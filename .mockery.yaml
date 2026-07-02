@@ -46,6 +46,8 @@ packages:
       RuntimeHealthClient:
       RuntimeSelfUpdater:
       RuntimeDrainAckReceiver:
+      RuntimeVolumeManager:
+      RuntimeImageManager:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

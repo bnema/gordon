@@ -2,14 +2,18 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	inruntime "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -29,6 +33,80 @@ func TestClientDeployRouteRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
 	assert.Equal(t, command, worker.deploy)
+}
+
+func TestClientReadRouteLogsCloseCancelsStream(t *testing.T) {
+	canceled := make(chan struct{})
+	logReader := outMocks.NewMockRuntimeLogReader(t)
+	logReader.EXPECT().
+		ReadRouteLogs(mock.Anything, "app.example.com", true).
+		RunAndReturn(func(ctx context.Context, _ string, _ bool) (io.ReadCloser, error) {
+			reader, writer := io.Pipe()
+			go func() {
+				<-ctx.Done()
+				close(canceled)
+				_ = writer.Close()
+			}()
+			return reader, nil
+		})
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithLogReader(&fakeRuntimeWorker{}, logReader, "runtime-1"))
+	client := NewClient(conn)
+
+	reader, err := client.ReadRouteLogs(context.Background(), "app.example.com", true)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("closing log reader did not cancel runtime stream")
+	}
+}
+
+func TestClientReadRouteLogsRoundTrip(t *testing.T) {
+	logReader := outMocks.NewMockRuntimeLogReader(t)
+	logReader.EXPECT().
+		ReadRouteLogs(mock.Anything, "app.example.com", true).
+		Return(io.NopCloser(strings.NewReader("log-a\nlog-b\n")), nil)
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithLogReader(&fakeRuntimeWorker{}, logReader, "runtime-1"))
+	client := NewClient(conn)
+
+	reader, err := client.ReadRouteLogs(context.Background(), "app.example.com", true)
+	require.NoError(t, err)
+	defer reader.Close()
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, "log-a\nlog-b\n", string(data))
+}
+
+func TestClientVolumeManagerRoundTrip(t *testing.T) {
+	volumeManager := outMocks.NewMockRuntimeVolumeManager(t)
+	volumes := []*domain.VolumeInfo{{Name: "gordon-data", Driver: "local", Size: 1024, InUse: false, Labels: map[string]string{domain.LabelManaged: "true"}}}
+	volumeManager.EXPECT().ListRuntimeVolumes(mock.Anything).Return(volumes, nil)
+	volumeManager.EXPECT().RemoveRuntimeVolume(mock.Anything, "gordon-data", false).Return(nil)
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithVolumeManager(&fakeRuntimeWorker{}, volumeManager, "runtime-1"))
+	client := NewClient(conn)
+
+	got, err := client.ListRuntimeVolumes(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, volumes, got)
+	require.NoError(t, client.RemoveRuntimeVolume(context.Background(), "gordon-data", false))
+}
+
+func TestClientImageManagerRoundTrip(t *testing.T) {
+	imageManager := outMocks.NewMockRuntimeImageManager(t)
+	images := []domain.RuntimeImageDetail{{ID: "sha256:111", RepoTags: []string{"gordon/api:latest"}, Size: 1024, Created: time.Unix(10, 0).UTC()}}
+	imageManager.EXPECT().ListRuntimeImages(mock.Anything).Return(images, nil)
+	imageManager.EXPECT().PruneRuntimeImages(mock.Anything, true).Return(domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096}, nil)
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithImageManager(&fakeRuntimeWorker{}, imageManager, "runtime-1"))
+	client := NewClient(conn)
+
+	got, err := client.ListRuntimeImages(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, images, got)
+	prune, err := client.PruneRuntimeImages(context.Background(), true)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096}, prune)
 }
 
 func TestClientSelfUpdateHealthAndDrain(t *testing.T) {

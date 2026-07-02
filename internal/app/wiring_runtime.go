@@ -13,8 +13,12 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
 	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
+	"github.com/bnema/gordon/internal/usecase/images"
+	"github.com/bnema/gordon/internal/usecase/logs"
+	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 )
 
 var (
@@ -58,7 +62,7 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
 	)
-	runtimev1.RegisterRuntimeServiceServer(server, runtimegrpc.NewServer(worker, "gordon-runtime"))
+	runtimev1.RegisterRuntimeServiceServer(server, runtimegrpc.NewServerWithAllRuntimePorts(worker, runtimeRoleLogReader(worker), runtimeRoleVolumeManager(worker), runtimeRoleImageManager(worker), "gordon-runtime"))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -82,6 +86,48 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 	case err := <-errCh:
 		return log.WrapErr(err, "runtime gRPC server stopped")
 	}
+}
+
+type runtimeRoleWorkerBundle struct {
+	in.RuntimeWorker
+	logReader     out.RuntimeLogReader
+	volumeManager out.RuntimeVolumeManager
+	imageManager  out.RuntimeImageManager
+}
+
+func (w runtimeRoleWorkerBundle) RuntimeLogReader() out.RuntimeLogReader { return w.logReader }
+
+func (w runtimeRoleWorkerBundle) RuntimeVolumeManager() out.RuntimeVolumeManager {
+	return w.volumeManager
+}
+
+func (w runtimeRoleWorkerBundle) RuntimeImageManager() out.RuntimeImageManager {
+	return w.imageManager
+}
+
+func runtimeRoleLogReader(worker in.RuntimeWorker) out.RuntimeLogReader {
+	if w, ok := worker.(interface{ RuntimeLogReader() out.RuntimeLogReader }); ok {
+		return w.RuntimeLogReader()
+	}
+	return nil
+}
+
+func runtimeRoleVolumeManager(worker in.RuntimeWorker) out.RuntimeVolumeManager {
+	if w, ok := worker.(interface {
+		RuntimeVolumeManager() out.RuntimeVolumeManager
+	}); ok {
+		return w.RuntimeVolumeManager()
+	}
+	return nil
+}
+
+func runtimeRoleImageManager(worker in.RuntimeWorker) out.RuntimeImageManager {
+	if w, ok := worker.(interface {
+		RuntimeImageManager() out.RuntimeImageManager
+	}); ok {
+		return w.RuntimeImageManager()
+	}
+	return nil
 }
 
 func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (in.RuntimeWorker, func(), error) {
@@ -133,5 +179,6 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 		RequireImageDigest:     cfg.Images.RequireDigest,
 		RuntimeComponentID:     "gordon-runtime",
 	}
-	return container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy), cleanup, nil
+	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy)
+	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime)}, cleanup, nil
 }

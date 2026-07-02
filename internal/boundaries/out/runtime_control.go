@@ -45,3 +45,15 @@ type RuntimeSelfUpdater interface {
 type RuntimeDrainAckReceiver interface {
 	AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64) error
 }
+
+// RuntimeVolumeManager performs controlled volume operations through the runtime boundary.
+type RuntimeVolumeManager interface {
+	ListRuntimeVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
+	RemoveRuntimeVolume(ctx context.Context, volumeName string, force bool) error
+}
+
+// RuntimeImageManager performs controlled image operations through the runtime boundary.
+type RuntimeImageManager interface {
+	ListRuntimeImages(ctx context.Context) ([]domain.RuntimeImageDetail, error)
+	PruneRuntimeImages(ctx context.Context, danglingOnly bool) (domain.RuntimePruneResult, error)
+}

@@ -13,15 +13,15 @@ import (
 )
 
 func TestService_ListVolumes(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockRuntimeVolumeManager(t)
 
 	vols := []*domain.VolumeInfo{
 		{Name: "vol1", InUse: true, Containers: []string{"web"}},
 		{Name: "vol2", InUse: false},
 	}
-	runtime.EXPECT().ListVolumes(context.Background()).Return(vols, nil)
+	runtime.EXPECT().ListRuntimeVolumes(context.Background()).Return(vols, nil)
 
-	svc := NewService(runtime)
+	svc := NewServiceWithRuntimeVolumeManager(runtime)
 	result, err := svc.ListVolumes(context.Background())
 	require.NoError(t, err)
 	assert.Len(t, result, 2)
@@ -119,10 +119,10 @@ func TestService_PruneVolumes_AllInUse(t *testing.T) {
 }
 
 func TestService_ListVolumes_PropagatesError(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	runtime.EXPECT().ListVolumes(context.Background()).Return(nil, fmt.Errorf("connection refused"))
+	runtime := outmocks.NewMockRuntimeVolumeManager(t)
+	runtime.EXPECT().ListRuntimeVolumes(context.Background()).Return(nil, fmt.Errorf("connection refused"))
 
-	svc := NewService(runtime)
+	svc := NewServiceWithRuntimeVolumeManager(runtime)
 	_, err := svc.ListVolumes(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "connection refused")

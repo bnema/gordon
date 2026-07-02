@@ -2,14 +2,18 @@ package runtime
 
 import (
 	"context"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -67,6 +71,58 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	assert.Equal(t, domain.ComponentRoleRuntime, worker.self.TargetComponentRole)
 }
 
+func TestServerStreamLogsUsesRuntimeLogReader(t *testing.T) {
+	reader := outMocks.NewMockRuntimeLogReader(t)
+	reader.EXPECT().
+		ReadRouteLogs(mock.Anything, "app.example.com", true).
+		Return(io.NopCloser(strings.NewReader("log-a\nlog-b\n")), nil)
+	server := NewServerWithLogReader(&fakeRuntimeWorker{}, reader, "runtime-1")
+	stream := &fakeLogStream{ctx: context.Background()}
+
+	err := server.StreamLogs(&runtimev1.StreamLogsRequest{RouteDomain: "app.example.com", Follow: true}, stream)
+
+	require.NoError(t, err)
+	require.Len(t, stream.chunks, 1)
+	assert.Equal(t, "log-a\nlog-b\n", string(stream.chunks[0].Data))
+}
+
+func TestServerVolumeManager(t *testing.T) {
+	volumeManager := outMocks.NewMockRuntimeVolumeManager(t)
+	volumes := []*domain.VolumeInfo{{Name: "gordon-data", Driver: "local", Size: 1024, Labels: map[string]string{domain.LabelManaged: "true"}}}
+	volumeManager.EXPECT().ListRuntimeVolumes(mock.Anything).Return(volumes, nil)
+	volumeManager.EXPECT().RemoveRuntimeVolume(mock.Anything, "gordon-data", false).Return(nil)
+	server := NewServerWithVolumeManager(&fakeRuntimeWorker{}, volumeManager, "runtime-1")
+
+	resp, err := server.ListVolumes(context.Background(), &runtimev1.ListVolumesRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetVolumes(), 1)
+	assert.Equal(t, "gordon-data", resp.GetVolumes()[0].GetName())
+	assert.Equal(t, "true", resp.GetVolumes()[0].GetLabels()[domain.LabelManaged])
+
+	ack, err := server.RemoveVolume(context.Background(), &runtimev1.RemoveVolumeRequest{Name: "gordon-data"})
+	require.NoError(t, err)
+	assert.True(t, ack.Ok)
+}
+
+func TestServerImageManager(t *testing.T) {
+	imageManager := outMocks.NewMockRuntimeImageManager(t)
+	images := []domain.RuntimeImageDetail{{ID: "sha256:111", RepoTags: []string{"gordon/api:latest"}, Size: 1024, Created: time.Unix(10, 0).UTC()}}
+	imageManager.EXPECT().ListRuntimeImages(mock.Anything).Return(images, nil)
+	imageManager.EXPECT().PruneRuntimeImages(mock.Anything, true).Return(domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 4096}, nil)
+	server := NewServerWithImageManager(&fakeRuntimeWorker{}, imageManager, "runtime-1")
+
+	resp, err := server.ListImages(context.Background(), &runtimev1.ListImagesRequest{})
+	require.NoError(t, err)
+	require.Len(t, resp.GetImages(), 1)
+	assert.Equal(t, "sha256:111", resp.GetImages()[0].GetId())
+	assert.Equal(t, []string{"gordon/api:latest"}, resp.GetImages()[0].GetRepoTags())
+
+	prune, err := server.PruneImages(context.Background(), &runtimev1.PruneImagesRequest{DanglingOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), prune.GetDeletedCount())
+	assert.Equal(t, int64(4096), prune.GetSpaceReclaimed())
+}
+
 func TestServerHealthAndDrainAck(t *testing.T) {
 	server := NewServer(&fakeRuntimeWorker{}, "runtime-1")
 
@@ -101,8 +157,27 @@ func TestRuntimeServerRequiresComponentAuth(t *testing.T) {
 func TestMethodScopesRequireRuntimePermissions(t *testing.T) {
 	scopes := MethodScopes()
 	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_ApplyCommand_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeStatus, scopes[runtimev1.RuntimeService_ListVolumes_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_RemoveVolume_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeStatus, scopes[runtimev1.RuntimeService_ListImages_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_PruneImages_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeSelfUpdate, scopes[runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeDrainAck, scopes[runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName])
+}
+
+type fakeLogStream struct {
+	runtimev1.RuntimeService_StreamLogsServer
+	ctx    context.Context
+	chunks []*runtimev1.LogChunk
+}
+
+func (f *fakeLogStream) Context() context.Context { return f.ctx }
+
+func (f *fakeLogStream) SendHeader(metadata.MD) error { return nil }
+
+func (f *fakeLogStream) Send(chunk *runtimev1.LogChunk) error {
+	f.chunks = append(f.chunks, chunk)
+	return nil
 }
 
 type fakeRuntimeWorker struct {

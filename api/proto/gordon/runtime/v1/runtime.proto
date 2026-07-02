@@ -14,6 +14,10 @@ service RuntimeService {
   rpc WatchActualState(WatchActualStateRequest) returns (stream ActualStateSnapshot);
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+  rpc RemoveVolume(RemoveVolumeRequest) returns (gordon.common.v1.Ack);
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
+  rpc PruneImages(PruneImagesRequest) returns (PruneImagesResponse);
   rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (ApplyCommandResponse);
 
   // ReportEdgeDrain is called by gordon-control after gordon-edge reports that
@@ -139,6 +143,50 @@ message StreamLogsRequest {
 message LogChunk {
   bytes data = 1;
   google.protobuf.Timestamp observed_at = 2;
+}
+
+message ListVolumesRequest {}
+
+message RuntimeVolumeInfo {
+  string name = 1;
+  string driver = 2;
+  string mount_point = 3;
+  int64 size = 4;
+  google.protobuf.Timestamp created_at = 5;
+  bool in_use = 6;
+  repeated string containers = 7;
+  map<string, string> labels = 8;
+}
+
+message ListVolumesResponse {
+  repeated RuntimeVolumeInfo volumes = 1;
+}
+
+message RemoveVolumeRequest {
+  string name = 1;
+  bool force = 2;
+}
+
+message ListImagesRequest {}
+
+message RuntimeImageInfo {
+  string id = 1;
+  repeated string repo_tags = 2;
+  int64 size = 3;
+  google.protobuf.Timestamp created = 4;
+}
+
+message ListImagesResponse {
+  repeated RuntimeImageInfo images = 1;
+}
+
+message PruneImagesRequest {
+  bool dangling_only = 1;
+}
+
+message PruneImagesResponse {
+  int32 deleted_count = 1;
+  int64 space_reclaimed = 2;
 }
 
 message ReportEdgeDrainRequest {

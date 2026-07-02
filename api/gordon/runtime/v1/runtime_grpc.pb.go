@@ -24,6 +24,10 @@ const (
 	RuntimeService_WatchActualState_FullMethodName  = "/gordon.runtime.v1.RuntimeService/WatchActualState"
 	RuntimeService_GetHealth_FullMethodName         = "/gordon.runtime.v1.RuntimeService/GetHealth"
 	RuntimeService_StreamLogs_FullMethodName        = "/gordon.runtime.v1.RuntimeService/StreamLogs"
+	RuntimeService_ListVolumes_FullMethodName       = "/gordon.runtime.v1.RuntimeService/ListVolumes"
+	RuntimeService_RemoveVolume_FullMethodName      = "/gordon.runtime.v1.RuntimeService/RemoveVolume"
+	RuntimeService_ListImages_FullMethodName        = "/gordon.runtime.v1.RuntimeService/ListImages"
+	RuntimeService_PruneImages_FullMethodName       = "/gordon.runtime.v1.RuntimeService/PruneImages"
 	RuntimeService_RuntimeSelfUpdate_FullMethodName = "/gordon.runtime.v1.RuntimeService/RuntimeSelfUpdate"
 	RuntimeService_ReportEdgeDrain_FullMethodName   = "/gordon.runtime.v1.RuntimeService/ReportEdgeDrain"
 )
@@ -39,6 +43,10 @@ type RuntimeServiceClient interface {
 	WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ActualStateSnapshot], error)
 	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
 	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
+	RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*v1.Ack, error)
+	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
+	PruneImages(ctx context.Context, in *PruneImagesRequest, opts ...grpc.CallOption) (*PruneImagesResponse, error)
 	RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error)
 	// ReportEdgeDrain is called by gordon-control after gordon-edge reports that
 	// a route generation has drained. Edge never calls runtime directly: edge
@@ -114,6 +122,46 @@ func (c *runtimeServiceClient) StreamLogs(ctx context.Context, in *StreamLogsReq
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RuntimeService_StreamLogsClient = grpc.ServerStreamingClient[LogChunk]
 
+func (c *runtimeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListVolumesResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ListVolumes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(v1.Ack)
+	err := c.cc.Invoke(ctx, RuntimeService_RemoveVolume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListImagesResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ListImages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) PruneImages(ctx context.Context, in *PruneImagesRequest, opts ...grpc.CallOption) (*PruneImagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PruneImagesResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_PruneImages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *runtimeServiceClient) RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ApplyCommandResponse)
@@ -145,6 +193,10 @@ type RuntimeServiceServer interface {
 	WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[ActualStateSnapshot]) error
 	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
 	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error
+	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
+	RemoveVolume(context.Context, *RemoveVolumeRequest) (*v1.Ack, error)
+	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
+	PruneImages(context.Context, *PruneImagesRequest) (*PruneImagesResponse, error)
 	RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error)
 	// ReportEdgeDrain is called by gordon-control after gordon-edge reports that
 	// a route generation has drained. Edge never calls runtime directly: edge
@@ -173,6 +225,18 @@ func (UnimplementedRuntimeServiceServer) GetHealth(context.Context, *GetHealthRe
 }
 func (UnimplementedRuntimeServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListVolumes not implemented")
+}
+func (UnimplementedRuntimeServiceServer) RemoveVolume(context.Context, *RemoveVolumeRequest) (*v1.Ack, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveVolume not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListImages not implemented")
+}
+func (UnimplementedRuntimeServiceServer) PruneImages(context.Context, *PruneImagesRequest) (*PruneImagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PruneImages not implemented")
 }
 func (UnimplementedRuntimeServiceServer) RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RuntimeSelfUpdate not implemented")
@@ -259,6 +323,78 @@ func _RuntimeService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type RuntimeService_StreamLogsServer = grpc.ServerStreamingServer[LogChunk]
 
+func _RuntimeService_ListVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListVolumesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ListVolumes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ListVolumes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ListVolumes(ctx, req.(*ListVolumesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_RemoveVolume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveVolumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).RemoveVolume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_RemoveVolume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).RemoveVolume(ctx, req.(*RemoveVolumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_ListImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListImagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ListImages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ListImages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ListImages(ctx, req.(*ListImagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_PruneImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PruneImagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).PruneImages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_PruneImages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).PruneImages(ctx, req.(*PruneImagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RuntimeService_RuntimeSelfUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RuntimeSelfUpdateRequest)
 	if err := dec(in); err != nil {
@@ -309,6 +445,22 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHealth",
 			Handler:    _RuntimeService_GetHealth_Handler,
+		},
+		{
+			MethodName: "ListVolumes",
+			Handler:    _RuntimeService_ListVolumes_Handler,
+		},
+		{
+			MethodName: "RemoveVolume",
+			Handler:    _RuntimeService_RemoveVolume_Handler,
+		},
+		{
+			MethodName: "ListImages",
+			Handler:    _RuntimeService_ListImages_Handler,
+		},
+		{
+			MethodName: "PruneImages",
+			Handler:    _RuntimeService_PruneImages_Handler,
 		},
 		{
 			MethodName: "RuntimeSelfUpdate",

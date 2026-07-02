@@ -242,6 +242,7 @@ type Config struct {
 
 // services holds all the services used by the application.
 type services struct {
+	role                  Role
 	runtime               *docker.Runtime
 	eventBus              *eventbus.InMemory
 	blobStorage           *filesystem.BlobStorage
@@ -351,7 +352,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 		v:   v,
 		cfg: cfg,
 		log: log,
-		svc: &services{},
+		svc: &services{role: RoleMonolith},
 	}
 	defer func() {
 		if retErr != nil {
@@ -595,8 +596,8 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	}
 
 	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus)
-	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log)
-	si.svc.volumeSvc = volumesSvc.NewService(si.svc.runtime)
+	si.svc.imageSvc = images.NewServiceWithRuntimeImageManager(runtimeImageManagerForServices(si.svc), si.svc.manifestStorage, si.svc.blobStorage, si.log)
+	si.svc.volumeSvc = volumesSvc.NewServiceWithRuntimeVolumeManager(runtimeVolumeManagerForServices(si.svc))
 
 	injectTelemetryMetrics(si.cfg, si.svc, si.log)
 
@@ -667,7 +668,7 @@ func (si *serviceInit) initHandlers() {
 	prober := httpprober.New()
 	si.svc.healthSvc = health.NewService(si.svc.configSvc, si.svc.containerSvc, prober, si.log)
 
-	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
+	si.svc.logSvc = logs.NewServiceWithRuntimeLogReader(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, runtimeLogReaderForServices(si.svc), si.log)
 
 	initRuntimeControlFacade(si.svc)
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
@@ -696,8 +697,44 @@ func (si *serviceInit) initHandlers() {
 	})
 }
 
+func runtimeLogReaderForServices(svc *services) out.RuntimeLogReader {
+	if svc == nil {
+		return nil
+	}
+	if svc.role == RoleControl {
+		if reader, ok := svc.runtimeCommandClient.(out.RuntimeLogReader); ok {
+			return reader
+		}
+	}
+	return logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime)
+}
+
+func runtimeVolumeManagerForServices(svc *services) out.RuntimeVolumeManager {
+	if svc == nil {
+		return nil
+	}
+	if svc.role == RoleControl {
+		if manager, ok := svc.runtimeCommandClient.(out.RuntimeVolumeManager); ok {
+			return manager
+		}
+	}
+	return volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime)
+}
+
+func runtimeImageManagerForServices(svc *services) out.RuntimeImageManager {
+	if svc == nil {
+		return nil
+	}
+	if svc.role == RoleControl {
+		if manager, ok := svc.runtimeCommandClient.(out.RuntimeImageManager); ok {
+			return manager
+		}
+	}
+	return images.NewLocalRuntimeImageManager(svc.runtime)
+}
+
 func initRuntimeControlFacade(svc *services) {
-	if svc == nil || svc.runtimeControl != nil || svc.runtimeCommandClient == nil {
+	if svc == nil || svc.role != RoleControl || svc.runtimeControl != nil || svc.runtimeCommandClient == nil {
 		return
 	}
 	svc.runtimeControl = runtimecontrol.NewService(svc.configSvc, svc.runtimeCommandClient, "gordon-control")

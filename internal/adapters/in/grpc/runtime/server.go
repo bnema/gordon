@@ -2,26 +2,60 @@ package runtime
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"maps"
 	"strings"
 
 	commonv1 "github.com/bnema/gordon/api/gordon/common/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	boundaries "github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+const (
+	maxInt32 = 1<<31 - 1
+	minInt32 = -1 << 31
 )
 
 // Server adapts runtime gRPC requests to the inbound RuntimeWorker boundary.
 type Server struct {
 	runtimev1.UnimplementedRuntimeServiceServer
-	worker      boundaries.RuntimeWorker
-	componentID string
+	worker        boundaries.RuntimeWorker
+	logReader     out.RuntimeLogReader
+	volumeManager out.RuntimeVolumeManager
+	imageManager  out.RuntimeImageManager
+	componentID   string
 }
 
 func NewServer(worker boundaries.RuntimeWorker, componentID string) *Server {
-	return &Server{worker: worker, componentID: componentID}
+	return NewServerWithLogReader(worker, nil, componentID)
+}
+
+func NewServerWithLogReader(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, componentID string) *Server {
+	return NewServerWithRuntimePorts(worker, logReader, nil, componentID)
+}
+
+func NewServerWithVolumeManager(worker boundaries.RuntimeWorker, volumeManager out.RuntimeVolumeManager, componentID string) *Server {
+	return NewServerWithRuntimePorts(worker, nil, volumeManager, componentID)
+}
+
+func NewServerWithImageManager(worker boundaries.RuntimeWorker, imageManager out.RuntimeImageManager, componentID string) *Server {
+	return &Server{worker: worker, imageManager: imageManager, componentID: componentID}
+}
+
+func NewServerWithRuntimePorts(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, componentID string) *Server {
+	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, componentID: componentID}
+}
+
+func NewServerWithAllRuntimePorts(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, componentID string) *Server {
+	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, componentID: componentID}
 }
 
 func MethodScopes() map[string]domain.ComponentScope {
@@ -30,6 +64,10 @@ func MethodScopes() map[string]domain.ComponentScope {
 		runtimev1.RuntimeService_WatchActualState_FullMethodName:  domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_GetHealth_FullMethodName:         domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_StreamLogs_FullMethodName:        domain.ComponentScopeRuntimeLogs,
+		runtimev1.RuntimeService_ListVolumes_FullMethodName:       domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_RemoveVolume_FullMethodName:      domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_ListImages_FullMethodName:        domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_PruneImages_FullMethodName:       domain.ComponentScopeRuntimeDeploy,
 		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName: domain.ComponentScopeRuntimeSelfUpdate,
 		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:   domain.ComponentScopeRuntimeDrainAck,
 	}
@@ -86,8 +124,100 @@ func (s *Server) WatchActualState(*runtimev1.WatchActualStateRequest, runtimev1.
 	return status.Error(codes.Unimplemented, "runtime actual-state streaming is not wired yet")
 }
 
-func (s *Server) StreamLogs(*runtimev1.StreamLogsRequest, runtimev1.RuntimeService_StreamLogsServer) error {
-	return status.Error(codes.Unimplemented, "runtime log streaming is not wired yet")
+func (s *Server) StreamLogs(req *runtimev1.StreamLogsRequest, stream runtimev1.RuntimeService_StreamLogsServer) error {
+	if s.logReader == nil {
+		return status.Error(codes.FailedPrecondition, "runtime log reader not configured")
+	}
+	if req == nil || strings.TrimSpace(req.RouteDomain) == "" {
+		return status.Error(codes.InvalidArgument, "route domain is required")
+	}
+	if err := stream.SendHeader(metadata.MD{}); err != nil {
+		return err
+	}
+	reader, err := s.logReader.ReadRouteLogs(stream.Context(), req.RouteDomain, req.Follow)
+	if err != nil {
+		return status.Error(codes.Internal, "failed to read runtime logs")
+	}
+	defer reader.Close()
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			if err := stream.Send(&runtimev1.LogChunk{Data: append([]byte(nil), buf[:n]...)}); err != nil {
+				return err
+			}
+		}
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) {
+			return nil
+		}
+		return status.Error(codes.Internal, "failed to stream runtime logs")
+	}
+}
+
+func (s *Server) ListVolumes(ctx context.Context, _ *runtimev1.ListVolumesRequest) (*runtimev1.ListVolumesResponse, error) {
+	if s.volumeManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime volume manager not configured")
+	}
+	volumes, err := s.volumeManager.ListRuntimeVolumes(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to list runtime volumes")
+	}
+	out := make([]*runtimev1.RuntimeVolumeInfo, 0, len(volumes))
+	for _, volume := range volumes {
+		out = append(out, protoVolumeInfo(volume))
+	}
+	return &runtimev1.ListVolumesResponse{Volumes: out}, nil
+}
+
+func (s *Server) RemoveVolume(ctx context.Context, req *runtimev1.RemoveVolumeRequest) (*commonv1.Ack, error) {
+	if s.volumeManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime volume manager not configured")
+	}
+	if req == nil || strings.TrimSpace(req.Name) == "" {
+		return nil, status.Error(codes.InvalidArgument, "volume name is required")
+	}
+	if err := s.volumeManager.RemoveRuntimeVolume(ctx, req.Name, req.Force); err != nil {
+		return nil, status.Error(codes.Internal, "failed to remove runtime volume")
+	}
+	return &commonv1.Ack{Ok: true, Message: "runtime volume removed"}, nil
+}
+
+func (s *Server) ListImages(ctx context.Context, _ *runtimev1.ListImagesRequest) (*runtimev1.ListImagesResponse, error) {
+	if s.imageManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime image manager not configured")
+	}
+	images, err := s.imageManager.ListRuntimeImages(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to list runtime images")
+	}
+	out := make([]*runtimev1.RuntimeImageInfo, 0, len(images))
+	for _, image := range images {
+		out = append(out, protoImageInfo(image))
+	}
+	return &runtimev1.ListImagesResponse{Images: out}, nil
+}
+
+func (s *Server) PruneImages(ctx context.Context, req *runtimev1.PruneImagesRequest) (*runtimev1.PruneImagesResponse, error) {
+	if s.imageManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime image manager not configured")
+	}
+	danglingOnly := false
+	if req != nil {
+		danglingOnly = req.DanglingOnly
+	}
+	report, err := s.imageManager.PruneRuntimeImages(ctx, danglingOnly)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to prune runtime images")
+	}
+	deletedCount, err := safeInt32(report.DeletedCount)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "runtime image prune deleted count overflows int32")
+	}
+	return &runtimev1.PruneImagesResponse{DeletedCount: deletedCount, SpaceReclaimed: report.SpaceReclaimed}, nil
 }
 
 func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeDrainRequest) (*commonv1.Ack, error) {
@@ -98,6 +228,33 @@ func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeD
 		return nil, status.Error(codes.InvalidArgument, "route domain and generation are required")
 	}
 	return &commonv1.Ack{Ok: true, Message: "edge drain acknowledgement recorded"}, nil
+}
+
+func safeInt32(value int) (int32, error) {
+	if value < minInt32 || value > maxInt32 {
+		return 0, fmt.Errorf("%d overflows int32", value)
+	}
+	return int32(value), nil
+}
+
+func protoImageInfo(image domain.RuntimeImageDetail) *runtimev1.RuntimeImageInfo {
+	return &runtimev1.RuntimeImageInfo{Id: image.ID, RepoTags: append([]string(nil), image.RepoTags...), Size: image.Size, Created: timestamppb.New(image.Created)}
+}
+
+func protoVolumeInfo(volume *domain.VolumeInfo) *runtimev1.RuntimeVolumeInfo {
+	if volume == nil {
+		return nil
+	}
+	return &runtimev1.RuntimeVolumeInfo{Name: volume.Name, Driver: volume.Driver, MountPoint: volume.MountPoint, Size: volume.Size, CreatedAt: timestamppb.New(volume.CreatedAt), InUse: volume.InUse, Containers: append([]string(nil), volume.Containers...), Labels: cloneStringMap(volume.Labels)}
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	out := make(map[string]string, len(values))
+	maps.Copy(out, values)
+	return out
 }
 
 func protoIdentity(identity *runtimev1.RuntimeCommandIdentity) domain.RuntimeCommandIdentity {
