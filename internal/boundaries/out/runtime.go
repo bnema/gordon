@@ -83,6 +83,17 @@ type ContainerLister interface {
 	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
 }
 
+// BackupDatabaseRuntime is the narrow runtime subset needed for logical database backups.
+type BackupDatabaseRuntime interface {
+	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)
+	CopyFromContainer(ctx context.Context, containerID, srcPath string) (io.ReadCloser, error)
+}
+
+// BackupVolumeTargetRuntime is the narrow runtime subset needed to discover volume backup targets.
+type BackupVolumeTargetRuntime interface {
+	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
+}
+
 // ExecResult holds the result of executing a command in a container.
 type ExecResult struct {
 	ExitCode int

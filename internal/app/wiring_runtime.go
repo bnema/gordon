@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/images"
@@ -50,7 +52,6 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 	if cleanupWorker != nil {
 		defer cleanupWorker()
 	}
-
 	addr := v.GetString("runtime.listen_address")
 	listener, err := listenRuntimeGRPC("tcp", addr)
 	if err != nil {
@@ -62,7 +63,7 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
 	)
-	runtimev1.RegisterRuntimeServiceServer(server, runtimegrpc.NewServerWithAllRuntimePorts(worker, runtimeRoleLogReader(worker), runtimeRoleVolumeManager(worker), runtimeRoleImageManager(worker), "gordon-runtime"))
+	runtimev1.RegisterRuntimeServiceServer(server, newRuntimeRoleService(worker))
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -128,6 +129,73 @@ func runtimeRoleImageManager(worker in.RuntimeWorker) out.RuntimeImageManager {
 		return w.RuntimeImageManager()
 	}
 	return nil
+}
+
+func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServer {
+	return runtimegrpc.NewServerWithAllRuntimePortsAndStateSubscriber(
+		worker,
+		runtimeRoleLogReader(worker),
+		runtimeRoleVolumeManager(worker),
+		runtimeRoleImageManager(worker),
+		runtimeRoleStateSubscriber(worker),
+		"gordon-runtime",
+	)
+}
+
+func runtimeRoleStateSubscriber(worker in.RuntimeWorker) out.RuntimeStateSubscriber {
+	snapshotter, ok := worker.(interface {
+		Snapshot(context.Context, uint64, string, string) (domain.RuntimeActualStateSnapshot, error)
+	})
+	if !ok {
+		return nil
+	}
+	return pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: "gordon-runtime"}
+}
+
+type pollingRuntimeStateSubscriber struct {
+	snapshotter interface {
+		Snapshot(context.Context, uint64, string, string) (domain.RuntimeActualStateSnapshot, error)
+	}
+	interval          time.Duration
+	sourceComponentID string
+}
+
+func (s pollingRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	if s.snapshotter == nil {
+		return nil, fmt.Errorf("runtime worker snapshotter not configured")
+	}
+	interval := s.interval
+	if interval <= 0 {
+		interval = time.Second
+	}
+	ch := make(chan domain.RuntimeActualStateSnapshot, 1)
+	go func() {
+		defer close(ch)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var generation uint64
+		for {
+			generation++
+			snapshot, err := s.snapshotter.Snapshot(ctx, generation, runtimeStateVersion(), s.sourceComponentID)
+			if err == nil {
+				select {
+				case ch <- snapshot:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func runtimeStateVersion() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (in.RuntimeWorker, func(), error) {

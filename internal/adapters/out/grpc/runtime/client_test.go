@@ -35,6 +35,43 @@ func TestClientDeployRouteRoundTrip(t *testing.T) {
 	assert.Equal(t, command, worker.deploy)
 }
 
+func TestClientSubscribeRuntimeStateRoundTripAndCancel(t *testing.T) {
+	state := &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{testActualStateSnapshot()}}
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithStateSubscriber(&fakeRuntimeWorker{}, state, "runtime-1"))
+	client := NewClient(conn)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	snapshots, err := client.SubscribeRuntimeState(ctx)
+	require.NoError(t, err)
+	got := <-snapshots
+	assert.Equal(t, uint64(7), got.Generation)
+	assert.Equal(t, "gordon-target-app-example-com", got.Routes[0].EdgeTargetAlias)
+	assert.Equal(t, "gordon-data", got.Volumes[0].Name)
+	assert.NotContains(t, got.Containers[0].Labels, "secret.env")
+
+	cancel()
+	select {
+	case _, ok := <-snapshots:
+		assert.False(t, ok)
+	case <-time.After(time.Second):
+		t.Fatal("runtime state subscription did not close after cancellation")
+	}
+}
+
+func TestClientMapsPolicyDeniedResult(t *testing.T) {
+	denied := domain.RuntimeCommandResult{CommandID: "cmd-denied", IdempotencyKey: "idem-cmd-denied", Generation: 7, Status: domain.RuntimeCommandStatusDenied, Error: &domain.RuntimeCommandError{Code: "policy_denied", Message: "policy denied", Retryable: false}}
+	worker := &fakeRuntimeWorker{resultOverride: &denied}
+	conn := newRuntimeTestConn(t, inruntime.NewServer(worker, "runtime-1"))
+	client := NewClient(conn)
+
+	result, err := client.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: testIdentity("cmd-denied"), Domain: "app.example.com", Image: "app:latest"})
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusDenied, result.Status)
+	require.NotNil(t, result.Error)
+	assert.Equal(t, "policy_denied", result.Error.Code)
+}
+
 func TestClientReadRouteLogsCloseCancelsStream(t *testing.T) {
 	canceled := make(chan struct{})
 	logReader := outMocks.NewMockRuntimeLogReader(t)
@@ -111,7 +148,11 @@ func TestClientImageManagerRoundTrip(t *testing.T) {
 
 func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
-	conn := newRuntimeTestConn(t, inruntime.NewServer(worker, "runtime-1"))
+	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
+	receiver.EXPECT().
+		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
+		Return(nil)
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithDrainAckReceiver(worker, receiver, "runtime-1"))
 	client := NewClient(conn)
 
 	result, err := client.SelfUpdateRuntime(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-self"), TargetComponentID: "runtime-1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1"})
@@ -123,7 +164,7 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	version, err := client.RuntimeVersion(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "runtime service ready", version)
-	require.NoError(t, client.AcknowledgeRuntimeDrain(context.Background(), "app.example.com", 7))
+	require.NoError(t, client.AcknowledgeRuntimeDrain(context.Background(), "app.example.com", 7, "edge-1", "gordon-target-app-example-com"))
 }
 
 func TestClientPreservesContextCancellation(t *testing.T) {
@@ -159,13 +200,51 @@ func newRuntimeTestConn(t *testing.T, server runtimev1.RuntimeServiceServer) *gr
 	return conn
 }
 
+type fakeRuntimeStateSubscriber struct {
+	snapshots []domain.RuntimeActualStateSnapshot
+}
+
+func (f *fakeRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	ch := make(chan domain.RuntimeActualStateSnapshot)
+	go func() {
+		defer close(ch)
+		for _, snapshot := range f.snapshots {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- snapshot:
+			}
+		}
+		<-ctx.Done()
+	}()
+	return ch, nil
+}
+
+func testActualStateSnapshot() domain.RuntimeActualStateSnapshot {
+	return domain.RuntimeActualStateSnapshot{
+		Generation:        7,
+		StateVersion:      "state-v1",
+		SourceComponentID: "runtime-1",
+		ObservedAt:        time.Unix(11, 0).UTC(),
+		Routes:            []domain.RuntimeRouteState{{Domain: "app.example.com", Generation: 7, RouteVersion: "route-v1", ContainerAlias: "app-example-com", EdgeTargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1, Status: domain.RouteTargetStatusReady}},
+		Containers:        []domain.RuntimeContainerState{{Name: "gordon-app-example-com", Alias: "app-example-com", Image: "app:latest", Status: domain.ContainerStatusRunning, Labels: map[string]string{domain.LabelDomain: "app.example.com", "secret.env": "DATABASE_URL=secret"}, Generation: 7}},
+		Networks:          []domain.RuntimeNetworkState{{Name: "gordon-app", Driver: "bridge", Aliases: []string{"app-example-com"}, Generation: 7}},
+		Volumes:           []domain.RuntimeVolumeState{{Name: "gordon-data", AttachedTo: []string{"gordon-app-example-com"}, Generation: 7}},
+		EdgeAttachments:   []domain.RuntimeEdgeNetworkAttachmentState{{RouteDomain: "app.example.com", NetworkName: "gordon-app", EdgeAlias: "edge-1", RuntimeAlias: "runtime-1", TargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Attached: true, Generation: 7, SourceComponent: "runtime-1"}},
+	}
+}
+
 type fakeRuntimeWorker struct {
-	deploy domain.DeployRouteCommand
-	self   domain.RuntimeSelfUpdateCommand
+	deploy         domain.DeployRouteCommand
+	self           domain.RuntimeSelfUpdateCommand
+	resultOverride *domain.RuntimeCommandResult
 }
 
 func (f *fakeRuntimeWorker) DeployRoute(_ context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
 	f.deploy = command
+	if f.resultOverride != nil {
+		return *f.resultOverride, nil
+	}
 	return testResult(command.RuntimeCommandIdentity), nil
 }
 

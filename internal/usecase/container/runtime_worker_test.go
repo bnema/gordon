@@ -3,6 +3,9 @@ package container
 import (
 	"context"
 	"errors"
+	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,13 +62,194 @@ func TestRuntimeWorkerResultSanitizedErrorAndCancellation(t *testing.T) {
 	assert.NotContains(t, result.Error.Message, "SECRET")
 	assert.NotContains(t, result.Error.Message, "/var/run")
 
-	fake = &fakeRuntimeWorkerService{restartErr: context.Canceled}
-	worker = NewRuntimeWorker(fake)
-	canceled, err := worker.RestartRoute(context.Background(), domain.RestartRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-cancel"), Domain: "app.example.com"})
+	tests := []struct {
+		name    string
+		invoke  func(*RuntimeWorker) (domain.RuntimeCommandResult, error)
+		wantOps []string
+	}{
+		{name: "deploy", invoke: func(w *RuntimeWorker) (domain.RuntimeCommandResult, error) {
+			return w.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-cancel-deploy"), Domain: "app.example.com", Image: "app:latest"})
+		}, wantOps: []string{"Deploy:app.example.com:app:latest"}},
+		{name: "restart", invoke: func(w *RuntimeWorker) (domain.RuntimeCommandResult, error) {
+			return w.RestartRoute(context.Background(), domain.RestartRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-cancel-restart"), Domain: "app.example.com"})
+		}, wantOps: []string{"Restart:app.example.com:false"}},
+		{name: "remove", invoke: func(w *RuntimeWorker) (domain.RuntimeCommandResult, error) {
+			return w.RemoveRoute(context.Background(), domain.RemoveRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-cancel-remove"), Domain: "app.example.com"})
+		}, wantOps: []string{"Remove:app.example.com"}},
+		{name: "reconcile", invoke: func(w *RuntimeWorker) (domain.RuntimeCommandResult, error) {
+			return w.Reconcile(context.Background(), domain.ReconcileRuntimeCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-cancel-reconcile"), ExpectedRouteCount: 1, DesiredRoutes: []domain.Route{{Domain: "app.example.com", Image: "app:latest"}}})
+		}, wantOps: []string{"Sync"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeRuntimeWorkerService{deployErr: context.Canceled, restartErr: context.Canceled, removeErr: context.Canceled, syncErr: context.Canceled}
+			worker := NewRuntimeWorker(fake)
+			canceled, err := tt.invoke(worker)
+			require.NoError(t, err)
+			assert.Equal(t, domain.RuntimeCommandStatusDenied, canceled.Status)
+			require.NotNil(t, canceled.Error)
+			assert.Equal(t, "context_canceled", canceled.Error.Code)
+			assert.Equal(t, tt.wantOps, fake.calls)
+		})
+	}
+}
+
+func TestRuntimeWorkerIdempotencyReturnsCachedResult(t *testing.T) {
+	identity := testRuntimeCommandIdentity("cmd-dedupe")
+	fake := &fakeRuntimeWorkerService{}
+	worker := NewRuntimeWorker(fake)
+	command := domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"}
+
+	first, err := worker.DeployRoute(context.Background(), command)
 	require.NoError(t, err)
-	assert.Equal(t, domain.RuntimeCommandStatusDenied, canceled.Status)
-	require.NotNil(t, canceled.Error)
-	assert.Equal(t, "context_canceled", canceled.Error.Code)
+	second, err := worker.DeployRoute(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.Equal(t, []string{"Deploy:app.example.com:app:latest"}, fake.calls)
+}
+
+func TestRuntimeWorkerCompletedResultsAreBoundedAndKeepRecentKeys(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{}
+	worker := NewRuntimeWorker(fake)
+
+	for i := range runtimeWorkerCompletedResultLimit + 5 {
+		identity := testRuntimeCommandIdentity("cmd-bounded-" + strconv.Itoa(i))
+		_, err := worker.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
+		require.NoError(t, err)
+	}
+
+	worker.mu.Lock()
+	cachedCount := len(worker.completedByDedupeKey)
+	worker.mu.Unlock()
+	assert.LessOrEqual(t, cachedCount, runtimeWorkerCompletedResultLimit)
+
+	callsBefore := len(fake.calls)
+	recent := testRuntimeCommandIdentity("cmd-bounded-" + strconv.Itoa(runtimeWorkerCompletedResultLimit+4))
+	_, err := worker.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: recent, Domain: "app.example.com", Image: "app:latest"})
+	require.NoError(t, err)
+	assert.Len(t, fake.calls, callsBefore)
+}
+
+func TestRuntimeWorkerPolicyDeniedEventsAreBounded(t *testing.T) {
+	worker := NewRuntimeWorkerWithPolicy(&fakeRuntimeWorkerService{}, RuntimePolicy{Mode: RuntimePolicyModeObserve, RequireImageDigest: true})
+
+	for i := range runtimeWorkerPolicyDeniedEventLimit + 5 {
+		identity := testRuntimeCommandIdentity("cmd-policy-bounded-" + strconv.Itoa(i))
+		_, err := worker.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
+		require.NoError(t, err)
+	}
+
+	events := worker.PolicyDeniedEvents()
+	require.Len(t, events, runtimeWorkerPolicyDeniedEventLimit)
+	assert.Equal(t, domain.RuntimeCommandID("cmd-policy-bounded-5"), events[0].CommandID)
+	assert.Equal(t, domain.RuntimeCommandID("cmd-policy-bounded-"+strconv.Itoa(runtimeWorkerPolicyDeniedEventLimit+4)), events[len(events)-1].CommandID)
+}
+
+func TestRuntimeWorkerConcurrentDuplicateCommandsRunMutationOnce(t *testing.T) {
+	tests := []struct {
+		name   string
+		invoke func(context.Context, *RuntimeWorker, domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error)
+		calls  func(*blockingRuntimeWorkerService) int64
+	}{
+		{name: "Deploy", invoke: func(ctx context.Context, w *RuntimeWorker, identity domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error) {
+			return w.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
+		}, calls: func(f *blockingRuntimeWorkerService) int64 { return f.deployCalls.Load() }},
+		{name: "Restart", invoke: func(ctx context.Context, w *RuntimeWorker, identity domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error) {
+			return w.RestartRoute(ctx, domain.RestartRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com"})
+		}, calls: func(f *blockingRuntimeWorkerService) int64 { return f.restartCalls.Load() }},
+		{name: "Remove", invoke: func(ctx context.Context, w *RuntimeWorker, identity domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error) {
+			return w.RemoveRoute(ctx, domain.RemoveRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com"})
+		}, calls: func(f *blockingRuntimeWorkerService) int64 { return f.removeCalls.Load() }},
+		{name: "Reconcile", invoke: func(ctx context.Context, w *RuntimeWorker, identity domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error) {
+			return w.Reconcile(ctx, domain.ReconcileRuntimeCommand{RuntimeCommandIdentity: identity, ExpectedRouteCount: 1, DesiredRoutes: []domain.Route{{Domain: "app.example.com", Image: "app:latest"}}})
+		}, calls: func(f *blockingRuntimeWorkerService) int64 { return f.syncCalls.Load() }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newBlockingRuntimeWorkerService()
+			worker := NewRuntimeWorker(fake)
+			identity := testRuntimeCommandIdentity("cmd-concurrent-" + tt.name)
+			start := make(chan struct{})
+			results := make(chan domain.RuntimeCommandResult, 8)
+			errs := make(chan error, 8)
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					result, err := tt.invoke(context.Background(), worker, identity)
+					results <- result
+					errs <- err
+				}()
+			}
+
+			close(start)
+			select {
+			case <-fake.entered:
+			case <-time.After(time.Second):
+				t.Fatal("mutation was not invoked")
+			}
+			require.Eventually(t, func() bool { return tt.calls(fake) == 1 }, 100*time.Millisecond, 10*time.Millisecond)
+			assert.Equal(t, int64(1), tt.calls(fake))
+
+			close(fake.release)
+			wg.Wait()
+			close(results)
+			close(errs)
+			var first *domain.RuntimeCommandResult
+			for err := range errs {
+				require.NoError(t, err)
+			}
+			for result := range results {
+				assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
+				if first == nil {
+					first = &result
+					continue
+				}
+				assert.Equal(t, *first, result)
+			}
+
+			cached, err := tt.invoke(context.Background(), worker, identity)
+			require.NoError(t, err)
+			require.NotNil(t, first)
+			assert.Equal(t, *first, cached)
+			assert.Equal(t, int64(1), tt.calls(fake))
+		})
+	}
+}
+
+func TestRuntimeWorkerConcurrentDuplicateWaitRespectsContextCancellation(t *testing.T) {
+	fake := newBlockingRuntimeWorkerService()
+	worker := NewRuntimeWorker(fake)
+	identity := testRuntimeCommandIdentity("cmd-concurrent-cancel")
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		_, _ = worker.DeployRoute(context.Background(), domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
+	}()
+	select {
+	case <-fake.entered:
+	case <-time.After(time.Second):
+		t.Fatal("leader mutation was not invoked")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err := worker.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusDenied, result.Status)
+	require.NotNil(t, result.Error)
+	assert.Equal(t, "context_canceled", result.Error.Code)
+	assert.Equal(t, int64(1), fake.deployCalls.Load())
+
+	close(fake.release)
+	select {
+	case <-leaderDone:
+	case <-time.After(time.Second):
+		t.Fatal("leader did not complete")
+	}
 }
 
 func TestRuntimeWorkerSelfUpdateDeniedWithoutMutation(t *testing.T) {
@@ -97,7 +281,12 @@ func TestRuntimeWorkerSnapshotSanitization(t *testing.T) {
 			{Domain: "app.example.com", ContainerID: "c1", ContainerStatus: "running", Network: "gordon-net"},
 			{Domain: "down.example.com", ContainerID: "c2", ContainerStatus: "exited", Network: "gordon-net"},
 		},
-		networks: []*domain.NetworkInfo{{Name: "gordon-net", Driver: "bridge", Containers: []string{"gordon-target-app-example-com", "localhost", "127.0.0.1"}}},
+		networks: []*domain.NetworkInfo{{Name: "gordon-net", Driver: "bridge", Containers: []string{"gordon-target-app-example-com", "localhost", "127.0.0.1", "bad\\alias"}}},
+		volumes: []*domain.VolumeInfo{
+			{Name: "app-data", Containers: []string{"gordon-app.example.com", "/var/lib/secret", "bad\\alias"}},
+			{Name: "/host/path", MountPoint: "/host/path", Containers: []string{"gordon-app.example.com"}},
+			{Name: "docker.sock", MountPoint: "/run/user/1000/podman/podman.sock"},
+		},
 	}
 	worker := NewRuntimeWorker(fake)
 	worker.now = func() time.Time { return time.Unix(100, 0) }
@@ -117,6 +306,9 @@ func TestRuntimeWorkerSnapshotSanitization(t *testing.T) {
 	assert.NotContains(t, snapshot.Containers[1].Labels, "TOKEN")
 	require.Len(t, snapshot.Networks, 1)
 	assert.Equal(t, []string{"gordon-target-app-example-com"}, snapshot.Networks[0].Aliases)
+	require.Len(t, snapshot.Volumes, 1)
+	assert.Equal(t, "app-data", snapshot.Volumes[0].Name)
+	assert.Equal(t, []string{"gordon-app.example.com"}, snapshot.Volumes[0].AttachedTo)
 	require.Len(t, snapshot.EdgeAttachments, 1)
 	assert.Equal(t, "gordon-target-app-example-com", snapshot.EdgeAttachments[0].TargetAlias)
 }
@@ -152,6 +344,65 @@ func testRuntimeCommandIdentity(id string) domain.RuntimeCommandIdentity {
 	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID(id), IdempotencyKey: id + "-key", Generation: 1, SourceComponentID: "control-plane", RequestedAt: time.Unix(1, 0)}
 }
 
+type blockingRuntimeWorkerService struct {
+	entered      chan struct{}
+	release      chan struct{}
+	deployCalls  atomic.Int64
+	restartCalls atomic.Int64
+	removeCalls  atomic.Int64
+	syncCalls    atomic.Int64
+}
+
+func newBlockingRuntimeWorkerService() *blockingRuntimeWorkerService {
+	return &blockingRuntimeWorkerService{entered: make(chan struct{}, 8), release: make(chan struct{})}
+}
+
+func (f *blockingRuntimeWorkerService) Deploy(context.Context, domain.Route) (*domain.Container, error) {
+	f.deployCalls.Add(1)
+	f.enter()
+	return &domain.Container{ID: "new"}, nil
+}
+
+func (f *blockingRuntimeWorkerService) Restart(context.Context, string, bool) error {
+	f.restartCalls.Add(1)
+	f.enter()
+	return nil
+}
+
+func (f *blockingRuntimeWorkerService) ReconcileRemovedRoute(context.Context, string) (*domain.CleanupReport, error) {
+	f.removeCalls.Add(1)
+	f.enter()
+	return &domain.CleanupReport{}, nil
+}
+
+func (f *blockingRuntimeWorkerService) SyncContainers(context.Context) error {
+	f.syncCalls.Add(1)
+	f.enter()
+	return nil
+}
+
+func (f *blockingRuntimeWorkerService) AutoStart(context.Context, []domain.Route) error {
+	return nil
+}
+
+func (f *blockingRuntimeWorkerService) enter() {
+	select {
+	case f.entered <- struct{}{}:
+	default:
+	}
+	<-f.release
+}
+
+func (f *blockingRuntimeWorkerService) List(context.Context) map[string]*domain.Container {
+	return nil
+}
+func (f *blockingRuntimeWorkerService) ListRoutesWithDetails(context.Context) []domain.RouteInfo {
+	return nil
+}
+func (f *blockingRuntimeWorkerService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
+	return nil, nil
+}
+
 type fakeRuntimeWorkerService struct {
 	calls           []string
 	deployRoute     domain.Route
@@ -165,6 +416,7 @@ type fakeRuntimeWorkerService struct {
 	containers      map[string]*domain.Container
 	routes          []domain.RouteInfo
 	networks        []*domain.NetworkInfo
+	volumes         []*domain.VolumeInfo
 }
 
 func (f *fakeRuntimeWorkerService) Deploy(_ context.Context, route domain.Route) (*domain.Container, error) {
@@ -206,6 +458,10 @@ func (f *fakeRuntimeWorkerService) ListRoutesWithDetails(context.Context) []doma
 }
 func (f *fakeRuntimeWorkerService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
 	return f.networks, f.listNetworksErr
+}
+
+func (f *fakeRuntimeWorkerService) ListVolumes(context.Context) ([]*domain.VolumeInfo, error) {
+	return f.volumes, nil
 }
 
 func boolString(v bool) string {

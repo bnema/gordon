@@ -55,6 +55,24 @@ func TestServiceReconcileConfiguredRoutes(t *testing.T) {
 	assert.Equal(t, routes, client.reconcile.DesiredRoutes)
 }
 
+func TestServiceRouteStatusesFromRuntimeSnapshot(t *testing.T) {
+	routes := []domain.Route{{Domain: "app.example.com", Image: "app:latest"}, {Domain: "missing.example.com", Image: "missing:latest"}}
+	subscriber := &fakeRuntimeStateSubscriber{snapshot: domain.RuntimeActualStateSnapshot{Containers: []domain.RuntimeContainerState{{Status: domain.ContainerStatusRunning, Labels: map[string]string{domain.LabelRoute: "app.example.com"}}}}}
+	svc := NewServiceWithStateSubscriber(nil, &fakeRuntimeCommandClient{}, subscriber, "control-1")
+
+	statuses, err := svc.RouteStatuses(context.Background(), routes)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"app.example.com": "running", "missing.example.com": "unknown"}, statuses)
+}
+
+func TestServiceRouteStatusesUnavailableDependency(t *testing.T) {
+	svc := NewService(nil, &fakeRuntimeCommandClient{}, "control-1")
+	_, err := svc.RouteStatuses(context.Background(), []domain.Route{{Domain: "app.example.com", Image: "app:latest"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runtime state subscriber unavailable")
+}
+
 func TestServiceUnavailableDependencies(t *testing.T) {
 	svc := NewService(nil, nil, "control-1")
 	_, err := svc.DeployRoute(context.Background(), domain.Route{Domain: "app.example.com", Image: "app:latest"})
@@ -65,6 +83,21 @@ func TestServiceUnavailableDependencies(t *testing.T) {
 	_, err = svc.ReconcileConfiguredRoutes(context.Background(), "startup")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config service unavailable")
+}
+
+type fakeRuntimeStateSubscriber struct {
+	snapshot domain.RuntimeActualStateSnapshot
+	err      error
+}
+
+func (f *fakeRuntimeStateSubscriber) SubscribeRuntimeState(_ context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	ch := make(chan domain.RuntimeActualStateSnapshot, 1)
+	ch <- f.snapshot
+	close(ch)
+	return ch, nil
 }
 
 type fakeRuntimeCommandClient struct {

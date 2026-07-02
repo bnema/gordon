@@ -43,7 +43,7 @@ type RuntimeSelfUpdater interface {
 
 // RuntimeDrainAckReceiver receives runtime acknowledgements for edge drain requests.
 type RuntimeDrainAckReceiver interface {
-	AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64) error
+	AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error
 }
 
 // RuntimeVolumeManager performs controlled volume operations through the runtime boundary.

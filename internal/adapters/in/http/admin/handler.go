@@ -42,6 +42,7 @@ type runtimeControlService interface {
 	DeployRoute(ctx context.Context, route domain.Route) (domain.RuntimeCommandResult, error)
 	RestartRoute(ctx context.Context, domainName string, withAttachments bool) (domain.RuntimeCommandResult, error)
 	RemoveRoute(ctx context.Context, domainName string, force bool) (domain.RuntimeCommandResult, error)
+	RouteStatuses(ctx context.Context, routes []domain.Route) (map[string]string, error)
 }
 
 // Handler implements the HTTP handler for the admin API.
@@ -1338,15 +1339,26 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	routes := h.configSvc.GetRoutes(ctx)
 
-	// Get container statuses
 	statuses := make(map[string]string)
-	for _, route := range routes {
-		status := "unknown"
-		container, ok := h.containerSvc.Get(ctx, route.Domain)
-		if ok && container != nil {
-			status = container.Status
+	if h.runtimeControl != nil {
+		var err error
+		statuses, err = h.runtimeControl.RouteStatuses(ctx, routes)
+		if err != nil {
+			log := zerowrap.FromCtx(ctx)
+			log.Error().Err(err).Msg("failed to get runtime route statuses")
+			h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+			return
 		}
-		statuses[route.Domain] = status
+	} else {
+		// Get container statuses from the local monolith container service.
+		for _, route := range routes {
+			status := "unknown"
+			container, ok := h.containerSvc.Get(ctx, route.Domain)
+			if ok && container != nil {
+				status = container.Status
+			}
+			statuses[route.Domain] = status
+		}
 	}
 
 	status := dto.StatusResponse{

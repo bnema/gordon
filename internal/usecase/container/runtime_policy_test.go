@@ -106,11 +106,14 @@ func TestRuntimePolicyAllowedCases(t *testing.T) {
 		AllowedImageRegistries: []string{"registry.example.com"},
 		RequireImageDigest:     true,
 		AllowedCapAdd:          []string{"NET_BIND_SERVICE"},
+		RuntimeComponentID:     "runtime-1",
+		RuntimeComponentRole:   domain.ComponentRoleRuntime,
 	}
 
 	assert.NoError(t, policy.CheckDeployRoute(domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "registry.example.com/app@sha256:abcdef"}))
 	assert.NoError(t, policy.CheckContainerConfig(identity, "app.example.com", domain.ContainerConfig{NetworkMode: "gordon-app-example-com", Volumes: map[string]string{"/data": "app-data"}, CapAdd: []string{"NET_BIND_SERVICE"}}))
 	assert.NoError(t, policy.CheckSelfUpdate(domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "runtime-1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1"}))
+	assert.ErrorIs(t, policy.CheckSelfUpdate(domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "edge-1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1"}), ErrRuntimePolicyDenied)
 }
 
 func TestServiceRuntimePolicyDeniesContainerConfigBeforeCreate(t *testing.T) {
@@ -143,6 +146,10 @@ func TestRuntimeWorkerPolicyObserveAndEnforce(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, observeResult.Status)
 	assert.Equal(t, []string{"Deploy:app.example.com:app:latest"}, observeFake.calls)
+	observeEvents := observeWorker.PolicyDeniedEvents()
+	require.Len(t, observeEvents, 1)
+	assert.Equal(t, RuntimePolicyReasonDigestRequired, observeEvents[0].Reason)
+	assert.NotContains(t, observeEvents[0].Message, "app:latest")
 
 	enforceFake := &fakeRuntimeWorkerService{}
 	enforceWorker := NewRuntimeWorkerWithPolicy(enforceFake, RuntimePolicy{Mode: RuntimePolicyModeEnforce, RequireImageDigest: true})

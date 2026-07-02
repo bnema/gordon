@@ -67,8 +67,18 @@ func (c *Client) RuntimeVersion(ctx context.Context) (string, error) {
 	return resp.Message, nil
 }
 
-func (c *Client) AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64) error {
-	_, err := c.client.ReportEdgeDrain(ctx, &runtimev1.ReportEdgeDrainRequest{RouteDomain: routeDomain, Generation: generation})
+func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	stream, err := c.client.WatchActualState(ctx, &runtimev1.WatchActualStateRequest{})
+	if err != nil {
+		return nil, err
+	}
+	out := make(chan domain.RuntimeActualStateSnapshot)
+	go pumpActualStateStream(ctx, stream, out)
+	return out, nil
+}
+
+func (c *Client) AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error {
+	_, err := c.client.ReportEdgeDrain(ctx, &runtimev1.ReportEdgeDrainRequest{RouteDomain: routeDomain, Generation: generation, EdgeComponentId: edgeComponentID, TargetAlias: targetAlias})
 	return err
 }
 
@@ -125,6 +135,21 @@ func (c *Client) PruneRuntimeImages(ctx context.Context, danglingOnly bool) (dom
 	return domain.RuntimePruneResult{DeletedCount: int(resp.GetDeletedCount()), SpaceReclaimed: resp.GetSpaceReclaimed()}, nil
 }
 
+func pumpActualStateStream(ctx context.Context, stream runtimev1.RuntimeService_WatchActualStateClient, out chan<- domain.RuntimeActualStateSnapshot) {
+	defer close(out)
+	for {
+		snapshot, recvErr := stream.Recv()
+		if recvErr != nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case out <- protoActualStateSnapshot(snapshot):
+		}
+	}
+}
+
 func pumpLogStream(stream runtimev1.RuntimeService_StreamLogsClient, writer *io.PipeWriter) {
 	for {
 		chunk, recvErr := stream.Recv()
@@ -156,6 +181,36 @@ func (r runtimeLogReadCloser) Read(p []byte) (int, error) { return r.reader.Read
 func (r runtimeLogReadCloser) Close() error {
 	r.cancel()
 	return r.reader.Close()
+}
+
+func protoActualStateSnapshot(snapshot *runtimev1.ActualStateSnapshot) domain.RuntimeActualStateSnapshot {
+	if snapshot == nil {
+		return domain.RuntimeActualStateSnapshot{}
+	}
+	out := domain.RuntimeActualStateSnapshot{Generation: snapshot.GetGeneration(), StateVersion: snapshot.GetStateVersion(), SourceComponentID: snapshot.GetSourceComponentId()}
+	if snapshot.GetObservedAt() != nil {
+		out.ObservedAt = snapshot.GetObservedAt().AsTime()
+	}
+	for _, route := range snapshot.GetRoutes() {
+		out.Routes = append(out.Routes, domain.RuntimeRouteState{Domain: route.GetDomain(), Generation: route.GetGeneration(), RouteVersion: route.GetRouteVersion(), ContainerAlias: route.GetContainerAlias(), EdgeTargetAlias: route.GetEdgeTargetAlias(), TargetPort: int(route.GetTargetPort()), Scheme: route.GetScheme(), Protocol: domain.RouteTargetProtocol(route.GetProtocol()), Status: domain.RouteTargetStatus(route.GetStatus()), UnavailableReason: domain.RouteTargetUnavailableReason(route.GetUnavailableReason()), BackingContainerName: route.GetBackingContainerName()})
+	}
+	for _, container := range snapshot.GetContainers() {
+		labels := domain.SanitizeRuntimeStateLabels(container.GetLabels())
+		out.Containers = append(out.Containers, domain.RuntimeContainerState{Name: container.GetName(), Alias: container.GetAlias(), Image: container.GetImage(), ImageID: container.GetImageId(), Status: domain.ContainerStatus(container.GetStatus()), Labels: labels, Generation: container.GetGeneration()})
+		if container.GetStartedAt() != nil {
+			out.Containers[len(out.Containers)-1].StartedAt = container.GetStartedAt().AsTime()
+		}
+	}
+	for _, network := range snapshot.GetNetworks() {
+		out.Networks = append(out.Networks, domain.RuntimeNetworkState{Name: network.GetName(), Driver: network.GetDriver(), Internal: network.GetInternal(), Aliases: append([]string(nil), network.GetAliases()...), Generation: network.GetGeneration()})
+	}
+	for _, volume := range snapshot.GetVolumes() {
+		out.Volumes = append(out.Volumes, domain.RuntimeVolumeState{Name: volume.GetName(), AttachedTo: append([]string(nil), volume.GetAttachedTo()...), Generation: volume.GetGeneration()})
+	}
+	for _, attachment := range snapshot.GetEdgeAttachments() {
+		out.EdgeAttachments = append(out.EdgeAttachments, domain.RuntimeEdgeNetworkAttachmentState{RouteDomain: attachment.GetRouteDomain(), NetworkName: attachment.GetNetworkName(), EdgeAlias: attachment.GetEdgeAlias(), RuntimeAlias: attachment.GetRuntimeAlias(), TargetAlias: attachment.GetTargetAlias(), TargetPort: int(attachment.GetTargetPort()), Attached: attachment.GetAttached(), Generation: attachment.GetGeneration(), SourceComponent: attachment.GetSourceComponent()})
+	}
+	return out
 }
 
 func protoImageInfo(image *runtimev1.RuntimeImageInfo) domain.RuntimeImageDetail {

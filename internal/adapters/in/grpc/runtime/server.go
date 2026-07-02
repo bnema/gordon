@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"strings"
 
 	commonv1 "github.com/bnema/gordon/api/gordon/common/v1"
@@ -27,11 +28,13 @@ const (
 // Server adapts runtime gRPC requests to the inbound RuntimeWorker boundary.
 type Server struct {
 	runtimev1.UnimplementedRuntimeServiceServer
-	worker        boundaries.RuntimeWorker
-	logReader     out.RuntimeLogReader
-	volumeManager out.RuntimeVolumeManager
-	imageManager  out.RuntimeImageManager
-	componentID   string
+	worker           boundaries.RuntimeWorker
+	stateSubscriber  out.RuntimeStateSubscriber
+	logReader        out.RuntimeLogReader
+	volumeManager    out.RuntimeVolumeManager
+	imageManager     out.RuntimeImageManager
+	drainAckReceiver out.RuntimeDrainAckReceiver
+	componentID      string
 }
 
 func NewServer(worker boundaries.RuntimeWorker, componentID string) *Server {
@@ -40,6 +43,10 @@ func NewServer(worker boundaries.RuntimeWorker, componentID string) *Server {
 
 func NewServerWithLogReader(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, componentID string) *Server {
 	return NewServerWithRuntimePorts(worker, logReader, nil, componentID)
+}
+
+func NewServerWithStateSubscriber(worker boundaries.RuntimeWorker, stateSubscriber out.RuntimeStateSubscriber, componentID string) *Server {
+	return &Server{worker: worker, stateSubscriber: stateSubscriber, componentID: componentID}
 }
 
 func NewServerWithVolumeManager(worker boundaries.RuntimeWorker, volumeManager out.RuntimeVolumeManager, componentID string) *Server {
@@ -54,8 +61,20 @@ func NewServerWithRuntimePorts(worker boundaries.RuntimeWorker, logReader out.Ru
 	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, componentID: componentID}
 }
 
+func NewServerWithDrainAckReceiver(worker boundaries.RuntimeWorker, drainAckReceiver out.RuntimeDrainAckReceiver, componentID string) *Server {
+	return &Server{worker: worker, drainAckReceiver: drainAckReceiver, componentID: componentID}
+}
+
 func NewServerWithAllRuntimePorts(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, componentID string) *Server {
-	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, componentID: componentID}
+	return NewServerWithAllRuntimePortsAndStateSubscriber(worker, logReader, volumeManager, imageManager, nil, componentID)
+}
+
+func NewServerWithAllRuntimePortsAndStateSubscriber(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, componentID string) *Server {
+	return NewServerWithAllRuntimePortsAndDrainAckReceiver(worker, logReader, volumeManager, imageManager, stateSubscriber, nil, componentID)
+}
+
+func NewServerWithAllRuntimePortsAndDrainAckReceiver(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, drainAckReceiver out.RuntimeDrainAckReceiver, componentID string) *Server {
+	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, drainAckReceiver: drainAckReceiver, componentID: componentID}
 }
 
 func MethodScopes() map[string]domain.ComponentScope {
@@ -120,8 +139,30 @@ func (s *Server) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runti
 	return &runtimev1.GetHealthResponse{Ok: s.worker != nil, ComponentId: s.componentID, Message: "runtime service ready"}, nil
 }
 
-func (s *Server) WatchActualState(*runtimev1.WatchActualStateRequest, runtimev1.RuntimeService_WatchActualStateServer) error {
-	return status.Error(codes.Unimplemented, "runtime actual-state streaming is not wired yet")
+func (s *Server) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream runtimev1.RuntimeService_WatchActualStateServer) error {
+	if s.stateSubscriber == nil {
+		return status.Error(codes.FailedPrecondition, "runtime state subscriber not configured")
+	}
+	snapshots, err := s.stateSubscriber.SubscribeRuntimeState(stream.Context())
+	if err != nil {
+		return status.Error(codes.Internal, "failed to subscribe runtime state")
+	}
+	for {
+		select {
+		case <-stream.Context().Done():
+			return status.Error(codes.Canceled, stream.Context().Err().Error())
+		case snapshot, ok := <-snapshots:
+			if !ok {
+				return nil
+			}
+			if err := stream.Context().Err(); err != nil {
+				return status.Error(codes.Canceled, err.Error())
+			}
+			if err := stream.Send(protoActualStateSnapshot(snapshot)); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (s *Server) StreamLogs(req *runtimev1.StreamLogsRequest, stream runtimev1.RuntimeService_StreamLogsServer) error {
@@ -224,8 +265,20 @@ func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeD
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req == nil || strings.TrimSpace(req.RouteDomain) == "" || req.Generation == 0 {
-		return nil, status.Error(codes.InvalidArgument, "route domain and generation are required")
+	if req == nil || strings.TrimSpace(req.RouteDomain) == "" || req.Generation == 0 || strings.TrimSpace(req.EdgeComponentId) == "" || strings.TrimSpace(req.TargetAlias) == "" {
+		return nil, status.Error(codes.InvalidArgument, "route domain, generation, edge component id, and target alias are required")
+	}
+	if !domain.IsValidRouteDomain(req.RouteDomain) {
+		return nil, status.Error(codes.InvalidArgument, "route domain is invalid")
+	}
+	if !isValidDrainTargetAlias(req.TargetAlias) {
+		return nil, status.Error(codes.InvalidArgument, "target alias is invalid")
+	}
+	if s.drainAckReceiver == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime drain ack receiver not configured")
+	}
+	if err := s.drainAckReceiver.AcknowledgeRuntimeDrain(ctx, req.RouteDomain, req.Generation, req.EdgeComponentId, req.TargetAlias); err != nil {
+		return nil, status.Error(codes.Internal, "failed to record edge drain acknowledgement")
 	}
 	return &commonv1.Ack{Ok: true, Message: "edge drain acknowledgement recorded"}, nil
 }
@@ -235,6 +288,40 @@ func safeInt32(value int) (int32, error) {
 		return 0, fmt.Errorf("%d overflows int32", value)
 	}
 	return int32(value), nil
+}
+
+func isValidDrainTargetAlias(alias string) bool {
+	trimmed := strings.TrimSpace(alias)
+	if trimmed == "" || strings.ContainsAny(trimmed, "/\\") {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	if lower == "localhost" {
+		return false
+	}
+	return net.ParseIP(lower) == nil
+}
+
+func protoActualStateSnapshot(snapshot domain.RuntimeActualStateSnapshot) *runtimev1.ActualStateSnapshot {
+	out := &runtimev1.ActualStateSnapshot{Generation: snapshot.Generation, StateVersion: snapshot.StateVersion, SourceComponentId: snapshot.SourceComponentID, ObservedAt: timestamppb.New(snapshot.ObservedAt)}
+	for _, route := range snapshot.Routes {
+		targetPort, _ := safeInt32(route.TargetPort)
+		out.Routes = append(out.Routes, &runtimev1.RuntimeRouteState{Domain: route.Domain, Generation: route.Generation, RouteVersion: route.RouteVersion, ContainerAlias: route.ContainerAlias, EdgeTargetAlias: route.EdgeTargetAlias, TargetPort: targetPort, Scheme: route.Scheme, Protocol: string(route.Protocol), Status: string(route.Status), UnavailableReason: string(route.UnavailableReason), BackingContainerName: route.BackingContainerName})
+	}
+	for _, container := range snapshot.Containers {
+		out.Containers = append(out.Containers, &runtimev1.RuntimeContainerState{Name: container.Name, Alias: container.Alias, Image: container.Image, ImageId: container.ImageID, Status: string(container.Status), StartedAt: timestamppb.New(container.StartedAt), Labels: domain.SanitizeRuntimeStateLabels(container.Labels), Generation: container.Generation})
+	}
+	for _, network := range snapshot.Networks {
+		out.Networks = append(out.Networks, &runtimev1.RuntimeNetworkState{Name: network.Name, Driver: network.Driver, Internal: network.Internal, Aliases: append([]string(nil), network.Aliases...), Generation: network.Generation})
+	}
+	for _, volume := range snapshot.Volumes {
+		out.Volumes = append(out.Volumes, &runtimev1.RuntimeActualVolumeState{Name: volume.Name, AttachedTo: append([]string(nil), volume.AttachedTo...), Generation: volume.Generation})
+	}
+	for _, attachment := range snapshot.EdgeAttachments {
+		targetPort, _ := safeInt32(attachment.TargetPort)
+		out.EdgeAttachments = append(out.EdgeAttachments, &runtimev1.RuntimeEdgeNetworkAttachmentState{RouteDomain: attachment.RouteDomain, NetworkName: attachment.NetworkName, EdgeAlias: attachment.EdgeAlias, RuntimeAlias: attachment.RuntimeAlias, TargetAlias: attachment.TargetAlias, TargetPort: targetPort, Attached: attachment.Attached, Generation: attachment.Generation, SourceComponent: attachment.SourceComponent})
+	}
+	return out
 }
 
 func protoImageInfo(image domain.RuntimeImageDetail) *runtimev1.RuntimeImageInfo {

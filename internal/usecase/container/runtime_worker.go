@@ -6,12 +6,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const runtimeWorkerTargetAliasPrefix = "gordon-target-"
+const (
+	runtimeWorkerTargetAliasPrefix      = "gordon-target-"
+	runtimeWorkerCompletedResultLimit   = 1024
+	runtimeWorkerPolicyDeniedEventLimit = 256
+)
 
 // runtimeWorkerService is the subset of Service used by the local runtime worker adapter.
 type runtimeWorkerService interface {
@@ -29,16 +34,36 @@ type runtimePolicySetter interface {
 	SetRuntimePolicy(RuntimePolicy)
 }
 
+type runtimeVolumeLister interface {
+	ListVolumes(context.Context) ([]*domain.VolumeInfo, error)
+}
+
+type runtimePolicyDeniedEventPublisher interface {
+	PublishRuntimePolicyDeniedEvent(context.Context, domain.RuntimePolicyDeniedEvent) error
+}
+
 // RuntimeWorker adapts local container.Service behavior to runtime intent commands.
 type RuntimeWorker struct {
 	service runtimeWorkerService
 	policy  RuntimePolicy
 	now     func() time.Time
+
+	mu                      sync.Mutex
+	completedByDedupeKey    map[string]domain.RuntimeCommandResult
+	completedDedupeKeyOrder []string
+	inFlightByDedupeKey     map[string]*runtimeWorkerInFlight
+	policyDeniedEvents      []domain.RuntimePolicyDeniedEvent
 }
 
 // NewRuntimeWorker creates a local runtime worker around the existing container service.
 func NewRuntimeWorker(service runtimeWorkerService) *RuntimeWorker {
 	return NewRuntimeWorkerWithPolicy(service, NewRuntimePolicy(RuntimePolicyModeObserve))
+}
+
+type runtimeWorkerInFlight struct {
+	done   chan struct{}
+	result domain.RuntimeCommandResult
+	err    error
 }
 
 // NewRuntimeWorkerWithPolicy creates a local runtime worker with explicit policy mode.
@@ -47,21 +72,33 @@ func NewRuntimeWorkerWithPolicy(service runtimeWorkerService, policy RuntimePoli
 	if setter, ok := service.(runtimePolicySetter); ok {
 		setter.SetRuntimePolicy(policy)
 	}
-	return &RuntimeWorker{service: service, policy: policy, now: time.Now}
+	return &RuntimeWorker{service: service, policy: policy, now: time.Now, completedByDedupeKey: make(map[string]domain.RuntimeCommandResult), inFlightByDedupeKey: make(map[string]*runtimeWorkerInFlight)}
+}
+
+// PolicyDeniedEvents returns policy findings recorded by this worker in observe or enforce mode.
+func (w *RuntimeWorker) PolicyDeniedEvents() []domain.RuntimePolicyDeniedEvent {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	events := make([]domain.RuntimePolicyDeniedEvent, len(w.policyDeniedEvents))
+	copy(events, w.policyDeniedEvents)
+	return events
 }
 
 func (w *RuntimeWorker) DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckDeployRoute(command)); denied {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckDeployRoute(command), ""); denied {
+		return result, nil
+	}
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "deploy_route"); ok {
 		return result, nil
 	}
 	deployCtx := ctx
 	if command.InternalDeploy {
 		deployCtx = domain.WithInternalDeploy(ctx)
 	}
-	return w.run(command.RuntimeCommandIdentity, func() error {
+	return w.runOnce(ctx, command.RuntimeCommandIdentity, "deploy_route", func() error {
 		_, err := w.service.Deploy(deployCtx, domain.Route{Domain: command.Domain, Image: command.Image, Env: command.Env})
 		return err
 	})
@@ -71,10 +108,13 @@ func (w *RuntimeWorker) RestartRoute(ctx context.Context, command domain.Restart
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckRestartRoute(command)); denied {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckRestartRoute(command), ""); denied {
 		return result, nil
 	}
-	return w.run(command.RuntimeCommandIdentity, func() error {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "restart_route"); ok {
+		return result, nil
+	}
+	return w.runOnce(ctx, command.RuntimeCommandIdentity, "restart_route", func() error {
 		return w.service.Restart(ctx, command.Domain, command.WithAttachments)
 	})
 }
@@ -83,10 +123,13 @@ func (w *RuntimeWorker) RemoveRoute(ctx context.Context, command domain.RemoveRo
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckRemoveRoute(command)); denied {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckRemoveRoute(command), ""); denied {
 		return result, nil
 	}
-	return w.run(command.RuntimeCommandIdentity, func() error {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "remove_route"); ok {
+		return result, nil
+	}
+	return w.runOnce(ctx, command.RuntimeCommandIdentity, "remove_route", func() error {
 		_, err := w.service.ReconcileRemovedRoute(ctx, command.Domain)
 		return err
 	})
@@ -96,10 +139,13 @@ func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileR
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckReconcile(command)); denied {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckReconcile(command), ""); denied {
 		return result, nil
 	}
-	return w.run(command.RuntimeCommandIdentity, func() error {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "reconcile"); ok {
+		return result, nil
+	}
+	return w.runOnce(ctx, command.RuntimeCommandIdentity, "reconcile", func() error {
 		if err := w.service.SyncContainers(ctx); err != nil {
 			return err
 		}
@@ -108,17 +154,21 @@ func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileR
 }
 
 // SelfUpdate validates policy intent but does not perform unmanaged local runtime mutations.
-func (w *RuntimeWorker) SelfUpdate(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
+func (w *RuntimeWorker) SelfUpdate(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckSelfUpdate(command)); denied {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckSelfUpdate(command), command.PolicyDecisionID); denied {
+		return result, nil
+	}
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "self_update"); ok {
 		return result, nil
 	}
 	result := w.baseResult(command.RuntimeCommandIdentity)
 	result.CompletedAt = result.StartedAt
 	result.Status = domain.RuntimeCommandStatusDenied
 	result.Error = &domain.RuntimeCommandError{Code: "self_update_unavailable", Message: "local runtime self-update adapter is not available", Retryable: false}
+	w.storeResult(command.RuntimeCommandIdentity, "self_update", result)
 	return result, nil
 }
 
@@ -139,12 +189,49 @@ func (w *RuntimeWorker) Snapshot(ctx context.Context, generation uint64, stateVe
 		Routes:            buildRuntimeRouteStates(generation, routes, containers, networkAliases),
 		Containers:        buildRuntimeContainerStates(generation, containers),
 		Networks:          buildRuntimeNetworkStates(generation, networks),
+		Volumes:           w.buildRuntimeVolumeStates(ctx, generation),
 		EdgeAttachments:   buildRuntimeEdgeAttachmentStates(generation, routes, containers, networkAliases, sourceComponentID),
 	}
 	if err := snapshot.Validate(); err != nil {
 		return domain.RuntimeActualStateSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func (w *RuntimeWorker) runOnce(ctx context.Context, identity domain.RuntimeCommandIdentity, kind string, op func() error) (domain.RuntimeCommandResult, error) {
+	key := identity.DedupeKey(kind)
+
+	w.mu.Lock()
+	if result, ok := w.completedByDedupeKey[key]; ok {
+		w.mu.Unlock()
+		return result, nil
+	}
+	if inFlight, ok := w.inFlightByDedupeKey[key]; ok {
+		w.mu.Unlock()
+		select {
+		case <-inFlight.done:
+			return inFlight.result, inFlight.err
+		case <-ctx.Done():
+			return w.failedResult(identity, ctx.Err()), nil
+		}
+	}
+	inFlight := &runtimeWorkerInFlight{done: make(chan struct{})}
+	w.inFlightByDedupeKey[key] = inFlight
+	w.mu.Unlock()
+
+	result, err := w.run(identity, op)
+
+	w.mu.Lock()
+	if result.Status != domain.RuntimeCommandStatusRunning && result.Status != domain.RuntimeCommandStatusPending {
+		w.rememberCompletedResultLocked(key, result)
+	}
+	delete(w.inFlightByDedupeKey, key)
+	inFlight.result = result
+	inFlight.err = err
+	close(inFlight.done)
+	w.mu.Unlock()
+
+	return result, err
 }
 
 func (w *RuntimeWorker) run(identity domain.RuntimeCommandIdentity, op func() error) (domain.RuntimeCommandResult, error) {
@@ -172,11 +259,62 @@ func (w *RuntimeWorker) failedResult(identity domain.RuntimeCommandIdentity, err
 	return result
 }
 
-func (w *RuntimeWorker) policyResult(identity domain.RuntimeCommandIdentity, err error) (domain.RuntimeCommandResult, bool) {
-	if err == nil || !w.policy.Enforced() {
+func (w *RuntimeWorker) policyResult(ctx context.Context, identity domain.RuntimeCommandIdentity, err error, decisionID string) (domain.RuntimeCommandResult, bool) {
+	if err == nil {
+		return domain.RuntimeCommandResult{}, false
+	}
+	w.recordPolicyDenied(ctx, err, decisionID)
+	if !w.policy.Enforced() {
 		return domain.RuntimeCommandResult{}, false
 	}
 	return w.failedResult(identity, err), true
+}
+
+func (w *RuntimeWorker) cachedResult(identity domain.RuntimeCommandIdentity, kind string) (domain.RuntimeCommandResult, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	result, ok := w.completedByDedupeKey[identity.DedupeKey(kind)]
+	return result, ok
+}
+
+func (w *RuntimeWorker) storeResult(identity domain.RuntimeCommandIdentity, kind string, result domain.RuntimeCommandResult) {
+	if result.Status == domain.RuntimeCommandStatusRunning || result.Status == domain.RuntimeCommandStatusPending {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.rememberCompletedResultLocked(identity.DedupeKey(kind), result)
+}
+
+func (w *RuntimeWorker) recordPolicyDenied(ctx context.Context, err error, decisionID string) {
+	event, ok := RuntimePolicyDeniedEventFromError(err, decisionID)
+	if !ok {
+		return
+	}
+	event.OccurredAt = w.now()
+	w.mu.Lock()
+	w.policyDeniedEvents = append(w.policyDeniedEvents, event)
+	if len(w.policyDeniedEvents) > runtimeWorkerPolicyDeniedEventLimit {
+		copy(w.policyDeniedEvents, w.policyDeniedEvents[len(w.policyDeniedEvents)-runtimeWorkerPolicyDeniedEventLimit:])
+		w.policyDeniedEvents = w.policyDeniedEvents[:runtimeWorkerPolicyDeniedEventLimit]
+	}
+	w.mu.Unlock()
+	if publisher, ok := w.service.(runtimePolicyDeniedEventPublisher); ok {
+		_ = publisher.PublishRuntimePolicyDeniedEvent(ctx, event)
+	}
+}
+
+func (w *RuntimeWorker) rememberCompletedResultLocked(key string, result domain.RuntimeCommandResult) {
+	if _, exists := w.completedByDedupeKey[key]; !exists {
+		w.completedDedupeKeyOrder = append(w.completedDedupeKeyOrder, key)
+	}
+	w.completedByDedupeKey[key] = result
+	for len(w.completedDedupeKeyOrder) > runtimeWorkerCompletedResultLimit {
+		oldest := w.completedDedupeKeyOrder[0]
+		copy(w.completedDedupeKeyOrder, w.completedDedupeKeyOrder[1:])
+		w.completedDedupeKeyOrder = w.completedDedupeKeyOrder[:len(w.completedDedupeKeyOrder)-1]
+		delete(w.completedByDedupeKey, oldest)
+	}
 }
 
 func statusForError(err error) domain.RuntimeCommandStatus {
@@ -224,6 +362,25 @@ func buildRuntimeContainerStates(generation uint64, containers map[string]*domai
 			continue
 		}
 		states = append(states, domain.RuntimeContainerState{Name: c.Name, Alias: targetAliasForDomain(c.Labels[domain.LabelDomain]), Image: c.Image, ImageID: c.ImageID, Status: normalizeContainerStatus(c.Status), StartedAt: c.Created, Labels: domain.SanitizeRuntimeStateLabels(c.Labels), Generation: generation})
+	}
+	return states
+}
+
+func (w *RuntimeWorker) buildRuntimeVolumeStates(ctx context.Context, generation uint64) []domain.RuntimeVolumeState {
+	volumeLister, ok := w.service.(runtimeVolumeLister)
+	if !ok {
+		return nil
+	}
+	volumes, err := volumeLister.ListVolumes(ctx)
+	if err != nil {
+		return nil
+	}
+	states := make([]domain.RuntimeVolumeState, 0, len(volumes))
+	for _, volume := range volumes {
+		if volume == nil || !safeRuntimeVolumeName(volume.Name) {
+			continue
+		}
+		states = append(states, domain.RuntimeVolumeState{Name: volume.Name, AttachedTo: sanitizedAliases(volume.Containers), Generation: generation})
 	}
 	return states
 }
@@ -382,12 +539,17 @@ func sanitizedAliases(values []string) []string {
 	aliases := make([]string, 0, len(values))
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
-		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" {
+		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" || strings.ContainsAny(trimmed, `/\\`) {
 			continue
 		}
 		aliases = append(aliases, trimmed)
 	}
 	return aliases
+}
+
+func safeRuntimeVolumeName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	return trimmed != "" && !strings.ContainsAny(trimmed, `/\\`) && !strings.Contains(trimmed, "://") && !isRuntimeSocketMount(trimmed)
 }
 
 var _ runtimeWorkerService = (*Service)(nil)

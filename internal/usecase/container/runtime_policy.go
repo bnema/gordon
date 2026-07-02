@@ -59,6 +59,7 @@ type RuntimePolicy struct {
 	RequireImageDigest     bool
 	AllowedCapAdd          []string
 	RuntimeComponentID     string
+	RuntimeComponentRole   domain.ComponentRole
 }
 
 func NewRuntimePolicy(mode RuntimePolicyMode) RuntimePolicy {
@@ -103,8 +104,15 @@ func (p RuntimePolicy) CheckReconcile(command domain.ReconcileRuntimeCommand) er
 }
 
 func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) error {
+	p = p.normalize()
 	if strings.TrimSpace(command.TargetComponentID) == "" || !domain.IsKnownComponentRole(command.TargetComponentRole) {
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "only labeled Gordon component self-updates are allowed")
+	}
+	if strings.TrimSpace(p.RuntimeComponentID) != "" && command.TargetComponentID != p.RuntimeComponentID {
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target component is not authorized")
+	}
+	if p.RuntimeComponentRole != "" && command.TargetComponentRole != p.RuntimeComponentRole {
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target role is not authorized")
 	}
 	return nil
 }
@@ -197,7 +205,7 @@ func RuntimePolicyDeniedEventFromError(err error, decisionID string) (domain.Run
 	if !errors.As(err, &denied) {
 		return domain.RuntimePolicyDeniedEvent{}, false
 	}
-	return domain.RuntimePolicyDeniedEvent{CommandID: denied.CommandID, RouteDomain: denied.RouteDomain, Service: denied.RouteDomain, Generation: denied.Generation, SourceComponentID: denied.ComponentID, PolicyDecisionID: decisionID, Reason: denied.Reason, Message: denied.Message}, true
+	return domain.RuntimePolicyDeniedEvent{CommandID: denied.CommandID, RouteDomain: denied.RouteDomain, Service: denied.RouteDomain, Generation: denied.Generation, SourceComponentID: denied.ComponentID, PolicyDecisionID: decisionID, Reason: denied.Reason, Message: sanitizeRuntimeErrorMessage(denied)}, true
 }
 
 func formatPolicyReason(reason string) string {

@@ -120,10 +120,67 @@ message WatchActualStateRequest {
   uint64 after_generation = 1;
 }
 
+message RuntimeRouteState {
+  string domain = 1;
+  uint64 generation = 2;
+  string route_version = 3;
+  string container_alias = 4;
+  string edge_target_alias = 5;
+  int32 target_port = 6;
+  string scheme = 7;
+  string protocol = 8;
+  string status = 9;
+  string unavailable_reason = 10;
+  string backing_container_name = 11;
+}
+
+message RuntimeContainerState {
+  string name = 1;
+  string alias = 2;
+  string image = 3;
+  string image_id = 4;
+  string status = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, string> labels = 7;
+  uint64 generation = 8;
+}
+
+message RuntimeNetworkState {
+  string name = 1;
+  string driver = 2;
+  bool internal = 3;
+  repeated string aliases = 4;
+  uint64 generation = 5;
+}
+
+message RuntimeActualVolumeState {
+  string name = 1;
+  repeated string attached_to = 2;
+  uint64 generation = 3;
+}
+
+message RuntimeEdgeNetworkAttachmentState {
+  string route_domain = 1;
+  string network_name = 2;
+  string edge_alias = 3;
+  string runtime_alias = 4;
+  string target_alias = 5;
+  int32 target_port = 6;
+  bool attached = 7;
+  uint64 generation = 8;
+  string source_component = 9;
+}
+
 message ActualStateSnapshot {
   uint64 generation = 1;
   string state_version = 2;
   string source_component_id = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  repeated RuntimeRouteState routes = 5;
+  repeated RuntimeContainerState containers = 6;
+  repeated RuntimeNetworkState networks = 7;
+  repeated RuntimeActualVolumeState volumes = 8;
+  repeated RuntimeEdgeNetworkAttachmentState edge_attachments = 9;
 }
 
 message GetHealthRequest {}

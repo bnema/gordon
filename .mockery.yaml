@@ -28,6 +28,8 @@ packages:
       DomainSecretStore:
       RateLimiter:
       BackupStorage:
+      BackupDatabaseRuntime:
+      BackupVolumeTargetRuntime:
       RouteChecker:
       HTTPChallengeSink:
       PublicCertificateIssuer:

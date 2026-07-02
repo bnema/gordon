@@ -71,6 +71,97 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	assert.Equal(t, domain.ComponentRoleRuntime, worker.self.TargetComponentRole)
 }
 
+func TestServerWatchActualStateStreamsSanitizedSnapshots(t *testing.T) {
+	snapshot := testActualStateSnapshot()
+	state := &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{snapshot}}
+	server := NewServerWithStateSubscriber(&fakeRuntimeWorker{}, state, "runtime-1")
+	stream := &fakeActualStateStream{ctx: context.Background()}
+
+	err := server.WatchActualState(&runtimev1.WatchActualStateRequest{}, stream)
+
+	require.NoError(t, err)
+	require.Len(t, stream.snapshots, 1)
+	got := stream.snapshots[0]
+	assert.Equal(t, uint64(7), got.GetGeneration())
+	assert.Equal(t, "app.example.com", got.GetRoutes()[0].GetDomain())
+	assert.Equal(t, "gordon-target-app-example-com", got.GetRoutes()[0].GetEdgeTargetAlias())
+	assert.Equal(t, "gordon-data", got.GetVolumes()[0].GetName())
+	assert.Empty(t, got.GetContainers()[0].GetLabels()["secret.env"])
+}
+
+func TestServerWatchActualStateCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	state := &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{testActualStateSnapshot()}, beforeSend: cancel}
+	server := NewServerWithStateSubscriber(&fakeRuntimeWorker{}, state, "runtime-1")
+
+	err := server.WatchActualState(&runtimev1.WatchActualStateRequest{}, &fakeActualStateStream{ctx: ctx})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+}
+
+func TestServerReportEdgeDrainInvokesReceiver(t *testing.T) {
+	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
+	receiver.EXPECT().
+		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
+		Return(nil)
+	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+
+	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
+
+	require.NoError(t, err)
+	assert.True(t, ack.Ok)
+}
+
+func TestServerReportEdgeDrainValidation(t *testing.T) {
+	server := NewServer(&fakeRuntimeWorker{}, "runtime-1")
+
+	cases := []*runtimev1.ReportEdgeDrainRequest{
+		nil,
+		{Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"},
+		{RouteDomain: "app.example.com", EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"},
+		{RouteDomain: "app.example.com", Generation: 7, TargetAlias: "gordon-target-app-example-com"},
+		{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1"},
+	}
+	for _, req := range cases {
+		_, err := server.ReportEdgeDrain(context.Background(), req)
+		require.Error(t, err)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	}
+}
+
+func TestServerReportEdgeDrainRejectsInvalidRouteDomainBeforeReceiver(t *testing.T) {
+	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
+	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+
+	invalidDomains := []string{"localhost", "127.0.0.1", "app.example.com/path", "app.example.com\\path", "app.local"}
+	for _, routeDomain := range invalidDomains {
+		t.Run(routeDomain, func(t *testing.T) {
+			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: routeDomain, Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		})
+	}
+	receiver.AssertNotCalled(t, "AcknowledgeRuntimeDrain", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestServerReportEdgeDrainRejectsInvalidTargetAliasBeforeReceiver(t *testing.T) {
+	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
+	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+
+	invalidAliases := []string{"localhost", "127.0.0.1", "127.10.0.1", "::1", "gordon/target", "gordon\\target"}
+	for _, targetAlias := range invalidAliases {
+		t.Run(targetAlias, func(t *testing.T) {
+			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: targetAlias})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		})
+	}
+	receiver.AssertNotCalled(t, "AcknowledgeRuntimeDrain", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestServerStreamLogsUsesRuntimeLogReader(t *testing.T) {
 	reader := outMocks.NewMockRuntimeLogReader(t)
 	reader.EXPECT().
@@ -124,14 +215,18 @@ func TestServerImageManager(t *testing.T) {
 }
 
 func TestServerHealthAndDrainAck(t *testing.T) {
-	server := NewServer(&fakeRuntimeWorker{}, "runtime-1")
+	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
+	receiver.EXPECT().
+		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
+		Return(nil)
+	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
 
 	health, err := server.GetHealth(context.Background(), &runtimev1.GetHealthRequest{})
 	require.NoError(t, err)
 	assert.True(t, health.Ok)
 	assert.Equal(t, "runtime-1", health.ComponentId)
 
-	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, TargetAlias: "gordon-target-app-example-com"})
+	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
 	require.NoError(t, err)
 	assert.True(t, ack.Ok)
 
@@ -163,6 +258,74 @@ func TestMethodScopesRequireRuntimePermissions(t *testing.T) {
 	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_PruneImages_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeSelfUpdate, scopes[runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeDrainAck, scopes[runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName])
+}
+
+type fakeActualStateStream struct {
+	runtimev1.RuntimeService_WatchActualStateServer
+	ctx       context.Context
+	snapshots []*runtimev1.ActualStateSnapshot
+}
+
+func (f *fakeActualStateStream) Context() context.Context { return f.ctx }
+
+func (f *fakeActualStateStream) Send(snapshot *runtimev1.ActualStateSnapshot) error {
+	f.snapshots = append(f.snapshots, snapshot)
+	return nil
+}
+
+type fakeRuntimeStateSubscriber struct {
+	snapshots  []domain.RuntimeActualStateSnapshot
+	beforeSend func()
+}
+
+func (f *fakeRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	ch := make(chan domain.RuntimeActualStateSnapshot)
+	go func() {
+		defer close(ch)
+		for _, snapshot := range f.snapshots {
+			if f.beforeSend != nil {
+				f.beforeSend()
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- snapshot:
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func testActualStateSnapshot() domain.RuntimeActualStateSnapshot {
+	return domain.RuntimeActualStateSnapshot{
+		Generation:        7,
+		StateVersion:      "state-v1",
+		SourceComponentID: "runtime-1",
+		ObservedAt:        time.Unix(11, 0).UTC(),
+		Routes: []domain.RuntimeRouteState{{
+			Domain:               "app.example.com",
+			Generation:           7,
+			RouteVersion:         "route-v1",
+			ContainerAlias:       "app-example-com",
+			EdgeTargetAlias:      "gordon-target-app-example-com",
+			TargetPort:           8080,
+			Scheme:               "http",
+			Protocol:             domain.RouteTargetProtocolHTTP1,
+			Status:               domain.RouteTargetStatusReady,
+			BackingContainerName: "gordon-app-example-com",
+		}},
+		Containers: []domain.RuntimeContainerState{{
+			Name:       "gordon-app-example-com",
+			Alias:      "app-example-com",
+			Image:      "app:latest",
+			Status:     domain.ContainerStatusRunning,
+			Labels:     map[string]string{domain.LabelDomain: "app.example.com", "secret.env": "DATABASE_URL=secret"},
+			Generation: 7,
+		}},
+		Networks:        []domain.RuntimeNetworkState{{Name: "gordon-app", Driver: "bridge", Aliases: []string{"app-example-com"}, Generation: 7}},
+		Volumes:         []domain.RuntimeVolumeState{{Name: "gordon-data", AttachedTo: []string{"gordon-app-example-com"}, Generation: 7}},
+		EdgeAttachments: []domain.RuntimeEdgeNetworkAttachmentState{{RouteDomain: "app.example.com", NetworkName: "gordon-app", EdgeAlias: "edge-1", RuntimeAlias: "runtime-1", TargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Attached: true, Generation: 7, SourceComponent: "runtime-1"}},
+	}
 }
 
 type fakeLogStream struct {

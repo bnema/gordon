@@ -38,16 +38,16 @@ func (_m *MockRuntimeDrainAckReceiver) EXPECT() *MockRuntimeDrainAckReceiver_Exp
 }
 
 // AcknowledgeRuntimeDrain provides a mock function for the type MockRuntimeDrainAckReceiver
-func (_mock *MockRuntimeDrainAckReceiver) AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64) error {
-	ret := _mock.Called(ctx, routeDomain, generation)
+func (_mock *MockRuntimeDrainAckReceiver) AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error {
+	ret := _mock.Called(ctx, routeDomain, generation, edgeComponentID, targetAlias)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AcknowledgeRuntimeDrain")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, uint64) error); ok {
-		r0 = returnFunc(ctx, routeDomain, generation)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, uint64, string, string) error); ok {
+		r0 = returnFunc(ctx, routeDomain, generation, edgeComponentID, targetAlias)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -63,11 +63,13 @@ type MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call struct {
 //   - ctx context.Context
 //   - routeDomain string
 //   - generation uint64
-func (_e *MockRuntimeDrainAckReceiver_Expecter) AcknowledgeRuntimeDrain(ctx any, routeDomain any, generation any) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
-	return &MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call{Call: _e.mock.On("AcknowledgeRuntimeDrain", ctx, routeDomain, generation)}
+//   - edgeComponentID string
+//   - targetAlias string
+func (_e *MockRuntimeDrainAckReceiver_Expecter) AcknowledgeRuntimeDrain(ctx any, routeDomain any, generation any, edgeComponentID any, targetAlias any) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
+	return &MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call{Call: _e.mock.On("AcknowledgeRuntimeDrain", ctx, routeDomain, generation, edgeComponentID, targetAlias)}
 }
 
-func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) Run(run func(ctx context.Context, routeDomain string, generation uint64)) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
+func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) Run(run func(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string)) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -81,10 +83,20 @@ func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) Run(run func
 		if args[2] != nil {
 			arg2 = args[2].(uint64)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		var arg4 string
+		if args[4] != nil {
+			arg4 = args[4].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -95,7 +107,7 @@ func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) Return(err e
 	return _c
 }
 
-func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) RunAndReturn(run func(ctx context.Context, routeDomain string, generation uint64) error) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
+func (_c *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call) RunAndReturn(run func(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error) *MockRuntimeDrainAckReceiver_AcknowledgeRuntimeDrain_Call {
 	_c.Call.Return(run)
 	return _c
 }

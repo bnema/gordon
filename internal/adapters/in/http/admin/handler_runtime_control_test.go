@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/dto"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -83,6 +84,48 @@ func TestRuntimeControlAPIParity(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 	})
+
+	t.Run("status uses runtime actual state without dto drift", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		routes := []domain.Route{{Domain: "app.example.com", Image: "app:latest"}}
+		configSvc.EXPECT().GetRoutes(mock.Anything).Return(routes)
+		configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com")
+		configSvc.EXPECT().GetRegistryPort().Return(5000)
+		configSvc.EXPECT().GetServerPort().Return(8080)
+		configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
+		configSvc.EXPECT().IsNetworkIsolationEnabled().Return(false)
+		runtimeControl := &fakeRuntimeControl{statuses: map[string]string{"app.example.com": "running"}}
+		handler := newTestHandler(t, func(d *HandlerDeps) {
+			d.ConfigSvc = configSvc
+			d.RuntimeControl = runtimeControl
+		})
+		server := newScopedTestServer(t, handler, "admin:status:read")
+
+		resp, err := http.Get(server.URL + "/admin/status")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		var body dto.StatusResponse
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+		assert.Equal(t, dto.StatusResponse{Routes: 1, RegistryDomain: "registry.example.com", RegistryPort: 5000, ServerPort: 8080, AutoRoute: true, NetworkIsolation: false, ContainerStatuses: map[string]string{"app.example.com": "running"}}, body)
+		assert.Equal(t, routes, runtimeControl.statusRoutes)
+	})
+
+	t.Run("status runtime unavailable maps service unavailable", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "app:latest"}})
+		runtimeControl := &fakeRuntimeControl{statusErr: context.DeadlineExceeded}
+		handler := newTestHandler(t, func(d *HandlerDeps) {
+			d.ConfigSvc = configSvc
+			d.RuntimeControl = runtimeControl
+		})
+		server := newScopedTestServer(t, handler, "admin:status:read")
+
+		resp, err := http.Get(server.URL + "/admin/status")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
+	})
 }
 
 type fakeRuntimeControl struct {
@@ -96,6 +139,9 @@ type fakeRuntimeControl struct {
 	restartAttach bool
 	removeDomain  string
 	removeForce   bool
+	statuses      map[string]string
+	statusRoutes  []domain.Route
+	statusErr     error
 }
 
 func (f *fakeRuntimeControl) DeployRoute(_ context.Context, route domain.Route) (domain.RuntimeCommandResult, error) {
@@ -113,6 +159,11 @@ func (f *fakeRuntimeControl) RemoveRoute(_ context.Context, domainName string, f
 	f.removeDomain = domainName
 	f.removeForce = force
 	return f.remove, f.err
+}
+
+func (f *fakeRuntimeControl) RouteStatuses(_ context.Context, routes []domain.Route) (map[string]string, error) {
+	f.statusRoutes = append([]domain.Route(nil), routes...)
+	return f.statuses, f.statusErr
 }
 
 func runtimeSuccess(commandID string) domain.RuntimeCommandResult {
