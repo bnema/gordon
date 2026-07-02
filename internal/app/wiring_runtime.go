@@ -1,8 +1,137 @@
 package app
 
-import "context"
+import (
+	"context"
+	"net"
+	"time"
 
-// runRuntimeImpl owns future runtime-worker-only wiring.
+	"github.com/bnema/zerowrap"
+	"github.com/spf13/viper"
+	"google.golang.org/grpc"
+
+	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/usecase/config"
+	"github.com/bnema/gordon/internal/usecase/container"
+)
+
+var (
+	buildRuntimeRoleWorker             = buildRuntimeRoleWorkerImpl
+	listenRuntimeGRPC                  = net.Listen
+	runtimeRoleComponentTokenValidator interceptors.ComponentTokenValidator
+)
+
+// runRuntimeImpl owns runtime-worker-only wiring.
 func runRuntimeImpl(ctx context.Context, configPath string) error {
-	return newRoleNotImplementedError(RoleRuntime)
+	v, cfg, err := initConfig(configPath)
+	if err != nil {
+		return err
+	}
+	log, cleanupLog, err := initLogger(cfg)
+	if err != nil {
+		return err
+	}
+	if cleanupLog != nil {
+		defer cleanupLog()
+	}
+	ctx = zerowrap.WithCtx(ctx, log)
+	warnDeprecatedConfigKeys(v, log)
+
+	worker, cleanupWorker, err := buildRuntimeRoleWorker(ctx, v, cfg, log)
+	if err != nil {
+		return err
+	}
+	if cleanupWorker != nil {
+		defer cleanupWorker()
+	}
+
+	addr := v.GetString("runtime.listen_address")
+	listener, err := listenRuntimeGRPC("tcp", addr)
+	if err != nil {
+		return log.WrapErr(err, "failed to listen for runtime gRPC")
+	}
+	defer listener.Close()
+
+	server := grpc.NewServer(
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
+	)
+	runtimev1.RegisterRuntimeServiceServer(server, runtimegrpc.NewServer(worker, "gordon-runtime"))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Serve(listener)
+	}()
+	log.Info().Str("addr", listener.Addr().String()).Msg("gordon-runtime gRPC server started")
+
+	select {
+	case <-ctx.Done():
+		stopped := make(chan struct{})
+		go func() {
+			server.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-time.After(5 * time.Second):
+			server.Stop()
+		}
+		return nil
+	case err := <-errCh:
+		return log.WrapErr(err, "runtime gRPC server stopped")
+	}
+}
+
+func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (in.RuntimeWorker, func(), error) {
+	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
+	runtimeAdapter, eventBus, err := createOutputAdapters(ctx, log, RoleRuntime, runtimeSocket)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	svc := &services{runtime: runtimeAdapter, eventBus: eventBus}
+	cleanup := func() {
+		if svc.eventBus != nil {
+			svc.eventBus.Stop()
+		}
+	}
+
+	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if svc.tokenStore, svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err := setupInternalRegistryAuth(svc, log); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	svc.configSvc = config.NewService(v, svc.eventBus)
+
+	si := &serviceInit{ctx: ctx, v: v, cfg: cfg, log: log, svc: svc}
+	if err := si.initSecrets(); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	if err := svc.eventBus.Start(); err != nil {
+		cleanup()
+		return nil, nil, log.WrapErr(err, "failed to start runtime event bus")
+	}
+
+	policy := container.RuntimePolicy{
+		Mode:                   container.RuntimePolicyModeEnforce,
+		ManagedNetworkPrefix:   v.GetString("network_isolation.network_prefix"),
+		AllowedImageRegistries: cfg.Images.AllowedRegistries,
+		RequireImageDigest:     cfg.Images.RequireDigest,
+		RuntimeComponentID:     "gordon-runtime",
+	}
+	return container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy), cleanup, nil
 }

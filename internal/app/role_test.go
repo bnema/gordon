@@ -103,7 +103,6 @@ func TestRoleNotImplemented(t *testing.T) {
 		run  func(context.Context, string) error
 	}{
 		{role: RoleControl, run: runControlImpl},
-		{role: RoleRuntime, run: runRuntimeImpl},
 		{role: RoleEdge, run: runEdgeImpl},
 		{role: RoleRegistry, run: runRegistryImpl},
 	}

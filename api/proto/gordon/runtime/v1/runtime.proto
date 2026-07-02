@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package gordon.runtime.v1;
+
+import "gordon/common/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/runtime/v1;runtimev1";
+
+// RuntimeService is the narrow intent surface exposed by gordon-runtime.
+// It must not expose raw Docker/Podman socket operations or full inspect data.
+service RuntimeService {
+  rpc ApplyCommand(ApplyCommandRequest) returns (ApplyCommandResponse);
+  rpc WatchActualState(WatchActualStateRequest) returns (stream ActualStateSnapshot);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+  rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (ApplyCommandResponse);
+
+  // ReportEdgeDrain is called by gordon-control after gordon-edge reports that
+  // a route generation has drained. Edge never calls runtime directly: edge
+  // reports drain state to control, control validates generation and target,
+  // then relays this acknowledgement to runtime. Runtime waits for this ack or
+  // its configured drain timeout before stopping the old route container.
+  rpc ReportEdgeDrain(ReportEdgeDrainRequest) returns (gordon.common.v1.Ack);
+}
+
+message RuntimeCommandIdentity {
+  string id = 1;
+  string idempotency_key = 2;
+  uint64 generation = 3;
+  string source_component_id = 4;
+  google.protobuf.Timestamp requested_at = 5;
+}
+
+message DeployRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  string image = 3;
+  string route_version = 4;
+  repeated string env = 5;
+}
+
+message RestartRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  string reason = 3;
+  bool with_attachments = 4;
+}
+
+message RemoveRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  bool force = 3;
+}
+
+message RuntimeRouteDesiredState {
+  string domain = 1;
+  string image = 2;
+  repeated string env = 3;
+}
+
+message ReconcileRuntimeCommand {
+  RuntimeCommandIdentity identity = 1;
+  string reason = 2;
+  int32 expected_route_count = 3;
+  string desired_state_version = 4;
+  repeated RuntimeRouteDesiredState desired_routes = 5;
+}
+
+message RuntimeSelfUpdateCommand {
+  RuntimeCommandIdentity identity = 1;
+  string target_component_id = 2;
+  string target_component_role = 3;
+  string current_version = 4;
+  string target_version = 5;
+  string policy = 6;
+  string policy_decision_id = 7;
+  string approved_by = 8;
+}
+
+message ApplyCommandRequest {
+  oneof command {
+    DeployRouteCommand deploy_route = 1;
+    RestartRouteCommand restart_route = 2;
+    RemoveRouteCommand remove_route = 3;
+    ReconcileRuntimeCommand reconcile = 4;
+  }
+}
+
+message RuntimeSelfUpdateRequest {
+  RuntimeSelfUpdateCommand command = 1;
+}
+
+message RuntimeCommandError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message RuntimeCommandResult {
+  string command_id = 1;
+  string idempotency_key = 2;
+  uint64 generation = 3;
+  string status = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
+  RuntimeCommandError error = 7;
+}
+
+message ApplyCommandResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message WatchActualStateRequest {
+  uint64 after_generation = 1;
+}
+
+message ActualStateSnapshot {
+  uint64 generation = 1;
+  string state_version = 2;
+  string source_component_id = 3;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  bool ok = 1;
+  string component_id = 2;
+  string message = 3;
+}
+
+message StreamLogsRequest {
+  string route_domain = 1;
+  int32 tail = 2;
+  bool follow = 3;
+}
+
+message LogChunk {
+  bytes data = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message ReportEdgeDrainRequest {
+  string route_domain = 1;
+  uint64 generation = 2;
+  string edge_component_id = 3;
+  string target_alias = 4;
+}
