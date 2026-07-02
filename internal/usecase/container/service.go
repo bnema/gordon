@@ -92,6 +92,7 @@ type Service struct {
 	drainWaiter      out.ProxyDrainWaiter
 	config           Config
 	configProvider   AttachmentConfigProvider // live config reads for attachments/networks (may be nil)
+	runtimePolicy    RuntimePolicy
 	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
@@ -162,6 +163,7 @@ func NewService(
 		logWriter:      logWriter,
 		config:         config,
 		configProvider: configProvider,
+		runtimePolicy:  NewRuntimePolicy(RuntimePolicyModeObserve),
 		containers:     make(map[string]*domain.Container),
 		attachments:    make(map[string][]string),
 	}
@@ -170,6 +172,36 @@ func NewService(
 // SetMetrics sets the telemetry metrics for the container service.
 func (s *Service) SetMetrics(m *telemetry.Metrics) {
 	s.metrics = m
+}
+
+// SetRuntimePolicy sets the pre-create runtime policy mode for this service.
+func (s *Service) SetRuntimePolicy(policy RuntimePolicy) {
+	s.mu.Lock()
+	s.runtimePolicy = policy.normalize()
+	s.mu.Unlock()
+}
+
+func (s *Service) checkRuntimeContainerPolicy(routeDomain string, config *domain.ContainerConfig) error {
+	if config == nil {
+		return nil
+	}
+	s.mu.RLock()
+	policy := s.runtimePolicy
+	s.mu.RUnlock()
+	policy = policy.normalize()
+	err := policy.CheckContainerConfig(runtimePolicyIdentity(routeDomain), routeDomain, *config)
+	if err != nil && policy.Enforced() {
+		return err
+	}
+	return nil
+}
+
+func runtimePolicyIdentity(routeDomain string) domain.RuntimeCommandIdentity {
+	trimmed := strings.TrimSpace(routeDomain)
+	if trimmed == "" {
+		trimmed = "unknown"
+	}
+	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("container-create:" + trimmed), IdempotencyKey: "container-create:" + trimmed, Generation: 1, SourceComponentID: "container-service"}
 }
 
 // SetProxyCacheInvalidator sets the proxy cache invalidator for synchronous
@@ -641,6 +673,10 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		ImageLabels:  resources.imageLabels,
 		Existing:     existing,
 	})
+
+	if err := s.checkRuntimeContainerPolicy(route.Domain, containerConfig); err != nil {
+		return nil, err
+	}
 
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
@@ -2926,6 +2962,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	config, err := s.buildAttachmentContainerConfig(ctx, ownerDomain, serviceName, serviceImage, containerName, networkName)
 	if err != nil {
+		return err
+	}
+
+	if err := s.checkRuntimeContainerPolicy(ownerDomain, config); err != nil {
 		return err
 	}
 

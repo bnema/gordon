@@ -25,20 +25,37 @@ type runtimeWorkerService interface {
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 }
 
+type runtimePolicySetter interface {
+	SetRuntimePolicy(RuntimePolicy)
+}
+
 // RuntimeWorker adapts local container.Service behavior to runtime intent commands.
 type RuntimeWorker struct {
 	service runtimeWorkerService
+	policy  RuntimePolicy
 	now     func() time.Time
 }
 
 // NewRuntimeWorker creates a local runtime worker around the existing container service.
 func NewRuntimeWorker(service runtimeWorkerService) *RuntimeWorker {
-	return &RuntimeWorker{service: service, now: time.Now}
+	return NewRuntimeWorkerWithPolicy(service, NewRuntimePolicy(RuntimePolicyModeObserve))
+}
+
+// NewRuntimeWorkerWithPolicy creates a local runtime worker with explicit policy mode.
+func NewRuntimeWorkerWithPolicy(service runtimeWorkerService, policy RuntimePolicy) *RuntimeWorker {
+	policy = policy.normalize()
+	if setter, ok := service.(runtimePolicySetter); ok {
+		setter.SetRuntimePolicy(policy)
+	}
+	return &RuntimeWorker{service: service, policy: policy, now: time.Now}
 }
 
 func (w *RuntimeWorker) DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
+	}
+	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckDeployRoute(command)); denied {
+		return result, nil
 	}
 	return w.run(command.RuntimeCommandIdentity, func() error {
 		_, err := w.service.Deploy(ctx, domain.Route{Domain: command.Domain, Image: command.Image, Env: command.Env})
@@ -50,6 +67,9 @@ func (w *RuntimeWorker) RestartRoute(ctx context.Context, command domain.Restart
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
+	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckRestartRoute(command)); denied {
+		return result, nil
+	}
 	return w.run(command.RuntimeCommandIdentity, func() error {
 		return w.service.Restart(ctx, command.Domain, command.WithAttachments)
 	})
@@ -58,6 +78,9 @@ func (w *RuntimeWorker) RestartRoute(ctx context.Context, command domain.Restart
 func (w *RuntimeWorker) RemoveRoute(ctx context.Context, command domain.RemoveRouteCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
+	}
+	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckRemoveRoute(command)); denied {
+		return result, nil
 	}
 	return w.run(command.RuntimeCommandIdentity, func() error {
 		_, err := w.service.ReconcileRemovedRoute(ctx, command.Domain)
@@ -68,6 +91,9 @@ func (w *RuntimeWorker) RemoveRoute(ctx context.Context, command domain.RemoveRo
 func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileRuntimeCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
+	}
+	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckReconcile(command)); denied {
+		return result, nil
 	}
 	return w.run(command.RuntimeCommandIdentity, func() error {
 		if err := w.service.SyncContainers(ctx); err != nil {
@@ -81,6 +107,9 @@ func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileR
 func (w *RuntimeWorker) SelfUpdate(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
+	}
+	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckSelfUpdate(command)); denied {
+		return result, nil
 	}
 	result := w.baseResult(command.RuntimeCommandIdentity)
 	result.CompletedAt = result.StartedAt
@@ -139,8 +168,15 @@ func (w *RuntimeWorker) failedResult(identity domain.RuntimeCommandIdentity, err
 	return result
 }
 
+func (w *RuntimeWorker) policyResult(identity domain.RuntimeCommandIdentity, err error) (domain.RuntimeCommandResult, bool) {
+	if err == nil || !w.policy.Enforced() {
+		return domain.RuntimeCommandResult{}, false
+	}
+	return w.failedResult(identity, err), true
+}
+
 func statusForError(err error) domain.RuntimeCommandStatus {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRuntimePolicyDenied) {
 		return domain.RuntimeCommandStatusDenied
 	}
 	return domain.RuntimeCommandStatusFailed
@@ -151,7 +187,10 @@ func sanitizeRuntimeCommandError(err error) *domain.RuntimeCommandError {
 		return nil
 	}
 	code := "runtime_command_failed"
-	if errors.Is(err, context.Canceled) {
+	var policyDenied RuntimePolicyDeniedError
+	if errors.As(err, &policyDenied) {
+		code = formatPolicyReason(policyDenied.Reason)
+	} else if errors.Is(err, context.Canceled) {
 		code = "context_canceled"
 	} else if errors.Is(err, context.DeadlineExceeded) {
 		code = "context_deadline_exceeded"

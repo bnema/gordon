@@ -84,6 +84,18 @@ func TestRuntime_CreateContainerAppliesRestartPolicy(t *testing.T) {
 	assert.Equal(t, domain.RestartPolicyAlways, restartPolicy["Name"])
 }
 
+func TestRuntime_CreateContainerMapsPrivilegedFlag(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:      "nginx:latest",
+		Name:       "gordon-app.example.com",
+		Privileged: true,
+	})
+
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, hostConfig["Privileged"])
+}
+
 func createTestContainer(t *testing.T, config *domain.ContainerConfig) map[string]any {
 	t.Helper()
 

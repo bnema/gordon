@@ -187,6 +187,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		CapDrop:        capDrop,
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
+		Privileged:     config.Privileged,
 	}
 	if config.RestartPolicy != "" {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(config.RestartPolicy)}

@@ -92,6 +92,7 @@ type ContainerConfig struct {
 	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
 	PidsLimit       int64             // Max number of PIDs (0 = no limit)
 	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
+	Privileged      bool              // Run container with elevated host privileges
 	User            string            // User to run as
 	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
 	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults

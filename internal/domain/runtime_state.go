@@ -269,10 +269,13 @@ type RuntimeDeploymentEvent struct {
 type RuntimePolicyDeniedEvent struct {
 	ID                string
 	CommandID         RuntimeCommandID
+	RouteDomain       string
+	Service           string
 	Generation        uint64
 	SourceComponentID string
 	PolicyDecisionID  string
 	Reason            string
+	Message           string
 	OccurredAt        time.Time
 }
 
