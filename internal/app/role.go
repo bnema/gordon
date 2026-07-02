@@ -20,6 +20,23 @@ const (
 // ErrRoleNotImplemented is returned for parsed roles whose service graph is not wired yet.
 var ErrRoleNotImplemented = errors.New("role not implemented")
 
+// RoleNotImplementedError reports a parsed role whose service graph is not wired yet.
+type RoleNotImplementedError struct {
+	Role Role
+}
+
+func (e RoleNotImplementedError) Error() string {
+	return fmt.Sprintf("role %q not implemented", e.Role)
+}
+
+func (e RoleNotImplementedError) Unwrap() error {
+	return ErrRoleNotImplemented
+}
+
+func newRoleNotImplementedError(role Role) error {
+	return RoleNotImplementedError{Role: role}
+}
+
 const acceptedRoleValues = "monolith, control, runtime, edge, registry"
 
 // ParseRole parses a role value. Empty defaults to monolith.
