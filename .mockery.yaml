@@ -31,6 +31,7 @@ packages:
       SecretResolver:
       CloudflareZoneResolver:
       CertificateAuthority:
+      ComponentTokenStore:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

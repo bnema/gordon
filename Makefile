@@ -23,7 +23,9 @@ ARCHS := amd64 arm64
 # Phony targets
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
-	lint fmt check mocks proto proto-check clean-test help
+	lint fmt check mocks proto proto-check clean-test help \
+	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
+	compat-harness-proxy compat-harness-runtime compat-harness-migration compat-harness-security
 
 # Default target
 all: build
@@ -87,6 +89,41 @@ test-usecase: ## Run usecase layer tests only
 
 test-adapter: ## Run adapter layer tests only
 	@go test -v ./internal/adapters/...
+
+##@ Compatibility Harness
+
+compat-harness-config: ## Run config compatibility harness checks
+	@echo "Running config compatibility harness foundation checks..."
+	@go test ./internal/testutils/compatoldnew -run 'TestGoBuilder|TestRunner' -count=1
+	@echo "Config compatibility slice tests are not implemented yet; foundation checks passed."
+
+compat-harness-cli: ## Run CLI compatibility harness checks
+	@echo "CLI compatibility slice tests are not implemented yet; skipping until tests are added."
+
+compat-harness-api: ## Run API compatibility harness checks
+	@echo "API compatibility slice tests are not implemented yet; skipping until tests are added."
+
+compat-harness-registry: ## Run registry compatibility harness checks
+	@echo "Running registry compatibility harness checks..."
+	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
+	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
+
+compat-harness-proxy: ## Run proxy compatibility harness checks
+	@echo "Running proxy compatibility harness checks..."
+	@go test ./internal/usecase/proxy -run 'TestProxyTargetResolutionContract|TestDrainRegistryInFlight|TestDrainRegistryInFlightTimeout|TestService_InvalidateTarget|TestContainerDeployedHandler_Handle_InvalidatesCache' -count=1
+	@go test ./internal/usecase/container -run 'TestService_ReconcileRemovedRoute_InvalidatesProxyCacheAndMetric' -count=1
+	@go test ./internal/adapters/in/traffic -run 'TestUDPRemovedRouterWithRetainedEntryPointDrainsSession|TestUDPBackendChangeDrainsExistingSession|TestUDPRemovedRouterDrainsThenClosesSessions|TestTLSHTTPListenerCloseDrainsQueuedConnections|TestTCPPassthroughDrainWaitsForActiveConnectionThenTimesOut' -count=1
+
+compat-harness-runtime: ## Run runtime compatibility harness checks
+	@echo "Running runtime compatibility harness checks..."
+	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
+	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
+
+compat-harness-migration: ## Run migration compatibility harness checks
+	@echo "Migration compatibility slice tests are not implemented yet; skipping until tests are added."
+
+compat-harness-security: ## Run security compatibility harness checks
+	@echo "Security compatibility slice tests are not implemented yet; skipping until tests are added."
 
 ##@ Build
 

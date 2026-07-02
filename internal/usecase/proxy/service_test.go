@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -811,4 +812,111 @@ func TestService_GetTarget_HostMode_DefaultProtocol(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, "", result.Protocol)
+}
+
+func TestProxyTargetResolutionContract(t *testing.T) {
+	ctx := testContext()
+
+	t.Run("cached target", func(t *testing.T) {
+		svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+		cached := &domain.ProxyTarget{Host: "10.0.0.9", Port: 8080, ContainerID: "cached", Scheme: "http"}
+		svc.targets["app.example.com"] = cached
+
+		got, err := svc.GetTarget(ctx, "app.example.com")
+		require.NoError(t, err)
+		assert.Same(t, cached, got)
+	})
+
+	t.Run("external route target", func(t *testing.T) {
+		configSvc := inmocks.NewMockConfigService(t)
+		svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), configSvc, Config{})
+		configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{"ext.example.com": "203.0.113.10:5000"})
+
+		got, err := svc.GetTarget(ctx, "ext.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "203.0.113.10", got.Host)
+		assert.Equal(t, 5000, got.Port)
+		assert.Empty(t, got.ContainerID)
+	})
+
+	t.Run("missing route", func(t *testing.T) {
+		containerSvc := inmocks.NewMockContainerService(t)
+		configSvc := inmocks.NewMockConfigService(t)
+		svc := NewService(outmocks.NewMockContainerRuntime(t), containerSvc, configSvc, Config{})
+		configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+		containerSvc.EXPECT().Get(mock.Anything, "missing.example.com").Return(nil, false)
+
+		got, err := svc.GetTarget(ctx, "missing.example.com")
+		assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+		assert.Nil(t, got)
+	})
+
+	t.Run("metadata labels and fallbacks", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			labels      map[string]string
+			exposed     []int
+			wantPort    int
+			wantProto   string
+			wantExposed bool
+		}{
+			{name: "image label port wins", labels: map[string]string{domain.LabelProxyPort: "9000", domain.LabelPort: "3000"}, wantPort: 9000},
+			{name: "deprecated gordon.port fallback", labels: map[string]string{domain.LabelPort: "3000"}, wantPort: 3000},
+			{name: "exposed port fallback", labels: map[string]string{}, exposed: []int{8080}, wantPort: 8080, wantExposed: true},
+			{name: "h2c protocol label distinct from port", labels: map[string]string{domain.LabelProxyPort: "50051", domain.LabelProxyProtocol: "h2c"}, wantPort: 50051, wantProto: "h2c"},
+			{name: "invalid port warning path", labels: map[string]string{domain.LabelProxyPort: "oops"}, exposed: []int{7000}, wantPort: 7000, wantExposed: true},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				runtime := outmocks.NewMockContainerRuntime(t)
+				svc := &Service{runtime: runtime}
+				runtime.EXPECT().GetImageLabels(ctx, tc.name).Return(tc.labels, nil)
+				if tc.wantExposed {
+					runtime.EXPECT().GetImageExposedPorts(ctx, tc.name).Return(tc.exposed, nil)
+				}
+
+				got, err := svc.resolveTargetMetadata(ctx, tc.name)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantPort, got.Port)
+				assert.Equal(t, tc.wantProto, got.Protocol)
+			})
+		}
+	})
+
+	t.Run("container network target when gordon runs in container", func(t *testing.T) {
+		t.Setenv("DOCKER_CONTAINER", "true")
+		runtime := outmocks.NewMockContainerRuntime(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		configSvc := inmocks.NewMockConfigService(t)
+		svc := NewService(runtime, containerSvc, configSvc, Config{})
+		configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+		containerSvc.EXPECT().Get(mock.Anything, "net.example.com").Return(&domain.Container{ID: "c-net", Image: "net:latest"}, true)
+		runtime.EXPECT().GetImageLabels(mock.Anything, "net:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil)
+		runtime.EXPECT().GetContainerNetworkInfo(mock.Anything, "c-net").Return("172.18.0.5", 8080, nil)
+
+		got, err := svc.GetTarget(ctx, "net.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "172.18.0.5", got.Host)
+		assert.Equal(t, 8080, got.Port)
+	})
+
+	t.Run("localhost port mapping when gordon runs on host", func(t *testing.T) {
+		runtime := outmocks.NewMockContainerRuntime(t)
+		containerSvc := inmocks.NewMockContainerService(t)
+		configSvc := inmocks.NewMockConfigService(t)
+		svc := NewService(runtime, containerSvc, configSvc, Config{})
+		if svc.isRunningInContainer() {
+			t.Skip("host-mode contract requires Gordon not to be detected inside a container")
+		}
+		configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+		containerSvc.EXPECT().Get(mock.Anything, "host.example.com").Return(&domain.Container{ID: "c-host", Image: "host:latest"}, true)
+		configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "host.example.com", Image: "host:latest"}})
+		runtime.EXPECT().GetImageLabels(mock.Anything, "host:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil)
+		runtime.EXPECT().GetContainerPort(mock.Anything, "c-host", 8080).Return(32080, nil)
+
+		got, err := svc.GetTarget(ctx, "host.example.com")
+		require.NoError(t, err)
+		assert.Equal(t, "localhost", got.Host)
+		assert.Equal(t, 32080, got.Port)
+	})
 }
