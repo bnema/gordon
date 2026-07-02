@@ -283,8 +283,26 @@ type services struct {
 	}
 }
 
-// Run initializes and starts the Gordon application.
+var runMonolith = runMonolithImpl
+
+// Run initializes and starts the Gordon application in the default monolith role.
 func Run(ctx context.Context, configPath string) error {
+	return runMonolith(ctx, configPath)
+}
+
+// RunWithRole initializes and starts the Gordon application for the requested role.
+func RunWithRole(ctx context.Context, configPath, roleValue string) error {
+	role, err := ResolveRole(roleValue, os.Getenv("GORDON_ROLE"))
+	if err != nil {
+		return err
+	}
+	if role != RoleMonolith {
+		return fmt.Errorf("%w: %s", ErrRoleNotImplemented, role)
+	}
+	return runMonolith(ctx, configPath)
+}
+
+func runMonolithImpl(ctx context.Context, configPath string) error {
 	// Load configuration
 	v, cfg, err := initConfig(configPath)
 	if err != nil {
