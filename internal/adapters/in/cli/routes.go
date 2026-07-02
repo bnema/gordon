@@ -292,6 +292,12 @@ func collectRoutesListSections(ctx context.Context, cfgPath string, deps routesL
 			Error: unresolvedRoutesTargetError(target),
 		}}, nil
 	}
+	if resolved, ok, err := resolveConfiguredControlPlaneTarget(cfgPath); err != nil {
+		return nil, err
+	} else if ok {
+		section := loadRoutesListExplicitRemoteSection(ctx, deps, resolved)
+		return []routeListSection{section}, nil
+	}
 
 	return collectRoutesListAggregateSections(ctx, cfgPath, deps)
 }
@@ -414,6 +420,12 @@ func collectRoutesStatusSections(ctx context.Context, cfgPath string, deps route
 			Name:  target,
 			Error: unresolvedRoutesTargetError(target),
 		}}, nil
+	}
+	if resolved, ok, err := resolveConfiguredControlPlaneTarget(cfgPath); err != nil {
+		return nil, err
+	} else if ok {
+		section := loadRoutesStatusExplicitRemoteSection(ctx, deps, resolved)
+		return []routeStatusSection{section}, nil
 	}
 
 	return collectRoutesStatusAggregateSections(ctx, cfgPath, deps)
@@ -1605,12 +1617,13 @@ Examples:
 				Image:  image,
 			}
 
-			client, isRemote, err := GetRemoteClient()
+			handle, isRemote, err := resolveRemoteControlPlane(configPath)
 			if err != nil {
 				return err
 			}
 			if isRemote {
-				if err := client.AddRoute(ctx, route); err != nil {
+				defer handle.close()
+				if err := handle.plane.AddRoute(ctx, route); err != nil {
 					return fmt.Errorf("failed to add route: %w", err)
 				}
 			} else {
@@ -1794,44 +1807,84 @@ func writeCleanupMessages(out io.Writer, warnings, hints []string) error {
 
 // newStatusCmd creates the status command.
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show Gordon server status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := context.Background()
-
-			handle, err := resolveControlPlane(configPath)
-			if err != nil {
-				return err
-			}
-			defer handle.close()
-
-			status, err := handle.plane.GetStatus(ctx)
-			if err != nil {
-				return fmt.Errorf("failed to get status: %w", err)
-			}
-
-			// Display status
-			fmt.Println(styles.Theme.Title.Render("Gordon Status"))
-			fmt.Println()
-
-			fmt.Printf("%s %s\n", styles.Theme.Bold.Render("Domain:"), status.RegistryDomain)
-			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Registry Port:"), status.RegistryPort)
-			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Server Port:"), status.ServerPort)
-			fmt.Printf("%s %d\n", styles.Theme.Bold.Render("Routes:"), status.Routes)
-			fmt.Printf("%s %v\n", styles.Theme.Bold.Render("Auto-Route:"), status.AutoRoute)
-			fmt.Printf("%s %v\n", styles.Theme.Bold.Render("Network Isolation:"), status.NetworkIsolation)
-
-			if len(status.ContainerStatus) > 0 {
-				fmt.Println()
-				fmt.Println(styles.Theme.Bold.Render("Container Status:"))
-				for domain, containerStatus := range status.ContainerStatus {
-					badge := components.ContainerStatusBadge(containerStatus)
-					fmt.Printf("  %s: %s\n", domain, badge)
-				}
-			}
-
-			return nil
+			return runStatus(cmd.Context(), cmd.OutOrStdout(), jsonOut)
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+func runStatus(ctx context.Context, out io.Writer, jsonOut bool) error {
+	handle, err := resolveControlPlane(configPath)
+	if err != nil {
+		return err
+	}
+	defer handle.close()
+
+	status, err := handle.plane.GetStatus(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get status: %w", err)
+	}
+	return renderStatus(out, status, jsonOut)
+}
+
+func renderStatus(out io.Writer, status *remote.Status, jsonOut bool) error {
+	if jsonOut {
+		return writeJSON(out, status)
+	}
+
+	if err := cliWriteLine(out, styles.Theme.Title.Render("Gordon Status")); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := writeStatusSummary(out, status); err != nil {
+		return err
+	}
+	return writeStatusContainers(out, status.ContainerStatus)
+}
+
+func writeStatusSummary(out io.Writer, status *remote.Status) error {
+	fields := []struct {
+		label string
+		value any
+	}{
+		{label: "Domain:", value: status.RegistryDomain},
+		{label: "Registry Port:", value: status.RegistryPort},
+		{label: "Server Port:", value: status.ServerPort},
+		{label: "Routes:", value: status.Routes},
+		{label: "Auto-Route:", value: status.AutoRoute},
+		{label: "Network Isolation:", value: status.NetworkIsolation},
+	}
+	for _, field := range fields {
+		if err := cliWritef(out, "%s %v\n", styles.Theme.Bold.Render(field.label), field.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeStatusContainers(out io.Writer, containerStatus map[string]string) error {
+	if len(containerStatus) == 0 {
+		return nil
+	}
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, styles.Theme.Bold.Render("Container Status:")); err != nil {
+		return err
+	}
+	for domain, status := range containerStatus {
+		badge := components.ContainerStatusBadge(status)
+		if err := cliWritef(out, "  %s: %s\n", domain, badge); err != nil {
+			return err
+		}
+	}
+	return nil
 }

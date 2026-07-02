@@ -49,6 +49,9 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectSplitModeKernel(cfg); err != nil {
+		return nil, err
+	}
 
 	log, cleanup, err := initLog(cfg)
 	if err != nil {

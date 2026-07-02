@@ -63,7 +63,16 @@ import (
 )
 
 // Config holds the application configuration.
+type ControlConfig struct {
+	Endpoint    string `mapstructure:"endpoint"`
+	Token       string `mapstructure:"token"`
+	TokenEnv    string `mapstructure:"token_env"`
+	InsecureTLS bool   `mapstructure:"insecure_tls"`
+}
+
 type Config struct {
+	Control ControlConfig `mapstructure:"control"`
+
 	Server struct {
 		Port                  int      `mapstructure:"port"`
 		RegistryPort          int      `mapstructure:"registry_port"`

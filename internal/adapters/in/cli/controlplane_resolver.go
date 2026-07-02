@@ -3,6 +3,9 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
+	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/app"
@@ -25,15 +28,28 @@ func (h *controlPlaneHandle) close() {
 }
 
 func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
-	client, isRemote, err := GetRemoteClient()
-	if err != nil {
-		return nil, err
+	if handle, ok, err := resolveRemoteControlPlane(configPath); err != nil || ok {
+		return handle, err
 	}
-	if isRemote {
-		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
+	return resolveLocalControlPlane(configPath)
+}
+
+func resolveRemoteControlPlane(configPath string) (*controlPlaneHandle, bool, error) {
+	if handle, ok, err := resolveExplicitRemoteControlPlane(); err != nil || ok {
+		return handle, ok, err
+	}
+	if handle, ok, err := resolveConfiguredControlPlane(configPath); err != nil || ok {
+		return handle, ok, err
 	}
 
-	return resolveLocalControlPlane(configPath)
+	client, isRemote, err := GetRemoteClient()
+	if err != nil {
+		return nil, false, err
+	}
+	if isRemote {
+		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, true, nil
+	}
+	return nil, false, nil
 }
 
 func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHandle {
@@ -76,8 +92,89 @@ func resolveControlPlaneWithInference(ctx context.Context, infer func(context.Co
 	return resolveControlPlane(configPath)
 }
 
+var newLocalKernelQuiet = app.NewKernelQuiet
+
+func resolveExplicitRemoteControlPlane() (*controlPlaneHandle, bool, error) {
+	resolved, ok, err := resolveExplicitRemoteTarget()
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
+	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, true, nil
+}
+
+func resolveExplicitRemoteTarget() (*remote.ResolvedRemote, bool, error) {
+	target := strings.TrimSpace(remoteFlag)
+	if target == "" {
+		target = strings.TrimSpace(os.Getenv("GORDON_REMOTE"))
+	}
+	if target == "" {
+		return nil, false, nil
+	}
+	return remote.ResolveStrict(target, tokenFlag, insecureTLSFlag)
+}
+
+func resolveConfiguredControlPlane(configPath string) (*controlPlaneHandle, bool, error) {
+	resolved, ok, err := resolveConfiguredControlPlaneTarget(configPath)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
+	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, true, nil
+}
+
+func resolveConfiguredControlPlaneTarget(configPath string) (*remote.ResolvedRemote, bool, error) {
+	controlCfg, err := app.LoadControlConfig(configPath)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to load control plane config: %w", err)
+	}
+	endpoint := strings.TrimSpace(controlCfg.Endpoint)
+	if endpoint == "" {
+		return nil, false, nil
+	}
+	token, insecureTLS := resolveConfiguredControlPlaneAuth(controlCfg)
+	return &remote.ResolvedRemote{
+		Name:        "control",
+		URL:         endpoint,
+		Token:       token,
+		InsecureTLS: insecureTLS,
+	}, true, nil
+}
+
+func resolveConfiguredControlPlaneAuth(controlCfg app.ControlConfig) (string, bool) {
+	return resolveConfiguredControlPlaneToken(controlCfg), resolveConfiguredControlPlaneInsecureTLS(controlCfg)
+}
+
+func resolveConfiguredControlPlaneToken(controlCfg app.ControlConfig) string {
+	if tokenFlag != "" {
+		return tokenFlag
+	}
+	if envToken := os.Getenv("GORDON_TOKEN"); envToken != "" {
+		return envToken
+	}
+	if controlCfg.Token != "" {
+		return controlCfg.Token
+	}
+	if controlCfg.TokenEnv != "" {
+		return os.Getenv(controlCfg.TokenEnv)
+	}
+	return ""
+}
+
+func resolveConfiguredControlPlaneInsecureTLS(controlCfg app.ControlConfig) bool {
+	if insecureTLSFlag {
+		return true
+	}
+	if env := os.Getenv("GORDON_INSECURE"); env != "" {
+		if insecure, err := strconv.ParseBool(env); err == nil && insecure {
+			return true
+		}
+	}
+	return controlCfg.InsecureTLS
+}
+
 func resolveLocalControlPlane(configPath string) (*controlPlaneHandle, error) {
-	kernel, err := app.NewKernelQuiet(configPath)
+	kernel, err := newLocalKernelQuiet(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
 	}
