@@ -39,6 +39,13 @@ packages:
       RouteSnapshotProvider:
       RouteSnapshotWatcher:
       EdgeDrainCoordinator:
+      RuntimeCommandClient:
+      RuntimeStatePublisher:
+      RuntimeStateSubscriber:
+      RuntimeLogReader:
+      RuntimeHealthClient:
+      RuntimeSelfUpdater:
+      RuntimeDrainAckReceiver:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
@@ -57,6 +64,7 @@ packages:
       TrafficStatusService:
       StandaloneServiceService:
       ComponentEventHandler:
+      RuntimeWorker:
   # Exception: pushImageOps is a CLI-local interface, not a boundary port.
   # Mocked here because it abstracts Docker SDK calls that require a running
   # daemon, making unit/integration tests impractical without a test double.
