@@ -32,6 +32,9 @@ packages:
       CloudflareZoneResolver:
       CertificateAuthority:
       ComponentTokenStore:
+      RouteSnapshotProvider:
+      RouteSnapshotWatcher:
+      EdgeDrainCoordinator:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:
