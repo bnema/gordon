@@ -93,37 +93,43 @@ test-adapter: ## Run adapter layer tests only
 ##@ Compatibility Harness
 
 compat-harness-config: ## Run config compatibility harness checks
-	@echo "Running config compatibility harness foundation checks..."
-	@go test ./internal/testutils/compatoldnew -run 'TestGoBuilder|TestRunner' -count=1
-	@echo "Config compatibility slice tests are not implemented yet; foundation checks passed."
+	@echo "Running config compatibility harness foundation and scenario definition checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestGoBuilder|TestRunner|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)' -count=1
 
 compat-harness-cli: ## Run CLI compatibility harness checks
-	@echo "CLI compatibility slice tests are not implemented yet; skipping until tests are added."
+	@echo "Running CLI compatibility scenario definition checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-api: ## Run API compatibility harness checks
-	@echo "API compatibility slice tests are not implemented yet; skipping until tests are added."
+	@echo "Running API compatibility scenario definition checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-registry: ## Run registry compatibility harness checks
 	@echo "Running registry compatibility harness checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
 
 compat-harness-proxy: ## Run proxy compatibility harness checks
 	@echo "Running proxy compatibility harness checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@go test ./internal/usecase/proxy -run 'TestProxyTargetResolutionContract|TestDrainRegistryInFlight|TestDrainRegistryInFlightTimeout|TestService_InvalidateTarget|TestContainerDeployedHandler_Handle_InvalidatesCache' -count=1
 	@go test ./internal/usecase/container -run 'TestService_ReconcileRemovedRoute_InvalidatesProxyCacheAndMetric' -count=1
 	@go test ./internal/adapters/in/traffic -run 'TestUDPRemovedRouterWithRetainedEntryPointDrainsSession|TestUDPBackendChangeDrainsExistingSession|TestUDPRemovedRouterDrainsThenClosesSessions|TestTLSHTTPListenerCloseDrainsQueuedConnections|TestTCPPassthroughDrainWaitsForActiveConnectionThenTimesOut' -count=1
 
 compat-harness-runtime: ## Run runtime compatibility harness checks
 	@echo "Running runtime compatibility harness checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
 compat-harness-migration: ## Run migration compatibility harness checks
-	@echo "Migration compatibility slice tests are not implemented yet; skipping until tests are added."
+	@echo "Running migration compatibility scenario definition checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-security: ## Run security compatibility harness checks
-	@echo "Security compatibility slice tests are not implemented yet; skipping until tests are added."
+	@echo "Running security compatibility scenario definition checks..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 ##@ Build
 
