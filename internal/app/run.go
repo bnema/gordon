@@ -358,7 +358,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 
 	// Create output adapters
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
-	if si.svc.runtime, si.svc.eventBus, err = createOutputAdapters(ctx, log, runtimeSocket); err != nil {
+	if si.svc.runtime, si.svc.eventBus, err = createOutputAdapters(ctx, log, RoleMonolith, runtimeSocket); err != nil {
 		return nil, err
 	}
 

@@ -20,6 +20,9 @@ const (
 // ErrRoleNotImplemented is returned for parsed roles whose service graph is not wired yet.
 var ErrRoleNotImplemented = errors.New("role not implemented")
 
+// ErrRoleRuntimeOwnership is returned when a role tries to instantiate a runtime adapter it does not own.
+var ErrRoleRuntimeOwnership = errors.New("role does not own runtime adapter")
+
 // RoleNotImplementedError reports a parsed role whose service graph is not wired yet.
 type RoleNotImplementedError struct {
 	Role Role
@@ -35,6 +38,17 @@ func (e RoleNotImplementedError) Unwrap() error {
 
 func newRoleNotImplementedError(role Role) error {
 	return RoleNotImplementedError{Role: role}
+}
+
+func roleMayInstantiateRuntimeAdapter(role Role) bool {
+	switch role {
+	case RoleMonolith, RoleRuntime:
+		return true
+	case RoleControl, RoleEdge, RoleRegistry:
+		return false
+	default:
+		return false
+	}
 }
 
 const acceptedRoleValues = "monolith, control, runtime, edge, registry"

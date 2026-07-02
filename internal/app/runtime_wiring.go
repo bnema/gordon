@@ -54,7 +54,11 @@ func resolveRuntimeConfig(value string) string {
 }
 
 // createOutputAdapters creates the container runtime and event bus.
-func createOutputAdapters(ctx context.Context, log zerowrap.Logger, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
+func createOutputAdapters(ctx context.Context, log zerowrap.Logger, role Role, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
+	if !roleMayInstantiateRuntimeAdapter(role) {
+		return nil, nil, fmt.Errorf("%w: role %q cannot instantiate container runtime", ErrRoleRuntimeOwnership, role)
+	}
+
 	detection := docker.DetectRuntimeSocket(runtimeSocket)
 
 	var runtime *docker.Runtime
