@@ -21,6 +21,9 @@ jobs:
           filters: |
             go:
               - '**.go'
+              - 'api/proto/**'
+              - 'buf.yaml'
+              - 'buf.gen.yaml'
               - 'go.mod'
               - 'go.sum'
               - '.golangci.yml'
@@ -79,6 +82,19 @@ jobs:
           key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-build-
+
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: 1.71.0
+
+      - name: Install protobuf generators
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.1
+
+      - name: Check generated protobuf bindings
+        run: make proto-check
 
       - name: Run tests
         run: go test -race -v ./...

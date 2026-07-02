@@ -23,7 +23,7 @@ ARCHS := amd64 arm64
 # Phony targets
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
-	lint fmt check mocks clean-test help
+	lint fmt check mocks proto proto-check clean-test help
 
 # Default target
 all: build
@@ -45,6 +45,17 @@ mocks: ## Generate mocks using mockery
 	@echo "Generating mocks..."
 	@mockery
 	@echo "Mocks generated successfully"
+
+proto: ## Generate protobuf bindings
+	@echo "Generating protobuf bindings..."
+	@buf generate
+
+proto-check: proto ## Verify generated protobuf bindings are up to date
+	@git diff --exit-code -- api/gordon
+	@test -z "$$(git ls-files --others --exclude-standard -- api/gordon)" || \
+		(echo "Untracked generated files under api/gordon:"; \
+		 git ls-files --others --exclude-standard -- api/gordon; \
+		 exit 1)
 
 check: lint test ## Run lint and tests
 
