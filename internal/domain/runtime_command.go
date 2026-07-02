@@ -78,10 +78,11 @@ func (i RuntimeCommandIdentity) DedupeKey(kind string) string {
 // DeployRouteCommand asks the runtime to realize one managed route.
 type DeployRouteCommand struct {
 	RuntimeCommandIdentity
-	Domain       string
-	Image        string
-	RouteVersion string
-	Env          []string
+	Domain         string
+	Image          string
+	RouteVersion   string
+	Env            []string
+	InternalDeploy bool
 }
 
 // Validate checks DeployRouteCommand invariants.

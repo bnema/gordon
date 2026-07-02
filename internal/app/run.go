@@ -56,6 +56,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
+	"github.com/bnema/gordon/internal/usecase/runtimecontrol"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	"github.com/bnema/gordon/internal/usecase/traffic"
@@ -71,7 +72,8 @@ type ControlConfig struct {
 }
 
 type Config struct {
-	Control ControlConfig `mapstructure:"control"`
+	Control ControlConfig        `mapstructure:"control"`
+	Runtime RuntimeControlConfig `mapstructure:"runtime"`
 
 	Server struct {
 		Port                  int      `mapstructure:"port"`
@@ -280,6 +282,8 @@ type services struct {
 	reloadCoordinator     *reloadCoordinator
 	publicTLSSvc          in.PublicTLSService
 	publicTLSRuntime      publicTLSRuntime
+	runtimeCommandClient  out.RuntimeCommandClient
+	runtimeControl        *runtimecontrol.Service
 	trafficManager        *trafficadapter.Manager
 	tlsHTTPEntryPoints    map[string]struct{}
 	smartHTTPEntryPoints  map[string]struct{}
@@ -586,6 +590,9 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	if si.svc.volumeBackupStore, si.svc.volumeBackupSvc, si.svc.volumeBackupCfg, err = createVolumeBackupService(si.ctx, si.cfg, si.svc, si.log); err != nil {
 		return err
 	}
+	if si.svc.runtimeCommandClient, err = createRuntimeCommandClient(si.ctx, si.cfg.Runtime); err != nil {
+		return err
+	}
 
 	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus)
 	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log)
@@ -662,6 +669,7 @@ func (si *serviceInit) initHandlers() {
 
 	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
 
+	initRuntimeControlFacade(si.svc)
 	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 	if si.svc.trafficManager == nil {
 		si.svc.trafficManager = trafficadapter.NewManager()
@@ -684,7 +692,15 @@ func (si *serviceInit) initHandlers() {
 		VolumeSvc:       si.svc.volumeSvc,
 		PublicTLSSvc:    si.svc.publicTLSSvc,
 		TrafficSvc:      si.svc.trafficManager,
+		RuntimeControl:  si.svc.runtimeControl,
 	})
+}
+
+func initRuntimeControlFacade(svc *services) {
+	if svc == nil || svc.runtimeControl != nil || svc.runtimeCommandClient == nil {
+		return
+	}
+	svc.runtimeControl = runtimecontrol.NewService(svc.configSvc, svc.runtimeCommandClient, "gordon-control")
 }
 
 // initPreviewService sets up the preview store, service, and TTL ticker.

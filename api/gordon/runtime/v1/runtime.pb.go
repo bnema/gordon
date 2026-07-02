@@ -100,14 +100,15 @@ func (x *RuntimeCommandIdentity) GetRequestedAt() *timestamppb.Timestamp {
 }
 
 type DeployRouteCommand struct {
-	state         protoimpl.MessageState  `protogen:"open.v1"`
-	Identity      *RuntimeCommandIdentity `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
-	Domain        string                  `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`
-	Image         string                  `protobuf:"bytes,3,opt,name=image,proto3" json:"image,omitempty"`
-	RouteVersion  string                  `protobuf:"bytes,4,opt,name=route_version,json=routeVersion,proto3" json:"route_version,omitempty"`
-	Env           []string                `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState  `protogen:"open.v1"`
+	Identity       *RuntimeCommandIdentity `protobuf:"bytes,1,opt,name=identity,proto3" json:"identity,omitempty"`
+	Domain         string                  `protobuf:"bytes,2,opt,name=domain,proto3" json:"domain,omitempty"`
+	Image          string                  `protobuf:"bytes,3,opt,name=image,proto3" json:"image,omitempty"`
+	RouteVersion   string                  `protobuf:"bytes,4,opt,name=route_version,json=routeVersion,proto3" json:"route_version,omitempty"`
+	Env            []string                `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty"`
+	InternalDeploy bool                    `protobuf:"varint,6,opt,name=internal_deploy,json=internalDeploy,proto3" json:"internal_deploy,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DeployRouteCommand) Reset() {
@@ -173,6 +174,13 @@ func (x *DeployRouteCommand) GetEnv() []string {
 		return x.Env
 	}
 	return nil
+}
+
+func (x *DeployRouteCommand) GetInternalDeploy() bool {
+	if x != nil {
+		return x.InternalDeploy
+	}
+	return false
 }
 
 type RestartRouteCommand struct {
@@ -1285,13 +1293,14 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"generation\x18\x03 \x01(\x04R\n" +
 	"generation\x12.\n" +
 	"\x13source_component_id\x18\x04 \x01(\tR\x11sourceComponentId\x12=\n" +
-	"\frequested_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vrequestedAt\"\xc0\x01\n" +
+	"\frequested_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vrequestedAt\"\xe9\x01\n" +
 	"\x12DeployRouteCommand\x12E\n" +
 	"\bidentity\x18\x01 \x01(\v2).gordon.runtime.v1.RuntimeCommandIdentityR\bidentity\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x14\n" +
 	"\x05image\x18\x03 \x01(\tR\x05image\x12#\n" +
 	"\rroute_version\x18\x04 \x01(\tR\frouteVersion\x12\x10\n" +
-	"\x03env\x18\x05 \x03(\tR\x03env\"\xb7\x01\n" +
+	"\x03env\x18\x05 \x03(\tR\x03env\x12'\n" +
+	"\x0finternal_deploy\x18\x06 \x01(\bR\x0einternalDeploy\"\xb7\x01\n" +
 	"\x13RestartRouteCommand\x12E\n" +
 	"\bidentity\x18\x01 \x01(\v2).gordon.runtime.v1.RuntimeCommandIdentityR\bidentity\x12\x16\n" +
 	"\x06domain\x18\x02 \x01(\tR\x06domain\x12\x16\n" +

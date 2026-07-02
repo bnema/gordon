@@ -31,7 +31,7 @@ func (s *Service) DeployRoute(ctx context.Context, route domain.Route) (domain.R
 		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime command client unavailable")
 	}
 	identity := s.identity("deploy", route.Domain)
-	return s.runtime.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: route.Domain, Image: route.Image, RouteVersion: identity.IdempotencyKey, Env: route.Env})
+	return s.runtime.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: route.Domain, Image: route.Image, RouteVersion: identity.IdempotencyKey, Env: route.Env, InternalDeploy: true})
 }
 
 func (s *Service) RestartRoute(ctx context.Context, domainName string, withAttachments bool) (domain.RuntimeCommandResult, error) {

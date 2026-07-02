@@ -128,6 +128,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("control.token_env", "")
 	v.SetDefault("control.insecure_tls", false)
 	v.SetDefault("runtime.listen_address", "127.0.0.1:9091")
+	v.SetDefault("runtime.endpoint", "")
+	v.SetDefault("runtime.token", "")
+	v.SetDefault("runtime.token_env", "")
 
 	v.SetDefault("server.max_concurrent_connections", -1) // -1 = use default (10000), 0 = no limit
 	v.SetDefault("server.registry_allowed_ips", []string{})

@@ -38,6 +38,12 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
+type runtimeControlService interface {
+	DeployRoute(ctx context.Context, route domain.Route) (domain.RuntimeCommandResult, error)
+	RestartRoute(ctx context.Context, domainName string, withAttachments bool) (domain.RuntimeCommandResult, error)
+	RemoveRoute(ctx context.Context, domainName string, force bool) (domain.RuntimeCommandResult, error)
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc       in.ConfigService
@@ -55,6 +61,7 @@ type Handler struct {
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
+	runtimeControl  runtimeControlService
 	log             zerowrap.Logger
 }
 
@@ -204,6 +211,7 @@ type HandlerDeps struct {
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
+	RuntimeControl  runtimeControlService
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -224,6 +232,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		reloadTrigger:   deps.ReloadTrigger,
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
+		runtimeControl:  deps.RuntimeControl,
 		log:             deps.Log,
 	}
 }
@@ -985,7 +994,12 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 	}
 
 	var cleanup *dto.CleanupReport
-	if h.containerSvc != nil {
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.RemoveRoute(ctx, routeDomain, true)
+		if h.handleRuntimeControlResult(w, log, routeDomain, result, err, "remove") {
+			return
+		}
+	} else if h.containerSvc != nil {
 		report, err := h.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
 		if err != nil {
 			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to cleanup removed route runtime state")
@@ -1676,6 +1690,34 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploy handles /admin/deploy/:domain endpoint.
 // POST triggers a deployment for the specified domain.
+func (h *Handler) clearDeploySuppression(image string) {
+	if image == "" || h.registrySvc == nil {
+		return
+	}
+	// Use the registry package's image name normaliser so digest-form refs
+	// and multi-segment paths are handled correctly.
+	imageName := registry.ExtractImageName(image)
+	h.registrySvc.ClearDeployEventSuppression(imageName)
+}
+
+func (h *Handler) handleRuntimeControlResult(w http.ResponseWriter, log zerowrap.Logger, routeDomain string, result domain.RuntimeCommandResult, err error, action string) bool {
+	if err != nil {
+		log.Error().Err(err).Str("domain", routeDomain).Str("action", action).Msg("runtime control command failed")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+		return true
+	}
+	if result.Status == domain.RuntimeCommandStatusSucceeded {
+		return false
+	}
+	if result.Error != nil && strings.HasPrefix(result.Error.Code, "runtime_policy_denied") {
+		h.sendError(w, http.StatusForbidden, result.Error.Message)
+		return true
+	}
+	log.Error().Str("domain", routeDomain).Str("action", action).Str("status", string(result.Status)).Msg("runtime control command did not succeed")
+	h.sendError(w, http.StatusInternalServerError, "runtime command failed")
+	return true
+}
+
 func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodPost {
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1709,6 +1751,17 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		return
 	}
 
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.DeployRoute(ctx, *route)
+		if h.handleRuntimeControlResult(w, log, deployDomain, result, err, "deploy") {
+			return
+		}
+		h.clearDeploySuppression(route.Image)
+		log.Info().Str("domain", deployDomain).Str("command_id", string(result.CommandID)).Msg("route deploy command applied via runtime control")
+		h.sendJSON(w, http.StatusOK, dto.DeployResponse{Status: "deployed", Domain: deployDomain})
+		return
+	}
+
 	// Deploy is an internal server-side action: pull from local registry path.
 	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
@@ -1731,12 +1784,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 
 	// Clear deploy event suppression now that the explicit deploy has completed.
 	// This re-enables event-based deploys for future direct docker pushes.
-	if route.Image != "" && h.registrySvc != nil {
-		// Use the registry package's image name normaliser so digest-form refs
-		// and multi-segment paths are handled correctly.
-		imageName := registry.ExtractImageName(route.Image)
-		h.registrySvc.ClearDeployEventSuppression(imageName)
-	}
+	h.clearDeploySuppression(route.Image)
 
 	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
 	h.sendJSON(w, http.StatusOK, dto.DeployResponse{
@@ -1777,6 +1825,16 @@ func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path str
 	// disconnects. Podman restart can take 30+ seconds (SIGTERM + wait + start).
 	restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
+
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.RestartRoute(restartCtx, restartDomain, withAttachments)
+		if h.handleRuntimeControlResult(w, log, restartDomain, result, err, "restart") {
+			return
+		}
+		log.Info().Str("domain", restartDomain).Bool("with_attachments", withAttachments).Str("command_id", string(result.CommandID)).Msg("route restart command applied via runtime control")
+		h.sendJSON(w, http.StatusOK, dto.RestartResponse{Status: "restarted", Domain: restartDomain})
+		return
+	}
 
 	if err := h.containerSvc.Restart(restartCtx, restartDomain, withAttachments); err != nil {
 		log.Error().Err(err).Str("domain", restartDomain).Msg("failed to restart container")

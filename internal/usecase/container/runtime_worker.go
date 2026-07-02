@@ -57,8 +57,12 @@ func (w *RuntimeWorker) DeployRoute(ctx context.Context, command domain.DeployRo
 	if result, denied := w.policyResult(command.RuntimeCommandIdentity, w.policy.CheckDeployRoute(command)); denied {
 		return result, nil
 	}
+	deployCtx := ctx
+	if command.InternalDeploy {
+		deployCtx = domain.WithInternalDeploy(ctx)
+	}
 	return w.run(command.RuntimeCommandIdentity, func() error {
-		_, err := w.service.Deploy(ctx, domain.Route{Domain: command.Domain, Image: command.Image, Env: command.Env})
+		_, err := w.service.Deploy(deployCtx, domain.Route{Domain: command.Domain, Image: command.Image, Env: command.Env})
 		return err
 	})
 }

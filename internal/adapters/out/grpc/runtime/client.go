@@ -75,7 +75,7 @@ func domainIdentity(identity domain.RuntimeCommandIdentity) *runtimev1.RuntimeCo
 }
 
 func domainDeployRoute(command domain.DeployRouteCommand) *runtimev1.DeployRouteCommand {
-	return &runtimev1.DeployRouteCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), Domain: command.Domain, Image: command.Image, RouteVersion: command.RouteVersion, Env: command.Env}
+	return &runtimev1.DeployRouteCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), Domain: command.Domain, Image: command.Image, RouteVersion: command.RouteVersion, Env: command.Env, InternalDeploy: command.InternalDeploy}
 }
 
 func domainRestartRoute(command domain.RestartRouteCommand) *runtimev1.RestartRouteCommand {

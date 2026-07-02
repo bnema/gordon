@@ -23,6 +23,7 @@ func TestServiceDeployRestartRemoveCommands(t *testing.T) {
 	assert.Equal(t, "app.example.com", client.deploy.Domain)
 	assert.Equal(t, "app:latest", client.deploy.Image)
 	assert.Equal(t, []string{"A=1"}, client.deploy.Env)
+	assert.True(t, client.deploy.InternalDeploy)
 	assert.Equal(t, "control-1", client.deploy.SourceComponentID)
 
 	_, err = svc.RestartRoute(ctx, "app.example.com", true)

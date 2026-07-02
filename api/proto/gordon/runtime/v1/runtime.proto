@@ -38,6 +38,7 @@ message DeployRouteCommand {
   string image = 3;
   string route_version = 4;
   repeated string env = 5;
+  bool internal_deploy = 6;
 }
 
 message RestartRouteCommand {

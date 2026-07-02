@@ -111,7 +111,7 @@ func protoDeployRoute(command *runtimev1.DeployRouteCommand) domain.DeployRouteC
 	if command == nil {
 		return domain.DeployRouteCommand{}
 	}
-	return domain.DeployRouteCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), Domain: command.Domain, Image: command.Image, RouteVersion: command.RouteVersion, Env: command.Env}
+	return domain.DeployRouteCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), Domain: command.Domain, Image: command.Image, RouteVersion: command.RouteVersion, Env: command.Env, InternalDeploy: command.InternalDeploy}
 }
 
 func protoRestartRoute(command *runtimev1.RestartRouteCommand) domain.RestartRouteCommand {
