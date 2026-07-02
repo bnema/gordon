@@ -245,6 +245,40 @@ endpoint = "`+server.URL+`"
 		require.True(t, addCalled)
 	})
 
+	t.Run("route inference uses control endpoint before matching saved remote", func(t *testing.T) {
+		resetControlPlaneResolutionTestState(t)
+
+		savedServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatalf("saved remote inference should not be probed when control endpoint is configured")
+		}))
+		defer savedServer.Close()
+		require.NoError(t, remote.SaveRemotes("", &remote.ClientConfig{
+			Remotes: map[string]remote.RemoteEntry{
+				"saved": {URL: savedServer.URL},
+			},
+		}))
+
+		controlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, "/admin/routes/app.test", r.URL.Path)
+			_, _ = w.Write([]byte(`{"domain":"app.test","image":"control.test/app:latest"}`))
+		}))
+		defer controlServer.Close()
+
+		originalConfigPath := configPath
+		configPath = writeCLIConfig(t, `[control]
+endpoint = "`+controlServer.URL+`"
+`)
+		t.Cleanup(func() { configPath = originalConfigPath })
+
+		handle, err := resolveControlPlaneForRouteDomain(context.Background(), "app.test")
+		require.NoError(t, err)
+		require.True(t, handle.isRemote)
+
+		route, err := handle.plane.GetRoute(context.Background(), "app.test")
+		require.NoError(t, err)
+		require.Equal(t, "control.test/app:latest", route.Image)
+	})
+
 	t.Run("routes add local mode tolerates omitted auth secrets backend", func(t *testing.T) {
 		resetControlPlaneResolutionTestState(t)
 

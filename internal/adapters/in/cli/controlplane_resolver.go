@@ -82,6 +82,13 @@ func resolveControlPlaneForRepository(ctx context.Context, repository string) (*
 }
 
 func resolveControlPlaneWithInference(ctx context.Context, infer func(context.Context) (*remote.ResolvedRemote, error)) (*controlPlaneHandle, error) {
+	if handle, ok, err := resolveExplicitRemoteControlPlane(); err != nil || ok {
+		return handle, err
+	}
+	if handle, ok, err := resolveConfiguredControlPlane(configPath); err != nil || ok {
+		return handle, err
+	}
+
 	resolved, err := infer(ctx)
 	if err != nil {
 		return nil, err
@@ -89,7 +96,15 @@ func resolveControlPlaneWithInference(ctx context.Context, infer func(context.Co
 	if resolved != nil {
 		return newRemoteControlPlaneHandle(resolved), nil
 	}
-	return resolveControlPlane(configPath)
+
+	client, isRemote, err := GetRemoteClient()
+	if err != nil {
+		return nil, err
+	}
+	if isRemote {
+		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
+	}
+	return resolveLocalControlPlane(configPath)
 }
 
 var newLocalKernelQuiet = app.NewKernelQuiet
