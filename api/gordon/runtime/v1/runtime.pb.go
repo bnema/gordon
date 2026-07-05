@@ -902,10 +902,9 @@ func (x *ApplyCommandResponse) GetResult() *RuntimeCommandResult {
 }
 
 type WatchActualStateRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	AfterGeneration uint64                 `protobuf:"varint,1,opt,name=after_generation,json=afterGeneration,proto3" json:"after_generation,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *WatchActualStateRequest) Reset() {
@@ -936,13 +935,6 @@ func (x *WatchActualStateRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use WatchActualStateRequest.ProtoReflect.Descriptor instead.
 func (*WatchActualStateRequest) Descriptor() ([]byte, []int) {
 	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *WatchActualStateRequest) GetAfterGeneration() uint64 {
-	if x != nil {
-		return x.AfterGeneration
-	}
-	return 0
 }
 
 type RuntimeRouteState struct {
@@ -1620,7 +1612,6 @@ func (x *GetHealthResponse) GetMessage() string {
 type StreamLogsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RouteDomain   string                 `protobuf:"bytes,1,opt,name=route_domain,json=routeDomain,proto3" json:"route_domain,omitempty"`
-	Tail          int32                  `protobuf:"varint,2,opt,name=tail,proto3" json:"tail,omitempty"`
 	Follow        bool                   `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1661,13 +1652,6 @@ func (x *StreamLogsRequest) GetRouteDomain() string {
 		return x.RouteDomain
 	}
 	return ""
-}
-
-func (x *StreamLogsRequest) GetTail() int32 {
-	if x != nil {
-		return x.Tail
-	}
-	return 0
 }
 
 func (x *StreamLogsRequest) GetFollow() bool {
@@ -2347,9 +2331,8 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\fcompleted_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vcompletedAt\x12<\n" +
 	"\x05error\x18\a \x01(\v2&.gordon.runtime.v1.RuntimeCommandErrorR\x05error\"W\n" +
 	"\x14ApplyCommandResponse\x12?\n" +
-	"\x06result\x18\x01 \x01(\v2'.gordon.runtime.v1.RuntimeCommandResultR\x06result\"D\n" +
-	"\x17WatchActualStateRequest\x12)\n" +
-	"\x10after_generation\x18\x01 \x01(\x04R\x0fafterGeneration\"\x97\x03\n" +
+	"\x06result\x18\x01 \x01(\v2'.gordon.runtime.v1.RuntimeCommandResultR\x06result\"1\n" +
+	"\x17WatchActualStateRequestJ\x04\b\x01\x10\x02R\x10after_generation\"\x97\x03\n" +
 	"\x11RuntimeRouteState\x12\x16\n" +
 	"\x06domain\x18\x01 \x01(\tR\x06domain\x12\x1e\n" +
 	"\n" +
@@ -2429,11 +2412,10 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x11GetHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12!\n" +
 	"\fcomponent_id\x18\x02 \x01(\tR\vcomponentId\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"b\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"Z\n" +
 	"\x11StreamLogsRequest\x12!\n" +
-	"\froute_domain\x18\x01 \x01(\tR\vrouteDomain\x12\x12\n" +
-	"\x04tail\x18\x02 \x01(\x05R\x04tail\x12\x16\n" +
-	"\x06follow\x18\x03 \x01(\bR\x06follow\"[\n" +
+	"\froute_domain\x18\x01 \x01(\tR\vrouteDomain\x12\x16\n" +
+	"\x06follow\x18\x03 \x01(\bR\x06followJ\x04\b\x02\x10\x03R\x04tail\"[\n" +
 	"\bLogChunk\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\x12;\n" +
 	"\vobserved_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +

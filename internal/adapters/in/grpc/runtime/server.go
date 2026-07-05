@@ -11,6 +11,7 @@ import (
 
 	commonv1 "github.com/bnema/gordon/api/gordon/common/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	boundaries "github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -111,6 +112,9 @@ func (s *Server) ApplyCommand(ctx context.Context, req *runtimev1.ApplyCommandRe
 	case *runtimev1.ApplyCommandRequest_RemoveRoute:
 		result, err = s.worker.RemoveRoute(ctx, protoRemoveRoute(command.RemoveRoute))
 	case *runtimev1.ApplyCommandRequest_Reconcile:
+		if _, scopeErr := interceptors.RequireScope(ctx, domain.ComponentScopeRuntimeReconcile); scopeErr != nil {
+			return nil, scopeErr
+		}
 		result, err = s.worker.Reconcile(ctx, protoReconcile(command.Reconcile))
 	default:
 		return nil, status.Error(codes.InvalidArgument, "runtime command is required")

@@ -117,7 +117,8 @@ message ApplyCommandResponse {
 }
 
 message WatchActualStateRequest {
-  uint64 after_generation = 1;
+  reserved 1;
+  reserved "after_generation";
 }
 
 message RuntimeRouteState {
@@ -193,7 +194,8 @@ message GetHealthResponse {
 
 message StreamLogsRequest {
   string route_domain = 1;
-  int32 tail = 2;
+  reserved 2;
+  reserved "tail";
   bool follow = 3;
 }
 

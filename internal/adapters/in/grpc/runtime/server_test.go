@@ -52,6 +52,29 @@ func TestServerRejectsMissingCommand(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
+func TestServerApplyCommandReconcileRequiresReconcileScope(t *testing.T) {
+	worker := &fakeRuntimeWorker{}
+	server := NewServer(worker, "runtime-1")
+	requestedAt := time.Unix(10, 0).UTC()
+	req := &runtimev1.ApplyCommandRequest{Command: &runtimev1.ApplyCommandRequest_Reconcile{Reconcile: &runtimev1.ReconcileRuntimeCommand{
+		Identity:           protoTestIdentity("cmd-reconcile", requestedAt),
+		ExpectedRouteCount: 0,
+	}}}
+	ctx := interceptors.ContextWithComponentIdentity(context.Background(), &domain.ComponentIdentity{Scopes: []domain.ComponentScope{domain.ComponentScopeRuntimeDeploy}})
+
+	_, err := server.ApplyCommand(ctx, req)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Empty(t, worker.reconcile.ID)
+
+	ctx = interceptors.ContextWithComponentIdentity(context.Background(), &domain.ComponentIdentity{Scopes: []domain.ComponentScope{domain.ComponentScopeRuntimeDeploy, domain.ComponentScopeRuntimeReconcile}})
+	_, err = server.ApplyCommand(ctx, req)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandID("cmd-reconcile"), worker.reconcile.ID)
+}
+
 func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
 	server := NewServer(worker, "runtime-1")
@@ -344,8 +367,9 @@ func (f *fakeLogStream) Send(chunk *runtimev1.LogChunk) error {
 }
 
 type fakeRuntimeWorker struct {
-	deploy domain.DeployRouteCommand
-	self   domain.RuntimeSelfUpdateCommand
+	deploy    domain.DeployRouteCommand
+	reconcile domain.ReconcileRuntimeCommand
+	self      domain.RuntimeSelfUpdateCommand
 }
 
 func (f *fakeRuntimeWorker) DeployRoute(_ context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
@@ -362,6 +386,7 @@ func (f *fakeRuntimeWorker) RemoveRoute(_ context.Context, command domain.Remove
 }
 
 func (f *fakeRuntimeWorker) Reconcile(_ context.Context, command domain.ReconcileRuntimeCommand) (domain.RuntimeCommandResult, error) {
+	f.reconcile = command
 	return testRuntimeResult(command.RuntimeCommandIdentity), nil
 }
 
