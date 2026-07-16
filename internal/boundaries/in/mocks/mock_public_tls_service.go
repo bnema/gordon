@@ -218,6 +218,52 @@ func (_c *MockPublicTLSService_Reconcile_Call) RunAndReturn(run func(ctx context
 	return _c
 }
 
+// SetAdditionalHosts provides a mock function for the type MockPublicTLSService
+func (_mock *MockPublicTLSService) SetAdditionalHosts(ctx context.Context, hosts []string) {
+	_mock.Called(ctx, hosts)
+	return
+}
+
+// MockPublicTLSService_SetAdditionalHosts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAdditionalHosts'
+type MockPublicTLSService_SetAdditionalHosts_Call struct {
+	*mock.Call
+}
+
+// SetAdditionalHosts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - hosts []string
+func (_e *MockPublicTLSService_Expecter) SetAdditionalHosts(ctx any, hosts any) *MockPublicTLSService_SetAdditionalHosts_Call {
+	return &MockPublicTLSService_SetAdditionalHosts_Call{Call: _e.mock.On("SetAdditionalHosts", ctx, hosts)}
+}
+
+func (_c *MockPublicTLSService_SetAdditionalHosts_Call) Run(run func(ctx context.Context, hosts []string)) *MockPublicTLSService_SetAdditionalHosts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []string
+		if args[1] != nil {
+			arg1 = args[1].([]string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockPublicTLSService_SetAdditionalHosts_Call) Return() *MockPublicTLSService_SetAdditionalHosts_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockPublicTLSService_SetAdditionalHosts_Call) RunAndReturn(run func(ctx context.Context, hosts []string)) *MockPublicTLSService_SetAdditionalHosts_Call {
+	_c.Run(run)
+	return _c
+}
+
 // Status provides a mock function for the type MockPublicTLSService
 func (_mock *MockPublicTLSService) Status(ctx context.Context) domain.PublicTLSStatus {
 	ret := _mock.Called(ctx)

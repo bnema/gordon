@@ -40,7 +40,7 @@ func TestTLSHandshake_OnDemandCert(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	svc := pkiusecase.NewService(ctx, ca, routes, log)
+	svc := pkiusecase.NewService(ctx, ca, routes, nil, log)
 	defer svc.Stop()
 
 	// Start a TLS server using the PKI service
@@ -93,7 +93,7 @@ func TestTLSHandshake_UnknownDomain_Rejected(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	svc := pkiusecase.NewService(ctx, ca, routes, log)
+	svc := pkiusecase.NewService(ctx, ca, routes, nil, log)
 	defer svc.Stop()
 
 	tlsCfg := &tls.Config{

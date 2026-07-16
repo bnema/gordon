@@ -29,9 +29,9 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 		},
 	}
 
-	// Mock zone resolver returns "example.com" zone for 3 routes.
+	// Mock zone resolver returns "example.com" for routes and the management host.
 	zoneResolver := outmocks.NewMockCloudflareZoneResolver(t)
-	zoneResolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: "example.com"}, nil).Times(3)
+	zoneResolver.EXPECT().FindZone(mock.Anything, mock.Anything).Return(out.CloudflareZone{Name: "example.com"}, nil).Times(4)
 
 	// Mock issuer: returns valid stored cert for any order.
 	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
@@ -48,12 +48,13 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 	}
 
 	svc := NewService(cfg, ServiceDeps{
-		Config:       cfg,
-		Routes:       routes,
-		Issuer:       issuer,
-		Store:        store,
-		ZoneResolver: zoneResolver,
-		Challenges:   NewHTTP01Challenges(),
+		Config:          cfg,
+		Routes:          routes,
+		Issuer:          issuer,
+		Store:           store,
+		ZoneResolver:    zoneResolver,
+		Challenges:      NewHTTP01Challenges(),
+		AdditionalHosts: []string{"gordon.example.com"},
 		Effective: EffectiveChallenge{
 			ConfiguredMode: domain.ACMEChallengeCloudflareDNS01,
 			Mode:           domain.ACMEChallengeCloudflareDNS01,
@@ -141,8 +142,21 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 		require.NotEmpty(t, cert.Certificate)
 	})
 
+	t.Run("GetCertificate_returns_cert_for_management_host", func(t *testing.T) {
+		cert, err := svc.GetCertificateForHost("gordon.example.com")
+		require.NoError(t, err)
+		require.NotNil(t, cert)
+		require.NotEmpty(t, cert.Certificate)
+	})
+
+	t.Run("GetCertificate_returns_nil_for_unknown_wildcard_sibling", func(t *testing.T) {
+		cert, err := svc.GetCertificateForHost("unknown.example.com")
+		require.NoError(t, err)
+		assert.Nil(t, cert, "wildcard coverage must not authorize an unconfigured sibling")
+	})
+
 	// Also verify that a host not in the routes returns nil (no required ACME).
-	// "unrelated.com" is not covered by any wildcard base in requiredHosts.
+	// "unrelated.com" is not configured as a route or management host.
 	t.Run("GetCertificate_returns_nil_for_unrelated_host", func(t *testing.T) {
 		cert, err := svc.GetCertificateForHost("unrelated.com")
 		require.NoError(t, err)

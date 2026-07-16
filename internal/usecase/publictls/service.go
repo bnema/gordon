@@ -23,29 +23,31 @@ type RouteSource interface {
 
 // ServiceDeps contains the dependencies for the Service.
 type ServiceDeps struct {
-	Config       Config
-	Routes       RouteSource
-	Issuer       out.PublicCertificateIssuer
-	Store        out.CertificateStore
-	ZoneResolver out.CloudflareZoneResolver
-	Challenges   *HTTP01Challenges
-	Effective    EffectiveChallenge
-	Log          zerowrap.Logger
+	Config          Config
+	Routes          RouteSource
+	Issuer          out.PublicCertificateIssuer
+	Store           out.CertificateStore
+	ZoneResolver    out.CloudflareZoneResolver
+	Challenges      *HTTP01Challenges
+	Effective       EffectiveChallenge
+	AdditionalHosts []string
+	Log             zerowrap.Logger
 }
 
 const defaultObtainBatchSize = 1
 
 // Service manages public TLS certificates via ACME.
 type Service struct {
-	mu           sync.RWMutex
-	reconcileMu  sync.Mutex
-	cfg          Config
-	deps         ServiceDeps
-	log          zerowrap.Logger
-	certs        map[string]*out.StoredCertificate // indexed by cert ID
-	lastErr      map[string]string                 // indexed by cert ID
-	routeErr     map[string]string                 // indexed by host
-	obtainCursor int                               // next missing target index for batched obtains
+	mu              sync.RWMutex
+	reconcileMu     sync.Mutex
+	cfg             Config
+	deps            ServiceDeps
+	log             zerowrap.Logger
+	certs           map[string]*out.StoredCertificate // indexed by cert ID
+	lastErr         map[string]string                 // indexed by cert ID
+	routeErr        map[string]string                 // indexed by host
+	obtainCursor    int                               // next missing target index for batched obtains
+	additionalHosts []string                          // non-route hosts requiring certificate coverage
 
 	// requiredHosts is the set of hosts that must be covered by ACME certs.
 	requiredHosts map[string]struct{}
@@ -58,6 +60,7 @@ type Service struct {
 
 // NewService creates a new public TLS Service.
 func NewService(cfg Config, deps ServiceDeps) *Service {
+	deps.AdditionalHosts = append([]string(nil), deps.AdditionalHosts...)
 	if deps.Challenges == nil {
 		deps.Challenges = NewHTTP01Challenges()
 	}
@@ -65,13 +68,14 @@ func NewService(cfg Config, deps ServiceDeps) *Service {
 		deps.Log = zerowrap.Default()
 	}
 	return &Service{
-		cfg:           cfg,
-		deps:          deps,
-		log:           deps.Log,
-		certs:         make(map[string]*out.StoredCertificate),
-		lastErr:       make(map[string]string),
-		routeErr:      make(map[string]string),
-		requiredHosts: make(map[string]struct{}),
+		cfg:             cfg,
+		deps:            deps,
+		log:             deps.Log,
+		certs:           make(map[string]*out.StoredCertificate),
+		lastErr:         make(map[string]string),
+		routeErr:        make(map[string]string),
+		additionalHosts: deps.AdditionalHosts,
+		requiredHosts:   make(map[string]struct{}),
 	}
 }
 
@@ -81,6 +85,9 @@ func (s *Service) Load(ctx context.Context) error {
 	if s.deps.Store == nil {
 		return nil
 	}
+
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
 
 	stored, err := s.deps.Store.LoadAll(ctx)
 	if err != nil {
@@ -93,6 +100,13 @@ func (s *Service) Load(ctx context.Context) error {
 	}
 	if state.ObtainCursor < 0 {
 		state.ObtainCursor = 0
+	}
+
+	required := make(map[string]struct{})
+	if s.deps.Routes != nil {
+		routes := s.deps.Routes.GetRoutes(ctx)
+		external := s.deps.Routes.GetExternalRoutes()
+		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
 	}
 
 	s.mu.Lock()
@@ -110,13 +124,34 @@ func (s *Service) Load(ctx context.Context) error {
 			continue
 		}
 		s.certs[cert.ID] = cert
-		addNamesToRequiredHosts(s.requiredHosts, cert.Names)
 		if cert.LastError != "" {
 			s.lastErr[cert.ID] = cert.LastError
 		}
 	}
 
+	s.requiredHosts = required
+
 	return nil
+}
+
+// SetAdditionalHosts atomically replaces non-route hosts that require public
+// certificate coverage and immediately revokes hosts that are no longer required.
+func (s *Service) SetAdditionalHosts(ctx context.Context, hosts []string) {
+	s.reconcileMu.Lock()
+	defer s.reconcileMu.Unlock()
+
+	s.additionalHosts = append([]string(nil), hosts...)
+	required := canonicalHostSet(s.additionalHosts)
+	if s.deps.Routes != nil {
+		routes := s.deps.Routes.GetRoutes(ctx)
+		external := s.deps.Routes.GetExternalRoutes()
+		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
+	}
+
+	s.mu.Lock()
+	s.requiredHosts = required
+	clearRouteErrorsLocked(s.routeErr, required)
+	s.mu.Unlock()
 }
 
 // Reconcile ensures all desired certificates are obtained and cached.
@@ -166,7 +201,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// DeriveCertificateTargets fails (e.g. broken DNS-01 zone resolver).
 	routes := s.deps.Routes.GetRoutes(ctx)
 	external := s.deps.Routes.GetExternalRoutes()
-	hosts := routeHosts(routes, external)
+	hosts := routeHosts(routes, external, s.additionalHosts)
 
 	// Build required hosts set from route hosts (before target derivation).
 	required := canonicalHostSet(hosts)
@@ -181,6 +216,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// Derive desired targets.
 	targets, err := DeriveCertificateTargets(ctx, effective.Mode,
 		routes, external,
+		s.additionalHosts,
 		s.deps.ZoneResolver,
 	)
 	if err != nil {
@@ -190,12 +226,10 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("derive certificate targets: %w", err)
 	}
 
-	// Merge target names into required hosts set.
-	// For DNS-01 wildcard targets, this adds wildcard entries as well;
-	// the exact route hosts already present suffice for isRequiredHostLocked.
-	addTargetNames(required, targets)
+	// Keep authorization limited to exact configured hosts. Wildcard names on
+	// certificates provide coverage but must not authorize unknown sibling SNI.
 
-	// Under mu: update requiredHosts (with target names) and compute missing targets.
+	// Under mu: update requiredHosts and compute missing targets.
 	s.mu.Lock()
 	s.requiredHosts = required
 
@@ -311,21 +345,6 @@ func canonicalHostSet(hosts []string) map[string]struct{} {
 		}
 	}
 	return required
-}
-
-func addNamesToRequiredHosts(required map[string]struct{}, names []string) {
-	for _, name := range names {
-		name = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
-		if name != "" {
-			required[name] = struct{}{}
-		}
-	}
-}
-
-func addTargetNames(required map[string]struct{}, targets []CertificateTarget) {
-	for _, t := range targets {
-		addNamesToRequiredHosts(required, t.Names)
-	}
 }
 
 func clearRouteErrorsLocked(routeErr map[string]string, hosts map[string]struct{}) {
@@ -493,20 +512,12 @@ func (s *Service) GetCertificateForHost(host string) (*tls.Certificate, error) {
 	return nil, fmt.Errorf("%w: %s", domain.ErrTLSRouteNotCovered, host)
 }
 
-// isRequiredHostLocked checks if host or any wildcard covering it is in
-// the required hosts set. Must be called with s.mu held.
+// isRequiredHostLocked checks whether host is explicitly configured to require
+// public TLS. Wildcard certificate names are coverage, not authorization.
+// Must be called with s.mu held.
 func (s *Service) isRequiredHostLocked(host string) bool {
-	if _, ok := s.requiredHosts[host]; ok {
-		return true
-	}
-	// Check wildcard: split at the first dot.
-	parts := strings.SplitN(host, ".", 2)
-	if len(parts) == 2 {
-		if _, ok := s.requiredHosts["*."+parts[1]]; ok {
-			return true
-		}
-	}
-	return false
+	_, ok := s.requiredHosts[host]
+	return ok
 }
 
 // GetHTTP01Challenge delegates to the HTTP-01 challenge store.

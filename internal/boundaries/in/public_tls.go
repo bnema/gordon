@@ -21,6 +21,9 @@ type PublicTLSService interface {
 	// Status returns the current public TLS status.
 	Status(ctx context.Context) domain.PublicTLSStatus
 
+	// SetAdditionalHosts replaces non-route hosts requiring public certificate coverage.
+	SetAdditionalHosts(ctx context.Context, hosts []string)
+
 	// Reconcile ensures the desired certificate state matches the actual state.
 	Reconcile(ctx context.Context) error
 
