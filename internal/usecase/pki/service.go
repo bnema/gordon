@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -129,6 +130,17 @@ func (s *Service) validCachedCertificate(domainName string) *tls.Certificate {
 }
 
 func (s *Service) issueCertificate(ctx context.Context, domainName string) (*tls.Certificate, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = zerowrap.WithCtx(ctx, s.log)
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "IssueCertificate",
+		"domain":              domainName,
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	if !s.isDomainAllowed(ctx, domainName) {
 		return nil, nil
 	}
@@ -138,15 +150,15 @@ func (s *Service) issueCertificate(ctx context.Context, domainName string) (*tls
 
 	cert, err := s.ca.IssueCertificate(domainName)
 	if err != nil {
-		s.log.Error().Err(err).Str("domain", domainName).Msg("failed to issue leaf cert")
-		return nil, err
+		log.Error().Err(err).Msg("failed to issue leaf certificate")
+		return nil, fmt.Errorf("issue leaf certificate for %q: %w", domainName, err)
 	}
 	if !s.isDomainAllowed(ctx, domainName) {
 		return nil, nil
 	}
 
 	s.cache.Store(domainName, &cachedCert{cert: cert, expiresAt: certificateExpiry(cert, s.leafLifetime())})
-	s.log.Debug().Str("domain", domainName).Msg("issued new leaf certificate")
+	log.Debug().Msg("issued new leaf certificate")
 	return cert, nil
 }
 

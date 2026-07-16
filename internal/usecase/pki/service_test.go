@@ -3,7 +3,9 @@ package pki_test
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -133,13 +135,59 @@ func TestService_SetAdditionalDomains_RevokesConcurrentIssuance(t *testing.T) {
 		errs <- getErr
 	}()
 
-	<-blockingCA.started
+	require.Eventually(t, func() bool {
+		select {
+		case <-blockingCA.started:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "certificate issuance did not start")
 	svc.SetAdditionalDomains([]string{"new.example.com"})
 	close(blockingCA.release)
 
-	require.NoError(t, <-errs)
-	assert.Nil(t, <-result)
+	var getErr error
+	require.Eventually(t, func() bool {
+		select {
+		case getErr = <-errs:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "certificate issuance did not return an error result")
+	require.NoError(t, getErr)
+
+	var cert *tls.Certificate
+	require.Eventually(t, func() bool {
+		select {
+		case cert = <-result:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond, "certificate issuance did not return a certificate result")
+	assert.Nil(t, cert)
 	assert.Equal(t, 0, svc.CachedCertCount())
+}
+
+func TestService_GetCertificate_WrapsIssuanceError(t *testing.T) {
+	issuerErr := errors.New("issuer unavailable")
+	ca := mocks.NewMockCertificateAuthority(t)
+	ca.EXPECT().IntermediateExpiresAt().Return(time.Now().Add(24 * time.Hour)).Maybe()
+	ca.EXPECT().IntermediateLifetime().Return(24 * time.Hour).Maybe()
+	ca.EXPECT().IssueCertificate("broken.example.com").Return(nil, issuerErr).Once()
+	cfg := newRouteCheckerMock(t, "broken.example.com")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	svc := pkiusecase.NewService(ctx, ca, cfg, nil, testLogger())
+	defer svc.Stop()
+
+	cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "broken.example.com"})
+
+	assert.Nil(t, cert)
+	require.ErrorIs(t, err, issuerErr)
+	assert.Equal(t, `issue leaf certificate for "broken.example.com": issuer unavailable`, err.Error())
 }
 
 func TestService_GetCertificate_UnknownDomain(t *testing.T) {
