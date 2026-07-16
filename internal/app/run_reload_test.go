@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
@@ -169,6 +171,15 @@ func (r *standaloneServiceRecorder) Calls() int {
 	return r.calls
 }
 
+type publicTLSReconcileRecorder struct {
+	calls int
+}
+
+func (r *publicTLSReconcileRecorder) Reconcile(context.Context) error {
+	r.calls++
+	return nil
+}
+
 type eventBusRecorder struct {
 	mu        sync.Mutex
 	calls     int
@@ -312,12 +323,54 @@ func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 	}
 
 	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
+	managementCert, err := pkiSvc.GetCertificate(&tls.ClientHelloInfo{ServerName: "reload.example.com"})
+	require.NoError(t, err)
+	require.NotNil(t, managementCert)
+
 	_, portValue, err := net.SplitHostPort(customAddress)
 	require.NoError(t, err)
 	port, err := strconv.Atoi(portValue)
 	require.NoError(t, err)
 	body := httpsGetForTest(t, port, "app.example.com")
 	require.Contains(t, body, "reload secure")
+}
+
+func TestServiceInit_ReloadUpdatesManagementHostsBeforeLaterFailure(t *testing.T) {
+	ctx := t.Context()
+	v := viper.New()
+	v.Set("server.gordon_domain", "old.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := cfgusecase.NewService(v, nil)
+	require.NoError(t, configSvc.Load(ctx))
+	publicTLS := inmocks.NewMockPublicTLSService(t)
+	publicTLS.EXPECT().SetAdditionalHosts(mock.Anything, []string{"new.example.com"}).Once()
+	reconcileErr := errors.New("standalone reconcile failed")
+
+	si := &serviceInit{
+		ctx: ctx,
+		v:   v,
+		cfg: Config{},
+		log: zerowrap.Default(),
+		svc: &services{
+			configSvc:            configSvc,
+			containerSvc:         container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			internalRegUser:      "gordon",
+			internalRegPass:      "secret",
+			reloadCoordinator:    newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, publicTLS, zerowrap.Default()),
+			publicTLSSvc:         publicTLS,
+			standaloneServiceSvc: &standaloneServiceRecorder{err: reconcileErr},
+		},
+	}
+	si.registerReloadCoordinatorHooks()
+
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "new.example.com"
+	reloadCfg.Server.RegistryPort = 5000
+	reloadCfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
+
+	err := si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg)
+	require.ErrorIs(t, err, reconcileErr)
 }
 
 func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(t *testing.T) {
@@ -538,8 +591,9 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	reloadSvc := &reloadRecorder{}
 	proxySvc := &proxyRecorder{}
 	events := &eventBusRecorder{err: publishErr}
+	publicTLS := &publicTLSReconcileRecorder{}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, publicTLS, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, publishErr)
@@ -550,6 +604,7 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	require.Equal(t, 2, reloadSvc.Calls())
 	require.Equal(t, 2, proxySvc.calls)
 	require.Equal(t, 2, events.Calls())
+	require.Equal(t, 2, publicTLS.calls)
 	require.Equal(t, domain.EventConfigReload, events.eventType)
 }
 

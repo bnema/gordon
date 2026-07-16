@@ -160,13 +160,18 @@ func TestPKIInitializesForSmartTCPEvenWithoutLegacyTLSPort(t *testing.T) {
 		svc: &services{configSvc: cfgServiceForPKITest(t)},
 	}
 	si.cfg.Server.DataDir = t.TempDir()
+	si.cfg.Server.GordonDomain = "gordon.example.com"
 	si.cfg.EntryPoints = map[string]traffic.EntryPointConfig{
 		traffic.DefaultEdgeEntryPointName: {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP},
 	}
 
 	require.NoError(t, si.initPKI())
 	require.NotNil(t, si.svc.pkiSvc)
-	si.svc.pkiSvc.Stop()
+	defer si.svc.pkiSvc.Stop()
+
+	cert, err := si.svc.pkiSvc.GetCertificate(&tls.ClientHelloInfo{ServerName: "gordon.example.com"})
+	require.NoError(t, err)
+	require.NotNil(t, cert)
 }
 
 func cfgServiceForPKITest(t *testing.T) *config.Service {
@@ -244,7 +249,7 @@ func TestCertificateSelector_PublicTLSErrorFallsThroughToLocalPKI(t *testing.T) 
 	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
 	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
-	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, zerowrap.Default())
+	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, nil, zerowrap.Default())
 	defer pkiSvc.Stop()
 
 	selector := &certificateSelector{publicTLS: publicTLS, localPKI: pkiSvc}

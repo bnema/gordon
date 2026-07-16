@@ -30,6 +30,7 @@ packages:
       CertificateStore:
       SecretResolver:
       CloudflareZoneResolver:
+      CertificateAuthority:
   github.com/bnema/gordon/internal/boundaries/in:
     interfaces:
       ContainerService:

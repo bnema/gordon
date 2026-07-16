@@ -24,9 +24,10 @@ func DeriveCertificateTargets(
 	mode domain.ACMEChallengeMode,
 	routes []domain.Route,
 	external map[string]string,
+	additionalHosts []string,
 	resolver out.CloudflareZoneResolver,
 ) ([]CertificateTarget, error) {
-	hosts := routeHosts(routes, external)
+	hosts := routeHosts(routes, external, additionalHosts)
 
 	switch mode {
 	case domain.ACMEChallengeHTTP01:
@@ -40,7 +41,7 @@ func DeriveCertificateTargets(
 
 // routeHosts collects all unique canonical hosts from routes and external keys,
 // sorted alphabetically. Trailing dots are stripped before canonicalization.
-func routeHosts(routes []domain.Route, external map[string]string) []string {
+func routeHosts(routes []domain.Route, external map[string]string, additionalHosts []string) []string {
 	seen := make(map[string]struct{})
 	var hosts []string
 
@@ -60,6 +61,9 @@ func routeHosts(routes []domain.Route, external map[string]string) []string {
 		addHost(r.Domain)
 	}
 	for h := range external {
+		addHost(h)
+	}
+	for _, h := range additionalHosts {
 		addHost(h)
 	}
 

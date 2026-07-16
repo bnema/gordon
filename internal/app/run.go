@@ -596,7 +596,7 @@ func (si *serviceInit) initPKI() error {
 		return si.log.WrapErr(err, "failed to initialize internal CA")
 	}
 	si.svc.caAdapter = caAdapter
-	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.svc.configSvc, si.log)
+	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.svc.configSvc, []string{si.cfg.Server.GordonDomain}, si.log)
 	return nil
 }
 
@@ -666,12 +666,13 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	svc := publictls.NewService(publicTLSCfg, publictls.ServiceDeps{
-		Routes:       si.svc.configSvc,
-		Issuer:       issuer,
-		Store:        store,
-		ZoneResolver: zoneResolver,
-		Challenges:   challenges,
-		Effective:    effective,
+		Routes:          si.svc.configSvc,
+		Issuer:          issuer,
+		Store:           store,
+		ZoneResolver:    zoneResolver,
+		Challenges:      challenges,
+		Effective:       effective,
+		AdditionalHosts: []string{si.cfg.Server.GordonDomain},
 	})
 
 	if err := svc.Load(ctx); err != nil {
@@ -778,6 +779,13 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		containerCfg, err := buildContainerServiceConfig(reloadCtx, si.v, reloadCfg, si.svc, si.log)
 		if err != nil {
 			return err
+		}
+		managementHosts := []string{reloadCfg.Server.GordonDomain}
+		if si.svc.pkiSvc != nil {
+			si.svc.pkiSvc.SetAdditionalDomains(managementHosts)
+		}
+		if si.svc.publicTLSSvc != nil {
+			si.svc.publicTLSSvc.SetAdditionalHosts(reloadCtx, managementHosts)
 		}
 		var tlsConfig *tls.Config
 		if hasTLSCapableEntrypoint(reloadCfg) && si.svc.httpsProxyHandler != nil {
@@ -1843,6 +1851,15 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
 	}
 
+	// Reconcile public TLS before publishing reload events so certificate
+	// authorization reflects the loaded config even if event delivery fails.
+	// A transient ACME issue must not abort the rest of the reload.
+	if c.publicTLS != nil {
+		if err := c.publicTLS.Reconcile(ctx); err != nil {
+			c.log.Warn().Err(err).Msg("failed to reconcile public TLS certificates after reload, continuing")
+		}
+	}
+
 	if c.eventBus != nil {
 		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
 			c.log.Error().Err(err).Msg("failed to publish config reload event")
@@ -1851,14 +1868,6 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	}
 
 	c.lastRun = now
-
-	// Reconcile public TLS certificates after config reload.
-	// Log and continue on failure — a transient ACME issue should not abort the entire reload.
-	if c.publicTLS != nil {
-		if err := c.publicTLS.Reconcile(ctx); err != nil {
-			c.log.Warn().Err(err).Msg("failed to reconcile public TLS certificates after reload, continuing")
-		}
-	}
 
 	c.log.Debug().Msg("config hot reload complete")
 	return nil

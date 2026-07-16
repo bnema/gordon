@@ -102,7 +102,9 @@ Challenge behavior:
 
 HTTP-01 requires public access to external port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to the HTTP-capable smart TCP entrypoint. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
 
-Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. Later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
+Gordon automatically includes `server.gordon_domain` in public ACME coverage in addition to configured HTTPS routes. The management hostname therefore needs the same challenge reachability: public port 80 for HTTP-01, or zone-read and DNS-edit permissions for its zone with Cloudflare DNS-01.
+
+Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. The management hostname consumes a place in the same batch; later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
 
 If the initial ACME reconcile fails (e.g. due to a transient network error or misconfiguration), Gordon logs the failure and keeps serving any existing certificates. The renewal loop retries reconcile work periodically, so missing certificates self-heal after the underlying issue is fixed without requiring a restart.
 

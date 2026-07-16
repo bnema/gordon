@@ -348,6 +348,71 @@ func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
 	assert.Len(t, storeState.All(), 3)
 }
 
+func TestServiceSetAdditionalHosts_ImmediatelyRevokesRemovedManagementDomain(t *testing.T) {
+	ctx := t.Context()
+	routes := outmocks.NewMockRouteChecker(t)
+	routes.EXPECT().GetRoutes(mock.Anything).Return(nil).Maybe()
+	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+
+	svc := NewService(Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01", ObtainBatchSize: 10}, ServiceDeps{
+		Routes:          routes,
+		Issuer:          issuer,
+		Store:           store,
+		AdditionalHosts: []string{"old.example.com"},
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	cert, err := svc.GetCertificateForHost("old.example.com")
+	require.NoError(t, err)
+	require.NotNil(t, cert)
+
+	svc.SetAdditionalHosts(ctx, []string{"new.example.com"})
+
+	cert, err = svc.GetCertificateForHost("old.example.com")
+	require.NoError(t, err)
+	assert.Nil(t, cert)
+}
+
+func TestServiceSetAdditionalHosts_ReconcileReplacesManagementDomain(t *testing.T) {
+	ctx := context.Background()
+	routes := &fakeRoutes{}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+
+	cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01", ObtainBatchSize: 10}
+	svc := NewService(cfg, ServiceDeps{
+		Routes:          routes,
+		Issuer:          issuer,
+		Store:           store,
+		AdditionalHosts: []string{"old.example.com"},
+		Effective: EffectiveChallenge{
+			ConfiguredMode: domain.ACMEChallengeHTTP01,
+			Mode:           domain.ACMEChallengeHTTP01,
+		},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+	svc.SetAdditionalHosts(ctx, []string{"NEW.EXAMPLE.COM."})
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 2)
+	assert.Equal(t, "http01-old.example.com", orders[0].ID)
+	assert.Equal(t, "http01-new.example.com", orders[1].ID)
+
+	cert, err := svc.GetCertificateForHost("old.example.com")
+	require.NoError(t, err)
+	assert.Nil(t, cert)
+}
+
 func TestServiceReconcileRotatesBatchAfterFailedObtain(t *testing.T) {
 	ctx := context.Background()
 
@@ -895,7 +960,7 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 		// Certificate field is zero — will be populated by Load.
 	})
 
-	routes := &fakeRoutes{}
+	routes := &fakeRoutes{routes: []domain.Route{{Domain: "test.example.com"}}}
 	cfg := Config{Enabled: true}
 
 	svc := NewService(cfg, ServiceDeps{
@@ -921,7 +986,7 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 
 	served, err := svc.GetCertificateForHost("test.example.com")
 	require.NoError(t, err)
-	require.NotNil(t, served, "loaded certificates should seed required hosts")
+	require.NotNil(t, served, "loaded certificate should cover the configured host")
 }
 
 func TestServiceStatusReportsRouteErrorAfterObtainFailure(t *testing.T) {

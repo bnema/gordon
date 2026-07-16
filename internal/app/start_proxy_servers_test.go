@@ -287,7 +287,7 @@ func newTestPKIService(t *testing.T) *pkiusecase.Service {
 	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
 	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
-	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, zerowrap.Default())
+	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, nil, zerowrap.Default())
 	t.Cleanup(pkiSvc.Stop)
 	return pkiSvc
 }
