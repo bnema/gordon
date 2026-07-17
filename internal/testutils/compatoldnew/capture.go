@@ -1,5 +1,15 @@
 package compatoldnew
 
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+)
+
 // ComparisonLevel describes how strictly an artifact must compare.
 type ComparisonLevel string
 
@@ -78,6 +88,111 @@ func newBaseArtifact(source string, raw any, level ComparisonLevel) baseArtifact
 
 func NewCLIArtifact(source string, raw any, level ComparisonLevel) CLIArtifact {
 	return CLIArtifact{newBaseArtifact(source, raw, level)}
+}
+
+// CommandCaptureRequest describes one CLI invocation. Environment values are
+// intentionally retained only as redacted metadata in the resulting artifact.
+type CommandCaptureRequest struct {
+	BinaryPath string
+	Args       []string
+	Dir        string
+	Env        []string
+	Source     string
+	Level      ComparisonLevel
+}
+
+// CaptureCommand records independent stdout, stderr, and process exit status.
+// A non-zero process exit is an observation to compare, not a capture failure.
+func CaptureCommand(ctx context.Context, request CommandCaptureRequest) (CLIArtifact, error) {
+	if request.BinaryPath == "" {
+		return CLIArtifact{}, fmt.Errorf("capture command: binary path is required")
+	}
+	source := request.Source
+	if source == "" {
+		source = strings.Join(append([]string{request.BinaryPath}, request.Args...), " ")
+	}
+	source = redactMetadata(source)
+	level := request.Level
+	if level == "" {
+		level = LevelExact
+	}
+	// #nosec G204 -- compatibility tests intentionally execute a selected binary.
+	cmd := exec.CommandContext(ctx, request.BinaryPath, request.Args...)
+	cmd.Dir = request.Dir
+	cmd.Env = append(os.Environ(), request.Env...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			return CLIArtifact{}, fmt.Errorf("capture command %q: %w", source, err)
+		}
+		exitCode = exitErr.ExitCode()
+	}
+	raw := map[string]any{
+		"command":     redactMetadata(request.BinaryPath),
+		"args":        redactArguments(request.Args),
+		"environment": redactedEnvironment(request.Env),
+		"exitCode":    exitCode,
+		"stdout":      stdout.String(),
+		"stderr":      stderr.String(),
+	}
+	return NewCLIArtifact(source, raw, level), nil
+}
+
+func redactedEnvironment(env []string) map[string]string {
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if key != "" && ok {
+			values[key] = "<redacted>"
+		}
+	}
+	return values
+}
+
+func redactArguments(args []string) []string {
+	redacted := make([]string, len(args))
+	copy(redacted, args)
+	for i, arg := range redacted {
+		redacted[i] = redactMetadata(arg)
+		if (arg == "--token" || arg == "--authorization") && i+1 < len(redacted) {
+			redacted[i+1] = "<redacted>"
+		}
+	}
+	return redacted
+}
+
+// ExecuteSide captures a command and associates it with exactly one old/new side.
+func ExecuteSide(ctx context.Context, side string, request CommandCaptureRequest) (SideResult, error) {
+	if side != SideOld && side != SideNew {
+		return SideResult{}, fmt.Errorf("execute side: unknown side %q", side)
+	}
+	artifact, err := CaptureCommand(ctx, request)
+	if err != nil {
+		return SideResult{}, err
+	}
+	return SideResult{Side: side, Artifact: artifact}, nil
+}
+
+func redactMetadata(value string) string {
+	fields := strings.Fields(value)
+	for i, field := range fields {
+		lower := strings.ToLower(field)
+		if strings.Contains(lower, "token=") || strings.Contains(lower, "authorization=") {
+			key, _, ok := strings.Cut(field, "=")
+			if ok {
+				fields[i] = key + "=<redacted>"
+			}
+		}
+		if (field == "--token" || field == "--authorization") && i+1 < len(fields) {
+			fields[i+1] = "<redacted>"
+		}
+	}
+	return strings.Join(fields, " ")
 }
 
 func NewHTTPArtifact(source string, raw any, level ComparisonLevel) HTTPArtifact {

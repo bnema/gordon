@@ -1,6 +1,7 @@
 package compatoldnew
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,6 +45,45 @@ type Fixture struct {
 	EnvFiles         []string
 	ExpectedSurfaces []Surface
 	PodmanRequired   bool
+}
+
+// SideFixture is an isolated filesystem view for one old/new side.
+type SideFixture struct {
+	Root       string
+	HomeDir    string
+	DataDir    string
+	ConfigPath string
+	Env        []string
+}
+
+// StageSideFixture copies a selected generic fixture config to gordon.toml and
+// isolates HOME (and therefore Gordon's default data directory) per side.
+func StageSideFixture(parentDir, sourceConfig string) (SideFixture, error) {
+	if sourceConfig == "" {
+		return SideFixture{}, fmt.Errorf("stage fixture: config path is required")
+	}
+	contents, err := os.ReadFile(sourceConfig)
+	if err != nil {
+		return SideFixture{}, fmt.Errorf("stage fixture read config: %w", err)
+	}
+	root, err := os.MkdirTemp(parentDir, "gordon-compat-side-*")
+	if err != nil {
+		return SideFixture{}, fmt.Errorf("stage fixture create side directory: %w", err)
+	}
+	cleanup := func(err error) (SideFixture, error) {
+		_ = os.RemoveAll(root)
+		return SideFixture{}, err
+	}
+	homeDir := filepath.Join(root, "home")
+	dataDir := filepath.Join(homeDir, ".gordon")
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return cleanup(fmt.Errorf("stage fixture create isolated data dir: %w", err))
+	}
+	configPath := filepath.Join(root, "gordon.toml")
+	if err := os.WriteFile(configPath, contents, 0o600); err != nil {
+		return cleanup(fmt.Errorf("stage fixture write config: %w", err))
+	}
+	return SideFixture{Root: root, HomeDir: homeDir, DataDir: dataDir, ConfigPath: configPath, Env: []string{"HOME=" + homeDir}}, nil
 }
 
 // BaselineRefFromEnv returns the git ref used for the old-side baseline.

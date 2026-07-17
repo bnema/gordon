@@ -124,6 +124,32 @@ func TestScenarioDefinitions(t *testing.T) {
 	require.Len(t, AllScenarios(), len(seen))
 }
 
+func TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe(t *testing.T) {
+	implemented := implementedScenario("cli/config-show-json", SurfaceCLI, "6.2 CLI compatibility", false)
+	pending := pendingScenario("migration/not-ready", SurfaceMigration, "6.4 migration", false, "requires migration harness")
+	unknown := Scenario{Name: "unknown", Surface: SurfaceCLI}
+
+	require.Equal(t, ScenarioStatusImplemented, implemented.Status)
+	require.Empty(t, implemented.BlockReason)
+	require.False(t, mustSkip(t, implemented))
+	require.True(t, mustSkip(t, pending))
+	reason, skip := unknown.SkipReason()
+	require.True(t, skip)
+	require.Contains(t, reason, "not implemented")
+
+	selected, err := SelectImplementedScenarios([]Scenario{implemented, pending}, []string{implemented.Name})
+	require.NoError(t, err)
+	require.Equal(t, []Scenario{implemented}, selected)
+	_, err = SelectImplementedScenarios([]Scenario{implemented, pending}, []string{pending.Name})
+	require.Error(t, err)
+}
+
+func mustSkip(t *testing.T, scenario Scenario) bool {
+	t.Helper()
+	_, skip := scenario.SkipReason()
+	return skip
+}
+
 func TestScenarioPodmanRequirements(t *testing.T) {
 	for _, scenario := range RegistryScenarios() {
 		require.True(t, scenario.PodmanRequired, scenario.Name)

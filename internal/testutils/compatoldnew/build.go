@@ -27,6 +27,12 @@ type BuildResult struct {
 	Commit     string
 }
 
+// OldNewBinaries identifies the independently built baseline and candidate.
+type OldNewBinaries struct {
+	Old BuildResult
+	New BuildResult
+}
+
 type Builder interface {
 	Build(context.Context, BuildRequest) (BuildResult, error)
 }
@@ -50,6 +56,23 @@ func (ExecCommandRunner) Run(ctx context.Context, dir, name string, args ...stri
 
 type GoBuilder struct {
 	Runner CommandRunner
+}
+
+// BuildOldAndNew builds the configured baseline in a detached worktree and the
+// candidate from the caller's current working tree, in that order.
+func BuildOldAndNew(ctx context.Context, builder Builder, repoRoot, outputDir string) (OldNewBinaries, error) {
+	if builder == nil {
+		builder = GoBuilder{}
+	}
+	oldBuild, err := builder.Build(ctx, BuildRequest{RepoRoot: repoRoot, Ref: BaselineRefFromEnv(), OutputDir: outputDir, Name: OldBinaryName})
+	if err != nil {
+		return OldNewBinaries{}, fmt.Errorf("build compatibility baseline: %w", err)
+	}
+	newBuild, err := builder.Build(ctx, BuildRequest{RepoRoot: repoRoot, Ref: "HEAD", OutputDir: outputDir, Name: NewBinaryName})
+	if err != nil {
+		return OldNewBinaries{}, fmt.Errorf("build compatibility candidate: %w", err)
+	}
+	return OldNewBinaries{Old: oldBuild, New: newBuild}, nil
 }
 
 func (b GoBuilder) Build(ctx context.Context, req BuildRequest) (BuildResult, error) {

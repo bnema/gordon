@@ -1,11 +1,28 @@
 package compatoldnew
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestStageSideFixtureCopiesConfigAndIsolatesHomeAndData(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source.toml")
+	require.NoError(t, os.WriteFile(source, []byte("[server]\nport = 9999\n"), 0o600))
+
+	fixture, err := StageSideFixture(t.TempDir(), source)
+	require.NoError(t, err)
+	require.FileExists(t, fixture.ConfigPath)
+	require.Equal(t, filepath.Join(fixture.Root, "gordon.toml"), fixture.ConfigPath)
+	require.Equal(t, filepath.Join(fixture.HomeDir, ".gordon"), fixture.DataDir)
+	require.Contains(t, fixture.Env, "HOME="+fixture.HomeDir)
+	require.NotEqual(t, source, fixture.ConfigPath)
+	got, err := os.ReadFile(fixture.ConfigPath)
+	require.NoError(t, err)
+	require.Equal(t, "[server]\nport = 9999\n", string(got))
+}
 
 func TestFixtureMetadata(t *testing.T) {
 	t.Run("baseline ref defaults to origin main", func(t *testing.T) {

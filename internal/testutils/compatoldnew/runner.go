@@ -3,7 +3,9 @@ package compatoldnew
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -12,17 +14,29 @@ import (
 	"time"
 )
 
+// ReadinessProbe supports services whose readiness is not a successful HTTP
+// response, including raw TCP listeners and authenticated endpoints.
+type ReadinessProbe struct {
+	TCPAddress string
+	Check      func(context.Context) error
+}
+
 type GordonInstance struct {
 	BinaryPath     string
 	ConfigPath     string
 	DataDir        string
+	WorkingDir     string
 	Env            []string
 	HealthProbeURL string
+	ReadinessProbe ReadinessProbe
 
-	cmd    *exec.Cmd
-	stdout syncBuffer
-	stderr syncBuffer
-	mu     sync.Mutex
+	cmd           *exec.Cmd
+	waitDone      chan struct{}
+	waitErr       error
+	processExited bool
+	stdout        syncBuffer
+	stderr        syncBuffer
+	mu            sync.Mutex
 }
 
 type syncBuffer struct {
@@ -56,10 +70,11 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 			return fmt.Errorf("create data dir: %w", err)
 		}
 	}
-	cmdArgs := append([]string{}, args...)
 	// #nosec G204 -- the harness must execute the Gordon binary under comparison.
-	cmd := exec.CommandContext(ctx, g.BinaryPath, cmdArgs...)
-	if g.DataDir != "" {
+	cmd := exec.CommandContext(ctx, g.BinaryPath, args...)
+	if g.WorkingDir != "" {
+		cmd.Dir = g.WorkingDir
+	} else if g.DataDir != "" {
 		cmd.Dir = g.DataDir
 	}
 	cmd.Env = append(os.Environ(), g.Env...)
@@ -72,34 +87,55 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 		return fmt.Errorf("start %s: %w", filepath.Base(g.BinaryPath), err)
 	}
 	g.cmd = cmd
+	g.waitDone = make(chan struct{})
+	g.waitErr = nil
+	g.processExited = false
+	go g.watchProcess(cmd, g.waitDone)
 	return nil
+}
+
+func (g *GordonInstance) watchProcess(cmd *exec.Cmd, done chan struct{}) {
+	err := cmd.Wait()
+	g.mu.Lock()
+	if g.cmd == cmd {
+		g.waitErr = err
+		g.processExited = true
+	}
+	close(done)
+	g.mu.Unlock()
 }
 
 func (g *GordonInstance) Stop(ctx context.Context) error {
 	g.mu.Lock()
-	cmd := g.cmd
+	cmd, done, exited := g.cmd, g.waitDone, g.processExited
 	g.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	if err := cmd.Process.Signal(os.Interrupt); err != nil && cmd.ProcessState == nil {
-		g.clearCmd(cmd)
-		return fmt.Errorf("stop instance: %w", err)
+	if !exited {
+		select {
+		case <-done:
+			exited = true
+		default:
+		}
 	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	if !exited {
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			select {
+			case <-done:
+			default:
+				return fmt.Errorf("stop instance: %w", err)
+			}
+		}
+	}
 	select {
 	case <-ctx.Done():
 		_ = cmd.Process.Kill()
+		<-done
 		g.clearCmd(cmd)
 		return ctx.Err()
-	case err := <-done:
+	case <-done:
 		g.clearCmd(cmd)
-		if err != nil {
-			if _, ok := err.(*exec.ExitError); !ok {
-				return fmt.Errorf("wait after stop: %w", err)
-			}
-		}
 		return nil
 	}
 }
@@ -113,26 +149,77 @@ func (g *GordonInstance) clearCmd(cmd *exec.Cmd) {
 }
 
 func (g *GordonInstance) WaitReady(ctx context.Context) error {
-	if g.HealthProbeURL == "" {
+	g.mu.Lock()
+	probe, healthURL, done := g.ReadinessProbe, g.HealthProbeURL, g.waitDone
+	exited, waitErr := g.processExited, g.waitErr
+	g.mu.Unlock()
+	if exited {
+		return g.earlyExitError(waitErr)
+	}
+	if probe.Check == nil && probe.TCPAddress == "" && healthURL == "" {
 		return nil
+	}
+	if probe.Check != nil && probe.TCPAddress != "" {
+		return fmt.Errorf("wait ready: configure either readiness callback or TCP address")
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
-	client := http.Client{Timeout: time.Second}
+	var lastErr error
 	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait ready %s: %w; logs: %s", g.HealthProbeURL, ctx.Err(), g.Logs())
-		case <-ticker.C:
-			resp, err := client.Get(g.HealthProbeURL)
-			if err == nil {
-				_ = resp.Body.Close()
-				if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-					return nil
-				}
+		if done != nil {
+			select {
+			case <-done:
+				g.mu.Lock()
+				err := g.waitErr
+				g.mu.Unlock()
+				return g.earlyExitError(err)
+			default:
 			}
 		}
+		if err := g.checkReadiness(ctx, probe, healthURL); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait ready: %w (last probe error: %v); logs: %s", ctx.Err(), lastErr, g.Logs())
+		case <-ticker.C:
+		}
 	}
+}
+
+func (g *GordonInstance) checkReadiness(ctx context.Context, probe ReadinessProbe, healthURL string) error {
+	if probe.Check != nil {
+		return probe.Check(ctx)
+	}
+	if probe.TCPAddress != "" {
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", probe.TCPAddress)
+		if err != nil {
+			return err
+		}
+		return conn.Close()
+	}
+	client := http.Client{Timeout: time.Second}
+	resp, err := client.Get(healthURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("health probe returned HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (g *GordonInstance) earlyExitError(waitErr error) error {
+	if waitErr == nil {
+		return fmt.Errorf("gordon exited before ready; logs: %s", g.Logs())
+	}
+	if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
+		return fmt.Errorf("gordon exited before ready with status %d; logs: %s", exitErr.ExitCode(), g.Logs())
+	}
+	return fmt.Errorf("gordon exited before ready: %w; logs: %s", waitErr, g.Logs())
 }
 
 func (g *GordonInstance) Logs() string {

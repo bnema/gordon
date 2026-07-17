@@ -14,6 +14,31 @@ type Report struct {
 	Failures []Failure `json:"failures"`
 }
 
+// SideResult associates a captured artifact with the target that produced it.
+type SideResult struct {
+	Side     string
+	Artifact Artifact
+}
+
+// CompareSideResults routes every comparison through Compare and writes the
+// report artifacts even when the values match, so failures are diagnosable.
+func CompareSideResults(old, new SideResult, allow *AllowlistedDifference, artifactDir string) (Report, error) {
+	if old.Side != SideOld || new.Side != SideNew {
+		return Report{}, fmt.Errorf("compare sides: expected old and new results")
+	}
+	if old.Artifact == nil || new.Artifact == nil {
+		return Report{}, fmt.Errorf("compare sides: both artifacts are required")
+	}
+	if artifactDir == "" {
+		return Report{}, fmt.Errorf("compare sides: report artifact directory is required")
+	}
+	report := NewReport(Compare(old.Artifact, new.Artifact, allow), 1)
+	if err := report.WriteArtifactDirectory(artifactDir); err != nil {
+		return Report{}, fmt.Errorf("compare sides write report: %w", err)
+	}
+	return report, nil
+}
+
 func NewReport(failures []Failure, total int) Report {
 	return Report{Total: total, Failed: len(failures), Failures: failures}
 }

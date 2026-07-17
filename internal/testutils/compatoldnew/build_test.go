@@ -21,6 +21,23 @@ func (f *fakeRunner) Run(_ context.Context, dir, name string, args ...string) ([
 	return []byte{}, nil
 }
 
+func TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation(t *testing.T) {
+	t.Setenv(EnvCompatBaselineRef, "refs/tags/v0.9.0")
+	fr := &fakeRunner{}
+	binaries, err := BuildOldAndNew(context.Background(), GoBuilder{Runner: fr}, "/repo", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binaries.Old.Ref != "refs/tags/v0.9.0" || binaries.New.Ref != "HEAD" {
+		t.Fatalf("unexpected build refs: %+v", binaries)
+	}
+	for _, command := range fr.commands {
+		if command.name == "git" && (len(command.args) > 0 && (command.args[0] == "checkout" || command.args[0] == "switch")) {
+			t.Fatalf("branch mutation: %#v", command)
+		}
+	}
+}
+
 func TestGoBuilderBuildsCandidateFromCurrentWorkingTree(t *testing.T) {
 	t.Chdir(t.TempDir())
 	fr := &fakeRunner{}
