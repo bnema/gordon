@@ -22,9 +22,10 @@ type ComponentTokenValidator interface {
 func ComponentAuthUnaryInterceptor(
 	validator ComponentTokenValidator,
 	methodScopes map[string]domain.ComponentScope,
+	methodRoles map[string]domain.ComponentRole,
 ) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		authedCtx, err := authenticateComponent(ctx, validator, methodScopes, info.FullMethod)
+		authedCtx, err := authenticateComponent(ctx, validator, methodScopes, methodRoles, info.FullMethod)
 		if err != nil {
 			return nil, err
 		}
@@ -36,9 +37,10 @@ func ComponentAuthUnaryInterceptor(
 func ComponentAuthStreamInterceptor(
 	validator ComponentTokenValidator,
 	methodScopes map[string]domain.ComponentScope,
+	methodRoles map[string]domain.ComponentRole,
 ) grpc.StreamServerInterceptor {
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		authedCtx, err := authenticateComponent(stream.Context(), validator, methodScopes, info.FullMethod)
+		authedCtx, err := authenticateComponent(stream.Context(), validator, methodScopes, methodRoles, info.FullMethod)
 		if err != nil {
 			return err
 		}
@@ -59,6 +61,7 @@ func authenticateComponent(
 	ctx context.Context,
 	validator ComponentTokenValidator,
 	methodScopes map[string]domain.ComponentScope,
+	methodRoles map[string]domain.ComponentRole,
 	fullMethod string,
 ) (context.Context, error) {
 	if validator == nil {
@@ -68,6 +71,10 @@ func authenticateComponent(
 	required, ok := methodScopes[fullMethod]
 	if !ok || required == "" {
 		return nil, status.Error(codes.PermissionDenied, "component RPC scope not configured")
+	}
+	requiredRole, ok := methodRoles[fullMethod]
+	if !ok || !domain.IsKnownComponentRole(requiredRole) {
+		return nil, status.Error(codes.PermissionDenied, "component RPC role not configured")
 	}
 
 	token, ok := bearerTokenFromIncomingContext(ctx)
@@ -81,6 +88,9 @@ func authenticateComponent(
 	}
 	if identity == nil {
 		return nil, status.Error(codes.Unauthenticated, "component identity required")
+	}
+	if identity.Role != requiredRole {
+		return nil, status.Error(codes.PermissionDenied, "component token role not permitted")
 	}
 
 	return ContextWithComponentIdentity(ctx, identity), nil

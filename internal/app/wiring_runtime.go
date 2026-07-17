@@ -96,8 +96,8 @@ func runRuntimeWithDependencies(ctx context.Context, configPath string, deps run
 	defer listener.Close()
 
 	server := grpc.NewServer(
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, runtimegrpc.MethodScopes())),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, runtimegrpc.MethodScopes())),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, runtimegrpc.MethodScopes(), runtimegrpc.MethodRoles())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, runtimegrpc.MethodScopes(), runtimegrpc.MethodRoles())),
 	)
 	runtimev1.RegisterRuntimeServiceServer(server, newRuntimeRoleService(worker))
 

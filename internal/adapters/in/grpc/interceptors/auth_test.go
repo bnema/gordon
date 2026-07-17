@@ -36,7 +36,7 @@ func (f *fakeComponentTokenValidator) ValidateToken(_ context.Context, token str
 
 func TestAuthInterceptorsUnaryMissingToken(t *testing.T) {
 	validator := &fakeComponentTokenValidator{}
-	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 	called := false
 
 	resp, err := interceptor(context.Background(), nil, unaryInfo(), func(context.Context, any) (any, error) {
@@ -53,7 +53,7 @@ func TestAuthInterceptorsUnaryMissingToken(t *testing.T) {
 
 func TestAuthInterceptorsUnaryInvalidToken(t *testing.T) {
 	validator := &fakeComponentTokenValidator{err: domain.ErrInvalidToken}
-	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 
 	resp, err := interceptor(ctxWithBearer("bad-token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 		t.Fatal("handler must not be called")
@@ -71,7 +71,7 @@ func TestAuthInterceptorsUnaryInvalidToken(t *testing.T) {
 func TestAuthInterceptorsUnaryValidTokenInjectsIdentity(t *testing.T) {
 	identity := testIdentity()
 	validator := &fakeComponentTokenValidator{identity: identity}
-	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 	called := false
 
 	resp, err := interceptor(ctxWithBearer("good-token"), nil, unaryInfo(), func(ctx context.Context, _ any) (any, error) {
@@ -92,7 +92,7 @@ func TestAuthInterceptorsUnaryValidTokenInjectsIdentity(t *testing.T) {
 
 func TestAuthInterceptorsUnaryWrongScopePermissionDenied(t *testing.T) {
 	validator := &fakeComponentTokenValidator{err: domain.ErrUnauthorized}
-	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 	called := false
 
 	resp, err := interceptor(ctxWithBearer("limited-token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
@@ -116,7 +116,7 @@ func TestAuthInterceptorsUnaryRevokedExpiredAndPermissionLikeDenied(t *testing.T
 	} {
 		t.Run(err.Error(), func(t *testing.T) {
 			validator := &fakeComponentTokenValidator{err: err}
-			interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+			interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 
 			resp, gotErr := interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 				t.Fatal("handler must not be called")
@@ -133,7 +133,7 @@ func TestAuthInterceptorsUnaryRevokedExpiredAndPermissionLikeDenied(t *testing.T
 func TestAuthInterceptorsPreservesValidatorStatusError(t *testing.T) {
 	validatorErr := status.Error(codes.ResourceExhausted, "validator overloaded")
 	validator := &fakeComponentTokenValidator{err: validatorErr}
-	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 
 	resp, err := interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 		t.Fatal("handler must not be called")
@@ -160,7 +160,7 @@ func TestAuthInterceptorsMapsInfrastructureErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			validator := &fakeComponentTokenValidator{err: tt.err}
-			interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes())
+			interceptor := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
 
 			resp, err := interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 				t.Fatal("handler must not be called")
@@ -178,7 +178,7 @@ func TestAuthInterceptorsMapsInfrastructureErrors(t *testing.T) {
 func TestAuthInterceptorsStreamValidTokenInjectsIdentity(t *testing.T) {
 	identity := testIdentity()
 	validator := &fakeComponentTokenValidator{identity: identity}
-	interceptor := ComponentAuthStreamInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthStreamInterceptor(validator, testMethodScopes(), testMethodRoles())
 	stream := &fakeServerStream{ctx: ctxWithBearer("stream-token")}
 	called := false
 
@@ -197,9 +197,31 @@ func TestAuthInterceptorsStreamValidTokenInjectsIdentity(t *testing.T) {
 	require.Equal(t, domain.ComponentScopeRuntimeDeploy, validator.required)
 }
 
+func TestAuthInterceptorsRejectWrongRoleForUnaryAndStream(t *testing.T) {
+	validator := &fakeComponentTokenValidator{identity: &domain.ComponentIdentity{
+		Role:   domain.ComponentRoleRuntime,
+		Scopes: []domain.ComponentScope{domain.ComponentScopeRuntimeDeploy},
+	}}
+
+	unary := ComponentAuthUnaryInterceptor(validator, testMethodScopes(), testMethodRoles())
+	resp, err := unary(ctxWithBearer("runtime-token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
+		t.Fatal("handler must not be called")
+		return nil, nil
+	})
+	require.Nil(t, resp)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	stream := ComponentAuthStreamInterceptor(validator, testMethodScopes(), testMethodRoles())
+	err = stream(nil, &fakeServerStream{ctx: ctxWithBearer("runtime-token")}, streamInfo(), func(any, grpc.ServerStream) error {
+		t.Fatal("handler must not be called")
+		return nil
+	})
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
 func TestAuthInterceptorsStreamMissingToken(t *testing.T) {
 	validator := &fakeComponentTokenValidator{identity: testIdentity()}
-	interceptor := ComponentAuthStreamInterceptor(validator, testMethodScopes())
+	interceptor := ComponentAuthStreamInterceptor(validator, testMethodScopes(), testMethodRoles())
 	called := false
 
 	err := interceptor(nil, &fakeServerStream{ctx: context.Background()}, streamInfo(), func(any, grpc.ServerStream) error {
@@ -214,7 +236,7 @@ func TestAuthInterceptorsStreamMissingToken(t *testing.T) {
 }
 
 func TestAuthInterceptorsFailClosedWhenValidatorOrScopeMissing(t *testing.T) {
-	interceptor := ComponentAuthUnaryInterceptor(nil, testMethodScopes())
+	interceptor := ComponentAuthUnaryInterceptor(nil, testMethodScopes(), testMethodRoles())
 	resp, err := interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 		t.Fatal("handler must not be called")
 		return nil, nil
@@ -224,7 +246,17 @@ func TestAuthInterceptorsFailClosedWhenValidatorOrScopeMissing(t *testing.T) {
 	require.Equal(t, codes.PermissionDenied, status.Code(err))
 
 	validator := &fakeComponentTokenValidator{identity: testIdentity()}
-	interceptor = ComponentAuthUnaryInterceptor(validator, map[string]domain.ComponentScope{})
+	interceptor = ComponentAuthUnaryInterceptor(validator, map[string]domain.ComponentScope{}, testMethodRoles())
+	resp, err = interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
+		t.Fatal("handler must not be called")
+		return nil, nil
+	})
+	require.Nil(t, resp)
+	require.Error(t, err)
+	require.Equal(t, codes.PermissionDenied, status.Code(err))
+	require.False(t, validator.called)
+
+	interceptor = ComponentAuthUnaryInterceptor(validator, testMethodScopes(), map[string]domain.ComponentRole{})
 	resp, err = interceptor(ctxWithBearer("token"), nil, unaryInfo(), func(context.Context, any) (any, error) {
 		t.Fatal("handler must not be called")
 		return nil, nil
@@ -259,6 +291,12 @@ func TestBearerTokenFromIncomingContextEdgeCases(t *testing.T) {
 	}
 }
 
+func testMethodRoles() map[string]domain.ComponentRole {
+	return map[string]domain.ComponentRole{
+		testAuthMethod: domain.ComponentRoleControl,
+	}
+}
+
 func testMethodScopes() map[string]domain.ComponentScope {
 	return map[string]domain.ComponentScope{
 		testAuthMethod: domain.ComponentScopeRuntimeDeploy,
@@ -281,7 +319,7 @@ func testIdentity() *domain.ComponentIdentity {
 	return &domain.ComponentIdentity{
 		KeyID:  "key-1",
 		Name:   "runtime-1",
-		Role:   domain.ComponentRoleRuntime,
+		Role:   domain.ComponentRoleControl,
 		Scopes: []domain.ComponentScope{domain.ComponentScopeRuntimeDeploy},
 	}
 }

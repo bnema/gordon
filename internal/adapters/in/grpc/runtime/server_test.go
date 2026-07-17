@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"strings"
 	"testing"
@@ -283,8 +285,8 @@ func TestRuntimeServerAuthenticatesRealPersistedComponentTokens(t *testing.T) {
 	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
 		runtimev1.RegisterRuntimeServiceServer(registrar, server)
 	},
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, MethodScopes())),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(service, MethodScopes())),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, MethodScopes(), MethodRoles())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(service, MethodScopes(), MethodRoles())),
 	)
 	client := runtimev1.NewRuntimeServiceClient(harness.Conn(t))
 	request := &runtimev1.ApplyCommandRequest{Command: &runtimev1.ApplyCommandRequest_DeployRoute{DeployRoute: &runtimev1.DeployRouteCommand{
@@ -342,6 +344,80 @@ func TestRuntimeServerAuthenticatesRealPersistedComponentTokens(t *testing.T) {
 	require.NoError(t, err)
 	_, err = missingStream.Recv()
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
+func TestRuntimeServerRejectsForgedNonControlRoleTokensWithRuntimeScopes(t *testing.T) {
+	store, err := tokenstore.NewComponentTokenStore(domain.SecretsBackendUnsafe, t.TempDir(), zerowrap.Default())
+	require.NoError(t, err)
+	service := componentauth.NewService(store, zerowrap.Default(), componentauth.Config{})
+	server := NewServerWithStateSubscriber(&fakeRuntimeWorker{}, &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{testActualStateSnapshot()}}, "runtime-1")
+	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
+		runtimev1.RegisterRuntimeServiceServer(registrar, server)
+	},
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, MethodScopes(), MethodRoles())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(service, MethodScopes(), MethodRoles())),
+	)
+	client := runtimev1.NewRuntimeServiceClient(harness.Conn(t))
+	deploy := &runtimev1.ApplyCommandRequest{Command: &runtimev1.ApplyCommandRequest_DeployRoute{DeployRoute: &runtimev1.DeployRouteCommand{
+		Identity: protoTestIdentity("forged-command", time.Unix(10, 0).UTC()),
+		Domain:   "app.example.com",
+		Image:    "app:latest",
+	}}}
+	selfUpdate := &runtimev1.RuntimeSelfUpdateRequest{Command: &runtimev1.RuntimeSelfUpdateCommand{
+		Identity:          protoTestIdentity("forged-update", time.Unix(10, 0).UTC()),
+		TargetComponentId: "runtime-1",
+	}}
+
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		t.Run(string(role), func(t *testing.T) {
+			ctx := grpctest.AuthenticatedContext(context.Background(), persistForgedRuntimeAuthorityToken(t, store, role))
+
+			_, callErr := client.ApplyCommand(ctx, deploy)
+			require.Equal(t, codes.PermissionDenied, status.Code(callErr))
+			_, callErr = client.GetHealth(ctx, &runtimev1.GetHealthRequest{})
+			require.Equal(t, codes.PermissionDenied, status.Code(callErr))
+			_, callErr = client.RuntimeSelfUpdate(ctx, selfUpdate)
+			require.Equal(t, codes.PermissionDenied, status.Code(callErr))
+
+			logs, callErr := client.StreamLogs(ctx, &runtimev1.StreamLogsRequest{RouteDomain: "app.example.com"})
+			require.NoError(t, callErr)
+			_, callErr = logs.Recv()
+			require.Equal(t, codes.PermissionDenied, status.Code(callErr))
+
+			state, callErr := client.WatchActualState(ctx, &runtimev1.WatchActualStateRequest{})
+			require.NoError(t, callErr)
+			_, callErr = state.Recv()
+			require.Equal(t, codes.PermissionDenied, status.Code(callErr))
+		})
+	}
+}
+
+func persistForgedRuntimeAuthorityToken(t *testing.T, store interface {
+	CreateComponentToken(context.Context, *domain.ComponentTokenRecord) error
+}, role domain.ComponentRole) string {
+	t.Helper()
+	keyID := string(role) + "-forged"
+	token := "gordon_component." + keyID + ".matching-runtime-scopes"
+	hash := sha256.Sum256([]byte(token))
+	err := store.CreateComponentToken(context.Background(), &domain.ComponentTokenRecord{
+		KeyID:     keyID,
+		Prefix:    "gordon_component",
+		Name:      string(role) + "-1",
+		Role:      role,
+		Scopes:    domain.AllComponentScopes(),
+		TokenHash: hex.EncodeToString(hash[:]),
+		CreatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	return token
+}
+
+func TestMethodRolesRequireControlForEveryRuntimeRPC(t *testing.T) {
+	roles := MethodRoles()
+	require.Len(t, roles, len(MethodScopes()))
+	for method := range MethodScopes() {
+		assert.Equal(t, domain.ComponentRoleControl, roles[method], method)
+	}
 }
 
 func TestMethodScopesRequireRuntimePermissions(t *testing.T) {
@@ -483,8 +559,8 @@ func newAuthenticatedRuntimeServerConn(t *testing.T, server runtimev1.RuntimeSer
 	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
 		runtimev1.RegisterRuntimeServiceServer(registrar, server)
 	},
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, MethodScopes())),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, MethodScopes())),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, MethodScopes(), MethodRoles())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, MethodScopes(), MethodRoles())),
 	)
 	return harness.Conn(t)
 }

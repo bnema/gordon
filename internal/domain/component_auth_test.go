@@ -24,30 +24,18 @@ func TestComponentAuthScopes(t *testing.T) {
 	}, AllComponentScopes())
 
 	assert.Equal(t, []ComponentScope{
-		ComponentScopeRoutesWatch,
-		ComponentScopeEdgeDrain,
 		ComponentScopeRuntimeDeploy,
 		ComponentScopeRuntimeReconcile,
 		ComponentScopeRuntimeLogs,
 		ComponentScopeRuntimeStatus,
-		ComponentScopeRuntimeStatePublish,
-		ComponentScopeRuntimeEventPublish,
 		ComponentScopeRuntimeSelfUpdate,
 		ComponentScopeRuntimeDrainAck,
-		ComponentScopeRegistryEventPublish,
-		ComponentScopeRegistryStatus,
 		ComponentScopeRegistryInspect,
 	}, DefaultComponentScopesForRole(ComponentRoleControl))
 
 	assert.Equal(t, []ComponentScope{
-		ComponentScopeRuntimeDeploy,
-		ComponentScopeRuntimeReconcile,
-		ComponentScopeRuntimeLogs,
-		ComponentScopeRuntimeStatus,
 		ComponentScopeRuntimeStatePublish,
 		ComponentScopeRuntimeEventPublish,
-		ComponentScopeRuntimeSelfUpdate,
-		ComponentScopeRuntimeDrainAck,
 	}, DefaultComponentScopesForRole(ComponentRoleRuntime))
 
 	assert.Equal(t, []ComponentScope{
@@ -58,7 +46,6 @@ func TestComponentAuthScopes(t *testing.T) {
 	assert.Equal(t, []ComponentScope{
 		ComponentScopeRegistryEventPublish,
 		ComponentScopeRegistryStatus,
-		ComponentScopeRegistryInspect,
 	}, DefaultComponentScopesForRole(ComponentRoleRegistry))
 
 	assert.Nil(t, DefaultComponentScopesForRole(ComponentRole("unknown")))

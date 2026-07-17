@@ -93,6 +93,22 @@ func MethodScopes() map[string]domain.ComponentScope {
 	}
 }
 
+// MethodRoles returns the authorized caller role for every RuntimeService RPC.
+func MethodRoles() map[string]domain.ComponentRole {
+	return map[string]domain.ComponentRole{
+		runtimev1.RuntimeService_ApplyCommand_FullMethodName:      domain.ComponentRoleControl,
+		runtimev1.RuntimeService_WatchActualState_FullMethodName:  domain.ComponentRoleControl,
+		runtimev1.RuntimeService_GetHealth_FullMethodName:         domain.ComponentRoleControl,
+		runtimev1.RuntimeService_StreamLogs_FullMethodName:        domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ListVolumes_FullMethodName:       domain.ComponentRoleControl,
+		runtimev1.RuntimeService_RemoveVolume_FullMethodName:      domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ListImages_FullMethodName:        domain.ComponentRoleControl,
+		runtimev1.RuntimeService_PruneImages_FullMethodName:       domain.ComponentRoleControl,
+		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName: domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:   domain.ComponentRoleControl,
+	}
+}
+
 func (s *Server) ApplyCommand(ctx context.Context, req *runtimev1.ApplyCommandRequest) (*runtimev1.ApplyCommandResponse, error) {
 	if s.worker == nil {
 		return nil, status.Error(codes.FailedPrecondition, "runtime worker not configured")

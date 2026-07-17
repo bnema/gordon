@@ -72,17 +72,19 @@ func ComponentRoleAllowsScope(role ComponentRole, scope ComponentScope) bool {
 func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
 	switch role {
 	case ComponentRoleControl:
-		return AllComponentScopes()
-	case ComponentRoleRuntime:
 		return []ComponentScope{
 			ComponentScopeRuntimeDeploy,
 			ComponentScopeRuntimeReconcile,
 			ComponentScopeRuntimeLogs,
 			ComponentScopeRuntimeStatus,
-			ComponentScopeRuntimeStatePublish,
-			ComponentScopeRuntimeEventPublish,
 			ComponentScopeRuntimeSelfUpdate,
 			ComponentScopeRuntimeDrainAck,
+			ComponentScopeRegistryInspect,
+		}
+	case ComponentRoleRuntime:
+		return []ComponentScope{
+			ComponentScopeRuntimeStatePublish,
+			ComponentScopeRuntimeEventPublish,
 		}
 	case ComponentRoleEdge:
 		return []ComponentScope{
@@ -93,7 +95,6 @@ func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
 		return []ComponentScope{
 			ComponentScopeRegistryEventPublish,
 			ComponentScopeRegistryStatus,
-			ComponentScopeRegistryInspect,
 		}
 	default:
 		return nil
