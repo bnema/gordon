@@ -70,6 +70,8 @@ type PassStore struct {
 	tokenCache  map[string]*cachedToken // keyed by subject
 	revokedList []string                // cached revocation list
 	revokedSet  map[string]struct{}     // for O(1) lookup
+
+	componentMu sync.Mutex
 }
 
 // NewPassStore creates a new pass-based token store.
