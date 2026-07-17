@@ -46,6 +46,13 @@ type RuntimeDrainAckReceiver interface {
 	AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error
 }
 
+// RuntimeStandaloneServiceManager manages standalone services through narrow runtime commands and state.
+type RuntimeStandaloneServiceManager interface {
+	ApplyStandaloneService(ctx context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error)
+	RemoveStandaloneService(ctx context.Context, command domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error)
+	ListStandaloneServiceState(ctx context.Context) ([]domain.RuntimeStandaloneServiceState, error)
+}
+
 // RuntimeVolumeManager performs controlled volume operations through the runtime boundary.
 type RuntimeVolumeManager interface {
 	ListRuntimeVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
