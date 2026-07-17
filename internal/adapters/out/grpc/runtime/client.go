@@ -76,6 +76,8 @@ func (c *Client) RemoveStandaloneService(ctx context.Context, command domain.Rem
 	resp, err := c.client.RemoveStandaloneService(ctx, &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{
 		Identity: domainIdentity(command.RuntimeCommandIdentity),
 		Name:     command.Name,
+		Reason:   command.Reason,
+		Cleanup:  &runtimev1.StandaloneServiceCleanupSpec{PreserveVolumes: command.Cleanup.PreserveVolumes, RemoveContainer: command.Cleanup.RemoveContainer},
 	}})
 	if err != nil {
 		return domain.RuntimeCommandResult{}, err
@@ -368,6 +370,10 @@ func protoStandaloneServiceState(service *runtimev1.RuntimeStandaloneServiceStat
 		ContainerName: service.GetContainerName(),
 		Status:        domain.ContainerStatus(service.GetStatus()),
 		ConfigHash:    service.GetConfigHash(),
+		Cleanup: domain.StandaloneServiceCleanup{
+			PreserveVolumes: service.GetCleanup().GetPreserveVolumes(),
+			RemoveContainer: service.GetCleanup().GetRemoveContainer(),
+		},
 	}
 }
 

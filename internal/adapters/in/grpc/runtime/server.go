@@ -485,7 +485,12 @@ func protoRemoveStandaloneService(command *runtimev1.RemoveStandaloneServiceComm
 	if command == nil {
 		return domain.RemoveStandaloneServiceCommand{}
 	}
-	return domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), Name: command.Name}
+	return domain.RemoveStandaloneServiceCommand{
+		RuntimeCommandIdentity: protoIdentity(command.Identity),
+		Name:                   command.Name,
+		Reason:                 command.Reason,
+		Cleanup:                domain.StandaloneServiceCleanup{PreserveVolumes: command.GetCleanup().GetPreserveVolumes(), RemoveContainer: command.GetCleanup().GetRemoveContainer()},
+	}
 }
 
 func protoStandaloneService(service *runtimev1.StandaloneServiceSpec) domain.StandaloneService {
@@ -524,7 +529,14 @@ func protoStandaloneService(service *runtimev1.StandaloneServiceSpec) domain.Sta
 }
 
 func protoStandaloneServiceState(service domain.RuntimeStandaloneServiceState) *runtimev1.RuntimeStandaloneServiceState {
-	return &runtimev1.RuntimeStandaloneServiceState{Name: service.Name, ContainerId: service.ContainerID, ContainerName: service.ContainerName, Status: string(service.Status), ConfigHash: service.ConfigHash}
+	return &runtimev1.RuntimeStandaloneServiceState{
+		Name:          service.Name,
+		ContainerId:   service.ContainerID,
+		ContainerName: service.ContainerName,
+		Status:        string(service.Status),
+		ConfigHash:    service.ConfigHash,
+		Cleanup:       &runtimev1.StandaloneServiceCleanupSpec{PreserveVolumes: service.Cleanup.PreserveVolumes, RemoveContainer: service.Cleanup.RemoveContainer},
+	}
 }
 
 func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.RuntimeSelfUpdateCommand {

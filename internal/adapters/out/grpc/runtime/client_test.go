@@ -262,11 +262,11 @@ func testResult(identity domain.RuntimeCommandIdentity) domain.RuntimeCommandRes
 func TestClientStandaloneServiceManagerRoundTrip(t *testing.T) {
 	manager := outMocks.NewMockRuntimeStandaloneServiceManager(t)
 	apply := testApplyStandaloneServiceCommand()
-	remove := domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testIdentity("remove-game"), Name: "game"}
+	remove := domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testIdentity("remove-game"), Name: "game", Reason: "disabled", Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}}
 	applyResult := testResult(apply.RuntimeCommandIdentity)
 	removeResult := testResult(remove.RuntimeCommandIdentity)
 	states := []domain.RuntimeStandaloneServiceState{{
-		Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash",
+		Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash", Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true},
 	}}
 	manager.EXPECT().ApplyStandaloneService(mock.Anything, apply).Return(applyResult, nil)
 	manager.EXPECT().RemoveStandaloneService(mock.Anything, remove).Return(removeResult, nil)

@@ -70,7 +70,10 @@ func TestServiceReconcileRoutesDisabledAndOmittedServicesThroughStandaloneManage
 		configured.Cleanup = domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}
 		manager.On("ListStandaloneServiceState", mock.Anything).Return([]domain.RuntimeStandaloneServiceState{{Name: configured.Name}}, nil).Once()
 		manager.On("RemoveStandaloneService", mock.Anything, mock.MatchedBy(func(command domain.RemoveStandaloneServiceCommand) bool {
-			return assert.NoError(t, command.Validate()) && assert.Equal(t, configured.Name, command.Name)
+			return assert.NoError(t, command.Validate()) &&
+				assert.Equal(t, configured.Name, command.Name) &&
+				assert.Equal(t, "disabled", command.Reason) &&
+				assert.Equal(t, domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}, command.Cleanup)
 		})).Return(domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil).Once()
 
 		err := NewServiceWithRuntimeStandaloneServiceManager(manager).Reconcile(context.Background(), []domain.StandaloneService{configured})
@@ -80,9 +83,12 @@ func TestServiceReconcileRoutesDisabledAndOmittedServicesThroughStandaloneManage
 
 	t.Run("omitted", func(t *testing.T) {
 		manager := outmocks.NewMockRuntimeStandaloneServiceManager(t)
-		manager.On("ListStandaloneServiceState", mock.Anything).Return([]domain.RuntimeStandaloneServiceState{{Name: "removed"}}, nil).Once()
+		manager.On("ListStandaloneServiceState", mock.Anything).Return([]domain.RuntimeStandaloneServiceState{{Name: "removed", Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}}}, nil).Once()
 		manager.On("RemoveStandaloneService", mock.Anything, mock.MatchedBy(func(command domain.RemoveStandaloneServiceCommand) bool {
-			return assert.NoError(t, command.Validate()) && assert.Equal(t, "removed", command.Name)
+			return assert.NoError(t, command.Validate()) &&
+				assert.Equal(t, "removed", command.Name) &&
+				assert.Equal(t, "removed", command.Reason) &&
+				assert.Equal(t, domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}, command.Cleanup)
 		})).Return(domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil).Once()
 
 		err := NewServiceWithRuntimeStandaloneServiceManager(manager).Reconcile(context.Background(), nil)

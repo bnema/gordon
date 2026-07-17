@@ -183,6 +183,8 @@ message ApplyStandaloneServiceResponse {
 message RemoveStandaloneServiceCommand {
   RuntimeCommandIdentity identity = 1;
   string name = 2;
+  string reason = 3;
+  StandaloneServiceCleanupSpec cleanup = 4;
 }
 
 message RemoveStandaloneServiceRequest {
@@ -203,6 +205,7 @@ message RuntimeStandaloneServiceState {
   string container_name = 3;
   string status = 4;
   string config_hash = 5;
+  StandaloneServiceCleanupSpec cleanup = 6;
 }
 
 message ListStandaloneServiceStateResponse {

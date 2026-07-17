@@ -545,7 +545,7 @@ func TestServerStandaloneServiceHandlersMapCommandsAndState(t *testing.T) {
 		applyResult:  testRuntimeResult(testDomainIdentity("apply-game", requestedAt)),
 		removeResult: testRuntimeResult(testDomainIdentity("remove-game", requestedAt)),
 		states: []domain.RuntimeStandaloneServiceState{{
-			Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash",
+			Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash", Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true},
 		}},
 	}
 	server := NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1")
@@ -578,14 +578,14 @@ func TestServerStandaloneServiceHandlersMapCommandsAndState(t *testing.T) {
 	}, manager.apply)
 	assert.NotContains(t, applyResponse.String(), "super-secret")
 
-	removeResponse, err := server.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{Identity: protoTestIdentity("remove-game", requestedAt), Name: "game"}})
+	removeResponse, err := server.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{Identity: protoTestIdentity("remove-game", requestedAt), Name: "game", Reason: "disabled", Cleanup: &runtimev1.StandaloneServiceCleanupSpec{PreserveVolumes: false, RemoveContainer: true}}})
 	require.NoError(t, err)
 	assert.Equal(t, "remove-game", removeResponse.GetResult().GetCommandId())
-	assert.Equal(t, domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testDomainIdentity("remove-game", requestedAt), Name: "game"}, manager.remove)
+	assert.Equal(t, domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testDomainIdentity("remove-game", requestedAt), Name: "game", Reason: "disabled", Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}}, manager.remove)
 
 	listResponse, err := server.ListStandaloneServiceState(context.Background(), &runtimev1.ListStandaloneServiceStateRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, []*runtimev1.RuntimeStandaloneServiceState{{Name: "game", ContainerId: "container-1", ContainerName: "gordon-service-game", Status: string(domain.ContainerStatusRunning), ConfigHash: "config-hash"}}, listResponse.GetServices())
+	assert.Equal(t, []*runtimev1.RuntimeStandaloneServiceState{{Name: "game", ContainerId: "container-1", ContainerName: "gordon-service-game", Status: string(domain.ContainerStatusRunning), ConfigHash: "config-hash", Cleanup: &runtimev1.StandaloneServiceCleanupSpec{PreserveVolumes: false, RemoveContainer: true}}}, listResponse.GetServices())
 }
 
 func TestServerStandaloneServiceHandlersRequireManagerAndCommand(t *testing.T) {

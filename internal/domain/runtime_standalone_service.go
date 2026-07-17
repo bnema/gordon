@@ -38,7 +38,9 @@ func (c ApplyStandaloneServiceCommand) Validate() error {
 // RemoveStandaloneServiceCommand asks the runtime to remove one standalone service.
 type RemoveStandaloneServiceCommand struct {
 	RuntimeCommandIdentity
-	Name string
+	Name    string
+	Reason  string
+	Cleanup StandaloneServiceCleanup
 }
 
 // Validate checks the remove command identity and service name.
@@ -59,6 +61,7 @@ type RuntimeStandaloneServiceState struct {
 	ContainerName string
 	Status        ContainerStatus
 	ConfigHash    string
+	Cleanup       StandaloneServiceCleanup
 }
 
 // ForRuntimeApply returns the runtime configuration without environment sources or secret references.

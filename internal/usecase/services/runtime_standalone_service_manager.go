@@ -69,7 +69,7 @@ func (m *localRuntimeStandaloneServiceManager) ApplyStandaloneService(ctx contex
 	})
 }
 
-// RemoveStandaloneService stops/removes the named managed service according to its persisted cleanup labels.
+// RemoveStandaloneService stops/removes the named managed service according to the command cleanup policy.
 func (m *localRuntimeStandaloneServiceManager) RemoveStandaloneService(ctx context.Context, command domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return m.failedResult(command.RuntimeCommandIdentity, err), nil
@@ -82,8 +82,9 @@ func (m *localRuntimeStandaloneServiceManager) RemoveStandaloneService(ctx conte
 		if err != nil {
 			return fmt.Errorf("list standalone service containers: %w", err)
 		}
+		cleanup := normalizeCleanup(command.Cleanup)
 		for _, container := range managedServiceContainers(containers)[command.Name] {
-			if err := m.cleanupContainer(ctx, command.Name, "removed", cleanupFromLabels(container.Labels), container); err != nil {
+			if err := m.cleanupContainer(ctx, command.Name, command.Reason, cleanup, container); err != nil {
 				return err
 			}
 		}
@@ -115,6 +116,7 @@ func (m *localRuntimeStandaloneServiceManager) ListStandaloneServiceState(ctx co
 			ContainerName: container.Name,
 			Status:        containerStatus(container),
 			ConfigHash:    container.Labels[domain.LabelServiceConfigHash],
+			Cleanup:       cleanupFromLabels(container.Labels),
 		})
 	}
 	sort.Slice(states, func(i, j int) bool {

@@ -61,8 +61,12 @@ func TestRemoveStandaloneServiceCommandValidate(t *testing.T) {
 	command := RemoveStandaloneServiceCommand{
 		RuntimeCommandIdentity: validStandaloneRuntimeIdentity(),
 		Name:                   "game",
+		Reason:                 "disabled",
+		Cleanup:                StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true},
 	}
 	require.NoError(t, command.Validate())
+	assert.Equal(t, "disabled", command.Reason)
+	assert.Equal(t, StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}, command.Cleanup)
 
 	command.Name = "  "
 	require.ErrorIs(t, command.Validate(), ErrInvalidRuntimeCommand)
@@ -126,6 +130,7 @@ func TestRuntimeStandaloneServiceStateCarriesSanitizedStatus(t *testing.T) {
 		ContainerName: "gordon-service-game",
 		Status:        ContainerStatusRunning,
 		ConfigHash:    "config-hash",
+		Cleanup:       StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true},
 	}
 
 	assert.Equal(t, "game", state.Name)
@@ -133,6 +138,7 @@ func TestRuntimeStandaloneServiceStateCarriesSanitizedStatus(t *testing.T) {
 	assert.Equal(t, "gordon-service-game", state.ContainerName)
 	assert.Equal(t, ContainerStatusRunning, state.Status)
 	assert.Equal(t, "config-hash", state.ConfigHash)
+	assert.Equal(t, StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}, state.Cleanup)
 }
 
 func validStandaloneRuntimeIdentity() RuntimeCommandIdentity {

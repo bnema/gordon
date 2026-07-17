@@ -95,7 +95,7 @@ func (s *Service) Reconcile(ctx context.Context, configured []domain.StandaloneS
 			if len(existing[service.Name]) == 0 {
 				continue
 			}
-			if err := s.remove(ctx, service.Name); err != nil {
+			if err := s.remove(ctx, service.Name, "disabled", normalizeCleanup(service.Cleanup)); err != nil {
 				return err
 			}
 			continue
@@ -112,7 +112,7 @@ func (s *Service) Reconcile(ctx context.Context, configured []domain.StandaloneS
 	}
 	sort.Strings(removedNames)
 	for _, name := range removedNames {
-		if err := s.remove(ctx, name); err != nil {
+		if err := s.remove(ctx, name, "removed", normalizeCleanup(existing[name][0].Cleanup)); err != nil {
 			return err
 		}
 	}
@@ -146,10 +146,12 @@ func (s *Service) apply(ctx context.Context, service domain.StandaloneService, e
 	return nil
 }
 
-func (s *Service) remove(ctx context.Context, name string) error {
+func (s *Service) remove(ctx context.Context, name, reason string, cleanup domain.StandaloneServiceCleanup) error {
 	result, err := s.runtime.RemoveStandaloneService(ctx, domain.RemoveStandaloneServiceCommand{
 		RuntimeCommandIdentity: s.imperativeIdentity("remove", name),
 		Name:                   name,
+		Reason:                 reason,
+		Cleanup:                normalizeCleanup(cleanup),
 	})
 	if err != nil {
 		return fmt.Errorf("remove standalone service %q: %w", name, err)
@@ -202,7 +204,13 @@ func (s *Service) Status(ctx context.Context) ([]domain.StandaloneServiceStatus,
 	}
 	statuses := make([]domain.StandaloneServiceStatus, 0, len(states))
 	for _, state := range states {
-		statuses = append(statuses, domain.StandaloneServiceStatus(state))
+		statuses = append(statuses, domain.StandaloneServiceStatus{
+			Name:          state.Name,
+			ContainerID:   state.ContainerID,
+			ContainerName: state.ContainerName,
+			Status:        state.Status,
+			ConfigHash:    state.ConfigHash,
+		})
 	}
 	sort.Slice(statuses, func(i, j int) bool {
 		if statuses[i].Name != statuses[j].Name {
