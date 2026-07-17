@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/base32"
 	"fmt"
 	"net"
 	"strings"
@@ -24,6 +26,16 @@ const (
 	RouteTargetProtocolH2C   RouteTargetProtocol = "h2c"
 )
 
+// RouteTargetAttachment describes whether the split edge can reach a target
+// through its own attachment. It intentionally does not identify a network.
+type RouteTargetAttachment string
+
+const (
+	RouteTargetAttachmentAttached    RouteTargetAttachment = "attached"
+	RouteTargetAttachmentNotRequired RouteTargetAttachment = "not_required"
+	RouteTargetAttachmentUnavailable RouteTargetAttachment = "unavailable"
+)
+
 // RouteTargetUnavailableReason explains why a target is not ready for traffic.
 type RouteTargetUnavailableReason string
 
@@ -44,10 +56,44 @@ func (g RouteTargetGeneration) After(previous RouteTargetGeneration) bool {
 	return g > previous
 }
 
+// RouteTargetKey is an opaque, snapshot-scoped target identity. It is never a
+// runtime or container identifier.
+type RouteTargetKey string
+
+const routeTargetKeyPrefix = "rtk_"
+
+// NewRouteTargetKey validates a safe opaque target identity.
+func NewRouteTargetKey(value string) (RouteTargetKey, error) {
+	key := RouteTargetKey(value)
+	if !key.Valid() {
+		return "", fmt.Errorf("%w: route target key is invalid", ErrInvalidRoute)
+	}
+	return key, nil
+}
+
+// Valid reports whether the key has the opaque snapshot-key format.
+func (k RouteTargetKey) Valid() bool {
+	value := string(k)
+	if !strings.HasPrefix(value, routeTargetKeyPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(value, routeTargetKeyPrefix)
+	if len(encoded) < 16 || len(encoded) > 52 {
+		return false
+	}
+	for _, char := range encoded {
+		if (char < 'a' || char > 'z') && (char < '2' || char > '7') {
+			return false
+		}
+	}
+	return true
+}
+
 // RouteTargetSnapshot is the routing-only view of edge targets.
 type RouteTargetSnapshot struct {
-	Generation RouteTargetGeneration
-	Entries    []RouteTargetEntry
+	Generation               RouteTargetGeneration
+	Entries                  []RouteTargetEntry
+	RegistryForwardingTarget *RouteTargetEntry
 }
 
 // Validate verifies the snapshot is a coherent, self-contained routing view.
@@ -56,19 +102,42 @@ func (s RouteTargetSnapshot) Validate() error {
 		return fmt.Errorf("%w: generation must be non-zero", ErrInvalidRouteSnapshot)
 	}
 
-	seenDomains := make(map[string]struct{}, len(s.Entries))
+	seenDomains := make(map[string]struct{}, len(s.Entries)+1)
+	seenTargetKeys := make(map[RouteTargetKey]struct{}, len(s.Entries)+1)
 	for index, entry := range s.Entries {
-		if err := entry.Validate(); err != nil {
+		if err := s.validateAggregateEntry(entry, seenDomains, seenTargetKeys); err != nil {
 			return fmt.Errorf("%w: entry %d: %w", ErrInvalidRouteSnapshot, index, err)
 		}
-		if entry.Generation > s.Generation {
-			return fmt.Errorf("%w: entry %d generation cannot be newer than snapshot generation", ErrInvalidRouteSnapshot, index)
-		}
-		if _, exists := seenDomains[entry.CanonicalDomain]; exists {
-			return fmt.Errorf("%w: duplicate canonical domain at entry %d", ErrInvalidRouteSnapshot, index)
-		}
-		seenDomains[entry.CanonicalDomain] = struct{}{}
 	}
+	if s.RegistryForwardingTarget != nil {
+		if s.RegistryForwardingTarget.Unavailable() {
+			return fmt.Errorf("%w: registry forwarding target must be routable", ErrInvalidRouteSnapshot)
+		}
+		if err := s.validateAggregateEntry(*s.RegistryForwardingTarget, seenDomains, seenTargetKeys); err != nil {
+			return fmt.Errorf("%w: registry forwarding target: %w", ErrInvalidRouteSnapshot, err)
+		}
+	}
+	return nil
+}
+
+func (s RouteTargetSnapshot) validateAggregateEntry(entry RouteTargetEntry, seenDomains map[string]struct{}, seenTargetKeys map[RouteTargetKey]struct{}) error {
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	if entry.Generation > s.Generation {
+		return fmt.Errorf("entry generation cannot be newer than snapshot generation")
+	}
+	if _, exists := seenDomains[entry.CanonicalDomain]; exists {
+		return fmt.Errorf("duplicate canonical domain")
+	}
+	seenDomains[entry.CanonicalDomain] = struct{}{}
+	if entry.Unavailable() {
+		return nil
+	}
+	if _, exists := seenTargetKeys[entry.TargetKey]; exists {
+		return fmt.Errorf("duplicate route target key")
+	}
+	seenTargetKeys[entry.TargetKey] = struct{}{}
 	return nil
 }
 
@@ -81,6 +150,11 @@ func (s RouteTargetSnapshot) ValidateSplitReachability() error {
 	for index, entry := range s.Entries {
 		if err := entry.ValidateSplitReachability(); err != nil {
 			return fmt.Errorf("%w: entry %d: %w", ErrInvalidRouteSnapshot, index, err)
+		}
+	}
+	if s.RegistryForwardingTarget != nil {
+		if err := s.RegistryForwardingTarget.ValidateSplitReachability(); err != nil {
+			return fmt.Errorf("%w: registry forwarding target: %w", ErrInvalidRouteSnapshot, err)
 		}
 	}
 	return nil
@@ -96,9 +170,12 @@ type RouteTargetEntry struct {
 	Status            RouteTargetStatus
 	UnavailableReason RouteTargetUnavailableReason
 	Generation        RouteTargetGeneration
+	UpstreamHost      string
+	Attachment        RouteTargetAttachment
+	TargetKey         RouteTargetKey
 }
 
-// NewReadyRouteTargetEntry constructs a validated ready route target.
+// NewReadyRouteTargetEntry constructs a validated attached (managed or registry) route target.
 func NewReadyRouteTargetEntry(domainName, targetHost string, targetPort int, scheme string, protocol RouteTargetProtocol, generation RouteTargetGeneration) (RouteTargetEntry, error) {
 	entry := RouteTargetEntry{
 		TargetHost: targetHost,
@@ -107,17 +184,43 @@ func NewReadyRouteTargetEntry(domainName, targetHost string, targetPort int, sch
 		Protocol:   protocol,
 		Status:     RouteTargetStatusReady,
 		Generation: generation,
+		Attachment: RouteTargetAttachmentAttached,
 	}
 	if err := entry.setCanonicalDomain(domainName); err != nil {
 		return RouteTargetEntry{}, err
 	}
+	entry.setDerivedTargetKey()
 	if err := entry.Validate(); err != nil {
 		return RouteTargetEntry{}, err
 	}
 	return entry, nil
 }
 
-// NewDrainingRouteTargetEntry constructs a validated draining route target.
+// NewExternalReadyRouteTargetEntry constructs a validated external route target.
+// targetHost may be a DNS-resolved address; upstreamHost is retained exactly for
+// the outbound Host header and therefore must be a safe endpoint host.
+func NewExternalReadyRouteTargetEntry(domainName, targetHost, upstreamHost string, targetPort int, scheme string, protocol RouteTargetProtocol, generation RouteTargetGeneration) (RouteTargetEntry, error) {
+	entry := RouteTargetEntry{
+		TargetHost:   targetHost,
+		TargetPort:   targetPort,
+		Scheme:       scheme,
+		Protocol:     protocol,
+		Status:       RouteTargetStatusReady,
+		Generation:   generation,
+		UpstreamHost: upstreamHost,
+		Attachment:   RouteTargetAttachmentNotRequired,
+	}
+	if err := entry.setCanonicalDomain(domainName); err != nil {
+		return RouteTargetEntry{}, err
+	}
+	entry.setDerivedTargetKey()
+	if err := entry.Validate(); err != nil {
+		return RouteTargetEntry{}, err
+	}
+	return entry, nil
+}
+
+// NewDrainingRouteTargetEntry constructs a validated draining attached route target.
 func NewDrainingRouteTargetEntry(domainName, targetHost string, targetPort int, scheme string, protocol RouteTargetProtocol, generation RouteTargetGeneration) (RouteTargetEntry, error) {
 	entry, err := NewReadyRouteTargetEntry(domainName, targetHost, targetPort, scheme, protocol, generation)
 	if err != nil {
@@ -134,6 +237,7 @@ func NewUnavailableRouteTargetEntry(domainName string, reason RouteTargetUnavail
 		Status:            RouteTargetStatusUnavailable,
 		UnavailableReason: reason,
 		Generation:        generation,
+		Attachment:        RouteTargetAttachmentUnavailable,
 	}
 	if err := entry.setCanonicalDomain(domainName); err != nil {
 		return RouteTargetEntry{}, err
@@ -165,11 +269,12 @@ func (e RouteTargetEntry) ToProxyTarget() (ProxyTarget, error) {
 		protocol = string(RouteTargetProtocolH2C)
 	}
 	return ProxyTarget{
-		Host:      e.TargetHost,
-		Port:      e.TargetPort,
-		Scheme:    e.Scheme,
-		Protocol:  protocol,
-		RouteHost: e.CanonicalDomain,
+		Host:         e.TargetHost,
+		Port:         e.TargetPort,
+		Scheme:       e.Scheme,
+		Protocol:     protocol,
+		OriginalHost: e.UpstreamHost,
+		RouteHost:    e.CanonicalDomain,
 	}, nil
 }
 
@@ -215,28 +320,20 @@ func (e RouteTargetEntry) Validate() error {
 func (e RouteTargetEntry) validateStateCoherence() error {
 	switch e.Status {
 	case RouteTargetStatusReady:
-		return e.validateReadyTarget()
+		if e.UnavailableReason != RouteTargetUnavailableReasonNone {
+			return fmt.Errorf("%w: ready route target cannot include unavailable reason", ErrInvalidRoute)
+		}
+		return e.validateRoutableTarget()
 	case RouteTargetStatusDraining:
-		return e.validateDrainingTarget()
+		if e.UnavailableReason != RouteTargetUnavailableReasonDraining {
+			return fmt.Errorf("%w: draining route target requires draining reason", ErrInvalidRoute)
+		}
+		return e.validateRoutableTarget()
 	case RouteTargetStatusUnavailable:
 		return e.validateUnavailableTarget()
 	default:
 		return fmt.Errorf("%w: invalid route target status %q", ErrInvalidRoute, e.Status)
 	}
-}
-
-func (e RouteTargetEntry) validateReadyTarget() error {
-	if e.UnavailableReason != RouteTargetUnavailableReasonNone {
-		return fmt.Errorf("%w: ready route target cannot include unavailable reason", ErrInvalidRoute)
-	}
-	return e.validateRoutableTarget()
-}
-
-func (e RouteTargetEntry) validateDrainingTarget() error {
-	if e.UnavailableReason != RouteTargetUnavailableReasonDraining {
-		return fmt.Errorf("%w: draining route target requires draining reason", ErrInvalidRoute)
-	}
-	return e.validateRoutableTarget()
 }
 
 func (e RouteTargetEntry) validateUnavailableTarget() error {
@@ -246,8 +343,11 @@ func (e RouteTargetEntry) validateUnavailableTarget() error {
 	if e.UnavailableReason == RouteTargetUnavailableReasonDraining {
 		return fmt.Errorf("%w: unavailable route target cannot use draining reason", ErrInvalidRoute)
 	}
-	if e.TargetHost != "" || e.TargetPort != 0 || e.Scheme != "" || e.Protocol != "" {
+	if e.TargetHost != "" || e.TargetPort != 0 || e.Scheme != "" || e.Protocol != "" || e.UpstreamHost != "" || e.TargetKey != "" {
 		return fmt.Errorf("%w: unavailable route target cannot include routing endpoint fields", ErrInvalidRoute)
+	}
+	if e.Attachment != RouteTargetAttachmentUnavailable {
+		return fmt.Errorf("%w: unavailable route target requires unavailable attachment", ErrInvalidRoute)
 	}
 	return nil
 }
@@ -259,6 +359,21 @@ func (e RouteTargetEntry) validateRoutableTarget() error {
 	if !validRouteTargetPort(e.TargetPort) {
 		return fmt.Errorf("%w: route target port must be between 1 and 65535", ErrInvalidRoute)
 	}
+	if !e.TargetKey.Valid() {
+		return fmt.Errorf("%w: route target key is invalid", ErrInvalidRoute)
+	}
+	if e.UpstreamHost == "" {
+		if e.Attachment != RouteTargetAttachmentAttached {
+			return fmt.Errorf("%w: attached route target requires edge attachment", ErrInvalidRoute)
+		}
+		return nil
+	}
+	if !validRouteTargetHost(e.UpstreamHost) {
+		return fmt.Errorf("%w: upstream host is invalid", ErrInvalidRoute)
+	}
+	if e.Attachment != RouteTargetAttachmentNotRequired {
+		return fmt.Errorf("%w: external route target must not require edge attachment", ErrInvalidRoute)
+	}
 	return nil
 }
 
@@ -269,6 +384,20 @@ func (e *RouteTargetEntry) setCanonicalDomain(domainName string) error {
 	}
 	e.CanonicalDomain = canonical
 	return nil
+}
+
+func (e *RouteTargetEntry) setDerivedTargetKey() {
+	payload := strings.Join([]string{
+		e.CanonicalDomain,
+		e.TargetHost,
+		fmt.Sprintf("%d", e.TargetPort),
+		e.Scheme,
+		string(e.Protocol),
+		e.UpstreamHost,
+		fmt.Sprintf("%d", e.Generation),
+	}, "\x00")
+	digest := sha256.Sum256([]byte(payload))
+	e.TargetKey = RouteTargetKey(routeTargetKeyPrefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
 }
 
 func (e RouteTargetEntry) validStatus() bool {
@@ -308,8 +437,9 @@ func (e RouteTargetEntry) validUnavailableReason() bool {
 	}
 }
 
-// ValidateSplitReachability verifies that a routable entry does not rely on local loopback.
-// It is intentionally separate from Validate because monolith deployments may use loopback.
+// ValidateSplitReachability verifies that a routable entry does not rely on local loopback
+// and declares whether an edge attachment is required. It is intentionally separate from
+// Validate because monolith deployments may use loopback.
 func (e RouteTargetEntry) ValidateSplitReachability() error {
 	if err := e.Validate(); err != nil {
 		return err
@@ -324,7 +454,7 @@ func (e RouteTargetEntry) ValidateSplitReachability() error {
 }
 
 func validRouteTargetHost(host string) bool {
-	if host == "" || containsWhitespaceOrControl(host) {
+	if host == "" || len(host) > 253 || containsWhitespaceOrControl(host) {
 		return false
 	}
 	if strings.ContainsAny(host, "/\\?#@") {
@@ -333,16 +463,31 @@ func validRouteTargetHost(host string) bool {
 	if net.ParseIP(host) != nil {
 		return true
 	}
-	if strings.Contains(host, ":") || len(host) > 253 || !hostnamePattern.MatchString(host) {
+	// A colon that was not parsed as IPv6 is an authority/host-port value.
+	if strings.Contains(host, ":") {
 		return false
 	}
-	if strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".sock") || strings.Contains(host, "..") {
 		return false
 	}
 	for label := range strings.SplitSeq(host, ".") {
-		if !isValidLabel(label) {
+		if !isValidEndpointHostLabel(label) {
 			return false
 		}
+	}
+	return true
+}
+
+func isValidEndpointHostLabel(label string) bool {
+	if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for _, char := range label {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' {
+			continue
+		}
+		return false
 	}
 	return true
 }
@@ -354,6 +499,7 @@ func containsWhitespaceOrControl(value string) bool {
 }
 
 func isLoopbackRouteTargetHost(host string) bool {
+	host = strings.TrimSuffix(host, ".")
 	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
 		return true
 	}

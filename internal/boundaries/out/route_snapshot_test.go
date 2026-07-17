@@ -20,11 +20,12 @@ func TestRouteSnapshotPorts_ExposeOnlyRoutingContract(t *testing.T) {
 	contextType := reflect.TypeOf((*context.Context)(nil)).Elem()
 	snapshotType := reflect.TypeOf(domain.RouteTargetSnapshot{})
 	generationType := reflect.TypeOf(domain.RouteTargetGeneration(0))
+	targetKeyType := reflect.TypeOf(domain.RouteTargetKey(""))
 	errorType := reflect.TypeOf((*error)(nil)).Elem()
 
 	assertMethodSignature(t, reflect.TypeOf((*out.RouteSnapshotProvider)(nil)).Elem(), "CurrentSnapshot", []reflect.Type{contextType}, []reflect.Type{snapshotType, errorType})
 	assertMethodSignature(t, reflect.TypeOf((*out.RouteSnapshotWatcher)(nil)).Elem(), "WatchSnapshots", []reflect.Type{contextType}, []reflect.Type{reflect.ChanOf(reflect.RecvDir, snapshotType), errorType})
-	assertMethodSignature(t, reflect.TypeOf((*out.EdgeDrainCoordinator)(nil)).Elem(), "AcknowledgeDrain", []reflect.Type{contextType, reflect.TypeOf(""), generationType}, []reflect.Type{errorType})
+	assertMethodSignature(t, reflect.TypeOf((*out.EdgeDrainCoordinator)(nil)).Elem(), "AcknowledgeDrain", []reflect.Type{contextType, reflect.TypeOf(""), targetKeyType, generationType}, []reflect.Type{errorType})
 }
 
 func TestRouteSnapshotPorts_AcceptCancelledContextAndKeepWatcherChannelReceiveOnly(t *testing.T) {
@@ -51,8 +52,12 @@ func TestRouteSnapshotPorts_AcceptCancelledContextAndKeepWatcherChannelReceiveOn
 	}
 
 	coordinator := mocks.NewMockEdgeDrainCoordinator(t)
-	coordinator.EXPECT().AcknowledgeDrain(ctx, "app.example.com", domain.RouteTargetGeneration(1)).Return(nil)
-	if err := coordinator.AcknowledgeDrain(ctx, "app.example.com", 1); err != nil {
+	targetKey, err := domain.NewRouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
+	if err != nil {
+		t.Fatalf("create route target key: %v", err)
+	}
+	coordinator.EXPECT().AcknowledgeDrain(ctx, "app.example.com", targetKey, domain.RouteTargetGeneration(1)).Return(nil)
+	if err := coordinator.AcknowledgeDrain(ctx, "app.example.com", targetKey, 1); err != nil {
 		t.Fatalf("acknowledge drain: %v", err)
 	}
 	if err := ctx.Err(); err == nil {

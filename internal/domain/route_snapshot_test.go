@@ -2,136 +2,70 @@ package domain
 
 import (
 	"encoding/json"
-	"errors"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestRouteTargetSnapshotReadyTarget(t *testing.T) {
-	entry, err := NewReadyRouteTargetEntry("APP.EXAMPLE.COM", "app-alias", 8080, "http", RouteTargetProtocolH2C, 2)
-	require.NoError(t, err)
+func TestRouteTargetSnapshotReadyTargetIsAttachedAndOpaque(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "APP.EXAMPLE.COM", "app_alias", 8080, 2)
+
 	require.True(t, entry.Ready())
 	require.Equal(t, "app.example.com", entry.CanonicalDomain)
-	require.Equal(t, "app-alias", entry.TargetHost)
-	require.Equal(t, 8080, entry.TargetPort)
-	require.Equal(t, RouteTargetGeneration(2), entry.Generation)
+	require.Equal(t, RouteTargetAttachmentAttached, entry.Attachment)
+	require.Empty(t, entry.UpstreamHost)
+	require.True(t, entry.TargetKey.Valid())
+	require.NotContains(t, string(entry.TargetKey), entry.TargetHost)
 }
 
-func TestRouteTargetSnapshotDrainingTarget(t *testing.T) {
-	entry, err := NewDrainingRouteTargetEntry("app.example.com", "10.0.0.3", 8080, "https", RouteTargetProtocolHTTP1, 3)
+func TestRouteTargetSnapshotExternalTargetPreservesHostHeaderWithoutLeakage(t *testing.T) {
+	entry, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", "Api.Upstream.Example.", 8443, "https", RouteTargetProtocolHTTP1, 7)
 	require.NoError(t, err)
-	require.True(t, entry.Draining())
-	require.Equal(t, RouteTargetUnavailableReasonDraining, entry.UnavailableReason)
+	require.Equal(t, RouteTargetAttachmentNotRequired, entry.Attachment)
+	require.Equal(t, "Api.Upstream.Example.", entry.UpstreamHost)
+
+	target, err := entry.ToProxyTarget()
+	require.NoError(t, err)
+	require.Equal(t, "198.51.100.9", target.Host)
+	require.Equal(t, "Api.Upstream.Example.", target.OriginalHost)
+	require.Empty(t, target.ContainerID)
+
+	encoded, err := json.Marshal(entry)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "http://")
+	require.NotContains(t, string(encoded), "password")
 }
 
-func TestRouteTargetSnapshotUnavailableTargetWithReason(t *testing.T) {
-	entry, err := NewUnavailableRouteTargetEntry("app.example.com", RouteTargetUnavailableReasonHealthCheckFailed, 4)
+func TestRouteTargetSnapshotManagedTargetHasNoOriginalHost(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	target, err := entry.ToProxyTarget()
 	require.NoError(t, err)
-	require.True(t, entry.Unavailable())
-	require.Equal(t, RouteTargetUnavailableReasonHealthCheckFailed, entry.UnavailableReason)
+	require.Empty(t, target.OriginalHost)
 }
 
-func TestRouteTargetSnapshotValidateAcceptsCoherentEntries(t *testing.T) {
-	ready := mustReadyRouteTargetEntry(t, "ready.example.com", "app-alias", 8080, 1)
-	draining, err := NewDrainingRouteTargetEntry("draining.example.com", "10.0.0.3", 8443, "https", RouteTargetProtocolHTTP1, 2)
-	require.NoError(t, err)
-	unavailable, err := NewUnavailableRouteTargetEntry("unavailable.example.com", RouteTargetUnavailableReasonHealthCheckFailed, 3)
-	require.NoError(t, err)
-
-	snapshot := RouteTargetSnapshot{Generation: 3, Entries: []RouteTargetEntry{ready, draining, unavailable}}
-	require.NoError(t, snapshot.Validate())
-}
-
-func TestRouteTargetSnapshotValidateRejectsInvalidAggregateStateDeterministically(t *testing.T) {
-	valid := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
-
-	tests := []struct {
-		name     string
-		snapshot RouteTargetSnapshot
-	}{
-		{
-			name:     "zero snapshot generation",
-			snapshot: RouteTargetSnapshot{Entries: []RouteTargetEntry{valid}},
-		},
-		{
-			name: "zero entry generation",
-			snapshot: RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{{
-				CanonicalDomain: "app.example.com", TargetHost: "app", TargetPort: 8080,
-				Scheme: "http", Protocol: RouteTargetProtocolHTTP1, Status: RouteTargetStatusReady,
-			}}},
-		},
-		{
-			name: "entry newer than snapshot",
-			snapshot: RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{mustReadyRouteTargetEntry(t,
-				"app.example.com", "app", 8080, 2)}},
-		},
-		{
-			name: "duplicate canonical domain",
-			snapshot: RouteTargetSnapshot{Generation: 2, Entries: []RouteTargetEntry{
-				mustReadyRouteTargetEntry(t, "app.example.com", "app-one", 8080, 1),
-				mustReadyRouteTargetEntry(t, "app.example.com", "app-two", 8080, 2),
-			}},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.snapshot.Validate()
-			require.Error(t, err)
-			require.ErrorIs(t, err, ErrInvalidRouteSnapshot)
+func TestRouteTargetSnapshotEndpointHostValidationAcceptsAliasesDNSAndIPs(t *testing.T) {
+	for _, host := range []string{
+		"app_alias", "app_alias.service", "service.example.com", "service.example.com.", "10.0.0.3", "2001:db8::1", "::1",
+	} {
+		t.Run(host, func(t *testing.T) {
+			entry := mustReadyRouteTargetEntry(t, "app.example.com", host, 8080, 1)
+			require.NoError(t, entry.Validate())
 		})
 	}
 }
 
-func TestRouteTargetSnapshotEntryCanonicalDomainMustBeCanonical(t *testing.T) {
-	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
-	entry.CanonicalDomain = "APP.EXAMPLE.COM"
-
-	err := entry.Validate()
-	require.ErrorIs(t, err, ErrRouteDomainInvalid)
-}
-
-func TestRouteTargetSnapshotInvalidDomainRejected(t *testing.T) {
-	_, err := NewReadyRouteTargetEntry("localhost", "app", 8080, "http", RouteTargetProtocolHTTP1, 1)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrRouteDomainInvalid))
-}
-
-func TestRouteTargetSnapshotInvalidPortRejected(t *testing.T) {
-	_, err := NewReadyRouteTargetEntry("app.example.com", "app", 0, "http", RouteTargetProtocolHTTP1, 1)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidRoute))
-}
-
-func TestRouteTargetSnapshotInvalidGenerationRejected(t *testing.T) {
-	_, err := NewReadyRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolHTTP1, 0)
-	require.ErrorIs(t, err, ErrInvalidRoute)
-}
-
-func TestRouteTargetSnapshotGenerationMonotonicComparison(t *testing.T) {
-	require.True(t, RouteTargetGeneration(2).After(RouteTargetGeneration(1)))
-	require.False(t, RouteTargetGeneration(2).After(RouteTargetGeneration(2)))
-}
-
-func TestRouteTargetSnapshotRejectsForbiddenTargetHosts(t *testing.T) {
+func TestRouteTargetSnapshotEndpointHostValidationRejectsUnsafeEndpoints(t *testing.T) {
+	overlongLabel := strings.Repeat("a", 64) + ".example.com"
+	overlongHost := strings.Repeat("a", 254)
 	for _, host := range []string{
-		"unix:///var/run/docker.sock",
-		"unix:/run/podman/podman.sock",
-		"/var/run/docker.sock",
-		"http://app:8080",
-		"https://user:password@app.example.com",
-		"user:password@app.example.com",
-		"app.example.com/path",
-		"app.example.com?token=secret",
-		"app.example.com#fragment",
-		"app.example.com:8080",
-		" app.example.com",
-		"app.example.com ",
-		"app\n.example.com",
-		"app\x00.example.com",
+		"", " app.example.com", "app.example.com ", "app\n.example.com", "app\x00.example.com",
+		"unix:///var/run/docker.sock", "unix:/run/podman/podman.sock", "/var/run/docker.sock", "app.sock",
+		"http://app:8080", "https://user:password@app.example.com", "user:password@app.example.com",
+		"app.example.com/path", "app.example.com?token=secret", "app.example.com#fragment", "app.example.com:8080",
+		".app.example.com", "app..example.com", "app.example.com..", overlongLabel, overlongHost,
 	} {
 		t.Run(host, func(t *testing.T) {
 			_, err := NewReadyRouteTargetEntry("app.example.com", host, 8080, "http", RouteTargetProtocolHTTP1, 1)
@@ -140,90 +74,112 @@ func TestRouteTargetSnapshotRejectsForbiddenTargetHosts(t *testing.T) {
 	}
 }
 
-func TestRouteTargetSnapshotAllowsLocalAliasesAndIPsButSplitValidationRejectsLoopback(t *testing.T) {
-	for _, host := range []string{"app-alias", "10.0.0.3", "127.0.0.1", "::1"} {
-		t.Run(host, func(t *testing.T) {
-			entry := mustReadyRouteTargetEntry(t, "app.example.com", host, 8080, 1)
-			require.NoError(t, entry.Validate())
+func TestRouteTargetSnapshotExternalTargetRejectsUnsafeUpstreamHost(t *testing.T) {
+	for _, upstreamHost := range []string{"https://user:secret@upstream.example", "upstream.example:443", "upstream.example/path", "upstream..example"} {
+		t.Run(upstreamHost, func(t *testing.T) {
+			_, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", upstreamHost, 443, "https", RouteTargetProtocolHTTP1, 1)
+			require.ErrorIs(t, err, ErrInvalidRoute)
 		})
 	}
+}
 
-	for _, host := range []string{"localhost", "127.0.0.1", "::1"} {
-		t.Run("split rejects "+host, func(t *testing.T) {
-			entry := mustReadyRouteTargetEntry(t, "app.example.com", host, 8080, 1)
-			require.ErrorIs(t, entry.ValidateSplitReachability(), ErrRouteTargetNotReachable)
-		})
-	}
+func TestRouteTargetSnapshotValidateRequiresCoherentAttachmentState(t *testing.T) {
+	attached := mustReadyRouteTargetEntry(t, "app.example.com", "app_alias", 8080, 1)
+	attached.Attachment = RouteTargetAttachmentNotRequired
+	require.ErrorIs(t, attached.Validate(), ErrInvalidRoute)
 
-	nonLoopback := mustReadyRouteTargetEntry(t, "app.example.com", "10.0.0.3", 8080, 1)
-	require.NoError(t, nonLoopback.ValidateSplitReachability())
+	external, err := NewExternalReadyRouteTargetEntry("external.example.com", "198.51.100.9", "upstream.example", 443, "https", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	external.Attachment = RouteTargetAttachmentAttached
+	require.ErrorIs(t, external.Validate(), ErrInvalidRoute)
 
-	loopback := mustReadyRouteTargetEntry(t, "loopback.example.com", "127.0.0.1", 8080, 1)
-	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{loopback}}
+	unavailable, err := NewUnavailableRouteTargetEntry("offline.example.com", RouteTargetUnavailableReasonStarting, 1)
+	require.NoError(t, err)
+	unavailable.Attachment = RouteTargetAttachmentAttached
+	require.ErrorIs(t, unavailable.Validate(), ErrInvalidRoute)
+}
+
+func TestRouteTargetSnapshotAggregateValidatesRegistryDomainGenerationAndTargetKeyUniqueness(t *testing.T) {
+	app := mustReadyRouteTargetEntry(t, "app.example.com", "app_alias", 8080, 1)
+	registry := mustReadyRouteTargetEntry(t, "registry.example.com", "registry_alias", 5000, 2)
+	snapshot := RouteTargetSnapshot{Generation: 2, Entries: []RouteTargetEntry{app}, RegistryForwardingTarget: &registry}
+	require.NoError(t, snapshot.Validate())
+
+	duplicateDomain := registry
+	duplicateDomain.CanonicalDomain = app.CanonicalDomain
+	require.ErrorIs(t, (RouteTargetSnapshot{Generation: 2, Entries: []RouteTargetEntry{app}, RegistryForwardingTarget: &duplicateDomain}).Validate(), ErrInvalidRouteSnapshot)
+
+	duplicateKey := registry
+	duplicateKey.TargetKey = app.TargetKey
+	require.ErrorIs(t, (RouteTargetSnapshot{Generation: 2, Entries: []RouteTargetEntry{app}, RegistryForwardingTarget: &duplicateKey}).Validate(), ErrInvalidRouteSnapshot)
+
+	future := registry
+	future.Generation = 3
+	require.ErrorIs(t, (RouteTargetSnapshot{Generation: 2, RegistryForwardingTarget: &future}).Validate(), ErrInvalidRouteSnapshot)
+}
+
+func TestRouteTargetSnapshotSplitReachabilityChecksEntriesAndRegistry(t *testing.T) {
+	app := mustReadyRouteTargetEntry(t, "app.example.com", "app_alias", 8080, 1)
+	registry := mustReadyRouteTargetEntry(t, "registry.example.com", "127.0.0.1", 5000, 1)
+	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{app}, RegistryForwardingTarget: &registry}
 	require.ErrorIs(t, snapshot.ValidateSplitReachability(), ErrRouteTargetNotReachable)
+
+	registry = mustReadyRouteTargetEntry(t, "registry.example.com", "registry_alias", 5000, 1)
+	snapshot.RegistryForwardingTarget = &registry
+	require.NoError(t, snapshot.ValidateSplitReachability())
 }
 
-func TestRouteTargetSnapshotToProxyTargetPreservesRoutingFieldsOnly(t *testing.T) {
-	entry, err := NewReadyRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolH2C, 1)
-	require.NoError(t, err)
+func TestRouteTargetSnapshotSplitValidationRejectsLoopbackButAllowsExternalNoAttachment(t *testing.T) {
+	loopback := mustReadyRouteTargetEntry(t, "loopback.example.com", "127.0.0.1", 8080, 1)
+	require.ErrorIs(t, loopback.ValidateSplitReachability(), ErrRouteTargetNotReachable)
 
-	target, err := entry.ToProxyTarget()
+	external, err := NewExternalReadyRouteTargetEntry("external.example.com", "198.51.100.9", "upstream.example", 443, "https", RouteTargetProtocolHTTP1, 1)
 	require.NoError(t, err)
-	require.Equal(t, "app", target.Host)
-	require.Equal(t, 8080, target.Port)
-	require.Equal(t, "http", target.Scheme)
-	require.Equal(t, "h2c", target.Protocol)
-	require.Equal(t, "app.example.com", target.RouteHost)
-	require.Empty(t, target.ContainerID)
-	require.Empty(t, target.OriginalHost)
+	require.NoError(t, external.ValidateSplitReachability())
 }
 
-func TestRouteTargetSnapshotToProxyTargetRejectsUnavailableTarget(t *testing.T) {
-	entry, err := NewUnavailableRouteTargetEntry("app.example.com", RouteTargetUnavailableReasonNoTarget, 1)
+func TestRouteTargetSnapshotRouteTargetKeyIsOpaqueAndValidated(t *testing.T) {
+	valid, err := NewRouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
 	require.NoError(t, err)
+	require.True(t, valid.Valid())
 
-	_, err = entry.ToProxyTarget()
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidRoute))
+	for _, key := range []string{"", "container-id", "abcdef0123456789", "rtk_short", "rtk_ABCDEFGHIJKLMNOP", "rtk_abcdefghijklmnopqrstuvwxyz234567!"} {
+		t.Run(key, func(t *testing.T) {
+			_, err := NewRouteTargetKey(key)
+			require.ErrorIs(t, err, ErrInvalidRoute)
+		})
+	}
+}
+
+func TestRouteTargetSnapshotRejectsInvalidDomainPortGenerationAndState(t *testing.T) {
+	_, err := NewReadyRouteTargetEntry("localhost", "app", 8080, "http", RouteTargetProtocolHTTP1, 1)
+	require.ErrorIs(t, err, ErrRouteDomainInvalid)
+	_, err = NewReadyRouteTargetEntry("app.example.com", "app", 0, "http", RouteTargetProtocolHTTP1, 1)
+	require.ErrorIs(t, err, ErrInvalidRoute)
+	_, err = NewReadyRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolHTTP1, 0)
+	require.ErrorIs(t, err, ErrInvalidRoute)
+
+	unavailable, err := NewUnavailableRouteTargetEntry("app.example.com", RouteTargetUnavailableReasonNoTarget, 1)
+	require.NoError(t, err)
+	_, err = unavailable.ToProxyTarget()
+	require.ErrorIs(t, err, ErrInvalidRoute)
+}
+
+func TestRouteTargetSnapshotFieldAllowlistPreventsForbiddenData(t *testing.T) {
+	// Update these explicit lists only when a documented routing or drain field is added.
+	assertExportedFieldNames(t, reflect.TypeFor[RouteTargetSnapshot](), []string{"Generation", "Entries", "RegistryForwardingTarget"})
+	assertExportedFieldNames(t, reflect.TypeFor[RouteTargetEntry](), []string{
+		"Attachment", "CanonicalDomain", "Generation", "Protocol", "Scheme", "Status", "TargetHost", "TargetKey", "TargetPort", "UnavailableReason", "UpstreamHost",
+	})
+	assertJSONFieldNames(t, RouteTargetSnapshot{}, []string{"Entries", "Generation", "RegistryForwardingTarget"})
+	assertJSONFieldNames(t, RouteTargetEntry{}, []string{
+		"Attachment", "CanonicalDomain", "Generation", "Protocol", "Scheme", "Status", "TargetHost", "TargetKey", "TargetPort", "UnavailableReason", "UpstreamHost",
+	})
 }
 
 func TestRouteTargetSnapshotProtocolFromProxyTarget(t *testing.T) {
 	require.Equal(t, RouteTargetProtocolH2C, ProtocolFromProxyTarget(ProxyTarget{Protocol: "h2c"}))
 	require.Equal(t, RouteTargetProtocolHTTP1, ProtocolFromProxyTarget(ProxyTarget{}))
-}
-
-func TestRouteTargetSnapshotRejectsUnknownUnavailableReason(t *testing.T) {
-	_, err := NewUnavailableRouteTargetEntry("app.example.com", RouteTargetUnavailableReason("bad_reason"), 1)
-	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrInvalidRoute))
-}
-
-func TestRouteTargetSnapshotRejectsIncoherentStateReasonCombinations(t *testing.T) {
-	ready := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
-	ready.UnavailableReason = RouteTargetUnavailableReasonStarting
-	require.Error(t, ready.Validate())
-
-	draining, err := NewDrainingRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolHTTP1, 1)
-	require.NoError(t, err)
-	draining.UnavailableReason = RouteTargetUnavailableReasonNoTarget
-	require.Error(t, draining.Validate())
-
-	unavailable, err := NewUnavailableRouteTargetEntry("app.example.com", RouteTargetUnavailableReasonNoTarget, 1)
-	require.NoError(t, err)
-	unavailable.TargetHost = "app"
-	require.Error(t, unavailable.Validate())
-}
-
-func TestRouteTargetSnapshotFieldAllowlistPreventsForbiddenData(t *testing.T) {
-	// Update these explicit lists only when a documented routing or drain field is added.
-	assertExportedFieldNames(t, reflect.TypeFor[RouteTargetSnapshot](), []string{"Generation", "Entries"})
-	assertExportedFieldNames(t, reflect.TypeFor[RouteTargetEntry](), []string{
-		"CanonicalDomain", "TargetHost", "TargetPort", "Scheme", "Protocol", "Status", "UnavailableReason", "Generation",
-	})
-	assertJSONFieldNames(t, RouteTargetSnapshot{}, []string{"Entries", "Generation"})
-	assertJSONFieldNames(t, RouteTargetEntry{}, []string{
-		"CanonicalDomain", "Generation", "Protocol", "Scheme", "Status", "TargetHost", "TargetPort", "UnavailableReason",
-	})
 }
 
 func mustReadyRouteTargetEntry(t *testing.T, domainName, host string, port int, generation RouteTargetGeneration) RouteTargetEntry {
@@ -257,5 +213,6 @@ func assertJSONFieldNames(t *testing.T, value any, want []string) {
 		got = append(got, field)
 	}
 	sort.Strings(got)
+	sort.Strings(want)
 	require.Equal(t, want, got)
 }

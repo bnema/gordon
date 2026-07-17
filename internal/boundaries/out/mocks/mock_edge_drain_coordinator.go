@@ -39,16 +39,16 @@ func (_m *MockEdgeDrainCoordinator) EXPECT() *MockEdgeDrainCoordinator_Expecter 
 }
 
 // AcknowledgeDrain provides a mock function for the type MockEdgeDrainCoordinator
-func (_mock *MockEdgeDrainCoordinator) AcknowledgeDrain(ctx context.Context, routeDomain string, generation domain.RouteTargetGeneration) error {
-	ret := _mock.Called(ctx, routeDomain, generation)
+func (_mock *MockEdgeDrainCoordinator) AcknowledgeDrain(ctx context.Context, routeDomain string, targetKey domain.RouteTargetKey, generation domain.RouteTargetGeneration) error {
+	ret := _mock.Called(ctx, routeDomain, targetKey, generation)
 
 	if len(ret) == 0 {
 		panic("no return value specified for AcknowledgeDrain")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.RouteTargetGeneration) error); ok {
-		r0 = returnFunc(ctx, routeDomain, generation)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.RouteTargetKey, domain.RouteTargetGeneration) error); ok {
+		r0 = returnFunc(ctx, routeDomain, targetKey, generation)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -63,12 +63,13 @@ type MockEdgeDrainCoordinator_AcknowledgeDrain_Call struct {
 // AcknowledgeDrain is a helper method to define mock.On call
 //   - ctx context.Context
 //   - routeDomain string
+//   - targetKey domain.RouteTargetKey
 //   - generation domain.RouteTargetGeneration
-func (_e *MockEdgeDrainCoordinator_Expecter) AcknowledgeDrain(ctx any, routeDomain any, generation any) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
-	return &MockEdgeDrainCoordinator_AcknowledgeDrain_Call{Call: _e.mock.On("AcknowledgeDrain", ctx, routeDomain, generation)}
+func (_e *MockEdgeDrainCoordinator_Expecter) AcknowledgeDrain(ctx any, routeDomain any, targetKey any, generation any) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
+	return &MockEdgeDrainCoordinator_AcknowledgeDrain_Call{Call: _e.mock.On("AcknowledgeDrain", ctx, routeDomain, targetKey, generation)}
 }
 
-func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) Run(run func(ctx context.Context, routeDomain string, generation domain.RouteTargetGeneration)) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
+func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) Run(run func(ctx context.Context, routeDomain string, targetKey domain.RouteTargetKey, generation domain.RouteTargetGeneration)) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -78,14 +79,19 @@ func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) Run(run func(ctx conte
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 domain.RouteTargetGeneration
+		var arg2 domain.RouteTargetKey
 		if args[2] != nil {
-			arg2 = args[2].(domain.RouteTargetGeneration)
+			arg2 = args[2].(domain.RouteTargetKey)
+		}
+		var arg3 domain.RouteTargetGeneration
+		if args[3] != nil {
+			arg3 = args[3].(domain.RouteTargetGeneration)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -96,7 +102,7 @@ func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) Return(err error) *Moc
 	return _c
 }
 
-func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) RunAndReturn(run func(ctx context.Context, routeDomain string, generation domain.RouteTargetGeneration) error) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
+func (_c *MockEdgeDrainCoordinator_AcknowledgeDrain_Call) RunAndReturn(run func(ctx context.Context, routeDomain string, targetKey domain.RouteTargetKey, generation domain.RouteTargetGeneration) error) *MockEdgeDrainCoordinator_AcknowledgeDrain_Call {
 	_c.Call.Return(run)
 	return _c
 }

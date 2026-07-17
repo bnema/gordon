@@ -18,5 +18,5 @@ type RouteSnapshotWatcher interface {
 
 // EdgeDrainCoordinator coordinates narrow edge drain acknowledgements.
 type EdgeDrainCoordinator interface {
-	AcknowledgeDrain(ctx context.Context, routeDomain string, generation domain.RouteTargetGeneration) error
+	AcknowledgeDrain(ctx context.Context, routeDomain string, targetKey domain.RouteTargetKey, generation domain.RouteTargetGeneration) error
 }
