@@ -161,6 +161,87 @@ func TestComponentTokenStoreFactoryAndPassLifecycle(t *testing.T) {
 	assert.NotContains(t, string(content), "\"secret\":")
 }
 
+func TestPassComponentTokenStoreOnlyTreatsStandardMissingEntriesAsAbsent(t *testing.T) {
+	passDir := t.TempDir()
+	installFakePass(t, passDir)
+	t.Setenv("PASS_STORE_DIR", passDir)
+	t.Setenv("PASS_FAKE_MODE", "missing")
+	store := NewPassStore(disabledTokenStoreLog())
+
+	found, err := store.LookupComponentToken(context.Background(), "gct_live", "missing")
+	require.NoError(t, err)
+	assert.Nil(t, found)
+
+	metadata, err := store.ListComponentTokenMetadata(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, metadata)
+
+	err = store.UpdateComponentTokenLastUsed(context.Background(), "missing", time.Now())
+	require.Error(t, err)
+	assert.EqualError(t, err, "component token not found")
+}
+
+func TestPassComponentTokenStorePropagatesBackendFailures(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "executable failure", mode: "failure"},
+		{name: "locked store", mode: "locked"},
+		{name: "timeout", mode: "timeout"},
+		{name: "record read failure", mode: "read-failure"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			passDir := t.TempDir()
+			installFakePass(t, passDir)
+			t.Setenv("PASS_STORE_DIR", passDir)
+			t.Setenv("PASS_FAKE_MODE", tt.mode)
+			store := NewPassStore(disabledTokenStoreLog())
+			if tt.mode == "timeout" {
+				store.timeout = 10 * time.Millisecond
+			}
+
+			_, err := store.LookupComponentToken(context.Background(), "gct_live", "key")
+			require.Error(t, err)
+			assert.NotEqual(t, "component token not found", err.Error())
+
+			err = store.UpdateComponentTokenLastUsed(context.Background(), "key", time.Now())
+			require.Error(t, err)
+			assert.NotEqual(t, "component token not found", err.Error())
+
+			_, err = store.ListComponentTokenMetadata(context.Background())
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestPassComponentTokenStoreRejectsMalformedListings(t *testing.T) {
+	passDir := t.TempDir()
+	installFakePass(t, passDir)
+	t.Setenv("PASS_STORE_DIR", passDir)
+	t.Setenv("PASS_FAKE_MODE", "malformed-list")
+	store := NewPassStore(disabledTokenStoreLog())
+
+	metadata, err := store.ListComponentTokenMetadata(context.Background())
+	require.Error(t, err)
+	assert.Nil(t, metadata)
+}
+
+func TestPassComponentTokenStoreErrorsDoNotExposeRecordData(t *testing.T) {
+	passDir := t.TempDir()
+	installFakePass(t, passDir)
+	t.Setenv("PASS_STORE_DIR", passDir)
+	t.Setenv("PASS_FAKE_MODE", "read-failure")
+	store := NewPassStore(disabledTokenStoreLog())
+
+	_, err := store.LookupComponentToken(context.Background(), "gct_live", "key")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), componentRecord("key", "gct_live").TokenHash)
+	assert.NotContains(t, err.Error(), "plaintext-component-secret")
+}
+
 func TestNewComponentTokenStoreRejectsUnsupportedBackend(t *testing.T) {
 	_, err := NewComponentTokenStore(domain.SecretsBackendSops, t.TempDir(), disabledTokenStoreLog())
 	assert.Error(t, err)
@@ -177,11 +258,37 @@ func installFakePass(t *testing.T, storeDir string) {
 	script := `#!/bin/sh
 set -eu
 root="$PASS_STORE_DIR"
+mode="${PASS_FAKE_MODE:-}"
+missing() {
+	printf 'Error: %s is not in the password store.\n' "$1" >&2
+	exit 1
+}
+unavailable() {
+	printf 'pass store unavailable\n' >&2
+	exit 1
+}
 case "$1" in
 version) exit 0 ;;
 insert) path="$4"; mkdir -p "$(dirname "$root/$path")"; cat > "$root/$path" ;;
-show) cat "$root/$2" ;;
-ls) echo "$2"; find "$root/$2" -type f -printf '└── %f\n' 2>/dev/null || true ;;
+show)
+	case "$mode" in
+	missing) missing "$2" ;;
+	failure|locked|read-failure) unavailable ;;
+	timeout) sleep 1 ;;
+	esac
+	cat "$root/$2"
+	;;
+ls)
+	case "$mode" in
+	missing) missing "$2" ;;
+	failure|locked) unavailable ;;
+	timeout) sleep 1 ;;
+	malformed-list) printf '%s\nthis is not a pass tree\n' "$2"; exit 0 ;;
+	read-failure) printf '%s\n└── %064d\n' "$2" 0; exit 0 ;;
+	esac
+	echo "$2"
+	find "$root/$2" -type f -printf '└── %f\n' 2>/dev/null || true
+	;;
 esac
 `
 	require.NoError(t, os.WriteFile(filepath.Join(binDir, "pass"), []byte(script), 0700))

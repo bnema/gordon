@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -323,7 +322,10 @@ func (s *PassStore) LookupComponentToken(ctx context.Context, prefix, keyID stri
 	defer cancel()
 	payload, err := s.passShow(ctx, componentTokenPassPath(keyID))
 	if err != nil {
-		return nil, nil
+		if isPassEntryNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read component token record: %w", err)
 	}
 	record, err := unmarshalComponentTokenRecord([]byte(payload), keyID)
 	if err != nil {
@@ -345,7 +347,10 @@ func (s *PassStore) updateComponentToken(ctx context.Context, keyID string, upda
 	defer s.componentMu.Unlock()
 	payload, err := s.passShow(ctx, componentTokenPassPath(keyID))
 	if err != nil {
-		return fmt.Errorf("component token not found")
+		if isPassEntryNotFound(err) {
+			return fmt.Errorf("component token not found")
+		}
+		return fmt.Errorf("read component token record: %w", err)
 	}
 	record, err := unmarshalComponentTokenRecord([]byte(payload), keyID)
 	if err != nil {
@@ -376,16 +381,49 @@ func (s *PassStore) UpdateComponentTokenLastUsed(ctx context.Context, keyID stri
 	})
 }
 
+func parsePassComponentTokenListing(output string) ([]string, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || ansiRegex.ReplaceAllString(strings.TrimSpace(lines[0]), "") != passComponentTokenPath {
+		return nil, fmt.Errorf("invalid component token pass listing")
+	}
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if len(parsePassLsEntries(passComponentTokenPath+"\n"+line)) != 1 {
+			return nil, fmt.Errorf("invalid component token pass listing")
+		}
+	}
+
+	entries := parsePassLsOutput(output)
+	for _, entry := range entries {
+		// Component-token paths are deterministic SHA-256 key-ID hashes. A
+		// different shape indicates a corrupt or malformed pass listing.
+		if strings.Contains(entry, "/") || len(entry) != sha256.Size*2 {
+			return nil, fmt.Errorf("invalid component token pass listing")
+		}
+		if _, err := hex.DecodeString(entry); err != nil {
+			return nil, fmt.Errorf("invalid component token pass listing")
+		}
+	}
+	return entries, nil
+}
+
 // ListComponentTokenMetadata returns sorted safe pass-backed token metadata.
 func (s *PassStore) ListComponentTokenMetadata(ctx context.Context) ([]domain.ComponentTokenMetadata, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "pass", "ls", passComponentTokenPath) //nolint:gosec // The pass path is fixed.
-	output, err := cmd.Output()
+	output, err := s.passList(ctx, passComponentTokenPath)
 	if err != nil {
-		return []domain.ComponentTokenMetadata{}, nil
+		if isPassEntryNotFound(err) {
+			return []domain.ComponentTokenMetadata{}, nil
+		}
+		return nil, fmt.Errorf("list component token records: %w", err)
 	}
-	entries := parsePassLsOutput(string(output))
+	entries, err := parsePassComponentTokenListing(output)
+	if err != nil {
+		return nil, err
+	}
 	metadata := make([]domain.ComponentTokenMetadata, 0, len(entries))
 	for _, entry := range entries {
 		payload, err := s.passShow(ctx, passComponentTokenPath+"/"+entry)
