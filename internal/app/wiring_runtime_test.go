@@ -20,7 +20,59 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/componentauth"
+	"github.com/bnema/gordon/internal/usecase/container"
 )
+
+func TestStandaloneServiceManagerUsesCommandClientForControlRole(t *testing.T) {
+	client := fakeRuntimeCommandClientForApp{}
+
+	manager := standaloneServiceManagerForServices(&services{role: RoleControl, runtimeCommandClient: client})
+
+	require.IsType(t, client, manager)
+}
+
+func TestStandaloneServiceManagerUsesLocalAdapterForMonolithRole(t *testing.T) {
+	client := fakeRuntimeCommandClientForApp{}
+
+	manager := standaloneServiceManagerForServices(&services{role: RoleMonolith, runtimeCommandClient: client})
+
+	require.NotNil(t, manager)
+	_, isClient := manager.(fakeRuntimeCommandClientForApp)
+	require.False(t, isClient)
+}
+
+func TestStandaloneServiceManagerDoesNotBuildLocalAdapterForNonRuntimeRoles(t *testing.T) {
+	for _, role := range []Role{RoleControl, RoleEdge, RoleRegistry} {
+		t.Run(string(role), func(t *testing.T) {
+			require.Nil(t, standaloneServiceManagerForServices(&services{role: role}))
+		})
+	}
+}
+
+func TestRuntimeRoleStandaloneServiceManagerIsPolicyWrapped(t *testing.T) {
+	manager := newRuntimeRoleStandaloneServiceManager(nil, Config{}, viper.New())
+
+	require.IsType(t, &container.RuntimeStandaloneServicePolicyManager{}, manager)
+}
+
+func TestRuntimeRoleBundleExposesStandaloneServiceManager(t *testing.T) {
+	manager := newRuntimeRoleStandaloneServiceManager(nil, Config{}, viper.New())
+	bundle := runtimeRoleWorkerBundle{standaloneServiceManager: manager}
+
+	require.Same(t, manager, runtimeRoleStandaloneServiceManager(bundle))
+}
+
+func TestRuntimeRoleServiceExposesStandaloneServiceManager(t *testing.T) {
+	server := newRuntimeRoleService(runtimeRoleWorkerBundle{
+		RuntimeWorker:            fakeRuntimeRoleWorker{},
+		standaloneServiceManager: fakeRuntimeCommandClientForApp{},
+	})
+
+	response, err := server.ListStandaloneServiceState(context.Background(), &runtimev1.ListStandaloneServiceStateRequest{})
+
+	require.NoError(t, err)
+	require.Empty(t, response.Services)
+}
 
 func TestRuntimeRoleWiringStartsGRPCWithInjectedDependencies(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

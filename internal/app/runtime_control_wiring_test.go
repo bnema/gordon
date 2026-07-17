@@ -190,3 +190,15 @@ func (fakeRuntimeCommandClientForApp) ListRuntimeImages(context.Context) ([]doma
 func (fakeRuntimeCommandClientForApp) PruneRuntimeImages(context.Context, bool) (domain.RuntimePruneResult, error) {
 	return domain.RuntimePruneResult{}, nil
 }
+
+func (fakeRuntimeCommandClientForApp) ApplyStandaloneService(context.Context, domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	return domain.RuntimeCommandResult{}, nil
+}
+
+func (fakeRuntimeCommandClientForApp) RemoveStandaloneService(context.Context, domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	return domain.RuntimeCommandResult{}, nil
+}
+
+func (fakeRuntimeCommandClientForApp) ListStandaloneServiceState(context.Context) ([]domain.RuntimeStandaloneServiceState, error) {
+	return nil, nil
+}

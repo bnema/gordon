@@ -415,7 +415,8 @@ func TestStandaloneServiceSecretProviderUnsafeBackendReconcilesServiceSecrets(t 
 
 	rt := outmocks.NewMockContainerRuntime(t)
 	var sawSecretEnv bool
-	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	// Reconciliation lists managed state, then the local manager lists again before apply.
+	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Twice()
 	rt.On("InspectImageVolumes", mock.Anything, "game:latest").Return([]string(nil), nil).Once()
 	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(args mock.Arguments) {
 		config := args.Get(1).(*domain.ContainerConfig)

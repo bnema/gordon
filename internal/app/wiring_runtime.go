@@ -24,6 +24,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 )
 
@@ -127,9 +128,10 @@ func runRuntimeWithDependencies(ctx context.Context, configPath string, deps run
 
 type runtimeRoleWorkerBundle struct {
 	in.RuntimeWorker
-	logReader     out.RuntimeLogReader
-	volumeManager out.RuntimeVolumeManager
-	imageManager  out.RuntimeImageManager
+	logReader                out.RuntimeLogReader
+	volumeManager            out.RuntimeVolumeManager
+	imageManager             out.RuntimeImageManager
+	standaloneServiceManager out.RuntimeStandaloneServiceManager
 }
 
 func (w runtimeRoleWorkerBundle) RuntimeLogReader() out.RuntimeLogReader { return w.logReader }
@@ -140,6 +142,10 @@ func (w runtimeRoleWorkerBundle) RuntimeVolumeManager() out.RuntimeVolumeManager
 
 func (w runtimeRoleWorkerBundle) RuntimeImageManager() out.RuntimeImageManager {
 	return w.imageManager
+}
+
+func (w runtimeRoleWorkerBundle) RuntimeStandaloneServiceManager() out.RuntimeStandaloneServiceManager {
+	return w.standaloneServiceManager
 }
 
 func runtimeRoleLogReader(worker in.RuntimeWorker) out.RuntimeLogReader {
@@ -167,13 +173,24 @@ func runtimeRoleImageManager(worker in.RuntimeWorker) out.RuntimeImageManager {
 	return nil
 }
 
+func runtimeRoleStandaloneServiceManager(worker in.RuntimeWorker) out.RuntimeStandaloneServiceManager {
+	if w, ok := worker.(interface {
+		RuntimeStandaloneServiceManager() out.RuntimeStandaloneServiceManager
+	}); ok {
+		return w.RuntimeStandaloneServiceManager()
+	}
+	return nil
+}
+
 func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServer {
-	return runtimegrpc.NewServerWithAllRuntimePortsAndStateSubscriber(
+	return runtimegrpc.NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager(
 		worker,
 		runtimeRoleLogReader(worker),
 		runtimeRoleVolumeManager(worker),
 		runtimeRoleImageManager(worker),
 		runtimeRoleStateSubscriber(worker),
+		nil,
+		runtimeRoleStandaloneServiceManager(worker),
 		"gordon-runtime",
 	)
 }
@@ -285,13 +302,26 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 		return nil, nil, log.WrapErr(err, "failed to start runtime event bus")
 	}
 
-	policy := container.RuntimePolicy{
+	policy := runtimeRolePolicy(cfg, v)
+	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy)
+	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)
+	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), standaloneServiceManager: standaloneServiceManager}, cleanup, nil
+}
+
+func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Config, v *viper.Viper) out.RuntimeStandaloneServiceManager {
+	return container.NewRuntimeStandaloneServicePolicyManager(servicecfg.NewLocalRuntimeStandaloneServiceManager(runtime), runtimeRolePolicy(cfg, v))
+}
+
+func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
+	managedNetworkPrefix := ""
+	if v != nil {
+		managedNetworkPrefix = v.GetString("network_isolation.network_prefix")
+	}
+	return container.RuntimePolicy{
 		Mode:                   container.RuntimePolicyModeEnforce,
-		ManagedNetworkPrefix:   v.GetString("network_isolation.network_prefix"),
+		ManagedNetworkPrefix:   managedNetworkPrefix,
 		AllowedImageRegistries: cfg.Images.AllowedRegistries,
 		RequireImageDigest:     cfg.Images.RequireDigest,
 		RuntimeComponentID:     "gordon-runtime",
 	}
-	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy)
-	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime)}, cleanup, nil
 }

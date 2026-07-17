@@ -608,7 +608,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
-	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithSecretProvider(si.svc.runtime, si.svc.serviceSecretProvider)
+	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider(standaloneServiceManagerForServices(si.svc), si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
@@ -695,6 +695,23 @@ func (si *serviceInit) initHandlers() {
 		TrafficSvc:      si.svc.trafficManager,
 		RuntimeControl:  si.svc.runtimeControl,
 	})
+}
+
+// standaloneServiceManagerForServices selects the narrow standalone-service runtime port.
+// Control uses its RPC client when available; monolith keeps the local runtime adapter.
+func standaloneServiceManagerForServices(svc *services) out.RuntimeStandaloneServiceManager {
+	if svc == nil {
+		return nil
+	}
+	switch svc.role {
+	case RoleControl:
+		manager, _ := svc.runtimeCommandClient.(out.RuntimeStandaloneServiceManager)
+		return manager
+	case RoleMonolith:
+		return servicecfg.NewLocalRuntimeStandaloneServiceManager(svc.runtime)
+	default:
+		return nil
+	}
 }
 
 func runtimeLogReaderForServices(svc *services) out.RuntimeLogReader {
