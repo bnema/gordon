@@ -53,7 +53,7 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-api
 
-      - name: Run managed proxy compatibility slice
+      - name: Run Docker proxy compatibility slices
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-proxy
@@ -64,7 +64,7 @@ jobs:
         run: make test
 
       - name: Upload compatibility reports
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: compatibility-harness-reports
