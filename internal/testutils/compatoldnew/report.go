@@ -55,7 +55,9 @@ func CompareSideResultsWithMetadata(old, new SideResult, allow *AllowlistedDiffe
 	}
 	failures := Compare(old.Artifact, new.Artifact, allow)
 	failures = append(failures, validationFailures(old, new)...)
-	report := NewReport(failures, 1)
+	// The artifact comparison and both side contract validations are separate
+	// checks. A failed validation must not make Failed exceed Total.
+	report := NewReport(failures, comparisonChecks+sideValidationChecks)
 	report.BaselineCommit = metadata.BaselineCommit
 	report.CandidateCommit = metadata.CandidateCommit
 	report.RerunCommand = metadata.RerunCommand
@@ -116,15 +118,23 @@ func redactedValidationEvidence(err error) string {
 	return redacted
 }
 
+const (
+	comparisonChecks     = 1
+	sideValidationChecks = 2
+)
+
 func NewReport(failures []Failure, total int) Report {
+	if total < len(failures) {
+		total = len(failures)
+	}
 	return Report{Total: total, Failed: len(failures), Failures: failures}
 }
 
 func (r Report) ConsoleSummary() string {
 	if r.Failed == 0 {
-		return fmt.Sprintf("compat: %d compared, 0 failed", r.Total)
+		return fmt.Sprintf("compat: %d checks, 0 failed", r.Total)
 	}
-	return fmt.Sprintf("compat: %d compared, %d failed", r.Total, r.Failed)
+	return fmt.Sprintf("compat: %d checks, %d failed", r.Total, r.Failed)
 }
 
 func (r Report) JSON() ([]byte, error) { return json.MarshalIndent(r, "", "  ") }

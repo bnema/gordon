@@ -10,6 +10,8 @@ import (
 )
 
 func TestCompatibilityConfigShowJSON(t *testing.T) {
+	requireRealCompatibilityRun(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -19,6 +21,7 @@ func TestCompatibilityConfigShowJSON(t *testing.T) {
 	require.Zero(t, report.Failed, report.ConsoleSummary())
 	require.NotEmpty(t, report.BaselineCommit)
 	require.NotEmpty(t, report.CandidateCommit)
+	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_RUN_REAL=1")
 	require.Contains(t, report.RerunCommand, "TestCompatibilityConfigShowJSON")
 	require.FileExists(t, filepath.Join(artifactDir, "compat-report.json"))
 	require.FileExists(t, filepath.Join(artifactDir, "normalized.diff"))

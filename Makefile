@@ -100,24 +100,24 @@ test-adapter: ## Run adapter layer tests only
 compat-harness-config: ## Run config compatibility harness checks
 	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/config/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$$' -count=1"
 	@echo "Running config compatibility harness slice and policy guards..."
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityConfigShowJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityConfigShowJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-cli: ## Run CLI compatibility harness checks
 	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/cli/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$$' -count=1"
 	@echo "Running CLI compatibility harness slice and policy guards..."
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityRoutesListJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityRoutesListJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-api: ## Run API compatibility harness checks
 	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/api/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$$' -count=1"
 	@echo "Running Docker preflight, API compatibility slice, and policy guards..."
 	@docker info
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-registry: ## Run registry compatibility harness checks
 	@echo "Running registry compatibility harness checks..."

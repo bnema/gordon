@@ -107,5 +107,5 @@ func routesListJSONArtifact(capture Artifact) (CLIArtifact, error) {
 }
 
 func routesListJSONRerunCommand() string {
-	return "GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$' -count=1"
+	return "GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$' -count=1"
 }

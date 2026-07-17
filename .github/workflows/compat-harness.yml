@@ -38,9 +38,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-build-
 
-      - name: Docker preflight
-        run: docker info
-
       - name: Run config compatibility slice
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
@@ -56,12 +53,9 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-api
 
-      - name: Run compatibility package tests
+      - name: Run full test suite with real scenarios gated off
         env:
-          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
-        run: go test ./internal/testutils/compatoldnew -count=1
-
-      - name: Run full test suite
+          GORDON_COMPAT_RUN_REAL: "0"
         run: make test
 
       - name: Upload compatibility reports

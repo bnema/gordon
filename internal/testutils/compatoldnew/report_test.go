@@ -17,8 +17,8 @@ func TestCompareSidesAlwaysWritesActionableReportOnDiff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Failed != 1 {
-		t.Fatalf("report=%+v", report)
+	if report.Total != 3 || report.Failed != 1 {
+		t.Fatalf("report=%+v, want comparison plus two validation checks", report)
 	}
 	for _, name := range []string{"compat-report.json", "normalized.diff", "old.raw.json", "new.raw.json", "old.normalized.json", "new.normalized.json"} {
 		info, err := os.Stat(filepath.Join(dir, name))
@@ -48,8 +48,14 @@ func TestCompareSideResultsSerializesValidationFailuresBeforeReturningError(t *t
 	if err == nil {
 		t.Fatal("validation failures must return an error after artifact emission")
 	}
-	if report.Failed != 2 || len(report.Failures) != 2 {
-		t.Fatalf("report=%+v, want two validation failures", report)
+	if report.Total != 3 || report.Failed != 2 || len(report.Failures) != 2 {
+		t.Fatalf("report=%+v, want comparison plus two validation checks and two failures", report)
+	}
+	if report.Failed > report.Total {
+		t.Fatalf("report has more failures than checks: %+v", report)
+	}
+	if !strings.Contains(report.ConsoleSummary(), "3 checks") || !strings.Contains(report.ConsoleSummary(), "2 failed") {
+		t.Fatalf("summary=%q", report.ConsoleSummary())
 	}
 	body, err := os.ReadFile(filepath.Join(dir, "compat-report.json"))
 	if err != nil {
@@ -62,8 +68,8 @@ func TestCompareSideResultsSerializesValidationFailuresBeforeReturningError(t *t
 	if err := json.Unmarshal(body, &persisted); err != nil {
 		t.Fatal(err)
 	}
-	if persisted.Failed != 2 || len(persisted.Failures) != 2 {
-		t.Fatalf("persisted report=%+v, want two validation failures", persisted)
+	if persisted.Total != 3 || persisted.Failed != 2 || len(persisted.Failures) != 2 {
+		t.Fatalf("persisted report=%+v, want comparison plus two validation checks and two failures", persisted)
 	}
 	for _, failure := range persisted.Failures {
 		if !strings.Contains(failure.Problem, "validation failed") || !strings.Contains(failure.Problem, "contract") {
@@ -109,6 +115,13 @@ func TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact(t *testing.T
 				t.Fatalf("%s leaked %q: %s", name, secret, body)
 			}
 		}
+	}
+}
+
+func TestNewReportNeverHasMoreFailuresThanChecks(t *testing.T) {
+	r := NewReport([]Failure{{}, {}}, 1)
+	if r.Total != 2 || r.Failed != 2 {
+		t.Fatalf("report=%+v, want failures capped by total checks", r)
 	}
 }
 

@@ -163,5 +163,5 @@ func newCLIJSONObservation(source string, raw, normalized map[string]any) CLIArt
 }
 
 func configShowJSONRerunCommand() string {
-	return "GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$' -count=1"
+	return "GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$' -count=1"
 }

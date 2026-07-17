@@ -49,6 +49,8 @@ func TestCompatibilityAdminAPIPreflight(t *testing.T) {
 }
 
 func TestCompatibilityAdminAuthAndRouteCRUD(t *testing.T) {
+	requireRealCompatibilityRun(t)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -65,6 +67,7 @@ func TestCompatibilityAdminAuthAndRouteCRUD(t *testing.T) {
 	require.Zero(t, report.Failed, report.ConsoleSummary())
 	require.NotEmpty(t, report.BaselineCommit)
 	require.NotEmpty(t, report.CandidateCommit)
+	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_RUN_REAL=1")
 	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_REQUIRE_RUNTIME=1")
 	require.Contains(t, report.RerunCommand, "TestCompatibilityAdminAuthAndRouteCRUD")
 	require.FileExists(t, filepath.Join(artifactDir, "compat-report.json"))
