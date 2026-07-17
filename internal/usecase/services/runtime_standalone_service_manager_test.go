@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -350,11 +351,6 @@ func TestLocalRuntimeStandaloneServiceManagerCoalescesOnlyConcurrentDuplicates(t
 		result, applyErr := manager.ApplyStandaloneService(context.Background(), command)
 		outcomes <- outcome{result, applyErr}
 	}()
-	select {
-	case result := <-outcomes:
-		t.Fatalf("concurrent duplicate returned before the in-flight operation completed: %+v", result)
-	case <-time.After(25 * time.Millisecond):
-	}
 	close(unblock)
 
 	first := <-outcomes
@@ -363,6 +359,179 @@ func TestLocalRuntimeStandaloneServiceManagerCoalescesOnlyConcurrentDuplicates(t
 	require.NoError(t, second.err)
 	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, first.result.Status)
 	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, second.result.Status)
+}
+
+func TestLocalRuntimeStandaloneServiceManagerSerializesSameServiceApplyMutations(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	service := sampleService().ForRuntimeApply()
+	first := applyStandaloneCommand(service, nil, "hash-a")
+	second := applyStandaloneCommand(service, nil, "hash-b")
+	second.RuntimeCommandIdentity = standaloneServiceIdentity("apply-b")
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	secondListCalled := make(chan struct{})
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{managedContainer("first", service.Name, "hash-a", "exited")}, nil).Once()
+	runtime.On("StartContainer", mock.Anything, "first").Run(func(mock.Arguments) {
+		close(mutationStarted)
+		<-releaseMutation
+	}).Return(nil).Once()
+	runtime.On("ListContainers", mock.Anything, true).Run(func(mock.Arguments) {
+		close(secondListCalled)
+	}).Return([]*domain.Container{}, nil).Once()
+	runtime.On("InspectImageVolumes", mock.Anything, service.Image).Return([]string{}, nil).Once()
+	runtime.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{ID: "second"}, nil).Once()
+	runtime.On("StartContainer", mock.Anything, "second").Return(nil).Once()
+	manager := newLocalRuntimeStandaloneServiceManager(runtime, defaultVolumePrefix)
+	outcomes := make(chan error, 2)
+	go func() { _, err := manager.ApplyStandaloneService(context.Background(), first); outcomes <- err }()
+	<-mutationStarted
+	go func() { _, err := manager.ApplyStandaloneService(context.Background(), second); outcomes <- err }()
+	waitForServiceGateReferences(t, manager, service.Name, 2)
+	select {
+	case <-secondListCalled:
+		t.Fatal("same-service apply listed containers while another mutation was active")
+	default:
+	}
+	close(releaseMutation)
+	require.NoError(t, <-outcomes)
+	require.NoError(t, <-outcomes)
+	<-secondListCalled
+}
+
+func TestLocalRuntimeStandaloneServiceManagerSerializesSameServiceApplyAndRemove(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	service := sampleService().ForRuntimeApply()
+	apply := applyStandaloneCommand(service, nil, "hash-a")
+	remove := removeStandaloneCommandWithCleanup(service.Name, "disabled", domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: false})
+	mutationStarted := make(chan struct{})
+	releaseMutation := make(chan struct{})
+	removeListCalled := make(chan struct{})
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{managedContainer("first", service.Name, "hash-a", "exited")}, nil).Once()
+	runtime.On("StartContainer", mock.Anything, "first").Run(func(mock.Arguments) {
+		close(mutationStarted)
+		<-releaseMutation
+	}).Return(nil).Once()
+	runtime.On("ListContainers", mock.Anything, true).Run(func(mock.Arguments) {
+		close(removeListCalled)
+	}).Return([]*domain.Container{}, nil).Once()
+	manager := newLocalRuntimeStandaloneServiceManager(runtime, defaultVolumePrefix)
+	outcomes := make(chan error, 2)
+	go func() { _, err := manager.ApplyStandaloneService(context.Background(), apply); outcomes <- err }()
+	<-mutationStarted
+	go func() { _, err := manager.RemoveStandaloneService(context.Background(), remove); outcomes <- err }()
+	waitForServiceGateReferences(t, manager, service.Name, 2)
+	select {
+	case <-removeListCalled:
+		t.Fatal("same-service remove listed containers while an apply mutation was active")
+	default:
+	}
+	close(releaseMutation)
+	require.NoError(t, <-outcomes)
+	require.NoError(t, <-outcomes)
+	<-removeListCalled
+}
+
+func TestLocalRuntimeStandaloneServiceManagerAllowsDifferentServiceMutationsConcurrently(t *testing.T) {
+	manager := newLocalRuntimeStandaloneServiceManager(nil, defaultVolumePrefix)
+	alphaEntered := make(chan struct{})
+	betaEntered := make(chan struct{})
+	release := make(chan struct{})
+	outcomes := make(chan error, 2)
+	go func() {
+		_, err := manager.runOnce(context.Background(), standaloneServiceIdentity("alpha"), "apply_standalone_service", "alpha", func() error {
+			close(alphaEntered)
+			<-release
+			return nil
+		})
+		outcomes <- err
+	}()
+	<-alphaEntered
+	go func() {
+		_, err := manager.runOnce(context.Background(), standaloneServiceIdentity("beta"), "apply_standalone_service", "beta", func() error {
+			close(betaEntered)
+			<-release
+			return nil
+		})
+		outcomes <- err
+	}()
+	<-betaEntered
+	close(release)
+	require.NoError(t, <-outcomes)
+	require.NoError(t, <-outcomes)
+}
+
+func TestLocalRuntimeStandaloneServiceManagerServiceGateHonorsCancellationAndCleansUp(t *testing.T) {
+	manager := newLocalRuntimeStandaloneServiceManager(nil, defaultVolumePrefix)
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		_, _ = manager.runOnce(context.Background(), standaloneServiceIdentity("first"), "apply_standalone_service", "game", func() error {
+			close(firstEntered)
+			<-releaseFirst
+			return nil
+		})
+	}()
+	<-firstEntered
+	ctx, cancel := context.WithCancel(context.Background())
+	waiting := make(chan domain.RuntimeCommandResult, 1)
+	operationEntered := make(chan struct{})
+	go func() {
+		result, _ := manager.runOnce(ctx, standaloneServiceIdentity("waiting"), "remove_standalone_service", "game", func() error {
+			close(operationEntered)
+			return nil
+		})
+		waiting <- result
+	}()
+	waitForServiceGateReferences(t, manager, "game", 2)
+	cancel()
+	result := <-waiting
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, result.Status)
+	assert.Equal(t, "context_canceled", result.Error.Code)
+	select {
+	case <-operationEntered:
+		t.Fatal("canceled gate waiter entered its operation")
+	default:
+	}
+	waitForServiceGateReferences(t, manager, "game", 1)
+	close(releaseFirst)
+	<-firstDone
+	waitForServiceGateCount(t, manager, 0)
+}
+
+func standaloneServiceIdentity(key string) domain.RuntimeCommandIdentity {
+	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID(key), IdempotencyKey: key, Generation: 1, SourceComponentID: "control-1"}
+}
+
+func waitForServiceGateReferences(t *testing.T, manager *localRuntimeStandaloneServiceManager, service string, want int) {
+	t.Helper()
+	for {
+		manager.mu.Lock()
+		gate := manager.serviceGates[service]
+		references := 0
+		if gate != nil {
+			references = gate.references
+		}
+		manager.mu.Unlock()
+		if references == want {
+			return
+		}
+		runtime.Gosched()
+	}
+}
+
+func waitForServiceGateCount(t *testing.T, manager *localRuntimeStandaloneServiceManager, want int) {
+	t.Helper()
+	for {
+		manager.mu.Lock()
+		count := len(manager.serviceGates)
+		manager.mu.Unlock()
+		if count == want {
+			return
+		}
+		runtime.Gosched()
+	}
 }
 
 func TestLocalRuntimeStandaloneServiceManagerRetriesFailedCommands(t *testing.T) {

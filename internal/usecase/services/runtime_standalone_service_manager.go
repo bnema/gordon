@@ -19,13 +19,19 @@ type localRuntimeStandaloneServiceManager struct {
 	volumePrefix string
 	now          func() time.Time
 
-	mu       sync.Mutex
-	inFlight map[string]*standaloneServiceInFlight
+	mu           sync.Mutex
+	inFlight     map[string]*standaloneServiceInFlight
+	serviceGates map[string]*standaloneServiceGate
 }
 
 type standaloneServiceInFlight struct {
 	done   chan struct{}
 	result domain.RuntimeCommandResult
+}
+
+type standaloneServiceGate struct {
+	semaphore  chan struct{}
+	references int
 }
 
 // NewLocalRuntimeStandaloneServiceManager creates the monolith implementation of the narrow standalone-service runtime port.
@@ -42,6 +48,7 @@ func newLocalRuntimeStandaloneServiceManager(runtime out.ContainerRuntime, volum
 		volumePrefix: volumePrefix,
 		now:          time.Now,
 		inFlight:     make(map[string]*standaloneServiceInFlight),
+		serviceGates: make(map[string]*standaloneServiceGate),
 	}
 }
 
@@ -51,7 +58,7 @@ func (m *localRuntimeStandaloneServiceManager) ApplyStandaloneService(ctx contex
 	if err := command.Validate(); err != nil {
 		return m.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	return m.runOnce(ctx, command.RuntimeCommandIdentity, "apply_standalone_service", func() error {
+	return m.runOnce(ctx, command.RuntimeCommandIdentity, "apply_standalone_service", command.Service.Name, func() error {
 		if m.runtime == nil {
 			return errors.New("runtime standalone service manager not configured")
 		}
@@ -69,7 +76,7 @@ func (m *localRuntimeStandaloneServiceManager) RemoveStandaloneService(ctx conte
 	if err := command.Validate(); err != nil {
 		return m.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	return m.runOnce(ctx, command.RuntimeCommandIdentity, "remove_standalone_service", func() error {
+	return m.runOnce(ctx, command.RuntimeCommandIdentity, "remove_standalone_service", command.Name, func() error {
 		if m.runtime == nil {
 			return errors.New("runtime standalone service manager not configured")
 		}
@@ -308,7 +315,7 @@ func (m *localRuntimeStandaloneServiceManager) waitLogReadiness(ctx context.Cont
 	}
 }
 
-func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, identity domain.RuntimeCommandIdentity, kind string, operation func() error) (domain.RuntimeCommandResult, error) {
+func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, identity domain.RuntimeCommandIdentity, kind, serviceName string, operation func() error) (domain.RuntimeCommandResult, error) {
 	key := identity.DedupeKey(kind)
 	m.mu.Lock()
 	if inFlight, ok := m.inFlight[key]; ok {
@@ -325,12 +332,16 @@ func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, iden
 	m.mu.Unlock()
 
 	result := m.baseResult(identity)
-	if err := operation(); err != nil {
-		result.CompletedAt = m.now()
+	gate, err := m.acquireServiceGate(ctx, serviceName)
+	if err == nil {
+		err = operation()
+		m.releaseServiceGate(serviceName, gate)
+	}
+	result.CompletedAt = m.now()
+	if err != nil {
 		result.Status = domain.RuntimeCommandStatusFailed
 		result.Error = sanitizeStandaloneServiceRuntimeError(err)
 	} else {
-		result.CompletedAt = m.now()
 		result.Status = domain.RuntimeCommandStatusSucceeded
 	}
 
@@ -340,6 +351,44 @@ func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, iden
 	close(inFlight.done)
 	m.mu.Unlock()
 	return result, nil
+}
+
+func (m *localRuntimeStandaloneServiceManager) acquireServiceGate(ctx context.Context, serviceName string) (*standaloneServiceGate, error) {
+	m.mu.Lock()
+	gate := m.serviceGates[serviceName]
+	if gate == nil {
+		gate = &standaloneServiceGate{semaphore: make(chan struct{}, 1)}
+		m.serviceGates[serviceName] = gate
+	}
+	gate.references++
+	m.mu.Unlock()
+
+	select {
+	case gate.semaphore <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			<-gate.semaphore
+			m.releaseServiceGateReference(serviceName, gate)
+			return nil, err
+		}
+		return gate, nil
+	case <-ctx.Done():
+		m.releaseServiceGateReference(serviceName, gate)
+		return nil, ctx.Err()
+	}
+}
+
+func (m *localRuntimeStandaloneServiceManager) releaseServiceGate(serviceName string, gate *standaloneServiceGate) {
+	<-gate.semaphore
+	m.releaseServiceGateReference(serviceName, gate)
+}
+
+func (m *localRuntimeStandaloneServiceManager) releaseServiceGateReference(serviceName string, gate *standaloneServiceGate) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	gate.references--
+	if gate.references == 0 && m.serviceGates[serviceName] == gate {
+		delete(m.serviceGates, serviceName)
+	}
 }
 
 func (m *localRuntimeStandaloneServiceManager) baseResult(identity domain.RuntimeCommandIdentity) domain.RuntimeCommandResult {
