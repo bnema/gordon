@@ -56,8 +56,8 @@ func (g RouteTargetGeneration) After(previous RouteTargetGeneration) bool {
 	return g > previous
 }
 
-// RouteTargetKey is an opaque, snapshot-scoped target identity. It is never a
-// runtime or container identifier.
+// RouteTargetKey is an opaque identity for an exact routing target. It is never
+// a runtime or container identifier.
 type RouteTargetKey string
 
 const routeTargetKeyPrefix = "rtk_"
@@ -394,7 +394,7 @@ func (e *RouteTargetEntry) setDerivedTargetKey() {
 		e.Scheme,
 		string(e.Protocol),
 		e.UpstreamHost,
-		fmt.Sprintf("%d", e.Generation),
+		string(e.Attachment),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	e.TargetKey = RouteTargetKey(routeTargetKeyPrefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
@@ -454,10 +454,17 @@ func (e RouteTargetEntry) ValidateSplitReachability() error {
 }
 
 func validRouteTargetHost(host string) bool {
-	if host == "" || len(host) > 253 || containsWhitespaceOrControl(host) {
+	if host == "" || containsWhitespaceOrControl(host) {
 		return false
 	}
 	if strings.ContainsAny(host, "/\\?#@") {
+		return false
+	}
+	// An absolute FQDN may include one root-label dot, which is not part of the
+	// 253-byte hostname limit. Do not trim more than one: repeated dots are not
+	// valid endpoint hosts.
+	host = strings.TrimSuffix(host, ".")
+	if host == "" || len(host) > 253 {
 		return false
 	}
 	if net.ParseIP(host) != nil {
@@ -467,8 +474,7 @@ func validRouteTargetHost(host string) bool {
 	if strings.Contains(host, ":") {
 		return false
 	}
-	host = strings.TrimSuffix(host, ".")
-	if host == "" || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".sock") || strings.Contains(host, "..") {
+	if strings.HasPrefix(host, ".") || strings.Contains(host, "..") {
 		return false
 	}
 	for label := range strings.SplitSeq(host, ".") {

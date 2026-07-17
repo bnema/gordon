@@ -48,7 +48,7 @@ func TestRouteTargetSnapshotManagedTargetHasNoOriginalHost(t *testing.T) {
 
 func TestRouteTargetSnapshotEndpointHostValidationAcceptsAliasesDNSAndIPs(t *testing.T) {
 	for _, host := range []string{
-		"app_alias", "app_alias.service", "service.example.com", "service.example.com.", "10.0.0.3", "2001:db8::1", "::1",
+		"app_alias", "app_alias.service", "app.sock", "docker.sock", "service.example.com", "service.example.com.", "10.0.0.3", "2001:db8::1", "::1",
 	} {
 		t.Run(host, func(t *testing.T) {
 			entry := mustReadyRouteTargetEntry(t, "app.example.com", host, 8080, 1)
@@ -62,7 +62,7 @@ func TestRouteTargetSnapshotEndpointHostValidationRejectsUnsafeEndpoints(t *test
 	overlongHost := strings.Repeat("a", 254)
 	for _, host := range []string{
 		"", " app.example.com", "app.example.com ", "app\n.example.com", "app\x00.example.com",
-		"unix:///var/run/docker.sock", "unix:/run/podman/podman.sock", "/var/run/docker.sock", "app.sock",
+		"unix:///var/run/docker.sock", "unix:/run/podman/podman.sock", "/var/run/docker.sock",
 		"http://app:8080", "https://user:password@app.example.com", "user:password@app.example.com",
 		"app.example.com/path", "app.example.com?token=secret", "app.example.com#fragment", "app.example.com:8080",
 		".app.example.com", "app..example.com", "app.example.com..", overlongLabel, overlongHost,
@@ -72,6 +72,20 @@ func TestRouteTargetSnapshotEndpointHostValidationRejectsUnsafeEndpoints(t *test
 			require.ErrorIs(t, err, ErrInvalidRoute)
 		})
 	}
+}
+
+func TestRouteTargetSnapshotEndpointHostValidationAcceptsMaximalAbsoluteFQDN(t *testing.T) {
+	maxHostname := strings.Join([]string{
+		strings.Repeat("a", 63), strings.Repeat("b", 63), strings.Repeat("c", 63), strings.Repeat("d", 61),
+	}, ".")
+	require.Len(t, maxHostname, 253)
+
+	entry, err := NewReadyRouteTargetEntry("app.example.com", maxHostname+".", 8080, "http", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	require.NoError(t, entry.Validate())
+
+	_, err = NewReadyRouteTargetEntry("app.example.com", maxHostname+"a", 8080, "http", RouteTargetProtocolHTTP1, 1)
+	require.ErrorIs(t, err, ErrInvalidRoute)
 }
 
 func TestRouteTargetSnapshotExternalTargetRejectsUnsafeUpstreamHost(t *testing.T) {
@@ -177,9 +191,156 @@ func TestRouteTargetSnapshotFieldAllowlistPreventsForbiddenData(t *testing.T) {
 	})
 }
 
+func TestNewDrainingRouteTargetEntrySetsDrainingStateAndReason(t *testing.T) {
+	tests := []struct {
+		name       string
+		scheme     string
+		protocol   RouteTargetProtocol
+		generation RouteTargetGeneration
+	}{
+		{name: "http1", scheme: "http", protocol: RouteTargetProtocolHTTP1, generation: 1},
+		{name: "h2c", scheme: "https", protocol: RouteTargetProtocolH2C, generation: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := NewDrainingRouteTargetEntry("app.example.com", "app", 8080, tt.scheme, tt.protocol, tt.generation)
+			require.NoError(t, err)
+			require.Equal(t, RouteTargetStatusDraining, entry.Status)
+			require.Equal(t, RouteTargetUnavailableReasonDraining, entry.UnavailableReason)
+			require.True(t, entry.Draining())
+		})
+	}
+}
+
+func TestNewUnavailableRouteTargetEntryAcceptsEverySupportedReasonAndRejectsUnknown(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason RouteTargetUnavailableReason
+		valid  bool
+	}{
+		{name: "no target", reason: RouteTargetUnavailableReasonNoTarget, valid: true},
+		{name: "starting", reason: RouteTargetUnavailableReasonStarting, valid: true},
+		{name: "health check failed", reason: RouteTargetUnavailableReasonHealthCheckFailed, valid: true},
+		{name: "deployment", reason: RouteTargetUnavailableReasonDeployment, valid: true},
+		{name: "draining belongs to draining state", reason: RouteTargetUnavailableReasonDraining},
+		{name: "unknown", reason: RouteTargetUnavailableReason("unknown")},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry, err := NewUnavailableRouteTargetEntry("app.example.com", tt.reason, 1)
+			if !tt.valid {
+				require.ErrorIs(t, err, ErrInvalidRoute)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, RouteTargetStatusUnavailable, entry.Status)
+			require.Equal(t, tt.reason, entry.UnavailableReason)
+			require.True(t, entry.Unavailable())
+		})
+	}
+}
+
+func TestRouteTargetGenerationAfter(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  RouteTargetGeneration
+		previous RouteTargetGeneration
+		want     bool
+	}{
+		{name: "newer", current: 2, previous: 1, want: true},
+		{name: "equal", current: 2, previous: 2, want: false},
+		{name: "older", current: 1, previous: 2, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, tt.current.After(tt.previous))
+		})
+	}
+}
+
 func TestRouteTargetSnapshotProtocolFromProxyTarget(t *testing.T) {
-	require.Equal(t, RouteTargetProtocolH2C, ProtocolFromProxyTarget(ProxyTarget{Protocol: "h2c"}))
-	require.Equal(t, RouteTargetProtocolHTTP1, ProtocolFromProxyTarget(ProxyTarget{}))
+	tests := []struct {
+		name   string
+		target ProxyTarget
+		want   RouteTargetProtocol
+	}{
+		{name: "h2c", target: ProxyTarget{Protocol: "h2c"}, want: RouteTargetProtocolH2C},
+		{name: "http1 default", target: ProxyTarget{}, want: RouteTargetProtocolHTTP1},
+		{name: "unknown defaults to http1", target: ProxyTarget{Protocol: "http2"}, want: RouteTargetProtocolHTTP1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, ProtocolFromProxyTarget(tt.target))
+		})
+	}
+}
+
+func TestRouteTargetEntryToProxyTargetConvertsManagedAndExternalTargets(t *testing.T) {
+	managed, err := NewReadyRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolH2C, 1)
+	require.NoError(t, err)
+	external, err := NewExternalReadyRouteTargetEntry("external.example.com", "198.51.100.9", "upstream.example", 8443, "https", RouteTargetProtocolHTTP1, 2)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name  string
+		entry RouteTargetEntry
+		want  ProxyTarget
+	}{
+		{
+			name:  "managed h2c",
+			entry: managed,
+			want:  ProxyTarget{Host: "app", Port: 8080, Scheme: "http", Protocol: "h2c", RouteHost: "app.example.com"},
+		},
+		{
+			name:  "external original host",
+			entry: external,
+			want:  ProxyTarget{Host: "198.51.100.9", Port: 8443, Scheme: "https", OriginalHost: "upstream.example", RouteHost: "external.example.com"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target, err := tt.entry.ToProxyTarget()
+			require.NoError(t, err)
+			require.Equal(t, tt.want, target)
+			require.Empty(t, target.ContainerID)
+		})
+	}
+}
+
+func TestRouteTargetSnapshotTargetKeyIsStableAcrossGenerationsAndStatus(t *testing.T) {
+	first := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	second := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 2)
+	draining, err := NewDrainingRouteTargetEntry("app.example.com", "app", 8080, "http", RouteTargetProtocolHTTP1, 3)
+	require.NoError(t, err)
+
+	require.Equal(t, first.TargetKey, second.TargetKey)
+	require.Equal(t, first.TargetKey, draining.TargetKey)
+}
+
+func TestRouteTargetSnapshotTargetKeyChangesForRoutingTargetChanges(t *testing.T) {
+	base, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", "upstream.example", 8443, "https", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		mutate func(*RouteTargetEntry)
+	}{
+		{name: "canonical route", mutate: func(entry *RouteTargetEntry) { entry.CanonicalDomain = "other.example.com" }},
+		{name: "target host", mutate: func(entry *RouteTargetEntry) { entry.TargetHost = "198.51.100.10" }},
+		{name: "target port", mutate: func(entry *RouteTargetEntry) { entry.TargetPort = 9443 }},
+		{name: "scheme", mutate: func(entry *RouteTargetEntry) { entry.Scheme = "http" }},
+		{name: "protocol", mutate: func(entry *RouteTargetEntry) { entry.Protocol = RouteTargetProtocolH2C }},
+		{name: "upstream host", mutate: func(entry *RouteTargetEntry) { entry.UpstreamHost = "other-upstream.example" }},
+		{name: "attachment", mutate: func(entry *RouteTargetEntry) { entry.Attachment = RouteTargetAttachmentAttached }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := base
+			tt.mutate(&changed)
+			changed.setDerivedTargetKey()
+			require.NotEqual(t, base.TargetKey, changed.TargetKey)
+		})
+	}
 }
 
 func mustReadyRouteTargetEntry(t *testing.T, domainName, host string, port int, generation RouteTargetGeneration) RouteTargetEntry {
