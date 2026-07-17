@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -12,14 +11,13 @@ import (
 	inruntime "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
 	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/testutils/grpctest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
 )
 
 func TestClientDeployRouteRoundTrip(t *testing.T) {
@@ -181,23 +179,10 @@ func TestClientPreservesContextCancellation(t *testing.T) {
 
 func newRuntimeTestConn(t *testing.T, server runtimev1.RuntimeServiceServer) *grpc.ClientConn {
 	t.Helper()
-	listener := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
-	runtimev1.RegisterRuntimeServiceServer(grpcServer, server)
-	go func() {
-		_ = grpcServer.Serve(listener)
-	}()
-	t.Cleanup(func() {
-		grpcServer.Stop()
-		_ = listener.Close()
+	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
+		runtimev1.RegisterRuntimeServiceServer(registrar, server)
 	})
-
-	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-		return listener.DialContext(ctx)
-	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	return conn
+	return harness.Conn(t)
 }
 
 type fakeRuntimeStateSubscriber struct {

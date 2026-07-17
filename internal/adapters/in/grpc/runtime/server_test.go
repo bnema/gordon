@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"io"
-	"net"
 	"strings"
 	"testing"
 	"time"
@@ -12,15 +11,14 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/testutils/grpctest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -259,14 +257,14 @@ func TestServerHealthAndDrainAck(t *testing.T) {
 }
 
 func TestRuntimeServerRequiresComponentAuth(t *testing.T) {
-	conn := newAuthenticatedRuntimeServerConn(t, NewServer(&fakeRuntimeWorker{}, "runtime-1"), &fakeComponentValidator{identity: &domain.ComponentIdentity{Name: "control-1", Role: domain.ComponentRoleControl, Scopes: domain.AllComponentScopes()}})
+	conn := newAuthenticatedRuntimeServerConn(t, NewServer(&fakeRuntimeWorker{}, "runtime-1"))
 	client := runtimev1.NewRuntimeServiceClient(conn)
 
 	_, err := client.GetHealth(context.Background(), &runtimev1.GetHealthRequest{})
 	require.Error(t, err)
 	assert.Equal(t, codes.Unauthenticated, status.Code(err))
 
-	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer token")
+	ctx := grpctest.AuthenticatedContext(context.Background(), grpctest.LocalComponentToken)
 	resp, err := client.GetHealth(ctx, &runtimev1.GetHealthRequest{})
 	require.NoError(t, err)
 	assert.True(t, resp.Ok)
@@ -395,34 +393,16 @@ func (f *fakeRuntimeWorker) SelfUpdate(_ context.Context, command domain.Runtime
 	return testRuntimeResult(command.RuntimeCommandIdentity), nil
 }
 
-func newAuthenticatedRuntimeServerConn(t *testing.T, server runtimev1.RuntimeServiceServer, validator interceptors.ComponentTokenValidator) *grpc.ClientConn {
+func newAuthenticatedRuntimeServerConn(t *testing.T, server runtimev1.RuntimeServiceServer) *grpc.ClientConn {
 	t.Helper()
-	listener := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer(
+	validator := grpctest.NewAuthFixture("control-local", domain.ComponentRoleControl, domain.AllComponentScopes()...)
+	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
+		runtimev1.RegisterRuntimeServiceServer(registrar, server)
+	},
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, MethodScopes())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, MethodScopes())),
 	)
-	runtimev1.RegisterRuntimeServiceServer(grpcServer, server)
-	go func() { _ = grpcServer.Serve(listener) }()
-	t.Cleanup(func() {
-		grpcServer.Stop()
-		_ = listener.Close()
-	})
-	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
-		return listener.DialContext(ctx)
-	}), grpc.WithTransportCredentials(insecure.NewCredentials()))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	return conn
-}
-
-type fakeComponentValidator struct {
-	identity *domain.ComponentIdentity
-	err      error
-}
-
-func (f *fakeComponentValidator) ValidateToken(_ context.Context, _ string, _ domain.ComponentScope) (*domain.ComponentIdentity, error) {
-	return f.identity, f.err
+	return harness.Conn(t)
 }
 
 func protoTestIdentity(id string, requestedAt time.Time) *runtimev1.RuntimeCommandIdentity {
