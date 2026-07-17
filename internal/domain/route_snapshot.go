@@ -1,6 +1,11 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+	"strings"
+	"unicode"
+)
 
 // RouteTargetStatus describes whether an edge route target may receive traffic.
 type RouteTargetStatus string
@@ -43,6 +48,42 @@ func (g RouteTargetGeneration) After(previous RouteTargetGeneration) bool {
 type RouteTargetSnapshot struct {
 	Generation RouteTargetGeneration
 	Entries    []RouteTargetEntry
+}
+
+// Validate verifies the snapshot is a coherent, self-contained routing view.
+func (s RouteTargetSnapshot) Validate() error {
+	if s.Generation == 0 {
+		return fmt.Errorf("%w: generation must be non-zero", ErrInvalidRouteSnapshot)
+	}
+
+	seenDomains := make(map[string]struct{}, len(s.Entries))
+	for index, entry := range s.Entries {
+		if err := entry.Validate(); err != nil {
+			return fmt.Errorf("%w: entry %d: %w", ErrInvalidRouteSnapshot, index, err)
+		}
+		if entry.Generation > s.Generation {
+			return fmt.Errorf("%w: entry %d generation cannot be newer than snapshot generation", ErrInvalidRouteSnapshot, index)
+		}
+		if _, exists := seenDomains[entry.CanonicalDomain]; exists {
+			return fmt.Errorf("%w: duplicate canonical domain at entry %d", ErrInvalidRouteSnapshot, index)
+		}
+		seenDomains[entry.CanonicalDomain] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateSplitReachability verifies that routable targets can be reached by a split edge process.
+// Local snapshots may use loopback targets during the monolith transition; split edges may not.
+func (s RouteTargetSnapshot) ValidateSplitReachability() error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	for index, entry := range s.Entries {
+		if err := entry.ValidateSplitReachability(); err != nil {
+			return fmt.Errorf("%w: entry %d: %w", ErrInvalidRouteSnapshot, index, err)
+		}
+	}
+	return nil
 }
 
 // RouteTargetEntry contains only fields required to route traffic to a target.
@@ -149,8 +190,12 @@ func (e RouteTargetEntry) Unavailable() bool {
 
 // Validate verifies the entry contains only a coherent routing target state.
 func (e RouteTargetEntry) Validate() error {
-	if !IsValidRouteDomain(e.CanonicalDomain) {
+	canonicalDomain, validDomain := CanonicalRouteDomain(e.CanonicalDomain)
+	if !validDomain || e.CanonicalDomain != canonicalDomain {
 		return fmt.Errorf("%w: %s", ErrRouteDomainInvalid, e.CanonicalDomain)
+	}
+	if e.Generation == 0 {
+		return fmt.Errorf("%w: route target generation must be non-zero", ErrInvalidRoute)
 	}
 	if !e.validStatus() {
 		return fmt.Errorf("%w: invalid route target status %q", ErrInvalidRoute, e.Status)
@@ -208,8 +253,8 @@ func (e RouteTargetEntry) validateUnavailableTarget() error {
 }
 
 func (e RouteTargetEntry) validateRoutableTarget() error {
-	if e.TargetHost == "" {
-		return fmt.Errorf("%w: route target host cannot be empty", ErrInvalidRoute)
+	if !validRouteTargetHost(e.TargetHost) {
+		return fmt.Errorf("%w: route target host is invalid", ErrInvalidRoute)
 	}
 	if !validRouteTargetPort(e.TargetPort) {
 		return fmt.Errorf("%w: route target port must be between 1 and 65535", ErrInvalidRoute)
@@ -261,6 +306,59 @@ func (e RouteTargetEntry) validUnavailableReason() bool {
 	default:
 		return false
 	}
+}
+
+// ValidateSplitReachability verifies that a routable entry does not rely on local loopback.
+// It is intentionally separate from Validate because monolith deployments may use loopback.
+func (e RouteTargetEntry) ValidateSplitReachability() error {
+	if err := e.Validate(); err != nil {
+		return err
+	}
+	if e.Unavailable() {
+		return nil
+	}
+	if isLoopbackRouteTargetHost(e.TargetHost) {
+		return fmt.Errorf("%w: loopback target host", ErrRouteTargetNotReachable)
+	}
+	return nil
+}
+
+func validRouteTargetHost(host string) bool {
+	if host == "" || containsWhitespaceOrControl(host) {
+		return false
+	}
+	if strings.ContainsAny(host, "/\\?#@") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if strings.Contains(host, ":") || len(host) > 253 || !hostnamePattern.MatchString(host) {
+		return false
+	}
+	if strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") || strings.Contains(host, "..") {
+		return false
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if !isValidLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
+func containsWhitespaceOrControl(value string) bool {
+	return strings.IndexFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	}) >= 0
+}
+
+func isLoopbackRouteTargetHost(host string) bool {
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func validRouteTargetPort(port int) bool {

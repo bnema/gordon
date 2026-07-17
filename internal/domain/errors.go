@@ -18,14 +18,16 @@ var (
 	ErrInvalidImageFormat = errors.New("invalid image format")
 
 	// Route errors
-	ErrRouteNotFound      = errors.New("route not found")
-	ErrRouteExists        = errors.New("route already exists")
-	ErrInvalidRoute       = errors.New("invalid route configuration")
-	ErrNoRouteForImage    = errors.New("no route configured for image")
-	ErrRouteDomainEmpty   = errors.New("route domain cannot be empty")
-	ErrRouteImageEmpty    = errors.New("route image cannot be empty")
-	ErrRouteDomainInvalid = errors.New("route domain is not a valid public hostname")
-	ErrNoTargetAvailable  = errors.New("no target available for route")
+	ErrRouteNotFound           = errors.New("route not found")
+	ErrRouteExists             = errors.New("route already exists")
+	ErrInvalidRoute            = errors.New("invalid route configuration")
+	ErrNoRouteForImage         = errors.New("no route configured for image")
+	ErrRouteDomainEmpty        = errors.New("route domain cannot be empty")
+	ErrRouteImageEmpty         = errors.New("route image cannot be empty")
+	ErrRouteDomainInvalid      = errors.New("route domain is not a valid public hostname")
+	ErrNoTargetAvailable       = errors.New("no target available for route")
+	ErrInvalidRouteSnapshot    = errors.New("route target snapshot is invalid")
+	ErrRouteTargetNotReachable = errors.New("route target is not reachable from split edge")
 
 	// Registry errors
 	ErrManifestNotFound = errors.New("manifest not found")
