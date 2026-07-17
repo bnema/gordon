@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -294,6 +295,71 @@ func TestRuntimeWorkerConcurrentDuplicateCommandsRunMutationOnce(t *testing.T) {
 	}
 }
 
+func TestRuntimeWorkerConcurrentPolicyDeniedCommandsAreSerialized(t *testing.T) {
+	const callers = 8
+
+	previousMaxProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousMaxProcs)
+
+	fake := newBlockingPolicyDeniedPublisherService()
+	worker := NewRuntimeWorkerWithPolicy(fake, RuntimePolicy{Mode: RuntimePolicyModeEnforce, RequireImageDigest: true})
+	command := domain.DeployRouteCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-concurrent-policy-denied"),
+		Domain:                 "app.example.com",
+		Image:                  "app:latest",
+	}
+	start := make(chan struct{})
+	results := make(chan domain.RuntimeCommandResult, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, err := worker.DeployRoute(context.Background(), command)
+			results <- result
+			errs <- err
+		}()
+	}
+	released := false
+	defer func() {
+		if !released {
+			close(fake.release)
+		}
+		wg.Wait()
+	}()
+
+	close(start)
+	select {
+	case <-fake.publishEntered:
+	case <-time.After(time.Second):
+		t.Fatal("policy denial was not published")
+	}
+	assert.Never(t, func() bool { return fake.publications.Load() > 1 }, 100*time.Millisecond, time.Millisecond)
+
+	close(fake.release)
+	released = true
+	wg.Wait()
+	close(errs)
+	close(results)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	var first *domain.RuntimeCommandResult
+	for result := range results {
+		assert.Equal(t, domain.RuntimeCommandStatusDenied, result.Status)
+		if first == nil {
+			first = &result
+			continue
+		}
+		assert.Equal(t, *first, result)
+	}
+	require.NotNil(t, first)
+	assert.Len(t, worker.PolicyDeniedEvents(), 1)
+	assert.Equal(t, int64(1), fake.publications.Load())
+}
+
 func TestRuntimeWorkerConcurrentDuplicateWaitRespectsContextCancellation(t *testing.T) {
 	fake := newBlockingRuntimeWorkerService()
 	worker := NewRuntimeWorker(fake)
@@ -349,7 +415,7 @@ func TestRuntimeWorkerSelfUpdateDeniedWithoutMutation(t *testing.T) {
 func TestRuntimeWorkerSnapshotSanitization(t *testing.T) {
 	fake := &fakeRuntimeWorkerService{
 		containers: map[string]*domain.Container{
-			"c1": {ID: "c1", Name: "gordon-app.example.com", Image: "app:latest", ImageID: "sha256:abc", Status: "running", Ports: []int{8080}, Created: time.Unix(10, 0), Labels: map[string]string{domain.LabelDomain: "app.example.com", domain.LabelManaged: "true", domain.LabelProxyPort: "8080", "com.example.secret": "do-not-leak"}},
+			"c1": {ID: "c1", Name: "gordon-app.example.com", Image: "app:latest", ImageID: "sha256:abc", Status: "running", Ports: []int{8080}, Created: time.Unix(10, 0), Labels: map[string]string{domain.LabelDomain: "app.example.com", domain.LabelManaged: "true", domain.LabelProxyPort: "8080", domain.LabelProxyProtocol: "h2c", "com.example.secret": "do-not-leak"}},
 			"c2": {ID: "c2", Name: "gordon-down.example.com", Image: "down:latest", Status: "exited", Labels: map[string]string{domain.LabelDomain: "down.example.com", "TOKEN": "secret"}},
 		},
 		routes: []domain.RouteInfo{
@@ -373,6 +439,8 @@ func TestRuntimeWorkerSnapshotSanitization(t *testing.T) {
 	require.Len(t, snapshot.Routes, 2)
 	assert.Equal(t, domain.RouteTargetStatusReady, snapshot.Routes[0].Status)
 	assert.Equal(t, "gordon-target-app-example-com", snapshot.Routes[0].EdgeTargetAlias)
+	assert.Equal(t, "http", snapshot.Routes[0].Scheme)
+	assert.Equal(t, domain.RouteTargetProtocolH2C, snapshot.Routes[0].Protocol)
 	assert.NotContains(t, snapshot.Routes[0].EdgeTargetAlias, "localhost")
 	assert.Equal(t, domain.RouteTargetStatusUnavailable, snapshot.Routes[1].Status)
 	assert.Empty(t, snapshot.Routes[1].EdgeTargetAlias)
@@ -476,6 +544,28 @@ func (f *blockingRuntimeWorkerService) ListRoutesWithDetails(context.Context) []
 }
 func (f *blockingRuntimeWorkerService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
 	return nil, nil
+}
+
+type blockingPolicyDeniedPublisherService struct {
+	*fakeRuntimeWorkerService
+	publishEntered chan struct{}
+	release        chan struct{}
+	publications   atomic.Int64
+}
+
+func newBlockingPolicyDeniedPublisherService() *blockingPolicyDeniedPublisherService {
+	return &blockingPolicyDeniedPublisherService{
+		fakeRuntimeWorkerService: &fakeRuntimeWorkerService{},
+		publishEntered:           make(chan struct{}, 8),
+		release:                  make(chan struct{}),
+	}
+}
+
+func (f *blockingPolicyDeniedPublisherService) PublishRuntimePolicyDeniedEvent(context.Context, domain.RuntimePolicyDeniedEvent) error {
+	f.publications.Add(1)
+	f.publishEntered <- struct{}{}
+	<-f.release
+	return nil
 }
 
 type fakeRuntimeWorkerService struct {
