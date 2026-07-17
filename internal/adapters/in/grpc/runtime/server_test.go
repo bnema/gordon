@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -429,6 +430,108 @@ func TestMethodScopesRequireRuntimePermissions(t *testing.T) {
 	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_PruneImages_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeSelfUpdate, scopes[runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName])
 	assert.Equal(t, domain.ComponentScopeRuntimeDrainAck, scopes[runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_ApplyStandaloneService_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_RemoveStandaloneService_FullMethodName])
+	assert.Equal(t, domain.ComponentScopeRuntimeStatus, scopes[runtimev1.RuntimeService_ListStandaloneServiceState_FullMethodName])
+}
+
+func TestServerStandaloneServiceHandlersMapCommandsAndState(t *testing.T) {
+	requestedAt := time.Unix(10, 0).UTC()
+	manager := &fakeRuntimeStandaloneServiceManager{
+		applyResult:  testRuntimeResult(testDomainIdentity("apply-game", requestedAt)),
+		removeResult: testRuntimeResult(testDomainIdentity("remove-game", requestedAt)),
+		states: []domain.RuntimeStandaloneServiceState{{
+			Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash",
+		}},
+	}
+	server := NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1")
+	applyRequest := &runtimev1.ApplyStandaloneServiceRequest{Command: &runtimev1.ApplyStandaloneServiceCommand{
+		Identity: protoTestIdentity("apply-game", requestedAt),
+		Service: &runtimev1.StandaloneServiceSpec{
+			Name: "game", Image: "game:latest", Enabled: true,
+			Ports:     []*runtimev1.StandaloneServicePortSpec{{Name: "game", Container: 28015, Protocol: string(domain.NetworkProtocolUDP), Publish: "127.0.0.1:38015", Private: true, Public: false, TrustedCidrs: []string{"10.0.0.0/8"}}},
+			Volumes:   []*runtimev1.StandaloneServiceVolumeSpec{{Source: "game-data", Target: "/data", ReadOnly: true}},
+			Readiness: &runtimev1.StandaloneServiceReadinessSpec{Type: domain.StandaloneServiceReadinessLog, Path: "/logs/game.log", Contains: "ready", TimeoutNs: int64(time.Second), TimeoutSet: true},
+			Cleanup:   &runtimev1.StandaloneServiceCleanupSpec{PreserveVolumes: true, RemoveContainer: true},
+		},
+		ResolvedEnv: []string{"TOKEN=super-secret"},
+		ConfigHash:  "config-hash",
+	}}
+
+	applyResponse, err := server.ApplyStandaloneService(context.Background(), applyRequest)
+	require.NoError(t, err)
+	assert.Equal(t, "apply-game", applyResponse.GetResult().GetCommandId())
+	assert.Equal(t, domain.ApplyStandaloneServiceCommand{
+		RuntimeCommandIdentity: testDomainIdentity("apply-game", requestedAt),
+		Service: domain.StandaloneService{
+			Name: "game", Image: "game:latest", Enabled: true,
+			Ports:     []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015", Private: true, TrustedCIDRs: []string{"10.0.0.0/8"}}},
+			Volumes:   []domain.StandaloneServiceVolume{{Source: "game-data", Target: "/data", ReadOnly: true}},
+			Readiness: domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessLog, Path: "/logs/game.log", Contains: "ready", Timeout: time.Second, TimeoutSet: true},
+			Cleanup:   domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true},
+		},
+		ResolvedEnv: []string{"TOKEN=super-secret"}, ConfigHash: "config-hash",
+	}, manager.apply)
+	assert.NotContains(t, applyResponse.String(), "super-secret")
+
+	removeResponse, err := server.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{Identity: protoTestIdentity("remove-game", requestedAt), Name: "game"}})
+	require.NoError(t, err)
+	assert.Equal(t, "remove-game", removeResponse.GetResult().GetCommandId())
+	assert.Equal(t, domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testDomainIdentity("remove-game", requestedAt), Name: "game"}, manager.remove)
+
+	listResponse, err := server.ListStandaloneServiceState(context.Background(), &runtimev1.ListStandaloneServiceStateRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []*runtimev1.RuntimeStandaloneServiceState{{Name: "game", ContainerId: "container-1", ContainerName: "gordon-service-game", Status: string(domain.ContainerStatusRunning), ConfigHash: "config-hash"}}, listResponse.GetServices())
+}
+
+func TestServerStandaloneServiceHandlersRequireManagerAndCommand(t *testing.T) {
+	server := NewServer(&fakeRuntimeWorker{}, "runtime-1")
+
+	_, err := server.ApplyStandaloneService(context.Background(), &runtimev1.ApplyStandaloneServiceRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	_, err = server.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+	_, err = server.ListStandaloneServiceState(context.Background(), &runtimev1.ListStandaloneServiceStateRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.FailedPrecondition, status.Code(err))
+
+	configured := NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, &fakeRuntimeStandaloneServiceManager{}, "runtime-1")
+	_, err = configured.ApplyStandaloneService(context.Background(), nil)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = configured.ApplyStandaloneService(context.Background(), &runtimev1.ApplyStandaloneServiceRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = configured.RemoveStandaloneService(context.Background(), nil)
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = configured.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestServerStandaloneServiceHandlersReturnGenericManagerErrors(t *testing.T) {
+	manager := &fakeRuntimeStandaloneServiceManager{
+		applyErr:  errors.New("TOKEN=super-secret"),
+		removeErr: errors.New("TOKEN=super-secret"),
+		listErr:   errors.New("TOKEN=super-secret"),
+	}
+	server := NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1")
+
+	_, err := server.ApplyStandaloneService(context.Background(), &runtimev1.ApplyStandaloneServiceRequest{Command: &runtimev1.ApplyStandaloneServiceCommand{}})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, status.Convert(err).Message(), "super-secret")
+	_, err = server.RemoveStandaloneService(context.Background(), &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{}})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, status.Convert(err).Message(), "super-secret")
+	_, err = server.ListStandaloneServiceState(context.Background(), &runtimev1.ListStandaloneServiceStateRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, status.Convert(err).Message(), "super-secret")
 }
 
 type fakeActualStateStream struct {
@@ -512,6 +615,31 @@ func (f *fakeLogStream) SendHeader(metadata.MD) error { return nil }
 func (f *fakeLogStream) Send(chunk *runtimev1.LogChunk) error {
 	f.chunks = append(f.chunks, chunk)
 	return nil
+}
+
+type fakeRuntimeStandaloneServiceManager struct {
+	apply        domain.ApplyStandaloneServiceCommand
+	applyResult  domain.RuntimeCommandResult
+	applyErr     error
+	remove       domain.RemoveStandaloneServiceCommand
+	removeResult domain.RuntimeCommandResult
+	removeErr    error
+	states       []domain.RuntimeStandaloneServiceState
+	listErr      error
+}
+
+func (f *fakeRuntimeStandaloneServiceManager) ApplyStandaloneService(_ context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	f.apply = command
+	return f.applyResult, f.applyErr
+}
+
+func (f *fakeRuntimeStandaloneServiceManager) RemoveStandaloneService(_ context.Context, command domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	f.remove = command
+	return f.removeResult, f.removeErr
+}
+
+func (f *fakeRuntimeStandaloneServiceManager) ListStandaloneServiceState(context.Context) ([]domain.RuntimeStandaloneServiceState, error) {
+	return f.states, f.listErr
 }
 
 type fakeRuntimeWorker struct {

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net"
 	"strings"
+	"time"
 
 	commonv1 "github.com/bnema/gordon/api/gordon/common/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
@@ -29,13 +30,14 @@ const (
 // Server adapts runtime gRPC requests to the inbound RuntimeWorker boundary.
 type Server struct {
 	runtimev1.UnimplementedRuntimeServiceServer
-	worker           boundaries.RuntimeWorker
-	stateSubscriber  out.RuntimeStateSubscriber
-	logReader        out.RuntimeLogReader
-	volumeManager    out.RuntimeVolumeManager
-	imageManager     out.RuntimeImageManager
-	drainAckReceiver out.RuntimeDrainAckReceiver
-	componentID      string
+	worker                   boundaries.RuntimeWorker
+	stateSubscriber          out.RuntimeStateSubscriber
+	logReader                out.RuntimeLogReader
+	volumeManager            out.RuntimeVolumeManager
+	imageManager             out.RuntimeImageManager
+	drainAckReceiver         out.RuntimeDrainAckReceiver
+	standaloneServiceManager out.RuntimeStandaloneServiceManager
+	componentID              string
 }
 
 func NewServer(worker boundaries.RuntimeWorker, componentID string) *Server {
@@ -66,6 +68,11 @@ func NewServerWithDrainAckReceiver(worker boundaries.RuntimeWorker, drainAckRece
 	return &Server{worker: worker, drainAckReceiver: drainAckReceiver, componentID: componentID}
 }
 
+// NewServerWithStandaloneServiceManager configures the optional narrow standalone-service runtime port.
+func NewServerWithStandaloneServiceManager(worker boundaries.RuntimeWorker, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
+	return &Server{worker: worker, standaloneServiceManager: standaloneServiceManager, componentID: componentID}
+}
+
 func NewServerWithAllRuntimePorts(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, componentID string) *Server {
 	return NewServerWithAllRuntimePortsAndStateSubscriber(worker, logReader, volumeManager, imageManager, nil, componentID)
 }
@@ -78,34 +85,47 @@ func NewServerWithAllRuntimePortsAndDrainAckReceiver(worker boundaries.RuntimeWo
 	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, drainAckReceiver: drainAckReceiver, componentID: componentID}
 }
 
+// NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager configures every optional runtime port.
+func NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, drainAckReceiver out.RuntimeDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
+	server := NewServerWithAllRuntimePortsAndDrainAckReceiver(worker, logReader, volumeManager, imageManager, stateSubscriber, drainAckReceiver, componentID)
+	server.standaloneServiceManager = standaloneServiceManager
+	return server
+}
+
 func MethodScopes() map[string]domain.ComponentScope {
 	return map[string]domain.ComponentScope{
-		runtimev1.RuntimeService_ApplyCommand_FullMethodName:      domain.ComponentScopeRuntimeDeploy,
-		runtimev1.RuntimeService_WatchActualState_FullMethodName:  domain.ComponentScopeRuntimeStatus,
-		runtimev1.RuntimeService_GetHealth_FullMethodName:         domain.ComponentScopeRuntimeStatus,
-		runtimev1.RuntimeService_StreamLogs_FullMethodName:        domain.ComponentScopeRuntimeLogs,
-		runtimev1.RuntimeService_ListVolumes_FullMethodName:       domain.ComponentScopeRuntimeStatus,
-		runtimev1.RuntimeService_RemoveVolume_FullMethodName:      domain.ComponentScopeRuntimeDeploy,
-		runtimev1.RuntimeService_ListImages_FullMethodName:        domain.ComponentScopeRuntimeStatus,
-		runtimev1.RuntimeService_PruneImages_FullMethodName:       domain.ComponentScopeRuntimeDeploy,
-		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName: domain.ComponentScopeRuntimeSelfUpdate,
-		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:   domain.ComponentScopeRuntimeDrainAck,
+		runtimev1.RuntimeService_ApplyCommand_FullMethodName:               domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_WatchActualState_FullMethodName:           domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_GetHealth_FullMethodName:                  domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_StreamLogs_FullMethodName:                 domain.ComponentScopeRuntimeLogs,
+		runtimev1.RuntimeService_ListVolumes_FullMethodName:                domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_RemoveVolume_FullMethodName:               domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_ListImages_FullMethodName:                 domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_PruneImages_FullMethodName:                domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName:          domain.ComponentScopeRuntimeSelfUpdate,
+		runtimev1.RuntimeService_ApplyStandaloneService_FullMethodName:     domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_RemoveStandaloneService_FullMethodName:    domain.ComponentScopeRuntimeDeploy,
+		runtimev1.RuntimeService_ListStandaloneServiceState_FullMethodName: domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:            domain.ComponentScopeRuntimeDrainAck,
 	}
 }
 
 // MethodRoles returns the authorized caller role for every RuntimeService RPC.
 func MethodRoles() map[string]domain.ComponentRole {
 	return map[string]domain.ComponentRole{
-		runtimev1.RuntimeService_ApplyCommand_FullMethodName:      domain.ComponentRoleControl,
-		runtimev1.RuntimeService_WatchActualState_FullMethodName:  domain.ComponentRoleControl,
-		runtimev1.RuntimeService_GetHealth_FullMethodName:         domain.ComponentRoleControl,
-		runtimev1.RuntimeService_StreamLogs_FullMethodName:        domain.ComponentRoleControl,
-		runtimev1.RuntimeService_ListVolumes_FullMethodName:       domain.ComponentRoleControl,
-		runtimev1.RuntimeService_RemoveVolume_FullMethodName:      domain.ComponentRoleControl,
-		runtimev1.RuntimeService_ListImages_FullMethodName:        domain.ComponentRoleControl,
-		runtimev1.RuntimeService_PruneImages_FullMethodName:       domain.ComponentRoleControl,
-		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName: domain.ComponentRoleControl,
-		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:   domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ApplyCommand_FullMethodName:               domain.ComponentRoleControl,
+		runtimev1.RuntimeService_WatchActualState_FullMethodName:           domain.ComponentRoleControl,
+		runtimev1.RuntimeService_GetHealth_FullMethodName:                  domain.ComponentRoleControl,
+		runtimev1.RuntimeService_StreamLogs_FullMethodName:                 domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ListVolumes_FullMethodName:                domain.ComponentRoleControl,
+		runtimev1.RuntimeService_RemoveVolume_FullMethodName:               domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ListImages_FullMethodName:                 domain.ComponentRoleControl,
+		runtimev1.RuntimeService_PruneImages_FullMethodName:                domain.ComponentRoleControl,
+		runtimev1.RuntimeService_RuntimeSelfUpdate_FullMethodName:          domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ApplyStandaloneService_FullMethodName:     domain.ComponentRoleControl,
+		runtimev1.RuntimeService_RemoveStandaloneService_FullMethodName:    domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ListStandaloneServiceState_FullMethodName: domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:            domain.ComponentRoleControl,
 	}
 }
 
@@ -139,6 +159,49 @@ func (s *Server) ApplyCommand(ctx context.Context, req *runtimev1.ApplyCommandRe
 		return nil, err
 	}
 	return &runtimev1.ApplyCommandResponse{Result: protoRuntimeCommandResult(result)}, nil
+}
+
+func (s *Server) ApplyStandaloneService(ctx context.Context, req *runtimev1.ApplyStandaloneServiceRequest) (*runtimev1.ApplyStandaloneServiceResponse, error) {
+	if s.standaloneServiceManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime standalone service manager not configured")
+	}
+	if req == nil || req.Command == nil {
+		return nil, status.Error(codes.InvalidArgument, "standalone service apply command is required")
+	}
+	result, err := s.standaloneServiceManager.ApplyStandaloneService(ctx, protoApplyStandaloneService(req.Command))
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to apply standalone service")
+	}
+	return &runtimev1.ApplyStandaloneServiceResponse{Result: protoRuntimeCommandResult(result)}, nil
+}
+
+func (s *Server) RemoveStandaloneService(ctx context.Context, req *runtimev1.RemoveStandaloneServiceRequest) (*runtimev1.RemoveStandaloneServiceResponse, error) {
+	if s.standaloneServiceManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime standalone service manager not configured")
+	}
+	if req == nil || req.Command == nil {
+		return nil, status.Error(codes.InvalidArgument, "standalone service remove command is required")
+	}
+	result, err := s.standaloneServiceManager.RemoveStandaloneService(ctx, protoRemoveStandaloneService(req.Command))
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to remove standalone service")
+	}
+	return &runtimev1.RemoveStandaloneServiceResponse{Result: protoRuntimeCommandResult(result)}, nil
+}
+
+func (s *Server) ListStandaloneServiceState(ctx context.Context, _ *runtimev1.ListStandaloneServiceStateRequest) (*runtimev1.ListStandaloneServiceStateResponse, error) {
+	if s.standaloneServiceManager == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime standalone service manager not configured")
+	}
+	states, err := s.standaloneServiceManager.ListStandaloneServiceState(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Internal, "failed to list standalone service state")
+	}
+	services := make([]*runtimev1.RuntimeStandaloneServiceState, 0, len(states))
+	for _, service := range states {
+		services = append(services, protoStandaloneServiceState(service))
+	}
+	return &runtimev1.ListStandaloneServiceStateResponse{Services: services}, nil
 }
 
 func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSelfUpdateRequest) (*runtimev1.ApplyCommandResponse, error) {
@@ -404,6 +467,64 @@ func protoReconcile(command *runtimev1.ReconcileRuntimeCommand) domain.Reconcile
 		routes = append(routes, domain.Route{Domain: route.Domain, Image: route.Image, Env: route.Env})
 	}
 	return domain.ReconcileRuntimeCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), Reason: command.Reason, ExpectedRouteCount: int(command.ExpectedRouteCount), DesiredStateVersion: command.DesiredStateVersion, DesiredRoutes: routes}
+}
+
+func protoApplyStandaloneService(command *runtimev1.ApplyStandaloneServiceCommand) domain.ApplyStandaloneServiceCommand {
+	if command == nil {
+		return domain.ApplyStandaloneServiceCommand{}
+	}
+	return domain.ApplyStandaloneServiceCommand{
+		RuntimeCommandIdentity: protoIdentity(command.Identity),
+		Service:                protoStandaloneService(command.Service),
+		ResolvedEnv:            append([]string(nil), command.ResolvedEnv...),
+		ConfigHash:             command.ConfigHash,
+	}
+}
+
+func protoRemoveStandaloneService(command *runtimev1.RemoveStandaloneServiceCommand) domain.RemoveStandaloneServiceCommand {
+	if command == nil {
+		return domain.RemoveStandaloneServiceCommand{}
+	}
+	return domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), Name: command.Name}
+}
+
+func protoStandaloneService(service *runtimev1.StandaloneServiceSpec) domain.StandaloneService {
+	if service == nil {
+		return domain.StandaloneService{}
+	}
+	out := domain.StandaloneService{
+		Name:    service.Name,
+		Image:   service.Image,
+		Enabled: service.Enabled,
+		Readiness: domain.StandaloneServiceReadiness{
+			Type:       service.GetReadiness().GetType(),
+			Path:       service.GetReadiness().GetPath(),
+			Contains:   service.GetReadiness().GetContains(),
+			Timeout:    time.Duration(service.GetReadiness().GetTimeoutNs()),
+			TimeoutSet: service.GetReadiness().GetTimeoutSet(),
+		},
+		Cleanup: domain.StandaloneServiceCleanup{
+			PreserveVolumes: service.GetCleanup().GetPreserveVolumes(),
+			RemoveContainer: service.GetCleanup().GetRemoveContainer(),
+		},
+	}
+	for _, port := range service.Ports {
+		if port == nil {
+			continue
+		}
+		out.Ports = append(out.Ports, domain.StandaloneServicePort{Name: port.Name, Container: int(port.Container), Protocol: domain.NetworkProtocol(port.Protocol), Publish: port.Publish, Private: port.Private, Public: port.Public, TrustedCIDRs: append([]string(nil), port.TrustedCidrs...)})
+	}
+	for _, volume := range service.Volumes {
+		if volume == nil {
+			continue
+		}
+		out.Volumes = append(out.Volumes, domain.StandaloneServiceVolume{Source: volume.Source, Target: volume.Target, ReadOnly: volume.ReadOnly})
+	}
+	return out
+}
+
+func protoStandaloneServiceState(service domain.RuntimeStandaloneServiceState) *runtimev1.RuntimeStandaloneServiceState {
+	return &runtimev1.RuntimeStandaloneServiceState{Name: service.Name, ContainerId: service.ContainerID, ContainerName: service.ContainerName, Status: string(service.Status), ConfigHash: service.ConfigHash}
 }
 
 func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.RuntimeSelfUpdateCommand {
