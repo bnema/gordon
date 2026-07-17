@@ -5,9 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,6 +37,7 @@ type Service struct {
 	runtime          out.ContainerRuntime
 	containerSvc     in.ContainerService
 	configSvc        in.ConfigService
+	snapshotProvider out.RouteSnapshotProvider
 	config           Config
 	targets          map[string]*domain.ProxyTarget
 	mu               sync.RWMutex
@@ -59,6 +58,9 @@ func NewService(
 	configSvc in.ConfigService,
 	config Config,
 ) *Service {
+	// Compatibility constructor retained for callers that still use the
+	// pre-snapshot cache/discovery API. Production must use
+	// NewServiceWithSnapshotProvider with an explicit provider.
 	return &Service{
 		runtime:      runtime,
 		containerSvc: containerSvc,
@@ -66,6 +68,17 @@ func NewService(
 		config:       config,
 		targets:      make(map[string]*domain.ProxyTarget),
 		inFlight:     make(map[string]int),
+	}
+}
+
+// NewServiceWithSnapshotProvider creates the snapshot-first proxy service.
+func NewServiceWithSnapshotProvider(provider out.RouteSnapshotProvider, configSvc in.ConfigService, config Config) *Service {
+	return &Service{
+		configSvc:        configSvc,
+		snapshotProvider: provider,
+		config:           config,
+		targets:          make(map[string]*domain.ProxyTarget),
+		inFlight:         make(map[string]int),
 	}
 }
 
@@ -93,6 +106,10 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 		"domain":              domainName,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	if s.snapshotProvider != nil {
+		return s.getSnapshotTarget(ctx, domainName)
+	}
 
 	// Check cache first
 	s.mu.RLock()
@@ -182,6 +199,37 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	s.mu.Unlock()
 
 	return target, nil
+}
+
+func (s *Service) getSnapshotTarget(ctx context.Context, domainName string) (*domain.ProxyTarget, error) {
+	snapshot, err := s.snapshotProvider.CurrentSnapshot(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get route snapshot: %w", err)
+	}
+	if err := snapshot.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid route snapshot: %w", err)
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.CanonicalDomain != domainName {
+			continue
+		}
+		if entry.Unavailable() {
+			return nil, domain.ErrNoTargetAvailable
+		}
+		target, err := entry.ToProxyTarget()
+		if err != nil {
+			return nil, fmt.Errorf("convert route snapshot target: %w", err)
+		}
+		return &target, nil
+	}
+	if snapshot.RegistryForwardingTarget != nil && snapshot.RegistryForwardingTarget.CanonicalDomain == domainName {
+		target, err := snapshot.RegistryForwardingTarget.ToProxyTarget()
+		if err != nil {
+			return nil, fmt.Errorf("convert registry snapshot target: %w", err)
+		}
+		return &target, nil
+	}
+	return nil, domain.ErrNoTargetAvailable
 }
 
 // resolveExternalRoute resolves an external route target address into a ProxyTarget,
@@ -332,6 +380,9 @@ func (s *Service) UpdateConfig(config Config) {
 	s.mu.Lock()
 	s.config = config
 	s.mu.Unlock()
+	if provider, ok := s.snapshotProvider.(*LocalSnapshotProvider); ok {
+		provider.UpdateConfig(config)
+	}
 }
 
 // IsRegistryDomain returns true if the host matches the configured registry domain.
@@ -442,31 +493,5 @@ func (s *Service) notifyDrainRegistryWait() {
 }
 
 func (s *Service) isRunningInContainer() bool {
-	// Check for /.dockerenv
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-
-	// Check cgroup for container indicators
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		content := string(data)
-		if strings.Contains(content, "docker") ||
-			strings.Contains(content, "containerd") ||
-			strings.Contains(content, "podman") {
-			return true
-		}
-	}
-
-	// NOTE: Hostname length check (12 or 64 chars) was removed because it produced
-	// false positives on hosts with short hostnames (e.g., "web-server-1" = 12 chars),
-	// which would cause the proxy to use container network IPs instead of host port mappings.
-
-	// Check environment variables
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
-		os.Getenv("DOCKER_CONTAINER") != "" ||
-		os.Getenv("container") != "" {
-		return true
-	}
-
-	return false
+	return runningInContainer()
 }

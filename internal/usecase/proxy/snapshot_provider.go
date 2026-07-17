@@ -1,0 +1,296 @@
+package proxy
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
+)
+
+// LocalSnapshotProvider derives a routing-only snapshot from the local config
+// and managed container state. It deliberately never publishes container IDs,
+// image metadata, labels, environment, or runtime paths.
+type LocalSnapshotProvider struct {
+	runtime      out.ContainerRuntime
+	containerSvc in.ContainerService
+	configSvc    in.ConfigService
+	config       Config
+	inContainer  func() bool
+
+	mu      sync.Mutex
+	last    domain.RouteTargetSnapshot
+	hasLast bool
+}
+
+var _ out.RouteSnapshotProvider = (*LocalSnapshotProvider)(nil)
+
+// NewLocalSnapshotProvider creates the monolith snapshot source. Loopback
+// endpoints are intentional here; split-edge reachability is validated later.
+func NewLocalSnapshotProvider(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config Config) *LocalSnapshotProvider {
+	return &LocalSnapshotProvider{
+		runtime: runtime, containerSvc: containerSvc, configSvc: configSvc, config: config,
+		inContainer: runningInContainer,
+	}
+}
+
+// CurrentSnapshot returns a validated, independent snapshot. Generation changes
+// only when routing-significant content changes.
+func (p *LocalSnapshotProvider) CurrentSnapshot(ctx context.Context) (domain.RouteTargetSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	candidate, err := p.buildSnapshot(ctx, p.nextGeneration())
+	if err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+	if p.hasLast && sameRoutingContent(candidate, p.last) {
+		return p.last.Clone(), nil
+	}
+	if err := candidate.Validate(); err != nil {
+		return domain.RouteTargetSnapshot{}, fmt.Errorf("validate local route snapshot: %w", err)
+	}
+	p.last = candidate.Clone()
+	p.hasLast = true
+	return candidate.Clone(), nil
+}
+
+// UpdateConfig applies proxy configuration used by future snapshots.
+func (p *LocalSnapshotProvider) UpdateConfig(config Config) {
+	p.mu.Lock()
+	p.config = config
+	p.mu.Unlock()
+}
+
+func (p *LocalSnapshotProvider) nextGeneration() domain.RouteTargetGeneration {
+	if !p.hasLast {
+		return 1
+	}
+	return p.last.Generation + 1
+}
+
+func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation domain.RouteTargetGeneration) (domain.RouteTargetSnapshot, error) {
+	if p.configSvc == nil {
+		return domain.RouteTargetSnapshot{}, fmt.Errorf("local snapshot provider config service is required")
+	}
+	routes := p.configSvc.GetRoutes(ctx)
+	if err := ctx.Err(); err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+	externalRoutes := p.configSvc.GetExternalRoutes()
+	if err := ctx.Err(); err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+
+	managed, err := canonicalManagedRoutes(routes)
+	if err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+	external, err := canonicalExternalRoutes(externalRoutes)
+	if err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+
+	registryDomain, registryEnabled := domain.CanonicalRouteDomain(p.config.RegistryDomain)
+	entries, err := p.snapshotEntries(ctx, managed, external, registryDomain, registryEnabled, generation)
+	if err != nil {
+		return domain.RouteTargetSnapshot{}, err
+	}
+
+	snapshot := domain.RouteTargetSnapshot{Generation: generation, Entries: entries}
+	if registryEnabled {
+		registry, err := registrySnapshotEntry(registryDomain, p.config.RegistryPort, generation)
+		if err != nil {
+			return domain.RouteTargetSnapshot{}, err
+		}
+		snapshot.RegistryForwardingTarget = &registry
+	}
+	return snapshot, nil
+}
+
+func (p *LocalSnapshotProvider) snapshotEntries(
+	ctx context.Context,
+	managed []localManagedRoute,
+	external map[string]string,
+	registryDomain string,
+	registryEnabled bool,
+	generation domain.RouteTargetGeneration,
+) ([]domain.RouteTargetEntry, error) {
+	entries := make([]domain.RouteTargetEntry, 0, len(managed)+len(external))
+	for _, route := range managed {
+		if registryEnabled && route.Domain == registryDomain {
+			continue
+		}
+		if _, externalOverride := external[route.Domain]; externalOverride {
+			continue
+		}
+		entry, err := p.managedEntry(ctx, route, generation)
+		if err != nil {
+			return nil, fmt.Errorf("resolve managed route %s: %w", route.Domain, err)
+		}
+		entries = append(entries, entry)
+	}
+	for domainName, targetAddr := range external {
+		if registryEnabled && domainName == registryDomain {
+			continue
+		}
+		entry, err := externalSnapshotEntry(domainName, targetAddr, generation)
+		if err != nil {
+			return nil, fmt.Errorf("resolve external route %s: %w", domainName, err)
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].CanonicalDomain < entries[j].CanonicalDomain })
+	return entries, nil
+}
+
+type localManagedRoute struct {
+	Domain string
+	Image  string
+}
+
+func canonicalManagedRoutes(routes []domain.Route) ([]localManagedRoute, error) {
+	byDomain := make(map[string]string, len(routes))
+	for _, route := range routes {
+		domainName, ok := domain.CanonicalRouteDomain(route.Domain)
+		if !ok {
+			return nil, fmt.Errorf("%w: configured route domain %q", domain.ErrRouteDomainInvalid, route.Domain)
+		}
+		if _, exists := byDomain[domainName]; exists {
+			return nil, fmt.Errorf("duplicate configured route domain %q", domainName)
+		}
+		byDomain[domainName] = route.Image
+	}
+	result := make([]localManagedRoute, 0, len(byDomain))
+	for domainName, image := range byDomain {
+		result = append(result, localManagedRoute{Domain: domainName, Image: image})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Domain < result[j].Domain })
+	return result, nil
+}
+
+func canonicalExternalRoutes(routes map[string]string) (map[string]string, error) {
+	result := make(map[string]string, len(routes))
+	for rawDomain, target := range routes {
+		domainName, ok := domain.CanonicalRouteDomain(rawDomain)
+		if !ok {
+			return nil, fmt.Errorf("%w: configured external route domain %q", domain.ErrRouteDomainInvalid, rawDomain)
+		}
+		if _, exists := result[domainName]; exists {
+			return nil, fmt.Errorf("duplicate configured external route domain %q", domainName)
+		}
+		result[domainName] = target
+	}
+	return result, nil
+}
+
+func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localManagedRoute, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+	if p.containerSvc == nil || p.runtime == nil {
+		return domain.RouteTargetEntry{}, fmt.Errorf("local snapshot provider managed-route dependencies are required")
+	}
+	container, found := p.containerSvc.Get(ctx, route.Domain)
+	if err := ctx.Err(); err != nil {
+		return domain.RouteTargetEntry{}, err
+	}
+	if !found || container == nil {
+		return domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonNoTarget, generation)
+	}
+	if container.Status != "" && !strings.EqualFold(container.Status, string(domain.ContainerStatusRunning)) {
+		return domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonStarting, generation)
+	}
+	image := container.Image
+	if image == "" {
+		image = route.Image
+	}
+	metadata, err := resolveTargetMetadata(ctx, p.runtime, image)
+	if err != nil {
+		return domain.RouteTargetEntry{}, err
+	}
+	protocol := domain.RouteTargetProtocolHTTP1
+	if metadata.Protocol == string(domain.RouteTargetProtocolH2C) {
+		protocol = domain.RouteTargetProtocolH2C
+	}
+	if p.inContainer() {
+		// The deployment installs this stable alias on the route network. It is
+		// independent of the backing container identity during replacement.
+		return domain.NewReadyRouteTargetEntry(route.Domain, targetAlias(route.Domain), metadata.Port, "http", protocol, generation)
+	}
+	hostPort, err := p.runtime.GetContainerPort(ctx, container.ID, metadata.Port)
+	if err != nil {
+		return domain.RouteTargetEntry{}, fmt.Errorf("get host port mapping: %w", err)
+	}
+	return domain.NewReadyRouteTargetEntry(route.Domain, "localhost", hostPort, "http", protocol, generation)
+}
+
+func targetAlias(domainName string) string {
+	return "gordon-target-" + strings.ReplaceAll(strings.ToLower(domainName), ".", "-")
+}
+
+func runningInContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "docker") || strings.Contains(content, "containerd") || strings.Contains(content, "podman") {
+			return true
+		}
+	}
+	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("DOCKER_CONTAINER") != "" || os.Getenv("container") != ""
+}
+
+func externalSnapshotEntry(domainName, targetAddr string, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+	host, portText, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		return domain.RouteTargetEntry{}, fmt.Errorf("invalid external route target: %w", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return domain.RouteTargetEntry{}, fmt.Errorf("invalid port in external route %q", targetAddr)
+	}
+	resolvedHost, err := ResolveAndValidateHost(host)
+	if err != nil {
+		return domain.RouteTargetEntry{}, err
+	}
+	// External entries always retain the configured endpoint host. For an IP
+	// literal this is equivalent to the dial host; for DNS it preserves virtual
+	// host routing while the resolved address remains pinned for dialing.
+	return domain.NewExternalReadyRouteTargetEntry(domainName, resolvedHost, host, port, "http", domain.RouteTargetProtocolHTTP1, generation)
+}
+
+func registrySnapshotEntry(registryDomain string, registryPort int, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+	if registryPort < 1 || registryPort > 65535 {
+		return domain.RouteTargetEntry{}, fmt.Errorf("invalid registry forwarding port %d", registryPort)
+	}
+	return domain.NewReadyRouteTargetEntry(registryDomain, "localhost", registryPort, "http", domain.RouteTargetProtocolHTTP1, generation)
+}
+
+func sameRoutingContent(left, right domain.RouteTargetSnapshot) bool {
+	left = left.Clone()
+	right = right.Clone()
+	left.Generation = 0
+	right.Generation = 0
+	for index := range left.Entries {
+		left.Entries[index].Generation = 0
+	}
+	for index := range right.Entries {
+		right.Entries[index].Generation = 0
+	}
+	if left.RegistryForwardingTarget != nil {
+		left.RegistryForwardingTarget.Generation = 0
+	}
+	if right.RegistryForwardingTarget != nil {
+		right.RegistryForwardingTarget.Generation = 0
+	}
+	return fmt.Sprintf("%#v", left) == fmt.Sprintf("%#v", right)
+}

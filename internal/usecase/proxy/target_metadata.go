@@ -7,6 +7,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -21,10 +22,14 @@ type TargetMetadata struct {
 // alias, then falls back to the first exposed port. Protocol is read from
 // gordon.proxy.protocol (only "h2c" is recognized; unknown values are ignored).
 func (s *Service) resolveTargetMetadata(ctx context.Context, imageRef string) (TargetMetadata, error) {
+	return resolveTargetMetadata(ctx, s.runtime, imageRef)
+}
+
+func resolveTargetMetadata(ctx context.Context, runtime out.ContainerRuntime, imageRef string) (TargetMetadata, error) {
 	log := zerowrap.FromCtx(ctx)
 	log.Debug().Str("image_ref", imageRef).Msg("resolving target metadata for image")
 
-	labels, err := s.runtime.GetImageLabels(ctx, imageRef)
+	labels, err := runtime.GetImageLabels(ctx, imageRef)
 	if err != nil {
 		log.Debug().Err(err).Msg("failed to get image labels, falling back to exposed ports")
 		labels = nil
@@ -46,7 +51,7 @@ func (s *Service) resolveTargetMetadata(ctx context.Context, imageRef string) (T
 	}
 
 	if port == 0 {
-		exposedPorts, portsErr := s.runtime.GetImageExposedPorts(ctx, imageRef)
+		exposedPorts, portsErr := runtime.GetImageExposedPorts(ctx, imageRef)
 		if portsErr != nil {
 			return TargetMetadata{}, fmt.Errorf("failed to get exposed ports for image %s: %w", imageRef, portsErr)
 		}
