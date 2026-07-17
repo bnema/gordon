@@ -2,13 +2,40 @@ package compatoldnew
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestStageAdminAPISideHoldsDistinctPortsUntilReleased(t *testing.T) {
+	setup, err := stageAdminAPISide(t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, setup.releaseReservations())
+		require.NoError(t, os.RemoveAll(setup.fixture.Root))
+	})
+
+	require.NotEqual(t, setup.port, setup.proxyPort)
+	for _, port := range []int{setup.port, setup.proxyPort} {
+		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		require.Error(t, err)
+		if listener != nil {
+			require.NoError(t, listener.Close())
+		}
+	}
+
+	require.NoError(t, setup.releaseReservations())
+	for _, port := range []int{setup.port, setup.proxyPort} {
+		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		require.NoError(t, err)
+		require.NoError(t, listener.Close())
+	}
+}
 
 func TestCompatibilityAdminAPIPreflight(t *testing.T) {
 	err := AdminAPIPreflight(context.Background())

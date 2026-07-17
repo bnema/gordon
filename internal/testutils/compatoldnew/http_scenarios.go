@@ -3,6 +3,7 @@ package compatoldnew
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -118,6 +119,9 @@ func RunCompatibilityAdminAuthAndRouteCRUD(ctx context.Context, repoRoot, artifa
 	if newErr != nil {
 		new = adminAPICaptureFailure(SideNew, newErr)
 	}
+	// Do not allowlist API differences for custom baselines: a deliberately
+	// pre-fix baseline such as 420070bc^ must report its delete behavior drift.
+	// The designated origin/main baseline passes this exact comparison.
 	return CompareSideResultsWithMetadata(old, new, nil, artifactDir, ReportMetadata{
 		BaselineCommit:  binaries.Old.Commit,
 		CandidateCommit: binaries.New.Commit,
@@ -133,19 +137,71 @@ func adminAPICaptureFailure(side string, validationErr error) SideResult {
 	}
 }
 
+const adminAPIStartupAttempts = 2
+
 type adminAPISide struct {
-	fixture   SideFixture
-	port      int
-	proxyPort int
-	token     string
+	fixture      SideFixture
+	port         int
+	proxyPort    int
+	reservations *adminAPIPortReservations
+	token        string
 }
 
-func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (_ SideResult, err error) {
+type adminAPIPortReservations struct {
+	registry net.Listener
+	proxy    net.Listener
+}
+
+func (r *adminAPIPortReservations) close() error {
+	if r == nil {
+		return nil
+	}
+	listeners := []net.Listener{r.registry, r.proxy}
+	r.registry, r.proxy = nil, nil
+	var errs []error
+	for _, listener := range listeners {
+		if listener != nil {
+			errs = append(errs, listener.Close())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (setup *adminAPISide) releaseReservations() error {
+	if setup == nil {
+		return nil
+	}
+	return setup.reservations.close()
+}
+
+func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (SideResult, error) {
+	var lastErr error
+	for attempt := 1; attempt <= adminAPIStartupAttempts; attempt++ {
+		result, err := runAdminAPISideAttempt(ctx, side, binaryPath, parent)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if attempt == adminAPIStartupAttempts || !isAdminAPIBindRace(err) {
+			return SideResult{}, err
+		}
+	}
+	return SideResult{}, lastErr
+}
+
+// runAdminAPISideAttempt keeps both listener reservations while writing config
+// and generating credentials, then releases them immediately before Start.
+func runAdminAPISideAttempt(ctx context.Context, side, binaryPath, parent string) (_ SideResult, err error) {
 	setup, err := stageAdminAPISide(parent)
 	if err != nil {
 		return SideResult{}, err
 	}
 	defer os.RemoveAll(setup.fixture.Root)
+	defer func() {
+		if releaseErr := setup.releaseReservations(); releaseErr != nil && err == nil {
+			err = fmt.Errorf("release admin API port reservations: %w", releaseErr)
+		}
+	}()
 
 	setup.token, err = generateAdminToken(ctx, binaryPath, setup.fixture, side)
 	if err != nil {
@@ -163,6 +219,9 @@ func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (_ Si
 	serveArgs := []string{"serve", "--config", setup.fixture.ConfigPath}
 	if side == SideNew {
 		serveArgs = []string{"serve", "--role", "monolith", "--config", setup.fixture.ConfigPath}
+	}
+	if err := setup.releaseReservations(); err != nil {
+		return SideResult{}, fmt.Errorf("release admin API port reservations before start: %w", err)
 	}
 	if err := instance.Start(ctx, serveArgs...); err != nil {
 		return SideResult{}, fmt.Errorf("admin API %s start: %w", side, err)
@@ -188,21 +247,29 @@ func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (_ Si
 	return SideResult{Side: side, Artifact: artifact, ValidationError: validationErr}, nil
 }
 
+func isAdminAPIBindRace(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "address already in use")
+}
+
 func stageAdminAPISide(parent string) (adminAPISide, error) {
 	fixture, err := StageSideFixture(parent, filepath.Join(FixtureRoot(), "configs", "minimal.toml"))
 	if err != nil {
 		return adminAPISide{}, err
 	}
-	port, err := reserveTCPPort()
+	reservations, err := reserveAdminAPIPorts()
 	if err != nil {
 		_ = os.RemoveAll(fixture.Root)
 		return adminAPISide{}, err
 	}
-	proxyPort, err := reserveTCPPort()
-	if err != nil {
+	cleanup := func(stageErr error) (adminAPISide, error) {
+		if closeErr := reservations.close(); closeErr != nil {
+			stageErr = errors.Join(stageErr, fmt.Errorf("release admin API port reservations: %w", closeErr))
+		}
 		_ = os.RemoveAll(fixture.Root)
-		return adminAPISide{}, err
+		return adminAPISide{}, stageErr
 	}
+	port := reservations.registry.Addr().(*net.TCPAddr).Port
+	proxyPort := reservations.proxy.Addr().(*net.TCPAddr).Port
 	// #nosec G101 -- this isolated unsafe-backend fixture deliberately needs a deterministic test secret.
 	secret := "compat-admin-api-test-only-secret-0123456789"
 	config := fmt.Sprintf(`[server]
@@ -233,28 +300,34 @@ level = "warn"
 format = "console"
 `, port, fixture.DataDir, proxyPort, secret)
 	if err := os.WriteFile(fixture.ConfigPath, []byte(config), 0o600); err != nil {
-		_ = os.RemoveAll(fixture.Root)
-		return adminAPISide{}, fmt.Errorf("write admin API config: %w", err)
+		return cleanup(fmt.Errorf("write admin API config: %w", err))
 	}
 	secretPath := filepath.Join(fixture.DataDir, "secrets", secret)
 	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
-		_ = os.RemoveAll(fixture.Root)
-		return adminAPISide{}, fmt.Errorf("create unsafe test secret directory: %w", err)
+		return cleanup(fmt.Errorf("create unsafe test secret directory: %w", err))
 	}
 	if err := os.WriteFile(secretPath, []byte(secret), 0o600); err != nil {
-		_ = os.RemoveAll(fixture.Root)
-		return adminAPISide{}, fmt.Errorf("write unsafe test secret: %w", err)
+		return cleanup(fmt.Errorf("write unsafe test secret: %w", err))
 	}
-	return adminAPISide{fixture: fixture, port: port, proxyPort: proxyPort}, nil
+	return adminAPISide{fixture: fixture, port: port, proxyPort: proxyPort, reservations: reservations}, nil
 }
 
-func reserveTCPPort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+// reserveAdminAPIPorts holds both listeners concurrently so the registry and
+// proxy ports stay distinct until the server is ready to claim them.
+func reserveAdminAPIPorts() (*adminAPIPortReservations, error) {
+	registry, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return 0, fmt.Errorf("reserve admin API port: %w", err)
+		return nil, fmt.Errorf("reserve admin API registry port: %w", err)
 	}
-	defer listener.Close()
-	return listener.Addr().(*net.TCPAddr).Port, nil
+	proxy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		closeErr := registry.Close()
+		if closeErr != nil {
+			return nil, errors.Join(fmt.Errorf("reserve admin API proxy port: %w", err), fmt.Errorf("release admin API registry reservation: %w", closeErr))
+		}
+		return nil, fmt.Errorf("reserve admin API proxy port: %w", err)
+	}
+	return &adminAPIPortReservations{registry: registry, proxy: proxy}, nil
 }
 
 func adminAPIEnvironment(fixture SideFixture) []string {

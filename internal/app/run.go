@@ -694,13 +694,17 @@ func (si *serviceInit) initHandlers() {
 		PublicTLSSvc:    si.svc.publicTLSSvc,
 		TrafficSvc:      si.svc.trafficManager,
 	}
-	// Do not convert a nil concrete facade to a non-nil interface. Monolith
-	// mode intentionally has no runtime-control facade and must use its local
-	// container cleanup path for route deletion.
-	if si.svc.runtimeControl != nil {
-		handlerDeps.RuntimeControl = si.svc.runtimeControl
-	}
+	assignRuntimeControlHandlerDep(&handlerDeps, si.svc.runtimeControl)
 	si.svc.adminHandler = admin.NewHandler(handlerDeps)
+}
+
+// assignRuntimeControlHandlerDep avoids converting a nil concrete facade to a
+// non-nil interface. Monolith mode intentionally has no runtime-control facade
+// and must use its local container cleanup path for route deletion.
+func assignRuntimeControlHandlerDep(deps *admin.HandlerDeps, runtimeControlSvc *runtimecontrol.Service) {
+	if deps != nil && runtimeControlSvc != nil {
+		deps.RuntimeControl = runtimeControlSvc
+	}
 }
 
 // standaloneServiceManagerForServices selects the narrow standalone-service runtime port.
