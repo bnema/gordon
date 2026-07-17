@@ -147,11 +147,8 @@ func TestClientImageManagerRoundTrip(t *testing.T) {
 
 func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
-	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
-	receiver.EXPECT().
-		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
-		Return(nil)
-	conn := newRuntimeTestConn(t, inruntime.NewServerWithDrainAckReceiver(worker, receiver, "runtime-1"))
+	receiver := &recordingRouteDrainAckReceiver{}
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithRouteDrainAckReceiver(worker, receiver, "runtime-1"))
 	client := NewClient(conn)
 
 	result, err := client.SelfUpdateRuntime(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-self"), TargetComponentID: "runtime-1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1"})
@@ -163,7 +160,7 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	version, err := client.RuntimeVersion(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, "runtime service ready", version)
-	require.NoError(t, client.AcknowledgeRuntimeDrain(context.Background(), "app.example.com", 7, "edge-1", "gordon-target-app-example-com"))
+	require.NoError(t, client.AcknowledgeRouteDrain(context.Background(), domain.RouteDrainAck{RouteDrainState: domain.RouteDrainState{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: testRouteDrainKey, AcknowledgedAt: time.Unix(1, 0).UTC()}, Status: domain.RouteDrainStatusAcknowledged}))
 }
 
 func TestClientPreservesContextCancellation(t *testing.T) {
@@ -385,4 +382,13 @@ func testApplyStandaloneServiceCommand() domain.ApplyStandaloneServiceCommand {
 		ResolvedEnv: []string{"TOKEN=super-secret"},
 		ConfigHash:  "config-hash",
 	}
+}
+
+const testRouteDrainKey domain.RouteTargetKey = "rtk_abcdefghijklmnopqrstuvwxyz234567"
+
+type recordingRouteDrainAckReceiver struct{ acks []domain.RouteDrainAck }
+
+func (r *recordingRouteDrainAckReceiver) AcknowledgeRouteDrain(_ context.Context, ack domain.RouteDrainAck) error {
+	r.acks = append(r.acks, ack)
+	return nil
 }

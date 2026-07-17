@@ -32,7 +32,7 @@ func TestRouteSnapshotTransportRoundTripAndPrivacy(t *testing.T) {
 
 	assertProtoFields(t, (&edgev1.RouteTargetSnapshot{}).ProtoReflect().Descriptor(), "generation", "entries", "registry_forwarding_target")
 	assertProtoFields(t, (&edgev1.RouteTargetEntry{}).ProtoReflect().Descriptor(), "canonical_domain", "target_host", "target_port", "scheme", "protocol", "status", "unavailable_reason", "generation", "upstream_host", "attachment", "target_key")
-	assertProtoFields(t, (&edgev1.ReportDrainStateRequest{}).ProtoReflect().Descriptor(), "generation", "target_key", "in_flight", "acknowledged_at", "timeout_reason")
+	assertProtoFields(t, (&edgev1.ReportDrainStateRequest{}).ProtoReflect().Descriptor(), "canonical_domain", "transition_generation", "old_target_key", "in_flight", "acknowledged_at", "timeout_reason")
 }
 
 func TestRouteSnapshotFromProtoRejectsNonCanonicalAndLoopbackTargets(t *testing.T) {
@@ -103,16 +103,16 @@ func TestServerReportDrainStateValidatesAndRelaysOpaqueData(t *testing.T) {
 	ctx := grpctest.AuthenticatedContext(context.Background(), grpctest.LocalComponentToken)
 	key := adapterTestSnapshot(t, 1).Entries[0].TargetKey
 
-	_, err := client.ReportDrainState(ctx, &edgev1.ReportDrainStateRequest{Generation: 3, TargetKey: string(key), InFlight: 2, AcknowledgedAt: timestamppb.New(time.Unix(9, 0).UTC()), TimeoutReason: "deadline"})
+	_, err := client.ReportDrainState(ctx, &edgev1.ReportDrainStateRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 3, OldTargetKey: string(key), InFlight: 2, AcknowledgedAt: timestamppb.New(time.Unix(9, 0).UTC()), TimeoutReason: edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE})
 	require.NoError(t, err)
-	assert.Equal(t, domain.RouteTargetGeneration(3), receiver.state.Generation)
-	assert.Equal(t, key, receiver.state.TargetKey)
+	assert.Equal(t, domain.RouteTargetGeneration(3), receiver.state.TransitionGeneration)
+	assert.Equal(t, key, receiver.state.OldTargetKey)
 	assert.Equal(t, uint64(2), receiver.state.InFlight)
 	identity, ok := interceptors.ComponentIdentityFromContext(receiver.ctx)
 	require.True(t, ok)
 	assert.Equal(t, domain.ComponentRoleEdge, identity.Role)
 
-	_, err = client.ReportDrainState(ctx, &edgev1.ReportDrainStateRequest{Generation: 3, TargetKey: "container-id"})
+	_, err = client.ReportDrainState(ctx, &edgev1.ReportDrainStateRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 3, OldTargetKey: "container-id"})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 	assert.Equal(t, 1, receiver.calls)
@@ -121,7 +121,7 @@ func TestServerReportDrainStateValidatesAndRelaysOpaqueData(t *testing.T) {
 func TestServerReportDrainStateRequiresDrainScope(t *testing.T) {
 	client := authenticatedClient(t, NewServerWithDrainStateReceiver(usecase.NewSnapshotHub(), &recordingDrainReceiver{}), domain.ComponentRoleEdge, domain.ComponentScopeRoutesWatch)
 	key := adapterTestSnapshot(t, 1).Entries[0].TargetKey
-	_, err := client.ReportDrainState(grpctest.AuthenticatedContext(context.Background(), grpctest.LocalComponentToken), &edgev1.ReportDrainStateRequest{Generation: 1, TargetKey: string(key)})
+	_, err := client.ReportDrainState(grpctest.AuthenticatedContext(context.Background(), grpctest.LocalComponentToken), &edgev1.ReportDrainStateRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 1, OldTargetKey: string(key)})
 	require.Error(t, err)
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }

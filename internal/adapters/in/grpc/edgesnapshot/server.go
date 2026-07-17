@@ -5,9 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
+	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	"google.golang.org/grpc/codes"
@@ -112,7 +112,15 @@ func (s *Server) ReportDrainState(ctx context.Context, request *edgev1.ReportDra
 	if s.drainReceiver == nil {
 		return nil, status.Error(codes.FailedPrecondition, "drain state receiver not configured")
 	}
-	if err := s.drainReceiver.ReportDrainState(ctx, state); err != nil {
+	if receiver, ok := s.drainReceiver.(edgesnapshot.AuthenticatedDrainStateReceiver); ok {
+		identity, authenticated := interceptors.ComponentIdentityFromContext(ctx)
+		if !authenticated {
+			return nil, status.Error(codes.Unauthenticated, "component identity required")
+		}
+		if err := receiver.ReportAuthenticatedDrainState(ctx, identity.Name, state); err != nil {
+			return nil, relayError(err)
+		}
+	} else if err := s.drainReceiver.ReportDrainState(ctx, state); err != nil {
 		return nil, relayError(err)
 	}
 	return &edgev1.ReportDrainStateResponse{}, nil
@@ -129,6 +137,12 @@ func sourceError(err error) error {
 }
 
 func relayError(err error) error {
+	if errors.Is(err, edgesnapshot.ErrDrainUnexpected) {
+		return status.Error(codes.PermissionDenied, "edge is not expected to report drains")
+	}
+	if errors.Is(err, edgesnapshot.ErrDrainUnknown) || errors.Is(err, edgesnapshot.ErrDrainStale) || errors.Is(err, edgesnapshot.ErrDrainConflicting) {
+		return status.Error(codes.FailedPrecondition, "drain is not pending")
+	}
 	if errors.Is(err, context.Canceled) {
 		return status.Error(codes.Canceled, "drain state relay canceled")
 	}
@@ -239,11 +253,16 @@ func DrainStateFromProto(request *edgev1.ReportDrainStateRequest) (edgesnapshot.
 	if request == nil {
 		return edgesnapshot.DrainState{}, fmt.Errorf("drain state is required")
 	}
+	timeoutReason, err := drainTimeoutReasonFromProto(request.TimeoutReason)
+	if err != nil {
+		return edgesnapshot.DrainState{}, err
+	}
 	state := edgesnapshot.DrainState{
-		Generation:    domain.RouteTargetGeneration(request.Generation),
-		TargetKey:     domain.RouteTargetKey(request.TargetKey),
-		InFlight:      request.InFlight,
-		TimeoutReason: request.TimeoutReason,
+		CanonicalDomain:      request.CanonicalDomain,
+		TransitionGeneration: domain.RouteTargetGeneration(request.TransitionGeneration),
+		OldTargetKey:         domain.RouteTargetKey(request.OldTargetKey),
+		InFlight:             request.InFlight,
+		TimeoutReason:        timeoutReason,
 	}
 	if request.AcknowledgedAt != nil {
 		if err := request.AcknowledgedAt.CheckValid(); err != nil {
@@ -263,13 +282,38 @@ func DrainStateToProto(state edgesnapshot.DrainState) (*edgev1.ReportDrainStateR
 		return nil, err
 	}
 	request := &edgev1.ReportDrainStateRequest{
-		Generation:    uint64(state.Generation),
-		TargetKey:     string(state.TargetKey),
-		InFlight:      state.InFlight,
-		TimeoutReason: strings.Clone(state.TimeoutReason),
+		CanonicalDomain:      state.CanonicalDomain,
+		TransitionGeneration: uint64(state.TransitionGeneration),
+		OldTargetKey:         string(state.OldTargetKey),
+		InFlight:             state.InFlight,
+		TimeoutReason:        drainTimeoutReasonToProto(state.TimeoutReason),
 	}
 	if !state.AcknowledgedAt.IsZero() {
 		request.AcknowledgedAt = timestamppb.New(state.AcknowledgedAt)
 	}
 	return request, nil
+}
+
+func drainTimeoutReasonFromProto(reason edgev1.DrainTimeoutReason) (domain.RouteDrainTimeoutReason, error) {
+	switch reason {
+	case edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_UNSPECIFIED:
+		return domain.RouteDrainTimeoutReasonNone, nil
+	case edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE:
+		return domain.RouteDrainTimeoutReasonEdge, nil
+	case edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_CONTROL:
+		return domain.RouteDrainTimeoutReasonControl, nil
+	default:
+		return domain.RouteDrainTimeoutReasonNone, fmt.Errorf("timeout reason is invalid")
+	}
+}
+
+func drainTimeoutReasonToProto(reason domain.RouteDrainTimeoutReason) edgev1.DrainTimeoutReason {
+	switch reason {
+	case domain.RouteDrainTimeoutReasonEdge:
+		return edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE
+	case domain.RouteDrainTimeoutReasonControl:
+		return edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_CONTROL
+	default:
+		return edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_UNSPECIFIED
+	}
 }

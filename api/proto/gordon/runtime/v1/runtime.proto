@@ -344,9 +344,13 @@ message PruneImagesResponse {
   int64 space_reclaimed = 2;
 }
 
+// ReportEdgeDrainRequest is emitted by control only after it validates an edge
+// report. old_target_key is opaque; runtime must not receive edge aliases or
+// backing/container identities through this protocol.
 message ReportEdgeDrainRequest {
-  string route_domain = 1;
-  uint64 generation = 2;
-  string edge_component_id = 3;
-  string target_alias = 4;
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
+  google.protobuf.Timestamp acknowledged_at = 4;
+  string timeout_reason = 5;
 }

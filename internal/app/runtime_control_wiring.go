@@ -51,6 +51,23 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 // createRuntimeStateSubscriber exposes only the narrow actual-state stream to
 // control orchestration. The control role never receives a runtime socket or a
 // container adapter.
+// createRuntimeRouteDrainAckReceiver exposes only the opaque route-drain relay
+// used by control after it validates an edge acknowledgement.
+func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlConfig) (out.RouteDrainAckReceiver, error) {
+	client, err := createRuntimeCommandClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, fmt.Errorf("runtime.endpoint is required for route drain relay")
+	}
+	receiver, ok := client.(out.RouteDrainAckReceiver)
+	if !ok {
+		return nil, fmt.Errorf("runtime command client does not provide route drain acknowledgement")
+	}
+	return receiver, nil
+}
+
 func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeStateSubscriber, error) {
 	client, err := createRuntimeCommandClient(ctx, cfg)
 	if err != nil {

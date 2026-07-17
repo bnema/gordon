@@ -22,6 +22,57 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// DrainTimeoutReason is a closed, sanitised timeout vocabulary. It must never
+// contain raw runtime or network error material.
+type DrainTimeoutReason int32
+
+const (
+	DrainTimeoutReason_DRAIN_TIMEOUT_REASON_UNSPECIFIED DrainTimeoutReason = 0
+	DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE        DrainTimeoutReason = 1
+	DrainTimeoutReason_DRAIN_TIMEOUT_REASON_CONTROL     DrainTimeoutReason = 2
+)
+
+// Enum value maps for DrainTimeoutReason.
+var (
+	DrainTimeoutReason_name = map[int32]string{
+		0: "DRAIN_TIMEOUT_REASON_UNSPECIFIED",
+		1: "DRAIN_TIMEOUT_REASON_EDGE",
+		2: "DRAIN_TIMEOUT_REASON_CONTROL",
+	}
+	DrainTimeoutReason_value = map[string]int32{
+		"DRAIN_TIMEOUT_REASON_UNSPECIFIED": 0,
+		"DRAIN_TIMEOUT_REASON_EDGE":        1,
+		"DRAIN_TIMEOUT_REASON_CONTROL":     2,
+	}
+)
+
+func (x DrainTimeoutReason) Enum() *DrainTimeoutReason {
+	p := new(DrainTimeoutReason)
+	*p = x
+	return p
+}
+
+func (x DrainTimeoutReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (DrainTimeoutReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_gordon_edge_v1_edge_proto_enumTypes[0].Descriptor()
+}
+
+func (DrainTimeoutReason) Type() protoreflect.EnumType {
+	return &file_gordon_edge_v1_edge_proto_enumTypes[0]
+}
+
+func (x DrainTimeoutReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use DrainTimeoutReason.Descriptor instead.
+func (DrainTimeoutReason) EnumDescriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{0}
+}
+
 // WatchRouteSnapshotsRequest deliberately has no routing selectors.
 type WatchRouteSnapshotsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -246,13 +297,16 @@ func (x *RouteTargetEntry) GetTargetKey() string {
 }
 
 // ReportDrainStateRequest carries no edge identity; authentication provides it.
+// target_key is opaque and must not be a target alias or backing/container ID.
 type ReportDrainStateRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	Generation     uint64                 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
-	TargetKey      string                 `protobuf:"bytes,2,opt,name=target_key,json=targetKey,proto3" json:"target_key,omitempty"`
-	InFlight       uint64                 `protobuf:"varint,3,opt,name=in_flight,json=inFlight,proto3" json:"in_flight,omitempty"`
-	AcknowledgedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=acknowledged_at,json=acknowledgedAt,proto3" json:"acknowledged_at,omitempty"`
-	TimeoutReason  string                 `protobuf:"bytes,5,opt,name=timeout_reason,json=timeoutReason,proto3" json:"timeout_reason,omitempty"`
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	CanonicalDomain      string                 `protobuf:"bytes,1,opt,name=canonical_domain,json=canonicalDomain,proto3" json:"canonical_domain,omitempty"`
+	TransitionGeneration uint64                 `protobuf:"varint,2,opt,name=transition_generation,json=transitionGeneration,proto3" json:"transition_generation,omitempty"`
+	OldTargetKey         string                 `protobuf:"bytes,3,opt,name=old_target_key,json=oldTargetKey,proto3" json:"old_target_key,omitempty"`
+	InFlight             uint64                 `protobuf:"varint,4,opt,name=in_flight,json=inFlight,proto3" json:"in_flight,omitempty"`
+	// Informational edge time only; control records the trusted receipt time.
+	AcknowledgedAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=acknowledged_at,json=acknowledgedAt,proto3" json:"acknowledged_at,omitempty"`
+	TimeoutReason  DrainTimeoutReason     `protobuf:"varint,6,opt,name=timeout_reason,json=timeoutReason,proto3,enum=gordon.edge.v1.DrainTimeoutReason" json:"timeout_reason,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -287,16 +341,23 @@ func (*ReportDrainStateRequest) Descriptor() ([]byte, []int) {
 	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *ReportDrainStateRequest) GetGeneration() uint64 {
+func (x *ReportDrainStateRequest) GetCanonicalDomain() string {
 	if x != nil {
-		return x.Generation
+		return x.CanonicalDomain
+	}
+	return ""
+}
+
+func (x *ReportDrainStateRequest) GetTransitionGeneration() uint64 {
+	if x != nil {
+		return x.TransitionGeneration
 	}
 	return 0
 }
 
-func (x *ReportDrainStateRequest) GetTargetKey() string {
+func (x *ReportDrainStateRequest) GetOldTargetKey() string {
 	if x != nil {
-		return x.TargetKey
+		return x.OldTargetKey
 	}
 	return ""
 }
@@ -315,11 +376,11 @@ func (x *ReportDrainStateRequest) GetAcknowledgedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *ReportDrainStateRequest) GetTimeoutReason() string {
+func (x *ReportDrainStateRequest) GetTimeoutReason() DrainTimeoutReason {
 	if x != nil {
 		return x.TimeoutReason
 	}
-	return ""
+	return DrainTimeoutReason_DRAIN_TIMEOUT_REASON_UNSPECIFIED
 }
 
 // ReportDrainStateResponse intentionally has no drain orchestration semantics.
@@ -390,17 +451,19 @@ const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	" \x01(\tR\n" +
 	"attachment\x12\x1d\n" +
 	"\n" +
-	"target_key\x18\v \x01(\tR\ttargetKey\"\xe1\x01\n" +
-	"\x17ReportDrainStateRequest\x12\x1e\n" +
-	"\n" +
-	"generation\x18\x01 \x01(\x04R\n" +
-	"generation\x12\x1d\n" +
-	"\n" +
-	"target_key\x18\x02 \x01(\tR\ttargetKey\x12\x1b\n" +
-	"\tin_flight\x18\x03 \x01(\x04R\binFlight\x12C\n" +
-	"\x0facknowledged_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x0eacknowledgedAt\x12%\n" +
-	"\x0etimeout_reason\x18\x05 \x01(\tR\rtimeoutReason\"\x1a\n" +
-	"\x18ReportDrainStateResponse2\xde\x01\n" +
+	"target_key\x18\v \x01(\tR\ttargetKey\"\xcc\x02\n" +
+	"\x17ReportDrainStateRequest\x12)\n" +
+	"\x10canonical_domain\x18\x01 \x01(\tR\x0fcanonicalDomain\x123\n" +
+	"\x15transition_generation\x18\x02 \x01(\x04R\x14transitionGeneration\x12$\n" +
+	"\x0eold_target_key\x18\x03 \x01(\tR\foldTargetKey\x12\x1b\n" +
+	"\tin_flight\x18\x04 \x01(\x04R\binFlight\x12C\n" +
+	"\x0facknowledged_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x0eacknowledgedAt\x12I\n" +
+	"\x0etimeout_reason\x18\x06 \x01(\x0e2\".gordon.edge.v1.DrainTimeoutReasonR\rtimeoutReason\"\x1a\n" +
+	"\x18ReportDrainStateResponse*{\n" +
+	"\x12DrainTimeoutReason\x12$\n" +
+	" DRAIN_TIMEOUT_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19DRAIN_TIMEOUT_REASON_EDGE\x10\x01\x12 \n" +
+	"\x1cDRAIN_TIMEOUT_REASON_CONTROL\x10\x022\xde\x01\n" +
 	"\vEdgeService\x12h\n" +
 	"\x13WatchRouteSnapshots\x12*.gordon.edge.v1.WatchRouteSnapshotsRequest\x1a#.gordon.edge.v1.RouteTargetSnapshot0\x01\x12e\n" +
 	"\x10ReportDrainState\x12'.gordon.edge.v1.ReportDrainStateRequest\x1a(.gordon.edge.v1.ReportDrainStateResponseB3Z1github.com/bnema/gordon/api/gordon/edge/v1;edgev1b\x06proto3"
@@ -417,28 +480,31 @@ func file_gordon_edge_v1_edge_proto_rawDescGZIP() []byte {
 	return file_gordon_edge_v1_edge_proto_rawDescData
 }
 
+var file_gordon_edge_v1_edge_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_gordon_edge_v1_edge_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_gordon_edge_v1_edge_proto_goTypes = []any{
-	(*WatchRouteSnapshotsRequest)(nil), // 0: gordon.edge.v1.WatchRouteSnapshotsRequest
-	(*RouteTargetSnapshot)(nil),        // 1: gordon.edge.v1.RouteTargetSnapshot
-	(*RouteTargetEntry)(nil),           // 2: gordon.edge.v1.RouteTargetEntry
-	(*ReportDrainStateRequest)(nil),    // 3: gordon.edge.v1.ReportDrainStateRequest
-	(*ReportDrainStateResponse)(nil),   // 4: gordon.edge.v1.ReportDrainStateResponse
-	(*timestamppb.Timestamp)(nil),      // 5: google.protobuf.Timestamp
+	(DrainTimeoutReason)(0),            // 0: gordon.edge.v1.DrainTimeoutReason
+	(*WatchRouteSnapshotsRequest)(nil), // 1: gordon.edge.v1.WatchRouteSnapshotsRequest
+	(*RouteTargetSnapshot)(nil),        // 2: gordon.edge.v1.RouteTargetSnapshot
+	(*RouteTargetEntry)(nil),           // 3: gordon.edge.v1.RouteTargetEntry
+	(*ReportDrainStateRequest)(nil),    // 4: gordon.edge.v1.ReportDrainStateRequest
+	(*ReportDrainStateResponse)(nil),   // 5: gordon.edge.v1.ReportDrainStateResponse
+	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
 }
 var file_gordon_edge_v1_edge_proto_depIdxs = []int32{
-	2, // 0: gordon.edge.v1.RouteTargetSnapshot.entries:type_name -> gordon.edge.v1.RouteTargetEntry
-	2, // 1: gordon.edge.v1.RouteTargetSnapshot.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
-	5, // 2: gordon.edge.v1.ReportDrainStateRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
-	0, // 3: gordon.edge.v1.EdgeService.WatchRouteSnapshots:input_type -> gordon.edge.v1.WatchRouteSnapshotsRequest
-	3, // 4: gordon.edge.v1.EdgeService.ReportDrainState:input_type -> gordon.edge.v1.ReportDrainStateRequest
-	1, // 5: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.RouteTargetSnapshot
-	4, // 6: gordon.edge.v1.EdgeService.ReportDrainState:output_type -> gordon.edge.v1.ReportDrainStateResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	3, // 0: gordon.edge.v1.RouteTargetSnapshot.entries:type_name -> gordon.edge.v1.RouteTargetEntry
+	3, // 1: gordon.edge.v1.RouteTargetSnapshot.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
+	6, // 2: gordon.edge.v1.ReportDrainStateRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
+	0, // 3: gordon.edge.v1.ReportDrainStateRequest.timeout_reason:type_name -> gordon.edge.v1.DrainTimeoutReason
+	1, // 4: gordon.edge.v1.EdgeService.WatchRouteSnapshots:input_type -> gordon.edge.v1.WatchRouteSnapshotsRequest
+	4, // 5: gordon.edge.v1.EdgeService.ReportDrainState:input_type -> gordon.edge.v1.ReportDrainStateRequest
+	2, // 6: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.RouteTargetSnapshot
+	5, // 7: gordon.edge.v1.EdgeService.ReportDrainState:output_type -> gordon.edge.v1.ReportDrainStateResponse
+	6, // [6:8] is the sub-list for method output_type
+	4, // [4:6] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_gordon_edge_v1_edge_proto_init() }
@@ -451,13 +517,14 @@ func file_gordon_edge_v1_edge_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gordon_edge_v1_edge_proto_rawDesc), len(file_gordon_edge_v1_edge_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_gordon_edge_v1_edge_proto_goTypes,
 		DependencyIndexes: file_gordon_edge_v1_edge_proto_depIdxs,
+		EnumInfos:         file_gordon_edge_v1_edge_proto_enumTypes,
 		MessageInfos:      file_gordon_edge_v1_edge_proto_msgTypes,
 	}.Build()
 	File_gordon_edge_v1_edge_proto = out.File

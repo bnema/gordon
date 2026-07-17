@@ -131,8 +131,24 @@ func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.Runti
 	return out, nil
 }
 
-func (c *Client) AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error {
-	_, err := c.client.ReportEdgeDrain(ctx, &runtimev1.ReportEdgeDrainRequest{RouteDomain: routeDomain, Generation: generation, EdgeComponentId: edgeComponentID, TargetAlias: targetAlias})
+// AcknowledgeRuntimeDrain is retained for the monolith compatibility boundary.
+// Split deployments use AcknowledgeRouteDrain and never transport aliases.
+func (c *Client) AcknowledgeRuntimeDrain(context.Context, string, uint64, string, string) error {
+	return fmt.Errorf("alias-based runtime drain acknowledgement is not supported by the split protocol")
+}
+
+// AcknowledgeRouteDrain relays the validated opaque control acknowledgement.
+func (c *Client) AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error {
+	if err := acknowledgement.Validate(); err != nil {
+		return fmt.Errorf("validate route drain acknowledgement: %w", err)
+	}
+	_, err := c.client.ReportEdgeDrain(ctx, &runtimev1.ReportEdgeDrainRequest{
+		CanonicalDomain:      acknowledgement.CanonicalDomain,
+		TransitionGeneration: uint64(acknowledgement.TransitionGeneration),
+		OldTargetKey:         string(acknowledgement.OldTargetKey),
+		AcknowledgedAt:       timestamppb.New(acknowledgement.AcknowledgedAt),
+		TimeoutReason:        string(acknowledgement.TimeoutReason),
+	})
 	return err
 }
 

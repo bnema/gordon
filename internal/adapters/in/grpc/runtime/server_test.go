@@ -129,13 +129,10 @@ func TestServerWatchActualStateCancellation(t *testing.T) {
 }
 
 func TestServerReportEdgeDrainInvokesReceiver(t *testing.T) {
-	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
-	receiver.EXPECT().
-		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
-		Return(nil)
-	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+	receiver := &recordingRouteDrainAckReceiver{}
+	server := NewServerWithRouteDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
 
-	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
+	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: string(testDrainTargetKey), AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())})
 
 	require.NoError(t, err)
 	assert.True(t, ack.Ok)
@@ -146,10 +143,10 @@ func TestServerReportEdgeDrainValidation(t *testing.T) {
 
 	cases := []*runtimev1.ReportEdgeDrainRequest{
 		nil,
-		{Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"},
-		{RouteDomain: "app.example.com", EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"},
-		{RouteDomain: "app.example.com", Generation: 7, TargetAlias: "gordon-target-app-example-com"},
-		{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1"},
+		{TransitionGeneration: 7, OldTargetKey: string(testDrainTargetKey), AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())},
+		{CanonicalDomain: "app.example.com", OldTargetKey: string(testDrainTargetKey), AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())},
+		{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: string(testDrainTargetKey)},
+		{CanonicalDomain: "app.example.com", TransitionGeneration: 7, AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())},
 	}
 	for _, req := range cases {
 		_, err := server.ReportEdgeDrain(context.Background(), req)
@@ -159,35 +156,35 @@ func TestServerReportEdgeDrainValidation(t *testing.T) {
 }
 
 func TestServerReportEdgeDrainRejectsInvalidRouteDomainBeforeReceiver(t *testing.T) {
-	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
-	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+	receiver := &recordingRouteDrainAckReceiver{}
+	server := NewServerWithRouteDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
 
 	invalidDomains := []string{"localhost", "127.0.0.1", "app.example.com/path", "app.example.com\\path", "app.local"}
 	for _, routeDomain := range invalidDomains {
 		t.Run(routeDomain, func(t *testing.T) {
-			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: routeDomain, Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
+			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: routeDomain, TransitionGeneration: 7, OldTargetKey: string(testDrainTargetKey), AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())})
 
 			require.Error(t, err)
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		})
 	}
-	receiver.AssertNotCalled(t, "AcknowledgeRuntimeDrain", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	assert.Empty(t, receiver.acks)
 }
 
 func TestServerReportEdgeDrainRejectsInvalidTargetAliasBeforeReceiver(t *testing.T) {
-	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
-	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+	receiver := &recordingRouteDrainAckReceiver{}
+	server := NewServerWithRouteDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
 
 	invalidAliases := []string{"localhost", "127.0.0.1", "127.10.0.1", "::1", "gordon/target", "gordon\\target"}
 	for _, targetAlias := range invalidAliases {
 		t.Run(targetAlias, func(t *testing.T) {
-			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: targetAlias})
+			_, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: targetAlias, AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())})
 
 			require.Error(t, err)
 			assert.Equal(t, codes.InvalidArgument, status.Code(err))
 		})
 	}
-	receiver.AssertNotCalled(t, "AcknowledgeRuntimeDrain", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	assert.Empty(t, receiver.acks)
 }
 
 func TestServerStreamLogsUsesRuntimeLogReader(t *testing.T) {
@@ -243,22 +240,19 @@ func TestServerImageManager(t *testing.T) {
 }
 
 func TestServerHealthAndDrainAck(t *testing.T) {
-	receiver := outMocks.NewMockRuntimeDrainAckReceiver(t)
-	receiver.EXPECT().
-		AcknowledgeRuntimeDrain(mock.Anything, "app.example.com", uint64(7), "edge-1", "gordon-target-app-example-com").
-		Return(nil)
-	server := NewServerWithDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
+	receiver := &recordingRouteDrainAckReceiver{}
+	server := NewServerWithRouteDrainAckReceiver(&fakeRuntimeWorker{}, receiver, "runtime-1")
 
 	health, err := server.GetHealth(context.Background(), &runtimev1.GetHealthRequest{})
 	require.NoError(t, err)
 	assert.True(t, health.Ok)
 	assert.Equal(t, "runtime-1", health.ComponentId)
 
-	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com", Generation: 7, EdgeComponentId: "edge-1", TargetAlias: "gordon-target-app-example-com"})
+	ack, err := server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: string(testDrainTargetKey), AcknowledgedAt: timestamppb.New(time.Unix(1, 0).UTC())})
 	require.NoError(t, err)
 	assert.True(t, ack.Ok)
 
-	_, err = server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{RouteDomain: "app.example.com"})
+	_, err = server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: "app.example.com"})
 	require.Error(t, err)
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
@@ -813,4 +807,13 @@ func testDomainIdentity(id string, requestedAt time.Time) domain.RuntimeCommandI
 
 func testRuntimeResult(identity domain.RuntimeCommandIdentity) domain.RuntimeCommandResult {
 	return domain.RuntimeCommandResult{CommandID: identity.ID, IdempotencyKey: identity.IdempotencyKey, Generation: identity.Generation, Status: domain.RuntimeCommandStatusSucceeded, StartedAt: identity.RequestedAt, CompletedAt: identity.RequestedAt}
+}
+
+const testDrainTargetKey domain.RouteTargetKey = "rtk_abcdefghijklmnopqrstuvwxyz234567"
+
+type recordingRouteDrainAckReceiver struct{ acks []domain.RouteDrainAck }
+
+func (r *recordingRouteDrainAckReceiver) AcknowledgeRouteDrain(_ context.Context, ack domain.RouteDrainAck) error {
+	r.acks = append(r.acks, ack)
+	return nil
 }

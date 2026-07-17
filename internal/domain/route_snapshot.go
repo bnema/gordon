@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -89,6 +90,86 @@ func (k RouteTargetKey) Valid() bool {
 		}
 	}
 	return true
+}
+
+// RouteDrainTimeoutReason explains why a drain completed without the normal
+// zero-in-flight acknowledgement. It is deliberately a closed vocabulary: error
+// text, endpoint details, and runtime identities are never drain protocol data.
+type RouteDrainTimeoutReason string
+
+const (
+	RouteDrainTimeoutReasonNone    RouteDrainTimeoutReason = ""
+	RouteDrainTimeoutReasonEdge    RouteDrainTimeoutReason = "edge_timeout"
+	RouteDrainTimeoutReasonControl RouteDrainTimeoutReason = "control_timeout"
+)
+
+// RouteDrainStatus is the control-owned state of a retired opaque route target.
+type RouteDrainStatus string
+
+const (
+	RouteDrainStatusPending      RouteDrainStatus = "pending"
+	RouteDrainStatusAcknowledged RouteDrainStatus = "acknowledged"
+	RouteDrainStatusTimedOut     RouteDrainStatus = "timed_out"
+)
+
+// RouteDrainState is the narrow identity reported by an edge. OldTargetKey is
+// opaque; container aliases, backing names, and endpoint identities must not be
+// included in this value or its transport representation.
+type RouteDrainState struct {
+	CanonicalDomain      string
+	TransitionGeneration RouteTargetGeneration
+	OldTargetKey         RouteTargetKey
+	InFlight             uint64
+	AcknowledgedAt       time.Time
+	TimeoutReason        RouteDrainTimeoutReason
+}
+
+// Validate verifies the privacy-preserving drain identity and report shape.
+func (s RouteDrainState) Validate() error {
+	canonical, ok := CanonicalRouteDomain(s.CanonicalDomain)
+	if !ok || canonical != s.CanonicalDomain {
+		return fmt.Errorf("%w: drain domain is invalid", ErrInvalidRoute)
+	}
+	if s.TransitionGeneration == 0 || !s.OldTargetKey.Valid() {
+		return fmt.Errorf("%w: drain identity is invalid", ErrInvalidRoute)
+	}
+	if s.TimeoutReason != RouteDrainTimeoutReasonNone && s.TimeoutReason != RouteDrainTimeoutReasonEdge && s.TimeoutReason != RouteDrainTimeoutReasonControl {
+		return fmt.Errorf("%w: drain timeout reason is invalid", ErrInvalidRoute)
+	}
+	if s.TimeoutReason != RouteDrainTimeoutReasonNone && s.InFlight == 0 {
+		return fmt.Errorf("%w: timeout drain must report in-flight work", ErrInvalidRoute)
+	}
+	return nil
+}
+
+// RouteDrainAck is the server-observed, control-owned drain result relayed to
+// runtime. AcknowledgedAt is never trusted from an edge clock.
+type RouteDrainAck struct {
+	RouteDrainState
+	Status RouteDrainStatus
+}
+
+// Validate verifies a relay-safe drain acknowledgement.
+func (a RouteDrainAck) Validate() error {
+	if err := a.RouteDrainState.Validate(); err != nil {
+		return err
+	}
+	if a.AcknowledgedAt.IsZero() {
+		return fmt.Errorf("%w: drain acknowledgement time is required", ErrInvalidRoute)
+	}
+	switch a.Status {
+	case RouteDrainStatusAcknowledged:
+		if a.InFlight != 0 || a.TimeoutReason != RouteDrainTimeoutReasonNone {
+			return fmt.Errorf("%w: acknowledged drain must have no in-flight work", ErrInvalidRoute)
+		}
+	case RouteDrainStatusTimedOut:
+		if a.TimeoutReason == RouteDrainTimeoutReasonNone {
+			return fmt.Errorf("%w: timed out drain requires reason", ErrInvalidRoute)
+		}
+	default:
+		return fmt.Errorf("%w: drain acknowledgement status is invalid", ErrInvalidRoute)
+	}
+	return nil
 }
 
 // RouteTargetSnapshot is the routing-only view of edge targets. Snapshot values are
@@ -448,6 +529,34 @@ func (e RouteTargetEntry) derivedTargetKey() RouteTargetKey {
 
 func (e RouteTargetEntry) derivedManagedTargetKey(instanceIdentity string) RouteTargetKey {
 	return e.derivedTargetKeyForIdentity(instanceIdentity)
+}
+
+// ManagedRouteTargetKeyFromRuntimeState derives exactly the managed target key
+// used by snapshot production. The state is validated first; private backing
+// material is hashed and is never retained in the returned opaque key.
+func ManagedRouteTargetKeyFromRuntimeState(state RuntimeRouteState) (RouteTargetKey, error) {
+	if err := state.Validate(); err != nil {
+		return "", err
+	}
+	if state.Status != RouteTargetStatusReady && state.Status != RouteTargetStatusDraining {
+		return "", fmt.Errorf("%w: managed target must be routable", ErrInvalidRoute)
+	}
+	if strings.TrimSpace(state.BackingContainerName) == "" {
+		return "", fmt.Errorf("%w: managed backing identity is required", ErrInvalidRoute)
+	}
+	canonicalDomain, ok := CanonicalRouteDomain(state.Domain)
+	if !ok {
+		return "", fmt.Errorf("%w: route domain is invalid", ErrInvalidRoute)
+	}
+	entry := RouteTargetEntry{
+		CanonicalDomain: canonicalDomain,
+		TargetHost:      state.EdgeTargetAlias,
+		TargetPort:      state.TargetPort,
+		Scheme:          state.Scheme,
+		Protocol:        state.Protocol,
+		Attachment:      RouteTargetAttachmentAttached,
+	}
+	return entry.derivedManagedTargetKey(state.BackingContainerName + "\x00" + state.RouteVersion), nil
 }
 
 func (e RouteTargetEntry) derivedTargetKeyForIdentity(instanceIdentity string) RouteTargetKey {

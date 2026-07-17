@@ -39,13 +39,24 @@ message RouteTargetEntry {
   string target_key = 11;
 }
 
+// DrainTimeoutReason is a closed, sanitised timeout vocabulary. It must never
+// contain raw runtime or network error material.
+enum DrainTimeoutReason {
+  DRAIN_TIMEOUT_REASON_UNSPECIFIED = 0;
+  DRAIN_TIMEOUT_REASON_EDGE = 1;
+  DRAIN_TIMEOUT_REASON_CONTROL = 2;
+}
+
 // ReportDrainStateRequest carries no edge identity; authentication provides it.
+// target_key is opaque and must not be a target alias or backing/container ID.
 message ReportDrainStateRequest {
-  uint64 generation = 1;
-  string target_key = 2;
-  uint64 in_flight = 3;
-  google.protobuf.Timestamp acknowledged_at = 4;
-  string timeout_reason = 5;
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
+  uint64 in_flight = 4;
+  // Informational edge time only; control records the trusted receipt time.
+  google.protobuf.Timestamp acknowledged_at = 5;
+  DrainTimeoutReason timeout_reason = 6;
 }
 
 // ReportDrainStateResponse intentionally has no drain orchestration semantics.

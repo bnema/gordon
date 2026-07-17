@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"maps"
-	"net"
 	"strings"
 	"time"
 
@@ -36,6 +35,7 @@ type Server struct {
 	volumeManager            out.RuntimeVolumeManager
 	imageManager             out.RuntimeImageManager
 	drainAckReceiver         out.RuntimeDrainAckReceiver
+	routeDrainAckReceiver    out.RouteDrainAckReceiver
 	standaloneServiceManager out.RuntimeStandaloneServiceManager
 	componentID              string
 }
@@ -66,6 +66,11 @@ func NewServerWithRuntimePorts(worker boundaries.RuntimeWorker, logReader out.Ru
 
 func NewServerWithDrainAckReceiver(worker boundaries.RuntimeWorker, drainAckReceiver out.RuntimeDrainAckReceiver, componentID string) *Server {
 	return &Server{worker: worker, drainAckReceiver: drainAckReceiver, componentID: componentID}
+}
+
+// NewServerWithRouteDrainAckReceiver configures the opaque split-edge drain protocol.
+func NewServerWithRouteDrainAckReceiver(worker boundaries.RuntimeWorker, receiver out.RouteDrainAckReceiver, componentID string) *Server {
+	return &Server{worker: worker, routeDrainAckReceiver: receiver, componentID: componentID}
 }
 
 // NewServerWithStandaloneServiceManager configures the optional narrow standalone-service runtime port.
@@ -348,22 +353,37 @@ func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeD
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if req == nil || strings.TrimSpace(req.RouteDomain) == "" || req.Generation == 0 || strings.TrimSpace(req.EdgeComponentId) == "" || strings.TrimSpace(req.TargetAlias) == "" {
-		return nil, status.Error(codes.InvalidArgument, "route domain, generation, edge component id, and target alias are required")
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "route drain acknowledgement is required")
 	}
-	if !domain.IsValidRouteDomain(req.RouteDomain) {
-		return nil, status.Error(codes.InvalidArgument, "route domain is invalid")
+	acknowledgedAt := time.Time{}
+	if req.AcknowledgedAt != nil {
+		if err := req.AcknowledgedAt.CheckValid(); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "acknowledgement time is invalid")
+		}
+		acknowledgedAt = req.AcknowledgedAt.AsTime()
 	}
-	if !isValidDrainTargetAlias(req.TargetAlias) {
-		return nil, status.Error(codes.InvalidArgument, "target alias is invalid")
+	ack := domain.RouteDrainAck{RouteDrainState: domain.RouteDrainState{
+		CanonicalDomain:      req.CanonicalDomain,
+		TransitionGeneration: domain.RouteTargetGeneration(req.TransitionGeneration),
+		OldTargetKey:         domain.RouteTargetKey(req.OldTargetKey),
+		AcknowledgedAt:       acknowledgedAt,
+		TimeoutReason:        domain.RouteDrainTimeoutReason(req.TimeoutReason),
+	}, Status: domain.RouteDrainStatusAcknowledged}
+	if ack.TimeoutReason != domain.RouteDrainTimeoutReasonNone {
+		ack.Status = domain.RouteDrainStatusTimedOut
+		ack.InFlight = 1
 	}
-	if s.drainAckReceiver == nil {
-		return nil, status.Error(codes.FailedPrecondition, "runtime drain ack receiver not configured")
+	if err := ack.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid route drain acknowledgement")
 	}
-	if err := s.drainAckReceiver.AcknowledgeRuntimeDrain(ctx, req.RouteDomain, req.Generation, req.EdgeComponentId, req.TargetAlias); err != nil {
-		return nil, status.Error(codes.Internal, "failed to record edge drain acknowledgement")
+	if s.routeDrainAckReceiver == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime route drain ack receiver not configured")
 	}
-	return &commonv1.Ack{Ok: true, Message: "edge drain acknowledgement recorded"}, nil
+	if err := s.routeDrainAckReceiver.AcknowledgeRouteDrain(ctx, ack); err != nil {
+		return nil, status.Error(codes.Internal, "failed to record route drain acknowledgement")
+	}
+	return &commonv1.Ack{Ok: true, Message: "route drain acknowledgement recorded"}, nil
 }
 
 func safeInt32(value int) (int32, error) {
@@ -371,18 +391,6 @@ func safeInt32(value int) (int32, error) {
 		return 0, fmt.Errorf("%d overflows int32", value)
 	}
 	return int32(value), nil
-}
-
-func isValidDrainTargetAlias(alias string) bool {
-	trimmed := strings.TrimSpace(alias)
-	if trimmed == "" || strings.ContainsAny(trimmed, "/\\") {
-		return false
-	}
-	lower := strings.ToLower(trimmed)
-	if lower == "localhost" {
-		return false
-	}
-	return net.ParseIP(lower) == nil
 }
 
 func protoActualStateSnapshot(snapshot domain.RuntimeActualStateSnapshot) *runtimev1.ActualStateSnapshot {

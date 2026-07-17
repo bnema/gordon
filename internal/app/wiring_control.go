@@ -33,6 +33,7 @@ type controlRoleDependencies struct {
 	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
 	newSnapshotHub             func() *edgesnapshot.SnapshotHub
 	newRuntimeStateSubscriber  func(context.Context, RuntimeControlConfig) (out.RuntimeStateSubscriber, error)
+	newRuntimeDrainAckReceiver func(context.Context, RuntimeControlConfig) (out.RouteDrainAckReceiver, error)
 	newSnapshotProducer        func(out.RuntimeStateSubscriber, *edgesnapshot.SnapshotHub, edgesnapshot.ProducerOptions) (*edgesnapshot.Producer, error)
 }
 
@@ -42,6 +43,7 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
 		newSnapshotHub:             edgesnapshot.NewSnapshotHub,
 		newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
+		newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
 		newSnapshotProducer:        edgesnapshot.NewProducer,
 	}
 }
@@ -81,13 +83,27 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 		}
 		return log.WrapErr(err, "publish initial control route snapshot")
 	}
+	var drainRelay edgesnapshot.RuntimeDrainAckReceiver
+	if deps.newRuntimeDrainAckReceiver != nil {
+		relay, relayErr := deps.newRuntimeDrainAckReceiver(ctx, cfg.Runtime)
+		if relayErr != nil {
+			return log.WrapErr(relayErr, "create runtime route drain relay")
+		}
+		drainRelay = relay
+	}
+	drainCoordinator, err := edgesnapshot.NewDrainCoordinator(hub, edgesnapshot.DrainCoordinatorOptions{Runtime: drainRelay})
+	if err != nil {
+		return log.WrapErr(err, "create route drain coordinator")
+	}
+	defer drainCoordinator.Close()
+
 	listener, err := deps.listen("tcp", strings.TrimSpace(cfg.Control.ListenAddress))
 	if err != nil {
 		return log.WrapErr(err, "failed to listen for control gRPC")
 	}
 	defer listener.Close()
 
-	server, err := newControlSnapshotServer(cfg, validator, hub)
+	server, err := newControlSnapshotServerWithDrain(cfg, validator, hub, drainCoordinator)
 	if err != nil {
 		return err
 	}
@@ -168,6 +184,10 @@ func controlProducerOptions(v *viper.Viper, cfg Config) (edgesnapshot.ProducerOp
 // newControlSnapshotServer is composable so route orchestration can publish to
 // hub without granting the transport access to runtime or configuration state.
 func newControlSnapshotServer(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub) (*grpc.Server, error) {
+	return newControlSnapshotServerWithDrain(cfg, validator, hub, nil)
+}
+
+func newControlSnapshotServerWithDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
 	if validator == nil {
 		return nil, fmt.Errorf("control component token validator is required")
 	}
@@ -183,7 +203,11 @@ func newControlSnapshotServer(cfg Config, validator interceptors.ComponentTokenV
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 	)
-	edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
+	if drainReceiver != nil {
+		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithDrainStateReceiver(hub, drainReceiver))
+	} else {
+		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
+	}
 	return server, nil
 }
 

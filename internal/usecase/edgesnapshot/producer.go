@@ -265,13 +265,17 @@ func (p *Producer) entryFromRoute(route domain.RuntimeRouteState, attachments []
 	if !p.matchingAttachment(route, attachments) || route.EdgeTargetAlias != managedTargetAlias(route.Domain) || !safeSplitAlias(route.EdgeTargetAlias) || strings.TrimSpace(route.BackingContainerName) == "" {
 		return domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonNoTarget, generation)
 	}
-	// BackingContainerName and RouteVersion are only private key material. The
-	// constructor hashes them and no resulting entry retains either value.
-	identity := route.BackingContainerName + "\x00" + route.RouteVersion
-	entry, err := domain.NewManagedReadyRouteTargetEntry(route.Domain, route.EdgeTargetAlias, route.TargetPort, route.Scheme, route.Protocol, generation, identity)
+	// The shared helper is also used by runtime drain handling. It hashes the
+	// private backing identity and never exposes it in the snapshot.
+	key, err := domain.ManagedRouteTargetKeyFromRuntimeState(route)
 	if err != nil {
 		return domain.RouteTargetEntry{}, err
 	}
+	entry, err := domain.NewReadyRouteTargetEntry(route.Domain, route.EdgeTargetAlias, route.TargetPort, route.Scheme, route.Protocol, generation)
+	if err != nil {
+		return domain.RouteTargetEntry{}, err
+	}
+	entry.TargetKey = key
 	if route.Status == domain.RouteTargetStatusDraining {
 		entry.Status = domain.RouteTargetStatusDraining
 		entry.UnavailableReason = domain.RouteTargetUnavailableReasonDraining

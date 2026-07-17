@@ -46,6 +46,13 @@ type RuntimeDrainAckReceiver interface {
 	AcknowledgeRuntimeDrain(ctx context.Context, routeDomain string, generation uint64, edgeComponentID string, targetAlias string) error
 }
 
+// RouteDrainAckReceiver receives a validated opaque drain acknowledgement.
+// It supersedes RuntimeDrainAckReceiver for split edge deployments; the legacy
+// alias-based method remains only for monolith compatibility.
+type RouteDrainAckReceiver interface {
+	AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error
+}
+
 // RuntimeStandaloneServiceManager manages standalone services through narrow runtime commands and state.
 type RuntimeStandaloneServiceManager interface {
 	ApplyStandaloneService(ctx context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error)

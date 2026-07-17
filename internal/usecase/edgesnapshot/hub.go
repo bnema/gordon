@@ -26,12 +26,13 @@ type SnapshotHub struct {
 	mu          sync.Mutex
 	current     *domain.RouteTargetSnapshot
 	subscribers map[uint64]chan domain.RouteTargetSnapshot
+	observers   map[uint64]func(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot)
 	nextID      uint64
 }
 
 // NewSnapshotHub returns an empty snapshot hub.
 func NewSnapshotHub() *SnapshotHub {
-	return &SnapshotHub{subscribers: make(map[uint64]chan domain.RouteTargetSnapshot)}
+	return &SnapshotHub{subscribers: make(map[uint64]chan domain.RouteTargetSnapshot), observers: make(map[uint64]func(*domain.RouteTargetSnapshot, domain.RouteTargetSnapshot))}
 }
 
 // Publish validates and atomically publishes a strictly newer split-reachable snapshot.
@@ -46,7 +47,17 @@ func (h *SnapshotHub) Publish(snapshot domain.RouteTargetSnapshot) error {
 	if h.current != nil && clone.Generation <= h.current.Generation {
 		return fmt.Errorf("route snapshot generation %d is not newer than %d", clone.Generation, h.current.Generation)
 	}
+	var previous *domain.RouteTargetSnapshot
+	if h.current != nil {
+		previousClone := h.current.Clone()
+		previous = &previousClone
+	}
 	h.current = &clone
+	// Observers run while publication is serialized, so transition ledger
+	// registration cannot miss a replacement between Current and Subscribe.
+	for _, observer := range h.observers {
+		observer(previous, clone)
+	}
 	for _, subscriber := range h.subscribers {
 		publishLatest(subscriber, clone)
 	}
@@ -54,6 +65,21 @@ func (h *SnapshotHub) Publish(snapshot domain.RouteTargetSnapshot) error {
 }
 
 // Current returns an independent immutable snapshot clone.
+// ObserveTransitions registers a synchronous control-owned observer. It is
+// intentionally not a public subscription stream: observers must not block.
+func (h *SnapshotHub) ObserveTransitions(observer func(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot)) func() {
+	h.mu.Lock()
+	id := h.nextID
+	h.nextID++
+	h.observers[id] = observer
+	h.mu.Unlock()
+	return func() {
+		h.mu.Lock()
+		delete(h.observers, id)
+		h.mu.Unlock()
+	}
+}
+
 func (h *SnapshotHub) Current(ctx context.Context) (domain.RouteTargetSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.RouteTargetSnapshot{}, err
