@@ -33,6 +33,7 @@ func newAuthCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newAuthTokenCmd())
+	cmd.AddCommand(newComponentTokenCmd())
 	cmd.AddCommand(newAuthInternalCmd())
 	cmd.AddCommand(newAuthLoginCmd())
 	cmd.AddCommand(newAuthStatusCmd())
