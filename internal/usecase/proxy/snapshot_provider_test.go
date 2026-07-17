@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -251,6 +253,149 @@ func TestLocalSnapshotProviderContextAndConcurrentCalls(t *testing.T) {
 		wg.Go(func() { _, _ = provider.CurrentSnapshot(testContext()) })
 	}
 	wg.Wait()
+}
+
+func TestLocalSnapshotProvider_RetainsDrainingTargetKeyAcrossReplacement(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	var phase atomic.Int32
+	config.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "app:latest"}}).Maybe()
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	containers.EXPECT().Get(mock.Anything, "app.example.com").RunAndReturn(func(context.Context, string) (*domain.Container, bool) {
+		switch phase.Load() {
+		case 1:
+			return &domain.Container{ID: "replacement-real-container-id", Image: "app:latest"}, true
+		case 2:
+			return &domain.Container{ID: "next-real-container-id", Image: "app:latest"}, true
+		default:
+			return &domain.Container{ID: "old-real-container-id", Image: "app:latest"}, true
+		}
+	}).Maybe()
+	runtime.EXPECT().GetImageLabels(mock.Anything, "app:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil).Maybe()
+	runtime.EXPECT().GetContainerPort(mock.Anything, mock.Anything, 8080).RunAndReturn(func(_ context.Context, containerID string, _ int) (int, error) {
+		switch containerID {
+		case "replacement-real-container-id":
+			return 18081, nil
+		case "next-real-container-id":
+			return 18082, nil
+		default:
+			return 18080, nil
+		}
+	}).Maybe()
+	provider := newHostSnapshotProvider(runtime, containers, config, Config{})
+
+	oldSnapshot, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	oldKey := snapshotEntry(t, oldSnapshot, "app.example.com").TargetKey
+	require.NotEmpty(t, oldKey)
+	phase.Store(1)
+	newSnapshot, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	newKey := snapshotEntry(t, newSnapshot, "app.example.com").TargetKey
+	require.NotEqual(t, oldKey, newKey)
+	assert.NotContains(t, fmt.Sprintf("%#v", newSnapshot), "old-real-container-id")
+	assert.NotContains(t, fmt.Sprintf("%#v", newSnapshot), "replacement-real-container-id")
+
+	mappedOldKey, found := provider.TargetKeyForContainer("old-real-container-id")
+	assert.True(t, found)
+	assert.Equal(t, oldKey, mappedOldKey)
+	mappedNewKey, found := provider.TargetKeyForContainer("replacement-real-container-id")
+	assert.True(t, found)
+	assert.Equal(t, newKey, mappedNewKey)
+
+	// A subsequent activation bounds abandoned associations to the previous
+	// lifecycle generation; normal per-domain deployment serialization means a
+	// live drain always releases before this can occur.
+	phase.Store(2)
+	_, err = provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	_, found = provider.TargetKeyForContainer("old-real-container-id")
+	assert.False(t, found)
+	_, found = provider.TargetKeyForContainer("replacement-real-container-id")
+	assert.True(t, found)
+	_, found = provider.TargetKeyForContainer("next-real-container-id")
+	assert.True(t, found)
+
+	service := NewSnapshotService(nil, Config{})
+	timedOutRelease := service.TrackInFlight(string(newKey))
+	waiter := NewLocalSnapshotDrainWaiter(provider, service)
+	assert.False(t, waiter.WaitForNoInFlight(ctx, "replacement-real-container-id", time.Nanosecond))
+	timedOutRelease()
+	_, found = provider.TargetKeyForContainer("replacement-real-container-id")
+	assert.False(t, found, "timed out drain must release the retired association")
+	_, found = provider.TargetKeyForContainer("next-real-container-id")
+	assert.True(t, found, "releasing an old association must preserve the current replacement")
+}
+
+func TestLocalSnapshotProvider_ConcurrentRefreshAndDrainLookup(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	var replacement atomic.Bool
+	config.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "app:latest"}}).Maybe()
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	containers.EXPECT().Get(mock.Anything, "app.example.com").RunAndReturn(func(context.Context, string) (*domain.Container, bool) {
+		if replacement.Load() {
+			return &domain.Container{ID: "replacement-id", Image: "app:latest"}, true
+		}
+		return &domain.Container{ID: "old-id", Image: "app:latest"}, true
+	}).Maybe()
+	runtime.EXPECT().GetImageLabels(mock.Anything, "app:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil).Maybe()
+	runtime.EXPECT().GetContainerPort(mock.Anything, mock.Anything, 8080).RunAndReturn(func(_ context.Context, id string, _ int) (int, error) {
+		if id == "replacement-id" {
+			return 18081, nil
+		}
+		return 18080, nil
+	}).Maybe()
+	provider := newHostSnapshotProvider(runtime, containers, config, Config{})
+	oldSnapshot, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	oldKey := snapshotEntry(t, oldSnapshot, "app.example.com").TargetKey
+	service := NewSnapshotService(nil, Config{})
+	release := service.TrackInFlight(string(oldKey))
+	waiter := NewLocalSnapshotDrainWaiter(provider, service)
+	replacement.Store(true)
+
+	// Refresh before the delayed lifecycle drain starts: this is the original
+	// replacement race. The old association must still resolve below.
+	_, err = provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+
+	waiting := make(chan struct{}, 1)
+	service.waitForNoInFlightWait = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	result := make(chan bool, 1)
+	go func() { result <- waiter.WaitForNoInFlight(ctx, "old-id", time.Second) }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("old drain did not wait for the old opaque target key")
+	}
+
+	// Requests may refresh while the old lifecycle drain is in progress.
+	var refreshes sync.WaitGroup
+	for range 16 {
+		refreshes.Go(func() { _, _ = provider.CurrentSnapshot(ctx) })
+	}
+	refreshes.Wait()
+	select {
+	case <-result:
+		t.Fatal("old drain completed while the old target still had an in-flight request")
+	default:
+	}
+	release()
+	require.True(t, <-result)
+	_, found := provider.TargetKeyForContainer("old-id")
+	assert.False(t, found)
+	_, found = provider.TargetKeyForContainer("replacement-id")
+	assert.True(t, found)
 }
 
 func newHostSnapshotProvider(runtime *outmocks.MockContainerRuntime, containers *inmocks.MockContainerService, config *inmocks.MockConfigService, cfg Config) *LocalSnapshotProvider {

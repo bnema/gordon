@@ -28,10 +28,16 @@ type LocalSnapshotProvider struct {
 	config       Config
 	inContainer  func() bool
 
-	mu                  sync.Mutex
-	last                domain.RouteTargetSnapshot
-	hasLast             bool
-	containerTargetKeys map[string]domain.RouteTargetKey
+	mu                         sync.Mutex
+	last                       domain.RouteTargetSnapshot
+	hasLast                    bool
+	containerTargetKeys        map[string]containerTargetKeyAssociation
+	currentContainerTargetKeys map[string]containerTargetKeyAssociation
+}
+
+type containerTargetKeyAssociation struct {
+	key    domain.RouteTargetKey
+	domain string
 }
 
 var _ out.RouteSnapshotProvider = (*LocalSnapshotProvider)(nil)
@@ -41,8 +47,9 @@ var _ out.RouteSnapshotProvider = (*LocalSnapshotProvider)(nil)
 func NewLocalSnapshotProvider(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config Config) *LocalSnapshotProvider {
 	return &LocalSnapshotProvider{
 		runtime: runtime, containerSvc: containerSvc, configSvc: configSvc, config: config,
-		inContainer:         runningInContainer,
-		containerTargetKeys: make(map[string]domain.RouteTargetKey),
+		inContainer:                runningInContainer,
+		containerTargetKeys:        make(map[string]containerTargetKeyAssociation),
+		currentContainerTargetKeys: make(map[string]containerTargetKeyAssociation),
 	}
 }
 
@@ -59,14 +66,14 @@ func (p *LocalSnapshotProvider) CurrentSnapshot(ctx context.Context) (domain.Rou
 	if err != nil {
 		return domain.RouteTargetSnapshot{}, err
 	}
-	// This map is deliberately private: it bridges the container lifecycle's
-	// legacy ID to the edge's opaque target key without publishing IDs.
-	p.containerTargetKeys = containerTargetKeys
-	if p.hasLast && sameRoutingContent(candidate, p.last) {
-		return p.last.Clone(), nil
-	}
 	if err := candidate.Validate(); err != nil {
 		return domain.RouteTargetSnapshot{}, fmt.Errorf("validate local route snapshot: %w", err)
+	}
+	// This map is deliberately private: it bridges the container lifecycle's
+	// legacy ID to the edge's opaque target key without publishing IDs.
+	p.mergeContainerTargetKeys(containerTargetKeys)
+	if p.hasLast && sameRoutingContent(candidate, p.last) {
+		return p.last.Clone(), nil
 	}
 	p.last = candidate.Clone()
 	p.hasLast = true
@@ -87,7 +94,7 @@ func (p *LocalSnapshotProvider) nextGeneration() domain.RouteTargetGeneration {
 	return p.last.Generation + 1
 }
 
-func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation domain.RouteTargetGeneration) (domain.RouteTargetSnapshot, map[string]domain.RouteTargetKey, error) {
+func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation domain.RouteTargetGeneration) (domain.RouteTargetSnapshot, map[string]containerTargetKeyAssociation, error) {
 	if p.configSvc == nil {
 		return domain.RouteTargetSnapshot{}, nil, fmt.Errorf("local snapshot provider config service is required")
 	}
@@ -131,8 +138,24 @@ func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation do
 func (p *LocalSnapshotProvider) TargetKeyForContainer(containerID string) (domain.RouteTargetKey, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	key, ok := p.containerTargetKeys[containerID]
-	return key, ok
+	association, ok := p.containerTargetKeys[containerID]
+	return association.key, ok
+}
+
+// ReleaseTargetKeyForContainer drops a retired lifecycle association after its
+// drain wait succeeds, times out, or is cancelled. A currently routed
+// container ID is never removed, so a delayed release cannot remove a newer
+// association.
+func (p *LocalSnapshotProvider) ReleaseTargetKeyForContainer(containerID string) {
+	if p == nil || containerID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, current := p.currentContainerTargetKeys[containerID]; current {
+		return
+	}
+	delete(p.containerTargetKeys, containerID)
 }
 
 func (p *LocalSnapshotProvider) snapshotEntries(
@@ -142,9 +165,9 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 	registryDomain string,
 	registryEnabled bool,
 	generation domain.RouteTargetGeneration,
-) ([]domain.RouteTargetEntry, map[string]domain.RouteTargetKey, error) {
+) ([]domain.RouteTargetEntry, map[string]containerTargetKeyAssociation, error) {
 	entries := make([]domain.RouteTargetEntry, 0, len(managed)+len(external))
-	containerTargetKeys := make(map[string]domain.RouteTargetKey, len(managed))
+	containerTargetKeys := make(map[string]containerTargetKeyAssociation, len(managed))
 	for _, route := range managed {
 		if registryEnabled && route.Domain == registryDomain {
 			continue
@@ -157,7 +180,7 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 			return nil, nil, err
 		}
 		if containerID != "" && !entry.Unavailable() {
-			containerTargetKeys[containerID] = entry.TargetKey
+			containerTargetKeys[containerID] = containerTargetKeyAssociation{key: entry.TargetKey, domain: route.Domain}
 		}
 		entries = append(entries, entry)
 	}
@@ -173,6 +196,37 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].CanonicalDomain < entries[j].CanonicalDomain })
 	return entries, containerTargetKeys, nil
+}
+
+// mergeContainerTargetKeys retains an old target association through the drain
+// for the immediately preceding deployment. Per-domain deployment is serialized
+// by container.Service, so a subsequent replacement can only occur after that
+// drain returns. Keeping only the current and immediately preceding association
+// therefore bounds abandoned mappings to two per route without evicting an
+// active drain when a lifecycle caller fails to release one.
+func (p *LocalSnapshotProvider) mergeContainerTargetKeys(current map[string]containerTargetKeyAssociation) {
+	previousCurrentByDomain := make(map[string]string, len(p.currentContainerTargetKeys))
+	for containerID, association := range p.currentContainerTargetKeys {
+		previousCurrentByDomain[association.domain] = containerID
+	}
+	currentByDomain := make(map[string]string, len(current))
+	for containerID, association := range current {
+		currentByDomain[association.domain] = containerID
+	}
+	for containerID, association := range p.containerTargetKeys {
+		if _, isCurrent := current[containerID]; isCurrent {
+			continue
+		}
+		currentContainerID, replaced := currentByDomain[association.domain]
+		previousContainerID := previousCurrentByDomain[association.domain]
+		if replaced && currentContainerID != previousContainerID && previousContainerID != containerID {
+			delete(p.containerTargetKeys, containerID)
+		}
+	}
+	for containerID, association := range current {
+		p.containerTargetKeys[containerID] = association
+	}
+	p.currentContainerTargetKeys = current
 }
 
 func (p *LocalSnapshotProvider) managedSnapshotEntry(ctx context.Context, route localManagedRoute, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, string, error) {

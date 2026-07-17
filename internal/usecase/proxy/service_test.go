@@ -262,6 +262,8 @@ func TestLocalSnapshotDrainWaiter_MapsOldContainerIDToOpaqueInFlightKey(t *testi
 	}
 	release()
 	require.True(t, <-result)
+	_, found := provider.TargetKeyForContainer("old-real-container-id")
+	assert.True(t, found, "releasing a current association must not remove it")
 	assert.True(t, waiter.WaitForNoInFlight(context.Background(), "unknown-old-id", time.Nanosecond))
 }
 

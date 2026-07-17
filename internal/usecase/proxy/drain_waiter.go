@@ -23,7 +23,8 @@ func NewLocalSnapshotDrainWaiter(provider *LocalSnapshotProvider, service *Servi
 
 // WaitForNoInFlight waits by opaque key. An unmapped old ID cannot have been
 // tracked by the snapshot proxy, so succeeding is both safe and compatible
-// with the prior no-in-flight behavior.
+// with the prior no-in-flight behavior. Once the key is found, its private
+// association is released on success, timeout, or context cancellation.
 func (w *LocalSnapshotDrainWaiter) WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool {
 	if w == nil || w.provider == nil || w.service == nil || containerID == "" {
 		return true
@@ -32,5 +33,6 @@ func (w *LocalSnapshotDrainWaiter) WaitForNoInFlight(ctx context.Context, contai
 	if !ok {
 		return true
 	}
+	defer w.provider.ReleaseTargetKeyForContainer(containerID)
 	return w.service.WaitForNoInFlight(ctx, string(key), timeout)
 }
