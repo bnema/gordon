@@ -74,6 +74,12 @@ type ControlConfig struct {
 	// InsecureTLS permits plaintext gRPC only when explicitly enabled. TLS with
 	// normal hostname verification is the default for edge control connections.
 	InsecureTLS bool `mapstructure:"insecure_tls"`
+	// EdgeAlias is the split-network alias that runtime attachments must name.
+	EdgeAlias string `mapstructure:"edge_alias"`
+	// RegistryAlias and RegistryPort are the control-owned internal registry
+	// target contract; neither accepts host loopback endpoints.
+	RegistryAlias string `mapstructure:"registry_alias"`
+	RegistryPort  int    `mapstructure:"registry_port"`
 }
 
 type Config struct {

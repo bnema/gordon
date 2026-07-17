@@ -48,6 +48,24 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 	return outruntime.NewClient(conn), nil
 }
 
+// createRuntimeStateSubscriber exposes only the narrow actual-state stream to
+// control orchestration. The control role never receives a runtime socket or a
+// container adapter.
+func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeStateSubscriber, error) {
+	client, err := createRuntimeCommandClient(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		return nil, fmt.Errorf("runtime.endpoint is required for control route snapshots")
+	}
+	subscriber, ok := client.(out.RuntimeStateSubscriber)
+	if !ok {
+		return nil, fmt.Errorf("runtime command client does not provide actual-state subscription")
+	}
+	return subscriber, nil
+}
+
 func runtimeControlToken(cfg RuntimeControlConfig) string {
 	if token := strings.TrimSpace(cfg.Token); token != "" {
 		return token

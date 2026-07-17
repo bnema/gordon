@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -16,15 +17,19 @@ import (
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
 	edgesnapshotgrpc "github.com/bnema/gordon/internal/adapters/in/grpc/edgesnapshot"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
 
 // controlRoleDependencies makes the narrowly-scoped control server testable.
-// It intentionally has no runtime, config-service, or route-orchestration dependency.
+// It receives only the runtime-state boundary, never a runtime adapter or socket.
 type controlRoleDependencies struct {
 	listen                     func(network, address string) (net.Listener, error)
 	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
 	newSnapshotHub             func() *edgesnapshot.SnapshotHub
+	newRuntimeStateSubscriber  func(context.Context, RuntimeControlConfig) (out.RuntimeStateSubscriber, error)
+	newSnapshotProducer        func(out.RuntimeStateSubscriber, *edgesnapshot.SnapshotHub, edgesnapshot.ProducerOptions) (*edgesnapshot.Producer, error)
 }
 
 func productionControlRoleDependencies() controlRoleDependencies {
@@ -32,12 +37,13 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		listen:                     net.Listen,
 		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
 		newSnapshotHub:             edgesnapshot.NewSnapshotHub,
+		newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
+		newSnapshotProducer:        edgesnapshot.NewProducer,
 	}
 }
 
-// runControlImpl owns only the authenticated snapshot gRPC server. Route
-// orchestration publishes into the returned hub in a later phase; this role
-// never reads runtime state to synthesize snapshots.
+// runControlImpl owns the authenticated snapshot gRPC server and translates
+// the narrow runtime-state boundary through the control-owned producer.
 func runControlImpl(ctx context.Context, configPath string) error {
 	return runControlWithDependencies(ctx, configPath, productionControlRoleDependencies())
 }
@@ -65,6 +71,12 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if hub == nil {
 		return fmt.Errorf("control route snapshot hub is required")
 	}
+	if err := startControlSnapshotProducer(ctx, cfg, deps, hub); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return log.WrapErr(err, "publish initial control route snapshot")
+	}
 	listener, err := deps.listen("tcp", strings.TrimSpace(cfg.Control.ListenAddress))
 	if err != nil {
 		return log.WrapErr(err, "failed to listen for control gRPC")
@@ -86,6 +98,42 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	case serveErr := <-errCh:
 		return log.WrapErr(serveErr, "control snapshot gRPC server stopped")
 	}
+}
+
+func startControlSnapshotProducer(ctx context.Context, cfg Config, deps controlRoleDependencies, hub *edgesnapshot.SnapshotHub) error {
+	if deps.newRuntimeStateSubscriber == nil || deps.newSnapshotProducer == nil {
+		return fmt.Errorf("control route snapshot producer dependencies are required")
+	}
+	subscriber, err := deps.newRuntimeStateSubscriber(ctx, cfg.Runtime)
+	if err != nil {
+		return fmt.Errorf("create control runtime state subscriber: %w", err)
+	}
+	producer, err := deps.newSnapshotProducer(subscriber, hub, controlProducerOptions(cfg))
+	if err != nil {
+		return fmt.Errorf("create control route snapshot producer: %w", err)
+	}
+	if err := producer.Start(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// controlProducerOptions converts only explicit control routing contracts into
+// producer inputs. It intentionally never forwards Config, container state, or
+// a runtime endpoint to edge snapshots.
+func controlProducerOptions(cfg Config) edgesnapshot.ProducerOptions {
+	options := edgesnapshot.ProducerOptions{EdgeAlias: cfg.Control.EdgeAlias}
+	if strings.TrimSpace(cfg.Server.RegistryDomain) == "" {
+		return options
+	}
+	options.Registry = &edgesnapshot.RegistryTarget{
+		Domain:   cfg.Server.RegistryDomain,
+		Alias:    cfg.Control.RegistryAlias,
+		Port:     cfg.Control.RegistryPort,
+		Scheme:   "http",
+		Protocol: domain.RouteTargetProtocolHTTP1,
+	}
+	return options
 }
 
 // newControlSnapshotServer is composable so route orchestration can publish to
