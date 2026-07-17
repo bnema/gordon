@@ -96,23 +96,60 @@ func TestRuntimeWorkerResultSanitizedErrorAndCancellation(t *testing.T) {
 	}
 }
 
-func TestSanitizeRuntimeErrorMessageCaseInsensitive(t *testing.T) {
+func TestRuntimeWorkerArbitraryDependencyErrorsAreNeverTransported(t *testing.T) {
 	tests := []struct {
 		name string
 		msg  string
-		want string
 	}{
-		{name: "uppercase unix socket", msg: "dial UNIX:///VAR/RUN/DOCKER.SOCK", want: "runtime command failed"},
-		{name: "mixed case unix socket", msg: "dial UnIx://docker-endpoint", want: "runtime command failed"},
-		{name: "uppercase var run path", msg: "open /VAR/RUN/docker.sock", want: "runtime command failed"},
-		{name: "mixed case run path", msg: "open /RuN/docker.sock", want: "runtime command failed"},
-		{name: "mixed case token", msg: "request failed with ToKeN=value", want: "runtime command failed"},
-		{name: "safe message", msg: "container image was not found", want: "container image was not found"},
+		{name: "API key", msg: "upstream rejected API_KEY=api-key-value"},
+		{name: "authorization bearer", msg: "Authorization: Bearer bearer-token-value"},
+		{name: "URL userinfo", msg: "request to https://user:password@example.com failed"},
+		{name: "cookie", msg: "Cookie: session=opaque-session-value"},
+		{name: "unfamiliar credential name", msg: "credential_blob=custom-credential-value"},
+		{name: "opaque dependency error", msg: "dependency failure 5f8d83e0-5ebb-44a1-91b1-04b44e4cf80d"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, sanitizeRuntimeErrorMessage(errors.New(tt.msg)))
+			worker := NewRuntimeWorker(&fakeRuntimeWorkerService{deployErr: errors.New(tt.msg)})
+			result, err := worker.DeployRoute(context.Background(), domain.DeployRouteCommand{
+				RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-untrusted-" + tt.name),
+				Domain:                 "app.example.com",
+				Image:                  "app:latest",
+			})
+			require.NoError(t, err)
+			require.NotNil(t, result.Error)
+			assert.Equal(t, domain.RuntimeCommandStatusFailed, result.Status)
+			assert.Equal(t, "runtime_command_failed", result.Error.Code)
+			assert.False(t, result.Error.Retryable)
+			assert.Equal(t, "runtime command failed", result.Error.Message)
+			assert.NotEqual(t, tt.msg, result.Error.Message)
+		})
+	}
+}
+
+func TestRuntimeWorkerSafeErrorMessagesAreControlled(t *testing.T) {
+	tests := []struct {
+		name          string
+		err           error
+		wantCode      string
+		wantMessage   string
+		wantRetryable bool
+	}{
+		{name: "policy denial", err: RuntimePolicyDeniedError{Reason: RuntimePolicyReasonDigestRequired, Message: "image digest is required"}, wantCode: "runtime_policy_denied:image_digest_required", wantMessage: "image digest is required"},
+		{name: "context canceled", err: context.Canceled, wantCode: "context_canceled", wantMessage: "context canceled"},
+		{name: "context deadline", err: context.DeadlineExceeded, wantCode: "context_deadline_exceeded", wantMessage: "context deadline exceeded", wantRetryable: true},
+		{name: "invalid command", err: domain.ErrInvalidRuntimeCommand, wantCode: "invalid_runtime_command", wantMessage: "invalid runtime command"},
+		{name: "self update unavailable", err: errRuntimeSelfUpdateUnavailable, wantCode: "self_update_unavailable", wantMessage: "runtime self-update is unavailable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transported := sanitizeRuntimeCommandError(tt.err)
+			require.NotNil(t, transported)
+			assert.Equal(t, tt.wantCode, transported.Code)
+			assert.Equal(t, tt.wantMessage, transported.Message)
+			assert.Equal(t, tt.wantRetryable, transported.Retryable)
 		})
 	}
 }

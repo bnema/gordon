@@ -303,17 +303,27 @@ func sanitizeRuntimeCommandError(err error) *domain.RuntimeCommandError {
 }
 
 func sanitizeRuntimeErrorMessage(err error) string {
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
+	switch {
+	case err == nil:
 		return "runtime command failed"
+	case errors.Is(err, errRuntimeSelfUpdateUnavailable):
+		return "runtime self-update is unavailable"
+	case errors.Is(err, context.Canceled):
+		return "context canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "context deadline exceeded"
+	case errors.Is(err, domain.ErrInvalidRuntimeCommand):
+		return "invalid runtime command"
 	}
-	normalizedMessage := strings.ToLower(msg)
-	for _, marker := range []string{"secret=", "token=", "password=", "unix://", "/var/run/", "/run/"} {
-		if strings.Contains(normalizedMessage, marker) {
-			return "runtime command failed"
+
+	var policyDenied RuntimePolicyDeniedError
+	if errors.As(err, &policyDenied) {
+		if message := strings.TrimSpace(policyDenied.Message); message != "" {
+			return message
 		}
+		return "runtime policy denied"
 	}
-	return msg
+	return "runtime command failed"
 }
 
 func buildRuntimeContainerStates(generation uint64, containers map[string]*domain.Container) []domain.RuntimeContainerState {
