@@ -345,8 +345,9 @@ func sanitizeRuntimeErrorMessage(err error) string {
 	if msg == "" {
 		return "runtime command failed"
 	}
-	for _, marker := range []string{"SECRET=", "TOKEN=", "PASSWORD=", "unix://", "/var/run/", "/run/"} {
-		if strings.Contains(strings.ToUpper(msg), marker) || strings.Contains(msg, marker) {
+	normalizedMessage := strings.ToLower(msg)
+	for _, marker := range []string{"secret=", "token=", "password=", "unix://", "/var/run/", "/run/"} {
+		if strings.Contains(normalizedMessage, marker) {
 			return "runtime command failed"
 		}
 	}
@@ -412,7 +413,7 @@ func buildRuntimeRouteStates(generation uint64, routes []domain.RouteInfo, conta
 			states = append(states, unavailableRouteState(generation, route.Domain, "no target alias"))
 			continue
 		}
-		states = append(states, domain.RuntimeRouteState{Domain: route.Domain, Generation: generation, ContainerAlias: alias, EdgeTargetAlias: alias, TargetPort: port, Scheme: routeScheme(c), Protocol: routeProtocol(c), Status: domain.RouteTargetStatusReady, UnavailableReason: domain.RouteTargetUnavailableReasonNone, BackingContainerName: c.Name})
+		states = append(states, domain.RuntimeRouteState{Domain: route.Domain, Generation: generation, ContainerAlias: alias, EdgeTargetAlias: alias, TargetPort: port, Scheme: routeScheme(), Protocol: routeProtocol(c), Status: domain.RouteTargetStatusReady, UnavailableReason: domain.RouteTargetUnavailableReasonNone, BackingContainerName: c.Name})
 	}
 	return states
 }
@@ -471,10 +472,7 @@ func routeTargetPort(c *domain.Container) int {
 	return 0
 }
 
-func routeScheme(c *domain.Container) string {
-	if c.Labels[domain.LabelProxyProtocol] == string(domain.RouteTargetProtocolH2C) {
-		return "http"
-	}
+func routeScheme() string {
 	return "http"
 }
 

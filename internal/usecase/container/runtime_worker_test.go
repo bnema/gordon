@@ -95,6 +95,27 @@ func TestRuntimeWorkerResultSanitizedErrorAndCancellation(t *testing.T) {
 	}
 }
 
+func TestSanitizeRuntimeErrorMessageCaseInsensitive(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{name: "uppercase unix socket", msg: "dial UNIX:///VAR/RUN/DOCKER.SOCK", want: "runtime command failed"},
+		{name: "mixed case unix socket", msg: "dial UnIx://docker-endpoint", want: "runtime command failed"},
+		{name: "uppercase var run path", msg: "open /VAR/RUN/docker.sock", want: "runtime command failed"},
+		{name: "mixed case run path", msg: "open /RuN/docker.sock", want: "runtime command failed"},
+		{name: "mixed case token", msg: "request failed with ToKeN=value", want: "runtime command failed"},
+		{name: "safe message", msg: "container image was not found", want: "container image was not found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, sanitizeRuntimeErrorMessage(errors.New(tt.msg)))
+		})
+	}
+}
+
 func TestRuntimeWorkerDeadlineExceededIsFailedAndRetryable(t *testing.T) {
 	fake := &fakeRuntimeWorkerService{deployErr: context.DeadlineExceeded}
 	worker := NewRuntimeWorker(fake)
