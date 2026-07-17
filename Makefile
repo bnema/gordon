@@ -27,6 +27,11 @@ COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWith
 # builder, and report contract tests. Do not replace this with a broad package
 # run: the Make recipe verifies every real route itself passed rather than skipped.
 COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain
+# Security is a current-candidate gate, not old/new baseline parity. The exact
+# tests below must each pass once without a skip; the edge test needs Docker to
+# prove the candidate container has no runtime socket access.
+COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
+COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 
@@ -159,9 +164,20 @@ compat-harness-migration: ## Run migration compatibility harness checks
 	@echo "Running migration compatibility scenario definition checks..."
 	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
-compat-harness-security: ## Run security compatibility harness checks
-	@echo "Running security compatibility scenario definition checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+compat-harness-security: ## Run blocking current-security compatibility gates
+	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,auth-missing,auth-scope}/compat-report.json"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=1"
+	@echo "Running required Docker preflight and exact current-security gates..."
+	@docker info
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS)|$(COMPAT_SECURITY_HARNESS_GUARDS))$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_SECURITY_REAL_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "security compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
 
 ##@ Build
 

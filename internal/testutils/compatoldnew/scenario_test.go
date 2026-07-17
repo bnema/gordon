@@ -132,14 +132,17 @@ func TestScenarioDefinitions(t *testing.T) {
 
 func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 	expected := map[string]struct{}{
-		"cli/config-show-json":        {},
-		"cli/routes-list-json":        {},
-		"api/auth-missing-invalid":    {},
-		"api/route-list-detail":       {},
-		"api/route-add-update-remove": {},
-		"proxy/managed-http-route":    {},
-		"proxy/external-route":        {},
-		"proxy/zero-downtime-drain":   {},
+		"cli/config-show-json":                          {},
+		"cli/routes-list-json":                          {},
+		"api/auth-missing-invalid":                      {},
+		"api/route-list-detail":                         {},
+		"api/route-add-update-remove":                   {},
+		"proxy/managed-http-route":                      {},
+		"proxy/external-route":                          {},
+		"proxy/zero-downtime-drain":                     {},
+		"security/edge-no-podman-socket":                {},
+		"security/missing-component-token-rejected":     {},
+		"security/wrong-scope-component-token-rejected": {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
 }
@@ -201,7 +204,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	}
 	require.True(t, podmanByName["cli/networks-list-json"])
 	require.True(t, podmanByName["cli/logs"])
-	require.True(t, podmanByName["security/edge-no-podman-socket"])
+	require.False(t, podmanByName["security/edge-no-podman-socket"])
 	require.False(t, podmanByName["security/missing-component-token-rejected"])
 
 	t.Setenv(EnvCompatPodman, "")
@@ -231,7 +234,14 @@ func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
 }
 
 func TestMigrationAndSecurityScenariosDoNotSilentlyPass(t *testing.T) {
-	for _, scenario := range append(MigrationScenarios(), SecurityScenarios()...) {
+	for _, scenario := range MigrationScenarios() {
+		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
+		require.NotEmpty(t, scenario.BlockReason, scenario.Name)
+	}
+	for _, scenario := range SecurityScenarios() {
+		if scenario.Status == ScenarioStatusImplemented {
+			continue
+		}
 		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
 		require.NotEmpty(t, scenario.BlockReason, scenario.Name)
 

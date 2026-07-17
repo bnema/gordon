@@ -1,0 +1,55 @@
+package compatoldnew
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+)
+
+func TestCompatibilitySecurityEdgeNoPodmanSocket(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := DockerCompatibilityPreflight(ctx); err != nil {
+		if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
+			t.Fatalf("security edge isolation requires Docker: %v", err)
+		}
+		t.Skipf("security edge isolation requires Docker; start Docker then rerun make compat-harness-security: %v", err)
+	}
+	report, err := RunSecurityEdgeNoPodmanSocket(ctx, projectRoot(t), compatibilityArtifactDir(t, "security-edge"))
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-edge"))
+}
+
+func TestCompatibilitySecurityMissingComponentTokenRejected(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	report, err := RunSecurityComponentAuth(context.Background(), compatibilityArtifactDir(t, "security-auth-missing"), securityMissingToken)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-auth-missing"))
+}
+
+func TestCompatibilitySecurityWrongScopeComponentTokenRejected(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	report, err := RunSecurityComponentAuth(context.Background(), compatibilityArtifactDir(t, "security-auth-scope"), securityWrongScopeToken)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-auth-scope"))
+}
+
+func assertSecurityArtifactsSafe(t *testing.T, artifactDir string) {
+	t.Helper()
+	for _, name := range []string{"old.raw.json", "new.raw.json", "old.normalized.json", "new.normalized.json", "compat-report.json", "normalized.diff"} {
+		body, err := os.ReadFile(filepath.Join(artifactDir, name))
+		require.NoError(t, err)
+		for _, forbidden := range []string{"gordon_component", "authorization", "127.0.0.1:", "docker.sock", "podman.sock", "container-id"} {
+			require.NotContains(t, strings.ToLower(string(body)), forbidden, name)
+		}
+	}
+}

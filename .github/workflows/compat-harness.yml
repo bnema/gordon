@@ -58,6 +58,11 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-proxy
 
+      - name: Run Docker current-security compatibility gates
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-security
+
       - name: Run full test suite with real scenarios gated off
         env:
           GORDON_COMPAT_RUN_REAL: "0"
