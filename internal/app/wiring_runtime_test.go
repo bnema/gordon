@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,38 +12,48 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/componentauth"
 )
 
-func TestRuntimeRoleWiringStartsGRPCWithInjectedWorker(t *testing.T) {
-	oldBuild := buildRuntimeRoleWorker
-	oldListen := listenRuntimeGRPC
-	oldValidator := runtimeRoleComponentTokenValidator
-	t.Cleanup(func() {
-		buildRuntimeRoleWorker = oldBuild
-		listenRuntimeGRPC = oldListen
-		runtimeRoleComponentTokenValidator = oldValidator
-	})
-
-	buildRuntimeRoleWorker = func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error) {
-		return fakeRuntimeRoleWorker{}, func() {}, nil
-	}
-	muxValidator := fakeRuntimeRoleTokenValidator{}
-	runtimeRoleComponentTokenValidator = muxValidator
-	listenRuntimeGRPC = func(_, _ string) (net.Listener, error) {
-		return net.Listen("tcp", "127.0.0.1:0")
+func TestRuntimeRoleWiringStartsGRPCWithInjectedDependencies(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	validator := &fakeRuntimeRoleTokenValidator{}
+	deps := runtimeRoleDependencies{
+		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error) {
+			return fakeRuntimeRoleWorker{}, func() {}, nil
+		},
+		listen: func(_, _ string) (net.Listener, error) {
+			return listener, nil
+		},
+		newComponentTokenValidator: func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error) {
+			return validator, nil
+		},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- runRuntimeImpl(ctx, "")
+		done <- runRuntimeWithDependencies(ctx, "", deps)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	client := runtimev1.NewRuntimeServiceClient(conn)
+	rpcCtx, rpcCancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer test-token"), time.Second)
+	defer rpcCancel()
+	_, err = client.GetHealth(rpcCtx, &runtimev1.GetHealthRequest{})
+	require.NoError(t, err)
+	require.Equal(t, 1, validator.calls)
+
 	cancel()
 
 	select {
@@ -50,6 +62,57 @@ func TestRuntimeRoleWiringStartsGRPCWithInjectedWorker(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime role did not stop after context cancellation")
 	}
+}
+
+func TestNewRuntimeRoleComponentTokenValidatorUsesConfiguredBackend(t *testing.T) {
+	cfg := Config{}
+	cfg.Auth.SecretsBackend = "unsafe"
+	cfg.Server.DataDir = t.TempDir()
+
+	validator, err := newRuntimeRoleComponentTokenValidator(cfg, zerowrap.Default())
+
+	require.NoError(t, err)
+	service, ok := validator.(*componentauth.Service)
+	require.True(t, ok)
+	created, err := service.CreateToken(context.Background(), componentauth.CreateRequest{
+		Name:   "control-1",
+		Role:   domain.ComponentRoleControl,
+		Scopes: []domain.ComponentScope{domain.ComponentScopeRuntimeStatus},
+	})
+	require.NoError(t, err)
+	identity, err := validator.ValidateToken(context.Background(), created.Token, domain.ComponentScopeRuntimeStatus)
+	require.NoError(t, err)
+	require.Equal(t, "control-1", identity.Name)
+}
+
+func TestRuntimeRoleStartupFailsClosedWhenComponentTokenStoreCannotBeCreated(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[auth]\nsecrets_backend = \"sops\"\n"), 0600))
+	workerBuilt := false
+	deps := runtimeRoleDependencies{
+		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error) {
+			workerBuilt = true
+			return fakeRuntimeRoleWorker{}, nil, nil
+		},
+		listen:                     net.Listen,
+		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
+	}
+
+	err := runRuntimeWithDependencies(context.Background(), configPath, deps)
+
+	require.ErrorContains(t, err, "failed to initialize component token validator")
+	require.False(t, workerBuilt)
+}
+
+func TestNewRuntimeRoleComponentTokenValidatorRejectsUnsupportedBackend(t *testing.T) {
+	cfg := Config{}
+	cfg.Auth.SecretsBackend = "sops"
+	cfg.Server.DataDir = t.TempDir()
+
+	_, err := newRuntimeRoleComponentTokenValidator(cfg, zerowrap.Default())
+
+	require.ErrorContains(t, err, "create component token store")
+	require.ErrorContains(t, err, "not yet implemented")
 }
 
 func TestRuntimeRoleServiceWiresActualStateSubscriberFromSnapshotWorker(t *testing.T) {
@@ -95,9 +158,12 @@ func TestRuntimeRoleServiceLeavesActualStateUnconfiguredWithoutSnapshotWorker(t 
 	require.ErrorContains(t, err, "runtime state subscriber not configured")
 }
 
-type fakeRuntimeRoleTokenValidator struct{}
+type fakeRuntimeRoleTokenValidator struct {
+	calls int
+}
 
-func (fakeRuntimeRoleTokenValidator) ValidateToken(context.Context, string, domain.ComponentScope) (*domain.ComponentIdentity, error) {
+func (f *fakeRuntimeRoleTokenValidator) ValidateToken(context.Context, string, domain.ComponentScope) (*domain.ComponentIdentity, error) {
+	f.calls++
 	return &domain.ComponentIdentity{Name: "control", Role: domain.ComponentRoleControl}, nil
 }
 

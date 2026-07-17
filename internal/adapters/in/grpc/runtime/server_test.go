@@ -8,10 +8,14 @@ import (
 	"time"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/testutils/grpctest"
+	"github.com/bnema/gordon/internal/usecase/componentauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -270,6 +274,76 @@ func TestRuntimeServerRequiresComponentAuth(t *testing.T) {
 	assert.True(t, resp.Ok)
 }
 
+func TestRuntimeServerAuthenticatesRealPersistedComponentTokens(t *testing.T) {
+	store, err := tokenstore.NewComponentTokenStore(domain.SecretsBackendUnsafe, t.TempDir(), zerowrap.Default())
+	require.NoError(t, err)
+	service := componentauth.NewService(store, zerowrap.Default(), componentauth.Config{})
+	worker := &countingRuntimeWorker{}
+	server := NewServerWithStateSubscriber(worker, &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{testActualStateSnapshot()}}, "runtime-1")
+	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
+		runtimev1.RegisterRuntimeServiceServer(registrar, server)
+	},
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, MethodScopes())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(service, MethodScopes())),
+	)
+	client := runtimev1.NewRuntimeServiceClient(harness.Conn(t))
+	request := &runtimev1.ApplyCommandRequest{Command: &runtimev1.ApplyCommandRequest_DeployRoute{DeployRoute: &runtimev1.DeployRouteCommand{
+		Identity: protoTestIdentity("command-1", time.Unix(10, 0).UTC()),
+		Domain:   "app.example.com",
+		Image:    "app:latest",
+	}}}
+	create := func(scopes []domain.ComponentScope, expiresAt time.Time) *componentauth.CreateResult {
+		t.Helper()
+		created, createErr := service.CreateToken(context.Background(), componentauth.CreateRequest{
+			Name:      "control-1",
+			Role:      domain.ComponentRoleControl,
+			Scopes:    scopes,
+			ExpiresAt: expiresAt,
+		})
+		require.NoError(t, createErr)
+		return created
+	}
+	call := func(token string) error {
+		t.Helper()
+		_, callErr := client.ApplyCommand(grpctest.AuthenticatedContext(context.Background(), token), request)
+		return callErr
+	}
+
+	_, err = client.ApplyCommand(context.Background(), request)
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+	require.Zero(t, worker.deployCalls)
+
+	valid := create([]domain.ComponentScope{domain.ComponentScopeRuntimeDeploy, domain.ComponentScopeRuntimeStatus}, time.Time{})
+	require.Equal(t, codes.Unauthenticated, status.Code(call(valid.Token+"wrong")))
+	require.Zero(t, worker.deployCalls)
+
+	revoked := create([]domain.ComponentScope{domain.ComponentScopeRuntimeDeploy}, time.Time{})
+	require.NoError(t, service.RevokeToken(context.Background(), revoked.Metadata.KeyID))
+	require.Equal(t, codes.PermissionDenied, status.Code(call(revoked.Token)))
+	require.Zero(t, worker.deployCalls)
+
+	expired := create([]domain.ComponentScope{domain.ComponentScopeRuntimeDeploy}, time.Now().Add(-time.Hour))
+	require.Equal(t, codes.PermissionDenied, status.Code(call(expired.Token)))
+	require.Zero(t, worker.deployCalls)
+
+	insufficient := create([]domain.ComponentScope{domain.ComponentScopeRuntimeStatus}, time.Time{})
+	require.Equal(t, codes.PermissionDenied, status.Code(call(insufficient.Token)))
+	require.Zero(t, worker.deployCalls)
+
+	require.NoError(t, call(valid.Token))
+	require.Equal(t, 1, worker.deployCalls)
+
+	stream, err := client.WatchActualState(grpctest.AuthenticatedContext(context.Background(), valid.Token), &runtimev1.WatchActualStateRequest{})
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	require.NoError(t, err)
+
+	missingStream, err := client.WatchActualState(context.Background(), &runtimev1.WatchActualStateRequest{})
+	require.NoError(t, err)
+	_, err = missingStream.Recv()
+	require.Equal(t, codes.Unauthenticated, status.Code(err))
+}
+
 func TestMethodScopesRequireRuntimePermissions(t *testing.T) {
 	scopes := MethodScopes()
 	assert.Equal(t, domain.ComponentScopeRuntimeDeploy, scopes[runtimev1.RuntimeService_ApplyCommand_FullMethodName])
@@ -368,6 +442,16 @@ type fakeRuntimeWorker struct {
 	deploy    domain.DeployRouteCommand
 	reconcile domain.ReconcileRuntimeCommand
 	self      domain.RuntimeSelfUpdateCommand
+}
+
+type countingRuntimeWorker struct {
+	fakeRuntimeWorker
+	deployCalls int
+}
+
+func (f *countingRuntimeWorker) DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
+	f.deployCalls++
+	return f.fakeRuntimeWorker.DeployRoute(ctx, command)
 }
 
 func (f *fakeRuntimeWorker) DeployRoute(_ context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {

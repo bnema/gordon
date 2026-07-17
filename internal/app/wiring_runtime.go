@@ -15,9 +15,11 @@ import (
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/componentauth"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/images"
@@ -25,14 +27,41 @@ import (
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 )
 
-var (
-	buildRuntimeRoleWorker             = buildRuntimeRoleWorkerImpl
-	listenRuntimeGRPC                  = net.Listen
-	runtimeRoleComponentTokenValidator interceptors.ComponentTokenValidator
-)
+type runtimeRoleDependencies struct {
+	buildWorker                func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error)
+	listen                     func(network, address string) (net.Listener, error)
+	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
+}
+
+func productionRuntimeRoleDependencies() runtimeRoleDependencies {
+	return runtimeRoleDependencies{
+		buildWorker:                buildRuntimeRoleWorkerImpl,
+		listen:                     net.Listen,
+		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
+	}
+}
 
 // runRuntimeImpl owns runtime-worker-only wiring.
 func runRuntimeImpl(ctx context.Context, configPath string) error {
+	return runRuntimeWithDependencies(ctx, configPath, productionRuntimeRoleDependencies())
+}
+
+// newRuntimeRoleComponentTokenValidator constructs the production validator from
+// the configured component-token backend. Runtime startup must not proceed if
+// this construction fails, because all component RPCs require authentication.
+func newRuntimeRoleComponentTokenValidator(cfg Config, log zerowrap.Logger) (interceptors.ComponentTokenValidator, error) {
+	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
+	if err != nil {
+		return nil, fmt.Errorf("resolve component token secrets backend: %w", err)
+	}
+	store, err := tokenstore.NewComponentTokenStore(backend, resolveDataDir(cfg.Server.DataDir), log)
+	if err != nil {
+		return nil, fmt.Errorf("create component token store: %w", err)
+	}
+	return componentauth.NewService(store, log, componentauth.Config{}), nil
+}
+
+func runRuntimeWithDependencies(ctx context.Context, configPath string, deps runtimeRoleDependencies) error {
 	v, cfg, err := initConfig(configPath)
 	if err != nil {
 		return err
@@ -47,7 +76,12 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 	ctx = zerowrap.WithCtx(ctx, log)
 	warnDeprecatedConfigKeys(v, log)
 
-	worker, cleanupWorker, err := buildRuntimeRoleWorker(ctx, v, cfg, log)
+	validator, err := deps.newComponentTokenValidator(cfg, log)
+	if err != nil {
+		return log.WrapErr(err, "failed to initialize component token validator")
+	}
+
+	worker, cleanupWorker, err := deps.buildWorker(ctx, v, cfg, log)
 	if err != nil {
 		return err
 	}
@@ -55,15 +89,15 @@ func runRuntimeImpl(ctx context.Context, configPath string) error {
 		defer cleanupWorker()
 	}
 	addr := v.GetString("runtime.listen_address")
-	listener, err := listenRuntimeGRPC("tcp", addr)
+	listener, err := deps.listen("tcp", addr)
 	if err != nil {
 		return log.WrapErr(err, "failed to listen for runtime gRPC")
 	}
 	defer listener.Close()
 
 	server := grpc.NewServer(
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(runtimeRoleComponentTokenValidator, runtimegrpc.MethodScopes())),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, runtimegrpc.MethodScopes())),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, runtimegrpc.MethodScopes())),
 	)
 	runtimev1.RegisterRuntimeServiceServer(server, newRuntimeRoleService(worker))
 
