@@ -50,6 +50,7 @@ type Producer struct {
 	mu         sync.Mutex
 	started    bool
 	generation uint64
+	retryWait  func(context.Context, time.Duration) error
 }
 
 // NewProducer validates control-owned routing contracts before accepting
@@ -97,7 +98,7 @@ func NewProducer(subscriber out.RuntimeStateSubscriber, hub *SnapshotHub, option
 			return nil, fmt.Errorf("external target duplicates registry domain %q", registry.CanonicalDomain)
 		}
 	}
-	return &Producer{subscriber: subscriber, hub: hub, edgeAlias: edgeAlias, registry: cloneRegistryTarget(options.Registry), external: external}, nil
+	return &Producer{subscriber: subscriber, hub: hub, edgeAlias: edgeAlias, registry: cloneRegistryTarget(options.Registry), external: external, retryWait: waitForRetry}, nil
 }
 
 // Start waits for a validated initial runtime snapshot before returning. Thus a
@@ -149,7 +150,7 @@ func (p *Producer) waitForInitial(ctx context.Context) (<-chan domain.RuntimeAct
 				}
 			}
 		}
-		if err := waitForRetry(ctx, backoff); err != nil {
+		if err := p.retryWait(ctx, backoff); err != nil {
 			return nil, err
 		}
 		backoff = nextProducerBackoff(backoff)
@@ -170,20 +171,25 @@ func (p *Producer) run(ctx context.Context, updates <-chan domain.RuntimeActualS
 					continue
 				}
 				// Later malformed runtime views are fail-closed: they are never
-				// published over the last known-good snapshot.
-				_, _ = p.publish(snapshot)
+				// published over the last known-good snapshot. A newly published
+				// valid state, not mere subscription success, resets retries.
+				published, _ := p.publish(snapshot)
+				if published {
+					backoff = producerRetryBackoff
+				}
 			}
 		}
-		if err := waitForRetry(ctx, backoff); err != nil {
+		if err := p.retryWait(ctx, backoff); err != nil {
 			return
 		}
+		// Every failed subscription cycle consumes retry budget. Receiving a
+		// valid, newly published update is the sole reset point.
+		backoff = nextProducerBackoff(backoff)
 		next, err := p.subscriber.SubscribeRuntimeState(ctx)
 		if err != nil || next == nil {
-			backoff = nextProducerBackoff(backoff)
 			continue
 		}
 		updates = next
-		backoff = producerRetryBackoff
 	}
 }
 

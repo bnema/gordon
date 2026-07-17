@@ -250,6 +250,58 @@ func testSnapshotMessage(t *testing.T, generation domain.RouteTargetGeneration) 
 	}}}
 }
 
+func TestClientEqualSynchronizationResetsReconnectBackoff(t *testing.T) {
+	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, call int) error {
+		switch call {
+		case 0, 1:
+			if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
+				return err
+			}
+			return nil
+		default:
+			return status.Error(codes.Unauthenticated, "stop test")
+		}
+	}}
+	client := NewClient(testHarness(t, server).Conn(t), WithReconnectBackoff(time.Millisecond, 8*time.Millisecond))
+	var mu sync.Mutex
+	var delays []time.Duration
+	client.retryWait = func(_ context.Context, delay time.Duration) bool {
+		mu.Lock()
+		delays = append(delays, delay)
+		mu.Unlock()
+		return true
+	}
+	require.NoError(t, client.Start(t.Context()))
+	waitFor(t, func() bool { return client.Health().ErrorCategory == ErrorAuthentication })
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []time.Duration{time.Millisecond, time.Millisecond}, delays)
+}
+
+func TestClientCancelDuringRetryExitsPromptly(t *testing.T) {
+	server := &scriptedServer{watch: func(edgev1.EdgeService_WatchRouteSnapshotsServer, int) error {
+		return status.Error(codes.Unavailable, "temporary")
+	}}
+	client := NewClient(testHarness(t, server).Conn(t))
+	retryStarted := make(chan struct{})
+	client.retryWait = func(ctx context.Context, _ time.Duration) bool {
+		close(retryStarted)
+		<-ctx.Done()
+		return false
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, client.Start(ctx))
+	<-retryStarted
+	cancel()
+	stopped := make(chan struct{})
+	go func() { client.Stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("client stop leaked while waiting to retry")
+	}
+}
+
 func waitFor(t *testing.T, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

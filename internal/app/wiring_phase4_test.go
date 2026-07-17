@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,12 +21,14 @@ import (
 
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	httpproxy "github.com/bnema/gordon/internal/adapters/in/http/proxy"
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
 	edgesnapshotclient "github.com/bnema/gordon/internal/adapters/out/grpc/edgesnapshot"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/testutils/grpctest"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
+	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 )
 
 func TestControlTokenPrefersConfigThenNamedEnvironment(t *testing.T) {
@@ -137,6 +143,109 @@ func TestControlProducerStreamsInitialAndUpdateToEdgeClient(t *testing.T) {
 	}, time.Second, time.Millisecond)
 	cancel()
 	require.NoError(t, <-done)
+}
+
+func TestExternalRouteStreamsFromParsedControlConfigToRealBackend(t *testing.T) {
+	backend, backendHost, backendObserved := phase4ExternalBackend(t)
+	defer backend.Close()
+	_, backendPort, err := net.SplitHostPort(backend.Listener.Addr().String())
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte(fmt.Sprintf(`
+[control]
+insecure_tls = true
+edge_alias = "gordon-edge"
+[external_routes]
+"public.example.com" = "%s"
+`, net.JoinHostPort(backendHost, backendPort))), 0600))
+	v, cfg, err := initConfig(configPath)
+	require.NoError(t, err)
+	options, err := controlProducerOptions(v, cfg)
+	require.NoError(t, err)
+	require.Len(t, options.External, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime := make(chan domain.RuntimeActualStateSnapshot, 1)
+	runtime <- domain.RuntimeActualStateSnapshot{Generation: 1, StateVersion: "runtime-state:1", SourceComponentID: "runtime"}
+	hub := edgesnapshot.NewSnapshotHub()
+	producer, err := edgesnapshot.NewProducer(phase4StateSubscriber{runtime}, hub, options)
+	require.NoError(t, err)
+	require.NoError(t, producer.Start(ctx))
+
+	validator := grpctest.NewAuthFixture("edge", domain.ComponentRoleEdge, domain.ComponentScopeRoutesWatch)
+	server, err := newControlSnapshotServer(cfg, validator, hub)
+	require.NoError(t, err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+	credentials, err := grpcauth.NewInsecureBearerTokenCredentials(grpctest.LocalComponentToken)
+	require.NoError(t, err)
+	connection, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithPerRPCCredentials(credentials))
+	require.NoError(t, err)
+	defer connection.Close()
+	snapshots := edgesnapshotclient.NewClient(connection, edgesnapshotclient.WithReconnectBackoff(time.Millisecond, 5*time.Millisecond))
+	require.NoError(t, snapshots.Start(ctx))
+	defer snapshots.Stop()
+	require.Eventually(t, func() bool {
+		snapshot, snapshotErr := snapshots.CurrentSnapshot(context.Background())
+		return snapshotErr == nil && snapshot.Generation == 1 && len(snapshot.Entries) == 1
+	}, time.Second, time.Millisecond)
+
+	proxyHandler := httpproxy.NewHandler(proxyusecase.NewSnapshotService(snapshots, proxyusecase.Config{}), nil, zerowrap.Default())
+	request := httptest.NewRequest(http.MethodGet, "http://public.example.com/through-edge", nil)
+	request.Host = "public.example.com"
+	response := httptest.NewRecorder()
+	proxyHandler.ServeHTTP(response, request)
+	result := response.Result()
+	defer result.Body.Close()
+	body, err := io.ReadAll(result.Body)
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, result.StatusCode)
+	assert.Equal(t, "external-backend", string(body))
+	select {
+	case host := <-backendObserved:
+		assert.Equal(t, net.JoinHostPort(backendHost, backendPort), host)
+	case <-time.After(time.Second):
+		t.Fatal("external backend did not receive proxied request")
+	}
+}
+
+func phase4ExternalBackend(t *testing.T) (*httptest.Server, string, <-chan string) {
+	t.Helper()
+	for _, iface := range mustInterfaceAddrs(t) {
+		ip, _, err := net.ParseCIDR(iface.String())
+		if err != nil || !phase4ExternallyRoutableTestIP(ip) {
+			continue
+		}
+		listener, listenErr := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+		if listenErr != nil {
+			continue
+		}
+		observed := make(chan string, 1)
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			observed <- r.Host
+			_, _ = w.Write([]byte("external-backend"))
+		}))
+		server.Listener = listener
+		server.Start()
+		return server, ip.String(), observed
+	}
+	t.Skip("no locally bound address outside external-route SSRF denylist")
+	return nil, "", nil
+}
+
+func mustInterfaceAddrs(t *testing.T) []net.Addr {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	require.NoError(t, err)
+	return addrs
+}
+
+func phase4ExternallyRoutableTestIP(ip net.IP) bool {
+	return ip.To4() != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !ip.IsMulticast()
 }
 
 func phase4ManagedRuntimeSnapshot(generation uint64, privateContainer string) domain.RuntimeActualStateSnapshot {

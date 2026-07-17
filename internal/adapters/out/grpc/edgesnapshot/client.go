@@ -74,6 +74,7 @@ type Client struct {
 
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
+	retryWait      func(context.Context, time.Duration) bool
 }
 
 var (
@@ -94,6 +95,7 @@ func NewClientWithEdgeService(service edgev1.EdgeServiceClient, options ...Optio
 		client:         service,
 		initialBackoff: defaultInitialBackoff,
 		maxBackoff:     defaultMaxBackoff,
+		retryWait:      waitForRetry,
 	}
 	for _, option := range options {
 		if option != nil {
@@ -195,7 +197,7 @@ func (c *Client) watch(ctx context.Context, runID uint64, done chan struct{}) {
 			if c.handleWatchError(ctx, err) {
 				return
 			}
-			if !waitForRetry(ctx, backoff) {
+			if !c.retryWait(ctx, backoff) {
 				return
 			}
 			backoff = nextBackoff(backoff, c.maxBackoff)
@@ -209,7 +211,7 @@ func (c *Client) watch(ctx context.Context, runID uint64, done chan struct{}) {
 				if c.handleWatchError(ctx, recvErr) {
 					return
 				}
-				if !waitForRetry(ctx, backoff) {
+				if !c.retryWait(ctx, backoff) {
 					return
 				}
 				backoff = nextBackoff(backoff, c.maxBackoff)
@@ -282,11 +284,12 @@ func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
 			}
 			// A byte-for-byte equivalent routing view is the reconnect sync
 			// acknowledgement. Preserve both the stored clone and acceptance
-			// metadata; this is not a new update.
+			// metadata; this is not a new update, but it is valid synchronization
+			// and therefore earns a fresh retry budget.
 			c.health.Healthy = true
 			c.health.Connected = true
 			c.health.ErrorCategory = ErrorNone
-			return false, nil
+			return true, nil
 		}
 	}
 	c.snapshot = snapshot.Clone()

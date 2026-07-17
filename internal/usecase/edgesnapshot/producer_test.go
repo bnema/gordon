@@ -3,6 +3,7 @@ package edgesnapshot
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -105,6 +106,119 @@ func TestProducerRejectsUnsafeRegistryAlias(t *testing.T) {
 		Registry:  &RegistryTarget{Domain: "registry.example.com", Alias: "127.0.0.1", Port: 5000},
 	})
 	require.Error(t, err)
+}
+
+type scriptedProducerSubscriber struct {
+	mu       sync.Mutex
+	channels []<-chan domain.RuntimeActualStateSnapshot
+	calls    int
+}
+
+func (s *scriptedProducerSubscriber) SubscribeRuntimeState(context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	if len(s.channels) == 0 {
+		return closedRuntimeStateChannel(), nil
+	}
+	channel := s.channels[0]
+	s.channels = s.channels[1:]
+	return channel, nil
+}
+
+func closedRuntimeStateChannel() <-chan domain.RuntimeActualStateSnapshot {
+	channel := make(chan domain.RuntimeActualStateSnapshot)
+	close(channel)
+	return channel
+}
+
+func TestProducerClosedSubscriptionsBackOffUntilValidUpdate(t *testing.T) {
+	initial := make(chan domain.RuntimeActualStateSnapshot, 1)
+	initial <- producerRuntimeSnapshot(1, "app.example.com", "gordon-target-app-example-com")
+	close(initial)
+	invalid := make(chan domain.RuntimeActualStateSnapshot, 1)
+	invalid <- domain.RuntimeActualStateSnapshot{}
+	close(invalid)
+	valid := make(chan domain.RuntimeActualStateSnapshot, 1)
+	valid <- producerRuntimeSnapshot(2, "app.example.com", "gordon-target-app-example-com")
+	close(valid)
+	subscriber := &scriptedProducerSubscriber{channels: []<-chan domain.RuntimeActualStateSnapshot{initial, invalid, valid}}
+	producer, err := NewProducer(subscriber, NewSnapshotHub(), ProducerOptions{EdgeAlias: "gordon-edge"})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var delays []time.Duration
+	retryExited := make(chan struct{})
+	producer.retryWait = func(ctx context.Context, delay time.Duration) error {
+		mu.Lock()
+		delays = append(delays, delay)
+		count := len(delays)
+		mu.Unlock()
+		if count < 3 {
+			return nil
+		}
+		<-ctx.Done()
+		close(retryExited)
+		return ctx.Err()
+	}
+	require.NoError(t, producer.Start(ctx))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(delays) == 3
+	}, time.Second, time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, []time.Duration{producerRetryBackoff, 2 * producerRetryBackoff, producerRetryBackoff}, delays)
+	mu.Unlock()
+	cancel()
+	select {
+	case <-retryExited:
+	case <-time.After(time.Second):
+		t.Fatal("producer leaked while waiting to retry")
+	}
+}
+
+func TestProducerRepeatedClosedSubscriptionsUseBoundedBackoff(t *testing.T) {
+	initial := make(chan domain.RuntimeActualStateSnapshot, 1)
+	initial <- producerRuntimeSnapshot(1, "app.example.com", "gordon-target-app-example-com")
+	close(initial)
+	subscriber := &scriptedProducerSubscriber{channels: []<-chan domain.RuntimeActualStateSnapshot{initial, closedRuntimeStateChannel(), closedRuntimeStateChannel()}}
+	producer, err := NewProducer(subscriber, NewSnapshotHub(), ProducerOptions{EdgeAlias: "gordon-edge"})
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var mu sync.Mutex
+	var delays []time.Duration
+	retryExited := make(chan struct{})
+	producer.retryWait = func(ctx context.Context, delay time.Duration) error {
+		mu.Lock()
+		delays = append(delays, delay)
+		count := len(delays)
+		mu.Unlock()
+		if count < 3 {
+			return nil
+		}
+		<-ctx.Done()
+		close(retryExited)
+		return ctx.Err()
+	}
+	require.NoError(t, producer.Start(ctx))
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(delays) == 3
+	}, time.Second, time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, []time.Duration{producerRetryBackoff, 2 * producerRetryBackoff, 4 * producerRetryBackoff}, delays)
+	mu.Unlock()
+	cancel()
+	select {
+	case <-retryExited:
+	case <-time.After(time.Second):
+		t.Fatal("producer leaked while waiting to retry")
+	}
 }
 
 func producerRuntimeSnapshot(generation uint64, domainName, alias string) domain.RuntimeActualStateSnapshot {
