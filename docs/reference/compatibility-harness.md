@@ -14,9 +14,12 @@ Run the CI slices exactly as follows:
 make compat-harness-config  # TestCompatibilityConfigShowJSON
 make compat-harness-cli     # TestCompatibilityRoutesListJSON
 make compat-harness-api     # Docker preflight + TestCompatibilityAdminAuthAndRouteCRUD
+make compat-harness-proxy   # blocking Docker preflight + TestCompatibilityManagedHTTPRoute
 ```
 
-The real old/new scenarios require `GORDON_COMPAT_RUN_REAL=1`. The three Make targets set it themselves, so they cannot pass by skipping; the API target also sets `GORDON_COMPAT_REQUIRE_RUNTIME=1` and fails without Docker. Ordinary `go test ./...` leaves real scenarios gated off, so it needs neither a baseline checkout nor a container runtime. Podman-only fixture work remains opt-in with `GORDON_COMPAT_PODMAN=1`; it requires a working `podman info`.
+The executable real old/new targets set `GORDON_COMPAT_RUN_REAL=1` themselves, so they cannot pass by skipping; API and proxy also set `GORDON_COMPAT_REQUIRE_RUNTIME=1` and run `docker info`, making Docker a hard CI/local requirement. The proxy target additionally rejects a skipped or absent `TestCompatibilityManagedHTTPRoute` result. Ordinary `go test ./...` leaves real scenarios gated off, so it needs neither a baseline checkout nor a container runtime.
+
+The managed route uses Docker's compatible CLI intentionally. Its `PodmanRequired=false` means *not specifically Podman*; it does not mean no runtime is required. Future Podman e2e scenarios remain opt-in through `GORDON_COMPAT_PODMAN=1` and require `podman info`.
 
 The Make targets derive `COMPAT_ARTIFACT_DIR` from `GORDON_COMPAT_ARTIFACT_DIR` when set, otherwise retain reports under the ignored repository-root `artifacts/compat` directory. Relative `GORDON_COMPAT_ARTIFACT_DIR` values are resolved from the repository root; absolute values are used unchanged. An explicit `COMPAT_ARTIFACT_DIR=...` make variable still takes precedence. Each target deterministically overwrites its expected files, then prints the baseline ref, report path, and exact focused rerun command. Every slice writes private (`0600`) diagnostic files:
 
@@ -31,11 +34,14 @@ Focused reruns are:
 GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$' -count=1
 GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$' -count=1
 GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$' -count=1
+GORDON_COMPAT_ARTIFACT_DIR=artifacts/compat GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityManagedHTTPRoute$' -count=1
 ```
+
+The proxy report is `artifacts/compat/proxy/compat-report.json` (or `<COMPAT_ARTIFACT_DIR>/proxy/compat-report.json`), with the same diagnostic side files as the other slices. The harness labels and removes its managed route containers and temporary image on completion, including failure paths; inspect Docker only by the printed run-specific labels while debugging.
 
 ## Scenario and fixture policy
 
-Exactly five scenario names are implemented: `cli/config-show-json`, `cli/routes-list-json`, `api/auth-missing-invalid`, `api/route-list-detail`, and `api/route-add-update-remove`. Every other scenario shell is `pending`, including all migration and security shells. Pending scenarios are not coverage: selecting one fails, and the policy guards keep them from silently becoming passing work.
+Exactly six scenario names are implemented: `cli/config-show-json`, `cli/routes-list-json`, `api/auth-missing-invalid`, `api/route-list-detail`, `api/route-add-update-remove`, and `proxy/managed-http-route`. The remaining proxy shells are pending: `proxy/unknown-host`, `proxy/external-route`, `proxy/h2c-backend`, `proxy/registry-domain-routing`, `proxy/body-size-limit`, `proxy/zero-downtime-drain`, and `proxy/access-log-emitted`. All other shells, including migration and security, are also pending. Pending scenarios are not coverage: selecting one fails, and the policy guards keep them from silently becoming passing work.
 
 When adding a fixture:
 

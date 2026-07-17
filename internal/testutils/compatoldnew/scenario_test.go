@@ -214,6 +214,20 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	require.Equal(t, podmanScenario.BlockReason, reason)
 }
 
+func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == managedHTTPRouteScenarioName {
+			continue
+		}
+		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
+		require.NotEmpty(t, scenario.BlockReason, scenario.Name)
+
+		reason, skip := scenario.SkipReason()
+		require.True(t, skip, scenario.Name)
+		require.NotEmpty(t, reason, scenario.Name)
+	}
+}
+
 func TestMigrationAndSecurityScenariosDoNotSilentlyPass(t *testing.T) {
 	for _, scenario := range append(MigrationScenarios(), SecurityScenarios()...) {
 		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)

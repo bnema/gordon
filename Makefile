@@ -23,6 +23,10 @@ ARCHS := amd64 arm64
 # Compatibility harness foundation and policy guards. Keep this list anchored
 # with each real slice so an absent or pending scenario cannot silently pass CI.
 COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestRunnerReadinessSupportsCallbackTCPExitAndTimeout|TestRunnerStartWaitReadyStopAndLogs|TestStageSideFixtureCopiesConfigAndIsolatesHomeAndData|TestFixtureMetadata|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass
+# The proxy gate deliberately selects its real route, proxy/pending policy,
+# builder, and report contract tests. Do not replace this with a broad package
+# run: the Make recipe verifies that the real route itself passed rather than skipped.
+COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 
 # Phony targets
@@ -125,12 +129,22 @@ compat-harness-registry: ## Run registry compatibility harness checks
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
 
-compat-harness-proxy: ## Run real managed proxy compatibility harness checks
+compat-harness-proxy: ## Run the blocking Docker managed-proxy compatibility gate
 	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/proxy/compat-report.json"
-	@echo "Running required Docker preflight and managed proxy compatibility slice..."
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityManagedHTTPRoute$$' -count=1"
+	@echo "Running required Docker preflight and blocking managed proxy compatibility slice..."
 	@docker info
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityManagedHTTPRoutePreflight|TestCompatibilityManagedHTTPRoute|TestManagedHTTPRouteScenarioDefinition|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^(TestCompatibilityManagedHTTPRoute|$(COMPAT_PROXY_HARNESS_GUARDS))$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		if grep -F '"Action":"skip"' "$$output" | grep -F '"Test":"TestCompatibilityManagedHTTPRoute"' >/dev/null; then \
+			echo "managed proxy compatibility route skipped; refusing to pass the gate"; exit 1; \
+		fi; \
+		if ! grep -F '"Action":"pass"' "$$output" | grep -F '"Test":"TestCompatibilityManagedHTTPRoute"' >/dev/null; then \
+			echo "managed proxy compatibility route did not pass; refusing to pass the gate"; exit 1; \
+		fi
 	@go test ./internal/usecase/proxy -run 'TestProxyTargetResolutionContract|TestDrainRegistryInFlight|TestDrainRegistryInFlightTimeout|TestService_InvalidateTarget|TestContainerDeployedHandler_Handle_InvalidatesCache' -count=1
 	@go test ./internal/usecase/container -run 'TestService_ReconcileRemovedRoute_InvalidatesProxyCacheAndMetric' -count=1
 	@go test ./internal/adapters/in/traffic -run 'TestUDPRemovedRouterWithRetainedEntryPointDrainsSession|TestUDPBackendChangeDrainsExistingSession|TestUDPRemovedRouterDrainsThenClosesSessions|TestTLSHTTPListenerCloseDrainsQueuedConnections|TestTCPPassthroughDrainWaitsForActiveConnectionThenTimesOut' -count=1
