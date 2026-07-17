@@ -101,8 +101,8 @@ compat-harness-cli: ## Run CLI compatibility harness checks
 	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-api: ## Run API compatibility harness checks
-	@echo "Running API compatibility scenario definition checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@echo "Running real API compatibility checks..."
+	@GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-registry: ## Run registry compatibility harness checks
 	@echo "Running registry compatibility harness checks..."

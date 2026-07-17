@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -119,7 +118,7 @@ func CaptureCommand(ctx context.Context, request CommandCaptureRequest) (CLIArti
 	// #nosec G204 -- compatibility tests intentionally execute a selected binary.
 	cmd := exec.CommandContext(ctx, request.BinaryPath, request.Args...)
 	cmd.Dir = request.Dir
-	cmd.Env = append(os.Environ(), request.Env...)
+	cmd.Env = commandEnvironment(request.Env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

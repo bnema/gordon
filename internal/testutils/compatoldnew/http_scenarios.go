@@ -1,11 +1,32 @@
 package compatoldnew
 
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+)
+
+const (
+	adminAuthScenarioName  = "api/auth-missing-invalid"
+	adminRouteListScenario = "api/route-list-detail"
+	adminRouteCRUDScenario = "api/route-add-update-remove"
+)
+
 // HTTPScenarios returns Phase 5 HTTP/admin API compatibility scenario shells.
 func HTTPScenarios() []Scenario {
 	return []Scenario{
-		httpScenario("api/auth-missing-invalid"),
-		httpScenario("api/route-list-detail"),
-		httpScenario("api/route-add-update-remove"),
+		implementedScenario(adminAuthScenarioName, SurfaceAPI, "6.3 Admin API compatibility", false),
+		implementedScenario(adminRouteListScenario, SurfaceAPI, "6.3 Admin API compatibility", false),
+		implementedScenario(adminRouteCRUDScenario, SurfaceAPI, "6.3 Admin API compatibility", false),
 		httpScenario("api/reload"),
 		httpScenario("api/health-status"),
 		httpScenario("api/request-too-large"),
@@ -15,4 +36,408 @@ func HTTPScenarios() []Scenario {
 
 func httpScenario(name string) Scenario {
 	return pendingScenario(name, SurfaceAPI, "6.3 Admin API compatibility", false, "old/new admin API compatibility scenario execution is not implemented yet")
+}
+
+// AdminAPIPreflight verifies that the local Docker daemon required to boot a
+// real Gordon server is available. CI can call this directly to make an
+// unavailable runtime a hard failure instead of a skipped integration test.
+func AdminAPIPreflight(ctx context.Context) error {
+	socket, err := adminDockerSocket()
+	if err != nil {
+		return err
+	}
+	conn, err := net.DialTimeout("unix", socket, time.Second)
+	if err != nil {
+		return fmt.Errorf("docker socket %q unavailable: %w", socket, err)
+	}
+	if err := conn.Close(); err != nil {
+		return fmt.Errorf("close docker socket probe: %w", err)
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+	}}
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
+	if err != nil {
+		return fmt.Errorf("create docker ping request: %w", err)
+	}
+	response, err := (&http.Client{Transport: transport, Timeout: time.Second}).Do(request)
+	if err != nil {
+		return fmt.Errorf("ping docker daemon: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker daemon ping returned HTTP %d", response.StatusCode)
+	}
+	return nil
+}
+
+func adminDockerSocket() (string, error) {
+	host := strings.TrimSpace(os.Getenv("DOCKER_HOST"))
+	if host == "" {
+		return "/var/run/docker.sock", nil
+	}
+	if !strings.HasPrefix(host, "unix://") {
+		return "", fmt.Errorf("DOCKER_HOST must be a unix socket for admin API compatibility, got %q", host)
+	}
+	socket := strings.TrimPrefix(host, "unix://")
+	if socket == "" {
+		return "", fmt.Errorf("DOCKER_HOST has an empty unix socket path")
+	}
+	return socket, nil
+}
+
+// RunCompatibilityAdminAuthAndRouteCRUD builds and runs baseline and candidate
+// sequentially, capturing the exact authenticated route API operation order.
+func RunCompatibilityAdminAuthAndRouteCRUD(ctx context.Context, repoRoot, artifactDir string) (Report, error) {
+	if repoRoot == "" {
+		return Report{}, fmt.Errorf("admin API compatibility: repository root is required")
+	}
+	if artifactDir == "" {
+		return Report{}, fmt.Errorf("admin API compatibility: report artifact directory is required")
+	}
+	if err := AdminAPIPreflight(ctx); err != nil {
+		return Report{}, err
+	}
+
+	binaries, err := BuildOldAndNew(ctx, nil, repoRoot, filepath.Join(artifactDir, "bin"))
+	if err != nil {
+		return Report{}, err
+	}
+	parent, err := os.MkdirTemp("", "gordon-compat-admin-api-*")
+	if err != nil {
+		return Report{}, fmt.Errorf("admin API compatibility: create fixture parent: %w", err)
+	}
+	defer os.RemoveAll(parent)
+
+	old, err := runAdminAPISide(ctx, SideOld, binaries.Old.BinaryPath, parent)
+	if err != nil {
+		return Report{}, err
+	}
+	new, err := runAdminAPISide(ctx, SideNew, binaries.New.BinaryPath, parent)
+	if err != nil {
+		return Report{}, err
+	}
+	return CompareSideResultsWithMetadata(old, new, nil, artifactDir, ReportMetadata{
+		BaselineCommit:  binaries.Old.Commit,
+		CandidateCommit: binaries.New.Commit,
+		RerunCommand:    adminAPIRerunCommand(),
+	})
+}
+
+type adminAPISide struct {
+	fixture   SideFixture
+	port      int
+	proxyPort int
+	token     string
+}
+
+func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (_ SideResult, err error) {
+	setup, err := stageAdminAPISide(parent)
+	if err != nil {
+		return SideResult{}, err
+	}
+	defer os.RemoveAll(setup.fixture.Root)
+
+	setup.token, err = generateAdminToken(ctx, binaryPath, setup.fixture, side)
+	if err != nil {
+		return SideResult{}, err
+	}
+	address := net.JoinHostPort("127.0.0.1", fmt.Sprint(setup.port))
+	instance := &GordonInstance{
+		BinaryPath:     binaryPath,
+		ConfigPath:     setup.fixture.ConfigPath,
+		DataDir:        setup.fixture.DataDir,
+		WorkingDir:     setup.fixture.Root,
+		Env:            adminAPIEnvironment(setup.fixture),
+		ReadinessProbe: ReadinessProbe{TCPAddress: address},
+	}
+	serveArgs := []string{"serve", "--config", setup.fixture.ConfigPath}
+	if side == SideNew {
+		serveArgs = []string{"serve", "--role", "monolith", "--config", setup.fixture.ConfigPath}
+	}
+	if err := instance.Start(ctx, serveArgs...); err != nil {
+		return SideResult{}, fmt.Errorf("admin API %s start: %w", side, err)
+	}
+	defer func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if stopErr := instance.Stop(stopCtx); stopErr != nil && err == nil {
+			err = fmt.Errorf("admin API %s stop: %w; logs: %s", side, stopErr, instance.Logs())
+		}
+	}()
+	readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := instance.WaitReady(readyCtx); err != nil {
+		return SideResult{}, fmt.Errorf("admin API %s ready: %w", side, err)
+	}
+
+	accessToken, err := exchangeAdminToken(ctx, "http://"+address, setup.token, side)
+	if err != nil {
+		return SideResult{}, fmt.Errorf("admin API %s exchange credential: %w; logs: %s", side, err, instance.Logs())
+	}
+	artifact, err := captureAdminRouteCRUD(ctx, "http://"+address, accessToken)
+	if err != nil {
+		return SideResult{}, fmt.Errorf("admin API %s capture: %w; logs: %s", side, err, instance.Logs())
+	}
+	return SideResult{Side: side, Artifact: artifact}, nil
+}
+
+func stageAdminAPISide(parent string) (adminAPISide, error) {
+	fixture, err := StageSideFixture(parent, filepath.Join(FixtureRoot(), "configs", "minimal.toml"))
+	if err != nil {
+		return adminAPISide{}, err
+	}
+	port, err := reserveTCPPort()
+	if err != nil {
+		_ = os.RemoveAll(fixture.Root)
+		return adminAPISide{}, err
+	}
+	proxyPort, err := reserveTCPPort()
+	if err != nil {
+		_ = os.RemoveAll(fixture.Root)
+		return adminAPISide{}, err
+	}
+	// #nosec G101 -- this isolated unsafe-backend fixture deliberately needs a deterministic test secret.
+	secret := "compat-admin-api-test-only-secret-0123456789"
+	config := fmt.Sprintf(`[server]
+registry_port = %d
+registry_listen_address = "127.0.0.1"
+data_dir = %q
+gordon_domain = "localhost"
+
+[entrypoints.edge]
+address = "127.0.0.1:%d"
+protocol = "smart_tcp"
+
+[auth]
+enabled = true
+secrets_backend = "unsafe"
+token_secret = %q
+token_expiry = "30d"
+access_token_ttl = "15m"
+
+[api.rate_limit]
+enabled = false
+
+[network_isolation]
+enabled = false
+
+[logging]
+level = "warn"
+format = "console"
+`, port, fixture.DataDir, proxyPort, secret)
+	if err := os.WriteFile(fixture.ConfigPath, []byte(config), 0o600); err != nil {
+		_ = os.RemoveAll(fixture.Root)
+		return adminAPISide{}, fmt.Errorf("write admin API config: %w", err)
+	}
+	secretPath := filepath.Join(fixture.DataDir, "secrets", secret)
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
+		_ = os.RemoveAll(fixture.Root)
+		return adminAPISide{}, fmt.Errorf("create unsafe test secret directory: %w", err)
+	}
+	if err := os.WriteFile(secretPath, []byte(secret), 0o600); err != nil {
+		_ = os.RemoveAll(fixture.Root)
+		return adminAPISide{}, fmt.Errorf("write unsafe test secret: %w", err)
+	}
+	return adminAPISide{fixture: fixture, port: port, proxyPort: proxyPort}, nil
+}
+
+func reserveTCPPort() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("reserve admin API port: %w", err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port, nil
+}
+
+func adminAPIEnvironment(fixture SideFixture) []string {
+	return append(append([]string{}, fixture.Env...),
+		"XDG_CONFIG_HOME="+filepath.Join(fixture.Root, "xdg-config"),
+		"XDG_RUNTIME_DIR="+filepath.Join(fixture.Root, "runtime"),
+		"GORDON_AUTH_TOKEN_SECRET=",
+		"GORDON_ROLE=monolith",
+		"GORDON_REMOTE=",
+		"GORDON_TOKEN=",
+	)
+}
+
+var jwtLine = regexp.MustCompile(`(?m)^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$`)
+
+func generateAdminToken(ctx context.Context, binaryPath string, fixture SideFixture, side string) (string, error) {
+	capture, err := CaptureCommand(ctx, CommandCaptureRequest{
+		BinaryPath: binaryPath,
+		Args: []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
+			"--scopes", "admin:*:*", "--expiry", "0"},
+		Dir: fixture.Root, Env: adminAPIEnvironment(fixture), Source: "gordon auth token generate", Level: LevelExact,
+	})
+	if err != nil {
+		return "", err
+	}
+	raw := capture.RawValue().(map[string]any)
+	if raw["exitCode"] != 0 {
+		return "", fmt.Errorf("token generation exited %v: %s", raw["exitCode"], raw["stderr"])
+	}
+	token := jwtLine.FindString(raw["stdout"].(string))
+	if token == "" {
+		return "", fmt.Errorf("token generation did not emit a JWT")
+	}
+	return token, nil
+}
+
+func exchangeAdminToken(ctx context.Context, baseURL, token, side string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/auth/token?scope="+url.QueryEscape("admin:*:*")+"&service=gordon-registry", nil)
+	if err != nil {
+		return "", err
+	}
+	req.SetBasicAuth("compat-"+side, token)
+	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		return "", fmt.Errorf("token exchange returned HTTP %d: %s", response.StatusCode, body)
+	}
+	var payload struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
+		return "", fmt.Errorf("decode token exchange: %w", err)
+	}
+	if payload.Token == "" {
+		return "", fmt.Errorf("token exchange returned an empty token")
+	}
+	return payload.Token, nil
+}
+
+type adminOperation struct {
+	Name      string            `json:"name"`
+	Status    int               `json:"status"`
+	Headers   map[string]string `json:"headers"`
+	JSON      any               `json:"json"`
+	DTOFields []string          `json:"dtoFields"`
+}
+
+func captureAdminRouteCRUD(ctx context.Context, baseURL, token string) (HTTPArtifact, error) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	domain := "compat-route.example.test"
+	operations := make([]adminOperation, 0, 8)
+	requests := []struct {
+		name, method, path, body string
+		auth                     string
+		expectedStatus           int
+		expectedFields           []string
+	}{
+		{"missing-auth", http.MethodGet, "/admin/routes", "", "", http.StatusUnauthorized, []string{"error"}},
+		{"invalid-bearer", http.MethodGet, "/admin/routes", "", "Bearer invalid", http.StatusUnauthorized, []string{"error"}},
+		{"empty-list", http.MethodGet, "/admin/routes", "", "Bearer " + token, http.StatusOK, []string{"routes"}},
+		{"create", http.MethodPost, "/admin/routes", `{"domain":"compat-route.example.test","image":"busybox:1.36","https":false}`, "Bearer " + token, http.StatusCreated, []string{"domain", "image", "https"}},
+		{"detail", http.MethodGet, "/admin/routes/" + domain, "", "Bearer " + token, http.StatusOK, []string{"domain", "image", "https"}},
+		{"update", http.MethodPut, "/admin/routes/" + domain, `{"image":"busybox:1.37","https":true}`, "Bearer " + token, http.StatusOK, []string{"domain", "image", "https"}},
+		{"delete", http.MethodDelete, "/admin/routes/" + domain, "", "Bearer " + token, http.StatusOK, []string{"status"}},
+		{"missing-after-delete", http.MethodGet, "/admin/routes/" + domain, "", "Bearer " + token, http.StatusNotFound, []string{"error"}},
+	}
+	for _, spec := range requests {
+		op, err := captureAdminOperation(ctx, client, baseURL, spec.name, spec.method, spec.path, spec.body, spec.auth, spec.expectedStatus, spec.expectedFields)
+		if err != nil {
+			return HTTPArtifact{}, err
+		}
+		operations = append(operations, op)
+	}
+	return HTTPArtifact{baseArtifact{
+		Raw:        map[string]any{"operations": operations},
+		Normalized: normalizeAdminOperations(operations),
+		SourceRef:  "admin route auth and CRUD sequence",
+		Compare:    LevelSemantic,
+	}}, nil
+}
+
+func captureAdminOperation(ctx context.Context, client *http.Client, baseURL, name, method, path, body, authorization string, expectedStatus int, expectedFields []string) (adminOperation, error) {
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, strings.NewReader(body))
+	if err != nil {
+		return adminOperation{}, err
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if authorization != "" {
+		req.Header.Set("Authorization", authorization)
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		return adminOperation{}, fmt.Errorf("%s: %w", name, err)
+	}
+	defer response.Body.Close()
+	bodyBytes, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil {
+		return adminOperation{}, fmt.Errorf("%s read response: %w", name, err)
+	}
+	var payload any
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		return adminOperation{}, fmt.Errorf("%s decode JSON: %w", name, err)
+	}
+	headers := adminSafeHeaders(response.Header)
+	if response.StatusCode != expectedStatus {
+		return adminOperation{}, fmt.Errorf("%s: expected HTTP %d, got %d: %s", name, expectedStatus, response.StatusCode, bodyBytes)
+	}
+	if err := validateAdminHeaders(name, headers, authorization != ""); err != nil {
+		return adminOperation{}, err
+	}
+	if err := validateDTOFields(name, payload, expectedFields); err != nil {
+		return adminOperation{}, err
+	}
+	return adminOperation{Name: name, Status: response.StatusCode, Headers: headers, JSON: payload, DTOFields: expectedFields}, nil
+}
+
+func adminSafeHeaders(headers http.Header) map[string]string {
+	out := make(map[string]string, 4)
+	for _, key := range []string{"Content-Type", "Cache-Control", "X-Content-Type-Options", "X-Frame-Options"} {
+		out[key] = headers.Get(key)
+	}
+	return out
+}
+
+func validateAdminHeaders(name string, headers map[string]string, authenticated bool) error {
+	if !strings.HasPrefix(headers["Content-Type"], "application/json") {
+		return fmt.Errorf("%s: expected JSON content type, got %q", name, headers["Content-Type"])
+	}
+	if headers["X-Content-Type-Options"] != "nosniff" || headers["X-Frame-Options"] != "DENY" {
+		return fmt.Errorf("%s: missing expected security headers", name)
+	}
+	if authenticated && headers["Cache-Control"] != "no-store" {
+		return fmt.Errorf("%s: expected Cache-Control no-store, got %q", name, headers["Cache-Control"])
+	}
+	return nil
+}
+
+func validateDTOFields(name string, payload any, expected []string) error {
+	object, ok := payload.(map[string]any)
+	if !ok {
+		return fmt.Errorf("%s: expected JSON object, got %T", name, payload)
+	}
+	for _, field := range expected {
+		if _, ok := object[field]; !ok {
+			return fmt.Errorf("%s: required DTO field %q is absent", name, field)
+		}
+	}
+	if name == "empty-list" {
+		if routes, ok := object["routes"].([]any); !ok || len(routes) != 0 {
+			return fmt.Errorf("empty-list: expected empty routes array")
+		}
+	}
+	return nil
+}
+
+func normalizeAdminOperations(operations []adminOperation) any {
+	// This response set has no identifiers, timestamps, or listener addresses.
+	// Keep every API-significant value intact rather than applying global text
+	// normalizers that could conceal an auth or DTO regression.
+	return operations
+}
+
+func adminAPIRerunCommand() string {
+	return "GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$' -count=1"
 }

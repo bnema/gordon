@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,6 +57,27 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+// commandEnvironment applies overrides without retaining an inherited value of
+// the same key. os.Getenv is permitted to select the first duplicate entry,
+// so plain append is not isolation.
+func commandEnvironment(overrides []string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, entry := range overrides {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			keys[key] = struct{}{}
+		}
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, overridden := keys[key]; !overridden {
+			env = append(env, entry)
+		}
+	}
+	return append(env, overrides...)
+}
+
 func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -77,7 +99,7 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 	} else if g.DataDir != "" {
 		cmd.Dir = g.DataDir
 	}
-	cmd.Env = append(os.Environ(), g.Env...)
+	cmd.Env = commandEnvironment(g.Env)
 	if g.ConfigPath != "" {
 		cmd.Env = append(cmd.Env, "GORDON_CONFIG="+g.ConfigPath)
 	}
