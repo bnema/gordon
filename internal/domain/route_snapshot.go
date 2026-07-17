@@ -190,11 +190,6 @@ type RouteTargetEntry struct {
 	UpstreamHost      string
 	Attachment        RouteTargetAttachment
 	TargetKey         RouteTargetKey
-
-	// instanceScoped is intentionally private. It records that TargetKey was
-	// derived with a private managed-instance input that must never be retained
-	// in a snapshot, artifact, or log.
-	instanceScoped bool
 }
 
 // NewReadyRouteTargetEntry constructs a validated attached (managed or registry) route target.
@@ -233,8 +228,6 @@ func NewManagedReadyRouteTargetEntry(domainName, targetHost string, targetPort i
 		Status:     RouteTargetStatusReady,
 		Generation: generation,
 		Attachment: RouteTargetAttachmentAttached,
-		// This marker deliberately retains no identity material.
-		instanceScoped: true,
 	}
 	if err := entry.setCanonicalDomain(domainName); err != nil {
 		return RouteTargetEntry{}, err
@@ -418,12 +411,9 @@ func (e RouteTargetEntry) validateRoutableTarget() error {
 	if !e.TargetKey.Valid() {
 		return fmt.Errorf("%w: route target key is invalid", ErrInvalidRoute)
 	}
-	// Instance-scoped managed keys incorporate a private identity which is
-	// deliberately discarded after construction. Endpoint-derived keys remain
-	// fully reproducible for external and registry targets.
-	if !e.instanceScoped && e.TargetKey != e.derivedTargetKey() {
-		return fmt.Errorf("%w: route target key does not match routing target", ErrInvalidRoute)
-	}
+	// Target identities are opaque transport values. Constructors derive them,
+	// but a received entry may have been derived with private managed-instance
+	// material that is intentionally never transported or retained here.
 	if e.UpstreamHost == "" {
 		if e.Attachment != RouteTargetAttachmentAttached {
 			return fmt.Errorf("%w: attached route target requires edge attachment", ErrInvalidRoute)

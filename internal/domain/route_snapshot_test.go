@@ -41,6 +41,30 @@ func TestRouteTargetSnapshotManagedTargetKeyIsInstanceStableAndOpaque(t *testing
 	require.NoError(t, first.Validate())
 }
 
+func TestRouteTargetSnapshotManagedTargetSurvivesExportedFieldRoundTrip(t *testing.T) {
+	const privateID = "private-container-identity-123"
+	entry, err := NewManagedReadyRouteTargetEntry("app.example.com", "gordon-target-app-example-com", 8080, "http", RouteTargetProtocolHTTP1, 1, privateID)
+	require.NoError(t, err)
+
+	wire, err := json.Marshal(RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{entry}})
+	require.NoError(t, err)
+	require.NotContains(t, string(wire), privateID)
+
+	var received RouteTargetSnapshot
+	require.NoError(t, json.Unmarshal(wire, &received))
+	require.NoError(t, received.Validate())
+	require.Equal(t, entry.TargetKey, received.Entries[0].TargetKey)
+}
+
+func TestRouteTargetEntryValidationTrustsWellFormedTransportedOpaqueKey(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	entry.TargetKey = RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
+	require.NoError(t, entry.Validate(), "received identities cannot be recomputed when constructors include private instance material")
+
+	entry.TargetKey = "forged-key"
+	require.ErrorIs(t, entry.Validate(), ErrInvalidRoute)
+}
+
 func TestRouteTargetSnapshotHasNoContainerIdentityField(t *testing.T) {
 	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
 	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{entry}}
@@ -380,7 +404,7 @@ func TestRouteTargetSnapshotTargetKeyChangesForRoutingTargetChanges(t *testing.T
 	}
 }
 
-func TestRouteTargetEntryValidateRejectsStaleOrForgedTargetKeys(t *testing.T) {
+func TestRouteTargetEntryValidateAcceptsTransportedOpaqueTargetKeys(t *testing.T) {
 	base, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", "upstream.example", 8443, "https", RouteTargetProtocolHTTP1, 1)
 	require.NoError(t, err)
 
@@ -394,23 +418,26 @@ func TestRouteTargetEntryValidateRejectsStaleOrForgedTargetKeys(t *testing.T) {
 		{name: "scheme", mutate: func(entry *RouteTargetEntry) { entry.Scheme = "http" }},
 		{name: "protocol", mutate: func(entry *RouteTargetEntry) { entry.Protocol = RouteTargetProtocolH2C }},
 		{name: "upstream host", mutate: func(entry *RouteTargetEntry) { entry.UpstreamHost = "other-upstream.example" }},
-		{name: "attachment", mutate: func(entry *RouteTargetEntry) { entry.Attachment = RouteTargetAttachmentAttached }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name+" stale", func(t *testing.T) {
 			stale := base
 			tt.mutate(&stale)
 			require.True(t, stale.TargetKey.Valid())
-			require.ErrorIs(t, stale.Validate(), ErrInvalidRoute)
+			require.NoError(t, stale.Validate())
 		})
-		t.Run(tt.name+" forged", func(t *testing.T) {
-			forged := base
-			tt.mutate(&forged)
-			forged.TargetKey = RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
-			require.True(t, forged.TargetKey.Valid())
-			require.ErrorIs(t, forged.Validate(), ErrInvalidRoute)
+		t.Run(tt.name+" opaque", func(t *testing.T) {
+			received := base
+			tt.mutate(&received)
+			received.TargetKey = RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
+			require.True(t, received.TargetKey.Valid())
+			require.NoError(t, received.Validate())
 		})
 	}
+
+	incoherent := base
+	incoherent.Attachment = RouteTargetAttachmentAttached
+	require.ErrorIs(t, incoherent.Validate(), ErrInvalidRoute)
 }
 
 func TestRouteTargetEntryTargetKeyCanonicalizesEndpointIdentity(t *testing.T) {
