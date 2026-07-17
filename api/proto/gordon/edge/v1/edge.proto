@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package gordon.edge.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/edge/v1;edgev1";
+
+// EdgeService exposes the control-owned routing view to authenticated edges.
+service EdgeService {
+  // WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
+  rpc WatchRouteSnapshots(WatchRouteSnapshotsRequest) returns (stream RouteTargetSnapshot);
+  // ReportDrainState accepts the narrow, opaque drain state produced by an edge.
+  rpc ReportDrainState(ReportDrainStateRequest) returns (ReportDrainStateResponse);
+}
+
+// WatchRouteSnapshotsRequest deliberately has no routing selectors.
+message WatchRouteSnapshotsRequest {}
+
+// RouteTargetSnapshot is the complete sanitized routing view for an edge.
+message RouteTargetSnapshot {
+  uint64 generation = 1;
+  repeated RouteTargetEntry entries = 2;
+  RouteTargetEntry registry_forwarding_target = 3;
+}
+
+// RouteTargetEntry contains only the data needed to proxy one route target.
+message RouteTargetEntry {
+  string canonical_domain = 1;
+  string target_host = 2;
+  int32 target_port = 3;
+  string scheme = 4;
+  string protocol = 5;
+  string status = 6;
+  string unavailable_reason = 7;
+  uint64 generation = 8;
+  string upstream_host = 9;
+  string attachment = 10;
+  string target_key = 11;
+}
+
+// ReportDrainStateRequest carries no edge identity; authentication provides it.
+message ReportDrainStateRequest {
+  uint64 generation = 1;
+  string target_key = 2;
+  uint64 in_flight = 3;
+  google.protobuf.Timestamp acknowledged_at = 4;
+  string timeout_reason = 5;
+}
+
+// ReportDrainStateResponse intentionally has no drain orchestration semantics.
+message ReportDrainStateResponse {}
