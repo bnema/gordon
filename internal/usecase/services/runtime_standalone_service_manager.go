@@ -77,8 +77,12 @@ func (m *localRuntimeStandaloneServiceManager) RemoveStandaloneService(ctx conte
 		if err != nil {
 			return fmt.Errorf("list standalone service containers: %w", err)
 		}
-		cleanup := normalizeCleanup(command.Cleanup)
+		commandCleanup := normalizeCleanup(command.Cleanup)
 		for _, container := range managedServiceContainers(containers)[command.Name] {
+			cleanup := commandCleanup
+			if command.Reason == "removed" {
+				cleanup = cleanupFromLabels(container.Labels)
+			}
 			if err := m.cleanupContainer(ctx, command.Name, command.Reason, cleanup, container); err != nil {
 				return err
 			}

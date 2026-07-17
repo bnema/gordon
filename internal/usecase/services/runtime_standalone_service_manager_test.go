@@ -115,8 +115,8 @@ func TestLocalRuntimeStandaloneServiceManagerApplyDoesNotLeakSecretInFailure(t *
 	assert.NotContains(t, result.Error.Message, "TOKEN")
 }
 
-func TestLocalRuntimeStandaloneServiceManagerRemoveCleansManagedVolumesAndPreservesRequestedVolumes(t *testing.T) {
-	t.Run("cleanup", func(t *testing.T) {
+func TestLocalRuntimeStandaloneServiceManagerRemoveUsesCommandCleanupForNonRemovedReasons(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
 		runtime := outmocks.NewMockContainerRuntime(t)
 		container := managedContainer("removed-1", "game", "old-hash", "running")
 		container.Labels[domain.LabelServiceCleanupPreserveVolumes] = "true"
@@ -133,19 +133,53 @@ func TestLocalRuntimeStandaloneServiceManagerRemoveCleansManagedVolumesAndPreser
 		require.NoError(t, err)
 		assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
 	})
-	t.Run("preserve", func(t *testing.T) {
-		runtime := outmocks.NewMockContainerRuntime(t)
-		container := managedContainer("removed-1", "game", "old-hash", "exited")
-		container.Labels[domain.LabelServiceManagedVolumes] = "gordon-service-game-data"
-		container.Labels[domain.LabelServiceCleanupRemoveContainer] = "true"
-		container.VolumeMounts = []domain.ContainerVolumeMount{{Name: "gordon-service-game-data", Type: "volume"}}
-		runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+	for _, reason := range []string{"", "malformed"} {
+		t.Run("conservative_"+reason, func(t *testing.T) {
+			runtime := outmocks.NewMockContainerRuntime(t)
+			container := managedContainer("removed-1", "game", "old-hash", "running")
+			container.Labels[domain.LabelServiceCleanupPreserveVolumes] = "false"
+			container.Labels[domain.LabelServiceCleanupRemoveContainer] = "true"
+			container.Labels[domain.LabelServiceManagedVolumes] = "gordon-service-game-data"
+			container.VolumeMounts = []domain.ContainerVolumeMount{{Name: "gordon-service-game-data", Type: "volume"}}
+			runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+			runtime.On("StopContainer", mock.Anything, "removed-1").Return(nil).Once()
 
-		result, err := NewLocalRuntimeStandaloneServiceManager(runtime).RemoveStandaloneService(context.Background(), removeStandaloneCommandWithCleanup("game", "removed", domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: false}))
+			result, err := NewLocalRuntimeStandaloneServiceManager(runtime).RemoveStandaloneService(context.Background(), removeStandaloneCommandWithCleanup("game", reason, domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: false}))
 
-		require.NoError(t, err)
-		assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
-	})
+			require.NoError(t, err)
+			assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
+		})
+	}
+}
+
+func TestLocalRuntimeStandaloneServiceManagerRemoveUsesPerContainerCleanupLabelsForRemovedDuplicates(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	removeAndDeleteVolume := managedContainer("removed-1", "game", "old-hash", "running")
+	removeAndDeleteVolume.Labels[domain.LabelServiceCleanupPreserveVolumes] = "false"
+	removeAndDeleteVolume.Labels[domain.LabelServiceCleanupRemoveContainer] = "true"
+	removeAndDeleteVolume.Labels[domain.LabelServiceManagedVolumes] = "gordon-service-game-first"
+	removeAndDeleteVolume.VolumeMounts = []domain.ContainerVolumeMount{
+		{Name: "gordon-service-game-first", Type: "volume"},
+		{Name: "unmanaged-volume", Type: "volume"},
+	}
+	preserveAndKeepContainer := managedContainer("removed-2", "game", "old-hash", "running")
+	preserveAndKeepContainer.Labels[domain.LabelServiceCleanupPreserveVolumes] = "true"
+	preserveAndKeepContainer.Labels[domain.LabelServiceCleanupRemoveContainer] = "false"
+	preserveAndKeepContainer.Labels[domain.LabelServiceManagedVolumes] = "gordon-service-game-second"
+	preserveAndKeepContainer.VolumeMounts = []domain.ContainerVolumeMount{
+		{Name: "gordon-service-game-second", Type: "volume"},
+		{Name: "unmanaged-volume", Type: "volume"},
+	}
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{removeAndDeleteVolume, preserveAndKeepContainer}, nil).Once()
+	runtime.On("StopContainer", mock.Anything, "removed-1").Return(nil).Once()
+	runtime.On("RemoveContainer", mock.Anything, "removed-1", true).Return(nil).Once()
+	runtime.On("RemoveVolume", mock.Anything, "gordon-service-game-first", true).Return(nil).Once()
+	runtime.On("StopContainer", mock.Anything, "removed-2").Return(nil).Once()
+
+	result, err := NewLocalRuntimeStandaloneServiceManager(runtime).RemoveStandaloneService(context.Background(), removeStandaloneCommandWithCleanup("game", "removed", domain.StandaloneServiceCleanup{PreserveVolumes: false, RemoveContainer: true}))
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
 }
 
 func TestLocalRuntimeStandaloneServiceManagerListStateIsSanitizedAndDeterministic(t *testing.T) {
