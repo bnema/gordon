@@ -19,23 +19,35 @@ import (
 )
 
 const (
-	unsafeComponentTokenDir = "secrets/gordon/component-tokens"
-	passComponentTokenPath  = "gordon/component-tokens" //nolint:gosec // This is a pass store path, not a credential.
+	unsafeComponentTokenDir           = "secrets/gordon/component-tokens"
+	unsafeComponentTokenRevocationDir = "secrets/gordon/component-token-revocations"
+	passComponentTokenPath            = "gordon/component-tokens"            //nolint:gosec // This is a pass store path, not a credential.
+	passComponentTokenRevocationPath  = "gordon/component-token-revocations" //nolint:gosec // This is a pass store path, not a credential.
 )
 
 // componentTokenData intentionally contains a hash and safe metadata only.
 // Plaintext component tokens must never be added to this type.
 type componentTokenData struct {
-	KeyID      string                  `json:"key_id"`
-	Prefix     string                  `json:"prefix"`
-	Name       string                  `json:"name"`
-	Role       domain.ComponentRole    `json:"role"`
-	Scopes     []domain.ComponentScope `json:"scopes"`
-	TokenHash  string                  `json:"token_hash"`
-	CreatedAt  time.Time               `json:"created_at"`
-	ExpiresAt  time.Time               `json:"expires_at,omitempty"`
-	RevokedAt  time.Time               `json:"revoked_at,omitempty"`
-	LastUsedAt time.Time               `json:"last_used_at,omitempty"`
+	KeyID     string                  `json:"key_id"`
+	Prefix    string                  `json:"prefix"`
+	Name      string                  `json:"name"`
+	Role      domain.ComponentRole    `json:"role"`
+	Scopes    []domain.ComponentScope `json:"scopes"`
+	TokenHash string                  `json:"token_hash"`
+	CreatedAt time.Time               `json:"created_at"`
+	ExpiresAt time.Time               `json:"expires_at,omitempty"`
+	// RevokedAt is retained only to read records written before revocations were
+	// made monotonic. New revocations are stored in a separate marker.
+	RevokedAt  time.Time `json:"revoked_at,omitempty"`
+	LastUsedAt time.Time `json:"last_used_at,omitempty"`
+}
+
+// componentTokenRevocation is a separate, authoritative record. Keeping it
+// apart from mutable token metadata means a stale last-used write can never
+// restore a revoked token.
+type componentTokenRevocation struct {
+	KeyID     string    `json:"key_id"`
+	RevokedAt time.Time `json:"revoked_at"`
 }
 
 // NewComponentTokenStore creates a ComponentTokenStore using the configured secrets backend.
@@ -66,6 +78,35 @@ func componentTokenFileName(keyID string) string {
 
 func componentTokenPassPath(keyID string) string {
 	return passComponentTokenPath + "/" + strings.TrimSuffix(componentTokenFileName(keyID), ".json")
+}
+
+func componentTokenRevocationPassPath(keyID string) string {
+	return passComponentTokenRevocationPath + "/" + strings.TrimSuffix(componentTokenFileName(keyID), ".json")
+}
+
+func marshalComponentTokenRevocation(keyID string, revokedAt time.Time) ([]byte, error) {
+	if keyID == "" {
+		return nil, fmt.Errorf("component token key ID is required")
+	}
+	if revokedAt.IsZero() {
+		return nil, fmt.Errorf("component token revocation time is required")
+	}
+	payload, err := json.Marshal(componentTokenRevocation{KeyID: keyID, RevokedAt: revokedAt})
+	if err != nil {
+		return nil, fmt.Errorf("marshal component token revocation: %w", err)
+	}
+	return payload, nil
+}
+
+func unmarshalComponentTokenRevocation(payload []byte, keyID string) (time.Time, error) {
+	var revocation componentTokenRevocation
+	if err := json.Unmarshal(payload, &revocation); err != nil {
+		return time.Time{}, fmt.Errorf("unmarshal component token revocation: %w", err)
+	}
+	if revocation.KeyID != keyID || revocation.RevokedAt.IsZero() {
+		return time.Time{}, fmt.Errorf("component token revocation does not match its path")
+	}
+	return revocation.RevokedAt, nil
 }
 
 func componentTokenDataFromRecord(record *domain.ComponentTokenRecord) (componentTokenData, error) {
@@ -137,8 +178,20 @@ func (s *UnsafeStore) componentTokenPath(keyID string) string {
 	return filepath.Join(s.dataDir, unsafeComponentTokenDir, componentTokenFileName(keyID))
 }
 
+func (s *UnsafeStore) componentTokenRevocationPath(keyID string) string {
+	return filepath.Join(s.dataDir, unsafeComponentTokenRevocationDir, componentTokenFileName(keyID))
+}
+
 func (s *UnsafeStore) ensureComponentTokenDir() (string, error) {
-	dir := filepath.Join(s.dataDir, unsafeComponentTokenDir)
+	return s.ensureComponentTokenSubdir(unsafeComponentTokenDir)
+}
+
+func (s *UnsafeStore) ensureComponentTokenRevocationDir() (string, error) {
+	return s.ensureComponentTokenSubdir(unsafeComponentTokenRevocationDir)
+}
+
+func (s *UnsafeStore) ensureComponentTokenSubdir(subdir string) (string, error) {
+	dir := filepath.Join(s.dataDir, subdir)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", fmt.Errorf("create component token directory: %w", err)
 	}
@@ -180,6 +233,22 @@ func writeComponentTokenAtomic(dir, path string, payload []byte) error {
 	return nil
 }
 
+func (s *UnsafeStore) mergeComponentTokenRevocation(record *domain.ComponentTokenRecord) error {
+	payload, err := os.ReadFile(s.componentTokenRevocationPath(record.KeyID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read component token revocation: %w", err)
+	}
+	revokedAt, err := unmarshalComponentTokenRevocation(payload, record.KeyID)
+	if err != nil {
+		return err
+	}
+	record.RevokedAt = revokedAt
+	return nil
+}
+
 // CreateComponentToken stores a component token hash and safe metadata.
 func (s *UnsafeStore) CreateComponentToken(_ context.Context, record *domain.ComponentTokenRecord) error {
 	payload, err := marshalComponentTokenRecord(record)
@@ -196,7 +265,18 @@ func (s *UnsafeStore) CreateComponentToken(_ context.Context, record *domain.Com
 	if err := writeComponentTokenAtomic(dir, s.componentTokenPath(record.KeyID), payload); err != nil {
 		return err
 	}
-	return nil
+	if record.RevokedAt.IsZero() {
+		return nil
+	}
+	marker, err := marshalComponentTokenRevocation(record.KeyID, record.RevokedAt)
+	if err != nil {
+		return err
+	}
+	revocationDir, err := s.ensureComponentTokenRevocationDir()
+	if err != nil {
+		return err
+	}
+	return writeComponentTokenAtomic(revocationDir, s.componentTokenRevocationPath(record.KeyID), marker)
 }
 
 // LookupComponentToken returns a copy of the matching component token record.
@@ -215,6 +295,9 @@ func (s *UnsafeStore) LookupComponentToken(_ context.Context, prefix, keyID stri
 	}
 	record, err := unmarshalComponentTokenRecord(payload, keyID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.mergeComponentTokenRevocation(record); err != nil {
 		return nil, err
 	}
 	if record.Prefix != prefix {
@@ -253,11 +336,29 @@ func (s *UnsafeStore) updateComponentToken(keyID string, update func(*domain.Com
 	return writeComponentTokenAtomic(dir, path, payload)
 }
 
-// RevokeComponentToken marks a component token as revoked.
+// RevokeComponentToken records an authoritative, monotonic revocation marker.
 func (s *UnsafeStore) RevokeComponentToken(_ context.Context, keyID string, revokedAt time.Time) error {
-	return s.updateComponentToken(keyID, func(record *domain.ComponentTokenRecord) {
-		record.RevokedAt = revokedAt
-	})
+	if keyID == "" {
+		return fmt.Errorf("component token key ID is required")
+	}
+	payload, err := marshalComponentTokenRevocation(keyID, revokedAt)
+	if err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := os.ReadFile(s.componentTokenPath(keyID)); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("component token not found")
+		}
+		return fmt.Errorf("read component token record: %w", err)
+	}
+	dir, err := s.ensureComponentTokenRevocationDir()
+	if err != nil {
+		return err
+	}
+	return writeComponentTokenAtomic(dir, s.componentTokenRevocationPath(keyID), payload)
 }
 
 // UpdateComponentTokenLastUsed records successful component token use.
@@ -291,10 +392,30 @@ func (s *UnsafeStore) ListComponentTokenMetadata(_ context.Context) ([]domain.Co
 		if err := json.Unmarshal(payload, &data); err != nil {
 			return nil, fmt.Errorf("unmarshal component token record: %w", err)
 		}
-		metadata = append(metadata, data.record().Metadata())
+		record := data.record()
+		if err := s.mergeComponentTokenRevocation(record); err != nil {
+			return nil, err
+		}
+		metadata = append(metadata, record.Metadata())
 	}
 	sort.Slice(metadata, func(i, j int) bool { return metadata[i].KeyID < metadata[j].KeyID })
 	return metadata, nil
+}
+
+func (s *PassStore) mergeComponentTokenRevocation(ctx context.Context, record *domain.ComponentTokenRecord) error {
+	payload, err := s.passShow(ctx, componentTokenRevocationPassPath(record.KeyID))
+	if err != nil {
+		if isPassEntryNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read component token revocation: %w", err)
+	}
+	revokedAt, err := unmarshalComponentTokenRevocation([]byte(payload), record.KeyID)
+	if err != nil {
+		return err
+	}
+	record.RevokedAt = revokedAt
+	return nil
 }
 
 // CreateComponentToken stores a component token hash and safe metadata in pass.
@@ -309,6 +430,16 @@ func (s *PassStore) CreateComponentToken(ctx context.Context, record *domain.Com
 	defer s.componentMu.Unlock()
 	if err := s.passInsert(ctx, componentTokenPassPath(record.KeyID), string(payload)); err != nil {
 		return fmt.Errorf("store component token record: %w", err)
+	}
+	if record.RevokedAt.IsZero() {
+		return nil
+	}
+	marker, err := marshalComponentTokenRevocation(record.KeyID, record.RevokedAt)
+	if err != nil {
+		return err
+	}
+	if err := s.passInsert(ctx, componentTokenRevocationPassPath(record.KeyID), string(marker)); err != nil {
+		return fmt.Errorf("store component token revocation: %w", err)
 	}
 	return nil
 }
@@ -329,6 +460,9 @@ func (s *PassStore) LookupComponentToken(ctx context.Context, prefix, keyID stri
 	}
 	record, err := unmarshalComponentTokenRecord([]byte(payload), keyID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.mergeComponentTokenRevocation(ctx, record); err != nil {
 		return nil, err
 	}
 	if record.Prefix != prefix {
@@ -367,11 +501,29 @@ func (s *PassStore) updateComponentToken(ctx context.Context, keyID string, upda
 	return nil
 }
 
-// RevokeComponentToken marks a pass-backed component token as revoked.
+// RevokeComponentToken records an authoritative pass-backed revocation marker.
 func (s *PassStore) RevokeComponentToken(ctx context.Context, keyID string, revokedAt time.Time) error {
-	return s.updateComponentToken(ctx, keyID, func(record *domain.ComponentTokenRecord) {
-		record.RevokedAt = revokedAt
-	})
+	if keyID == "" {
+		return fmt.Errorf("component token key ID is required")
+	}
+	marker, err := marshalComponentTokenRevocation(keyID, revokedAt)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	s.componentMu.Lock()
+	defer s.componentMu.Unlock()
+	if _, err := s.passShow(ctx, componentTokenPassPath(keyID)); err != nil {
+		if isPassEntryNotFound(err) {
+			return fmt.Errorf("component token not found")
+		}
+		return fmt.Errorf("read component token record: %w", err)
+	}
+	if err := s.passInsert(ctx, componentTokenRevocationPassPath(keyID), string(marker)); err != nil {
+		return fmt.Errorf("store component token revocation: %w", err)
+	}
+	return nil
 }
 
 // UpdateComponentTokenLastUsed records successful component token use in pass.
@@ -434,7 +586,11 @@ func (s *PassStore) ListComponentTokenMetadata(ctx context.Context) ([]domain.Co
 		if err := json.Unmarshal([]byte(payload), &data); err != nil {
 			return nil, fmt.Errorf("unmarshal component token record: %w", err)
 		}
-		metadata = append(metadata, data.record().Metadata())
+		record := data.record()
+		if err := s.mergeComponentTokenRevocation(ctx, record); err != nil {
+			return nil, err
+		}
+		metadata = append(metadata, record.Metadata())
 	}
 	sort.Slice(metadata, func(i, j int) bool { return metadata[i].KeyID < metadata[j].KeyID })
 	return metadata, nil

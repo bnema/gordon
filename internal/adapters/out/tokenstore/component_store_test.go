@@ -125,6 +125,115 @@ func TestUnsafeComponentTokenStoreCorruptionAndConcurrentUpdates(t *testing.T) {
 	assert.False(t, metadata[0].RevokedAt.IsZero())
 }
 
+func TestUnsafeComponentTokenRevocationSurvivesCrossInstanceLastUsedWrite(t *testing.T) {
+	dir := t.TempDir()
+	revoker, err := NewUnsafeStore(dir, disabledTokenStoreLog())
+	require.NoError(t, err)
+	updater, err := NewUnsafeStore(dir, disabledTokenStoreLog())
+	require.NoError(t, err)
+	require.NoError(t, revoker.CreateComponentToken(context.Background(), componentRecord("race-key", "gct_live")))
+
+	read := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- updater.updateComponentToken("race-key", func(record *domain.ComponentTokenRecord) {
+			close(read) // The updater has read the old, unrevoked record.
+			<-release
+			record.LastUsedAt = time.Unix(1, 0).UTC()
+		})
+	}()
+	<-read
+	revokedAt := time.Unix(2, 0).UTC()
+	require.NoError(t, revoker.RevokeComponentToken(context.Background(), "race-key", revokedAt))
+	close(release)
+	require.NoError(t, <-done)
+
+	found, err := revoker.LookupComponentToken(context.Background(), "gct_live", "race-key")
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Equal(t, revokedAt, found.RevokedAt)
+	metadata, err := updater.ListComponentTokenMetadata(context.Background())
+	require.NoError(t, err)
+	require.Len(t, metadata, 1)
+	assert.Equal(t, revokedAt, metadata[0].RevokedAt)
+}
+
+func TestPassComponentTokenRevocationSurvivesCrossInstanceLastUsedWrite(t *testing.T) {
+	passDir := t.TempDir()
+	installFakePass(t, passDir)
+	t.Setenv("PASS_STORE_DIR", passDir)
+	revoker := NewPassStore(disabledTokenStoreLog())
+	updater := NewPassStore(disabledTokenStoreLog())
+	require.NoError(t, revoker.CreateComponentToken(context.Background(), componentRecord("race-key", "gct_live")))
+
+	read := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- updater.updateComponentToken(context.Background(), "race-key", func(record *domain.ComponentTokenRecord) {
+			close(read) // The updater has read the old, unrevoked record.
+			<-release
+			record.LastUsedAt = time.Unix(1, 0).UTC()
+		})
+	}()
+	<-read
+	revokedAt := time.Unix(2, 0).UTC()
+	require.NoError(t, revoker.RevokeComponentToken(context.Background(), "race-key", revokedAt))
+	close(release)
+	require.NoError(t, <-done)
+
+	found, err := revoker.LookupComponentToken(context.Background(), "gct_live", "race-key")
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Equal(t, revokedAt, found.RevokedAt)
+	metadata, err := updater.ListComponentTokenMetadata(context.Background())
+	require.NoError(t, err)
+	require.Len(t, metadata, 1)
+	assert.Equal(t, revokedAt, metadata[0].RevokedAt)
+}
+
+func TestComponentTokenRevocationMarkersFailClosedAndRemainPrivate(t *testing.T) {
+	t.Run("unsafe", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := NewUnsafeStore(dir, disabledTokenStoreLog())
+		require.NoError(t, err)
+		require.NoError(t, store.CreateComponentToken(context.Background(), componentRecord("../key", "gct_live")))
+		require.NoError(t, store.RevokeComponentToken(context.Background(), "../key", time.Unix(2, 0).UTC()))
+
+		markerPath := store.componentTokenRevocationPath("../key")
+		assert.NotContains(t, markerPath, "../key")
+		info, err := os.Stat(markerPath)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
+		info, err = os.Stat(filepath.Dir(markerPath))
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0700), info.Mode().Perm())
+		require.NoError(t, os.WriteFile(markerPath, []byte("corrupt"), 0600))
+		_, err = store.LookupComponentToken(context.Background(), "gct_live", "../key")
+		require.Error(t, err)
+		_, err = store.ListComponentTokenMetadata(context.Background())
+		require.Error(t, err)
+	})
+
+	t.Run("pass", func(t *testing.T) {
+		passDir := t.TempDir()
+		installFakePass(t, passDir)
+		t.Setenv("PASS_STORE_DIR", passDir)
+		store := NewPassStore(disabledTokenStoreLog())
+		require.NoError(t, store.CreateComponentToken(context.Background(), componentRecord("../key", "gct_live")))
+		require.NoError(t, store.RevokeComponentToken(context.Background(), "../key", time.Unix(2, 0).UTC()))
+
+		markerPath := filepath.Join(passDir, componentTokenRevocationPassPath("../key"))
+		assert.NotContains(t, filepath.Base(markerPath), "../key")
+		require.NoError(t, os.WriteFile(markerPath, []byte("corrupt"), 0600))
+		_, err := store.LookupComponentToken(context.Background(), "gct_live", "../key")
+		require.Error(t, err)
+		_, err = store.ListComponentTokenMetadata(context.Background())
+		require.Error(t, err)
+	})
+}
+
 func TestComponentTokenStoreFactoryAndPassLifecycle(t *testing.T) {
 	passDir := t.TempDir()
 	installFakePass(t, passDir)
@@ -276,6 +385,7 @@ show)
 	failure|locked|read-failure) unavailable ;;
 	timeout) sleep 1 ;;
 	esac
+	if [ ! -f "$root/$2" ]; then missing "$2"; fi
 	cat "$root/$2"
 	;;
 ls)

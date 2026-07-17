@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -113,6 +114,23 @@ func TestService_ValidateTokenRejectsRevokedToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.RevokeToken(context.Background(), result.Metadata.KeyID))
 
+	_, err = svc.ValidateToken(context.Background(), result.Token, domain.ComponentScopeRuntimeStatus)
+	assert.ErrorIs(t, err, domain.ErrRevokedToken)
+}
+
+func TestService_ValidateTokenRemainsRevokedAfterIndependentStoreLastUsedUpdate(t *testing.T) {
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	store, err := tokenstore.NewUnsafeStore(dir, zerowrap.Default())
+	require.NoError(t, err)
+	svc := NewService(store, zerowrap.Default(), Config{Now: func() time.Time { return now }})
+	result, err := svc.CreateToken(context.Background(), CreateRequest{Name: "runtime-a", Role: domain.ComponentRoleRuntime})
+	require.NoError(t, err)
+	require.NoError(t, svc.RevokeToken(context.Background(), result.Metadata.KeyID))
+
+	independent, err := tokenstore.NewUnsafeStore(dir, zerowrap.Default())
+	require.NoError(t, err)
+	require.NoError(t, independent.UpdateComponentTokenLastUsed(context.Background(), result.Metadata.KeyID, now.Add(time.Minute)))
 	_, err = svc.ValidateToken(context.Background(), result.Token, domain.ComponentScopeRuntimeStatus)
 	assert.ErrorIs(t, err, domain.ErrRevokedToken)
 }
