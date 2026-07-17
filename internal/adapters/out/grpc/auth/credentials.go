@@ -11,17 +11,27 @@ import (
 var errEmptyBearerToken = errors.New("bearer token must not be empty")
 
 type bearerTokenCredentials struct {
-	token string
+	token                    string
+	requireTransportSecurity bool
 }
 
-// NewBearerTokenCredentials returns per-RPC credentials that attach a bearer token.
+// NewBearerTokenCredentials returns per-RPC credentials that attach a bearer token over a secure transport.
 func NewBearerTokenCredentials(token string) (credentials.PerRPCCredentials, error) {
+	return newBearerTokenCredentials(token, true)
+}
+
+// NewInsecureBearerTokenCredentials returns per-RPC credentials for an explicitly configured private plaintext transport.
+func NewInsecureBearerTokenCredentials(token string) (credentials.PerRPCCredentials, error) {
+	return newBearerTokenCredentials(token, false)
+}
+
+func newBearerTokenCredentials(token string, requireTransportSecurity bool) (credentials.PerRPCCredentials, error) {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return nil, errEmptyBearerToken
 	}
 
-	return bearerTokenCredentials{token: token}, nil
+	return bearerTokenCredentials{token: token, requireTransportSecurity: requireTransportSecurity}, nil
 }
 
 func (c bearerTokenCredentials) GetRequestMetadata(context.Context, ...string) (map[string]string, error) {
@@ -31,5 +41,5 @@ func (c bearerTokenCredentials) GetRequestMetadata(context.Context, ...string) (
 }
 
 func (c bearerTokenCredentials) RequireTransportSecurity() bool {
-	return true
+	return c.requireTransportSecurity
 }

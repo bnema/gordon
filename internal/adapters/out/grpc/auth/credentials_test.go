@@ -42,3 +42,10 @@ func TestBearerTokenCredentialsRequireTransportSecurity(t *testing.T) {
 
 	require.True(t, creds.RequireTransportSecurity())
 }
+
+func TestInsecureBearerTokenCredentialsExplicitlyPermitPlaintextTransport(t *testing.T) {
+	creds, err := NewInsecureBearerTokenCredentials("component-token")
+	require.NoError(t, err)
+
+	require.False(t, creds.RequireTransportSecurity())
+}

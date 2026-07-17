@@ -12,12 +12,14 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type RuntimeControlConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 	Token    string `mapstructure:"token"`
 	TokenEnv string `mapstructure:"token_env"`
+	Insecure bool   `mapstructure:"insecure"`
 }
 
 func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (out.RuntimeCommandClient, error) {
@@ -25,9 +27,15 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 	if endpoint == "" {
 		return nil, nil
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12}))}
+	transportCredentials := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
+	newBearerCredentials := grpcauth.NewBearerTokenCredentials
+	if cfg.Insecure {
+		transportCredentials = insecure.NewCredentials()
+		newBearerCredentials = grpcauth.NewInsecureBearerTokenCredentials
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(transportCredentials)}
 	if token := runtimeControlToken(cfg); token != "" {
-		creds, err := grpcauth.NewBearerTokenCredentials(token)
+		creds, err := newBearerCredentials(token)
 		if err != nil {
 			return nil, err
 		}

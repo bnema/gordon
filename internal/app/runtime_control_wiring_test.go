@@ -3,11 +3,21 @@ package app
 import (
 	"context"
 	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
+	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
 
 func TestCreateRuntimeCommandClientFromEndpoint(t *testing.T) {
@@ -18,6 +28,35 @@ func TestCreateRuntimeCommandClientFromEndpoint(t *testing.T) {
 	client, err = createRuntimeCommandClient(context.Background(), RuntimeControlConfig{})
 	assert.NoError(t, err)
 	assert.Nil(t, client)
+}
+
+func TestCreateRuntimeCommandClientUsesPlaintextOnlyWithExplicitOptIn(t *testing.T) {
+	endpoint := startPlaintextRuntimeControlServer(t, "component-token")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	insecureClient, err := createRuntimeCommandClient(ctx, RuntimeControlConfig{
+		Endpoint: endpoint,
+		Token:    "component-token",
+		Insecure: true,
+	})
+	require.NoError(t, err)
+	require.NoError(t, insecureClient.(out.RuntimeHealthClient).PingRuntime(ctx))
+
+	secureClient, err := createRuntimeCommandClient(ctx, RuntimeControlConfig{Endpoint: endpoint, Token: "component-token"})
+	require.NoError(t, err)
+	require.Error(t, secureClient.(out.RuntimeHealthClient).PingRuntime(ctx))
+}
+
+func TestRuntimeControlConfigDefaultsAndMapsInsecureTransportOptIn(t *testing.T) {
+	v := viper.New()
+	require.NoError(t, loadConfig(v, ""))
+	assert.False(t, v.GetBool("runtime.insecure"))
+
+	v.Set("runtime.insecure", true)
+	var cfg Config
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.True(t, cfg.Runtime.Insecure)
 }
 
 func TestRuntimeLogReaderUsesCommandClientForControlRole(t *testing.T) {
@@ -84,6 +123,34 @@ func TestRuntimeControlFacadeNotConstructedForMonolithRole(t *testing.T) {
 	initRuntimeControlFacade(svc)
 
 	assert.Nil(t, svc.runtimeControl)
+}
+
+type plaintextRuntimeControlServer struct {
+	runtimev1.UnimplementedRuntimeServiceServer
+}
+
+func (plaintextRuntimeControlServer) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runtimev1.GetHealthResponse, error) {
+	return &runtimev1.GetHealthResponse{Ok: true}, nil
+}
+
+func startPlaintextRuntimeControlServer(t *testing.T, token string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		if values := md.Get("authorization"); len(values) != 1 || values[0] != "Bearer "+token {
+			return nil, status.Error(codes.Unauthenticated, "component token required")
+		}
+		return handler(ctx, req)
+	}))
+	runtimev1.RegisterRuntimeServiceServer(server, plaintextRuntimeControlServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	return listener.Addr().String()
 }
 
 type fakeRuntimeCommandClientForApp struct{}
