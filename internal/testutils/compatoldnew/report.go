@@ -9,9 +9,20 @@ import (
 )
 
 type Report struct {
-	Total    int       `json:"total"`
-	Failed   int       `json:"failed"`
-	Failures []Failure `json:"failures"`
+	Total           int       `json:"total"`
+	Failed          int       `json:"failed"`
+	Failures        []Failure `json:"failures"`
+	BaselineCommit  string    `json:"baselineCommit,omitempty"`
+	CandidateCommit string    `json:"candidateCommit,omitempty"`
+	RerunCommand    string    `json:"rerunCommand,omitempty"`
+}
+
+// ReportMetadata identifies the exact old/new inputs and focused rerun for a
+// scenario report.
+type ReportMetadata struct {
+	BaselineCommit  string
+	CandidateCommit string
+	RerunCommand    string
 }
 
 // SideResult associates a captured artifact with the target that produced it.
@@ -23,6 +34,12 @@ type SideResult struct {
 // CompareSideResults routes every comparison through Compare and writes the
 // report artifacts even when the values match, so failures are diagnosable.
 func CompareSideResults(old, new SideResult, allow *AllowlistedDifference, artifactDir string) (Report, error) {
+	return CompareSideResultsWithMetadata(old, new, allow, artifactDir, ReportMetadata{})
+}
+
+// CompareSideResultsWithMetadata compares artifacts through Compare and adds
+// reproducibility information to the report written for the scenario.
+func CompareSideResultsWithMetadata(old, new SideResult, allow *AllowlistedDifference, artifactDir string, metadata ReportMetadata) (Report, error) {
 	if old.Side != SideOld || new.Side != SideNew {
 		return Report{}, fmt.Errorf("compare sides: expected old and new results")
 	}
@@ -33,6 +50,9 @@ func CompareSideResults(old, new SideResult, allow *AllowlistedDifference, artif
 		return Report{}, fmt.Errorf("compare sides: report artifact directory is required")
 	}
 	report := NewReport(Compare(old.Artifact, new.Artifact, allow), 1)
+	report.BaselineCommit = metadata.BaselineCommit
+	report.CandidateCommit = metadata.CandidateCommit
+	report.RerunCommand = metadata.RerunCommand
 	if err := report.WriteArtifactDirectory(artifactDir); err != nil {
 		return Report{}, fmt.Errorf("compare sides write report: %w", err)
 	}

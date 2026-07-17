@@ -1,5 +1,15 @@
 package compatoldnew
 
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+const configShowJSONScenarioName = "cli/config-show-json"
+
 // ConfigScenarios returns Phase 5 config compatibility scenario shells.
 func ConfigScenarios() []Scenario {
 	return []Scenario{
@@ -34,4 +44,108 @@ func ConfigScenarios() []Scenario {
 
 func configScenario(name string) Scenario {
 	return pendingScenario(name, SurfaceConfig, "6.1 Config compatibility", false, "old/new config compatibility scenario execution is not implemented yet")
+}
+
+// RunConfigShowJSON executes the real config-show compatibility slice. It
+// builds the baseline in a detached worktree and the candidate from the
+// caller's worktree, then runs identical isolated fixtures against both.
+func RunConfigShowJSON(ctx context.Context, repoRoot, artifactDir string) (Report, error) {
+	if repoRoot == "" {
+		return Report{}, fmt.Errorf("config show JSON: repository root is required")
+	}
+	if artifactDir == "" {
+		return Report{}, fmt.Errorf("config show JSON: report artifact directory is required")
+	}
+
+	binaries, err := BuildOldAndNew(ctx, nil, repoRoot, filepath.Join(artifactDir, "bin"))
+	if err != nil {
+		return Report{}, err
+	}
+
+	fixtureParent, err := os.MkdirTemp("", "gordon-compat-config-show-*")
+	if err != nil {
+		return Report{}, fmt.Errorf("config show JSON: create fixture parent: %w", err)
+	}
+	defer os.RemoveAll(fixtureParent)
+
+	sourceConfig := filepath.Join(FixtureRoot(), "configs", "realistic.toml")
+	oldFixture, err := StageSideFixture(fixtureParent, sourceConfig)
+	if err != nil {
+		return Report{}, err
+	}
+	newFixture, err := StageSideFixture(fixtureParent, sourceConfig)
+	if err != nil {
+		return Report{}, err
+	}
+
+	old, err := executeConfigShowJSON(ctx, SideOld, binaries.Old.BinaryPath, oldFixture)
+	if err != nil {
+		return Report{}, err
+	}
+	new, err := executeConfigShowJSON(ctx, SideNew, binaries.New.BinaryPath, newFixture)
+	if err != nil {
+		return Report{}, err
+	}
+
+	return CompareSideResultsWithMetadata(old, new, nil, artifactDir, ReportMetadata{
+		BaselineCommit:  binaries.Old.Commit,
+		CandidateCommit: binaries.New.Commit,
+		RerunCommand:    configShowJSONRerunCommand(),
+	})
+}
+
+func executeConfigShowJSON(ctx context.Context, side, binaryPath string, fixture SideFixture) (SideResult, error) {
+	result, err := ExecuteSide(ctx, side, CommandCaptureRequest{
+		BinaryPath: binaryPath,
+		Args:       []string{"config", "show", "--json"},
+		Dir:        fixture.Root,
+		Env:        configShowJSONEnvironment(fixture),
+		Source:     "gordon config show --json",
+		Level:      LevelSemantic,
+	})
+	if err != nil {
+		return SideResult{}, err
+	}
+
+	artifact, err := configShowJSONArtifact(result.Artifact)
+	if err != nil {
+		return SideResult{}, fmt.Errorf("config show JSON %s output: %w", side, err)
+	}
+	return SideResult{Side: side, Artifact: artifact}, nil
+}
+
+func configShowJSONEnvironment(fixture SideFixture) []string {
+	return append(append([]string{}, fixture.Env...),
+		"XDG_CONFIG_HOME="+filepath.Join(fixture.Root, "xdg-config"),
+		"GORDON_REMOTE=",
+		"GORDON_TOKEN=",
+		"GORDON_INSECURE=",
+	)
+}
+
+func configShowJSONArtifact(capture Artifact) (CLIArtifact, error) {
+	raw, ok := capture.RawValue().(map[string]any)
+	if !ok {
+		return CLIArtifact{}, fmt.Errorf("unexpected capture type %T", capture.RawValue())
+	}
+	exitCode, ok := raw["exitCode"].(int)
+	if !ok {
+		return CLIArtifact{}, fmt.Errorf("missing integer exit code")
+	}
+	stdout, ok := raw["stdout"].(string)
+	if !ok {
+		return CLIArtifact{}, fmt.Errorf("missing stdout")
+	}
+	var payload any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		return CLIArtifact{}, fmt.Errorf("decode JSON: %w", err)
+	}
+	return NewCLIArtifact("gordon config show --json", map[string]any{
+		"exitCode": exitCode,
+		"json":     payload,
+	}, LevelSemantic), nil
+}
+
+func configShowJSONRerunCommand() string {
+	return "GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$' -count=1"
 }

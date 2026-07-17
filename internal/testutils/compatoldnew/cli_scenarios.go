@@ -3,7 +3,7 @@ package compatoldnew
 // CLIScenarios returns Phase 5 CLI compatibility scenario shells.
 func CLIScenarios() []Scenario {
 	return []Scenario{
-		cliScenario("cli/config-show-json", false),
+		implementedScenario(configShowJSONScenarioName, SurfaceCLI, "6.2 CLI compatibility", false),
 		cliScenario("cli/routes-list-json", false),
 		cliScenario("cli/routes-add-remove", false),
 		cliScenario("cli/status-text", false),

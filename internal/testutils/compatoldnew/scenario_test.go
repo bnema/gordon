@@ -112,8 +112,13 @@ func TestScenarioDefinitions(t *testing.T) {
 		for _, scenario := range group.scenarios {
 			require.NotEmpty(t, scenario.SpecSection, scenario.Name)
 			require.Equal(t, surface, scenario.Surface, scenario.Name)
-			require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
-			require.NotEmpty(t, scenario.BlockReason, scenario.Name)
+			if scenario.Name == configShowJSONScenarioName {
+				require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
+				require.Empty(t, scenario.BlockReason, scenario.Name)
+			} else {
+				require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
+				require.NotEmpty(t, scenario.BlockReason, scenario.Name)
+			}
 
 			_, duplicate := seen[scenario.Name]
 			require.False(t, duplicate, "duplicate scenario name %q", scenario.Name)
