@@ -20,16 +20,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RuntimeService_ApplyCommand_FullMethodName      = "/gordon.runtime.v1.RuntimeService/ApplyCommand"
-	RuntimeService_WatchActualState_FullMethodName  = "/gordon.runtime.v1.RuntimeService/WatchActualState"
-	RuntimeService_GetHealth_FullMethodName         = "/gordon.runtime.v1.RuntimeService/GetHealth"
-	RuntimeService_StreamLogs_FullMethodName        = "/gordon.runtime.v1.RuntimeService/StreamLogs"
-	RuntimeService_ListVolumes_FullMethodName       = "/gordon.runtime.v1.RuntimeService/ListVolumes"
-	RuntimeService_RemoveVolume_FullMethodName      = "/gordon.runtime.v1.RuntimeService/RemoveVolume"
-	RuntimeService_ListImages_FullMethodName        = "/gordon.runtime.v1.RuntimeService/ListImages"
-	RuntimeService_PruneImages_FullMethodName       = "/gordon.runtime.v1.RuntimeService/PruneImages"
-	RuntimeService_RuntimeSelfUpdate_FullMethodName = "/gordon.runtime.v1.RuntimeService/RuntimeSelfUpdate"
-	RuntimeService_ReportEdgeDrain_FullMethodName   = "/gordon.runtime.v1.RuntimeService/ReportEdgeDrain"
+	RuntimeService_ApplyCommand_FullMethodName               = "/gordon.runtime.v1.RuntimeService/ApplyCommand"
+	RuntimeService_WatchActualState_FullMethodName           = "/gordon.runtime.v1.RuntimeService/WatchActualState"
+	RuntimeService_GetHealth_FullMethodName                  = "/gordon.runtime.v1.RuntimeService/GetHealth"
+	RuntimeService_StreamLogs_FullMethodName                 = "/gordon.runtime.v1.RuntimeService/StreamLogs"
+	RuntimeService_ListVolumes_FullMethodName                = "/gordon.runtime.v1.RuntimeService/ListVolumes"
+	RuntimeService_RemoveVolume_FullMethodName               = "/gordon.runtime.v1.RuntimeService/RemoveVolume"
+	RuntimeService_ListImages_FullMethodName                 = "/gordon.runtime.v1.RuntimeService/ListImages"
+	RuntimeService_PruneImages_FullMethodName                = "/gordon.runtime.v1.RuntimeService/PruneImages"
+	RuntimeService_RuntimeSelfUpdate_FullMethodName          = "/gordon.runtime.v1.RuntimeService/RuntimeSelfUpdate"
+	RuntimeService_ApplyStandaloneService_FullMethodName     = "/gordon.runtime.v1.RuntimeService/ApplyStandaloneService"
+	RuntimeService_RemoveStandaloneService_FullMethodName    = "/gordon.runtime.v1.RuntimeService/RemoveStandaloneService"
+	RuntimeService_ListStandaloneServiceState_FullMethodName = "/gordon.runtime.v1.RuntimeService/ListStandaloneServiceState"
+	RuntimeService_ReportEdgeDrain_FullMethodName            = "/gordon.runtime.v1.RuntimeService/ReportEdgeDrain"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -48,6 +51,12 @@ type RuntimeServiceClient interface {
 	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
 	PruneImages(ctx context.Context, in *PruneImagesRequest, opts ...grpc.CallOption) (*PruneImagesResponse, error)
 	RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error)
+	// ApplyStandaloneService realizes one sanitized standalone-service spec.
+	// Resolved environment values are accepted only as apply input and are never
+	// returned by this service.
+	ApplyStandaloneService(ctx context.Context, in *ApplyStandaloneServiceRequest, opts ...grpc.CallOption) (*ApplyStandaloneServiceResponse, error)
+	RemoveStandaloneService(ctx context.Context, in *RemoveStandaloneServiceRequest, opts ...grpc.CallOption) (*RemoveStandaloneServiceResponse, error)
+	ListStandaloneServiceState(ctx context.Context, in *ListStandaloneServiceStateRequest, opts ...grpc.CallOption) (*ListStandaloneServiceStateResponse, error)
 	// ReportEdgeDrain is called by gordon-control after gordon-edge reports that
 	// a route generation has drained. Edge never calls runtime directly: edge
 	// reports drain state to control, control validates generation and target,
@@ -172,6 +181,36 @@ func (c *runtimeServiceClient) RuntimeSelfUpdate(ctx context.Context, in *Runtim
 	return out, nil
 }
 
+func (c *runtimeServiceClient) ApplyStandaloneService(ctx context.Context, in *ApplyStandaloneServiceRequest, opts ...grpc.CallOption) (*ApplyStandaloneServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyStandaloneServiceResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ApplyStandaloneService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) RemoveStandaloneService(ctx context.Context, in *RemoveStandaloneServiceRequest, opts ...grpc.CallOption) (*RemoveStandaloneServiceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveStandaloneServiceResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_RemoveStandaloneService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) ListStandaloneServiceState(ctx context.Context, in *ListStandaloneServiceStateRequest, opts ...grpc.CallOption) (*ListStandaloneServiceStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListStandaloneServiceStateResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ListStandaloneServiceState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *runtimeServiceClient) ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(v1.Ack)
@@ -198,6 +237,12 @@ type RuntimeServiceServer interface {
 	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
 	PruneImages(context.Context, *PruneImagesRequest) (*PruneImagesResponse, error)
 	RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error)
+	// ApplyStandaloneService realizes one sanitized standalone-service spec.
+	// Resolved environment values are accepted only as apply input and are never
+	// returned by this service.
+	ApplyStandaloneService(context.Context, *ApplyStandaloneServiceRequest) (*ApplyStandaloneServiceResponse, error)
+	RemoveStandaloneService(context.Context, *RemoveStandaloneServiceRequest) (*RemoveStandaloneServiceResponse, error)
+	ListStandaloneServiceState(context.Context, *ListStandaloneServiceStateRequest) (*ListStandaloneServiceStateResponse, error)
 	// ReportEdgeDrain is called by gordon-control after gordon-edge reports that
 	// a route generation has drained. Edge never calls runtime directly: edge
 	// reports drain state to control, control validates generation and target,
@@ -240,6 +285,15 @@ func (UnimplementedRuntimeServiceServer) PruneImages(context.Context, *PruneImag
 }
 func (UnimplementedRuntimeServiceServer) RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RuntimeSelfUpdate not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ApplyStandaloneService(context.Context, *ApplyStandaloneServiceRequest) (*ApplyStandaloneServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyStandaloneService not implemented")
+}
+func (UnimplementedRuntimeServiceServer) RemoveStandaloneService(context.Context, *RemoveStandaloneServiceRequest) (*RemoveStandaloneServiceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveStandaloneService not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ListStandaloneServiceState(context.Context, *ListStandaloneServiceStateRequest) (*ListStandaloneServiceStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListStandaloneServiceState not implemented")
 }
 func (UnimplementedRuntimeServiceServer) ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*v1.Ack, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportEdgeDrain not implemented")
@@ -413,6 +467,60 @@ func _RuntimeService_RuntimeSelfUpdate_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_ApplyStandaloneService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyStandaloneServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ApplyStandaloneService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ApplyStandaloneService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ApplyStandaloneService(ctx, req.(*ApplyStandaloneServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_RemoveStandaloneService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveStandaloneServiceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).RemoveStandaloneService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_RemoveStandaloneService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).RemoveStandaloneService(ctx, req.(*RemoveStandaloneServiceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_ListStandaloneServiceState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListStandaloneServiceStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ListStandaloneServiceState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ListStandaloneServiceState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ListStandaloneServiceState(ctx, req.(*ListStandaloneServiceStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RuntimeService_ReportEdgeDrain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReportEdgeDrainRequest)
 	if err := dec(in); err != nil {
@@ -465,6 +573,18 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RuntimeSelfUpdate",
 			Handler:    _RuntimeService_RuntimeSelfUpdate_Handler,
+		},
+		{
+			MethodName: "ApplyStandaloneService",
+			Handler:    _RuntimeService_ApplyStandaloneService_Handler,
+		},
+		{
+			MethodName: "RemoveStandaloneService",
+			Handler:    _RuntimeService_RemoveStandaloneService_Handler,
+		},
+		{
+			MethodName: "ListStandaloneServiceState",
+			Handler:    _RuntimeService_ListStandaloneServiceState_Handler,
 		},
 		{
 			MethodName: "ReportEdgeDrain",

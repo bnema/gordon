@@ -20,6 +20,13 @@ service RuntimeService {
   rpc PruneImages(PruneImagesRequest) returns (PruneImagesResponse);
   rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (ApplyCommandResponse);
 
+  // ApplyStandaloneService realizes one sanitized standalone-service spec.
+  // Resolved environment values are accepted only as apply input and are never
+  // returned by this service.
+  rpc ApplyStandaloneService(ApplyStandaloneServiceRequest) returns (ApplyStandaloneServiceResponse);
+  rpc RemoveStandaloneService(RemoveStandaloneServiceRequest) returns (RemoveStandaloneServiceResponse);
+  rpc ListStandaloneServiceState(ListStandaloneServiceStateRequest) returns (ListStandaloneServiceStateResponse);
+
   // ReportEdgeDrain is called by gordon-control after gordon-edge reports that
   // a route generation has drained. Edge never calls runtime directly: edge
   // reports drain state to control, control validates generation and target,
@@ -114,6 +121,92 @@ message RuntimeCommandResult {
 
 message ApplyCommandResponse {
   RuntimeCommandResult result = 1;
+}
+
+// StandaloneServiceSpec contains only runtime-safe standalone-service settings.
+// Environment sources and secret references are resolved by control and are not
+// part of this boundary.
+message StandaloneServiceSpec {
+  string name = 1;
+  string image = 2;
+  bool enabled = 3;
+  repeated StandaloneServicePortSpec ports = 4;
+  repeated StandaloneServiceVolumeSpec volumes = 5;
+  StandaloneServiceReadinessSpec readiness = 6;
+  StandaloneServiceCleanupSpec cleanup = 7;
+}
+
+message StandaloneServicePortSpec {
+  string name = 1;
+  int32 container = 2;
+  string protocol = 3;
+  string publish = 4;
+  bool private = 5;
+  bool public = 6;
+  repeated string trusted_cidrs = 7;
+}
+
+message StandaloneServiceVolumeSpec {
+  string source = 1;
+  string target = 2;
+  bool read_only = 3;
+}
+
+message StandaloneServiceReadinessSpec {
+  string type = 1;
+  string path = 2;
+  string contains = 3;
+  int64 timeout_ns = 4;
+  bool timeout_set = 5;
+}
+
+message StandaloneServiceCleanupSpec {
+  bool preserve_volumes = 1;
+  bool remove_container = 2;
+}
+
+message ApplyStandaloneServiceCommand {
+  RuntimeCommandIdentity identity = 1;
+  StandaloneServiceSpec service = 2;
+  repeated string resolved_env = 3;
+  string config_hash = 4;
+}
+
+message ApplyStandaloneServiceRequest {
+  ApplyStandaloneServiceCommand command = 1;
+}
+
+message ApplyStandaloneServiceResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message RemoveStandaloneServiceCommand {
+  RuntimeCommandIdentity identity = 1;
+  string name = 2;
+}
+
+message RemoveStandaloneServiceRequest {
+  RemoveStandaloneServiceCommand command = 1;
+}
+
+message RemoveStandaloneServiceResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message ListStandaloneServiceStateRequest {}
+
+// RuntimeStandaloneServiceState is the sanitized service state safe for
+// publication to control. It contains no environment or secret material.
+message RuntimeStandaloneServiceState {
+  string name = 1;
+  string container_id = 2;
+  string container_name = 3;
+  string status = 4;
+  string config_hash = 5;
+}
+
+message ListStandaloneServiceStateResponse {
+  repeated RuntimeStandaloneServiceState services = 1;
 }
 
 message WatchActualStateRequest {
