@@ -39,7 +39,7 @@ func ProxyScenarios() []Scenario {
 	return []Scenario{
 		implementedScenario(managedHTTPRouteScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		proxyScenario("proxy/unknown-host"),
-		proxyScenario("proxy/external-route"),
+		implementedScenario(externalRouteScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		proxyScenario("proxy/h2c-backend"),
 		proxyScenario("proxy/registry-domain-routing"),
 		proxyScenario("proxy/body-size-limit"),
