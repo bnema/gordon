@@ -347,6 +347,99 @@ func TestRuntimeServerAuthenticatesRealPersistedComponentTokens(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
+func TestRuntimeServerAuthenticatesStandaloneServiceRPCsWithPersistedComponentTokens(t *testing.T) {
+	store, err := tokenstore.NewComponentTokenStore(domain.SecretsBackendUnsafe, t.TempDir(), zerowrap.Default())
+	require.NoError(t, err)
+	service := componentauth.NewService(store, zerowrap.Default(), componentauth.Config{})
+	manager := &fakeRuntimeStandaloneServiceManager{}
+	server := NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1")
+	harness := grpctest.NewHarness(t, func(registrar grpc.ServiceRegistrar) {
+		runtimev1.RegisterRuntimeServiceServer(registrar, server)
+	}, grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, MethodScopes(), MethodRoles())))
+	client := runtimev1.NewRuntimeServiceClient(harness.Conn(t))
+
+	createControlToken := func(name string, scope domain.ComponentScope) string {
+		t.Helper()
+		created, createErr := service.CreateToken(context.Background(), componentauth.CreateRequest{
+			Name:   name,
+			Role:   domain.ComponentRoleControl,
+			Scopes: []domain.ComponentScope{scope},
+		})
+		require.NoError(t, createErr)
+		return created.Token
+	}
+	deployToken := createControlToken("control-deploy", domain.ComponentScopeRuntimeDeploy)
+	statusToken := createControlToken("control-status", domain.ComponentScopeRuntimeStatus)
+	wrongRoleToken := persistForgedRuntimeAuthorityToken(t, store, domain.ComponentRoleRuntime)
+	requestedAt := time.Unix(10, 0).UTC()
+
+	tests := []struct {
+		name            string
+		wrongScopeToken string
+		validToken      string
+		calls           func() int
+		call            func(context.Context) error
+	}{
+		{
+			name:            "apply requires runtime deploy",
+			wrongScopeToken: statusToken,
+			validToken:      deployToken,
+			calls:           func() int { return manager.applyCalls },
+			call: func(ctx context.Context) error {
+				_, callErr := client.ApplyStandaloneService(ctx, &runtimev1.ApplyStandaloneServiceRequest{Command: &runtimev1.ApplyStandaloneServiceCommand{
+					Identity: protoTestIdentity("apply-auth", requestedAt),
+					Service:  &runtimev1.StandaloneServiceSpec{Name: "game", Image: "game:latest", Enabled: true},
+				}})
+				return callErr
+			},
+		},
+		{
+			name:            "remove requires runtime deploy",
+			wrongScopeToken: statusToken,
+			validToken:      deployToken,
+			calls:           func() int { return manager.removeCalls },
+			call: func(ctx context.Context) error {
+				_, callErr := client.RemoveStandaloneService(ctx, &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{
+					Identity: protoTestIdentity("remove-auth", requestedAt),
+					Name:     "game",
+				}})
+				return callErr
+			},
+		},
+		{
+			name:            "list requires runtime status",
+			wrongScopeToken: deployToken,
+			validToken:      statusToken,
+			calls:           func() int { return manager.listCalls },
+			call: func(ctx context.Context) error {
+				_, callErr := client.ListStandaloneServiceState(ctx, &runtimev1.ListStandaloneServiceStateRequest{})
+				return callErr
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := tt.calls()
+
+			require.Equal(t, codes.Unauthenticated, status.Code(tt.call(context.Background())))
+			require.Equal(t, before, tt.calls(), "missing token invoked manager")
+
+			wrongScopeCtx := grpctest.AuthenticatedContext(context.Background(), tt.wrongScopeToken)
+			require.Equal(t, codes.PermissionDenied, status.Code(tt.call(wrongScopeCtx)))
+			require.Equal(t, before, tt.calls(), "wrong scope invoked manager")
+
+			wrongRoleCtx := grpctest.AuthenticatedContext(context.Background(), wrongRoleToken)
+			require.Equal(t, codes.PermissionDenied, status.Code(tt.call(wrongRoleCtx)))
+			require.Equal(t, before, tt.calls(), "wrong role invoked manager")
+
+			validCtx := grpctest.AuthenticatedContext(context.Background(), tt.validToken)
+			require.NoError(t, tt.call(validCtx))
+			require.Equal(t, before+1, tt.calls(), "valid control token did not invoke manager")
+		})
+	}
+}
+
 func TestRuntimeServerRejectsForgedNonControlRoleTokensWithRuntimeScopes(t *testing.T) {
 	store, err := tokenstore.NewComponentTokenStore(domain.SecretsBackendUnsafe, t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
@@ -413,11 +506,22 @@ func persistForgedRuntimeAuthorityToken(t *testing.T, store interface {
 	return token
 }
 
-func TestMethodRolesRequireControlForEveryRuntimeRPC(t *testing.T) {
+func TestRuntimeUnaryAuthCoverageIncludesEveryRPC(t *testing.T) {
+	scopes := MethodScopes()
 	roles := MethodRoles()
-	require.Len(t, roles, len(MethodScopes()))
-	for method := range MethodScopes() {
-		assert.Equal(t, domain.ComponentRoleControl, roles[method], method)
+	service := runtimev1.RuntimeService_ServiceDesc
+	require.Len(t, scopes, len(service.Methods)+len(service.Streams))
+	require.Len(t, roles, len(service.Methods)+len(service.Streams))
+
+	for _, method := range service.Methods {
+		fullMethod := "/" + service.ServiceName + "/" + method.MethodName
+		assert.Contains(t, scopes, fullMethod, "unary RPC missing scope coverage")
+		assert.Equal(t, domain.ComponentRoleControl, roles[fullMethod], "unary RPC missing control-role coverage")
+	}
+	for _, stream := range service.Streams {
+		fullMethod := "/" + service.ServiceName + "/" + stream.StreamName
+		assert.Contains(t, scopes, fullMethod, "streaming RPC missing scope coverage")
+		assert.Equal(t, domain.ComponentRoleControl, roles[fullMethod], "streaming RPC missing control-role coverage")
 	}
 }
 
@@ -621,24 +725,30 @@ type fakeRuntimeStandaloneServiceManager struct {
 	apply        domain.ApplyStandaloneServiceCommand
 	applyResult  domain.RuntimeCommandResult
 	applyErr     error
+	applyCalls   int
 	remove       domain.RemoveStandaloneServiceCommand
 	removeResult domain.RuntimeCommandResult
 	removeErr    error
+	removeCalls  int
 	states       []domain.RuntimeStandaloneServiceState
 	listErr      error
+	listCalls    int
 }
 
 func (f *fakeRuntimeStandaloneServiceManager) ApplyStandaloneService(_ context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	f.applyCalls++
 	f.apply = command
 	return f.applyResult, f.applyErr
 }
 
 func (f *fakeRuntimeStandaloneServiceManager) RemoveStandaloneService(_ context.Context, command domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	f.removeCalls++
 	f.remove = command
 	return f.removeResult, f.removeErr
 }
 
 func (f *fakeRuntimeStandaloneServiceManager) ListStandaloneServiceState(context.Context) ([]domain.RuntimeStandaloneServiceState, error) {
+	f.listCalls++
 	return f.states, f.listErr
 }
 
