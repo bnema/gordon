@@ -190,6 +190,11 @@ type RouteTargetEntry struct {
 	UpstreamHost      string
 	Attachment        RouteTargetAttachment
 	TargetKey         RouteTargetKey
+
+	// instanceScoped is intentionally private. It records that TargetKey was
+	// derived with a private managed-instance input that must never be retained
+	// in a snapshot, artifact, or log.
+	instanceScoped bool
 }
 
 // NewReadyRouteTargetEntry constructs a validated attached (managed or registry) route target.
@@ -207,6 +212,34 @@ func NewReadyRouteTargetEntry(domainName, targetHost string, targetPort int, sch
 		return RouteTargetEntry{}, err
 	}
 	entry.setDerivedTargetKey()
+	if err := entry.Validate(); err != nil {
+		return RouteTargetEntry{}, err
+	}
+	return entry, nil
+}
+
+// NewManagedReadyRouteTargetEntry constructs a managed route target whose opaque
+// identity also includes instanceIdentity. The identity input is hashed and is
+// never stored on the entry, so snapshots cannot expose runtime/container IDs.
+func NewManagedReadyRouteTargetEntry(domainName, targetHost string, targetPort int, scheme string, protocol RouteTargetProtocol, generation RouteTargetGeneration, instanceIdentity string) (RouteTargetEntry, error) {
+	if instanceIdentity == "" {
+		return RouteTargetEntry{}, fmt.Errorf("%w: managed instance identity is required", ErrInvalidRoute)
+	}
+	entry := RouteTargetEntry{
+		TargetHost: targetHost,
+		TargetPort: targetPort,
+		Scheme:     scheme,
+		Protocol:   protocol,
+		Status:     RouteTargetStatusReady,
+		Generation: generation,
+		Attachment: RouteTargetAttachmentAttached,
+		// This marker deliberately retains no identity material.
+		instanceScoped: true,
+	}
+	if err := entry.setCanonicalDomain(domainName); err != nil {
+		return RouteTargetEntry{}, err
+	}
+	entry.TargetKey = entry.derivedManagedTargetKey(instanceIdentity)
 	if err := entry.Validate(); err != nil {
 		return RouteTargetEntry{}, err
 	}
@@ -385,7 +418,10 @@ func (e RouteTargetEntry) validateRoutableTarget() error {
 	if !e.TargetKey.Valid() {
 		return fmt.Errorf("%w: route target key is invalid", ErrInvalidRoute)
 	}
-	if e.TargetKey != e.derivedTargetKey() {
+	// Instance-scoped managed keys incorporate a private identity which is
+	// deliberately discarded after construction. Endpoint-derived keys remain
+	// fully reproducible for external and registry targets.
+	if !e.instanceScoped && e.TargetKey != e.derivedTargetKey() {
 		return fmt.Errorf("%w: route target key does not match routing target", ErrInvalidRoute)
 	}
 	if e.UpstreamHost == "" {
@@ -417,7 +453,15 @@ func (e *RouteTargetEntry) setDerivedTargetKey() {
 }
 
 func (e RouteTargetEntry) derivedTargetKey() RouteTargetKey {
-	payload := strings.Join([]string{
+	return e.derivedTargetKeyForIdentity("")
+}
+
+func (e RouteTargetEntry) derivedManagedTargetKey(instanceIdentity string) RouteTargetKey {
+	return e.derivedTargetKeyForIdentity(instanceIdentity)
+}
+
+func (e RouteTargetEntry) derivedTargetKeyForIdentity(instanceIdentity string) RouteTargetKey {
+	fields := []string{
 		e.CanonicalDomain,
 		canonicalRouteTargetIdentityHost(e.TargetHost),
 		fmt.Sprintf("%d", e.TargetPort),
@@ -425,7 +469,13 @@ func (e RouteTargetEntry) derivedTargetKey() RouteTargetKey {
 		string(e.Protocol),
 		canonicalRouteTargetIdentityHost(e.UpstreamHost),
 		string(e.Attachment),
-	}, "\x00")
+	}
+	// Preserve the established endpoint-only key for external and registry
+	// targets. Only managed entries add private instance material.
+	if instanceIdentity != "" {
+		fields = append(fields, instanceIdentity)
+	}
+	payload := strings.Join(fields, "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return RouteTargetKey(routeTargetKeyPrefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
 }

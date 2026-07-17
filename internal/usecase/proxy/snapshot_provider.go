@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"sort"
@@ -33,6 +34,7 @@ type LocalSnapshotProvider struct {
 	hasLast                    bool
 	containerTargetKeys        map[string]containerTargetKeyAssociation
 	currentContainerTargetKeys map[string]containerTargetKeyAssociation
+	preparedDrains             map[string]struct{}
 }
 
 type containerTargetKeyAssociation struct {
@@ -50,6 +52,7 @@ func NewLocalSnapshotProvider(runtime out.ContainerRuntime, containerSvc in.Cont
 		inContainer:                runningInContainer,
 		containerTargetKeys:        make(map[string]containerTargetKeyAssociation),
 		currentContainerTargetKeys: make(map[string]containerTargetKeyAssociation),
+		preparedDrains:             make(map[string]struct{}),
 	}
 }
 
@@ -142,20 +145,34 @@ func (p *LocalSnapshotProvider) TargetKeyForContainer(containerID string) (domai
 	return association.key, ok
 }
 
-// ReleaseTargetKeyForContainer drops a retired lifecycle association after its
-// drain wait succeeds, times out, or is cancelled. A currently routed
-// container ID is never removed, so a delayed release cannot remove a newer
-// association.
+// PrepareDrain pins a current lifecycle association before traffic switches.
+// Invariant: refreshes prune every non-current association unless it is pinned
+// here; WaitForNoInFlight or CancelDrain always releases the pin. This keeps
+// removed-route IDs bounded without evicting an old target during its drain.
+func (p *LocalSnapshotProvider) PrepareDrain(containerID string) {
+	if p == nil || containerID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, found := p.containerTargetKeys[containerID]; found {
+		p.preparedDrains[containerID] = struct{}{}
+	}
+}
+
+// ReleaseTargetKeyForContainer drops a prepared lifecycle association after
+// its drain wait succeeds, times out, or is cancelled. A currently routed ID
+// is never removed, so a delayed release cannot remove a newer association.
 func (p *LocalSnapshotProvider) ReleaseTargetKeyForContainer(containerID string) {
 	if p == nil || containerID == "" {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if _, current := p.currentContainerTargetKeys[containerID]; current {
-		return
+	delete(p.preparedDrains, containerID)
+	if _, current := p.currentContainerTargetKeys[containerID]; !current {
+		delete(p.containerTargetKeys, containerID)
 	}
-	delete(p.containerTargetKeys, containerID)
 }
 
 func (p *LocalSnapshotProvider) snapshotEntries(
@@ -198,12 +215,11 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 	return entries, containerTargetKeys, nil
 }
 
-// mergeContainerTargetKeys retains an old target association through the drain
-// for the immediately preceding deployment. Per-domain deployment is serialized
-// by container.Service, so a subsequent replacement can only occur after that
-// drain returns. Keeping only the current and immediately preceding association
-// therefore bounds abandoned mappings to two per route without evicting an
-// active drain when a lifecycle caller fails to release one.
+// mergeContainerTargetKeys bounds lifecycle associations to current targets,
+// explicitly prepared drains, and one legacy immediately preceding replacement.
+// The legacy slot preserves callers that begin a drain just after refresh; new
+// lifecycle callers pin before switching traffic via PrepareDrain. A removed
+// route has no replacement, so all of its unprepared IDs are pruned immediately.
 func (p *LocalSnapshotProvider) mergeContainerTargetKeys(current map[string]containerTargetKeyAssociation) {
 	previousCurrentByDomain := make(map[string]string, len(p.currentContainerTargetKeys))
 	for containerID, association := range p.currentContainerTargetKeys {
@@ -217,15 +233,17 @@ func (p *LocalSnapshotProvider) mergeContainerTargetKeys(current map[string]cont
 		if _, isCurrent := current[containerID]; isCurrent {
 			continue
 		}
-		currentContainerID, replaced := currentByDomain[association.domain]
-		previousContainerID := previousCurrentByDomain[association.domain]
-		if replaced && currentContainerID != previousContainerID && previousContainerID != containerID {
-			delete(p.containerTargetKeys, containerID)
+		if _, prepared := p.preparedDrains[containerID]; prepared {
+			continue
 		}
+		previousID := previousCurrentByDomain[association.domain]
+		currentID, replaced := currentByDomain[association.domain]
+		if replaced && previousID == containerID && currentID != containerID {
+			continue
+		}
+		delete(p.containerTargetKeys, containerID)
 	}
-	for containerID, association := range current {
-		p.containerTargetKeys[containerID] = association
-	}
+	maps.Copy(p.containerTargetKeys, current)
 	p.currentContainerTargetKeys = current
 }
 
@@ -328,14 +346,14 @@ func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localMan
 	if p.inContainer() {
 		// The deployment installs this stable alias on the route network. It is
 		// independent of the backing container identity during replacement.
-		entry, err := domain.NewReadyRouteTargetEntry(route.Domain, targetAlias(route.Domain), metadata.Port, "http", protocol, generation)
+		entry, err := domain.NewManagedReadyRouteTargetEntry(route.Domain, targetAlias(route.Domain), metadata.Port, "http", protocol, generation, container.ID)
 		return entry, container.ID, err
 	}
 	hostPort, err := p.runtime.GetContainerPort(ctx, container.ID, metadata.Port)
 	if err != nil {
 		return domain.RouteTargetEntry{}, container.ID, fmt.Errorf("get host port mapping: %w", err)
 	}
-	entry, err := domain.NewReadyRouteTargetEntry(route.Domain, "localhost", hostPort, "http", protocol, generation)
+	entry, err := domain.NewManagedReadyRouteTargetEntry(route.Domain, "localhost", hostPort, "http", protocol, generation, container.ID)
 	return entry, container.ID, err
 }
 

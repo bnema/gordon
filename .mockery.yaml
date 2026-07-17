@@ -38,6 +38,7 @@ packages:
       CloudflareZoneResolver:
       CertificateAuthority:
       ComponentTokenStore:
+      ProxyDrainWaiter:
       RouteSnapshotProvider:
       RouteSnapshotWatcher:
       EdgeDrainCoordinator:

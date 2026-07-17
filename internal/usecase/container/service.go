@@ -390,21 +390,16 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
-
-	// Post-switch stabilization: verify new container stays running
-	if hasExisting {
-		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
-		if stabilizeErr != nil {
-			// Both old and new containers are dead; assign to named return so
-			// the deferred recordDeployMetrics and span see the failure.
-			err = stabilizeErr
-			return nil, err
-		}
-		if !stable {
-			// Rollback performed — old container is restored
-			return existing, nil
-		}
+	invalidated, stable, stabilizeErr := s.activateAndStabilizeNewContainer(ctx, route.Domain, newContainer, existing, hasExisting)
+	if stabilizeErr != nil {
+		// Both old and new containers are dead; assign to named return so
+		// the deferred recordDeployMetrics and span see the failure.
+		err = stabilizeErr
+		return nil, err
+	}
+	if !stable {
+		// Rollback performed — old container is restored.
+		return existing, nil
 	}
 
 	// Finalize old container in the background — the new container is already
@@ -1010,6 +1005,55 @@ func (s *Service) finalizePreviousContainer(ctx context.Context, domainName stri
 	}
 
 	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
+}
+
+// activateAndStabilizeNewContainer pins an old target before invalidation can
+// direct requests to its replacement. It releases that pin when the handoff
+// does not reach the background drain wait (failed invalidation or rollback).
+func (s *Service) activateAndStabilizeNewContainer(ctx context.Context, domainName string, newContainer, existing *domain.Container, hasExisting bool) (bool, bool, error) {
+	preparedDrain := hasExisting && s.prepareDrain(existing.ID)
+	invalidated := s.activateDeployedContainer(ctx, domainName, newContainer)
+	if preparedDrain && !invalidated {
+		s.cancelPreparedDrain(existing.ID)
+		preparedDrain = false
+	}
+	if !hasExisting {
+		return invalidated, true, nil
+	}
+	stable, err := s.stabilizeNewContainer(ctx, domainName, newContainer, existing)
+	if (err != nil || !stable) && preparedDrain {
+		s.cancelPreparedDrain(existing.ID)
+	}
+	return invalidated, stable, err
+}
+
+// prepareDrain pins the old target only when this deployment will actually
+// use the in-flight waiter. The pin must be acquired before cache invalidation
+// so snapshot refreshes cannot prune the old target during the handoff.
+func (s *Service) prepareDrain(oldContainerID string) bool {
+	s.mu.RLock()
+	cfg := s.config
+	waiter := s.drainWaiter
+	invalidator := s.cacheInvalidator
+	s.mu.RUnlock()
+	mode := cfg.DrainMode
+	if mode == "" {
+		mode = "delay"
+	}
+	if invalidator == nil || waiter == nil || (mode != "inflight" && mode != "auto") {
+		return false
+	}
+	waiter.PrepareDrain(oldContainerID)
+	return true
+}
+
+func (s *Service) cancelPreparedDrain(oldContainerID string) {
+	s.mu.RLock()
+	waiter := s.drainWaiter
+	s.mu.RUnlock()
+	if waiter != nil {
+		waiter.CancelDrain(oldContainerID)
+	}
 }
 
 func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {

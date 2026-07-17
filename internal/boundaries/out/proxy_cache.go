@@ -12,8 +12,11 @@ type ProxyCacheInvalidator interface {
 	InvalidateTarget(ctx context.Context, domainName string)
 }
 
-// ProxyDrainWaiter defines the contract for waiting until no in-flight
-// requests remain for a container.
+// ProxyDrainWaiter defines the contract for safely draining a retired
+// container. PrepareDrain must run before the traffic switch; it pins the old
+// target identity until WaitForNoInFlight or CancelDrain releases it.
 type ProxyDrainWaiter interface {
+	PrepareDrain(containerID string)
+	CancelDrain(containerID string)
 	WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool
 }

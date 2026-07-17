@@ -31,6 +31,23 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+func TestService_PrepareDrainPinsBeforeTrafficInvalidation(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	waiter := mocks.NewMockProxyDrainWaiter(t)
+	invalidator := mocks.NewMockProxyCacheInvalidator(t)
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{DrainMode: "inflight"}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+	svc.SetProxyCacheInvalidator(invalidator)
+
+	waiter.EXPECT().PrepareDrain("private-old-id").Once()
+	assert.True(t, svc.prepareDrain("private-old-id"))
+
+	waiter.EXPECT().CancelDrain("private-old-id").Once()
+	svc.cancelPreparedDrain("private-old-id")
+}
+
 func dockerLogFrames(stream byte, lines ...string) io.ReadCloser {
 	var buf bytes.Buffer
 	for _, line := range lines {

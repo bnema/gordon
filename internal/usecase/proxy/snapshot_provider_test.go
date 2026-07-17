@@ -398,6 +398,111 @@ func TestLocalSnapshotProvider_ConcurrentRefreshAndDrainLookup(t *testing.T) {
 	assert.True(t, found)
 }
 
+func TestLocalSnapshotProvider_ContainerAliasReplacementHasDistinctDrainIdentity(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	var replacement atomic.Bool
+	config.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", Image: "app:latest"}}).Maybe()
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	containers.EXPECT().Get(mock.Anything, "app.example.com").RunAndReturn(func(context.Context, string) (*domain.Container, bool) {
+		if replacement.Load() {
+			return &domain.Container{ID: "private-replacement-id", Image: "app:latest"}, true
+		}
+		return &domain.Container{ID: "private-original-id", Image: "app:latest"}, true
+	}).Maybe()
+	runtime.EXPECT().GetImageLabels(mock.Anything, "app:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil).Maybe()
+	provider := NewLocalSnapshotProvider(runtime, containers, config, Config{})
+	provider.inContainer = func() bool { return true }
+
+	original, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	replacement.Store(true)
+	replaced, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	originalEntry := snapshotEntry(t, original, "app.example.com")
+	replacedEntry := snapshotEntry(t, replaced, "app.example.com")
+	assert.Equal(t, originalEntry.TargetHost, replacedEntry.TargetHost)
+	assert.Equal(t, originalEntry.TargetPort, replacedEntry.TargetPort)
+	assert.NotEqual(t, originalEntry.TargetKey, replacedEntry.TargetKey)
+	assert.NotContains(t, fmt.Sprintf("%#v", replaced), "private-replacement-id")
+
+	service := NewSnapshotService(nil, Config{})
+	releaseOld := service.TrackInFlight(string(originalEntry.TargetKey))
+	releaseNew := service.TrackInFlight(string(replacedEntry.TargetKey))
+	waiter := NewLocalSnapshotDrainWaiter(provider, service)
+	waiter.PrepareDrain("private-original-id")
+	waiting := make(chan struct{}, 1)
+	service.waitForNoInFlightWait = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	result := make(chan bool, 1)
+	go func() { result <- waiter.WaitForNoInFlight(ctx, "private-original-id", time.Second) }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("old drain did not begin waiting")
+	}
+	releaseOld()
+	assert.True(t, <-result, "replacement traffic must not delay the old drain")
+	releaseNew()
+}
+
+func TestLocalSnapshotProvider_PrunesRemovedRoutesButRetainsPreparedDrain(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	var routes atomic.Bool
+	var replacement atomic.Bool
+	config.EXPECT().GetRoutes(mock.Anything).RunAndReturn(func(context.Context) []domain.Route {
+		if !routes.Load() {
+			return []domain.Route{{Domain: "app.example.com", Image: "app:latest"}}
+		}
+		return nil
+	}).Maybe()
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	containers.EXPECT().Get(mock.Anything, "app.example.com").RunAndReturn(func(context.Context, string) (*domain.Container, bool) {
+		if replacement.Load() {
+			return &domain.Container{ID: "private-new-id", Image: "app:latest"}, true
+		}
+		return &domain.Container{ID: "private-old-id", Image: "app:latest"}, true
+	}).Maybe()
+	runtime.EXPECT().GetImageLabels(mock.Anything, "app:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil).Maybe()
+	provider := NewLocalSnapshotProvider(runtime, containers, config, Config{})
+	provider.inContainer = func() bool { return true }
+
+	_, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	waiter := NewLocalSnapshotDrainWaiter(provider, NewSnapshotService(nil, Config{}))
+	waiter.PrepareDrain("private-old-id")
+	routes.Store(true)
+	for range 3 {
+		_, err = provider.CurrentSnapshot(ctx)
+		require.NoError(t, err)
+	}
+	_, found := provider.TargetKeyForContainer("private-old-id")
+	assert.True(t, found, "a prepared drain survives route removal and repeated refreshes")
+	assert.True(t, waiter.WaitForNoInFlight(ctx, "private-old-id", time.Nanosecond))
+	_, found = provider.TargetKeyForContainer("private-old-id")
+	assert.False(t, found, "successful drain release prunes the removed route association")
+
+	// Unprepared removed routes do not leave lifecycle IDs retained indefinitely.
+	routes.Store(false)
+	replacement.Store(true)
+	_, err = provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	routes.Store(true)
+	_, err = provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	_, found = provider.TargetKeyForContainer("private-new-id")
+	assert.False(t, found)
+}
+
 func newHostSnapshotProvider(runtime *outmocks.MockContainerRuntime, containers *inmocks.MockContainerService, config *inmocks.MockConfigService, cfg Config) *LocalSnapshotProvider {
 	provider := NewLocalSnapshotProvider(runtime, containers, config, cfg)
 	provider.inContainer = func() bool { return false }

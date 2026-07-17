@@ -21,6 +21,26 @@ func TestRouteTargetSnapshotReadyTargetIsAttachedAndOpaque(t *testing.T) {
 	require.NotContains(t, string(entry.TargetKey), entry.TargetHost)
 }
 
+func TestRouteTargetSnapshotManagedTargetKeyIsInstanceStableAndOpaque(t *testing.T) {
+	const privateID = "private-container-identity-123"
+	first, err := NewManagedReadyRouteTargetEntry("app.example.com", "gordon-target-app-example-com", 8080, "http", RouteTargetProtocolHTTP1, 1, privateID)
+	require.NoError(t, err)
+	second, err := NewManagedReadyRouteTargetEntry("app.example.com", "gordon-target-app-example-com", 8080, "http", RouteTargetProtocolHTTP1, 1, privateID)
+	require.NoError(t, err)
+	replacement, err := NewManagedReadyRouteTargetEntry("app.example.com", "gordon-target-app-example-com", 8080, "http", RouteTargetProtocolHTTP1, 1, "private-container-identity-456")
+	require.NoError(t, err)
+
+	require.True(t, first.TargetKey.Valid())
+	require.Equal(t, first.TargetKey, second.TargetKey, "the same managed instance must retain its key")
+	require.NotEqual(t, first.TargetKey, replacement.TargetKey, "replacement instances must not share a drain identity")
+	require.NotContains(t, string(first.TargetKey), privateID)
+	require.NotContains(t, string(replacement.TargetKey), "private-container-identity-456")
+	snapshotJSON, err := json.Marshal(RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{first}})
+	require.NoError(t, err)
+	require.NotContains(t, string(snapshotJSON), privateID)
+	require.NoError(t, first.Validate())
+}
+
 func TestRouteTargetSnapshotHasNoContainerIdentityField(t *testing.T) {
 	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
 	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{entry}}
