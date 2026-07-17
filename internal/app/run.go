@@ -607,8 +607,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	}
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
-	localSnapshots := proxy.NewLocalSnapshotProvider(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
-	si.svc.proxySvc = proxy.NewSnapshotService(localSnapshots, proxyCfg.proxyConfig)
+	si.svc.proxySvc = newMonolithProxyService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
 	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider(standaloneServiceManagerForServices(si.svc), si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
@@ -616,6 +615,14 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.containerSvc.SetProxyCacheInvalidator(si.svc.proxySvc)
 	si.svc.containerSvc.SetProxyDrainWaiter(si.svc.proxySvc)
 	return nil
+}
+
+// newMonolithProxyService explicitly wires the local route snapshot provider
+// into the snapshot-first proxy service. Monolith snapshots may use loopback
+// targets; split-edge reachability is validated by the edge role.
+func newMonolithProxyService(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config proxy.Config) *proxy.Service {
+	localSnapshots := proxy.NewLocalSnapshotProvider(runtime, containerSvc, configSvc, config)
+	return proxy.NewSnapshotService(localSnapshots, config)
 }
 
 // initHandlers creates the auth, health, log, preview, and admin handlers.
