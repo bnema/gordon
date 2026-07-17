@@ -114,7 +114,7 @@ func normalizeJSON(v any, key string) any {
 
 func isUnorderedKey(key string) bool {
 	switch key {
-	case "items", "tags", "ids", "names", "routes":
+	case "routes", "external_routes", "externalRoutes":
 		return true
 	}
 	return false

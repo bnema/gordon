@@ -19,6 +19,20 @@ func TestNormalizeRouteMapsAreUnorderedButMeaningfulFieldsRemain(t *testing.T) {
 	}
 }
 
+func TestNormalizeOnlySortsRouteCollections(t *testing.T) {
+	routesA := NewCLIArtifact("gordon routes list --json", map[string]any{"routes": []any{"b", "a"}}, LevelSemantic)
+	routesB := NewCLIArtifact("gordon routes list --json", map[string]any{"routes": []any{"a", "b"}}, LevelSemantic)
+	if fails := Compare(routesA, routesB, nil); len(fails) != 0 {
+		t.Fatalf("route collection order should be ignored: %#v", fails)
+	}
+
+	namesA := NewCLIArtifact("gordon routes list --json", map[string]any{"names": []any{"b", "a"}}, LevelSemantic)
+	namesB := NewCLIArtifact("gordon routes list --json", map[string]any{"names": []any{"a", "b"}}, LevelSemantic)
+	if fails := Compare(namesA, namesB, nil); len(fails) != 1 {
+		t.Fatalf("non-route collection order was normalized incorrectly: %#v", fails)
+	}
+}
+
 func TestNormalizeForbiddenPreservesMeaningfulDiffs(t *testing.T) {
 	old := Normalize(map[string]any{"statusCode": 200, "exitCode": 0, "labels": map[string]any{"app": "old"}, "networks": []any{"blue"}, "envHash": "aaa", "domain": "old.example", "digest": "sha256:old", "deletedField": "present"})
 	new := Normalize(map[string]any{"statusCode": 500, "exitCode": 1, "labels": map[string]any{"app": "new"}, "networks": []any{"green"}, "envHash": "bbb", "domain": "new.example", "digest": "sha256:new"})

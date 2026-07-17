@@ -112,7 +112,7 @@ func TestScenarioDefinitions(t *testing.T) {
 		for _, scenario := range group.scenarios {
 			require.NotEmpty(t, scenario.SpecSection, scenario.Name)
 			require.Equal(t, surface, scenario.Surface, scenario.Name)
-			if scenario.Name == configShowJSONScenarioName {
+			if scenario.Name == configShowJSONScenarioName || scenario.Name == routesListJSONScenarioName {
 				require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
 				require.Empty(t, scenario.BlockReason, scenario.Name)
 			} else {
