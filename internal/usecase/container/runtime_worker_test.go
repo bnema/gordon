@@ -86,12 +86,29 @@ func TestRuntimeWorkerResultSanitizedErrorAndCancellation(t *testing.T) {
 			worker := NewRuntimeWorker(fake)
 			canceled, err := tt.invoke(worker)
 			require.NoError(t, err)
-			assert.Equal(t, domain.RuntimeCommandStatusDenied, canceled.Status)
+			assert.Equal(t, domain.RuntimeCommandStatusFailed, canceled.Status)
 			require.NotNil(t, canceled.Error)
 			assert.Equal(t, "context_canceled", canceled.Error.Code)
+			assert.False(t, canceled.Error.Retryable)
 			assert.Equal(t, tt.wantOps, fake.calls)
 		})
 	}
+}
+
+func TestRuntimeWorkerDeadlineExceededIsFailedAndRetryable(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{deployErr: context.DeadlineExceeded}
+	worker := NewRuntimeWorker(fake)
+
+	result, err := worker.DeployRoute(context.Background(), domain.DeployRouteCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-deadline"),
+		Domain:                 "app.example.com",
+		Image:                  "app:latest",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, result.Status)
+	require.NotNil(t, result.Error)
+	assert.Equal(t, "context_deadline_exceeded", result.Error.Code)
+	assert.True(t, result.Error.Retryable)
 }
 
 func TestRuntimeWorkerIdempotencyReturnsCachedResult(t *testing.T) {
@@ -135,6 +152,9 @@ func TestRuntimeWorkerRetriesFailedCommandsButCachesSucceededAndPolicyDeniedResu
 	denied, err := deniedWorker.DeployRoute(context.Background(), deniedCommand)
 	require.NoError(t, err)
 	assert.Equal(t, domain.RuntimeCommandStatusDenied, denied.Status)
+	require.NotNil(t, denied.Error)
+	assert.Equal(t, "runtime_policy_denied:image_digest_required", denied.Error.Code)
+	assert.False(t, denied.Error.Retryable)
 	cachedDenied, err := deniedWorker.DeployRoute(context.Background(), deniedCommand)
 	require.NoError(t, err)
 	assert.Equal(t, denied, cachedDenied)
@@ -272,9 +292,10 @@ func TestRuntimeWorkerConcurrentDuplicateWaitRespectsContextCancellation(t *test
 	cancel()
 	result, err := worker.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"})
 	require.NoError(t, err)
-	assert.Equal(t, domain.RuntimeCommandStatusDenied, result.Status)
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, result.Status)
 	require.NotNil(t, result.Error)
 	assert.Equal(t, "context_canceled", result.Error.Code)
+	assert.False(t, result.Error.Retryable)
 	assert.Equal(t, int64(1), fake.deployCalls.Load())
 
 	close(fake.release)

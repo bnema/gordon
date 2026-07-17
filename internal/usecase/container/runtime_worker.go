@@ -316,7 +316,7 @@ func (w *RuntimeWorker) rememberCompletedResultLocked(key string, result domain.
 }
 
 func statusForError(err error) domain.RuntimeCommandStatus {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRuntimePolicyDenied) {
+	if errors.Is(err, ErrRuntimePolicyDenied) {
 		return domain.RuntimeCommandStatusDenied
 	}
 	return domain.RuntimeCommandStatusFailed
