@@ -39,6 +39,32 @@ func TestZeroDowntimeDrainScenarioDefinition(t *testing.T) {
 	require.Empty(t, drain.BlockReason)
 }
 
+func TestDistributedDrainScenarioDefinition(t *testing.T) {
+	var distributed Scenario
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == distributedDrainScenarioName {
+			distributed = scenario
+			break
+		}
+	}
+	require.Equal(t, ScenarioStatusImplemented, distributed.Status)
+	require.False(t, distributed.PodmanRequired)
+	require.Empty(t, distributed.BlockReason)
+}
+
+func TestSplitDeploymentDrainScenarioRemainsPending(t *testing.T) {
+	var split Scenario
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == "proxy/split-deployment-drain" {
+			split = scenario
+			break
+		}
+	}
+	require.Equal(t, ScenarioStatusPending, split.Status)
+	require.Contains(t, split.BlockReason, "WS07")
+	require.Contains(t, split.BlockReason, "bootstrap")
+}
+
 func TestExternalRouteScenarioDefinition(t *testing.T) {
 	var external Scenario
 	for _, scenario := range ProxyScenarios() {
@@ -71,6 +97,23 @@ func TestManagedHTTPRoutePublishedAddressRejectsNonLoopback(t *testing.T) {
 
 	_, err = managedProxyPublishedAddress("0.0.0.0:49152\n")
 	require.Error(t, err)
+}
+
+func TestCompatibilityDistributedDrainProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	artifactDir := compatibilityArtifactDir(t, "proxy-distributed-drain")
+	report, err := RunCompatibilityDistributedDrainProtocol(ctx, artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	require.FileExists(t, filepath.Join(artifactDir, "compat-report.json"))
+	for _, name := range []string{"old.raw.json", "new.raw.json", "compat-report.json"} {
+		body, readErr := os.ReadFile(filepath.Join(artifactDir, name))
+		require.NoError(t, readErr)
+		require.NotContains(t, string(body), "private-old-backing")
+		require.NotContains(t, string(body), "gordon_component.")
+	}
 }
 
 func TestCompatibilityManagedHTTPRoutePreflight(t *testing.T) {

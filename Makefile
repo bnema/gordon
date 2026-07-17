@@ -26,7 +26,10 @@ COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWith
 # The proxy gate deliberately selects its three real routes, proxy/pending policy,
 # builder, and report contract tests. Do not replace this with a broad package
 # run: the Make recipe verifies every real route itself passed rather than skipped.
-COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain
+COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain|TestCompatibilityDistributedDrainProtocol
+# The split drain gate is in-process but uses the production TCP/gRPC/HTTP
+# adapters. It must pass exactly once and must never become an environmental skip.
+COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
 # Security is a current-candidate gate, not old/new baseline parity. The exact
 # tests below must each pass once without a skip; the edge test needs Docker to
 # prove the candidate container has no runtime socket access.
@@ -156,7 +159,15 @@ compat-harness-proxy: ## Run the blocking Docker proxy compatibility gate
 
 compat-harness-runtime: ## Run runtime compatibility harness checks
 	@echo "Running runtime compatibility harness checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_RUNTIME_REAL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_RUNTIME_REAL_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "runtime compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 

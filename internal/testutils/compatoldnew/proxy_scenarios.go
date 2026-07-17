@@ -44,6 +44,8 @@ func ProxyScenarios() []Scenario {
 		proxyScenario("proxy/registry-domain-routing"),
 		proxyScenario("proxy/body-size-limit"),
 		implementedScenario(zeroDowntimeDrainScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
+		implementedScenario(distributedDrainScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
+		pendingScenario("proxy/split-deployment-drain", SurfaceProxy, "6.5 Proxy and traffic compatibility", true, "WS07 must provide control deployment/bootstrap orchestration before Docker split-deployment drain can run"),
 		proxyScenario("proxy/access-log-emitted"),
 	}
 }

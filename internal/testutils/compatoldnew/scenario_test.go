@@ -75,6 +75,8 @@ func TestScenarioDefinitions(t *testing.T) {
 			"proxy/registry-domain-routing",
 			"proxy/body-size-limit",
 			"proxy/zero-downtime-drain",
+			"proxy/distributed-drain-protocol",
+			"proxy/split-deployment-drain",
 			"proxy/access-log-emitted",
 		}},
 		SurfaceRuntime: {RuntimeScenarios(), []string{
@@ -141,6 +143,7 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"proxy/managed-http-route":                      {},
 		"proxy/external-route":                          {},
 		"proxy/zero-downtime-drain":                     {},
+		"proxy/distributed-drain-protocol":              {},
 		"security/edge-no-podman-socket":                {},
 		"security/missing-component-token-rejected":     {},
 		"security/wrong-component-token-rejected":       {},
@@ -190,7 +193,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 	for _, scenario := range ProxyScenarios() {
-		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName {
+		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName || scenario.Name == distributedDrainScenarioName {
 			require.False(t, scenario.PodmanRequired, scenario.Name)
 			continue
 		}
@@ -224,7 +227,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 
 func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
 	for _, scenario := range ProxyScenarios() {
-		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName {
+		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName || scenario.Name == distributedDrainScenarioName {
 			continue
 		}
 		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
