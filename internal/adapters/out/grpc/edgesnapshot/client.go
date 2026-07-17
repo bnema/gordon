@@ -246,11 +246,11 @@ func (c *Client) handleWatchError(ctx context.Context, err error) bool {
 func (c *Client) setConnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A transport reconnect only establishes the stream. The edge is healthy
+	// again after this stream supplies a strictly newer valid snapshot.
 	c.health.Connected = true
-	c.health.Healthy = c.hasData
-	if c.hasData {
-		c.health.ErrorCategory = ErrorNone
-	}
+	c.health.Healthy = false
+	c.health.ErrorCategory = ErrorNone
 }
 
 func (c *Client) setError(category ErrorCategory, connected bool) {

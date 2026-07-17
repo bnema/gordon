@@ -59,21 +59,61 @@ func TestClientAcceptsNewerIgnoresStaleAndClones(t *testing.T) {
 	client.Stop()
 }
 
-func TestClientReconnectsAfterEOF(t *testing.T) {
+func TestClientReconnectRequiresNewerValidSnapshotForHealth(t *testing.T) {
+	finishFirstStream := make(chan struct{})
+	reconnected := make(chan struct{})
+	messages := make(chan *edgev1.RouteTargetSnapshot, 2)
 	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, call int) error {
 		if call == 0 {
-			return nil
+			if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
+				return err
+			}
+			select {
+			case <-finishFirstStream:
+				return nil
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
 		}
-		if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
-			return err
+		if call == 1 {
+			close(reconnected)
 		}
-		<-stream.Context().Done()
-		return stream.Context().Err()
+		select {
+		case message := <-messages:
+			if err := stream.Send(message); err != nil {
+				return err
+			}
+			if message.GetGeneration() == 1 {
+				return nil
+			}
+			<-stream.Context().Done()
+			return stream.Context().Err()
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
 	}}
 	client := newTestClient(t, server)
 	require.NoError(t, client.Start(context.Background()))
-	waitFor(t, func() bool { return client.Health().LastAcceptedGeneration == 1 })
-	assert.GreaterOrEqual(t, server.CallCount(), 2)
+	waitFor(t, func() bool { return client.Health().Healthy })
+	close(finishFirstStream)
+
+	select {
+	case <-reconnected:
+	case <-time.After(time.Second):
+		require.Fail(t, "client did not reconnect")
+	}
+	waitFor(t, func() bool { return client.Health().Connected })
+	assert.False(t, client.Health().Healthy, "a reconnected stream needs a new snapshot")
+
+	messages <- testSnapshotMessage(t, 1)
+	waitFor(t, func() bool { return server.CallCount() >= 3 && client.Health().Connected })
+	assert.False(t, client.Health().Healthy, "a stale snapshot cannot restore health")
+
+	messages <- testSnapshotMessage(t, 2)
+	waitFor(t, func() bool {
+		health := client.Health()
+		return health.Healthy && health.LastAcceptedGeneration == 2
+	})
 	client.Stop()
 }
 
