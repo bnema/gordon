@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -52,12 +54,25 @@ func unavailableEntry(t *testing.T, domainName string, generation domain.RouteTa
 
 func TestService_DiscoveryFieldsAreSnapshotOnly(t *testing.T) {
 	serviceType := reflect.TypeFor[Service]()
+	providerType := reflect.TypeFor[out.RouteSnapshotProvider]()
+	forbiddenDiscoveryDependencies := []reflect.Type{
+		reflect.TypeFor[out.ContainerRuntime](),
+		reflect.TypeFor[in.ContainerService](),
+		reflect.TypeFor[in.ConfigService](),
+	}
+
+	providerFields := 0
 	for index := range serviceType.NumField() {
 		field := serviceType.Field(index)
-		assert.NotContains(t, field.Type.String(), "ContainerRuntime", "service must not discover targets through runtime")
-		assert.NotContains(t, field.Type.String(), "ContainerService", "service must not discover targets through container service")
-		assert.NotContains(t, field.Type.String(), "ConfigService", "service must not discover targets through config service")
+		if field.Name == "snapshotProvider" {
+			providerFields++
+			assert.Equal(t, providerType, field.Type)
+		}
+		for _, forbidden := range forbiddenDiscoveryDependencies {
+			assert.NotEqual(t, forbidden, field.Type, "service must not retain %s", forbidden)
+		}
 	}
+	assert.Equal(t, 1, providerFields, "service must retain its only discovery dependency as a route snapshot provider")
 }
 
 func TestService_GetTarget_SnapshotReadyCanonicalAndCached(t *testing.T) {
