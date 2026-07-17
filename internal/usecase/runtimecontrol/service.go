@@ -2,6 +2,8 @@ package runtimecontrol
 
 import (
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -22,11 +24,20 @@ type Service struct {
 	runtime           out.RuntimeCommandClient
 	stateSubscriber   out.RuntimeStateSubscriber
 	sourceComponentID string
+	instanceSecret    [sha256.Size]byte
 	generation        atomic.Uint64
 	now               func() time.Time
 }
 
 func NewService(configSvc in.ConfigService, runtime out.RuntimeCommandClient, sourceComponentID string) *Service {
+	var instanceSecret [sha256.Size]byte
+	if _, err := cryptorand.Read(instanceSecret[:]); err != nil {
+		panic("runtime command identity entropy unavailable")
+	}
+	return newService(configSvc, runtime, sourceComponentID, instanceSecret)
+}
+
+func newService(configSvc in.ConfigService, runtime out.RuntimeCommandClient, sourceComponentID string, instanceSecret [sha256.Size]byte) *Service {
 	if strings.TrimSpace(sourceComponentID) == "" {
 		sourceComponentID = "gordon-control"
 	}
@@ -34,7 +45,7 @@ func NewService(configSvc in.ConfigService, runtime out.RuntimeCommandClient, so
 	if runtimeSubscriber, ok := runtime.(out.RuntimeStateSubscriber); ok {
 		subscriber = runtimeSubscriber
 	}
-	return &Service{configSvc: configSvc, runtime: runtime, stateSubscriber: subscriber, sourceComponentID: sourceComponentID, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{configSvc: configSvc, runtime: runtime, stateSubscriber: subscriber, sourceComponentID: sourceComponentID, instanceSecret: instanceSecret, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewServiceWithStateSubscriber(configSvc in.ConfigService, runtime out.RuntimeCommandClient, subscriber out.RuntimeStateSubscriber, sourceComponentID string) *Service {
@@ -47,7 +58,7 @@ func (s *Service) DeployRoute(ctx context.Context, route domain.Route) (domain.R
 	if s.runtime == nil {
 		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime command client unavailable")
 	}
-	version := desiredStateVersion([]domain.Route{route})
+	version := s.desiredStateVersion([]domain.Route{route})
 	identity := s.desiredIdentity("deploy", version)
 	return s.runtime.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: route.Domain, Image: route.Image, RouteVersion: version, Env: route.Env, InternalDeploy: true})
 }
@@ -74,7 +85,7 @@ func (s *Service) ReconcileConfiguredRoutes(ctx context.Context, reason string) 
 		return domain.RuntimeCommandResult{}, fmt.Errorf("config service unavailable")
 	}
 	routes := s.configSvc.GetRoutes(ctx)
-	version := desiredStateVersion(routes)
+	version := s.desiredStateVersion(routes)
 	identity := s.desiredIdentity("reconcile", version)
 	return s.runtime.Reconcile(ctx, domain.ReconcileRuntimeCommand{RuntimeCommandIdentity: identity, Reason: reason, ExpectedRouteCount: len(routes), DesiredStateVersion: version, DesiredRoutes: routes})
 }
@@ -147,11 +158,12 @@ func (s *Service) identity(key string) domain.RuntimeCommandIdentity {
 }
 
 func (s *Service) identityWithGeneration(key string, generation uint64) domain.RuntimeCommandIdentity {
+	namespacedKey := s.keyedDigest([]byte(key))
 	now := s.now().UTC()
-	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("runtime-control:" + key), IdempotencyKey: key, Generation: generation, SourceComponentID: s.sourceComponentID, RequestedAt: now}
+	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("runtime-control:" + namespacedKey), IdempotencyKey: namespacedKey, Generation: generation, SourceComponentID: s.sourceComponentID, RequestedAt: now}
 }
 
-func desiredStateVersion(routes []domain.Route) string {
+func (s *Service) desiredStateVersion(routes []domain.Route) string {
 	type desiredRoute struct {
 		Domain string   `json:"domain"`
 		Image  string   `json:"image"`
@@ -178,6 +190,11 @@ func desiredStateVersion(routes []domain.Route) string {
 		return strings.Join(left.Env, "\x00") < strings.Join(right.Env, "\x00")
 	})
 	payload, _ := json.Marshal(canonical)
-	digest := sha256.Sum256(payload)
-	return hex.EncodeToString(digest[:])
+	return s.keyedDigest(payload)
+}
+
+func (s *Service) keyedDigest(payload []byte) string {
+	digest := hmac.New(sha256.New, s.instanceSecret[:])
+	_, _ = digest.Write(payload)
+	return hex.EncodeToString(digest.Sum(nil))
 }

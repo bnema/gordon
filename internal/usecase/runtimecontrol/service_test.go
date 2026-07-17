@@ -2,6 +2,9 @@ package runtimecontrol
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +72,74 @@ func TestServiceDesiredStateCommandsHaveStableIdempotencyKeys(t *testing.T) {
 	_, err = reconcileSvc.ReconcileConfiguredRoutes(ctx, "startup")
 	require.NoError(t, err)
 	assert.Equal(t, firstReconcile.IdempotencyKey, client.reconcile.IdempotencyKey)
+}
+
+func TestServiceInstanceSecretNamespacesCommandIdentities(t *testing.T) {
+	ctx := context.Background()
+	firstClient := &fakeRuntimeCommandClient{}
+	secondClient := &fakeRuntimeCommandClient{}
+	first := NewService(nil, firstClient, "control-1")
+	second := NewService(nil, secondClient, "control-1")
+
+	_, err := first.RestartRoute(ctx, "app.example.com", false)
+	require.NoError(t, err)
+	_, err = second.RestartRoute(ctx, "app.example.com", false)
+	require.NoError(t, err)
+	assert.Equal(t, firstClient.restart.Generation, secondClient.restart.Generation)
+	assert.NotEqual(t, firstClient.restart.IdempotencyKey, secondClient.restart.IdempotencyKey)
+
+	_, err = first.RemoveRoute(ctx, "app.example.com", false)
+	require.NoError(t, err)
+	_, err = second.RemoveRoute(ctx, "app.example.com", false)
+	require.NoError(t, err)
+	assert.Equal(t, firstClient.remove.Generation, secondClient.remove.Generation)
+	assert.NotEqual(t, firstClient.remove.IdempotencyKey, secondClient.remove.IdempotencyKey)
+}
+
+func TestServiceImperativeIdentityGenerationIsAtomicAndMonotonic(t *testing.T) {
+	const requests = 64
+	svc := NewService(nil, nil, "control-1")
+	identities := make(chan domain.RuntimeCommandIdentity, requests)
+	var wg sync.WaitGroup
+	for range requests {
+		wg.Go(func() {
+			identities <- svc.imperativeIdentity("restart", "app.example.com")
+		})
+	}
+	wg.Wait()
+	close(identities)
+
+	seen := make(map[uint64]struct{}, requests)
+	for identity := range identities {
+		seen[identity.Generation] = struct{}{}
+	}
+	require.Len(t, seen, requests)
+	for generation := uint64(1); generation <= requests; generation++ {
+		assert.Contains(t, seen, generation)
+	}
+}
+
+func TestServiceDesiredStateVersionsAreInstanceKeyedAndOpaque(t *testing.T) {
+	ctx := context.Background()
+	route := domain.Route{Domain: "app.example.com", Image: "app:v1", Env: []string{"PASSWORD=1"}}
+	firstClient := &fakeRuntimeCommandClient{}
+	secondClient := &fakeRuntimeCommandClient{}
+	first := NewService(nil, firstClient, "control-1")
+	second := NewService(nil, secondClient, "control-1")
+
+	_, err := first.DeployRoute(ctx, route)
+	require.NoError(t, err)
+	firstVersion := firstClient.deploy.RouteVersion
+	_, err = first.DeployRoute(ctx, route)
+	require.NoError(t, err)
+	assert.Equal(t, firstVersion, firstClient.deploy.RouteVersion)
+
+	_, err = second.DeployRoute(ctx, route)
+	require.NoError(t, err)
+	assert.NotEqual(t, firstVersion, secondClient.deploy.RouteVersion)
+
+	plainDigest := sha256.Sum256([]byte(`[{"domain":"app.example.com","image":"app:v1","https":false,"env":["PASSWORD=1"]}]`))
+	assert.NotEqual(t, hex.EncodeToString(plainDigest[:]), firstVersion)
 }
 
 func TestServiceReconcileConfiguredRoutes(t *testing.T) {
