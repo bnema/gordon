@@ -91,7 +91,7 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 		return
 	}
 
-	releaseInFlight := h.proxySvc.TrackInFlight(target.ContainerID)
+	releaseInFlight := h.proxySvc.TrackInFlight(targetInFlightKey(target))
 	defer releaseInFlight()
 
 	transport := h.transportForTarget(target)
@@ -217,6 +217,15 @@ type reverseProxyOptions struct {
 	trustedNets    []*net.IPNet
 	errorHandler   func(http.ResponseWriter, *http.Request, error)
 	modifyResponse func(*http.Response) error
+}
+
+// targetInFlightKey uses snapshot-derived opaque keys. The ContainerID fallback
+// preserves manually registered legacy targets during the transition.
+func targetInFlightKey(target *domain.ProxyTarget) string {
+	if target.TargetKey != "" {
+		return string(target.TargetKey)
+	}
+	return target.ContainerID
 }
 
 func targetHostHeader(target *domain.ProxyTarget, targetURL *url.URL) string {

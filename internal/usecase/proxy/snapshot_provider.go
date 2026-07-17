@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -25,9 +28,10 @@ type LocalSnapshotProvider struct {
 	config       Config
 	inContainer  func() bool
 
-	mu      sync.Mutex
-	last    domain.RouteTargetSnapshot
-	hasLast bool
+	mu                  sync.Mutex
+	last                domain.RouteTargetSnapshot
+	hasLast             bool
+	containerTargetKeys map[string]domain.RouteTargetKey
 }
 
 var _ out.RouteSnapshotProvider = (*LocalSnapshotProvider)(nil)
@@ -37,7 +41,8 @@ var _ out.RouteSnapshotProvider = (*LocalSnapshotProvider)(nil)
 func NewLocalSnapshotProvider(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config Config) *LocalSnapshotProvider {
 	return &LocalSnapshotProvider{
 		runtime: runtime, containerSvc: containerSvc, configSvc: configSvc, config: config,
-		inContainer: runningInContainer,
+		inContainer:         runningInContainer,
+		containerTargetKeys: make(map[string]domain.RouteTargetKey),
 	}
 }
 
@@ -50,10 +55,13 @@ func (p *LocalSnapshotProvider) CurrentSnapshot(ctx context.Context) (domain.Rou
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	candidate, err := p.buildSnapshot(ctx, p.nextGeneration())
+	candidate, containerTargetKeys, err := p.buildSnapshot(ctx, p.nextGeneration())
 	if err != nil {
 		return domain.RouteTargetSnapshot{}, err
 	}
+	// This map is deliberately private: it bridges the container lifecycle's
+	// legacy ID to the edge's opaque target key without publishing IDs.
+	p.containerTargetKeys = containerTargetKeys
 	if p.hasLast && sameRoutingContent(candidate, p.last) {
 		return p.last.Clone(), nil
 	}
@@ -79,43 +87,52 @@ func (p *LocalSnapshotProvider) nextGeneration() domain.RouteTargetGeneration {
 	return p.last.Generation + 1
 }
 
-func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation domain.RouteTargetGeneration) (domain.RouteTargetSnapshot, error) {
+func (p *LocalSnapshotProvider) buildSnapshot(ctx context.Context, generation domain.RouteTargetGeneration) (domain.RouteTargetSnapshot, map[string]domain.RouteTargetKey, error) {
 	if p.configSvc == nil {
-		return domain.RouteTargetSnapshot{}, fmt.Errorf("local snapshot provider config service is required")
+		return domain.RouteTargetSnapshot{}, nil, fmt.Errorf("local snapshot provider config service is required")
 	}
 	routes := p.configSvc.GetRoutes(ctx)
 	if err := ctx.Err(); err != nil {
-		return domain.RouteTargetSnapshot{}, err
+		return domain.RouteTargetSnapshot{}, nil, err
 	}
 	externalRoutes := p.configSvc.GetExternalRoutes()
 	if err := ctx.Err(); err != nil {
-		return domain.RouteTargetSnapshot{}, err
+		return domain.RouteTargetSnapshot{}, nil, err
 	}
 
 	managed, err := canonicalManagedRoutes(routes)
 	if err != nil {
-		return domain.RouteTargetSnapshot{}, err
+		return domain.RouteTargetSnapshot{}, nil, err
 	}
 	external, err := canonicalExternalRoutes(externalRoutes)
 	if err != nil {
-		return domain.RouteTargetSnapshot{}, err
+		return domain.RouteTargetSnapshot{}, nil, err
 	}
 
 	registryDomain, registryEnabled := domain.CanonicalRouteDomain(p.config.RegistryDomain)
-	entries, err := p.snapshotEntries(ctx, managed, external, registryDomain, registryEnabled, generation)
+	entries, containerTargetKeys, err := p.snapshotEntries(ctx, managed, external, registryDomain, registryEnabled, generation)
 	if err != nil {
-		return domain.RouteTargetSnapshot{}, err
+		return domain.RouteTargetSnapshot{}, nil, err
 	}
 
 	snapshot := domain.RouteTargetSnapshot{Generation: generation, Entries: entries}
 	if registryEnabled {
 		registry, err := registrySnapshotEntry(registryDomain, p.config.RegistryPort, generation)
 		if err != nil {
-			return domain.RouteTargetSnapshot{}, err
+			return domain.RouteTargetSnapshot{}, nil, err
 		}
 		snapshot.RegistryForwardingTarget = &registry
 	}
-	return snapshot, nil
+	return snapshot, containerTargetKeys, nil
+}
+
+// TargetKeyForContainer returns the private lifecycle-to-edge association.
+// It never exposes container IDs through a snapshot.
+func (p *LocalSnapshotProvider) TargetKeyForContainer(containerID string) (domain.RouteTargetKey, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	key, ok := p.containerTargetKeys[containerID]
+	return key, ok
 }
 
 func (p *LocalSnapshotProvider) snapshotEntries(
@@ -125,8 +142,9 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 	registryDomain string,
 	registryEnabled bool,
 	generation domain.RouteTargetGeneration,
-) ([]domain.RouteTargetEntry, error) {
+) ([]domain.RouteTargetEntry, map[string]domain.RouteTargetKey, error) {
 	entries := make([]domain.RouteTargetEntry, 0, len(managed)+len(external))
+	containerTargetKeys := make(map[string]domain.RouteTargetKey, len(managed))
 	for _, route := range managed {
 		if registryEnabled && route.Domain == registryDomain {
 			continue
@@ -134,9 +152,12 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 		if _, externalOverride := external[route.Domain]; externalOverride {
 			continue
 		}
-		entry, err := p.managedEntry(ctx, route, generation)
+		entry, containerID, err := p.managedSnapshotEntry(ctx, route, generation)
 		if err != nil {
-			return nil, fmt.Errorf("resolve managed route %s: %w", route.Domain, err)
+			return nil, nil, err
+		}
+		if containerID != "" && !entry.Unavailable() {
+			containerTargetKeys[containerID] = entry.TargetKey
 		}
 		entries = append(entries, entry)
 	}
@@ -144,14 +165,42 @@ func (p *LocalSnapshotProvider) snapshotEntries(
 		if registryEnabled && domainName == registryDomain {
 			continue
 		}
-		entry, err := externalSnapshotEntry(domainName, targetAddr, generation)
+		entry, err := externalUnavailableOnError(ctx, domainName, targetAddr, generation)
 		if err != nil {
-			return nil, fmt.Errorf("resolve external route %s: %w", domainName, err)
+			return nil, nil, err
 		}
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].CanonicalDomain < entries[j].CanonicalDomain })
-	return entries, nil
+	return entries, containerTargetKeys, nil
+}
+
+func (p *LocalSnapshotProvider) managedSnapshotEntry(ctx context.Context, route localManagedRoute, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, string, error) {
+	entry, containerID, err := p.managedEntry(ctx, route, generation)
+	if err == nil || ctx.Err() != nil {
+		return entry, containerID, err
+	}
+	entry, entryErr := domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonDeployment, generation)
+	if entryErr == nil {
+		logRouteUnavailable(ctx, route.Domain, domain.RouteTargetUnavailableReasonDeployment)
+	}
+	return entry, containerID, entryErr
+}
+
+func externalUnavailableOnError(ctx context.Context, domainName, targetAddr string, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+	entry, err := externalSnapshotEntry(domainName, targetAddr, generation)
+	if err == nil || ctx.Err() != nil {
+		return entry, err
+	}
+	reason := domain.RouteTargetUnavailableReasonNoTarget
+	if errors.Is(err, domain.ErrSSRFBlocked) {
+		reason = domain.RouteTargetUnavailableReasonPolicyBlocked
+	}
+	entry, entryErr := domain.NewUnavailableRouteTargetEntry(domainName, reason, generation)
+	if entryErr == nil {
+		logRouteUnavailable(ctx, domainName, reason)
+	}
+	return entry, entryErr
 }
 
 type localManagedRoute struct {
@@ -194,19 +243,21 @@ func canonicalExternalRoutes(routes map[string]string) (map[string]string, error
 	return result, nil
 }
 
-func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localManagedRoute, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localManagedRoute, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, string, error) {
 	if p.containerSvc == nil || p.runtime == nil {
-		return domain.RouteTargetEntry{}, fmt.Errorf("local snapshot provider managed-route dependencies are required")
+		return domain.RouteTargetEntry{}, "", fmt.Errorf("local snapshot provider managed-route dependencies are required")
 	}
 	container, found := p.containerSvc.Get(ctx, route.Domain)
 	if err := ctx.Err(); err != nil {
-		return domain.RouteTargetEntry{}, err
+		return domain.RouteTargetEntry{}, "", err
 	}
 	if !found || container == nil {
-		return domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonNoTarget, generation)
+		entry, err := domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonNoTarget, generation)
+		return entry, "", err
 	}
 	if container.Status != "" && !strings.EqualFold(container.Status, string(domain.ContainerStatusRunning)) {
-		return domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonStarting, generation)
+		entry, err := domain.NewUnavailableRouteTargetEntry(route.Domain, domain.RouteTargetUnavailableReasonStarting, generation)
+		return entry, "", err
 	}
 	image := container.Image
 	if image == "" {
@@ -214,7 +265,7 @@ func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localMan
 	}
 	metadata, err := resolveTargetMetadata(ctx, p.runtime, image)
 	if err != nil {
-		return domain.RouteTargetEntry{}, err
+		return domain.RouteTargetEntry{}, container.ID, err
 	}
 	protocol := domain.RouteTargetProtocolHTTP1
 	if metadata.Protocol == string(domain.RouteTargetProtocolH2C) {
@@ -223,13 +274,20 @@ func (p *LocalSnapshotProvider) managedEntry(ctx context.Context, route localMan
 	if p.inContainer() {
 		// The deployment installs this stable alias on the route network. It is
 		// independent of the backing container identity during replacement.
-		return domain.NewReadyRouteTargetEntry(route.Domain, targetAlias(route.Domain), metadata.Port, "http", protocol, generation)
+		entry, err := domain.NewReadyRouteTargetEntry(route.Domain, targetAlias(route.Domain), metadata.Port, "http", protocol, generation)
+		return entry, container.ID, err
 	}
 	hostPort, err := p.runtime.GetContainerPort(ctx, container.ID, metadata.Port)
 	if err != nil {
-		return domain.RouteTargetEntry{}, fmt.Errorf("get host port mapping: %w", err)
+		return domain.RouteTargetEntry{}, container.ID, fmt.Errorf("get host port mapping: %w", err)
 	}
-	return domain.NewReadyRouteTargetEntry(route.Domain, "localhost", hostPort, "http", protocol, generation)
+	entry, err := domain.NewReadyRouteTargetEntry(route.Domain, "localhost", hostPort, "http", protocol, generation)
+	return entry, container.ID, err
+}
+
+func logRouteUnavailable(ctx context.Context, domainName string, reason domain.RouteTargetUnavailableReason) {
+	log := zerowrap.FromCtx(ctx)
+	log.Warn().Str("domain", domainName).Str("reason", string(reason)).Msg("route target unavailable")
 }
 
 func targetAlias(domainName string) string {

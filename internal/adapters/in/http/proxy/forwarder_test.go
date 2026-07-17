@@ -139,11 +139,12 @@ func TestForwardToTarget_OriginalHostPreserved(t *testing.T) {
 	proxySvc.EXPECT().GetTarget(mock.Anything, "external.example.com").Return(&domain.ProxyTarget{
 		Host:         "127.0.0.1",
 		Port:         backendPort,
-		ContainerID:  "",
+		ContainerID:  "must-not-track-container-id",
+		TargetKey:    domain.RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567"),
 		Scheme:       "http",
 		OriginalHost: "upstream.example.com",
 	}, nil)
-	proxySvc.EXPECT().TrackInFlight("").Return(func() {})
+	proxySvc.EXPECT().TrackInFlight("rtk_abcdefghijklmnopqrstuvwxyz234567").Return(func() {})
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 

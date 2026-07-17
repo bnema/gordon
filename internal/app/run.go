@@ -607,13 +607,14 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	}
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
-	si.svc.proxySvc = newMonolithProxyService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
+	var drainWaiter out.ProxyDrainWaiter
+	si.svc.proxySvc, drainWaiter = newMonolithProxyServiceWithDrainWaiter(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
 	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider(standaloneServiceManagerForServices(si.svc), si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
 	si.svc.containerSvc.SetProxyCacheInvalidator(si.svc.proxySvc)
-	si.svc.containerSvc.SetProxyDrainWaiter(si.svc.proxySvc)
+	si.svc.containerSvc.SetProxyDrainWaiter(drainWaiter)
 	return nil
 }
 
@@ -621,8 +622,14 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 // into the snapshot-first proxy service. Monolith snapshots may use loopback
 // targets; split-edge reachability is validated by the edge role.
 func newMonolithProxyService(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config proxy.Config) *proxy.Service {
+	service, _ := newMonolithProxyServiceWithDrainWaiter(runtime, containerSvc, configSvc, config)
+	return service
+}
+
+func newMonolithProxyServiceWithDrainWaiter(runtime out.ContainerRuntime, containerSvc in.ContainerService, configSvc in.ConfigService, config proxy.Config) (*proxy.Service, out.ProxyDrainWaiter) {
 	localSnapshots := proxy.NewLocalSnapshotProvider(runtime, containerSvc, configSvc, config)
-	return proxy.NewSnapshotService(localSnapshots, config)
+	service := proxy.NewSnapshotService(localSnapshots, config)
+	return service, proxy.NewLocalSnapshotDrainWaiter(localSnapshots, service)
 }
 
 // initHandlers creates the auth, health, log, preview, and admin handlers.

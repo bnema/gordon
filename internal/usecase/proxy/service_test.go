@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -218,6 +219,50 @@ func TestService_IsKnownHostUsesSnapshotAndRegistryConfig(t *testing.T) {
 	assert.True(t, svc.IsRegistryDomain("Registry.Example.com"))
 	assert.True(t, svc.IsKnownHost(testContext(), "App.Example.com"))
 	assert.True(t, svc.IsKnownHost(testContext(), "registry.example.com"))
+}
+
+func TestLocalSnapshotDrainWaiter_MapsOldContainerIDToOpaqueInFlightKey(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	config.EXPECT().GetRoutes(ctx).Return([]domain.Route{{Domain: "app.example.com", Image: "app:latest"}})
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	containers.EXPECT().Get(mock.Anything, "app.example.com").Return(&domain.Container{ID: "old-real-container-id", Image: "app:latest"}, true)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "app:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil)
+	runtime.EXPECT().GetContainerPort(mock.Anything, "old-real-container-id", 8080).Return(18080, nil)
+	provider := newHostSnapshotProvider(runtime, containers, config, Config{})
+	snapshot, err := provider.CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	key := snapshotEntry(t, snapshot, "app.example.com").TargetKey
+	require.NotEmpty(t, key)
+
+	service := NewSnapshotService(nil, Config{})
+	release := service.TrackInFlight(string(key))
+	waiter := NewLocalSnapshotDrainWaiter(provider, service)
+
+	waiting := make(chan struct{}, 1)
+	service.waitForNoInFlightWait = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	result := make(chan bool, 1)
+	go func() { result <- waiter.WaitForNoInFlight(context.Background(), "old-real-container-id", time.Second) }()
+	select {
+	case <-waiting:
+	case <-time.After(time.Second):
+		t.Fatal("drain waiter did not block for the opaque target key")
+	}
+	select {
+	case <-result:
+		t.Fatal("drain waiter returned before the request released")
+	default:
+	}
+	release()
+	require.True(t, <-result)
+	assert.True(t, waiter.WaitForNoInFlight(context.Background(), "unknown-old-id", time.Nanosecond))
 }
 
 func TestService_RegisterUnregisterRefreshAndInFlight(t *testing.T) {

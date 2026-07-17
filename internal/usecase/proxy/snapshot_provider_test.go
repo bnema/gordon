@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -118,15 +119,59 @@ func TestLocalSnapshotProviderAliasRegistryAndSSRFParity(t *testing.T) {
 		assert.Equal(t, "localhost", snapshot.RegistryForwardingTarget.TargetHost)
 	})
 
-	t.Run("external SSRF protection is unchanged", func(t *testing.T) {
+	t.Run("external SSRF protection fails only the affected route closed", func(t *testing.T) {
 		ctx := testContext()
 		config := inmocks.NewMockConfigService(t)
 		config.EXPECT().GetRoutes(ctx).Return(nil)
 		config.EXPECT().GetExternalRoutes().Return(map[string]string{"blocked.example.com": "127.0.0.1:8080"})
 		provider := NewLocalSnapshotProvider(nil, nil, config, Config{})
-		_, err := provider.CurrentSnapshot(ctx)
+		snapshot, err := provider.CurrentSnapshot(ctx)
+		require.NoError(t, err)
+		entry := snapshotEntry(t, snapshot, "blocked.example.com")
+		assert.Equal(t, domain.RouteTargetStatusUnavailable, entry.Status)
+		assert.Equal(t, domain.RouteTargetUnavailableReasonPolicyBlocked, entry.UnavailableReason)
+
+		snapshots := outmocks.NewMockRouteSnapshotProvider(t)
+		snapshots.EXPECT().CurrentSnapshot(mock.Anything).Return(snapshot, nil)
+		_, err = NewSnapshotService(snapshots, Config{}).GetTarget(ctx, "blocked.example.com")
 		require.ErrorIs(t, err, domain.ErrSSRFBlocked)
 	})
+}
+
+func TestLocalSnapshotProvider_BrokenRouteDoesNotAbortReadyRoute(t *testing.T) {
+	ctx := testContext()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	containers := inmocks.NewMockContainerService(t)
+	config := inmocks.NewMockConfigService(t)
+	config.EXPECT().GetRoutes(ctx).Return([]domain.Route{
+		{Domain: "broken.example.com", Image: "broken:latest"},
+		{Domain: "ready.example.com", Image: "ready:latest"},
+	})
+	config.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	containers.EXPECT().Get(mock.Anything, "broken.example.com").Return(&domain.Container{ID: "private-broken", Image: "broken:latest"}, true)
+	containers.EXPECT().Get(mock.Anything, "ready.example.com").Return(&domain.Container{ID: "private-ready", Image: "ready:latest"}, true)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "broken:latest").Return(nil, assert.AnError)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "broken:latest").Return(nil, assert.AnError)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "ready:latest").Return(map[string]string{domain.LabelProxyPort: "8080"}, nil)
+	runtime.EXPECT().GetContainerPort(mock.Anything, "private-ready", 8080).Return(18080, nil)
+
+	snapshot, err := newHostSnapshotProvider(runtime, containers, config, Config{}).CurrentSnapshot(ctx)
+	require.NoError(t, err)
+	broken := snapshotEntry(t, snapshot, "broken.example.com")
+	assert.Equal(t, domain.RouteTargetStatusUnavailable, broken.Status)
+	assert.Equal(t, domain.RouteTargetUnavailableReasonDeployment, broken.UnavailableReason)
+	assert.Empty(t, broken.TargetHost)
+	assert.NotContains(t, fmt.Sprintf("%#v", snapshot), "private-broken")
+	require.Equal(t, domain.RouteTargetStatusReady, snapshotEntry(t, snapshot, "ready.example.com").Status)
+
+	snapshots := outmocks.NewMockRouteSnapshotProvider(t)
+	snapshots.EXPECT().CurrentSnapshot(mock.Anything).Return(snapshot, nil).Twice()
+	svc := NewSnapshotService(snapshots, Config{})
+	ready, err := svc.GetTarget(ctx, "ready.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", ready.Host)
+	_, err = svc.GetTarget(ctx, "broken.example.com")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
 }
 
 func TestLocalSnapshotProviderDeterministicGenerationAndCloneIsolation(t *testing.T) {

@@ -46,6 +46,8 @@ const (
 	RouteTargetUnavailableReasonHealthCheckFailed RouteTargetUnavailableReason = "health_check_failed"
 	RouteTargetUnavailableReasonDeployment        RouteTargetUnavailableReason = "deployment"
 	RouteTargetUnavailableReasonDraining          RouteTargetUnavailableReason = "draining"
+	// PolicyBlocked is used when external target validation rejects an SSRF-risky endpoint.
+	RouteTargetUnavailableReasonPolicyBlocked RouteTargetUnavailableReason = "policy_blocked"
 )
 
 // RouteTargetGeneration is a monotonically increasing version for route target snapshots.
@@ -283,14 +285,20 @@ func (e RouteTargetEntry) ToProxyTarget() (ProxyTarget, error) {
 	if e.Protocol == RouteTargetProtocolH2C {
 		protocol = string(RouteTargetProtocolH2C)
 	}
-	return ProxyTarget{
+	target := ProxyTarget{
 		Host:         e.TargetHost,
 		Port:         e.TargetPort,
 		Scheme:       e.Scheme,
 		Protocol:     protocol,
 		OriginalHost: e.UpstreamHost,
-		RouteHost:    e.CanonicalDomain,
-	}, nil
+		TargetKey:    e.TargetKey,
+	}
+	// External upstreams must retain their configured host header. Managed
+	// targets instead use the canonical route host.
+	if e.UpstreamHost == "" {
+		target.RouteHost = e.CanonicalDomain
+	}
+	return target, nil
 }
 
 // Ready reports whether this entry may receive traffic.
@@ -462,7 +470,8 @@ func (e RouteTargetEntry) validUnavailableReason() bool {
 		RouteTargetUnavailableReasonStarting,
 		RouteTargetUnavailableReasonHealthCheckFailed,
 		RouteTargetUnavailableReasonDeployment,
-		RouteTargetUnavailableReasonDraining:
+		RouteTargetUnavailableReasonDraining,
+		RouteTargetUnavailableReasonPolicyBlocked:
 		return true
 	default:
 		return false

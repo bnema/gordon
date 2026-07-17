@@ -21,6 +21,21 @@ func TestRouteTargetSnapshotReadyTargetIsAttachedAndOpaque(t *testing.T) {
 	require.NotContains(t, string(entry.TargetKey), entry.TargetHost)
 }
 
+func TestRouteTargetSnapshotHasNoContainerIdentityField(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{entry}}
+	require.NoError(t, snapshot.Validate())
+	encoded, err := json.Marshal(snapshot)
+	require.NoError(t, err)
+	require.NotContains(t, string(encoded), "container-private-id")
+
+	entryType := reflect.TypeFor[RouteTargetEntry]()
+	for field := range entryType.Fields() {
+		require.NotEqual(t, "ContainerID", field.Name)
+		require.NotEqual(t, "ContainerId", field.Name)
+	}
+}
+
 func TestRouteTargetSnapshotExternalTargetPreservesHostHeaderWithoutLeakage(t *testing.T) {
 	entry, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", "Api.Upstream.Example.", 8443, "https", RouteTargetProtocolHTTP1, 7)
 	require.NoError(t, err)
@@ -31,6 +46,8 @@ func TestRouteTargetSnapshotExternalTargetPreservesHostHeaderWithoutLeakage(t *t
 	require.NoError(t, err)
 	require.Equal(t, "198.51.100.9", target.Host)
 	require.Equal(t, "Api.Upstream.Example.", target.OriginalHost)
+	require.Empty(t, target.RouteHost, "external targets must preserve their upstream Host header")
+	require.Equal(t, entry.TargetKey, target.TargetKey)
 	require.Empty(t, target.ContainerID)
 
 	encoded, err := json.Marshal(entry)
@@ -289,12 +306,12 @@ func TestRouteTargetEntryToProxyTargetConvertsManagedAndExternalTargets(t *testi
 		{
 			name:  "managed h2c",
 			entry: managed,
-			want:  ProxyTarget{Host: "app", Port: 8080, Scheme: "http", Protocol: "h2c", RouteHost: "app.example.com"},
+			want:  ProxyTarget{Host: "app", Port: 8080, TargetKey: managed.TargetKey, Scheme: "http", Protocol: "h2c", RouteHost: "app.example.com"},
 		},
 		{
 			name:  "external original host",
 			entry: external,
-			want:  ProxyTarget{Host: "198.51.100.9", Port: 8443, Scheme: "https", OriginalHost: "upstream.example", RouteHost: "external.example.com"},
+			want:  ProxyTarget{Host: "198.51.100.9", Port: 8443, TargetKey: external.TargetKey, Scheme: "https", OriginalHost: "upstream.example"},
 		},
 	}
 	for _, tt := range tests {

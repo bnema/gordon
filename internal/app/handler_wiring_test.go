@@ -47,6 +47,12 @@ func TestNewMonolithProxyService_ResolvesManagedRouteFromLocalSnapshot(t *testin
 	}
 }
 
+func TestNewMonolithProxyServiceWithDrainWaiter_UsesSnapshotAdapter(t *testing.T) {
+	service, waiter := newMonolithProxyServiceWithDrainWaiter(nil, nil, nil, proxyusecase.Config{})
+	require.NotNil(t, service)
+	assert.IsType(t, &proxyusecase.LocalSnapshotDrainWaiter{}, waiter)
+}
+
 func TestCreateHTTPHandlers_ProxiedRequestIsAccessLogged(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusCreated)

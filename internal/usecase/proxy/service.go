@@ -142,6 +142,9 @@ func (s *Service) resolveSnapshotTarget(ctx context.Context, domainName string) 
 
 	entry, found := findSnapshotEntry(snapshot, domainName)
 	if !found || entry.Unavailable() {
+		if found && entry.UnavailableReason == domain.RouteTargetUnavailableReasonPolicyBlocked {
+			return snapshotLookupResult{}, domain.ErrSSRFBlocked
+		}
 		return snapshotLookupResult{}, nil
 	}
 	target, err := entry.ToProxyTarget()
@@ -251,9 +254,9 @@ func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
 }
 
 // WaitForNoInFlight waits until no requests are currently proxied to the
-// given container, or until timeout/context cancellation.
-func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool {
-	if containerID == "" {
+// given opaque target key, or until timeout/context cancellation.
+func (s *Service) WaitForNoInFlight(ctx context.Context, targetKey string, timeout time.Duration) bool {
+	if targetKey == "" {
 		return true
 	}
 	if timeout <= 0 {
@@ -263,7 +266,7 @@ func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, tim
 	deadline := time.Now().Add(timeout)
 	for {
 		s.inFlightMu.Lock()
-		count := s.inFlight[containerID]
+		count := s.inFlight[targetKey]
 		s.inFlightMu.Unlock()
 		if count <= 0 {
 			return true
@@ -337,21 +340,21 @@ func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	return found
 }
 
-// TrackInFlight records an in-flight request for a container.
+// TrackInFlight records an in-flight request for an opaque target key.
 // Returns a release function that must be called when the request completes.
-func (s *Service) TrackInFlight(containerID string) func() {
-	if containerID == "" {
+func (s *Service) TrackInFlight(targetKey string) func() {
+	if targetKey == "" {
 		return func() {}
 	}
 	s.inFlightMu.Lock()
-	s.inFlight[containerID]++
+	s.inFlight[targetKey]++
 	s.inFlightMu.Unlock()
 	return func() {
 		s.inFlightMu.Lock()
-		if s.inFlight[containerID] > 1 {
-			s.inFlight[containerID]--
+		if s.inFlight[targetKey] > 1 {
+			s.inFlight[targetKey]--
 		} else {
-			delete(s.inFlight, containerID)
+			delete(s.inFlight, targetKey)
 		}
 		s.inFlightMu.Unlock()
 	}
