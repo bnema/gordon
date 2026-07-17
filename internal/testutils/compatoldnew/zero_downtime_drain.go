@@ -23,6 +23,7 @@ const (
 	zeroDowntimeDrainStart               = "SLOW-START\n"
 	zeroDowntimeDrainDone                = "SLOW-DONE\n"
 	zeroDowntimeDrainStateMarker         = "/state/request-started"
+	zeroDowntimeDrainStateRelease        = "/state/request-release"
 	zeroDowntimeDrainOldInstance         = "old"
 	zeroDowntimeDrainReplacementInstance = "replacement"
 	zeroDowntimeDrainBaseImage           = "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
@@ -32,7 +33,7 @@ const zeroDowntimeDrainDockerfile = `FROM busybox@sha256:73aaf090f3d85aa34ee1998
 LABEL gordon.proxy.port=8080
 ENV INSTANCE_MARKER=replacement
 EXPOSE 8080
-RUN mkdir -p /www/cgi-bin /state && printf '%s\n' '#!/bin/sh' 'echo "Content-Type: text/plain"' 'echo' 'tmp=/state/request-started.tmp' 'umask 077' ': > "$tmp" && mv "$tmp" /state/request-started' 'printf "INSTANCE:%s\\n" "$INSTANCE_MARKER"' 'printf "SLOW-START\\n"' 'sleep 3' 'printf "SLOW-DONE\\n"' > /www/cgi-bin/slow && chmod 0555 /www/cgi-bin/slow
+RUN mkdir -p /www/cgi-bin /state && printf '%s\n' '#!/bin/sh' 'echo "Content-Type: text/plain"' 'echo' 'tmp=/state/request-started.tmp' 'umask 077' ': > "$tmp" && mv "$tmp" /state/request-started' 'printf "INSTANCE:%s\\n" "$INSTANCE_MARKER"' 'printf "SLOW-START\\n"' 'while [ ! -f /state/request-release ]; do sleep 0.1; done' 'printf "SLOW-DONE\\n"' > /www/cgi-bin/slow && printf '%s\n' '#!/bin/sh' 'echo "Content-Type: text/plain"' 'echo' 'printf "INSTANCE:%s\\n" "$INSTANCE_MARKER"' > /www/cgi-bin/fast && chmod 0555 /www/cgi-bin/slow /www/cgi-bin/fast
 CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
 `
 
@@ -305,7 +306,7 @@ allowed_registries = ["localhost:%d"]
 
 [deploy]
 readiness_delay = "100ms"
-stabilization_delay = "100ms"
+stabilization_delay = "2s"
 drain_mode = "inflight"
 drain_timeout = "10s"
 %s`, registryPort, fixture.DataDir, registryPort, mustDrainRuntimeSocket(), proxyPort, secret, registryPort, routes)
@@ -467,21 +468,24 @@ func startZeroDowntimeDrainInitial(ctx context.Context, resources *zeroDowntimeD
 }
 
 type zeroDowntimeDrainObservation struct {
-	MarkerObserved                      bool   `json:"marker_observed"`
-	OldResponseFromOld                  bool   `json:"old_response_from_old"`
-	FreshResponseFromReplacement        bool   `json:"fresh_response_from_replacement"`
-	TargetChanged                       bool   `json:"target_changed"`
-	DeploySucceeded                     bool   `json:"deploy_succeeded"`
-	DeployBlockedUntilResponseRelease   bool   `json:"deploy_blocked_until_response_release"`
-	DeployReturnedBeforeResponseRelease bool   `json:"deploy_returned_before_response_release"`
-	OldTargetContinuouslyRunning        bool   `json:"old_target_continuously_running"`
-	DrainDurationBucket                 string `json:"drain_duration_bucket"`
+	MarkerObserved                       bool   `json:"marker_observed"`
+	OldResponseFromOld                   bool   `json:"old_response_from_old"`
+	FreshResponseFromReplacement         bool   `json:"fresh_response_from_replacement"`
+	ReplacementRoutedDuringStabilization bool   `json:"replacement_routed_during_stabilization"`
+	OldSurvivedRefreshUntilRelease       bool   `json:"old_survived_refresh_until_release"`
+	TargetChanged                        bool   `json:"target_changed"`
+	DeploySucceeded                      bool   `json:"deploy_succeeded"`
+	DeployBlockedUntilResponseRelease    bool   `json:"deploy_blocked_until_response_release"`
+	DeployReturnedBeforeResponseRelease  bool   `json:"deploy_returned_before_response_release"`
+	OldTargetContinuouslyRunning         bool   `json:"old_target_continuously_running"`
+	DrainDurationBucket                  string `json:"drain_duration_bucket"`
 }
 
 func (o zeroDowntimeDrainObservation) satisfiesOrderingContract() bool {
 	deploymentOrderingProved := o.DeployBlockedUntilResponseRelease ||
 		(o.DeployReturnedBeforeResponseRelease && o.OldTargetContinuouslyRunning)
 	return o.MarkerObserved && o.OldResponseFromOld && o.FreshResponseFromReplacement &&
+		o.ReplacementRoutedDuringStabilization && o.OldSurvivedRefreshUntilRelease &&
 		o.TargetChanged && o.DeploySucceeded && deploymentOrderingProved
 }
 
@@ -494,6 +498,19 @@ type zeroDowntimeDrainSlowCompletion struct {
 	rest        []byte
 	err         error
 	completedAt time.Time
+}
+
+type zeroDowntimeDrainRaceObservation struct {
+	oldResponseFromOld                   bool
+	replacementRoutedDuringStabilization bool
+	oldSurvivedRefreshUntilRelease       bool
+	freshResponseFromReplacement         bool
+	targetChanged                        bool
+	deploySucceeded                      bool
+	deployBlockedUntilResponseRelease    bool
+	deployReturnedBeforeResponseRelease  bool
+	oldTargetContinuouslyRunning         bool
+	drainDurationBucket                  string
 }
 
 func captureZeroDowntimeDrain(ctx context.Context, proxyAddress, adminURL, domain, token string) (ProxyArtifact, error) {
@@ -535,40 +552,111 @@ func captureZeroDowntimeDrain(ctx context.Context, proxyAddress, adminURL, domai
 		deployCh <- zeroDowntimeDrainDeployResult{err: deployErr, completedAt: time.Now()}
 	}()
 
-	startedAt := time.Now()
-	slowCompletionCh := make(chan zeroDowntimeDrainSlowCompletion, 1)
-	go func() {
-		rest, readErr := io.ReadAll(io.LimitReader(reader, 1<<20))
-		slowCompletionCh <- zeroDowntimeDrainSlowCompletion{rest: rest, err: readErr, completedAt: time.Now()}
-	}()
-	slowCompletion := <-slowCompletionCh
-	close(monitorDone)
-	observation.OldTargetContinuouslyRunning = <-monitorCh
-	observation.DrainDurationBucket = zeroDowntimeDrainDurationBucket(slowCompletion.completedAt.Sub(startedAt))
-	deploy := <-deployCh
-	observation.DeploySucceeded = deploy.err == nil
-	observation.DeployReturnedBeforeResponseRelease = deploy.completedAt.Before(slowCompletion.completedAt)
-	observation.DeployBlockedUntilResponseRelease = !observation.DeployReturnedBeforeResponseRelease
-	if slowCompletion.err != nil {
-		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain read completion: %w", slowCompletion.err)
-	}
-	instance, completed := parseZeroDowntimeDrainResponse("INSTANCE:" + instance + "\n" + zeroDowntimeDrainStart + string(slowCompletion.rest))
-	observation.OldResponseFromOld = observation.OldResponseFromOld && completed && instance == zeroDowntimeDrainOldInstance
-	if deploy.err != nil {
-		return zeroDowntimeDrainArtifact(observation), deploy.err
-	}
-	observation.TargetChanged = waitZeroDowntimeDrainReplacementCanonical(requestCtx, domain, oldTargetID, 30*time.Second)
-	_, freshInstance, freshErr := freshZeroDowntimeDrainRequest(requestCtx, proxyAddress, domain)
-	observation.FreshResponseFromReplacement = freshErr == nil && freshInstance == zeroDowntimeDrainReplacementInstance
+	race, raceErr := observeZeroDowntimeDrainRace(requestCtx, proxyAddress, domain, oldTargetID, reader, instance, deployCh, monitorDone, monitorCh)
+	observation.OldResponseFromOld = observation.OldResponseFromOld && race.oldResponseFromOld
+	observation.ReplacementRoutedDuringStabilization = race.replacementRoutedDuringStabilization
+	observation.OldSurvivedRefreshUntilRelease = race.oldSurvivedRefreshUntilRelease
+	observation.FreshResponseFromReplacement = race.freshResponseFromReplacement
+	observation.TargetChanged = race.targetChanged
+	observation.DeploySucceeded = race.deploySucceeded
+	observation.DeployBlockedUntilResponseRelease = race.deployBlockedUntilResponseRelease
+	observation.DeployReturnedBeforeResponseRelease = race.deployReturnedBeforeResponseRelease
+	observation.OldTargetContinuouslyRunning = race.oldTargetContinuouslyRunning
+	observation.DrainDurationBucket = race.drainDurationBucket
 	artifact := zeroDowntimeDrainArtifact(observation)
+	if raceErr != nil {
+		return artifact, raceErr
+	}
 	if !observation.satisfiesOrderingContract() {
 		return artifact, fmt.Errorf("zero downtime drain contract failed: %+v", observation)
 	}
 	return artifact, nil
 }
 
+func observeZeroDowntimeDrainRace(ctx context.Context, proxyAddress, domain, oldTargetID string, reader io.Reader, oldInstance string, deployCh <-chan zeroDowntimeDrainDeployResult, monitorDone chan<- struct{}, monitorCh <-chan bool) (zeroDowntimeDrainRaceObservation, error) {
+	observation := zeroDowntimeDrainRaceObservation{}
+	startedAt := time.Now()
+	replacementRouted, oldSurvived, orderingErr := refreshZeroDowntimeDrainDuringStabilization(ctx, proxyAddress, domain, oldTargetID)
+	observation.replacementRoutedDuringStabilization = replacementRouted
+	observation.oldSurvivedRefreshUntilRelease = oldSurvived
+
+	var earlyDeploy *zeroDowntimeDrainDeployResult
+	select {
+	case deploy := <-deployCh:
+		earlyDeploy = &deploy
+		orderingErr = errors.Join(orderingErr, errors.New("zero downtime drain deploy returned before slow response release"))
+	default:
+	}
+	if releaseErr := releaseZeroDowntimeDrainSlowResponse(ctx, oldTargetID); releaseErr != nil {
+		orderingErr = errors.Join(orderingErr, releaseErr)
+	}
+	slowRest, slowErr := io.ReadAll(io.LimitReader(reader, 1<<20))
+	slowCompletion := zeroDowntimeDrainSlowCompletion{rest: slowRest, err: slowErr, completedAt: time.Now()}
+	close(monitorDone)
+	observation.oldTargetContinuouslyRunning = <-monitorCh
+	observation.drainDurationBucket = zeroDowntimeDrainDurationBucket(slowCompletion.completedAt.Sub(startedAt))
+
+	deploy := awaitZeroDowntimeDrainDeploy(deployCh, earlyDeploy)
+	observation.deploySucceeded = deploy.err == nil
+	observation.deployReturnedBeforeResponseRelease = deploy.completedAt.Before(slowCompletion.completedAt)
+	observation.deployBlockedUntilResponseRelease = !observation.deployReturnedBeforeResponseRelease
+	if slowCompletion.err != nil {
+		orderingErr = errors.Join(orderingErr, fmt.Errorf("zero downtime drain read completion: %w", slowCompletion.err))
+	}
+	instance, completed := parseZeroDowntimeDrainResponse("INSTANCE:" + oldInstance + "\n" + zeroDowntimeDrainStart + string(slowCompletion.rest))
+	observation.oldResponseFromOld = completed && instance == zeroDowntimeDrainOldInstance
+	if deploy.err != nil {
+		orderingErr = errors.Join(orderingErr, deploy.err)
+	}
+	observation.targetChanged = waitZeroDowntimeDrainReplacementCanonical(ctx, domain, oldTargetID, 30*time.Second)
+	_, freshInstance, freshErr := freshZeroDowntimeDrainRequest(ctx, proxyAddress, domain)
+	observation.freshResponseFromReplacement = freshErr == nil && freshInstance == zeroDowntimeDrainReplacementInstance
+	return observation, orderingErr
+}
+
+func refreshZeroDowntimeDrainDuringStabilization(ctx context.Context, proxyAddress, domain, oldTargetID string) (bool, bool, error) {
+	if !waitZeroDowntimeDrainReplacementRunning(ctx, domain, 30*time.Second) {
+		return false, false, errors.New("zero downtime drain replacement was not running during stabilization")
+	}
+	replacementRouted := freshZeroDowntimeDrainReplacementDuringStabilization(ctx, proxyAddress, domain)
+	if !replacementRouted {
+		return false, false, errors.New("zero downtime drain refresh did not route to replacement during stabilization")
+	}
+	if !zeroDowntimeDrainContainerRunning(ctx, oldTargetID) {
+		return true, false, errors.New("zero downtime drain old target did not survive refresh until release")
+	}
+	return true, true, nil
+}
+
+func awaitZeroDowntimeDrainDeploy(deployCh <-chan zeroDowntimeDrainDeployResult, earlyDeploy *zeroDowntimeDrainDeployResult) zeroDowntimeDrainDeployResult {
+	if earlyDeploy != nil {
+		return *earlyDeploy
+	}
+	return <-deployCh
+}
+
+func freshZeroDowntimeDrainReplacementDuringStabilization(ctx context.Context, proxyAddress, domain string) bool {
+	deadlineCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer cancel()
+	replacementName := "gordon-" + domain + "-new"
+	for {
+		if !zeroDowntimeDrainContainerRunning(deadlineCtx, replacementName) {
+			return false
+		}
+		_, instance, err := freshZeroDowntimeDrainRequest(deadlineCtx, proxyAddress, domain)
+		if err == nil && instance == zeroDowntimeDrainReplacementInstance && zeroDowntimeDrainContainerRunning(deadlineCtx, replacementName) {
+			return true
+		}
+		select {
+		case <-deadlineCtx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
 func freshZeroDowntimeDrainRequest(ctx context.Context, proxyAddress, domain string) (int, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+proxyAddress+"/cgi-bin/slow", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+proxyAddress+"/cgi-bin/fast", nil)
 	if err != nil {
 		return 0, "", err
 	}
@@ -579,8 +667,8 @@ func freshZeroDowntimeDrainRequest(ctx context.Context, proxyAddress, domain str
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	instance, completed := parseZeroDowntimeDrainResponse(string(body))
-	if err != nil || response.StatusCode != http.StatusOK || !completed {
+	instance, routed := parseZeroDowntimeDrainFastResponse(string(body))
+	if err != nil || response.StatusCode != http.StatusOK || !routed {
 		return response.StatusCode, instance, fmt.Errorf("zero downtime drain fresh response was incomplete")
 	}
 	return response.StatusCode, instance, nil
@@ -637,6 +725,15 @@ func parseZeroDowntimeDrainResponse(body string) (string, bool) {
 	}
 	instance, started := parseZeroDowntimeDrainSlowStart(lines[0], lines[1])
 	return instance, started && lines[2] == zeroDowntimeDrainDone && lines[3] == ""
+}
+
+func parseZeroDowntimeDrainFastResponse(body string) (string, bool) {
+	instance := strings.TrimSuffix(body, "\n")
+	if strings.Count(body, "\n") != 1 || !strings.HasPrefix(instance, "INSTANCE:") {
+		return "", false
+	}
+	instance = strings.TrimPrefix(instance, "INSTANCE:")
+	return instance, instance == zeroDowntimeDrainReplacementInstance
 }
 
 func zeroDowntimeDrainDurationBucket(duration time.Duration) string {
@@ -710,6 +807,29 @@ func zeroDowntimeDrainContainerID(ctx context.Context, target string) (string, e
 func zeroDowntimeDrainContainerRunning(ctx context.Context, target string) bool {
 	output, err := dockerCompatibilityOutput(ctx, "container", "inspect", "--format", "{{.State.Running}}", target)
 	return err == nil && strings.TrimSpace(output) == "true"
+}
+
+func waitZeroDowntimeDrainReplacementRunning(ctx context.Context, domain string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	replacementName := "gordon-" + domain + "-new"
+	for time.Now().Before(deadline) {
+		if zeroDowntimeDrainContainerRunning(ctx, replacementName) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return false
+}
+
+func releaseZeroDowntimeDrainSlowResponse(ctx context.Context, target string) error {
+	if err := dockerCompatibilityCommand(ctx, "exec", target, "touch", zeroDowntimeDrainStateRelease); err != nil {
+		return errors.New("zero downtime drain release old slow response")
+	}
+	return nil
 }
 
 func monitorZeroDowntimeDrainTarget(ctx context.Context, target string, done <-chan struct{}) (<-chan bool, <-chan bool) {

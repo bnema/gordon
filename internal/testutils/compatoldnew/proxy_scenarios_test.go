@@ -2,6 +2,7 @@ package compatoldnew
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -99,7 +100,7 @@ func TestZeroDowntimeDrainStateVolumesAreExactAndSideUnique(t *testing.T) {
 	require.Equal(t, "gordon-compat-zero-drain-state-run-id-new", resources.stateVolumeName(SideNew))
 }
 
-func TestZeroDowntimeDrainMarkerAndInstanceParser(t *testing.T) {
+func TestZeroDowntimeDrainResponseParsers(t *testing.T) {
 	instance, started := parseZeroDowntimeDrainSlowStart("INSTANCE:old\n", zeroDowntimeDrainStart)
 	require.True(t, started)
 	require.Equal(t, zeroDowntimeDrainOldInstance, instance)
@@ -111,18 +112,59 @@ func TestZeroDowntimeDrainMarkerAndInstanceParser(t *testing.T) {
 	instance, completed := parseZeroDowntimeDrainResponse("INSTANCE:replacement\n" + zeroDowntimeDrainStart + zeroDowntimeDrainDone)
 	require.True(t, completed)
 	require.Equal(t, zeroDowntimeDrainReplacementInstance, instance)
+
+	instance, routed := parseZeroDowntimeDrainFastResponse("INSTANCE:replacement\n")
+	require.True(t, routed)
+	require.Equal(t, zeroDowntimeDrainReplacementInstance, instance)
+
+	_, routed = parseZeroDowntimeDrainFastResponse("INSTANCE:old\n")
+	require.False(t, routed)
+}
+
+func TestZeroDowntimeDrainArtifactOrderingFieldsAreSafeAndStable(t *testing.T) {
+	artifact := zeroDowntimeDrainArtifact(zeroDowntimeDrainObservation{
+		ReplacementRoutedDuringStabilization: true,
+		OldSurvivedRefreshUntilRelease:       true,
+	})
+	encoded, err := json.Marshal(artifact.RawValue())
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"marker_observed": false,
+		"old_response_from_old": false,
+		"fresh_response_from_replacement": false,
+		"replacement_routed_during_stabilization": true,
+		"old_survived_refresh_until_release": true,
+		"target_changed": false,
+		"deploy_succeeded": false,
+		"deploy_blocked_until_response_release": false,
+		"deploy_returned_before_response_release": false,
+		"old_target_continuously_running": false,
+		"drain_duration_bucket": ""
+	}`, string(encoded))
+	require.NotContains(t, string(encoded), "container_id")
+	require.NotContains(t, string(encoded), "proxy_port")
 }
 
 func TestZeroDowntimeDrainOrderingContract(t *testing.T) {
 	base := zeroDowntimeDrainObservation{
-		MarkerObserved:                    true,
-		OldResponseFromOld:                true,
-		FreshResponseFromReplacement:      true,
-		TargetChanged:                     true,
-		DeploySucceeded:                   true,
-		DeployBlockedUntilResponseRelease: true,
+		MarkerObserved:                       true,
+		OldResponseFromOld:                   true,
+		FreshResponseFromReplacement:         true,
+		ReplacementRoutedDuringStabilization: true,
+		OldSurvivedRefreshUntilRelease:       true,
+		TargetChanged:                        true,
+		DeploySucceeded:                      true,
+		DeployBlockedUntilResponseRelease:    true,
 	}
 	require.True(t, base.satisfiesOrderingContract())
+
+	base.ReplacementRoutedDuringStabilization = false
+	require.False(t, base.satisfiesOrderingContract(), "the provider refresh must route to the replacement during stabilization")
+	base.ReplacementRoutedDuringStabilization = true
+
+	base.OldSurvivedRefreshUntilRelease = false
+	require.False(t, base.satisfiesOrderingContract(), "the old target must survive the refresh until release")
+	base.OldSurvivedRefreshUntilRelease = true
 
 	base.DeployBlockedUntilResponseRelease = false
 	base.DeployReturnedBeforeResponseRelease = true
