@@ -456,40 +456,26 @@ func TestDrainRegistryInFlight(t *testing.T) {
 	svc := &Service{
 		inFlight: make(map[string]int),
 	}
-
 	svc.registryInFlight.Add(2)
 
 	result := make(chan bool, 1)
 	go func() {
-		result <- svc.DrainRegistryInFlight(50 * time.Millisecond)
+		result <- svc.DrainRegistryInFlight(time.Second)
 	}()
+	assertWaiterBlocked(t, result)
 
-	time.Sleep(5 * time.Millisecond)
 	svc.registryInFlight.Add(-1)
 	svc.registryInFlight.Add(-1)
-
-	select {
-	case drained := <-result:
-		if !drained {
-			t.Fatalf("DrainRegistryInFlight returned false; expected true after all requests completed")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("DrainRegistryInFlight did not return within timeout")
-	}
+	require.True(t, awaitWaiterResult(t, result))
 }
 
 func TestDrainRegistryInFlightTimeout(t *testing.T) {
 	svc := &Service{
 		inFlight: make(map[string]int),
 	}
-
-	// Add a request and never release it
 	svc.registryInFlight.Add(1)
 
-	drained := svc.DrainRegistryInFlight(30 * time.Millisecond)
-	if drained {
-		t.Fatal("expected DrainRegistryInFlight to return false on timeout, got true")
-	}
+	assert.False(t, svc.DrainRegistryInFlight(time.Nanosecond))
 }
 
 func TestService_ProxyConfig_ReflectsUpdates(t *testing.T) {
@@ -836,6 +822,8 @@ func TestProxyTargetResolutionContract(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "203.0.113.10", got.Host)
 		assert.Equal(t, 5000, got.Port)
+		assert.Equal(t, "http", got.Scheme)
+		assert.Empty(t, got.Protocol)
 		assert.Empty(t, got.ContainerID)
 	})
 
@@ -898,6 +886,9 @@ func TestProxyTargetResolutionContract(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "172.18.0.5", got.Host)
 		assert.Equal(t, 8080, got.Port)
+		assert.Equal(t, "c-net", got.ContainerID)
+		assert.Equal(t, "net.example.com", got.RouteHost)
+		assert.Equal(t, "http", got.Scheme)
 	})
 
 	t.Run("localhost port mapping when gordon runs on host", func(t *testing.T) {
@@ -918,5 +909,8 @@ func TestProxyTargetResolutionContract(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "localhost", got.Host)
 		assert.Equal(t, 32080, got.Port)
+		assert.Equal(t, "c-host", got.ContainerID)
+		assert.Equal(t, "host.example.com", got.RouteHost)
+		assert.Equal(t, "http", got.Scheme)
 	})
 }
