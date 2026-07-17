@@ -18,17 +18,21 @@ import (
 )
 
 const (
-	zeroDowntimeDrainScenarioName = "proxy/zero-downtime-drain"
-	zeroDowntimeDrainPort         = 8080
-	zeroDowntimeDrainStart        = "SLOW-START\n"
-	zeroDowntimeDrainDone         = "SLOW-DONE\n"
-	zeroDowntimeDrainBaseImage    = "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+	zeroDowntimeDrainScenarioName        = "proxy/zero-downtime-drain"
+	zeroDowntimeDrainPort                = 8080
+	zeroDowntimeDrainStart               = "SLOW-START\n"
+	zeroDowntimeDrainDone                = "SLOW-DONE\n"
+	zeroDowntimeDrainStateMarker         = "/state/request-started"
+	zeroDowntimeDrainOldInstance         = "old"
+	zeroDowntimeDrainReplacementInstance = "replacement"
+	zeroDowntimeDrainBaseImage           = "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 )
 
 const zeroDowntimeDrainDockerfile = `FROM busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
 LABEL gordon.proxy.port=8080
+ENV INSTANCE_MARKER=replacement
 EXPOSE 8080
-RUN mkdir -p /www/cgi-bin && printf '%s\n' '#!/bin/sh' 'echo "Content-Type: text/plain"' 'echo' 'printf "SLOW-START\\n"' 'sleep 3' 'printf "SLOW-DONE\\n"' > /www/cgi-bin/slow && chmod 0555 /www/cgi-bin/slow
+RUN mkdir -p /www/cgi-bin /state && printf '%s\n' '#!/bin/sh' 'echo "Content-Type: text/plain"' 'echo' 'tmp=/state/request-started.tmp' 'umask 077' ': > "$tmp" && mv "$tmp" /state/request-started' 'printf "INSTANCE:%s\\n" "$INSTANCE_MARKER"' 'printf "SLOW-START\\n"' 'sleep 3' 'printf "SLOW-DONE\\n"' > /www/cgi-bin/slow && chmod 0555 /www/cgi-bin/slow
 CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
 `
 
@@ -37,6 +41,7 @@ type zeroDowntimeDrainResources struct {
 	sourceTag             string
 	domain                string
 	imageTags             []string
+	volumeNames           []string
 	cleanupCommand        func(context.Context, ...string) error
 	cleanupContainersFunc func(context.Context) error
 }
@@ -85,6 +90,25 @@ func (r *zeroDowntimeDrainResources) trackImageTag(tag string) {
 	r.imageTags = append(r.imageTags, tag)
 }
 
+func (r *zeroDowntimeDrainResources) stateVolumeName(side string) string {
+	part := sanitizePart(r.runID)
+	if len(part) > 45 {
+		part = part[:45]
+	}
+	return "gordon-compat-zero-drain-state-" + part + "-" + sanitizePart(side)
+}
+
+func (r *zeroDowntimeDrainResources) createStateVolume(ctx context.Context, side string) (string, error) {
+	volume := r.stateVolumeName(side)
+	labels := ResourceLabels(r.runID, side, zeroDowntimeDrainScenarioName)
+	if err := dockerCompatibilityCommand(ctx, "volume", "create", "--label", LabelRun+"="+labels[LabelRun],
+		"--label", LabelSide+"="+labels[LabelSide], "--label", LabelFixture+"="+labels[LabelFixture], volume); err != nil {
+		return "", fmt.Errorf("create zero downtime drain state volume: %w", err)
+	}
+	r.volumeNames = append(r.volumeNames, volume)
+	return volume, nil
+}
+
 func (r *zeroDowntimeDrainResources) cleanup(ctx context.Context) error {
 	var errs []error
 	if err := r.runCleanupContainers(ctx); err != nil {
@@ -93,6 +117,11 @@ func (r *zeroDowntimeDrainResources) cleanup(ctx context.Context) error {
 	for _, tag := range r.imageTags {
 		if err := r.runCleanupCommand(ctx, "image", "rm", "-f", tag); err != nil {
 			errs = append(errs, fmt.Errorf("remove zero downtime drain image %q: %w", tag, err))
+		}
+	}
+	for _, volume := range r.volumeNames {
+		if err := r.runCleanupCommand(ctx, "volume", "rm", "-f", volume); err != nil {
+			errs = append(errs, fmt.Errorf("remove zero downtime drain state volume %q: %w", volume, err))
 		}
 	}
 	return errors.Join(errs...)
@@ -421,10 +450,16 @@ func classifyZeroDowntimeDrainDockerError(output string) string {
 
 func startZeroDowntimeDrainInitial(ctx context.Context, resources *zeroDowntimeDrainResources, side, image string) error {
 	labels := ResourceLabels(resources.runID, side, zeroDowntimeDrainScenarioName)
+	volume, err := resources.createStateVolume(ctx, side)
+	if err != nil {
+		return err
+	}
 	name := "gordon-" + resources.domain
 	if err := dockerCompatibilityCommand(ctx, "run", "-d", "--name", name,
 		"--label", LabelRun+"="+labels[LabelRun], "--label", LabelSide+"="+labels[LabelSide], "--label", LabelFixture+"="+labels[LabelFixture],
 		"--label", "gordon.managed=true", "--label", "gordon.domain="+resources.domain, "--label", "gordon.route="+resources.domain,
+		"--env", "INSTANCE_MARKER="+zeroDowntimeDrainOldInstance,
+		"--mount", "type=volume,src="+volume+",dst=/state",
 		"-p", "127.0.0.1::"+strconv.Itoa(zeroDowntimeDrainPort), image); err != nil {
 		return fmt.Errorf("zero downtime drain initial container: %w", err)
 	}
@@ -432,82 +467,126 @@ func startZeroDowntimeDrainInitial(ctx context.Context, resources *zeroDowntimeD
 }
 
 type zeroDowntimeDrainObservation struct {
-	SlowStarted           bool `json:"slowStarted"`
-	DeployStatus          int  `json:"deployStatus"`
-	OldRunningDuringDrain bool `json:"oldRunningDuringDrain"`
-	SlowStatus            int  `json:"slowStatus"`
-	SlowDone              bool `json:"slowDone"`
-	ReplacementRunning    bool `json:"replacementRunning"`
-	CanonicalRunning      bool `json:"canonicalRunning"`
-	NewNameRemoved        bool `json:"newNameRemoved"`
-	OldRemoved            bool `json:"oldRemoved"`
-	FreshStatus           int  `json:"freshStatus"`
-	FreshSucceeded        bool `json:"freshSucceeded"`
-	TimingBounded         bool `json:"timingBounded"`
+	MarkerObserved                      bool   `json:"marker_observed"`
+	OldResponseFromOld                  bool   `json:"old_response_from_old"`
+	FreshResponseFromReplacement        bool   `json:"fresh_response_from_replacement"`
+	TargetChanged                       bool   `json:"target_changed"`
+	DeploySucceeded                     bool   `json:"deploy_succeeded"`
+	DeployBlockedUntilResponseRelease   bool   `json:"deploy_blocked_until_response_release"`
+	DeployReturnedBeforeResponseRelease bool   `json:"deploy_returned_before_response_release"`
+	OldTargetContinuouslyRunning        bool   `json:"old_target_continuously_running"`
+	DrainDurationBucket                 string `json:"drain_duration_bucket"`
+}
+
+func (o zeroDowntimeDrainObservation) satisfiesOrderingContract() bool {
+	deploymentOrderingProved := o.DeployBlockedUntilResponseRelease ||
+		(o.DeployReturnedBeforeResponseRelease && o.OldTargetContinuouslyRunning)
+	return o.MarkerObserved && o.OldResponseFromOld && o.FreshResponseFromReplacement &&
+		o.TargetChanged && o.DeploySucceeded && deploymentOrderingProved
+}
+
+type zeroDowntimeDrainDeployResult struct {
+	err         error
+	completedAt time.Time
+}
+
+type zeroDowntimeDrainSlowCompletion struct {
+	rest        []byte
+	err         error
+	completedAt time.Time
 }
 
 func captureZeroDowntimeDrain(ctx context.Context, proxyAddress, adminURL, domain, token string) (ProxyArtifact, error) {
-	observation := zeroDowntimeDrainObservation{TimingBounded: true}
+	observation := zeroDowntimeDrainObservation{}
 	requestCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	response, reader, first, err := beginZeroDowntimeDrainSlowRequest(requestCtx, proxyAddress, domain, &observation)
+	oldName := "gordon-" + domain
+	oldTargetID, err := zeroDowntimeDrainContainerID(requestCtx, oldName)
+	if err != nil {
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("identify zero downtime drain old target: %w", err)
+	}
+	response, reader, instance, err := beginZeroDowntimeDrainSlowRequest(requestCtx, proxyAddress, domain)
 	if err != nil {
 		return zeroDowntimeDrainArtifact(observation), err
 	}
 	defer response.Body.Close()
-	observation.SlowStarted = first == zeroDowntimeDrainStart
-	if !observation.SlowStarted || observation.SlowStatus != http.StatusOK {
-		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain did not receive slow start (status %d, marker %t)", observation.SlowStatus, observation.SlowStarted)
+	observation.OldResponseFromOld = instance == zeroDowntimeDrainOldInstance
+	if !observation.OldResponseFromOld {
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain slow response did not identify the old instance")
 	}
-	deployCh := make(chan struct {
-		status int
-		err    error
-	}, 1)
+	observation.MarkerObserved = waitZeroDowntimeDrainMarker(requestCtx, oldName, 10*time.Second)
+	if !observation.MarkerObserved {
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain old request marker was not observed before deploy")
+	}
+	if !zeroDowntimeDrainContainerRunning(requestCtx, oldTargetID) {
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain old target was not running before deploy")
+	}
+
+	monitorDone := make(chan struct{})
+	monitorCh, monitorStarted := monitorZeroDowntimeDrainTarget(requestCtx, oldTargetID, monitorDone)
+	if !<-monitorStarted {
+		close(monitorDone)
+		<-monitorCh
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain old target monitor could not start")
+	}
+	deployCh := make(chan zeroDowntimeDrainDeployResult, 1)
 	go func() {
-		status, err := deployZeroDowntimeDrain(requestCtx, adminURL, domain, token)
-		deployCh <- struct {
-			status int
-			err    error
-		}{status, err}
+		_, deployErr := deployZeroDowntimeDrain(requestCtx, adminURL, domain, token)
+		deployCh <- zeroDowntimeDrainDeployResult{err: deployErr, completedAt: time.Now()}
 	}()
-	oldName := "gordon-" + domain
-	observation.OldRunningDuringDrain = waitZeroDowntimeDrainRunning(requestCtx, oldName, 2*time.Second)
-	rest, readErr := io.ReadAll(io.LimitReader(reader, 1<<20))
-	observation.SlowDone = string(rest) == zeroDowntimeDrainDone
+
+	startedAt := time.Now()
+	slowCompletionCh := make(chan zeroDowntimeDrainSlowCompletion, 1)
+	go func() {
+		rest, readErr := io.ReadAll(io.LimitReader(reader, 1<<20))
+		slowCompletionCh <- zeroDowntimeDrainSlowCompletion{rest: rest, err: readErr, completedAt: time.Now()}
+	}()
+	slowCompletion := <-slowCompletionCh
+	close(monitorDone)
+	observation.OldTargetContinuouslyRunning = <-monitorCh
+	observation.DrainDurationBucket = zeroDowntimeDrainDurationBucket(slowCompletion.completedAt.Sub(startedAt))
 	deploy := <-deployCh
-	observation.DeployStatus = deploy.status
-	if readErr != nil {
-		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain read completion: %w", readErr)
+	observation.DeploySucceeded = deploy.err == nil
+	observation.DeployReturnedBeforeResponseRelease = deploy.completedAt.Before(slowCompletion.completedAt)
+	observation.DeployBlockedUntilResponseRelease = !observation.DeployReturnedBeforeResponseRelease
+	if slowCompletion.err != nil {
+		return zeroDowntimeDrainArtifact(observation), fmt.Errorf("zero downtime drain read completion: %w", slowCompletion.err)
 	}
+	instance, completed := parseZeroDowntimeDrainResponse("INSTANCE:" + instance + "\n" + zeroDowntimeDrainStart + string(slowCompletion.rest))
+	observation.OldResponseFromOld = observation.OldResponseFromOld && completed && instance == zeroDowntimeDrainOldInstance
 	if deploy.err != nil {
 		return zeroDowntimeDrainArtifact(observation), deploy.err
 	}
-	observation.ReplacementRunning, observation.CanonicalRunning, observation.NewNameRemoved = waitZeroDowntimeDrainReplacement(requestCtx, domain, 30*time.Second)
-	observation.OldRemoved = observation.ReplacementRunning
-	observation.FreshStatus, observation.FreshSucceeded = freshZeroDowntimeDrainRequest(requestCtx, proxyAddress, domain)
+	observation.TargetChanged = waitZeroDowntimeDrainReplacementCanonical(requestCtx, domain, oldTargetID, 30*time.Second)
+	_, freshInstance, freshErr := freshZeroDowntimeDrainRequest(requestCtx, proxyAddress, domain)
+	observation.FreshResponseFromReplacement = freshErr == nil && freshInstance == zeroDowntimeDrainReplacementInstance
 	artifact := zeroDowntimeDrainArtifact(observation)
-	if observation.DeployStatus != http.StatusOK || !observation.OldRunningDuringDrain || !observation.SlowDone || !observation.ReplacementRunning || !observation.OldRemoved || !observation.FreshSucceeded || !observation.TimingBounded {
+	if !observation.satisfiesOrderingContract() {
 		return artifact, fmt.Errorf("zero downtime drain contract failed: %+v", observation)
 	}
 	return artifact, nil
 }
 
-func freshZeroDowntimeDrainRequest(ctx context.Context, proxyAddress, domain string) (int, bool) {
+func freshZeroDowntimeDrainRequest(ctx context.Context, proxyAddress, domain string) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+proxyAddress+"/cgi-bin/slow", nil)
 	if err != nil {
-		return 0, false
+		return 0, "", err
 	}
 	req.Host = domain
 	response, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
-		return 0, false
+		return 0, "", err
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	return response.StatusCode, err == nil && response.StatusCode == http.StatusOK && string(body) == zeroDowntimeDrainStart+zeroDowntimeDrainDone
+	instance, completed := parseZeroDowntimeDrainResponse(string(body))
+	if err != nil || response.StatusCode != http.StatusOK || !completed {
+		return response.StatusCode, instance, fmt.Errorf("zero downtime drain fresh response was incomplete")
+	}
+	return response.StatusCode, instance, nil
 }
 
-func beginZeroDowntimeDrainSlowRequest(ctx context.Context, proxyAddress, domain string, observation *zeroDowntimeDrainObservation) (*http.Response, *bufio.Reader, string, error) {
+func beginZeroDowntimeDrainSlowRequest(ctx context.Context, proxyAddress, domain string) (*http.Response, *bufio.Reader, string, error) {
 	deadline := time.Now().Add(10 * time.Second)
 	var lastStatus int
 	for time.Now().Before(deadline) {
@@ -521,15 +600,14 @@ func beginZeroDowntimeDrainSlowRequest(ctx context.Context, proxyAddress, domain
 			lastStatus = response.StatusCode
 			if response.StatusCode == http.StatusOK {
 				reader := bufio.NewReader(response.Body)
-				first, readErr := reader.ReadString('\n')
-				if readErr == nil {
-					observation.SlowStatus = response.StatusCode
-					return response, reader, first, nil
+				instanceLine, firstErr := reader.ReadString('\n')
+				startLine, secondErr := reader.ReadString('\n')
+				instance, started := parseZeroDowntimeDrainSlowStart(instanceLine, startLine)
+				if firstErr == nil && secondErr == nil && started {
+					return response, reader, instance, nil
 				}
-				_ = response.Body.Close()
-			} else {
-				_ = response.Body.Close()
 			}
+			_ = response.Body.Close()
 		}
 		select {
 		case <-ctx.Done():
@@ -537,8 +615,41 @@ func beginZeroDowntimeDrainSlowRequest(ctx context.Context, proxyAddress, domain
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	observation.SlowStatus = lastStatus
 	return nil, nil, "", fmt.Errorf("zero downtime drain slow request did not become ready (status %d)", lastStatus)
+}
+
+func parseZeroDowntimeDrainSlowStart(instanceLine, startLine string) (string, bool) {
+	instance := strings.TrimSuffix(instanceLine, "\n")
+	if startLine != zeroDowntimeDrainStart || !strings.HasPrefix(instance, "INSTANCE:") {
+		return "", false
+	}
+	instance = strings.TrimPrefix(instance, "INSTANCE:")
+	if instance != zeroDowntimeDrainOldInstance && instance != zeroDowntimeDrainReplacementInstance {
+		return "", false
+	}
+	return instance, true
+}
+
+func parseZeroDowntimeDrainResponse(body string) (string, bool) {
+	lines := strings.SplitAfter(body, "\n")
+	if len(lines) != 4 {
+		return "", false
+	}
+	instance, started := parseZeroDowntimeDrainSlowStart(lines[0], lines[1])
+	return instance, started && lines[2] == zeroDowntimeDrainDone && lines[3] == ""
+}
+
+func zeroDowntimeDrainDurationBucket(duration time.Duration) string {
+	switch {
+	case duration < time.Second:
+		return "under_1s"
+	case duration < 5*time.Second:
+		return "1s_to_5s"
+	case duration < 10*time.Second:
+		return "5s_to_10s"
+	default:
+		return "10s_or_more"
+	}
 }
 
 func deployZeroDowntimeDrain(ctx context.Context, adminURL, domain, token string) (int, error) {
@@ -569,11 +680,10 @@ func classifyZeroDowntimeDrainDeployError(body string) string {
 	return "deployment error"
 }
 
-func waitZeroDowntimeDrainRunning(ctx context.Context, name string, timeout time.Duration) bool {
+func waitZeroDowntimeDrainMarker(ctx context.Context, name string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		output, err := dockerCompatibilityOutput(ctx, "container", "inspect", "--format", "{{.State.Running}}", name)
-		if err == nil && strings.TrimSpace(output) == "true" {
+		if err := dockerCompatibilityCommand(ctx, "exec", name, "test", "-f", zeroDowntimeDrainStateMarker); err == nil {
 			return true
 		}
 		select {
@@ -585,24 +695,71 @@ func waitZeroDowntimeDrainRunning(ctx context.Context, name string, timeout time
 	return false
 }
 
-func waitZeroDowntimeDrainReplacement(ctx context.Context, domain string, timeout time.Duration) (bool, bool, bool) {
+func zeroDowntimeDrainContainerID(ctx context.Context, target string) (string, error) {
+	output, err := dockerCompatibilityOutput(ctx, "container", "inspect", "--format", "{{.Id}}", target)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(output)
+	if id == "" {
+		return "", errors.New("empty container ID")
+	}
+	return id, nil
+}
+
+func zeroDowntimeDrainContainerRunning(ctx context.Context, target string) bool {
+	output, err := dockerCompatibilityOutput(ctx, "container", "inspect", "--format", "{{.State.Running}}", target)
+	return err == nil && strings.TrimSpace(output) == "true"
+}
+
+func monitorZeroDowntimeDrainTarget(ctx context.Context, target string, done <-chan struct{}) (<-chan bool, <-chan bool) {
+	result := make(chan bool, 1)
+	started := make(chan bool, 1)
+	go func() {
+		defer close(result)
+		defer close(started)
+		running := zeroDowntimeDrainContainerRunning(ctx, target)
+		started <- running
+		if !running {
+			result <- false
+			return
+		}
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				result <- running
+				return
+			case <-ctx.Done():
+				result <- false
+				return
+			case <-ticker.C:
+				if !zeroDowntimeDrainContainerRunning(ctx, target) {
+					running = false
+				}
+			}
+		}
+	}()
+	return result, started
+}
+
+func waitZeroDowntimeDrainReplacementCanonical(ctx context.Context, domain, oldTargetID string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	canonical, next := "gordon-"+domain, "gordon-"+domain+"-new"
 	for time.Now().Before(deadline) {
-		canonicalRunning := waitZeroDowntimeDrainRunning(ctx, canonical, 100*time.Millisecond)
+		canonicalID, idErr := zeroDowntimeDrainContainerID(ctx, canonical)
 		_, nextErr := dockerCompatibilityOutput(ctx, "container", "inspect", "--format", "{{.State.Running}}", next)
-		if canonicalRunning && nextErr != nil {
-			return true, true, true
+		if idErr == nil && canonicalID != oldTargetID && zeroDowntimeDrainContainerRunning(ctx, canonical) && nextErr != nil {
+			return true
 		}
 		select {
 		case <-ctx.Done():
-			return false, false, false
+			return false
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	canonicalRunning := waitZeroDowntimeDrainRunning(context.Background(), canonical, time.Second)
-	_, nextErr := dockerCompatibilityOutput(context.Background(), "container", "inspect", "--format", "{{.State.Running}}", next)
-	return false, canonicalRunning, nextErr != nil
+	return false
 }
 
 func zeroDowntimeDrainArtifact(observation zeroDowntimeDrainObservation) ProxyArtifact {
@@ -619,5 +776,5 @@ func zeroDowntimeDrainDomain(runID string) string {
 	return "drain-" + part + ".test"
 }
 func zeroDowntimeDrainRerunCommand() string {
-	return "GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityZeroDowntimeDrain$' -count=1"
+	return "GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=" + BaselineRefFromEnv() + " go test ./internal/testutils/compatoldnew -run '^TestCompatibilityZeroDowntimeDrain$' -count=2"
 }

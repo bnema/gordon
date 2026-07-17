@@ -93,13 +93,55 @@ func (r *zeroDowntimeDrainCleanupRunner) command(_ context.Context, args ...stri
 	return r.failures[args[len(args)-1]]
 }
 
-func TestZeroDowntimeDrainCleanupAttemptsEveryTrackedTagAfterFailures(t *testing.T) {
+func TestZeroDowntimeDrainStateVolumesAreExactAndSideUnique(t *testing.T) {
+	resources := newZeroDowntimeDrainResources("Run ID", "drain.test")
+	require.Equal(t, "gordon-compat-zero-drain-state-run-id-old", resources.stateVolumeName(SideOld))
+	require.Equal(t, "gordon-compat-zero-drain-state-run-id-new", resources.stateVolumeName(SideNew))
+}
+
+func TestZeroDowntimeDrainMarkerAndInstanceParser(t *testing.T) {
+	instance, started := parseZeroDowntimeDrainSlowStart("INSTANCE:old\n", zeroDowntimeDrainStart)
+	require.True(t, started)
+	require.Equal(t, zeroDowntimeDrainOldInstance, instance)
+
+	instance, started = parseZeroDowntimeDrainSlowStart("INSTANCE:unknown\n", zeroDowntimeDrainStart)
+	require.False(t, started)
+	require.Empty(t, instance)
+
+	instance, completed := parseZeroDowntimeDrainResponse("INSTANCE:replacement\n" + zeroDowntimeDrainStart + zeroDowntimeDrainDone)
+	require.True(t, completed)
+	require.Equal(t, zeroDowntimeDrainReplacementInstance, instance)
+}
+
+func TestZeroDowntimeDrainOrderingContract(t *testing.T) {
+	base := zeroDowntimeDrainObservation{
+		MarkerObserved:                    true,
+		OldResponseFromOld:                true,
+		FreshResponseFromReplacement:      true,
+		TargetChanged:                     true,
+		DeploySucceeded:                   true,
+		DeployBlockedUntilResponseRelease: true,
+	}
+	require.True(t, base.satisfiesOrderingContract())
+
+	base.DeployBlockedUntilResponseRelease = false
+	base.DeployReturnedBeforeResponseRelease = true
+	base.OldTargetContinuouslyRunning = true
+	require.True(t, base.satisfiesOrderingContract())
+
+	base.OldTargetContinuouslyRunning = false
+	require.False(t, base.satisfiesOrderingContract(), "an asynchronous deploy must retain the old target until release")
+}
+
+func TestZeroDowntimeDrainCleanupAttemptsEveryTrackedResourceAfterFailures(t *testing.T) {
 	containerCleanupErr := errors.New("remove containers failed")
 	sourceCleanupErr := errors.New("remove source failed")
 	oldCleanupErr := errors.New("remove old registry tag failed")
+	volumeCleanupErr := errors.New("remove old state volume failed")
 	runner := &zeroDowntimeDrainCleanupRunner{failures: map[string]error{
 		"gordon-compat-zero-drain:test":                   sourceCleanupErr,
 		"localhost:41001/gordon-compat-drain-test:latest": oldCleanupErr,
+		"gordon-compat-zero-drain-state-test-old":         volumeCleanupErr,
 	}}
 	resources := &zeroDowntimeDrainResources{
 		imageTags: []string{
@@ -107,6 +149,7 @@ func TestZeroDowntimeDrainCleanupAttemptsEveryTrackedTagAfterFailures(t *testing
 			"localhost:41001/gordon-compat-drain-test:latest",
 			"localhost:41002/gordon-compat-drain-test:latest",
 		},
+		volumeNames:           []string{"gordon-compat-zero-drain-state-test-old", "gordon-compat-zero-drain-state-test-new"},
 		cleanupCommand:        runner.command,
 		cleanupContainersFunc: func(context.Context) error { return containerCleanupErr },
 	}
@@ -116,10 +159,13 @@ func TestZeroDowntimeDrainCleanupAttemptsEveryTrackedTagAfterFailures(t *testing
 	require.ErrorIs(t, err, containerCleanupErr)
 	require.ErrorIs(t, err, sourceCleanupErr)
 	require.ErrorIs(t, err, oldCleanupErr)
+	require.ErrorIs(t, err, volumeCleanupErr)
 	require.Equal(t, [][]string{
 		{"image", "rm", "-f", "gordon-compat-zero-drain:test"},
 		{"image", "rm", "-f", "localhost:41001/gordon-compat-drain-test:latest"},
 		{"image", "rm", "-f", "localhost:41002/gordon-compat-drain-test:latest"},
+		{"volume", "rm", "-f", "gordon-compat-zero-drain-state-test-old"},
+		{"volume", "rm", "-f", "gordon-compat-zero-drain-state-test-new"},
 	}, runner.commands)
 }
 

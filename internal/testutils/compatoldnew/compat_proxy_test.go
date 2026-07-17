@@ -120,15 +120,18 @@ func TestCompatibilityZeroDowntimeDrain(t *testing.T) {
 	defer cancel()
 	require.NoError(t, DockerCompatibilityPreflight(ctx), "zero downtime drain compatibility runtime required")
 
-	beforeTags, beforeContainers := zeroDowntimeDrainDockerResources(t, ctx)
+	beforeTags, beforeContainers, beforeVolumes := zeroDowntimeDrainDockerResources(t, ctx)
 	require.Empty(t, beforeTags, "zero downtime drain image tags must not leak between runs")
 	require.Empty(t, beforeContainers, "zero downtime drain containers must not leak between runs")
+	require.Empty(t, beforeVolumes, "zero downtime drain state volumes must not leak between runs")
 	t.Cleanup(func() {
-		afterTags, afterContainers := zeroDowntimeDrainDockerResources(t, context.Background())
+		afterTags, afterContainers, afterVolumes := zeroDowntimeDrainDockerResources(t, context.Background())
 		require.Equal(t, beforeTags, afterTags, "zero downtime drain image tag set changed")
 		require.Equal(t, beforeContainers, afterContainers, "zero downtime drain container set changed")
+		require.Equal(t, beforeVolumes, afterVolumes, "zero downtime drain state volume set changed")
 		require.Empty(t, afterTags, "zero downtime drain image tags leaked")
 		require.Empty(t, afterContainers, "zero downtime drain containers leaked")
+		require.Empty(t, afterVolumes, "zero downtime drain state volumes leaked")
 	})
 
 	artifactDir := compatibilityArtifactDir(t, "proxy-zero-drain")
@@ -150,14 +153,16 @@ func TestCompatibilityZeroDowntimeDrain(t *testing.T) {
 	}
 }
 
-func zeroDowntimeDrainDockerResources(t *testing.T, ctx context.Context) ([]string, []string) {
+func zeroDowntimeDrainDockerResources(t *testing.T, ctx context.Context) ([]string, []string, []string) {
 	t.Helper()
 	imageOutput, err := dockerCompatibilityOutput(ctx, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}")
 	require.NoError(t, err, "list zero downtime drain image tags")
 	containerOutput, err := dockerCompatibilityOutput(ctx, "ps", "-a", "--format", "{{.Names}}")
 	require.NoError(t, err, "list zero downtime drain containers")
+	volumeOutput, err := dockerCompatibilityOutput(ctx, "volume", "ls", "--format", "{{.Name}}")
+	require.NoError(t, err, "list zero downtime drain state volumes")
 
-	var tags, containers []string
+	var tags, containers, volumes []string
 	for _, ref := range strings.Fields(imageOutput) {
 		if strings.HasPrefix(ref, "gordon-compat-zero-drain:") ||
 			(strings.HasPrefix(ref, "localhost:") && strings.Contains(ref, "/gordon-compat-drain-")) {
@@ -169,9 +174,15 @@ func zeroDowntimeDrainDockerResources(t *testing.T, ctx context.Context) ([]stri
 			containers = append(containers, name)
 		}
 	}
+	for _, name := range strings.Fields(volumeOutput) {
+		if strings.HasPrefix(name, "gordon-compat-zero-drain-state-") {
+			volumes = append(volumes, name)
+		}
+	}
 	sort.Strings(tags)
 	sort.Strings(containers)
-	return tags, containers
+	sort.Strings(volumes)
+	return tags, containers, volumes
 }
 
 func TestCompatibilityManagedHTTPRoute(t *testing.T) {
