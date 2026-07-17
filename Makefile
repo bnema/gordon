@@ -125,9 +125,12 @@ compat-harness-registry: ## Run registry compatibility harness checks
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
 
-compat-harness-proxy: ## Run proxy compatibility harness checks
-	@echo "Running proxy compatibility harness checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+compat-harness-proxy: ## Run real managed proxy compatibility harness checks
+	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
+	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/proxy/compat-report.json"
+	@echo "Running required Docker preflight and managed proxy compatibility slice..."
+	@docker info
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityManagedHTTPRoutePreflight|TestCompatibilityManagedHTTPRoute|TestManagedHTTPRouteScenarioDefinition|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@go test ./internal/usecase/proxy -run 'TestProxyTargetResolutionContract|TestDrainRegistryInFlight|TestDrainRegistryInFlightTimeout|TestService_InvalidateTarget|TestContainerDeployedHandler_Handle_InvalidatesCache' -count=1
 	@go test ./internal/usecase/container -run 'TestService_ReconcileRemovedRoute_InvalidatesProxyCacheAndMetric' -count=1
 	@go test ./internal/adapters/in/traffic -run 'TestUDPRemovedRouterWithRetainedEntryPointDrainsSession|TestUDPBackendChangeDrainsExistingSession|TestUDPRemovedRouterDrainsThenClosesSessions|TestTLSHTTPListenerCloseDrainsQueuedConnections|TestTCPPassthroughDrainWaitsForActiveConnectionThenTimesOut' -count=1

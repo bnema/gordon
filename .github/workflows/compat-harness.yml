@@ -53,6 +53,11 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-api
 
+      - name: Run managed proxy compatibility slice
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-proxy
+
       - name: Run full test suite with real scenarios gated off
         env:
           GORDON_COMPAT_RUN_REAL: "0"

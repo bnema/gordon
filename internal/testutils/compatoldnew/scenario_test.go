@@ -137,6 +137,7 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"api/auth-missing-invalid":    {},
 		"api/route-list-detail":       {},
 		"api/route-add-update-remove": {},
+		"proxy/managed-http-route":    {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
 }
@@ -182,6 +183,10 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == managedHTTPRouteScenarioName {
+			require.False(t, scenario.PodmanRequired, scenario.Name)
+			continue
+		}
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 	for _, scenario := range RuntimeScenarios() {
