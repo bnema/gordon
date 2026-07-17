@@ -2,7 +2,7 @@
 # Multi-stage build for optimized container image
 
 # Build stage
-FROM golang:1.26.1-alpine3.22 AS builder
+FROM golang:1.26.5-alpine3.24 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o gordon .
 
 # Runtime stage
-FROM alpine:3.22
+FROM alpine:3.24
 
 # Install runtime dependencies
 RUN apk add --no-cache \
