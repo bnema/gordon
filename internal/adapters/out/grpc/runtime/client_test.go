@@ -259,6 +259,69 @@ func testResult(identity domain.RuntimeCommandIdentity) domain.RuntimeCommandRes
 	return domain.RuntimeCommandResult{CommandID: identity.ID, IdempotencyKey: identity.IdempotencyKey, Generation: identity.Generation, Status: domain.RuntimeCommandStatusSucceeded, StartedAt: identity.RequestedAt, CompletedAt: identity.RequestedAt}
 }
 
+func TestClientStandaloneServiceManagerRejectsMissingResults(t *testing.T) {
+	tests := []struct {
+		name   string
+		client runtimev1.RuntimeServiceClient
+		call   func(*Client) error
+	}{
+		{
+			name:   "apply missing response",
+			client: missingResultRuntimeClient{},
+			call: func(client *Client) error {
+				_, err := client.ApplyStandaloneService(context.Background(), testApplyStandaloneServiceCommand())
+				return err
+			},
+		},
+		{
+			name:   "apply missing result",
+			client: missingResultRuntimeClient{applyResponse: &runtimev1.ApplyStandaloneServiceResponse{}},
+			call: func(client *Client) error {
+				_, err := client.ApplyStandaloneService(context.Background(), testApplyStandaloneServiceCommand())
+				return err
+			},
+		},
+		{
+			name:   "remove missing response",
+			client: missingResultRuntimeClient{},
+			call: func(client *Client) error {
+				_, err := client.RemoveStandaloneService(context.Background(), domain.RemoveStandaloneServiceCommand{Name: "game"})
+				return err
+			},
+		},
+		{
+			name:   "remove missing result",
+			client: missingResultRuntimeClient{removeResponse: &runtimev1.RemoveStandaloneServiceResponse{}},
+			call: func(client *Client) error {
+				_, err := client.RemoveStandaloneService(context.Background(), domain.RemoveStandaloneServiceCommand{Name: "game"})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call(NewClientWithRuntimeService(tt.client))
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "runtime response missing result")
+		})
+	}
+}
+
+type missingResultRuntimeClient struct {
+	runtimev1.RuntimeServiceClient
+	applyResponse  *runtimev1.ApplyStandaloneServiceResponse
+	removeResponse *runtimev1.RemoveStandaloneServiceResponse
+}
+
+func (c missingResultRuntimeClient) ApplyStandaloneService(context.Context, *runtimev1.ApplyStandaloneServiceRequest, ...grpc.CallOption) (*runtimev1.ApplyStandaloneServiceResponse, error) {
+	return c.applyResponse, nil
+}
+
+func (c missingResultRuntimeClient) RemoveStandaloneService(context.Context, *runtimev1.RemoveStandaloneServiceRequest, ...grpc.CallOption) (*runtimev1.RemoveStandaloneServiceResponse, error) {
+	return c.removeResponse, nil
+}
+
 func TestClientStandaloneServiceManagerRoundTrip(t *testing.T) {
 	manager := outMocks.NewMockRuntimeStandaloneServiceManager(t)
 	apply := testApplyStandaloneServiceCommand()

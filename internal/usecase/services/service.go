@@ -185,13 +185,43 @@ func standaloneServiceStateByName(states []domain.RuntimeStandaloneServiceState)
 }
 
 func standaloneServiceCommandResultError(result domain.RuntimeCommandResult) error {
-	if result.Status != domain.RuntimeCommandStatusFailed && result.Status != domain.RuntimeCommandStatusDenied {
+	switch result.Status {
+	case domain.RuntimeCommandStatusSucceeded:
 		return nil
+	case domain.RuntimeCommandStatusFailed:
+		return runtimeCommandOutcomeError("failed", result.Error)
+	case domain.RuntimeCommandStatusDenied:
+		return runtimeCommandOutcomeError("denied", result.Error)
+	case domain.RuntimeCommandStatusPending, domain.RuntimeCommandStatusRunning:
+		return fmt.Errorf("runtime command incomplete: %s", result.Status)
+	default:
+		return fmt.Errorf("runtime command invalid status")
 	}
-	if result.Error == nil || strings.TrimSpace(result.Error.Message) == "" {
-		return fmt.Errorf("runtime command failed")
+}
+
+func runtimeCommandOutcomeError(outcome string, commandErr *domain.RuntimeCommandError) error {
+	code := "runtime_command_" + outcome
+	if commandErr != nil {
+		if safeCode, ok := safeRuntimeCommandErrorCode(commandErr.Code); ok {
+			code = safeCode
+		}
 	}
-	return fmt.Errorf("%s", result.Error.Message)
+	return fmt.Errorf("runtime command %s (%s)", outcome, code)
+}
+
+func safeRuntimeCommandErrorCode(code string) (string, bool) {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 128 {
+		return "", false
+	}
+	for _, character := range code {
+		if (character < 'a' || character > 'z') &&
+			(character < '0' || character > '9') &&
+			character != '_' && character != '-' && character != ':' {
+			return "", false
+		}
+	}
+	return code, true
 }
 
 func (s *Service) Status(ctx context.Context) ([]domain.StandaloneServiceStatus, error) {

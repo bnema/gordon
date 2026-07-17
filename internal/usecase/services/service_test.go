@@ -154,6 +154,40 @@ func TestServiceStatusMapsAndSortsStandaloneManagerState(t *testing.T) {
 	}, statuses)
 }
 
+func TestStandaloneServiceCommandResultErrorRequiresSucceededStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		result     domain.RuntimeCommandResult
+		wantErr    string
+		secretSafe bool
+	}{
+		{name: "succeeded", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}},
+		{name: "failed", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusFailed, Error: &domain.RuntimeCommandError{Code: "runtime_command_failed", Message: "TOKEN=super-secret"}}, wantErr: "runtime command failed (runtime_command_failed)", secretSafe: true},
+		{name: "failed generic fallback", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusFailed, Error: &domain.RuntimeCommandError{Code: "TOKEN=super-secret"}}, wantErr: "runtime command failed (runtime_command_failed)", secretSafe: true},
+		{name: "denied", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusDenied, Error: &domain.RuntimeCommandError{Code: "policy_denied", Message: "TOKEN=super-secret"}}, wantErr: "runtime command denied (policy_denied)", secretSafe: true},
+		{name: "denied generic fallback", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusDenied}, wantErr: "runtime command denied (runtime_command_denied)"},
+		{name: "pending", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusPending}, wantErr: "runtime command incomplete: pending"},
+		{name: "running", result: domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusRunning}, wantErr: "runtime command incomplete: running"},
+		{name: "empty", result: domain.RuntimeCommandResult{}, wantErr: "runtime command invalid status"},
+		{name: "unknown", result: domain.RuntimeCommandResult{Status: "unexpected"}, wantErr: "runtime command invalid status"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := standaloneServiceCommandResultError(tt.result)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tt.wantErr)
+			if tt.secretSafe {
+				assert.NotContains(t, err.Error(), "super-secret")
+			}
+		})
+	}
+}
+
 func TestServicePropagatesStandaloneManagerErrors(t *testing.T) {
 	t.Run("state", func(t *testing.T) {
 		manager := outmocks.NewMockRuntimeStandaloneServiceManager(t)
@@ -199,11 +233,11 @@ func TestServiceStandaloneCommandIdentitiesAreMonotonicAndInstanceNamespaced(t *
 			return
 		}
 		next = arguments.Get(1).(domain.RemoveStandaloneServiceCommand)
-	}).Return(domain.RuntimeCommandResult{}, nil).Twice()
+	}).Return(domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil).Twice()
 	secondManager.On("ListStandaloneServiceState", mock.Anything).Return([]domain.RuntimeStandaloneServiceState{{Name: "game"}}, nil).Once()
 	secondManager.On("RemoveStandaloneService", mock.Anything, mock.Anything).Run(func(arguments mock.Arguments) {
 		second = arguments.Get(1).(domain.RemoveStandaloneServiceCommand)
-	}).Return(domain.RuntimeCommandResult{}, nil).Once()
+	}).Return(domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil).Once()
 
 	firstService := NewServiceWithRuntimeStandaloneServiceManager(firstManager)
 	require.NoError(t, firstService.Reconcile(context.Background(), nil))

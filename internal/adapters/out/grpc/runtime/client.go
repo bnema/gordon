@@ -67,7 +67,7 @@ func (c *Client) ApplyStandaloneService(ctx context.Context, command domain.Appl
 		return domain.RuntimeCommandResult{}, err
 	}
 	if resp == nil || resp.Result == nil {
-		return domain.RuntimeCommandResult{}, nil
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime response missing result")
 	}
 	return protoResult(resp.Result), nil
 }
@@ -83,7 +83,7 @@ func (c *Client) RemoveStandaloneService(ctx context.Context, command domain.Rem
 		return domain.RuntimeCommandResult{}, err
 	}
 	if resp == nil || resp.Result == nil {
-		return domain.RuntimeCommandResult{}, nil
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime response missing result")
 	}
 	return protoResult(resp.Result), nil
 }
@@ -386,7 +386,7 @@ func responseResult(resp *runtimev1.ApplyCommandResponse, err error) (domain.Run
 		return domain.RuntimeCommandResult{}, err
 	}
 	if resp == nil || resp.Result == nil {
-		return domain.RuntimeCommandResult{}, nil
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime response missing result")
 	}
 	return protoResult(resp.Result), nil
 }
