@@ -4,8 +4,6 @@ package proxy
 import (
 	"context"
 	"fmt"
-	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -32,15 +31,20 @@ type Config struct {
 	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
 }
 
-// Service implements the ProxyService interface.
+// Service implements the ProxyService interface. Target discovery is exclusively
+// delegated to snapshotProvider; the service never retains runtime or config-service
+// dependencies.
 type Service struct {
-	runtime          out.ContainerRuntime
-	containerSvc     in.ContainerService
-	configSvc        in.ConfigService
 	snapshotProvider out.RouteSnapshotProvider
 	config           Config
-	targets          map[string]*domain.ProxyTarget
-	mu               sync.RWMutex
+
+	mu                  sync.RWMutex
+	targets             map[string]*domain.ProxyTarget
+	targetGenerations   map[string]domain.RouteTargetGeneration
+	latestGeneration    domain.RouteTargetGeneration
+	invalidationVersion uint64
+	targetLookup        singleflight.Group
+
 	inFlight         map[string]int
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
@@ -51,34 +55,25 @@ type Service struct {
 	drainRegistryWait     func()
 }
 
-// NewService creates a new proxy service.
+// NewService retains the pre-snapshot constructor for compatibility. All discovery
+// still goes through the local RouteSnapshotProvider and NewSnapshotService.
 func NewService(
 	runtime out.ContainerRuntime,
 	containerSvc in.ContainerService,
 	configSvc in.ConfigService,
 	config Config,
 ) *Service {
-	// Compatibility constructor retained for callers that still use the
-	// pre-snapshot cache/discovery API. Production must use
-	// NewServiceWithSnapshotProvider with an explicit provider.
-	return &Service{
-		runtime:      runtime,
-		containerSvc: containerSvc,
-		configSvc:    configSvc,
-		config:       config,
-		targets:      make(map[string]*domain.ProxyTarget),
-		inFlight:     make(map[string]int),
-	}
+	return NewSnapshotService(NewLocalSnapshotProvider(runtime, containerSvc, configSvc, config), config)
 }
 
-// NewServiceWithSnapshotProvider creates the snapshot-first proxy service.
-func NewServiceWithSnapshotProvider(provider out.RouteSnapshotProvider, configSvc in.ConfigService, config Config) *Service {
+// NewSnapshotService creates a proxy service backed by route snapshots.
+func NewSnapshotService(provider out.RouteSnapshotProvider, config Config) *Service {
 	return &Service{
-		configSvc:        configSvc,
-		snapshotProvider: provider,
-		config:           config,
-		targets:          make(map[string]*domain.ProxyTarget),
-		inFlight:         make(map[string]int),
+		snapshotProvider:  provider,
+		config:            config,
+		targets:           make(map[string]*domain.ProxyTarget),
+		targetGenerations: make(map[string]domain.RouteTargetGeneration),
+		inFlight:          make(map[string]int),
 	}
 }
 
@@ -90,8 +85,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	}
 	domainName = canonicalDomain
 
-	ctx, span := proxyTracer.Start(ctx, "proxy.get_target",
-		trace.WithAttributes(attribute.String("domain", domainName)))
+	ctx, span := proxyTracer.Start(ctx, "proxy.get_target", trace.WithAttributes(attribute.String("domain", domainName)))
 	defer func() {
 		if retErr != nil {
 			span.RecordError(retErr)
@@ -99,193 +93,121 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 		}
 		span.End()
 	}()
-
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetTarget",
 		"domain":              domainName,
 	})
-	log := zerowrap.FromCtx(ctx)
 
-	if s.snapshotProvider != nil {
-		return s.getSnapshotTarget(ctx, domainName)
-	}
-
-	// Check cache first
-	s.mu.RLock()
-	if target, exists := s.targets[domainName]; exists {
-		s.mu.RUnlock()
-		log.Debug().
-			Str("host", target.Host).
-			Int("port", target.Port).
-			Str("container_id", target.ContainerID).
-			Msg("using cached proxy target")
+	if target := s.cachedTarget(domainName); target != nil {
 		return target, nil
 	}
-	s.mu.RUnlock()
-
-	// Check if this is an external route
-	externalRoutes := s.configSvc.GetExternalRoutes()
-	if targetAddr, ok := externalRoutes[domainName]; ok {
-		return s.resolveExternalRoute(ctx, domainName, targetAddr, log)
-	}
-
-	// Get container for this domain
-	container, exists := s.containerSvc.Get(ctx, domainName)
-	if !exists {
-		log.Debug().Msg("container not found for domain")
+	if s.snapshotProvider == nil {
 		return nil, domain.ErrNoTargetAvailable
 	}
-	log.Debug().Str("container_id", container.ID).Str("image", container.Image).Msg("found container for domain")
 
-	// Build target based on runtime mode
-
-	if s.isRunningInContainer() {
-		// Gordon is in a container - use container network
-		meta, err := s.resolveTargetMetadata(ctx, container.Image)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to resolve target metadata")
+	result, err, _ := s.targetLookup.Do(domainName, func() (any, error) {
+		if target := s.cachedTarget(domainName); target != nil {
+			return snapshotLookupResult{target: target}, nil
 		}
-		containerIP, _, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get container network info", map[string]any{zerowrap.FieldEntityID: container.ID})
-		}
-		target = &domain.ProxyTarget{
-			Host:        containerIP,
-			Port:        meta.Port,
-			ContainerID: container.ID,
-			Scheme:      "http",
-			Protocol:    meta.Protocol,
-			RouteHost:   domainName,
-		}
-	} else {
-		// Gordon is on the host - use host port mapping
-		routes := s.configSvc.GetRoutes(ctx)
-		var route *domain.Route
-		for _, r := range routes {
-			if r.Domain == domainName {
-				route = &r
-				break
-			}
-		}
-
-		if route == nil {
-			return nil, domain.ErrRouteNotFound
-		}
-
-		meta, err := s.resolveTargetMetadata(ctx, container.Image)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to resolve target metadata")
-		}
-
-		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, meta.Port)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": meta.Port})
-		}
-
-		target = &domain.ProxyTarget{
-			Host:        "localhost",
-			Port:        hostPort,
-			ContainerID: container.ID,
-			Scheme:      "http",
-			Protocol:    meta.Protocol,
-			RouteHost:   domainName,
-		}
-	}
-
-	// Cache the target
-	s.mu.Lock()
-	s.targets[domainName] = target
-	s.mu.Unlock()
-
-	return target, nil
-}
-
-func (s *Service) getSnapshotTarget(ctx context.Context, domainName string) (*domain.ProxyTarget, error) {
-	snapshot, err := s.snapshotProvider.CurrentSnapshot(ctx)
+		return s.resolveSnapshotTarget(ctx, domainName)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("get route snapshot: %w", err)
-	}
-	if err := snapshot.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid route snapshot: %w", err)
-	}
-	for _, entry := range snapshot.Entries {
-		if entry.CanonicalDomain != domainName {
-			continue
-		}
-		if entry.Unavailable() {
-			return nil, domain.ErrNoTargetAvailable
-		}
-		target, err := entry.ToProxyTarget()
-		if err != nil {
-			return nil, fmt.Errorf("convert route snapshot target: %w", err)
-		}
-		return &target, nil
-	}
-	if snapshot.RegistryForwardingTarget != nil && snapshot.RegistryForwardingTarget.CanonicalDomain == domainName {
-		target, err := snapshot.RegistryForwardingTarget.ToProxyTarget()
-		if err != nil {
-			return nil, fmt.Errorf("convert registry snapshot target: %w", err)
-		}
-		return &target, nil
-	}
-	return nil, domain.ErrNoTargetAvailable
-}
-
-// resolveExternalRoute resolves an external route target address into a ProxyTarget,
-// performing DNS validation and SSRF protection.
-func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
-	host, portStr, err := net.SplitHostPort(targetAddr)
-	if err != nil {
-		return nil, log.WrapErrWithFields(err, "invalid external route target", map[string]any{"target": targetAddr})
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, log.WrapErrWithFields(err, "invalid port in external route", map[string]any{"target": targetAddr})
-	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("invalid port in external route %q: port must be between 1 and 65535", targetAddr)
-	}
-
-	// SECURITY: Resolve DNS and validate that the target is not an internal/blocked
-	// network. We use the resolved IP as the proxy target to prevent DNS rebinding
-	// (TOCTOU) attacks where a hostname resolves to a public IP during validation
-	// but to a private IP when the proxy connects.
-	resolvedIP, err := ResolveAndValidateHost(host)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("host", host).
-			Str("domain", domainName).
-			Msg("SSRF protection: blocked external route to internal network")
 		return nil, err
 	}
+	lookup := result.(snapshotLookupResult)
+	if lookup.target == nil {
+		return nil, domain.ErrNoTargetAvailable
+	}
+	return lookup.target, nil
+}
 
-	// Preserve the original hostname for the Host header so virtual-hosted
-	// upstreams work correctly. The resolved IP is used for dialing only.
-	var originalHost string
-	if resolvedIP != host {
-		originalHost = host
+type snapshotLookupResult struct {
+	target *domain.ProxyTarget
+}
+
+func (s *Service) resolveSnapshotTarget(ctx context.Context, domainName string) (snapshotLookupResult, error) {
+	lookupInvalidationVersion := s.invalidationVersionForLookup()
+	snapshot, err := s.snapshotProvider.CurrentSnapshot(ctx)
+	if err != nil {
+		return snapshotLookupResult{}, fmt.Errorf("get route snapshot: %w", err)
+	}
+	if err := snapshot.Validate(); err != nil {
+		return snapshotLookupResult{}, fmt.Errorf("invalid route snapshot: %w", err)
+	}
+	if !s.observeSnapshot(snapshot.Generation) {
+		// A delayed provider result must never resurrect an older routing view.
+		return snapshotLookupResult{}, nil
 	}
 
-	t := &domain.ProxyTarget{
-		Host:         resolvedIP,
-		Port:         port,
-		ContainerID:  "", // Not a container
-		Scheme:       "http",
-		OriginalHost: originalHost,
+	entry, found := findSnapshotEntry(snapshot, domainName)
+	if !found || entry.Unavailable() {
+		return snapshotLookupResult{}, nil
 	}
+	target, err := entry.ToProxyTarget()
+	if err != nil {
+		return snapshotLookupResult{}, fmt.Errorf("convert route snapshot target: %w", err)
+	}
+	result := &target
+	// Draining targets remain routable for the current request but are deliberately
+	// not retained: a following request must observe the drain transition.
+	if entry.Ready() {
+		s.cacheSnapshotTarget(domainName, result, snapshot.Generation, lookupInvalidationVersion)
+	}
+	return snapshotLookupResult{target: result}, nil
+}
 
-	// Cache external route target
+func findSnapshotEntry(snapshot domain.RouteTargetSnapshot, domainName string) (domain.RouteTargetEntry, bool) {
+	for _, entry := range snapshot.Entries {
+		if entry.CanonicalDomain == domainName {
+			return entry, true
+		}
+	}
+	if snapshot.RegistryForwardingTarget != nil && snapshot.RegistryForwardingTarget.CanonicalDomain == domainName {
+		return *snapshot.RegistryForwardingTarget, true
+	}
+	return domain.RouteTargetEntry{}, false
+}
+
+func (s *Service) cachedTarget(domainName string) *domain.ProxyTarget {
+	s.mu.RLock()
+	target := s.targets[domainName]
+	s.mu.RUnlock()
+	return target
+}
+
+func (s *Service) invalidationVersionForLookup() uint64 {
+	s.mu.RLock()
+	version := s.invalidationVersion
+	s.mu.RUnlock()
+	return version
+}
+
+// observeSnapshot accepts only the current or newer routing view. Observing a
+// newer generation invalidates every older cached target, including targets for
+// domains not present in the new view.
+func (s *Service) observeSnapshot(generation domain.RouteTargetGeneration) bool {
 	s.mu.Lock()
-	s.targets[domainName] = t
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if generation < s.latestGeneration {
+		return false
+	}
+	if generation > s.latestGeneration {
+		s.latestGeneration = generation
+		s.targets = make(map[string]*domain.ProxyTarget)
+		s.targetGenerations = make(map[string]domain.RouteTargetGeneration)
+	}
+	return true
+}
 
-	log.Debug().
-		Str("host", host).
-		Int("port", port).
-		Msg("using external route target")
-	return t, nil
+func (s *Service) cacheSnapshotTarget(domainName string, target *domain.ProxyTarget, generation domain.RouteTargetGeneration, lookupInvalidationVersion uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.latestGeneration != generation || s.invalidationVersion != lookupInvalidationVersion {
+		return
+	}
+	s.targets[domainName] = target
+	s.targetGenerations[domainName] = generation
 }
 
 // RegisterTarget registers a new proxy target for a domain.
@@ -294,11 +216,10 @@ func (s *Service) RegisterTarget(_ context.Context, domainName string, target *d
 	if !ok {
 		return domain.ErrRouteDomainInvalid
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	s.targets[canonicalDomain] = target
+	delete(s.targetGenerations, canonicalDomain)
 	return nil
 }
 
@@ -308,26 +229,25 @@ func (s *Service) UnregisterTarget(_ context.Context, domainName string) error {
 	if !ok {
 		return domain.ErrRouteDomainInvalid
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	delete(s.targets, canonicalDomain)
+	delete(s.targetGenerations, canonicalDomain)
+	s.invalidationVersion++
 	return nil
 }
 
 // InvalidateTarget removes a cached proxy target, forcing re-lookup on next request.
-// This is used during zero-downtime deployments to switch traffic to a new container.
 func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
 	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
 	if !ok {
 		return
 	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	delete(s.targets, canonicalDomain)
+	delete(s.targetGenerations, canonicalDomain)
+	s.invalidationVersion++
 }
 
 // WaitForNoInFlight waits until no requests are currently proxied to the
@@ -348,11 +268,9 @@ func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, tim
 		if count <= 0 {
 			return true
 		}
-
 		if time.Now().After(deadline) {
 			return false
 		}
-
 		s.notifyWaitForNoInFlightWait()
 		select {
 		case <-time.After(100 * time.Millisecond):
@@ -366,21 +284,23 @@ func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, tim
 func (s *Service) RefreshTargets(ctx context.Context) error {
 	s.mu.Lock()
 	s.targets = make(map[string]*domain.ProxyTarget)
+	s.targetGenerations = make(map[string]domain.RouteTargetGeneration)
+	s.invalidationVersion++
 	s.mu.Unlock()
-
 	log := zerowrap.FromCtx(ctx)
 	log.Debug().Msg("proxy targets cache cleared")
 	return nil
 }
 
-// UpdateConfig updates the service configuration.
-// Connection limiting uses an atomic counter checked against config, so
-// changing MaxConcurrentConns takes effect immediately without any race.
+// UpdateConfig updates the service configuration and invalidates old targets.
 func (s *Service) UpdateConfig(config Config) {
 	s.mu.Lock()
 	s.config = config
+	s.targets = make(map[string]*domain.ProxyTarget)
+	s.targetGenerations = make(map[string]domain.RouteTargetGeneration)
+	s.invalidationVersion++
 	s.mu.Unlock()
-	if provider, ok := s.snapshotProvider.(*LocalSnapshotProvider); ok {
+	if provider, ok := s.snapshotProvider.(interface{ UpdateConfig(Config) }); ok {
 		provider.UpdateConfig(config)
 	}
 }
@@ -391,14 +311,13 @@ func (s *Service) IsRegistryDomain(host string) bool {
 	if !ok {
 		return false
 	}
-
 	s.mu.RLock()
-	registryDomain, ok := domain.CanonicalRouteDomain(s.config.RegistryDomain)
+	registryDomain, configured := domain.CanonicalRouteDomain(s.config.RegistryDomain)
 	s.mu.RUnlock()
-	return ok && canonicalHost == registryDomain
+	return configured && canonicalHost == registryDomain
 }
 
-// IsKnownHost returns true if host is configured as registry, route, or external route.
+// IsKnownHost returns true if host is configured as registry or appears in the current snapshot.
 func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	canonicalHost, ok := domain.CanonicalRouteDomain(host)
 	if !ok {
@@ -407,11 +326,15 @@ func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	if s.IsRegistryDomain(canonicalHost) {
 		return true
 	}
-	if _, err := s.configSvc.GetRoute(ctx, canonicalHost); err == nil {
-		return true
+	if s.snapshotProvider == nil {
+		return false
 	}
-	_, ok = s.configSvc.GetExternalRoutes()[canonicalHost]
-	return ok
+	snapshot, err := s.snapshotProvider.CurrentSnapshot(ctx)
+	if err != nil || snapshot.Validate() != nil || !s.observeSnapshot(snapshot.Generation) {
+		return false
+	}
+	_, found := findSnapshotEntry(snapshot, canonicalHost)
+	return found
 }
 
 // TrackInFlight records an in-flight request for a container.
@@ -420,11 +343,9 @@ func (s *Service) TrackInFlight(containerID string) func() {
 	if containerID == "" {
 		return func() {}
 	}
-
 	s.inFlightMu.Lock()
 	s.inFlight[containerID]++
 	s.inFlightMu.Unlock()
-
 	return func() {
 		s.inFlightMu.Lock()
 		if s.inFlight[containerID] > 1 {
@@ -437,37 +358,26 @@ func (s *Service) TrackInFlight(containerID string) func() {
 }
 
 // TrackRegistryRequest increments the registry in-flight counter.
-func (s *Service) TrackRegistryRequest() {
-	s.registryInFlight.Add(1)
-}
+func (s *Service) TrackRegistryRequest() { s.registryInFlight.Add(1) }
 
 // ReleaseRegistryRequest decrements the registry in-flight counter.
-func (s *Service) ReleaseRegistryRequest() {
-	s.registryInFlight.Add(-1)
-}
+func (s *Service) ReleaseRegistryRequest() { s.registryInFlight.Add(-1) }
 
 // ProxyConfig returns the current proxy configuration for adapter use.
 func (s *Service) ProxyConfig() in.ProxyServiceConfig {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return in.ProxyServiceConfig{
-		RegistryDomain:     s.config.RegistryDomain,
-		RegistryPort:       s.config.RegistryPort,
-		MaxBodySize:        s.config.MaxBodySize,
-		MaxResponseSize:    s.config.MaxResponseSize,
+		RegistryDomain: s.config.RegistryDomain, RegistryPort: s.config.RegistryPort,
+		MaxBodySize: s.config.MaxBodySize, MaxResponseSize: s.config.MaxResponseSize,
 		MaxConcurrentConns: s.config.MaxConcurrentConns,
 	}
 }
 
 // RegistryInFlight returns the current count of active registry proxy requests.
-func (s *Service) RegistryInFlight() int64 {
-	return s.registryInFlight.Load()
-}
+func (s *Service) RegistryInFlight() int64 { return s.registryInFlight.Load() }
 
-// DrainRegistryInFlight blocks until all in-flight registry proxy requests
-// complete or the timeout elapses. Returns true if drained cleanly, false if
-// timed out with requests still in flight. Call this before shutting down the
-// registry server.
+// DrainRegistryInFlight blocks until all in-flight registry proxy requests complete or timeout.
 func (s *Service) DrainRegistryInFlight(timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -490,8 +400,4 @@ func (s *Service) notifyDrainRegistryWait() {
 	if s.drainRegistryWait != nil {
 		s.drainRegistryWait()
 	}
-}
-
-func (s *Service) isRunningInContainer() bool {
-	return runningInContainer()
 }

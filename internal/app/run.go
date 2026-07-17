@@ -608,7 +608,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
 	localSnapshots := proxy.NewLocalSnapshotProvider(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
-	si.svc.proxySvc = proxy.NewServiceWithSnapshotProvider(localSnapshots, si.svc.configSvc, proxyCfg.proxyConfig)
+	si.svc.proxySvc = proxy.NewSnapshotService(localSnapshots, proxyCfg.proxyConfig)
 	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider(standaloneServiceManagerForServices(si.svc), si.svc.serviceSecretProvider)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.

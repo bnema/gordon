@@ -6,23 +6,20 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestRouteSnapshotContract_InvalidationForcesTargetResolution(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), configSvc, Config{})
+	provider := outmocks.NewMockRouteSnapshotProvider(t)
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(routeSnapshot(t, 1, readyEntry(t, "app.example.com", "203.0.113.10", 1)), nil).Once()
+	svc := NewSnapshotService(provider, Config{})
 	svc.targets["app.example.com"] = &domain.ProxyTarget{Host: "198.51.100.1", Port: 8080, Scheme: "http"}
 
 	svc.InvalidateTarget(testContext(), "App.Example.com")
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
-		"app.example.com": "203.0.113.10:8080",
-	}).Once()
-
 	target, err := svc.GetTarget(testContext(), "app.example.com")
 	require.NoError(t, err)
 	assert.Equal(t, "203.0.113.10", target.Host)

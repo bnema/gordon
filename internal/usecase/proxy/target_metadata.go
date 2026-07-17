@@ -21,9 +21,6 @@ type TargetMetadata struct {
 // image labels. It checks gordon.proxy.port first, then the deprecated gordon.port
 // alias, then falls back to the first exposed port. Protocol is read from
 // gordon.proxy.protocol (only "h2c" is recognized; unknown values are ignored).
-func (s *Service) resolveTargetMetadata(ctx context.Context, imageRef string) (TargetMetadata, error) {
-	return resolveTargetMetadata(ctx, s.runtime, imageRef)
-}
 
 func resolveTargetMetadata(ctx context.Context, runtime out.ContainerRuntime, imageRef string) (TargetMetadata, error) {
 	log := zerowrap.FromCtx(ctx)

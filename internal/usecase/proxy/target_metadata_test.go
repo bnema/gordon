@@ -12,7 +12,6 @@ import (
 
 func TestResolveTargetMetadata_PortAndProtocolFromLabels(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "grpc-app:latest").Return(map[string]string{
@@ -20,7 +19,7 @@ func TestResolveTargetMetadata_PortAndProtocolFromLabels(t *testing.T) {
 		domain.LabelProxyProtocol: "h2c",
 	}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "grpc-app:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "grpc-app:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 50051, meta.Port)
@@ -29,14 +28,13 @@ func TestResolveTargetMetadata_PortAndProtocolFromLabels(t *testing.T) {
 
 func TestResolveTargetMetadata_DefaultProtocolWhenAbsent(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "web:latest").Return(map[string]string{
 		domain.LabelProxyPort: "8080",
 	}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "web:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "web:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 8080, meta.Port)
@@ -45,14 +43,13 @@ func TestResolveTargetMetadata_DefaultProtocolWhenAbsent(t *testing.T) {
 
 func TestResolveTargetMetadata_DeprecatedPortLabel(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "old:latest").Return(map[string]string{
 		domain.LabelPort: "3000",
 	}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "old:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "old:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 3000, meta.Port)
@@ -61,7 +58,6 @@ func TestResolveTargetMetadata_DeprecatedPortLabel(t *testing.T) {
 
 func TestResolveTargetMetadata_ProxyPortWinsOverDeprecated(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "dual:latest").Return(map[string]string{
@@ -69,7 +65,7 @@ func TestResolveTargetMetadata_ProxyPortWinsOverDeprecated(t *testing.T) {
 		domain.LabelPort:      "3000",
 	}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "dual:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "dual:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 9000, meta.Port)
@@ -77,13 +73,12 @@ func TestResolveTargetMetadata_ProxyPortWinsOverDeprecated(t *testing.T) {
 
 func TestResolveTargetMetadata_FallsBackToExposedPort(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "plain:latest").Return(map[string]string{}, nil)
 	runtime.EXPECT().GetImageExposedPorts(ctx, "plain:latest").Return([]int{8080}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "plain:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "plain:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 8080, meta.Port)
@@ -92,7 +87,6 @@ func TestResolveTargetMetadata_FallsBackToExposedPort(t *testing.T) {
 
 func TestResolveTargetMetadata_UnknownProtocolIgnored(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "exotic:latest").Return(map[string]string{
@@ -100,7 +94,7 @@ func TestResolveTargetMetadata_UnknownProtocolIgnored(t *testing.T) {
 		domain.LabelProxyProtocol: "quic",
 	}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "exotic:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "exotic:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 8080, meta.Port)
@@ -109,13 +103,12 @@ func TestResolveTargetMetadata_UnknownProtocolIgnored(t *testing.T) {
 
 func TestResolveTargetMetadata_NoPortsAvailable(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "empty:latest").Return(map[string]string{}, nil)
 	runtime.EXPECT().GetImageExposedPorts(ctx, "empty:latest").Return([]int{}, nil)
 
-	_, err := svc.resolveTargetMetadata(ctx, "empty:latest")
+	_, err := resolveTargetMetadata(ctx, runtime, "empty:latest")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no exposed ports")
@@ -123,13 +116,12 @@ func TestResolveTargetMetadata_NoPortsAvailable(t *testing.T) {
 
 func TestResolveTargetMetadata_LabelErrorFallsBackToExposedPort(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := &Service{runtime: runtime}
 	ctx := testContext()
 
 	runtime.EXPECT().GetImageLabels(ctx, "broken:latest").Return(nil, fmt.Errorf("image inspect failed"))
 	runtime.EXPECT().GetImageExposedPorts(ctx, "broken:latest").Return([]int{3000}, nil)
 
-	meta, err := svc.resolveTargetMetadata(ctx, "broken:latest")
+	meta, err := resolveTargetMetadata(ctx, runtime, "broken:latest")
 
 	assert.NoError(t, err)
 	assert.Equal(t, 3000, meta.Port)
