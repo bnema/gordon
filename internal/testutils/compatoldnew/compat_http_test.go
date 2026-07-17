@@ -26,10 +26,13 @@ func TestCompatibilityAdminAuthAndRouteCRUD(t *testing.T) {
 	defer cancel()
 
 	if err := AdminAPIPreflight(ctx); err != nil {
+		if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
+			t.Fatalf("admin API compatibility runtime required: %v", err)
+		}
 		t.Skipf("admin API compatibility runtime unavailable: %v", err)
 	}
 
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	artifactDir := compatibilityArtifactDir(t, "api")
 	report, err := RunCompatibilityAdminAuthAndRouteCRUD(ctx, projectRoot(t), artifactDir)
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, report.ConsoleSummary())

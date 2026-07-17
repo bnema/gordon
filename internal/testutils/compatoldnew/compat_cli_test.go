@@ -13,7 +13,7 @@ func TestCompatibilityRoutesListJSON(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	artifactDir := filepath.Join(t.TempDir(), "artifacts")
+	artifactDir := compatibilityArtifactDir(t, "cli")
 	report, err := RunRoutesListJSON(ctx, projectRoot(t), artifactDir)
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, report.ConsoleSummary())

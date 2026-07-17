@@ -106,14 +106,14 @@ func TestScenarioDefinitions(t *testing.T) {
 		}},
 	}
 
+	implemented := implementedScenarioNames()
 	seen := make(map[string]struct{})
 	for surface, group := range expected {
 		requireScenarioNames(t, surface, group.scenarios, group.names)
 		for _, scenario := range group.scenarios {
 			require.NotEmpty(t, scenario.SpecSection, scenario.Name)
 			require.Equal(t, surface, scenario.Surface, scenario.Name)
-			if scenario.Name == configShowJSONScenarioName || scenario.Name == routesListJSONScenarioName ||
-				scenario.Name == adminAuthScenarioName || scenario.Name == adminRouteListScenario || scenario.Name == adminRouteCRUDScenario {
+			if _, isImplemented := implemented[scenario.Name]; isImplemented {
 				require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
 				require.Empty(t, scenario.BlockReason, scenario.Name)
 			} else {
@@ -128,6 +128,27 @@ func TestScenarioDefinitions(t *testing.T) {
 	}
 
 	require.Len(t, AllScenarios(), len(seen))
+}
+
+func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
+	expected := map[string]struct{}{
+		"cli/config-show-json":        {},
+		"cli/routes-list-json":        {},
+		"api/auth-missing-invalid":    {},
+		"api/route-list-detail":       {},
+		"api/route-add-update-remove": {},
+	}
+	require.Equal(t, expected, implementedScenarioNames())
+}
+
+func implementedScenarioNames() map[string]struct{} {
+	implemented := make(map[string]struct{})
+	for _, scenario := range AllScenarios() {
+		if scenario.Status == ScenarioStatusImplemented {
+			implemented[scenario.Name] = struct{}{}
+		}
+	}
+	return implemented
 }
 
 func TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe(t *testing.T) {

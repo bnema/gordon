@@ -20,6 +20,10 @@ LDFLAGS := -s -w \
 # Architectures
 ARCHS := amd64 arm64
 
+# Compatibility harness foundation and policy guards. Keep this list anchored
+# with each real slice so an absent or pending scenario cannot silently pass CI.
+COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestRunnerReadinessSupportsCallbackTCPExitAndTimeout|TestRunnerStartWaitReadyStopAndLogs|TestStageSideFixtureCopiesConfigAndIsolatesHomeAndData|TestFixtureMetadata|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass
+
 # Phony targets
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
@@ -93,16 +97,17 @@ test-adapter: ## Run adapter layer tests only
 ##@ Compatibility Harness
 
 compat-harness-config: ## Run config compatibility harness checks
-	@echo "Running config compatibility harness foundation and scenario definition checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestGoBuilder|TestRunner|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)' -count=1
+	@echo "Running config compatibility harness slice and policy guards..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityConfigShowJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-cli: ## Run CLI compatibility harness checks
-	@echo "Running CLI compatibility scenario definition checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@echo "Running CLI compatibility harness slice and policy guards..."
+	@go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityRoutesListJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-api: ## Run API compatibility harness checks
-	@echo "Running real API compatibility checks..."
-	@GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@echo "Running Docker preflight, API compatibility slice, and policy guards..."
+	@docker info
+	@GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-registry: ## Run registry compatibility harness checks
 	@echo "Running registry compatibility harness checks..."
