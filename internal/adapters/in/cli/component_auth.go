@@ -215,16 +215,29 @@ func loadComponentAuthConfig(configPath string) (*componentAuthCLIConfig, error)
 		}
 	}
 
-	config := &componentAuthCLIConfig{DataDir: v.GetString("server.data_dir")}
-	switch v.GetString("auth.secrets_backend") {
-	case "pass":
-		config.Backend = domain.SecretsBackendPass
-	case "sops":
-		config.Backend = domain.SecretsBackendSops
-	default:
-		config.Backend = domain.SecretsBackendUnsafe
+	backend, err := componentAuthBackend(v.GetString("auth.secrets_backend"))
+	if err != nil {
+		return nil, fmt.Errorf("load component auth config: %w", err)
 	}
-	return config, nil
+	return &componentAuthCLIConfig{
+		Backend: backend,
+		DataDir: v.GetString("server.data_dir"),
+	}, nil
+}
+
+func componentAuthBackend(value string) (domain.SecretsBackend, error) {
+	switch value {
+	case "pass":
+		return domain.SecretsBackendPass, nil
+	case "sops":
+		return domain.SecretsBackendSops, nil
+	case "unsafe":
+		return domain.SecretsBackendUnsafe, nil
+	case "":
+		return "", fmt.Errorf("auth.secrets_backend is required")
+	default:
+		return "", fmt.Errorf("unsupported auth.secrets_backend %q", value)
+	}
 }
 
 func createComponentAuthServiceForCLI(config *componentAuthCLIConfig, log zerowrap.Logger) (*componentauth.Service, error) {

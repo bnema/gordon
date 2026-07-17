@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestRootRegistersComponentTokenCommands(t *testing.T) {
@@ -37,7 +38,7 @@ func TestComponentTokenCommands_CreateListRevoke(t *testing.T) {
 
 	var createOut bytes.Buffer
 	create := newComponentTokenCmd()
-	create.SetArgs([]string{"create", "--config", configPath, "--name", "runtime-a", "--role", "runtime", "--scope", "runtime:deploy,runtime:logs", "--scope", "runtime:status"})
+	create.SetArgs([]string{"create", "--config", configPath, "--name", "runtime-a", "--role", "runtime", "--scope", "runtime:state:publish", "--scope", "runtime:event:publish"})
 	create.SetOut(&createOut)
 	require.NoError(t, create.ExecuteContext(context.Background()))
 
@@ -108,6 +109,52 @@ func TestComponentTokenCreate_RejectsInvalidArguments(t *testing.T) {
 			cmd := newComponentTokenCmd()
 			cmd.SetArgs(tc.args)
 			assert.ErrorContains(t, cmd.ExecuteContext(context.Background()), tc.want)
+		})
+	}
+}
+
+func TestComponentTokenCommands_RejectUnsupportedBackend(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gordon.yaml")
+	contents := "server:\n  data_dir: " + t.TempDir() + "\nauth:\n  secrets_backend: vault\n"
+	require.NoError(t, os.WriteFile(configPath, []byte(contents), 0600))
+
+	cmd := newComponentTokenCmd()
+	cmd.SetArgs([]string{"create", "--config", configPath, "--name", "edge-a", "--role", "edge"})
+
+	assert.ErrorContains(t, cmd.ExecuteContext(context.Background()), `unsupported auth.secrets_backend "vault"`)
+}
+
+func TestLoadComponentAuthConfig_Backends(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    string
+		configured bool
+		want       domain.SecretsBackend
+		wantErr    string
+	}{
+		{name: "absent defaults to unsafe", want: domain.SecretsBackendUnsafe},
+		{name: "pass", backend: "pass", configured: true, want: domain.SecretsBackendPass},
+		{name: "sops", backend: "sops", configured: true, want: domain.SecretsBackendSops},
+		{name: "unsafe", backend: "unsafe", configured: true, want: domain.SecretsBackendUnsafe},
+		{name: "empty", configured: true, wantErr: "auth.secrets_backend is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "gordon.yaml")
+			contents := "server:\n  data_dir: " + t.TempDir() + "\n"
+			if tt.configured {
+				contents += "auth:\n  secrets_backend: \"" + tt.backend + "\"\n"
+			}
+			require.NoError(t, os.WriteFile(configPath, []byte(contents), 0600))
+
+			config, err := loadComponentAuthConfig(configPath)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, config.Backend)
 		})
 	}
 }
