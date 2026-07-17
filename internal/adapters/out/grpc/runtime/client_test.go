@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -256,4 +257,69 @@ func testIdentity(id string) domain.RuntimeCommandIdentity {
 
 func testResult(identity domain.RuntimeCommandIdentity) domain.RuntimeCommandResult {
 	return domain.RuntimeCommandResult{CommandID: identity.ID, IdempotencyKey: identity.IdempotencyKey, Generation: identity.Generation, Status: domain.RuntimeCommandStatusSucceeded, StartedAt: identity.RequestedAt, CompletedAt: identity.RequestedAt}
+}
+
+func TestClientStandaloneServiceManagerRoundTrip(t *testing.T) {
+	manager := outMocks.NewMockRuntimeStandaloneServiceManager(t)
+	apply := testApplyStandaloneServiceCommand()
+	remove := domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testIdentity("remove-game"), Name: "game"}
+	applyResult := testResult(apply.RuntimeCommandIdentity)
+	removeResult := testResult(remove.RuntimeCommandIdentity)
+	states := []domain.RuntimeStandaloneServiceState{{
+		Name: "game", ContainerID: "container-1", ContainerName: "gordon-service-game", Status: domain.ContainerStatusRunning, ConfigHash: "config-hash",
+	}}
+	manager.EXPECT().ApplyStandaloneService(mock.Anything, apply).Return(applyResult, nil)
+	manager.EXPECT().RemoveStandaloneService(mock.Anything, remove).Return(removeResult, nil)
+	manager.EXPECT().ListStandaloneServiceState(mock.Anything).Return(states, nil)
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1"))
+	client := NewClient(conn)
+
+	gotApply, err := client.ApplyStandaloneService(context.Background(), apply)
+	require.NoError(t, err)
+	assert.Equal(t, applyResult, gotApply)
+	assert.Nil(t, gotApply.Error)
+
+	gotRemove, err := client.RemoveStandaloneService(context.Background(), remove)
+	require.NoError(t, err)
+	assert.Equal(t, removeResult, gotRemove)
+
+	gotStates, err := client.ListStandaloneServiceState(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, states, gotStates)
+}
+
+func TestClientStandaloneServiceManagerPreservesCancellationAndSanitizesErrors(t *testing.T) {
+	apply := testApplyStandaloneServiceCommand()
+	manager := outMocks.NewMockRuntimeStandaloneServiceManager(t)
+	manager.EXPECT().ApplyStandaloneService(mock.Anything, apply).Return(domain.RuntimeCommandResult{}, errors.New("TOKEN=super-secret"))
+	conn := newRuntimeTestConn(t, inruntime.NewServerWithStandaloneServiceManager(&fakeRuntimeWorker{}, manager, "runtime-1"))
+	client := NewClient(conn)
+
+	_, err := client.ApplyStandaloneService(context.Background(), apply)
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
+	assert.NotContains(t, status.Convert(err).Message(), "super-secret")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.RemoveStandaloneService(ctx, domain.RemoveStandaloneServiceCommand{RuntimeCommandIdentity: testIdentity("cancel-game"), Name: "game"})
+	require.Error(t, err)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+}
+
+func testApplyStandaloneServiceCommand() domain.ApplyStandaloneServiceCommand {
+	return domain.ApplyStandaloneServiceCommand{
+		RuntimeCommandIdentity: testIdentity("apply-game"),
+		Service: domain.StandaloneService{
+			Name: "game", Image: "game:latest", Enabled: true,
+			Ports: []domain.StandaloneServicePort{{
+				Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015", Private: true, Public: false, TrustedCIDRs: []string{"10.0.0.0/8"},
+			}},
+			Volumes:   []domain.StandaloneServiceVolume{{Source: "game-data", Target: "/data", ReadOnly: true}},
+			Readiness: domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessLog, Path: "/logs/game.log", Contains: "ready", Timeout: time.Second, TimeoutSet: true},
+			Cleanup:   domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true},
+		},
+		ResolvedEnv: []string{"TOKEN=super-secret"},
+		ConfigHash:  "config-hash",
+	}
 }

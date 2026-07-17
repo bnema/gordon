@@ -7,6 +7,7 @@ import (
 	"maps"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -16,6 +17,8 @@ import (
 type Client struct {
 	client runtimev1.RuntimeServiceClient
 }
+
+var _ out.RuntimeStandaloneServiceManager = (*Client)(nil)
 
 func NewClient(conn grpc.ClientConnInterface) *Client {
 	return &Client{client: runtimev1.NewRuntimeServiceClient(conn)}
@@ -47,6 +50,55 @@ func (c *Client) Reconcile(ctx context.Context, command domain.ReconcileRuntimeC
 	expectedRouteCount := int32(command.ExpectedRouteCount)
 	resp, err := c.client.ApplyCommand(ctx, &runtimev1.ApplyCommandRequest{Command: &runtimev1.ApplyCommandRequest_Reconcile{Reconcile: domainReconcile(command, expectedRouteCount)}})
 	return responseResult(resp, err)
+}
+
+func (c *Client) ApplyStandaloneService(ctx context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	service, err := domainStandaloneService(command.Service)
+	if err != nil {
+		return domain.RuntimeCommandResult{}, err
+	}
+	resp, err := c.client.ApplyStandaloneService(ctx, &runtimev1.ApplyStandaloneServiceRequest{Command: &runtimev1.ApplyStandaloneServiceCommand{
+		Identity:    domainIdentity(command.RuntimeCommandIdentity),
+		Service:     service,
+		ResolvedEnv: append([]string(nil), command.ResolvedEnv...),
+		ConfigHash:  command.ConfigHash,
+	}})
+	if err != nil {
+		return domain.RuntimeCommandResult{}, err
+	}
+	if resp == nil || resp.Result == nil {
+		return domain.RuntimeCommandResult{}, nil
+	}
+	return protoResult(resp.Result), nil
+}
+
+func (c *Client) RemoveStandaloneService(ctx context.Context, command domain.RemoveStandaloneServiceCommand) (domain.RuntimeCommandResult, error) {
+	resp, err := c.client.RemoveStandaloneService(ctx, &runtimev1.RemoveStandaloneServiceRequest{Command: &runtimev1.RemoveStandaloneServiceCommand{
+		Identity: domainIdentity(command.RuntimeCommandIdentity),
+		Name:     command.Name,
+	}})
+	if err != nil {
+		return domain.RuntimeCommandResult{}, err
+	}
+	if resp == nil || resp.Result == nil {
+		return domain.RuntimeCommandResult{}, nil
+	}
+	return protoResult(resp.Result), nil
+}
+
+func (c *Client) ListStandaloneServiceState(ctx context.Context) ([]domain.RuntimeStandaloneServiceState, error) {
+	resp, err := c.client.ListStandaloneServiceState(ctx, &runtimev1.ListStandaloneServiceStateRequest{})
+	if err != nil {
+		return nil, err
+	}
+	states := make([]domain.RuntimeStandaloneServiceState, 0, len(resp.GetServices()))
+	for _, service := range resp.GetServices() {
+		if service == nil {
+			continue
+		}
+		states = append(states, protoStandaloneServiceState(service))
+	}
+	return states, nil
 }
 
 func (c *Client) SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
@@ -263,6 +315,60 @@ func domainReconcile(command domain.ReconcileRuntimeCommand, expectedRouteCount 
 		routes = append(routes, &runtimev1.RuntimeRouteDesiredState{Domain: route.Domain, Image: route.Image, Env: route.Env})
 	}
 	return &runtimev1.ReconcileRuntimeCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), Reason: command.Reason, ExpectedRouteCount: expectedRouteCount, DesiredStateVersion: command.DesiredStateVersion, DesiredRoutes: routes}
+}
+
+func domainStandaloneService(service domain.StandaloneService) (*runtimev1.StandaloneServiceSpec, error) {
+	out := &runtimev1.StandaloneServiceSpec{
+		Name:    service.Name,
+		Image:   service.Image,
+		Enabled: service.Enabled,
+		Readiness: &runtimev1.StandaloneServiceReadinessSpec{
+			Type:       service.Readiness.Type,
+			Path:       service.Readiness.Path,
+			Contains:   service.Readiness.Contains,
+			TimeoutNs:  int64(service.Readiness.Timeout),
+			TimeoutSet: service.Readiness.TimeoutSet,
+		},
+		Cleanup: &runtimev1.StandaloneServiceCleanupSpec{
+			PreserveVolumes: service.Cleanup.PreserveVolumes,
+			RemoveContainer: service.Cleanup.RemoveContainer,
+		},
+	}
+	for _, port := range service.Ports {
+		if port.Container > maxInt32 || port.Container < minInt32 {
+			return nil, fmt.Errorf("standalone service port %q container port %d overflows int32", port.Name, port.Container)
+		}
+		out.Ports = append(out.Ports, &runtimev1.StandaloneServicePortSpec{
+			Name:         port.Name,
+			Container:    int32(port.Container),
+			Protocol:     string(port.Protocol),
+			Publish:      port.Publish,
+			Private:      port.Private,
+			Public:       port.Public,
+			TrustedCidrs: append([]string(nil), port.TrustedCIDRs...),
+		})
+	}
+	for _, volume := range service.Volumes {
+		out.Volumes = append(out.Volumes, &runtimev1.StandaloneServiceVolumeSpec{
+			Source:   volume.Source,
+			Target:   volume.Target,
+			ReadOnly: volume.ReadOnly,
+		})
+	}
+	return out, nil
+}
+
+func protoStandaloneServiceState(service *runtimev1.RuntimeStandaloneServiceState) domain.RuntimeStandaloneServiceState {
+	if service == nil {
+		return domain.RuntimeStandaloneServiceState{}
+	}
+	return domain.RuntimeStandaloneServiceState{
+		Name:          service.GetName(),
+		ContainerID:   service.GetContainerId(),
+		ContainerName: service.GetContainerName(),
+		Status:        domain.ContainerStatus(service.GetStatus()),
+		ConfigHash:    service.GetConfigHash(),
+	}
 }
 
 func domainSelfUpdate(command domain.RuntimeSelfUpdateCommand) *runtimev1.RuntimeSelfUpdateCommand {
