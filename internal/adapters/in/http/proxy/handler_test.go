@@ -166,9 +166,17 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 }
 
 func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
+	readResult := make(chan struct {
+		bytesRead int
+		err       error
+	}, 1)
 	// Backend that reads the full request body, triggering MaxBytesReader.
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		readResult <- struct {
+			bytesRead int
+			err       error
+		}{bytesRead: len(body), err: err}
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer backend.Close()
@@ -198,6 +206,9 @@ func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
+	result := <-readResult
+	assert.Equal(t, 1024, result.bytesRead)
+	assert.Error(t, result.err)
 }
 
 func TestHandler_UpdatedConfigReflected(t *testing.T) {

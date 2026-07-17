@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -190,6 +191,107 @@ func TestForwardToTarget_RouteHostPreservedForManagedTarget(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "app.example.com", receivedHost)
 	assert.Equal(t, "app.example.com", receivedForwardedHost)
+}
+
+func TestForwardToTarget_PreservesHostAndForwardedHeaders(t *testing.T) {
+	got := make(chan struct {
+		host string
+		xff  string
+		xfh  string
+		xfp  string
+	}, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got <- struct {
+			host string
+			xff  string
+			xfh  string
+			xfp  string
+		}{
+			host: r.Host,
+			xff:  r.Header.Get("X-Forwarded-For"),
+			xfh:  r.Header.Get("X-Forwarded-Host"),
+			xfp:  r.Header.Get("X-Forwarded-Proto"),
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer backend.Close()
+
+	proxySvc := inmocks.NewMockProxyService(t)
+	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        backendPort,
+		ContainerID: "c-1",
+		Scheme:      "http",
+		RouteHost:   "app.example.com",
+	}, nil)
+	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+
+	handler := NewHandler(proxySvc, gordonhttp.ParseTrustedProxies([]string{"10.0.0.0/8"}), zerowrap.Default())
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/headers", nil)
+	req.Host = "app.example.com"
+	req.RemoteAddr = "10.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "198.51.100.8")
+	req.Header.Set("X-Forwarded-Host", "client.example.com")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	received := <-got
+	assert.Equal(t, "app.example.com", received.host)
+	// SetXForwarded replaces client-provided forwarding addresses with the
+	// trusted peer address; it never lets a caller forge the chain.
+	assert.Equal(t, "10.0.0.1", received.xff)
+	assert.Equal(t, "app.example.com", received.xfh)
+	assert.Equal(t, "https", received.xfp)
+}
+
+func TestForwardToTarget_ResponseSizeLimits(t *testing.T) {
+	for _, tt := range []struct {
+		name           string
+		streamResponse bool
+		wantStatus     int
+		wantBody       string
+	}{
+		{name: "declared content length is rejected", wantStatus: http.StatusBadGateway, wantBody: "Response Too Large"},
+		{name: "streaming response is truncated", streamResponse: true, wantStatus: http.StatusOK, wantBody: strings.Repeat("x", 1024)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := make([]byte, 2048)
+			for i := range body {
+				body[i] = 'x'
+			}
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tt.streamResponse {
+					w.Header().Set("Transfer-Encoding", "chunked")
+				}
+				_, _ = w.Write(body)
+			}))
+			defer backend.Close()
+
+			proxySvc := inmocks.NewMockProxyService(t)
+			backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
+			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{MaxResponseSize: 1024})
+			proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
+			proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+				Host: "127.0.0.1", Port: backendPort, ContainerID: "c-1", Scheme: "http",
+			}, nil)
+			proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+
+			handler := NewHandler(proxySvc, nil, zerowrap.Default())
+			req := httptest.NewRequest(http.MethodGet, "http://app.example.com/large", nil)
+			req.Host = "app.example.com"
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+			assert.Equal(t, tt.wantBody, rec.Body.String())
+		})
+	}
 }
 
 func TestForwardToTarget_ContextCanceled_Returns499(t *testing.T) {
