@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -75,11 +76,13 @@ type Client struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	retryWait      func(context.Context, time.Duration) bool
+	observer       out.RouteSnapshotAcceptanceObserver
 }
 
 var (
 	_ out.RouteSnapshotProvider       = (*Client)(nil)
 	_ out.RouteSnapshotHealthReporter = (*Client)(nil)
+	_ out.EdgeDrainReporter           = (*Client)(nil)
 )
 
 // NewClient constructs a snapshot client from a gRPC connection. Per-RPC
@@ -172,6 +175,46 @@ func (c *Client) SnapshotHealth() Health {
 // Health returns the same immutable health snapshot as SnapshotHealth.
 func (c *Client) Health() Health {
 	return c.SnapshotHealth()
+}
+
+// SetSnapshotAcceptanceObserver installs the edge proxy observer. It is safe
+// to call after Start; only snapshots accepted after installation are observed.
+func (c *Client) SetSnapshotAcceptanceObserver(observer out.RouteSnapshotAcceptanceObserver) {
+	c.mu.Lock()
+	c.observer = observer
+	c.mu.Unlock()
+}
+
+// ReportDrainState sends the narrow opaque drain state over the same
+// authenticated gRPC connection that receives snapshots.
+func (c *Client) ReportDrainState(ctx context.Context, state domain.RouteDrainState) error {
+	if err := state.Validate(); err != nil {
+		return fmt.Errorf("validate edge drain state: %w", err)
+	}
+	if c.client == nil {
+		return errors.New("edge snapshot service is required")
+	}
+	reason := edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_UNSPECIFIED
+	switch state.TimeoutReason {
+	case domain.RouteDrainTimeoutReasonEdge:
+		reason = edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE
+	case domain.RouteDrainTimeoutReasonControl:
+		reason = edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_CONTROL
+	}
+	request := &edgev1.ReportDrainStateRequest{
+		CanonicalDomain:      state.CanonicalDomain,
+		TransitionGeneration: uint64(state.TransitionGeneration),
+		OldTargetKey:         string(state.OldTargetKey),
+		InFlight:             state.InFlight,
+		TimeoutReason:        reason,
+	}
+	if !state.AcknowledgedAt.IsZero() {
+		request.AcknowledgedAt = timestamppb.New(state.AcknowledgedAt)
+	}
+	if _, err := c.client.ReportDrainState(ctx, request); err != nil {
+		return fmt.Errorf("report edge drain state: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) watch(ctx context.Context, runID uint64, done chan struct{}) {
@@ -270,27 +313,31 @@ func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
 		return false, err
 	}
 
+	var previous *domain.RouteTargetSnapshot
+	var observer out.RouteSnapshotAcceptanceObserver
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.hasData {
 		switch {
 		case snapshot.Generation < c.snapshot.Generation:
 			// A lower generation cannot establish that a reconnected stream is
 			// synchronized with our current routing view.
+			c.mu.Unlock()
 			return false, nil
 		case snapshot.Generation == c.snapshot.Generation:
 			if !reflect.DeepEqual(snapshot, c.snapshot) {
+				c.mu.Unlock()
 				return false, fmt.Errorf("conflicting route snapshot generation %d", snapshot.Generation)
 			}
-			// A byte-for-byte equivalent routing view is the reconnect sync
-			// acknowledgement. Preserve both the stored clone and acceptance
-			// metadata; this is not a new update, but it is valid synchronization
-			// and therefore earns a fresh retry budget.
+			// A byte-for-byte equivalent routing view is reconnect synchronization,
+			// not a transition, so it must never duplicate drain reporting.
 			c.health.Healthy = true
 			c.health.Connected = true
 			c.health.ErrorCategory = ErrorNone
+			c.mu.Unlock()
 			return true, nil
 		}
+		prior := c.snapshot.Clone()
+		previous = &prior
 	}
 	c.snapshot = snapshot.Clone()
 	c.hasData = true
@@ -299,6 +346,11 @@ func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
 		Connected:              true,
 		LastAcceptedGeneration: snapshot.Generation,
 		LastUpdate:             time.Now().UTC(),
+	}
+	observer = c.observer
+	c.mu.Unlock()
+	if observer != nil {
+		observer.ObserveAcceptedRouteSnapshot(previous, snapshot.Clone())
 	}
 	return true, nil
 }

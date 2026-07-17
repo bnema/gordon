@@ -208,6 +208,137 @@ func TestService_GetTarget_ConcurrentMissSharesSnapshotLookup(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
+type recordingEdgeDrainReporter struct {
+	mu       sync.Mutex
+	states   []domain.RouteDrainState
+	failures int
+}
+
+func (r *recordingEdgeDrainReporter) ReportDrainState(_ context.Context, state domain.RouteDrainState) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.states = append(r.states, state)
+	if r.failures > 0 {
+		r.failures--
+		return errors.New("temporary control failure")
+	}
+	return nil
+}
+
+func (r *recordingEdgeDrainReporter) snapshot() []domain.RouteDrainState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]domain.RouteDrainState(nil), r.states...)
+}
+
+func TestService_EdgeSnapshotTransitionRoutesNewTargetAndReportsOldAtZero(t *testing.T) {
+	provider := outmocks.NewMockRouteSnapshotProvider(t)
+	old := readyEntry(t, "app.example.com", "old.internal", 1)
+	newTarget := readyEntry(t, "app.example.com", "new.internal", 2)
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(routeSnapshot(t, 1, old), nil).Once()
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(routeSnapshot(t, 2, newTarget), nil).Once()
+	reporter := &recordingEdgeDrainReporter{}
+	svc := NewSnapshotService(provider, Config{}, reporter)
+	defer svc.Close()
+
+	oldTarget, err := svc.GetTarget(testContext(), "app.example.com")
+	require.NoError(t, err)
+	releaseOld := svc.TrackInFlight(string(old.TargetKey))
+	svc.ObserveAcceptedRouteSnapshot(&domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}}, routeSnapshot(t, 2, newTarget))
+
+	freshTarget, err := svc.GetTarget(testContext(), "app.example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "old.internal", oldTarget.Host)
+	assert.Equal(t, "new.internal", freshTarget.Host, "fresh traffic must use the new target")
+	assert.Empty(t, reporter.snapshot(), "old target remains pending while it has traffic")
+	releaseOld()
+	waitForProxy(t, func() bool { return len(reporter.snapshot()) == 1 })
+	state := reporter.snapshot()[0]
+	assert.Equal(t, old.TargetKey, state.OldTargetKey)
+	assert.Equal(t, domain.RouteTargetGeneration(2), state.TransitionGeneration)
+	assert.Zero(t, state.InFlight)
+	assert.Equal(t, domain.RouteDrainTimeoutReasonNone, state.TimeoutReason)
+}
+
+func TestService_EdgeSnapshotTransitionReportsZeroOnceAndIgnoresEqualReconnect(t *testing.T) {
+	old := readyEntry(t, "app.example.com", "old.internal", 1)
+	newTarget := readyEntry(t, "app.example.com", "new.internal", 2)
+	reporter := &recordingEdgeDrainReporter{}
+	svc := NewSnapshotService(nil, Config{}, reporter)
+	defer svc.Close()
+	previous := &domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}}
+	current := routeSnapshot(t, 2, newTarget)
+
+	svc.ObserveAcceptedRouteSnapshot(previous, current)
+	waitForProxy(t, func() bool { return len(reporter.snapshot()) == 1 })
+	svc.ObserveAcceptedRouteSnapshot(previous, current)
+	time.Sleep(20 * time.Millisecond)
+	assert.Len(t, reporter.snapshot(), 1, "equal reconnect must not create another logical report")
+}
+
+func TestService_EdgeSnapshotTransitionTimeoutRetriesAndIsolatesRegistry(t *testing.T) {
+	old := readyEntry(t, "app.example.com", "old.internal", 1)
+	newTarget := readyEntry(t, "app.example.com", "new.internal", 2)
+	oldRegistry := readyEntry(t, "registry.example.com", "registry-old", 1)
+	newRegistry := readyEntry(t, "registry.example.com", "registry-new", 2)
+	reporter := &recordingEdgeDrainReporter{failures: 2}
+	svc := NewSnapshotService(nil, Config{EdgeDrainTimeout: 15 * time.Millisecond}, reporter)
+	defer svc.Close()
+	releaseOld := svc.TrackInFlight(string(old.TargetKey))
+	defer releaseOld()
+	// New target and registry work must not change the retired app key's count.
+	releaseNew := svc.TrackInFlight(string(newTarget.TargetKey))
+	defer releaseNew()
+	svc.TrackRegistryRequest()
+	defer svc.ReleaseRegistryRequest()
+	previous := &domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}, RegistryForwardingTarget: &oldRegistry}
+	current := routeSnapshot(t, 2, newTarget)
+	current.RegistryForwardingTarget = &newRegistry
+	svc.ObserveAcceptedRouteSnapshot(previous, current)
+
+	waitForProxy(t, func() bool { return len(reporter.snapshot()) >= 3 })
+	states := reporter.snapshot()
+	assert.Len(t, states, 3, "two bounded retries followed by success")
+	for _, state := range states {
+		assert.Equal(t, old.TargetKey, state.OldTargetKey)
+		assert.Equal(t, uint64(1), state.InFlight)
+		assert.Equal(t, domain.RouteDrainTimeoutReasonEdge, state.TimeoutReason)
+	}
+}
+
+func TestService_EdgeSnapshotTransitionConcurrentCompletionReportsOnce(t *testing.T) {
+	old := readyEntry(t, "app.example.com", "old.internal", 1)
+	newTarget := readyEntry(t, "app.example.com", "new.internal", 2)
+	reporter := &recordingEdgeDrainReporter{}
+	svc := NewSnapshotService(nil, Config{}, reporter)
+	defer svc.Close()
+	const requests = 32
+	releases := make([]func(), 0, requests)
+	for range requests {
+		releases = append(releases, svc.TrackInFlight(string(old.TargetKey)))
+	}
+	svc.ObserveAcceptedRouteSnapshot(&domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}}, routeSnapshot(t, 2, newTarget))
+	var wg sync.WaitGroup
+	for _, release := range releases {
+		wg.Go(release)
+	}
+	wg.Wait()
+	waitForProxy(t, func() bool { return len(reporter.snapshot()) == 1 })
+	assert.Len(t, reporter.snapshot(), 1)
+}
+
+func waitForProxy(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition was not met")
+}
+
 func TestService_RegistryClassificationComesFromSnapshotDespiteConfigMismatch(t *testing.T) {
 	provider := outmocks.NewMockRouteSnapshotProvider(t)
 	registry := readyEntry(t, "registry.example.com", "registry.internal", 1)

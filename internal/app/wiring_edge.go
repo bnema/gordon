@@ -83,7 +83,9 @@ func runEdgeWithDependencies(ctx context.Context, configPath string, deps edgeRo
 	if err != nil {
 		return err
 	}
-	proxyService := proxy.NewSnapshotService(snapshotClient, proxyCfg)
+	proxyService := proxy.NewSnapshotService(snapshotClient, proxyCfg, snapshotClient)
+	snapshotClient.SetSnapshotAcceptanceObserver(proxyService)
+	defer proxyService.Close()
 	proxyHandler := httpproxy.NewHandler(proxyService, nil, log)
 	listener, err := listenEdge(cfg, deps)
 	if err != nil {

@@ -61,3 +61,16 @@ type RouteSnapshotWatcher interface {
 type EdgeDrainCoordinator interface {
 	AcknowledgeDrain(ctx context.Context, routeDomain string, targetKey domain.RouteTargetKey, generation domain.RouteTargetGeneration) error
 }
+
+// EdgeDrainReporter reports one opaque retired-target drain state to control.
+// It is intentionally unable to carry backing/container identity.
+type EdgeDrainReporter interface {
+	ReportDrainState(ctx context.Context, state domain.RouteDrainState) error
+}
+
+// RouteSnapshotAcceptanceObserver is called exactly once for each strictly
+// newer validated snapshot accepted by an edge snapshot consumer. previous is
+// nil for the initial snapshot; callers must not retain either value.
+type RouteSnapshotAcceptanceObserver interface {
+	ObserveAcceptedRouteSnapshot(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot)
+}

@@ -204,9 +204,10 @@ func TestClientRejectsSplitUnreachableSnapshot(t *testing.T) {
 
 type scriptedServer struct {
 	edgev1.UnimplementedEdgeServiceServer
-	mu    sync.Mutex
-	calls int
-	watch func(edgev1.EdgeService_WatchRouteSnapshotsServer, int) error
+	mu     sync.Mutex
+	calls  int
+	watch  func(edgev1.EdgeService_WatchRouteSnapshotsServer, int) error
+	report func(context.Context, *edgev1.ReportDrainStateRequest) error
 }
 
 func (s *scriptedServer) WatchRouteSnapshots(_ *edgev1.WatchRouteSnapshotsRequest, stream edgev1.EdgeService_WatchRouteSnapshotsServer) error {
@@ -219,6 +220,15 @@ func (s *scriptedServer) WatchRouteSnapshots(_ *edgev1.WatchRouteSnapshotsReques
 		return stream.Context().Err()
 	}
 	return s.watch(stream, call)
+}
+
+func (s *scriptedServer) ReportDrainState(ctx context.Context, request *edgev1.ReportDrainStateRequest) (*edgev1.ReportDrainStateResponse, error) {
+	if s.report != nil {
+		if err := s.report(ctx, request); err != nil {
+			return nil, err
+		}
+	}
+	return &edgev1.ReportDrainStateResponse{}, nil
 }
 
 func (s *scriptedServer) CallCount() int {
@@ -248,6 +258,55 @@ func testSnapshotMessage(t *testing.T, generation domain.RouteTargetGeneration) 
 		Protocol: string(entry.Protocol), Status: string(entry.Status), UnavailableReason: string(entry.UnavailableReason),
 		Generation: uint64(entry.Generation), UpstreamHost: entry.UpstreamHost, Attachment: string(entry.Attachment), TargetKey: string(entry.TargetKey),
 	}}}
+}
+
+type snapshotObserver struct {
+	mu          sync.Mutex
+	transitions [][2]domain.RouteTargetGeneration
+}
+
+func (o *snapshotObserver) ObserveAcceptedRouteSnapshot(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	var generation domain.RouteTargetGeneration
+	if previous != nil {
+		generation = previous.Generation
+	}
+	o.transitions = append(o.transitions, [2]domain.RouteTargetGeneration{generation, current.Generation})
+}
+
+func TestClientObserverOnlyReceivesStrictlyNewerSnapshots(t *testing.T) {
+	observer := &snapshotObserver{}
+	client := NewClientWithEdgeService(nil)
+	client.SetSnapshotAcceptanceObserver(observer)
+	_, err := client.accept(testSnapshotMessage(t, 1))
+	require.NoError(t, err)
+	_, err = client.accept(testSnapshotMessage(t, 1))
+	require.NoError(t, err)
+	_, err = client.accept(testSnapshotMessage(t, 2))
+	require.NoError(t, err)
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	require.Equal(t, [][2]domain.RouteTargetGeneration{{0, 1}, {1, 2}}, observer.transitions)
+}
+
+func TestClientReportDrainStateUsesOpaqueProtocolFields(t *testing.T) {
+	var got *edgev1.ReportDrainStateRequest
+	server := &scriptedServer{report: func(_ context.Context, request *edgev1.ReportDrainStateRequest) error {
+		got = request
+		return nil
+	}}
+	client := newTestClient(t, server)
+	key, err := domain.NewRouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
+	require.NoError(t, err)
+	state := domain.RouteDrainState{CanonicalDomain: "app.example.com", TransitionGeneration: 2, OldTargetKey: key, InFlight: 3, TimeoutReason: domain.RouteDrainTimeoutReasonEdge, AcknowledgedAt: time.Now().UTC()}
+	require.NoError(t, client.ReportDrainState(t.Context(), state))
+	require.NotNil(t, got)
+	assert.Equal(t, "app.example.com", got.GetCanonicalDomain())
+	assert.Equal(t, string(key), got.GetOldTargetKey())
+	assert.Equal(t, uint64(3), got.GetInFlight())
+	assert.Equal(t, edgev1.DrainTimeoutReason_DRAIN_TIMEOUT_REASON_EDGE, got.GetTimeoutReason())
+	assert.NotNil(t, got.GetAcknowledgedAt())
 }
 
 func TestClientEqualSynchronizationResetsReconnectBackoff(t *testing.T) {

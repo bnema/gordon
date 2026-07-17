@@ -29,6 +29,10 @@ type Config struct {
 	MaxBodySize        int64 // Maximum request body size in bytes (0 = no limit)
 	MaxResponseSize    int64 // Maximum response body size in bytes (0 = no limit)
 	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
+
+	// EdgeDrainTimeout optionally bounds an edge's wait for retired application
+	// traffic. Zero disables edge-side timeout reporting.
+	EdgeDrainTimeout time.Duration
 }
 
 // Service implements the ProxyService interface. Target discovery is exclusively
@@ -49,6 +53,12 @@ type Service struct {
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 
+	drainReporter out.EdgeDrainReporter
+	drainCtx      context.Context
+	drainCancel   context.CancelFunc
+	drainMu       sync.Mutex
+	pendingDrains map[edgeDrainIdentity]*edgeDrain
+
 	// Wait-path callbacks are package-private synchronization hooks for drain
 	// contract tests. Production leaves them nil.
 	waitForNoInFlightWait func()
@@ -67,14 +77,34 @@ func NewService(
 }
 
 // NewSnapshotService creates a proxy service backed by route snapshots.
-func NewSnapshotService(provider out.RouteSnapshotProvider, config Config) *Service {
+func NewSnapshotService(provider out.RouteSnapshotProvider, config Config, reporters ...out.EdgeDrainReporter) *Service {
+	var reporter out.EdgeDrainReporter
+	if len(reporters) > 0 {
+		reporter = reporters[0]
+	}
+	drainCtx, drainCancel := context.WithCancel(context.Background())
 	return &Service{
 		snapshotProvider:  provider,
 		config:            config,
 		targets:           make(map[string]*domain.ProxyTarget),
 		targetGenerations: make(map[string]domain.RouteTargetGeneration),
 		inFlight:          make(map[string]int),
+		drainReporter:     reporter,
+		drainCtx:          drainCtx,
+		drainCancel:       drainCancel,
+		pendingDrains:     make(map[edgeDrainIdentity]*edgeDrain),
 	}
+}
+
+type edgeDrainIdentity struct {
+	domain     string
+	generation domain.RouteTargetGeneration
+	key        domain.RouteTargetKey
+}
+
+type edgeDrain struct {
+	state    domain.RouteDrainState
+	reported bool
 }
 
 // GetTarget returns the proxy target for a given domain.
@@ -205,6 +235,130 @@ func (s *Service) observeSnapshot(generation domain.RouteTargetGeneration) bool 
 		s.targetGenerations = make(map[string]domain.RouteTargetGeneration)
 	}
 	return true
+}
+
+// ObserveAcceptedRouteSnapshot coordinates edge-only drain reporting after a
+// snapshot consumer has atomically installed a strictly newer routing view.
+// Registry targets are intentionally absent: registry request accounting is
+// separate and must never complete an application target drain.
+func (s *Service) ObserveAcceptedRouteSnapshot(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot) {
+	if previous == nil || s.drainReporter == nil {
+		return
+	}
+
+	// Invalidate all cached routes before scheduling reports. New requests fetch
+	// from the already-installed current snapshot rather than retaining an old
+	// target while its drain is being acknowledged.
+	s.mu.Lock()
+	if current.Generation >= s.latestGeneration {
+		s.latestGeneration = current.Generation
+		s.targets = make(map[string]*domain.ProxyTarget)
+		s.targetGenerations = make(map[string]domain.RouteTargetGeneration)
+	}
+	s.mu.Unlock()
+
+	currentTargets := make(map[string]domain.RouteTargetKey, len(current.Entries))
+	for _, entry := range current.Entries {
+		if entry.Ready() || entry.Draining() {
+			currentTargets[entry.CanonicalDomain] = entry.TargetKey
+		}
+	}
+	for _, old := range previous.Entries {
+		if !old.Ready() || currentTargets[old.CanonicalDomain] == old.TargetKey {
+			continue
+		}
+		s.startEdgeDrain(old.CanonicalDomain, current.Generation, old.TargetKey)
+	}
+}
+
+// Close cancels pending edge reporting timers and retry calls. It is a no-op
+// for the monolith, whose local drain waiter remains independent.
+func (s *Service) Close() {
+	if s.drainCancel != nil {
+		s.drainCancel()
+	}
+}
+
+func (s *Service) startEdgeDrain(routeDomain string, generation domain.RouteTargetGeneration, key domain.RouteTargetKey) {
+	identity := edgeDrainIdentity{domain: routeDomain, generation: generation, key: key}
+	s.drainMu.Lock()
+	if _, exists := s.pendingDrains[identity]; exists {
+		s.drainMu.Unlock()
+		return
+	}
+	drain := &edgeDrain{state: domain.RouteDrainState{
+		CanonicalDomain: routeDomain, TransitionGeneration: generation, OldTargetKey: key,
+	}}
+	s.pendingDrains[identity] = drain
+	s.drainMu.Unlock()
+
+	s.inFlightMu.Lock()
+	inFlight := s.inFlight[string(key)]
+	s.inFlightMu.Unlock()
+	if inFlight == 0 {
+		s.completeEdgeDrain(identity, 0, domain.RouteDrainTimeoutReasonNone)
+		return
+	}
+	if s.config.EdgeDrainTimeout > 0 {
+		go s.waitForEdgeDrainTimeout(identity, s.config.EdgeDrainTimeout)
+	}
+}
+
+func (s *Service) waitForEdgeDrainTimeout(identity edgeDrainIdentity, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-s.drainCtx.Done():
+		return
+	case <-timer.C:
+	}
+	s.inFlightMu.Lock()
+	remaining := s.inFlight[string(identity.key)]
+	s.inFlightMu.Unlock()
+	if remaining > 0 {
+		s.completeEdgeDrain(identity, remaining, domain.RouteDrainTimeoutReasonEdge)
+	}
+}
+
+func (s *Service) completeEdgeDrain(identity edgeDrainIdentity, inFlight int, reason domain.RouteDrainTimeoutReason) {
+	s.drainMu.Lock()
+	drain, exists := s.pendingDrains[identity]
+	if !exists || drain.reported {
+		s.drainMu.Unlock()
+		return
+	}
+	drain.reported = true
+	if inFlight > 0 {
+		drain.state.InFlight = uint64(inFlight)
+	} else {
+		drain.state.InFlight = 0
+	}
+	drain.state.TimeoutReason = reason
+	drain.state.AcknowledgedAt = time.Now().UTC()
+	state := drain.state
+	s.drainMu.Unlock()
+	go s.reportEdgeDrain(state)
+}
+
+func (s *Service) reportEdgeDrain(state domain.RouteDrainState) {
+	// Control's ledger makes retries idempotent. Keep retry work bounded and
+	// detached from request completion paths; each call has a deadline so Close
+	// reliably releases any blocked transport call.
+	for attempt := 0; attempt < 3; attempt++ {
+		ctx, cancel := context.WithTimeout(s.drainCtx, 5*time.Second)
+		err := s.drainReporter.ReportDrainState(ctx, state)
+		cancel()
+		if err == nil || s.drainCtx.Err() != nil {
+			return
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
+		select {
+		case <-s.drainCtx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func (s *Service) cacheSnapshotTarget(domainName string, target *domain.ProxyTarget, generation domain.RouteTargetGeneration, lookupInvalidationVersion uint64) {
@@ -350,14 +504,35 @@ func (s *Service) TrackInFlight(targetKey string) func() {
 	s.inFlightMu.Lock()
 	s.inFlight[targetKey]++
 	s.inFlightMu.Unlock()
+	var once sync.Once
 	return func() {
-		s.inFlightMu.Lock()
-		if s.inFlight[targetKey] > 1 {
-			s.inFlight[targetKey]--
-		} else {
-			delete(s.inFlight, targetKey)
+		once.Do(func() {
+			s.inFlightMu.Lock()
+			if s.inFlight[targetKey] > 1 {
+				s.inFlight[targetKey]--
+			} else {
+				delete(s.inFlight, targetKey)
+			}
+			remaining := s.inFlight[targetKey]
+			s.inFlightMu.Unlock()
+			if remaining == 0 {
+				s.completeDrainsForTarget(domain.RouteTargetKey(targetKey))
+			}
+		})
+	}
+}
+
+func (s *Service) completeDrainsForTarget(key domain.RouteTargetKey) {
+	s.drainMu.Lock()
+	identities := make([]edgeDrainIdentity, 0)
+	for identity, drain := range s.pendingDrains {
+		if identity.key == key && !drain.reported {
+			identities = append(identities, identity)
 		}
-		s.inFlightMu.Unlock()
+	}
+	s.drainMu.Unlock()
+	for _, identity := range identities {
+		s.completeEdgeDrain(identity, 0, domain.RouteDrainTimeoutReasonNone)
 	}
 }
 
