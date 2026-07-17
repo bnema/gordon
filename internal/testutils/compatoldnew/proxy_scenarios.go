@@ -43,7 +43,7 @@ func ProxyScenarios() []Scenario {
 		proxyScenario("proxy/h2c-backend"),
 		proxyScenario("proxy/registry-domain-routing"),
 		proxyScenario("proxy/body-size-limit"),
-		proxyScenario("proxy/zero-downtime-drain"),
+		implementedScenario(zeroDowntimeDrainScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		proxyScenario("proxy/access-log-emitted"),
 	}
 }

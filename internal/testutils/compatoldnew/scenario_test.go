@@ -139,6 +139,7 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"api/route-add-update-remove": {},
 		"proxy/managed-http-route":    {},
 		"proxy/external-route":        {},
+		"proxy/zero-downtime-drain":   {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
 }
@@ -184,7 +185,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 	for _, scenario := range ProxyScenarios() {
-		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName {
+		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName {
 			require.False(t, scenario.PodmanRequired, scenario.Name)
 			continue
 		}
@@ -217,7 +218,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 
 func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
 	for _, scenario := range ProxyScenarios() {
-		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName {
+		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName {
 			continue
 		}
 		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)

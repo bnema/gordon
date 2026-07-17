@@ -24,6 +24,19 @@ func TestManagedHTTPRouteScenarioDefinition(t *testing.T) {
 	require.Empty(t, managed.BlockReason)
 }
 
+func TestZeroDowntimeDrainScenarioDefinition(t *testing.T) {
+	var drain Scenario
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == zeroDowntimeDrainScenarioName {
+			drain = scenario
+			break
+		}
+	}
+	require.Equal(t, ScenarioStatusImplemented, drain.Status)
+	require.False(t, drain.PodmanRequired)
+	require.Empty(t, drain.BlockReason)
+}
+
 func TestExternalRouteScenarioDefinition(t *testing.T) {
 	var external Scenario
 	for _, scenario := range ProxyScenarios() {
@@ -95,6 +108,32 @@ func TestCompatibilityExternalRoute(t *testing.T) {
 		require.NotContains(t, string(body), "docker inspect")
 		require.NotContains(t, string(body), "\"Config\"")
 		require.NotContains(t, string(body), "containerID")
+	}
+}
+
+func TestCompatibilityZeroDowntimeDrain(t *testing.T) {
+	requireRealCompatibilityRun(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	require.NoError(t, DockerCompatibilityPreflight(ctx), "zero downtime drain compatibility runtime required")
+
+	artifactDir := compatibilityArtifactDir(t, "proxy-zero-drain")
+	report, err := RunCompatibilityZeroDowntimeDrain(ctx, projectRoot(t), artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	require.NotEmpty(t, report.BaselineCommit)
+	require.NotEmpty(t, report.CandidateCommit)
+	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_RUN_REAL=1")
+	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_REQUIRE_RUNTIME=1")
+	require.Contains(t, report.RerunCommand, "TestCompatibilityZeroDowntimeDrain")
+	require.FileExists(t, filepath.Join(artifactDir, "compat-report.json"))
+	for _, name := range []string{"old.raw.json", "new.raw.json", "compat-report.json"} {
+		body, readErr := os.ReadFile(filepath.Join(artifactDir, name))
+		require.NoError(t, readErr)
+		for _, forbidden := range []string{"docker inspect", "\"Config\"", "containerID", "localhost:", "Bearer ", "eyJ"} {
+			require.NotContains(t, string(body), forbidden)
+		}
 	}
 }
 
