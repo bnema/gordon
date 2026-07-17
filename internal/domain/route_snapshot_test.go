@@ -65,7 +65,7 @@ func TestRouteTargetSnapshotEndpointHostValidationRejectsUnsafeEndpoints(t *test
 		"unix:///var/run/docker.sock", "unix:/run/podman/podman.sock", "/var/run/docker.sock",
 		"http://app:8080", "https://user:password@app.example.com", "user:password@app.example.com",
 		"app.example.com/path", "app.example.com?token=secret", "app.example.com#fragment", "app.example.com:8080",
-		".app.example.com", "app..example.com", "app.example.com..", overlongLabel, overlongHost,
+		".app.example.com", "app..example.com", "app.example.com..", "2001:db8::1.", overlongLabel, overlongHost,
 	} {
 		t.Run(host, func(t *testing.T) {
 			_, err := NewReadyRouteTargetEntry("app.example.com", host, 8080, "http", RouteTargetProtocolHTTP1, 1)
@@ -89,7 +89,7 @@ func TestRouteTargetSnapshotEndpointHostValidationAcceptsMaximalAbsoluteFQDN(t *
 }
 
 func TestRouteTargetSnapshotExternalTargetRejectsUnsafeUpstreamHost(t *testing.T) {
-	for _, upstreamHost := range []string{"https://user:secret@upstream.example", "upstream.example:443", "upstream.example/path", "upstream..example"} {
+	for _, upstreamHost := range []string{"https://user:secret@upstream.example", "upstream.example:443", "upstream.example/path", "upstream..example", "2001:db8::1."} {
 		t.Run(upstreamHost, func(t *testing.T) {
 			_, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", upstreamHost, 443, "https", RouteTargetProtocolHTTP1, 1)
 			require.ErrorIs(t, err, ErrInvalidRoute)

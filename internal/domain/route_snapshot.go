@@ -492,9 +492,13 @@ func validRouteTargetHost(host string) bool {
 	if strings.ContainsAny(host, "/\\?#@") {
 		return false
 	}
-	// An absolute FQDN may include one root-label dot, which is not part of the
-	// 253-byte hostname limit. Do not trim more than one: repeated dots are not
-	// valid endpoint hosts.
+	// An absolute FQDN may include one root-label dot, but IP literals may not.
+	// Reject a dotted IP spelling before removing the DNS root label.
+	if strings.HasSuffix(host, ".") && net.ParseIP(strings.TrimSuffix(host, ".")) != nil {
+		return false
+	}
+	// The root-label dot is not part of the 253-byte hostname limit. Do not trim
+	// more than one: repeated dots are not valid endpoint hosts.
 	host = strings.TrimSuffix(host, ".")
 	if host == "" || len(host) > 253 {
 		return false
