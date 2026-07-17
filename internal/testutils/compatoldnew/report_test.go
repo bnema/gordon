@@ -79,6 +79,39 @@ func TestCompareSideResultsSerializesValidationFailuresBeforeReturningError(t *t
 	}
 }
 
+func TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact(t *testing.T) {
+	dir := t.TempDir()
+	old := SideResult{Side: SideOld, Artifact: NewCLIArtifact("gordon routes list --json", map[string]any{
+		"stdout":  `{"token":"top-token","nested":"{\"password\":\"nested-password\",\"items\":[\"{\\\"authorization\\\":\\\"nested-authorization\\\"}\"]}"}`,
+		"stderr":  "token: colon-token credential=equals-credential Bearer bearer-token",
+		"payload": `["{\"secret\":\"array-secret\"}",{"credential":"direct-credential"}]`,
+	}, LevelExact)}
+	new := SideResult{Side: SideNew, Artifact: NewCLIArtifact("gordon routes list --json", map[string]any{
+		"stdout": `{"token":"new-top-token"}`,
+		"stderr": "authorization: colon-authorization",
+	}, LevelExact)}
+
+	if _, err := CompareSideResults(old, new, nil, dir); err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{
+		"top-token", "nested-password", "nested-authorization", "colon-token",
+		"equals-credential", "bearer-token", "array-secret", "direct-credential",
+		"new-top-token", "colon-authorization",
+	}
+	for _, name := range []string{"compat-report.json", "normalized.diff", "old.raw.json", "new.raw.json", "old.normalized.json", "new.normalized.json"} {
+		body, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, secret := range secrets {
+			if strings.Contains(string(body), secret) {
+				t.Fatalf("%s leaked %q: %s", name, secret, body)
+			}
+		}
+	}
+}
+
 func TestReportOutputs(t *testing.T) {
 	r := NewReport([]Failure{{OldValue: "old", NewValue: "new", Source: "cmd", SuggestedCommand: "cmd"}}, 1)
 	if !strings.Contains(r.ConsoleSummary(), "1 failed") {

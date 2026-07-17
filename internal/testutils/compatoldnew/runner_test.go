@@ -14,6 +14,52 @@ import (
 	"time"
 )
 
+func TestCommandEnvironmentStripsInheritedGordonVariablesAndHonorsOverrides(t *testing.T) {
+	t.Setenv("GORDON_CONFIG", "/inherited/config")
+	t.Setenv("GORDON_FOO", "inherited-foo")
+	t.Setenv("GORDON_RUNTIME_SOCKET", "inherited-socket")
+	t.Setenv("PATH", "/essential/path")
+
+	env := commandEnvironment([]string{
+		"GORDON_OVERRIDE=first",
+		"GORDON_OVERRIDE=last",
+		"ORDINARY_OVERRIDE=first",
+		"ORDINARY_OVERRIDE=last",
+	})
+	values := environmentValues(t, env)
+	for _, key := range []string{"GORDON_CONFIG", "GORDON_FOO", "GORDON_RUNTIME_SOCKET"} {
+		if _, found := values[key]; found {
+			t.Fatalf("inherited %s was passed to child: %#v", key, values)
+		}
+	}
+	if values["PATH"] != "/essential/path" {
+		t.Fatalf("essential inherited environment missing: %#v", values)
+	}
+	if values["GORDON_OVERRIDE"] != "last" || values["ORDINARY_OVERRIDE"] != "last" {
+		t.Fatalf("explicit overrides did not win: %#v", values)
+	}
+	configValues := environmentValues(t, commandEnvironment([]string{"GORDON_CONFIG=/explicit/config"}))
+	if configValues["GORDON_CONFIG"] != "/explicit/config" {
+		t.Fatalf("explicit GORDON_CONFIG did not win: %#v", configValues)
+	}
+}
+
+func environmentValues(t *testing.T, env []string) map[string]string {
+	t.Helper()
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("invalid environment entry %q", entry)
+		}
+		if _, duplicate := values[key]; duplicate {
+			t.Fatalf("duplicate environment key %q in %#v", key, env)
+		}
+		values[key] = value
+	}
+	return values
+}
+
 func TestRunnerReadinessSupportsCallbackTCPExitAndTimeout(t *testing.T) {
 	t.Run("callback can define readiness beyond HTTP 2xx", func(t *testing.T) {
 		inst := startTestInstance(t, "1")

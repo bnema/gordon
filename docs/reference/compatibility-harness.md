@@ -18,12 +18,12 @@ make compat-harness-api     # Docker preflight + TestCompatibilityAdminAuthAndRo
 
 The API slice requires a reachable Docker daemon on a Unix socket and fails rather than skipping when it is unavailable. Config and CLI slices do not require a container runtime. Podman-only fixture work remains opt-in with `GORDON_COMPAT_PODMAN=1`; it requires a working `podman info`.
 
-The Make targets derive `COMPAT_ARTIFACT_DIR` from `GORDON_COMPAT_ARTIFACT_DIR` when set, otherwise retain reports under the ignored repository-root `artifacts/compat` directory. Relative `GORDON_COMPAT_ARTIFACT_DIR` values are resolved from the repository root; absolute values are used unchanged. An explicit `COMPAT_ARTIFACT_DIR=...` make variable still takes precedence. Each target clears only its own slice, then prints the baseline ref, report path, and exact focused rerun command. Every slice writes private (`0600`) diagnostic files:
+The Make targets derive `COMPAT_ARTIFACT_DIR` from `GORDON_COMPAT_ARTIFACT_DIR` when set, otherwise retain reports under the ignored repository-root `artifacts/compat` directory. Relative `GORDON_COMPAT_ARTIFACT_DIR` values are resolved from the repository root; absolute values are used unchanged. An explicit `COMPAT_ARTIFACT_DIR=...` make variable still takes precedence. Each target deterministically overwrites its expected files, then prints the baseline ref, report path, and exact focused rerun command. Every slice writes private (`0600`) diagnostic files:
 
 - `compat-report.json` and `normalized.diff`
 - `old.raw.json`, `new.raw.json`, `old.normalized.json`, and `new.normalized.json`
 
-The harness redacts tokens, authorization credentials, and secret-bearing metadata before writing artifacts.
+The harness redacts tokens, authorization credentials, and secret-bearing metadata before writing artifacts, including recursively embedded JSON diagnostics. A configured baseline is compared normally: a behavior difference against a custom ref is reported rather than hidden or allowlisted.
 
 Focused reruns are:
 

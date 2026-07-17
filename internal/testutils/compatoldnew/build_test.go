@@ -2,6 +2,8 @@ package compatoldnew
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,6 +59,44 @@ func TestGoBuilderBuildsCandidateFromCurrentWorkingTree(t *testing.T) {
 	build := fr.commands[1]
 	if build.dir != "/repo" || build.name != "go" || strings.Join(build.args, " ") != "build -o "+res.BinaryPath+" ./main.go" {
 		t.Fatalf("unexpected build command: %+v", build)
+	}
+}
+
+type cleanupFailureRunner struct {
+	fakeRunner
+	cleanupErr      error
+	cleanupDeadline bool
+	worktreePath    string
+}
+
+func (f *cleanupFailureRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name == "git" && len(args) >= 4 && strings.Join(args[:3], " ") == "worktree add --detach" {
+		f.worktreePath = args[3]
+	}
+	if name == "git" && len(args) >= 3 && strings.Join(args[:3], " ") == "worktree remove --force" {
+		_, f.cleanupDeadline = ctx.Deadline()
+		return nil, f.cleanupErr
+	}
+	return f.fakeRunner.Run(ctx, dir, name, args...)
+}
+
+func TestGoBuilderSurfacesBoundedWorktreeCleanupFailures(t *testing.T) {
+	for _, cleanupErr := range []error{context.DeadlineExceeded, errors.New("worktree still locked")} {
+		t.Run(cleanupErr.Error(), func(t *testing.T) {
+			fr := &cleanupFailureRunner{cleanupErr: cleanupErr}
+			_, err := (GoBuilder{Runner: fr}).Build(context.Background(), BuildRequest{
+				RepoRoot: "/repo", Ref: "v1.0.0", OutputDir: t.TempDir(), Name: OldBinaryName,
+			})
+			if !errors.Is(err, cleanupErr) {
+				t.Fatalf("cleanup error was not surfaced: %v", err)
+			}
+			if !fr.cleanupDeadline {
+				t.Fatal("worktree cleanup did not receive a bounded context")
+			}
+			if _, statErr := os.Stat(fr.worktreePath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("temporary worktree fallback was not removed: %v", statErr)
+			}
+		})
 	}
 }
 

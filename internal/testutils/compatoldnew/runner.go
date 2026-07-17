@@ -57,25 +57,37 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// commandEnvironment applies overrides without retaining an inherited value of
-// the same key. os.Getenv is permitted to select the first duplicate entry,
-// so plain append is not isolation.
+// commandEnvironment retains essential inherited settings but isolates child
+// processes from every ambient GORDON_* setting. Explicit overrides are
+// de-duplicated (last value wins), since duplicate environment entries have
+// platform-dependent lookup behavior.
 func commandEnvironment(overrides []string) []string {
-	keys := make(map[string]struct{}, len(overrides))
+	overrideValues := make(map[string]string, len(overrides))
+	overrideOrder := make([]string, 0, len(overrides))
 	for _, entry := range overrides {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok {
-			keys[key] = struct{}{}
+		if !ok || key == "" {
+			continue
 		}
+		if _, seen := overrideValues[key]; !seen {
+			overrideOrder = append(overrideOrder, key)
+		}
+		overrideValues[key] = entry
 	}
-	env := make([]string, 0, len(os.Environ())+len(overrides))
+	env := make([]string, 0, len(os.Environ())+len(overrideOrder))
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if _, overridden := keys[key]; !overridden {
+		if strings.HasPrefix(key, "GORDON_") {
+			continue
+		}
+		if _, overridden := overrideValues[key]; !overridden {
 			env = append(env, entry)
 		}
 	}
-	return append(env, overrides...)
+	for _, key := range overrideOrder {
+		env = append(env, overrideValues[key])
+	}
+	return env
 }
 
 func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
@@ -99,10 +111,11 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 	} else if g.DataDir != "" {
 		cmd.Dir = g.DataDir
 	}
-	cmd.Env = commandEnvironment(g.Env)
+	env := append([]string(nil), g.Env...)
 	if g.ConfigPath != "" {
-		cmd.Env = append(cmd.Env, "GORDON_CONFIG="+g.ConfigPath)
+		env = append(env, "GORDON_CONFIG="+g.ConfigPath)
 	}
+	cmd.Env = commandEnvironment(env)
 	cmd.Stdout = &g.stdout
 	cmd.Stderr = &g.stderr
 	if err := cmd.Start(); err != nil {

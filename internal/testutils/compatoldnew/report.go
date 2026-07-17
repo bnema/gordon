@@ -180,7 +180,7 @@ func writePrivateFile(path string, body []byte) error {
 
 var sensitiveArtifactKey = regexp.MustCompile(`(?i)(token|authorization|credential|password|secret)`)
 var artifactBearer = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[^\s"']+`)
-var artifactSensitiveValue = regexp.MustCompile(`(?i)\b(?:token|authorization|credential|password|secret)=[^\s"']+`)
+var artifactSensitiveAssignment = regexp.MustCompile(`(?i)(\b(?:token|authorization|credential|password|secret)\b\s*[:=]\s*)(?:(?:bearer|basic)\s+[^\s"']+|"[^"]*"|'[^']*'|[^\s,"'}\]]+)`)
 var artifactJWT = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b`)
 
 // redactArtifactValue serializes through JSON so structs and maps receive the
@@ -216,10 +216,29 @@ func redactArtifactJSON(value any) any {
 		}
 		return out
 	case string:
-		typed = artifactBearer.ReplaceAllString(typed, "<redacted authorization>")
-		typed = artifactSensitiveValue.ReplaceAllString(typed, "<redacted>")
-		return artifactJWT.ReplaceAllString(typed, "<redacted token>")
+		return redactArtifactString(typed)
 	default:
 		return value
 	}
+}
+
+// redactArtifactString preserves string-valued diagnostics while inspecting
+// embedded JSON objects and arrays recursively. Re-serializing an embedded
+// value keeps its outer string shape intact in the enclosing artifact.
+func redactArtifactString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		var embedded any
+		if err := json.Unmarshal([]byte(trimmed), &embedded); err == nil {
+			switch embedded.(type) {
+			case map[string]any, []any:
+				if body, err := json.Marshal(redactArtifactJSON(embedded)); err == nil {
+					return string(body)
+				}
+			}
+		}
+	}
+	value = artifactSensitiveAssignment.ReplaceAllString(value, "${1}<redacted>")
+	value = artifactBearer.ReplaceAllString(value, "<redacted authorization>")
+	return artifactJWT.ReplaceAllString(value, "<redacted token>")
 }

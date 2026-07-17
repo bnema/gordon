@@ -2,16 +2,19 @@ package compatoldnew
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
-	OldBinaryName = "gordon-old"
-	NewBinaryName = "gordon-new"
+	OldBinaryName                  = "gordon-old"
+	NewBinaryName                  = "gordon-new"
+	detachedWorktreeCleanupTimeout = 10 * time.Second
 )
 
 type BuildRequest struct {
@@ -101,11 +104,19 @@ func (b GoBuilder) Build(ctx context.Context, req BuildRequest) (BuildResult, er
 	commit := strings.TrimSpace(string(commitOut))
 	binaryPath := filepath.Join(outputDir, req.Name)
 	if req.Name == NewBinaryName {
-		if _, err := runner.Run(ctx, req.RepoRoot, "go", "build", "-o", binaryPath, "./main.go"); err != nil {
-			return BuildResult{}, fmt.Errorf("build ref %q candidate command go build: %w", ref, err)
-		}
-		return BuildResult{BinaryPath: binaryPath, Ref: ref, Commit: commit}, nil
+		return buildCandidate(ctx, runner, req, ref, commit, binaryPath)
 	}
+	return buildDetachedBaseline(ctx, runner, req, ref, commit, binaryPath)
+}
+
+func buildCandidate(ctx context.Context, runner CommandRunner, req BuildRequest, ref, commit, binaryPath string) (BuildResult, error) {
+	if _, err := runner.Run(ctx, req.RepoRoot, "go", "build", "-o", binaryPath, "./main.go"); err != nil {
+		return BuildResult{}, fmt.Errorf("build ref %q candidate command go build: %w", ref, err)
+	}
+	return BuildResult{BinaryPath: binaryPath, Ref: ref, Commit: commit}, nil
+}
+
+func buildDetachedBaseline(ctx context.Context, runner CommandRunner, req BuildRequest, ref, commit, binaryPath string) (BuildResult, error) {
 	tmp, err := os.MkdirTemp("", "gordon-compat-build-*")
 	if err != nil {
 		return BuildResult{}, fmt.Errorf("build ref %q create temp checkout: %w", ref, err)
@@ -114,11 +125,26 @@ func (b GoBuilder) Build(ctx context.Context, req BuildRequest) (BuildResult, er
 	if _, err := runner.Run(ctx, req.RepoRoot, "git", "worktree", "add", "--detach", tmp, ref); err != nil {
 		return BuildResult{}, fmt.Errorf("build ref %q worktree add: %w", ref, err)
 	}
-	defer func() {
-		_, _ = runner.Run(context.Background(), req.RepoRoot, "git", "worktree", "remove", "--force", tmp)
-	}()
-	if _, err := runner.Run(ctx, tmp, "go", "build", "-o", binaryPath, "./main.go"); err != nil {
-		return BuildResult{}, fmt.Errorf("build ref %q baseline command go build: %w", ref, err)
+	_, buildErr := runner.Run(ctx, tmp, "go", "build", "-o", binaryPath, "./main.go")
+	cleanupErr := removeDetachedWorktree(runner, req.RepoRoot, tmp)
+	if buildErr != nil {
+		buildErr = fmt.Errorf("build ref %q baseline command go build: %w", ref, buildErr)
+		if cleanupErr != nil {
+			return BuildResult{}, errors.Join(buildErr, cleanupErr)
+		}
+		return BuildResult{}, buildErr
+	}
+	if cleanupErr != nil {
+		return BuildResult{}, cleanupErr
 	}
 	return BuildResult{BinaryPath: binaryPath, Ref: ref, Commit: commit}, nil
+}
+
+func removeDetachedWorktree(runner CommandRunner, repoRoot, path string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), detachedWorktreeCleanupTimeout)
+	defer cancel()
+	if _, err := runner.Run(cleanupCtx, repoRoot, "git", "worktree", "remove", "--force", path); err != nil {
+		return fmt.Errorf("remove detached baseline worktree: %w", err)
+	}
+	return nil
 }
