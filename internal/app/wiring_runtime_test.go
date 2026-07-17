@@ -63,6 +63,29 @@ func TestRuntimeRoleServiceWiresActualStateSubscriberFromSnapshotWorker(t *testi
 	require.Equal(t, "gordon-runtime", stream.snapshots[0].SourceComponentId)
 }
 
+func TestPollingRuntimeStateSubscriberSharesGenerationsAcrossSubscriptions(t *testing.T) {
+	subscriber := pollingRuntimeStateSubscriber{
+		snapshotter:       fakeSnapshotRuntimeRoleWorker{},
+		interval:          time.Hour,
+		sourceComponentID: "gordon-runtime",
+	}
+
+	firstCtx, cancelFirst := context.WithCancel(context.Background())
+	firstSnapshots, err := subscriber.SubscribeRuntimeState(firstCtx)
+	require.NoError(t, err)
+	first := <-firstSnapshots
+	cancelFirst()
+
+	secondCtx, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	secondSnapshots, err := subscriber.SubscribeRuntimeState(secondCtx)
+	require.NoError(t, err)
+	second := <-secondSnapshots
+
+	require.Equal(t, uint64(1), first.Generation)
+	require.Equal(t, uint64(2), second.Generation)
+}
+
 func TestRuntimeRoleServiceLeavesActualStateUnconfiguredWithoutSnapshotWorker(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

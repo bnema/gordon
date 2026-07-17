@@ -108,6 +108,39 @@ func TestRuntimeWorkerIdempotencyReturnsCachedResult(t *testing.T) {
 	assert.Equal(t, []string{"Deploy:app.example.com:app:latest"}, fake.calls)
 }
 
+func TestRuntimeWorkerRetriesFailedCommandsButCachesSucceededAndPolicyDeniedResults(t *testing.T) {
+	identity := testRuntimeCommandIdentity("cmd-retry")
+	fake := &fakeRuntimeWorkerService{deployErr: errors.New("temporary failure")}
+	worker := NewRuntimeWorker(fake)
+	command := domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: "app.example.com", Image: "app:latest"}
+
+	first, err := worker.DeployRoute(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, first.Status)
+	fake.deployErr = nil
+	second, err := worker.DeployRoute(context.Background(), command)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, second.Status)
+	assert.Equal(t, []string{"Deploy:app.example.com:app:latest", "Deploy:app.example.com:app:latest"}, fake.calls)
+
+	redelivery := command
+	redelivery.Generation++
+	third, err := worker.DeployRoute(context.Background(), redelivery)
+	require.NoError(t, err)
+	assert.Equal(t, second, third)
+	assert.Len(t, fake.calls, 2)
+
+	deniedWorker := NewRuntimeWorkerWithPolicy(&fakeRuntimeWorkerService{}, RuntimePolicy{Mode: RuntimePolicyModeEnforce, RequireImageDigest: true})
+	deniedCommand := domain.DeployRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-denied"), Domain: "app.example.com", Image: "app:latest"}
+	denied, err := deniedWorker.DeployRoute(context.Background(), deniedCommand)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusDenied, denied.Status)
+	cachedDenied, err := deniedWorker.DeployRoute(context.Background(), deniedCommand)
+	require.NoError(t, err)
+	assert.Equal(t, denied, cachedDenied)
+	assert.Len(t, deniedWorker.PolicyDeniedEvents(), 1)
+}
+
 func TestRuntimeWorkerCompletedResultsAreBoundedAndKeepRecentKeys(t *testing.T) {
 	fake := &fakeRuntimeWorkerService{}
 	worker := NewRuntimeWorker(fake)

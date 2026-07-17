@@ -40,7 +40,7 @@ func TestRuntimeCommandIdentityDedupeKeyStableForSameLogicalCommand(t *testing.T
 
 	nextGeneration := identity
 	nextGeneration.Generation = 8
-	assert.NotEqual(t, identity.DedupeKey("deploy_route"), nextGeneration.DedupeKey("deploy_route"))
+	assert.Equal(t, identity.DedupeKey("deploy_route"), nextGeneration.DedupeKey("deploy_route"))
 }
 
 func TestRuntimeRouteCommandValidation(t *testing.T) {

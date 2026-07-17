@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -149,7 +151,7 @@ func runtimeRoleStateSubscriber(worker in.RuntimeWorker) out.RuntimeStateSubscri
 	if !ok {
 		return nil
 	}
-	return pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: "gordon-runtime"}
+	return &pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: "gordon-runtime"}
 }
 
 type pollingRuntimeStateSubscriber struct {
@@ -158,9 +160,12 @@ type pollingRuntimeStateSubscriber struct {
 	}
 	interval          time.Duration
 	sourceComponentID string
+
+	generationMu sync.Mutex
+	generation   uint64
 }
 
-func (s pollingRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+func (s *pollingRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
 	if s.snapshotter == nil {
 		return nil, fmt.Errorf("runtime worker snapshotter not configured")
 	}
@@ -173,10 +178,9 @@ func (s pollingRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context
 		defer close(ch)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		var generation uint64
 		for {
-			generation++
-			snapshot, err := s.snapshotter.Snapshot(ctx, generation, runtimeStateVersion(), s.sourceComponentID)
+			generation := s.nextGeneration()
+			snapshot, err := s.snapshotter.Snapshot(ctx, generation, runtimeStateVersion(generation), s.sourceComponentID)
 			if err == nil {
 				select {
 				case ch <- snapshot:
@@ -194,8 +198,15 @@ func (s pollingRuntimeStateSubscriber) SubscribeRuntimeState(ctx context.Context
 	return ch, nil
 }
 
-func runtimeStateVersion() string {
-	return time.Now().UTC().Format(time.RFC3339Nano)
+func (s *pollingRuntimeStateSubscriber) nextGeneration() uint64 {
+	s.generationMu.Lock()
+	defer s.generationMu.Unlock()
+	s.generation++
+	return s.generation
+}
+
+func runtimeStateVersion(generation uint64) string {
+	return "runtime-state:" + strconv.FormatUint(generation, 10)
 }
 
 func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (in.RuntimeWorker, func(), error) {

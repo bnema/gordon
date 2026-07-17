@@ -88,10 +88,10 @@ func (w *RuntimeWorker) DeployRoute(ctx context.Context, command domain.DeployRo
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckDeployRoute(command), ""); denied {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "deploy_route"); ok {
 		return result, nil
 	}
-	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "deploy_route"); ok {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, "deploy_route", w.policy.CheckDeployRoute(command), ""); denied {
 		return result, nil
 	}
 	deployCtx := ctx
@@ -108,10 +108,10 @@ func (w *RuntimeWorker) RestartRoute(ctx context.Context, command domain.Restart
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckRestartRoute(command), ""); denied {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "restart_route"); ok {
 		return result, nil
 	}
-	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "restart_route"); ok {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, "restart_route", w.policy.CheckRestartRoute(command), ""); denied {
 		return result, nil
 	}
 	return w.runOnce(ctx, command.RuntimeCommandIdentity, "restart_route", func() error {
@@ -123,10 +123,10 @@ func (w *RuntimeWorker) RemoveRoute(ctx context.Context, command domain.RemoveRo
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckRemoveRoute(command), ""); denied {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "remove_route"); ok {
 		return result, nil
 	}
-	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "remove_route"); ok {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, "remove_route", w.policy.CheckRemoveRoute(command), ""); denied {
 		return result, nil
 	}
 	return w.runOnce(ctx, command.RuntimeCommandIdentity, "remove_route", func() error {
@@ -139,10 +139,10 @@ func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileR
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckReconcile(command), ""); denied {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "reconcile"); ok {
 		return result, nil
 	}
-	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "reconcile"); ok {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, "reconcile", w.policy.CheckReconcile(command), ""); denied {
 		return result, nil
 	}
 	return w.runOnce(ctx, command.RuntimeCommandIdentity, "reconcile", func() error {
@@ -158,17 +158,16 @@ func (w *RuntimeWorker) SelfUpdate(ctx context.Context, command domain.RuntimeSe
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
-	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, w.policy.CheckSelfUpdate(command), command.PolicyDecisionID); denied {
+	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "self_update"); ok {
 		return result, nil
 	}
-	if result, ok := w.cachedResult(command.RuntimeCommandIdentity, "self_update"); ok {
+	if result, denied := w.policyResult(ctx, command.RuntimeCommandIdentity, "self_update", w.policy.CheckSelfUpdate(command), command.PolicyDecisionID); denied {
 		return result, nil
 	}
 	result := w.baseResult(command.RuntimeCommandIdentity)
 	result.CompletedAt = result.StartedAt
 	result.Status = domain.RuntimeCommandStatusDenied
 	result.Error = &domain.RuntimeCommandError{Code: "self_update_unavailable", Message: "local runtime self-update adapter is not available", Retryable: false}
-	w.storeResult(command.RuntimeCommandIdentity, "self_update", result)
 	return result, nil
 }
 
@@ -222,7 +221,7 @@ func (w *RuntimeWorker) runOnce(ctx context.Context, identity domain.RuntimeComm
 	result, err := w.run(identity, op)
 
 	w.mu.Lock()
-	if result.Status != domain.RuntimeCommandStatusRunning && result.Status != domain.RuntimeCommandStatusPending {
+	if result.Status == domain.RuntimeCommandStatusSucceeded {
 		w.rememberCompletedResultLocked(key, result)
 	}
 	delete(w.inFlightByDedupeKey, key)
@@ -259,7 +258,7 @@ func (w *RuntimeWorker) failedResult(identity domain.RuntimeCommandIdentity, err
 	return result
 }
 
-func (w *RuntimeWorker) policyResult(ctx context.Context, identity domain.RuntimeCommandIdentity, err error, decisionID string) (domain.RuntimeCommandResult, bool) {
+func (w *RuntimeWorker) policyResult(ctx context.Context, identity domain.RuntimeCommandIdentity, kind string, err error, decisionID string) (domain.RuntimeCommandResult, bool) {
 	if err == nil {
 		return domain.RuntimeCommandResult{}, false
 	}
@@ -267,7 +266,9 @@ func (w *RuntimeWorker) policyResult(ctx context.Context, identity domain.Runtim
 	if !w.policy.Enforced() {
 		return domain.RuntimeCommandResult{}, false
 	}
-	return w.failedResult(identity, err), true
+	result := w.failedResult(identity, err)
+	w.storePolicyDeniedResult(identity, kind, result)
+	return result, true
 }
 
 func (w *RuntimeWorker) cachedResult(identity domain.RuntimeCommandIdentity, kind string) (domain.RuntimeCommandResult, bool) {
@@ -277,10 +278,7 @@ func (w *RuntimeWorker) cachedResult(identity domain.RuntimeCommandIdentity, kin
 	return result, ok
 }
 
-func (w *RuntimeWorker) storeResult(identity domain.RuntimeCommandIdentity, kind string, result domain.RuntimeCommandResult) {
-	if result.Status == domain.RuntimeCommandStatusRunning || result.Status == domain.RuntimeCommandStatusPending {
-		return
-	}
+func (w *RuntimeWorker) storePolicyDeniedResult(identity domain.RuntimeCommandIdentity, kind string, result domain.RuntimeCommandResult) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.rememberCompletedResultLocked(identity.DedupeKey(kind), result)

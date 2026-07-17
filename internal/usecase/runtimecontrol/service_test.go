@@ -37,6 +37,40 @@ func TestServiceDeployRestartRemoveCommands(t *testing.T) {
 	assert.True(t, client.remove.Force)
 }
 
+func TestServiceDesiredStateCommandsHaveStableIdempotencyKeys(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeRuntimeCommandClient{}
+	svc := NewService(nil, client, "control-1")
+	calls := 0
+	svc.now = func() time.Time {
+		calls++
+		return time.Unix(int64(calls), 0).UTC()
+	}
+
+	_, err := svc.DeployRoute(ctx, domain.Route{Domain: "app.example.com", Image: "app:v1", Env: []string{"A=1"}})
+	require.NoError(t, err)
+	firstDeploy := client.deploy
+	_, err = svc.DeployRoute(ctx, domain.Route{Domain: "app.example.com", Image: "app:v1", Env: []string{"A=1"}})
+	require.NoError(t, err)
+	assert.Equal(t, firstDeploy.IdempotencyKey, client.deploy.IdempotencyKey)
+	assert.Greater(t, client.deploy.Generation, firstDeploy.Generation)
+
+	_, err = svc.DeployRoute(ctx, domain.Route{Domain: "app.example.com", Image: "app:v2", Env: []string{"A=1"}})
+	require.NoError(t, err)
+	assert.NotEqual(t, firstDeploy.IdempotencyKey, client.deploy.IdempotencyKey)
+
+	configSvc := inmocks.NewMockConfigService(t)
+	routes := []domain.Route{{Domain: "app.example.com", Image: "app:v1"}}
+	configSvc.EXPECT().GetRoutes(ctx).Return(routes).Twice()
+	reconcileSvc := NewService(configSvc, client, "control-1")
+	_, err = reconcileSvc.ReconcileConfiguredRoutes(ctx, "startup")
+	require.NoError(t, err)
+	firstReconcile := client.reconcile
+	_, err = reconcileSvc.ReconcileConfiguredRoutes(ctx, "startup")
+	require.NoError(t, err)
+	assert.Equal(t, firstReconcile.IdempotencyKey, client.reconcile.IdempotencyKey)
+}
+
 func TestServiceReconcileConfiguredRoutes(t *testing.T) {
 	ctx := context.Background()
 	configSvc := inmocks.NewMockConfigService(t)

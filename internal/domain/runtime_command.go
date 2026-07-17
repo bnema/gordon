@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -70,8 +69,6 @@ func (i RuntimeCommandIdentity) DedupeKey(kind string) string {
 	_, _ = h.Write([]byte(strings.TrimSpace(i.IdempotencyKey)))
 	_, _ = h.Write([]byte{0})
 	_, _ = h.Write([]byte(kind))
-	_, _ = h.Write([]byte{0})
-	_, _ = h.Write([]byte(strconv.FormatUint(i.Generation, 10)))
 	return hex.EncodeToString(h.Sum(nil))
 }
 
