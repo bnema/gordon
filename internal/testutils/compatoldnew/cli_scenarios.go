@@ -2,7 +2,6 @@ package compatoldnew
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,28 +103,7 @@ func routesListJSONEnvironment(fixture SideFixture) []string {
 }
 
 func routesListJSONArtifact(capture Artifact) (CLIArtifact, error) {
-	raw, ok := capture.RawValue().(map[string]any)
-	if !ok {
-		artifact := newExactCLIObservation("gordon routes list --json", map[string]any{"captureError": fmt.Sprintf("unexpected capture type %T", capture.RawValue())})
-		return artifact, fmt.Errorf("unexpected capture type %T", capture.RawValue())
-	}
-	exitCode, exitOK := raw["exitCode"].(int)
-	stdout, stdoutOK := raw["stdout"].(string)
-	stderr, stderrOK := raw["stderr"].(string)
-	observed := map[string]any{"exitCode": exitCode, "stderr": stderr}
-	if !exitOK || !stdoutOK || !stderrOK {
-		artifact := newExactCLIObservation("gordon routes list --json", observed)
-		return artifact, fmt.Errorf("missing command observation fields")
-	}
-	var payload any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		observed["stdout"] = stdout
-		observed["decodeError"] = "invalid JSON"
-		artifact := newExactCLIObservation("gordon routes list --json", observed)
-		return artifact, fmt.Errorf("decode JSON: %w", err)
-	}
-	observed["json"] = payload
-	return newExactCLIObservation("gordon routes list --json", observed), nil
+	return commandJSONArtifact(capture, "gordon routes list --json")
 }
 
 func routesListJSONRerunCommand() string {

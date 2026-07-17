@@ -121,34 +121,45 @@ func configShowJSONEnvironment(fixture SideFixture) []string {
 }
 
 func configShowJSONArtifact(capture Artifact) (CLIArtifact, error) {
-	raw, ok := capture.RawValue().(map[string]any)
+	return commandJSONArtifact(capture, "gordon config show --json")
+}
+
+// commandJSONArtifact preserves the command's raw output for diagnostics while
+// comparing only its exit status, parsed JSON, stderr, and decode state.
+func commandJSONArtifact(capture Artifact, source string) (CLIArtifact, error) {
+	captured, ok := capture.RawValue().(map[string]any)
 	if !ok {
-		artifact := newExactCLIObservation("gordon config show --json", map[string]any{"captureError": fmt.Sprintf("unexpected capture type %T", capture.RawValue())})
+		artifact := newExactCLIObservation(source, map[string]any{"captureError": fmt.Sprintf("unexpected capture type %T", capture.RawValue())})
 		return artifact, fmt.Errorf("unexpected capture type %T", capture.RawValue())
 	}
-	exitCode, exitOK := raw["exitCode"].(int)
-	stdout, stdoutOK := raw["stdout"].(string)
-	stderr, stderrOK := raw["stderr"].(string)
-	observed := map[string]any{"exitCode": exitCode, "stderr": stderr}
+	exitCode, exitOK := captured["exitCode"].(int)
+	stdout, stdoutOK := captured["stdout"].(string)
+	stderr, stderrOK := captured["stderr"].(string)
+	raw := map[string]any{"exitCode": exitCode, "stdout": stdout, "stderr": stderr}
+	normalized := map[string]any{"exitCode": exitCode, "stderr": stderr, "decodeError": ""}
 	if !exitOK || !stdoutOK || !stderrOK {
-		artifact := newExactCLIObservation("gordon config show --json", observed)
-		return artifact, fmt.Errorf("missing command observation fields")
+		raw["decodeError"] = "missing command observation fields"
+		normalized["decodeError"] = "missing command observation fields"
+		return newCLIJSONObservation(source, raw, normalized), fmt.Errorf("missing command observation fields")
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		observed["stdout"] = stdout
-		observed["decodeError"] = "invalid JSON"
-		artifact := newExactCLIObservation("gordon config show --json", observed)
-		return artifact, fmt.Errorf("decode JSON: %w", err)
+		raw["decodeError"] = "invalid JSON"
+		normalized["decodeError"] = "invalid JSON"
+		return newCLIJSONObservation(source, raw, normalized), fmt.Errorf("decode JSON: %w", err)
 	}
-	observed["json"] = payload
-	return newExactCLIObservation("gordon config show --json", observed), nil
+	normalized["json"] = payload
+	return newCLIJSONObservation(source, raw, normalized), nil
 }
 
-// newExactCLIObservation deliberately bypasses generic normalization: command
-// exit status, parsed JSON, and stderr are the compatibility contract here.
+// newExactCLIObservation is used for capture failures that have no command
+// observation to parse.
 func newExactCLIObservation(source string, observed map[string]any) CLIArtifact {
 	return CLIArtifact{baseArtifact{Raw: observed, Normalized: observed, SourceRef: source, Compare: LevelExact}}
+}
+
+func newCLIJSONObservation(source string, raw, normalized map[string]any) CLIArtifact {
+	return CLIArtifact{baseArtifact{Raw: raw, Normalized: Normalize(normalized), SourceRef: source, Compare: LevelExact}}
 }
 
 func configShowJSONRerunCommand() string {

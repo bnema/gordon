@@ -23,7 +23,7 @@ ARCHS := amd64 arm64
 # Compatibility harness foundation and policy guards. Keep this list anchored
 # with each real slice so an absent or pending scenario cannot silently pass CI.
 COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestRunnerReadinessSupportsCallbackTCPExitAndTimeout|TestRunnerStartWaitReadyStopAndLogs|TestStageSideFixtureCopiesConfigAndIsolatesHomeAndData|TestFixtureMetadata|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass
-COMPAT_ARTIFACT_DIR ?= artifacts/compat
+COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 
 # Phony targets
 .PHONY: all build build-push clean dev-release \

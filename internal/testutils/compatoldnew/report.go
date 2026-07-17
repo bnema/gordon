@@ -53,7 +53,9 @@ func CompareSideResultsWithMetadata(old, new SideResult, allow *AllowlistedDiffe
 	if artifactDir == "" {
 		return Report{}, fmt.Errorf("compare sides: report artifact directory is required")
 	}
-	report := NewReport(Compare(old.Artifact, new.Artifact, allow), 1)
+	failures := Compare(old.Artifact, new.Artifact, allow)
+	failures = append(failures, validationFailures(old, new)...)
+	report := NewReport(failures, 1)
 	report.BaselineCommit = metadata.BaselineCommit
 	report.CandidateCommit = metadata.CandidateCommit
 	report.RerunCommand = metadata.RerunCommand
@@ -69,17 +71,49 @@ func CompareSideResultsWithMetadata(old, new SideResult, allow *AllowlistedDiffe
 	return report, nil
 }
 
+func validationFailures(old, new SideResult) []Failure {
+	var failures []Failure
+	for _, result := range []SideResult{old, new} {
+		if result.ValidationError == nil {
+			continue
+		}
+		evidence := redactedValidationEvidence(result.ValidationError)
+		failure := Failure{
+			Source:           result.Artifact.Source(),
+			Level:            result.Artifact.Level(),
+			SuggestedCommand: suggest(result.Artifact),
+			Problem:          fmt.Sprintf("%s validation failed: %s", result.Side, evidence),
+		}
+		observation := map[string]string{"side": result.Side, "validationError": evidence}
+		if result.Side == SideOld {
+			failure.OldValue = observation
+		} else {
+			failure.NewValue = observation
+		}
+		failures = append(failures, failure)
+	}
+	return failures
+}
+
 func validationErrors(old, new SideResult) error {
 	var errors []string
 	for _, result := range []SideResult{old, new} {
 		if result.ValidationError != nil {
-			errors = append(errors, fmt.Sprintf("%s validation: %v", result.Side, result.ValidationError))
+			errors = append(errors, fmt.Sprintf("%s validation: %s", result.Side, redactedValidationEvidence(result.ValidationError)))
 		}
 	}
 	if len(errors) == 0 {
 		return nil
 	}
 	return fmt.Errorf("compatibility contract failure after report emission: %s", strings.Join(errors, "; "))
+}
+
+func redactedValidationEvidence(err error) string {
+	redacted, ok := redactArtifactValue(err.Error()).(string)
+	if !ok {
+		return "<redacted validation error>"
+	}
+	return redacted
 }
 
 func NewReport(failures []Failure, total int) Report {
