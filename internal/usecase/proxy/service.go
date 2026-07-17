@@ -45,6 +45,11 @@ type Service struct {
 	inFlight         map[string]int
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
+
+	// Wait-path callbacks are package-private synchronization hooks for drain
+	// contract tests. Production leaves them nil.
+	waitForNoInFlightWait func()
+	drainRegistryWait     func()
 }
 
 // NewService creates a new proxy service.
@@ -300,6 +305,7 @@ func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, tim
 			return false
 		}
 
+		s.notifyWaitForNoInFlightWait()
 		select {
 		case <-time.After(100 * time.Millisecond):
 		case <-ctx.Done():
@@ -417,9 +423,22 @@ func (s *Service) DrainRegistryInFlight(timeout time.Duration) bool {
 		if s.registryInFlight.Load() == 0 {
 			return true
 		}
+		s.notifyDrainRegistryWait()
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+func (s *Service) notifyWaitForNoInFlightWait() {
+	if s.waitForNoInFlightWait != nil {
+		s.waitForNoInFlightWait()
+	}
+}
+
+func (s *Service) notifyDrainRegistryWait() {
+	if s.drainRegistryWait != nil {
+		s.drainRegistryWait()
+	}
 }
 
 func (s *Service) isRunningInContainer() bool {

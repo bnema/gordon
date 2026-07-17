@@ -10,9 +10,77 @@ import (
 
 func TestManagedHTTPRouteImageMetadataSeparatesLabelAndExposePorts(t *testing.T) {
 	require.NotEqual(t, managedHTTPRouteImagePort, managedHTTPRouteExposedPort)
+	require.Contains(t, managedHTTPRouteDockerfile, "FROM "+managedHTTPRouteBaseImage)
 	require.Contains(t, managedHTTPRouteDockerfile, "LABEL gordon.proxy.port=8080")
 	require.Contains(t, managedHTTPRouteDockerfile, "EXPOSE 9090")
 	require.Equal(t, "127.0.0.1::8080", managedHTTPRoutePublishAddress())
+}
+
+func TestManagedHTTPRouteSideRetryRemovesExactContainerBeforeRestart(t *testing.T) {
+	var order []string
+	containerActive := false
+	resources := &managedProxyResources{
+		containers: map[string]string{},
+		cleanupCommand: func(_ context.Context, args ...string) error {
+			require.Equal(t, []string{"rm", "-f", "gordon-managed.test"}, args)
+			require.True(t, containerActive, "retry must remove the previous container")
+			containerActive = false
+			order = append(order, "remove-old")
+			return nil
+		},
+	}
+	attempts := 0
+	attempt := func(_ context.Context, side, _, _, domain string, resources *managedProxyResources) (SideResult, error) {
+		attempts++
+		if containerActive {
+			return SideResult{}, errors.New("container name conflict")
+		}
+		containerActive = true
+		resources.containers[side] = "gordon-" + domain
+		order = append(order, "start")
+		if attempts == 1 {
+			return SideResult{}, errors.New("listen tcp 127.0.0.1: address already in use")
+		}
+		return SideResult{Side: side}, nil
+	}
+
+	result, err := runManagedHTTPRouteSideWithAttempt(context.Background(), SideOld, "gordon", t.TempDir(), "managed.test", resources, attempt)
+
+	require.NoError(t, err)
+	require.Equal(t, SideOld, result.Side)
+	require.Equal(t, []string{"start", "remove-old", "start"}, order)
+	require.True(t, containerActive, "second attempt owns only its newly started container")
+	require.Equal(t, "gordon-managed.test", resources.containers[SideOld])
+}
+
+func TestManagedProxyPullBaseImageRetriesOnlyTransientNetworkFailures(t *testing.T) {
+	t.Run("retries transient network failure", func(t *testing.T) {
+		attempts := 0
+		resources := &managedProxyResources{command: func(_ context.Context, args ...string) error {
+			attempts++
+			require.Equal(t, []string{"pull", managedHTTPRouteBaseImage}, args)
+			if attempts == 1 {
+				return errTransientDockerNetwork
+			}
+			return nil
+		}}
+
+		require.NoError(t, resources.pullBaseImage(context.Background()))
+		require.Equal(t, 2, attempts)
+	})
+
+	t.Run("does not retry non-transient failure", func(t *testing.T) {
+		attempts := 0
+		nonTransientErr := errors.New("image not found")
+		resources := &managedProxyResources{command: func(_ context.Context, _ ...string) error {
+			attempts++
+			return nonTransientErr
+		}}
+
+		err := resources.pullBaseImage(context.Background())
+		require.ErrorIs(t, err, nonTransientErr)
+		require.Equal(t, 1, attempts)
+	})
 }
 
 func TestManagedProxyCleanupJoinsPrimaryErrorAndAttemptsAllOwnedResources(t *testing.T) {

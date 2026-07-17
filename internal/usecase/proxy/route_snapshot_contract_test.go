@@ -34,11 +34,18 @@ func TestRouteSnapshotContract_WaitForNoInFlight(t *testing.T) {
 		svc := NewService(nil, nil, nil, Config{})
 		release := svc.TrackInFlight("route-old")
 		result := make(chan bool, 1)
+		waitEntered := make(chan struct{}, 1)
+		svc.waitForNoInFlightWait = func() {
+			select {
+			case waitEntered <- struct{}{}:
+			default:
+			}
+		}
 
 		go func() {
 			result <- svc.WaitForNoInFlight(context.Background(), "route-old", time.Second)
 		}()
-		assertWaiterBlocked(t, result)
+		awaitWaitPath(t, waitEntered)
 
 		release()
 		require.True(t, awaitWaiterResult(t, result))
@@ -65,15 +72,13 @@ func TestRouteSnapshotContract_RouteAndRegistryInFlightAreIndependent(t *testing
 	assert.Equal(t, int64(1), svc.RegistryInFlight())
 }
 
-func assertWaiterBlocked(t *testing.T, result <-chan bool) {
+func awaitWaitPath(t *testing.T, waitEntered <-chan struct{}) {
 	t.Helper()
 
-	timer := time.NewTimer(20 * time.Millisecond)
-	defer timer.Stop()
 	select {
-	case drained := <-result:
-		t.Fatalf("waiter returned before request release: %t", drained)
-	case <-timer.C:
+	case <-waitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("waiter did not enter the wait path")
 	}
 }
 

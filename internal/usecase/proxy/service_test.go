@@ -484,10 +484,17 @@ func TestDrainRegistryInFlight(t *testing.T) {
 	svc.registryInFlight.Add(2)
 
 	result := make(chan bool, 1)
+	waitEntered := make(chan struct{}, 1)
+	svc.drainRegistryWait = func() {
+		select {
+		case waitEntered <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		result <- svc.DrainRegistryInFlight(time.Second)
 	}()
-	assertWaiterBlocked(t, result)
+	awaitWaitPath(t, waitEntered)
 
 	svc.registryInFlight.Add(-1)
 	svc.registryInFlight.Add(-1)

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -212,7 +213,15 @@ func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, w.Code)
-	result := <-readResult
+	var result struct {
+		bytesRead int
+		err       error
+	}
+	select {
+	case result = <-readResult:
+	case <-time.After(time.Second):
+		t.Fatal("backend did not report request body read")
+	}
 	assert.Equal(t, 1024, result.bytesRead)
 	assert.Error(t, result.err)
 }
