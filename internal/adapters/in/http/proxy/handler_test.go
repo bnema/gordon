@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
@@ -43,30 +45,35 @@ func TestHandler_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
-func TestHandler_RoutesToRegistry(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func TestHandler_RoutesToRegistrySnapshotTarget(t *testing.T) {
+	var upstreamPort string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v2/", r.URL.Path)
+		assert.Equal(t, "registry.internal:"+upstreamPort, r.Host)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+	upstreamURL, err := url.Parse(upstream.URL)
 	require.NoError(t, err)
-	registryPort := listener.Addr().(*net.TCPAddr).Port
-	require.NoError(t, listener.Close())
+	upstreamPort = upstreamURL.Port()
+	registryPort, err := strconv.Atoi(upstreamPort)
+	require.NoError(t, err)
 
 	proxySvc := inmocks.NewMockProxyService(t)
-
-	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
-		RegistryPort: registryPort,
-	})
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
 	proxySvc.EXPECT().IsRegistryDomain("registry.example.com").Return(true)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "registry.example.com").Return(&domain.ProxyTarget{
+		Host: "127.0.0.1", Port: registryPort, Scheme: "http", OriginalHost: "registry.internal",
+	}, nil)
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
 
 	handler := NewHandler(proxySvc, nil, testLogger())
-
 	req := httptest.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
 	req.Host = "registry.example.com"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), "Registry Unavailable")
+	assert.Equal(t, http.StatusNoContent, w.Code)
 }
 
 func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {

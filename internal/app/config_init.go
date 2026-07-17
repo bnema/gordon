@@ -123,6 +123,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("telemetry.metrics", true)
 	v.SetDefault("telemetry.logs", true)
 	v.SetDefault("telemetry.trace_sample_rate", 1.0)
+	v.SetDefault("control.listen_address", "127.0.0.1:9090")
 	v.SetDefault("control.endpoint", "")
 	v.SetDefault("control.token", "")
 	v.SetDefault("control.token_env", "")

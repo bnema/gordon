@@ -65,10 +65,15 @@ import (
 
 // Config holds the application configuration.
 type ControlConfig struct {
-	Endpoint    string `mapstructure:"endpoint"`
-	Token       string `mapstructure:"token"`
-	TokenEnv    string `mapstructure:"token_env"`
-	InsecureTLS bool   `mapstructure:"insecure_tls"`
+	// ListenAddress is the control-role gRPC bind address. It is deliberately
+	// separate from Endpoint, which is only the edge-role dial target.
+	ListenAddress string `mapstructure:"listen_address"`
+	Endpoint      string `mapstructure:"endpoint"`
+	Token         string `mapstructure:"token"`
+	TokenEnv      string `mapstructure:"token_env"`
+	// InsecureTLS permits plaintext gRPC only when explicitly enabled. TLS with
+	// normal hostname verification is the default for edge control connections.
+	InsecureTLS bool `mapstructure:"insecure_tls"`
 }
 
 type Config struct {

@@ -78,10 +78,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this is the registry domain
+	// Registry routing is snapshot-first too: in a split deployment the registry
+	// is not necessarily on this edge host. Never synthesize localhost here.
 	if h.proxySvc.IsRegistryDomain(host) {
-		log.Debug().Msg("routing request to registry")
-		h.forwardToRegistry(w, r, cfg.RegistryPort)
+		log.Debug().Msg("resolving registry snapshot target")
+		target, err := h.proxySvc.GetTarget(ctx, host)
+		if err != nil {
+			log.Warn().Err(err).Msg("registry snapshot target unavailable")
+			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		h.forwardToRegistry(w, r, target)
 		return
 	}
 
