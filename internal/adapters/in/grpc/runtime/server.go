@@ -90,11 +90,16 @@ func NewServerWithAllRuntimePortsAndDrainAckReceiver(worker boundaries.RuntimeWo
 	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, drainAckReceiver: drainAckReceiver, componentID: componentID}
 }
 
-// NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager configures every optional runtime port.
+// NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager configures every optional legacy runtime port.
 func NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, drainAckReceiver out.RuntimeDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
 	server := NewServerWithAllRuntimePortsAndDrainAckReceiver(worker, logReader, volumeManager, imageManager, stateSubscriber, drainAckReceiver, componentID)
 	server.standaloneServiceManager = standaloneServiceManager
 	return server
+}
+
+// NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager configures the split opaque drain relay.
+func NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, routeDrainAckReceiver out.RouteDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
+	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, routeDrainAckReceiver: routeDrainAckReceiver, standaloneServiceManager: standaloneServiceManager, componentID: componentID}
 }
 
 func MethodScopes() map[string]domain.ComponentScope {

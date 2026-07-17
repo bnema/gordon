@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
@@ -60,6 +61,19 @@ func TestRuntimeRoleBundleExposesStandaloneServiceManager(t *testing.T) {
 	bundle := runtimeRoleWorkerBundle{standaloneServiceManager: manager}
 
 	require.Same(t, manager, runtimeRoleStandaloneServiceManager(bundle))
+}
+
+func TestRuntimeRoleServiceWiresControlRelayedDrainReceiver(t *testing.T) {
+	state := domain.RuntimeRouteState{Domain: "app.example.com", Generation: 1, ContainerAlias: "gordon-target-app-example-com", EdgeTargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1, Status: domain.RouteTargetStatusReady, BackingContainerName: "private-old"}
+	key, err := domain.ManagedRouteTargetKeyFromRuntimeState(state)
+	require.NoError(t, err)
+	registry := container.NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return state, true })
+	registry.PrepareDrain("old-id")
+	server := newRuntimeRoleService(runtimeRoleWorkerBundle{RuntimeWorker: fakeRuntimeRoleWorker{}, routeDrainAckReceiver: registry})
+
+	_, err = server.ReportEdgeDrain(context.Background(), &runtimev1.ReportEdgeDrainRequest{CanonicalDomain: "app.example.com", TransitionGeneration: 4, OldTargetKey: string(key), AcknowledgedAt: timestamppb.Now()})
+	require.NoError(t, err)
+	require.True(t, registry.WaitForNoInFlight(context.Background(), "old-id", time.Second))
 }
 
 func TestRuntimeRoleServiceExposesStandaloneServiceManager(t *testing.T) {

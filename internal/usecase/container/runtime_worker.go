@@ -375,17 +375,16 @@ func buildRuntimeRouteStates(generation uint64, routes []domain.RouteInfo, conta
 			states = append(states, unavailableRouteState(generation, route.Domain, route.ContainerStatus))
 			continue
 		}
-		port := routeTargetPort(c)
-		if port == 0 {
+		state, ready := runtimeReadyRouteState(generation, route.Domain, c)
+		if !ready {
 			states = append(states, unavailableRouteState(generation, route.Domain, "no target port"))
 			continue
 		}
-		alias := targetAliasForDomain(route.Domain)
-		if !runtimeNetworkHasTarget(networkAliases, route.Network, alias, c.Name) {
+		if !runtimeNetworkHasTarget(networkAliases, route.Network, state.EdgeTargetAlias, c.Name) {
 			states = append(states, unavailableRouteState(generation, route.Domain, "no target alias"))
 			continue
 		}
-		states = append(states, domain.RuntimeRouteState{Domain: route.Domain, Generation: generation, ContainerAlias: alias, EdgeTargetAlias: alias, TargetPort: port, Scheme: routeScheme(), Protocol: routeProtocol(c), Status: domain.RouteTargetStatusReady, UnavailableReason: domain.RouteTargetUnavailableReasonNone, BackingContainerName: c.Name})
+		states = append(states, state)
 	}
 	return states
 }
@@ -422,6 +421,34 @@ func containerForRoute(route domain.RouteInfo, containers map[string]*domain.Con
 		}
 	}
 	return nil
+}
+
+// runtimeReadyRouteState is the one managed route-state construction shared by
+// snapshot production and the runtime drain registry. The backing name is
+// private runtime material; callers must derive an opaque TargetKey before it
+// crosses a component boundary.
+func runtimeReadyRouteState(generation uint64, routeDomain string, c *domain.Container) (domain.RuntimeRouteState, bool) {
+	canonicalDomain, ok := domain.CanonicalRouteDomain(routeDomain)
+	if !ok || c == nil || normalizeContainerStatus(c.Status) != domain.ContainerStatusRunning {
+		return domain.RuntimeRouteState{}, false
+	}
+	port := routeTargetPort(c)
+	if port == 0 || strings.TrimSpace(c.Name) == "" {
+		return domain.RuntimeRouteState{}, false
+	}
+	alias := targetAliasForDomain(canonicalDomain)
+	return domain.RuntimeRouteState{
+		Domain:               canonicalDomain,
+		Generation:           generation,
+		ContainerAlias:       alias,
+		EdgeTargetAlias:      alias,
+		TargetPort:           port,
+		Scheme:               routeScheme(),
+		Protocol:             routeProtocol(c),
+		Status:               domain.RouteTargetStatusReady,
+		UnavailableReason:    domain.RouteTargetUnavailableReasonNone,
+		BackingContainerName: c.Name,
+	}, true
 }
 
 func unavailableRouteState(generation uint64, routeDomain, status string) domain.RuntimeRouteState {

@@ -907,13 +907,18 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 
 	s.mu.RLock()
 	inv := s.cacheInvalidator
+	waiter := s.drainWaiter
+	cfg := s.config
 	s.mu.RUnlock()
 	if inv != nil {
 		inv.InvalidateTarget(ctx, domainName)
 		return true
 	}
 
-	return false
+	// Split runtime has no local edge cache to invalidate. Its prepared remote
+	// waiter pins the old opaque target while the polling state publisher sends
+	// the replacement to control/edge, so it is the traffic-switch boundary.
+	return usesRuntimeRemoteDrainWaiter(waiter, cfg)
 }
 
 // stabilizeNewContainer monitors the new container briefly after traffic switch.
@@ -1086,11 +1091,28 @@ func (s *Service) prepareDrain(oldContainerID string) *preparedDrain {
 	if mode == "" {
 		mode = "delay"
 	}
-	if invalidator == nil || waiter == nil || (mode != "inflight" && mode != "auto") {
+	if waiter == nil || (mode != "inflight" && mode != "auto") {
+		return nil
+	}
+	// A monolith waiter requires a local cache invalidation. The split runtime
+	// waiter instead waits for the remotely observed snapshot handoff.
+	if invalidator == nil && !usesRuntimeRemoteDrainWaiter(waiter, cfg) {
 		return nil
 	}
 	waiter.PrepareDrain(oldContainerID)
 	return &preparedDrain{waiter: waiter, timeout: cfg.DrainTimeout}
+}
+
+func usesRuntimeRemoteDrainWaiter(waiter out.ProxyDrainWaiter, cfg Config) bool {
+	mode := cfg.DrainMode
+	if mode == "" {
+		mode = "delay"
+	}
+	if mode != "inflight" && mode != "auto" {
+		return false
+	}
+	_, ok := waiter.(runtimeRemoteDrainWaiter)
+	return ok
 }
 
 func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
@@ -1608,6 +1630,24 @@ func (s *Service) List(_ context.Context) map[string]*domain.Container {
 	result := make(map[string]*domain.Container, len(s.containers))
 	maps.Copy(result, s.containers)
 	return result
+}
+
+// RuntimeDrainRouteState resolves a private lifecycle ID to the same sanitized
+// managed route state emitted by RuntimeWorker snapshots. The caller derives an
+// opaque TargetKey locally; no backing identity is sent to the edge protocol.
+func (s *Service) RuntimeDrainRouteState(containerID string) (domain.RuntimeRouteState, bool) {
+	if containerID == "" {
+		return domain.RuntimeRouteState{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for routeDomain, candidate := range s.containers {
+		if candidate == nil || candidate.ID != containerID {
+			continue
+		}
+		return runtimeReadyRouteState(1, routeDomain, candidate)
+	}
+	return domain.RuntimeRouteState{}, false
 }
 
 // ListRoutesWithDetails returns routes with network and attachment info.

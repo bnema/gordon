@@ -58,6 +58,20 @@ func TestService_PrepareDrainRequiresInvalidator(t *testing.T) {
 	require.Nil(t, svc.prepareDrain("old-container"))
 }
 
+func TestService_PrepareDrainAllowsSplitRuntimeWithoutLocalInvalidator(t *testing.T) {
+	state := domain.RuntimeRouteState{Domain: "app.example.com", Generation: 1, ContainerAlias: "gordon-target-app-example-com", EdgeTargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1, Status: domain.RouteTargetStatusReady, BackingContainerName: "private-old"}
+	waiter := NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return state, true })
+	eventBus := mocks.NewMockEventPublisher(t)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Once()
+	svc := NewService(nil, nil, eventBus, nil, Config{DrainMode: "inflight"}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+
+	prepared := svc.prepareDrain("old-container")
+	require.NotNil(t, prepared)
+	assert.True(t, svc.activateDeployedContainer(testContext(), "app.example.com", &domain.Container{ID: "new-container"}))
+	prepared.cancel("old-container")
+}
+
 func TestService_ActivateAndStabilizeCancelsPreparedDrainOnRollbackOrError(t *testing.T) {
 	tests := []struct {
 		name       string
