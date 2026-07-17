@@ -227,8 +227,10 @@ func edgeHTTPHandlerWithMiddleware(proxyHandler http.Handler, snapshots *edgesna
 	}
 	// External TLS termination has no safe direct plaintext path. The same
 	// CIDRs that make forwarded headers trustworthy are the only permitted peers.
+	// Unlike registry access, loopback is not implicitly trusted: operators must
+	// explicitly list it when their terminating proxy connects from localhost.
 	if strings.EqualFold(cfg.Edge.TLS.Mode, edgeTLSModeExternal) {
-		middlewares = append(middlewares, middleware.ProxyCIDRAllowlist(trustedNets, log))
+		middlewares = append(middlewares, middleware.StrictDirectPeerCIDRAllowlist(trustedNets, log))
 	}
 	handler := otelhttp.NewHandler(middleware.Chain(middlewares...)(edgeHTTPHandler(proxyHandler, snapshots)), "gordon.edge")
 	if accessWriter != nil {

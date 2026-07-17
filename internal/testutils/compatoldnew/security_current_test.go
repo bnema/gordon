@@ -33,8 +33,10 @@ import (
 type securityAuthCase string
 
 const (
-	securityMissingToken    securityAuthCase = "missing"
-	securityWrongScopeToken securityAuthCase = "wrong_scope"
+	securityMissingToken          securityAuthCase = "missing"
+	securityWrongComponentToken   securityAuthCase = "wrong_component"
+	securityWrongScopeToken       securityAuthCase = "wrong_scope"
+	securityUnknownComponentToken                  = "gordon_component.unknown-component.unknown-secret"
 )
 
 // RunSecurityComponentAuth exercises the actual control EdgeService transport
@@ -133,6 +135,22 @@ func (f *securityControlFixture) exercise(ctx context.Context, authCase security
 		} else {
 			rejectedErr = callErr
 		}
+	case securityWrongComponentToken:
+		credentials, credentialErr := grpcauth.NewInsecureBearerTokenCredentials(securityUnknownComponentToken)
+		if credentialErr != nil {
+			return false, false, credentialErr
+		}
+		unknownConnection, dialErr := grpc.NewClient(f.listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithPerRPCCredentials(credentials))
+		if dialErr != nil {
+			return false, false, dialErr
+		}
+		stream, callErr := edgev1.NewEdgeServiceClient(unknownConnection).WatchRouteSnapshots(ctx, &edgev1.WatchRouteSnapshotsRequest{})
+		if callErr == nil {
+			_, rejectedErr = stream.Recv()
+		} else {
+			rejectedErr = callErr
+		}
+		_ = unknownConnection.Close()
 	case securityWrongScopeToken:
 		credentials, credentialErr := grpcauth.NewInsecureBearerTokenCredentials(f.limited)
 		if credentialErr != nil {
@@ -153,6 +171,9 @@ func (f *securityControlFixture) exercise(ctx context.Context, authCase security
 		return false, false, fmt.Errorf("unknown security auth case")
 	}
 	denied := status.Code(rejectedErr) == codes.Unauthenticated || status.Code(rejectedErr) == codes.PermissionDenied
+	if authCase == securityWrongComponentToken {
+		denied = status.Code(rejectedErr) == codes.Unauthenticated
+	}
 
 	credentials, err := grpcauth.NewInsecureBearerTokenCredentials(f.valid)
 	if err != nil {

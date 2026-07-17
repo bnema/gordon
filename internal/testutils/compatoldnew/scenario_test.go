@@ -101,6 +101,7 @@ func TestScenarioDefinitions(t *testing.T) {
 			"security/registry-no-podman-socket",
 			"security/control-no-podman-socket-after-split",
 			"security/missing-component-token-rejected",
+			"security/wrong-component-token-rejected",
 			"security/wrong-scope-component-token-rejected",
 			"security/unsafe-runtime-request-denied",
 		}},
@@ -142,6 +143,7 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"proxy/zero-downtime-drain":                     {},
 		"security/edge-no-podman-socket":                {},
 		"security/missing-component-token-rejected":     {},
+		"security/wrong-component-token-rejected":       {},
 		"security/wrong-scope-component-token-rejected": {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
@@ -206,6 +208,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	require.True(t, podmanByName["cli/logs"])
 	require.False(t, podmanByName["security/edge-no-podman-socket"])
 	require.False(t, podmanByName["security/missing-component-token-rejected"])
+	require.False(t, podmanByName["security/wrong-component-token-rejected"])
 
 	t.Setenv(EnvCompatPodman, "")
 	podmanScenario := RegistryScenarios()[0]

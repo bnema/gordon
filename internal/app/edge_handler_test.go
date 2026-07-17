@@ -33,6 +33,54 @@ func (w *edgeAccessWriter) entry(t *testing.T, index int) out.AccessLogEntry {
 	return w.entries[index]
 }
 
+func TestEdgeHandlerExternalTLSRequiresExplicitLoopbackTrust(t *testing.T) {
+	log := zerowrap.New(zerowrap.Config{Level: "disabled"})
+
+	tests := []struct {
+		name         string
+		trustedCIDRs []string
+		remoteAddr   string
+		wantStatus   int
+	}{
+		{
+			name:         "localhost is denied when only a non-loopback proxy CIDR is configured",
+			trustedCIDRs: []string{"10.0.0.0/8"},
+			remoteAddr:   "127.0.0.1:1234",
+			wantStatus:   http.StatusForbidden,
+		},
+		{
+			name:         "localhost passes only when loopback is explicitly configured",
+			trustedCIDRs: []string{"127.0.0.0/8"},
+			remoteAddr:   "127.0.0.1:1234",
+			wantStatus:   http.StatusServiceUnavailable,
+		},
+		{
+			name:         "forwarded headers cannot bypass an untrusted direct peer",
+			trustedCIDRs: []string{"10.0.0.0/8"},
+			remoteAddr:   "192.0.2.5:1234",
+			wantStatus:   http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := defaultEdgeConfig()
+			cfg.Edge.TLS.Mode = edgeTLSModeExternal
+			cfg.Edge.TrustedProxyCIDRs = tt.trustedCIDRs
+			handler := edgeHTTPHandlerWithMiddleware(http.NotFoundHandler(), nil, cfg, log, nil)
+			req := httptest.NewRequest(http.MethodGet, "http://edge.test/healthz", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("X-Forwarded-For", "10.1.2.3")
+			req.Header.Set("Forwarded", "for=10.1.2.3")
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.wantStatus, rr.Code)
+		})
+	}
+}
+
 func TestEdgeHandlerExternalTLSRestrictsPlaintextAndLogsTrustedForwardedAddress(t *testing.T) {
 	cfg := defaultEdgeConfig()
 	cfg.Edge.TLS.Mode = edgeTLSModeExternal

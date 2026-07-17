@@ -9,6 +9,7 @@ func SecurityScenarios() []Scenario {
 		securityScenario("security/registry-no-podman-socket", true),
 		securityScenario("security/control-no-podman-socket-after-split", true),
 		implementedScenario("security/missing-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
+		implementedScenario("security/wrong-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/wrong-scope-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		securityScenario("security/unsafe-runtime-request-denied", false),
 	}

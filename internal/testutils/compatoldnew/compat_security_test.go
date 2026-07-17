@@ -29,18 +29,29 @@ func TestCompatibilitySecurityEdgeNoPodmanSocket(t *testing.T) {
 
 func TestCompatibilitySecurityMissingComponentTokenRejected(t *testing.T) {
 	requireRealCompatibilityRun(t)
-	report, err := RunSecurityComponentAuth(context.Background(), compatibilityArtifactDir(t, "security-auth-missing"), securityMissingToken)
+	artifactDir := compatibilityArtifactDir(t, "security-auth-missing")
+	report, err := RunSecurityComponentAuth(context.Background(), artifactDir, securityMissingToken)
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, report.ConsoleSummary())
-	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-auth-missing"))
+	assertSecurityArtifactsSafe(t, artifactDir)
+}
+
+func TestCompatibilitySecurityWrongComponentTokenRejected(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	artifactDir := compatibilityArtifactDir(t, "security-auth-wrong-component")
+	report, err := RunSecurityComponentAuth(context.Background(), artifactDir, securityWrongComponentToken)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, artifactDir)
 }
 
 func TestCompatibilitySecurityWrongScopeComponentTokenRejected(t *testing.T) {
 	requireRealCompatibilityRun(t)
-	report, err := RunSecurityComponentAuth(context.Background(), compatibilityArtifactDir(t, "security-auth-scope"), securityWrongScopeToken)
+	artifactDir := compatibilityArtifactDir(t, "security-auth-scope")
+	report, err := RunSecurityComponentAuth(context.Background(), artifactDir, securityWrongScopeToken)
 	require.NoError(t, err)
 	require.Zero(t, report.Failed, report.ConsoleSummary())
-	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-auth-scope"))
+	assertSecurityArtifactsSafe(t, artifactDir)
 }
 
 func assertSecurityArtifactsSafe(t *testing.T, artifactDir string) {

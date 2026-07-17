@@ -18,7 +18,8 @@ import (
 // cidrAllowlist is the shared implementation for CIDR-based access control middleware.
 // ipExtractor determines how the client IP is obtained from the request.
 // logLabel is used in the deny log message (e.g. "registry", "proxy origin").
-func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) string, logLabel string, log zerowrap.Logger) func(http.Handler) http.Handler {
+// allowLocal preserves legacy localhost access where it is explicitly required.
+func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) string, logLabel string, allowLocal bool, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if len(allowedNets) == 0 {
 			return next
@@ -26,12 +27,7 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			clientIP := ipExtractor(r)
 
-			if httphelper.IsTrustedProxy(clientIP, httphelper.LocalhostNets) {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			if httphelper.IsTrustedProxy(clientIP, allowedNets) {
+			if (allowLocal && httphelper.IsTrustedProxy(clientIP, httphelper.LocalhostNets)) || httphelper.IsTrustedProxy(clientIP, allowedNets) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -56,7 +52,7 @@ func cidrAllowlist(allowedNets []*net.IPNet, ipExtractor func(*http.Request) str
 func RegistryCIDRAllowlist(allowedNets, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
 		return GetClientIP(r, trustedNets)
-	}, "registry", log)
+	}, "registry", true, log)
 }
 
 // HTTPSRedirect redirects HTTP clients to the HTTPS port.
@@ -148,5 +144,15 @@ func httpsRedirectTarget(host, requestURI string, httpPort, tlsPort int, isHostA
 func ProxyCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
 	return cidrAllowlist(allowedNets, func(r *http.Request) string {
 		return httphelper.ExtractRemoteIP(r.RemoteAddr)
-	}, "proxy origin", log)
+	}, "proxy origin", true, log)
+}
+
+// StrictDirectPeerCIDRAllowlist restricts access to explicitly configured
+// direct network peers. It deliberately does not trust localhost implicitly:
+// loopback access must be included in allowedNets. Forwarded headers are not
+// consulted, so an untrusted peer cannot spoof an allowed source.
+func StrictDirectPeerCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return cidrAllowlist(allowedNets, func(r *http.Request) string {
+		return httphelper.ExtractRemoteIP(r.RemoteAddr)
+	}, "direct peer", false, log)
 }
