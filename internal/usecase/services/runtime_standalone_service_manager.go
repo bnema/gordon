@@ -14,17 +14,13 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const runtimeStandaloneServiceCompletedResultLimit = 256
-
 type localRuntimeStandaloneServiceManager struct {
 	runtime      out.ContainerRuntime
 	volumePrefix string
 	now          func() time.Time
 
-	mu             sync.Mutex
-	completed      map[string]domain.RuntimeCommandResult
-	completedOrder []string
-	inFlight       map[string]*standaloneServiceInFlight
+	mu       sync.Mutex
+	inFlight map[string]*standaloneServiceInFlight
 }
 
 type standaloneServiceInFlight struct {
@@ -45,7 +41,6 @@ func newLocalRuntimeStandaloneServiceManager(runtime out.ContainerRuntime, volum
 		runtime:      runtime,
 		volumePrefix: volumePrefix,
 		now:          time.Now,
-		completed:    make(map[string]domain.RuntimeCommandResult),
 		inFlight:     make(map[string]*standaloneServiceInFlight),
 	}
 }
@@ -312,10 +307,6 @@ func (m *localRuntimeStandaloneServiceManager) waitLogReadiness(ctx context.Cont
 func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, identity domain.RuntimeCommandIdentity, kind string, operation func() error) (domain.RuntimeCommandResult, error) {
 	key := identity.DedupeKey(kind)
 	m.mu.Lock()
-	if result, ok := m.completed[key]; ok {
-		m.mu.Unlock()
-		return result, nil
-	}
 	if inFlight, ok := m.inFlight[key]; ok {
 		m.mu.Unlock()
 		select {
@@ -340,7 +331,6 @@ func (m *localRuntimeStandaloneServiceManager) runOnce(ctx context.Context, iden
 	}
 
 	m.mu.Lock()
-	m.rememberCompletedLocked(key, result)
 	delete(m.inFlight, key)
 	inFlight.result = result
 	close(inFlight.done)
@@ -358,19 +348,6 @@ func (m *localRuntimeStandaloneServiceManager) failedResult(identity domain.Runt
 	result.Status = domain.RuntimeCommandStatusFailed
 	result.Error = sanitizeStandaloneServiceRuntimeError(err)
 	return result
-}
-
-func (m *localRuntimeStandaloneServiceManager) rememberCompletedLocked(key string, result domain.RuntimeCommandResult) {
-	if _, exists := m.completed[key]; !exists {
-		m.completedOrder = append(m.completedOrder, key)
-	}
-	m.completed[key] = result
-	for len(m.completedOrder) > runtimeStandaloneServiceCompletedResultLimit {
-		oldest := m.completedOrder[0]
-		copy(m.completedOrder, m.completedOrder[1:])
-		m.completedOrder = m.completedOrder[:len(m.completedOrder)-1]
-		delete(m.completed, oldest)
-	}
 }
 
 func sanitizeStandaloneServiceRuntimeError(err error) *domain.RuntimeCommandError {

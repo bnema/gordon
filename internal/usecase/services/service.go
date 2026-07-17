@@ -132,7 +132,7 @@ func (s *Service) apply(ctx context.Context, service domain.StandaloneService, e
 		return nil
 	}
 	result, err := s.runtime.ApplyStandaloneService(ctx, domain.ApplyStandaloneServiceCommand{
-		RuntimeCommandIdentity: s.desiredIdentity("apply", hash),
+		RuntimeCommandIdentity: s.desiredIdentity("apply", service.Name+":"+hash),
 		Service:                service.ForRuntimeApply(),
 		ResolvedEnv:            env,
 		ConfigHash:             hash,

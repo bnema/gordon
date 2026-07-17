@@ -241,6 +241,116 @@ func TestForRuntimeApplyKeepsExistingConfigHashInvariant(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
+func TestLocalRuntimeStandaloneServiceManagerDoesNotCollideNamedServicesWithMatchingConfigHash(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	first := sampleService().ForRuntimeApply()
+	first.Name = "alpha"
+	second := first
+	second.Name = "beta"
+	hash, err := serviceConfigHashWithEnv(first, []string{"PUBLIC=value"})
+	require.NoError(t, err)
+	secondHash, err := serviceConfigHashWithEnv(second, []string{"PUBLIC=value"})
+	require.NoError(t, err)
+	require.Equal(t, hash, secondHash)
+	var created []string
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Times(2)
+	runtime.On("InspectImageVolumes", mock.Anything, first.Image).Return([]string{}, nil).Times(2)
+	runtime.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(arguments mock.Arguments) {
+		created = append(created, arguments.Get(1).(*domain.ContainerConfig).Name)
+	}).Return(&domain.Container{ID: "created"}, nil).Times(2)
+	runtime.On("StartContainer", mock.Anything, "created").Return(nil).Times(2)
+	manager := NewLocalRuntimeStandaloneServiceManager(runtime)
+
+	firstResult, err := manager.ApplyStandaloneService(context.Background(), applyStandaloneCommand(first, []string{"PUBLIC=value"}, hash))
+	require.NoError(t, err)
+	secondResult, err := manager.ApplyStandaloneService(context.Background(), applyStandaloneCommand(second, []string{"PUBLIC=value"}, hash))
+	require.NoError(t, err)
+
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, firstResult.Status)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, secondResult.Status)
+	assert.Equal(t, []string{"gordon-service-alpha", "gordon-service-beta"}, created)
+}
+
+func TestServiceReconcileRepeatsReadinessForMatchingRunningService(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	service := sampleService()
+	service.Readiness = domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessLog, Path: "/logs/server.log", Contains: "ready", Timeout: time.Second}
+	hash, err := serviceConfigHash(service)
+	require.NoError(t, err)
+	container := managedContainer("existing-1", service.Name, hash, "running")
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{container}, nil).Times(4)
+	runtime.On("CopyFromContainer", mock.Anything, "existing-1", "/logs/server.log").Return(func(context.Context, string, string) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader("ready")), nil
+	}).Twice()
+	control := NewService(runtime)
+
+	require.NoError(t, control.Reconcile(context.Background(), []domain.StandaloneService{service}))
+	require.NoError(t, control.Reconcile(context.Background(), []domain.StandaloneService{service}))
+}
+
+func TestLocalRuntimeStandaloneServiceManagerCoalescesOnlyConcurrentDuplicates(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	service := sampleService().ForRuntimeApply()
+	command := applyStandaloneCommand(service, []string{"PUBLIC=value"}, "hash-1")
+	started := make(chan struct{})
+	unblock := make(chan struct{})
+	runtime.On("ListContainers", mock.Anything, true).Run(func(mock.Arguments) {
+		close(started)
+		<-unblock
+	}).Return([]*domain.Container{}, nil).Once()
+	runtime.On("InspectImageVolumes", mock.Anything, service.Image).Return([]string{}, nil).Once()
+	runtime.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{ID: "created"}, nil).Once()
+	runtime.On("StartContainer", mock.Anything, "created").Return(nil).Once()
+	manager := NewLocalRuntimeStandaloneServiceManager(runtime)
+	type outcome struct {
+		result domain.RuntimeCommandResult
+		err    error
+	}
+	outcomes := make(chan outcome, 2)
+	go func() {
+		result, applyErr := manager.ApplyStandaloneService(context.Background(), command)
+		outcomes <- outcome{result, applyErr}
+	}()
+	<-started
+	go func() {
+		result, applyErr := manager.ApplyStandaloneService(context.Background(), command)
+		outcomes <- outcome{result, applyErr}
+	}()
+	select {
+	case result := <-outcomes:
+		t.Fatalf("concurrent duplicate returned before the in-flight operation completed: %+v", result)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(unblock)
+
+	first := <-outcomes
+	second := <-outcomes
+	require.NoError(t, first.err)
+	require.NoError(t, second.err)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, first.result.Status)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, second.result.Status)
+}
+
+func TestLocalRuntimeStandaloneServiceManagerRetriesFailedCommands(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	service := sampleService().ForRuntimeApply()
+	command := applyStandaloneCommand(service, []string{"PUBLIC=value"}, "hash-1")
+	runtime.On("ListContainers", mock.Anything, true).Return(nil, errors.New("temporary runtime failure")).Once()
+	runtime.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	runtime.On("InspectImageVolumes", mock.Anything, service.Image).Return([]string{}, nil).Once()
+	runtime.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(&domain.Container{ID: "created"}, nil).Once()
+	runtime.On("StartContainer", mock.Anything, "created").Return(nil).Once()
+	manager := NewLocalRuntimeStandaloneServiceManager(runtime)
+
+	failed, err := manager.ApplyStandaloneService(context.Background(), command)
+	require.NoError(t, err)
+	retried, err := manager.ApplyStandaloneService(context.Background(), command)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, failed.Status)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, retried.Status)
+}
+
 func applyStandaloneCommand(service domain.StandaloneService, env []string, hash string) domain.ApplyStandaloneServiceCommand {
 	return domain.ApplyStandaloneServiceCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "command-apply", IdempotencyKey: "apply-game-hash", Generation: 1, SourceComponentID: "control-1"},

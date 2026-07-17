@@ -36,6 +36,28 @@ func TestServiceReconcileRoutesEnabledApplyThroughStandaloneManager(t *testing.T
 	require.NoError(t, err)
 }
 
+func TestServiceReconcileNamespacesApplyIdentityByServiceName(t *testing.T) {
+	manager := outmocks.NewMockRuntimeStandaloneServiceManager(t)
+	first := sampleService()
+	first.Name = "alpha"
+	second := first
+	second.Name = "beta"
+	var commands []domain.ApplyStandaloneServiceCommand
+	manager.On("ListStandaloneServiceState", mock.Anything).Return([]domain.RuntimeStandaloneServiceState{}, nil).Once()
+	manager.On("ApplyStandaloneService", mock.Anything, mock.Anything).Run(func(arguments mock.Arguments) {
+		commands = append(commands, arguments.Get(1).(domain.ApplyStandaloneServiceCommand))
+	}).Return(domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil).Twice()
+
+	err := NewServiceWithRuntimeStandaloneServiceManager(manager).Reconcile(context.Background(), []domain.StandaloneService{first, second})
+
+	require.NoError(t, err)
+	require.Len(t, commands, 2)
+	assert.Equal(t, commands[0].ConfigHash, commands[1].ConfigHash)
+	assert.NotEqual(t, commands[0].IdempotencyKey, commands[1].IdempotencyKey)
+	assert.NotContains(t, commands[0].IdempotencyKey, "PUBLIC=value")
+	assert.NotContains(t, commands[1].IdempotencyKey, "PUBLIC=value")
+}
+
 func TestServiceReconcileKeepsMatchingRunningServiceOutsideRuntimeBoundary(t *testing.T) {
 	manager := outmocks.NewMockRuntimeStandaloneServiceManager(t)
 	configured := sampleService()
