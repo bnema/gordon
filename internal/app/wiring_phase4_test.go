@@ -26,8 +26,8 @@ import (
 
 func TestControlTokenPrefersConfigThenNamedEnvironment(t *testing.T) {
 	t.Setenv("EDGE_CONTROL_TOKEN", "from-environment")
-	assert.Equal(t, "configured", controlToken(ControlConfig{Token: " configured ", TokenEnv: "EDGE_CONTROL_TOKEN"}))
-	assert.Equal(t, "from-environment", controlToken(ControlConfig{TokenEnv: "EDGE_CONTROL_TOKEN"}))
+	assert.Equal(t, "configured", controlToken(EdgeControlConfig{Token: " configured ", TokenEnv: "EDGE_CONTROL_TOKEN"}))
+	assert.Equal(t, "from-environment", controlToken(EdgeControlConfig{TokenEnv: "EDGE_CONTROL_TOKEN"}))
 }
 
 func TestControlTransportDefaultsToTLSAndPlaintextIsExplicit(t *testing.T) {
@@ -158,12 +158,13 @@ func TestEdgeAndControlStartupCancelWithNarrowDependencies(t *testing.T) {
 	cancelControl()
 	require.NoError(t, <-controlDone)
 
+	edgeConfigPath := writePhase4EdgeConfig(t)
 	edgeCtx, cancelEdge := context.WithCancel(context.Background())
 	edgeDone := make(chan error, 1)
 	go func() {
-		edgeDone <- runEdgeWithDependencies(edgeCtx, configPath, edgeRoleDependencies{
+		edgeDone <- runEdgeWithDependencies(edgeCtx, edgeConfigPath, edgeRoleDependencies{
 			listen: net.Listen,
-			dialSnapshot: func(context.Context, ControlConfig) (*edgesnapshotclient.Client, *grpc.ClientConn, error) {
+			dialSnapshot: func(context.Context, EdgeControlConfig) (*edgesnapshotclient.Client, *grpc.ClientConn, error) {
 				conn, err := grpc.NewClient("passthrough:///127.0.0.1:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
 					return nil, nil, err
@@ -197,6 +198,23 @@ token = "test-token"
 insecure_tls = true
 [server]
 port = 0
+`), 0600))
+	return path
+}
+
+func writePhase4EdgeConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "edge.toml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+[control]
+endpoint = "127.0.0.1:1"
+token = "test-token"
+insecure_tls = true
+[edge]
+listen_address = "127.0.0.1:0"
+trusted_proxy_cidrs = ["127.0.0.0/8"]
+[edge.tls]
+mode = "external"
 `), 0600))
 	return path
 }
