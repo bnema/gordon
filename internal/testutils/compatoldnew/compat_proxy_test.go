@@ -5,6 +5,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -118,6 +120,17 @@ func TestCompatibilityZeroDowntimeDrain(t *testing.T) {
 	defer cancel()
 	require.NoError(t, DockerCompatibilityPreflight(ctx), "zero downtime drain compatibility runtime required")
 
+	beforeTags, beforeContainers := zeroDowntimeDrainDockerResources(t, ctx)
+	require.Empty(t, beforeTags, "zero downtime drain image tags must not leak between runs")
+	require.Empty(t, beforeContainers, "zero downtime drain containers must not leak between runs")
+	t.Cleanup(func() {
+		afterTags, afterContainers := zeroDowntimeDrainDockerResources(t, context.Background())
+		require.Equal(t, beforeTags, afterTags, "zero downtime drain image tag set changed")
+		require.Equal(t, beforeContainers, afterContainers, "zero downtime drain container set changed")
+		require.Empty(t, afterTags, "zero downtime drain image tags leaked")
+		require.Empty(t, afterContainers, "zero downtime drain containers leaked")
+	})
+
 	artifactDir := compatibilityArtifactDir(t, "proxy-zero-drain")
 	report, err := RunCompatibilityZeroDowntimeDrain(ctx, projectRoot(t), artifactDir)
 	require.NoError(t, err)
@@ -135,6 +148,30 @@ func TestCompatibilityZeroDowntimeDrain(t *testing.T) {
 			require.NotContains(t, string(body), forbidden)
 		}
 	}
+}
+
+func zeroDowntimeDrainDockerResources(t *testing.T, ctx context.Context) ([]string, []string) {
+	t.Helper()
+	imageOutput, err := dockerCompatibilityOutput(ctx, "image", "ls", "--format", "{{.Repository}}:{{.Tag}}")
+	require.NoError(t, err, "list zero downtime drain image tags")
+	containerOutput, err := dockerCompatibilityOutput(ctx, "ps", "-a", "--format", "{{.Names}}")
+	require.NoError(t, err, "list zero downtime drain containers")
+
+	var tags, containers []string
+	for _, ref := range strings.Fields(imageOutput) {
+		if strings.HasPrefix(ref, "gordon-compat-zero-drain:") ||
+			(strings.HasPrefix(ref, "localhost:") && strings.Contains(ref, "/gordon-compat-drain-")) {
+			tags = append(tags, ref)
+		}
+	}
+	for _, name := range strings.Fields(containerOutput) {
+		if strings.HasPrefix(name, "gordon-drain-") {
+			containers = append(containers, name)
+		}
+	}
+	sort.Strings(tags)
+	sort.Strings(containers)
+	return tags, containers
 }
 
 func TestCompatibilityManagedHTTPRoute(t *testing.T) {

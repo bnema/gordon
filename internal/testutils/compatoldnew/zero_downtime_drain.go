@@ -33,10 +33,12 @@ CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
 `
 
 type zeroDowntimeDrainResources struct {
-	runID     string
-	sourceTag string
-	domain    string
-	imageRefs map[string]string
+	runID                 string
+	sourceTag             string
+	domain                string
+	imageTags             []string
+	cleanupCommand        func(context.Context, ...string) error
+	cleanupContainersFunc func(context.Context) error
 }
 
 func newZeroDowntimeDrainResources(runID, domain string) *zeroDowntimeDrainResources {
@@ -45,9 +47,10 @@ func newZeroDowntimeDrainResources(runID, domain string) *zeroDowntimeDrainResou
 		part = part[:60]
 	}
 	return &zeroDowntimeDrainResources{
-		runID: runID, domain: domain,
-		sourceTag: "gordon-compat-zero-drain:" + part,
-		imageRefs: make(map[string]string),
+		runID:          runID,
+		domain:         domain,
+		sourceTag:      "gordon-compat-zero-drain:" + part,
+		cleanupCommand: dockerCompatibilityCommand,
 	}
 }
 
@@ -69,23 +72,44 @@ func (r *zeroDowntimeDrainResources) buildImage(ctx context.Context) error {
 		"--tag", r.sourceTag, dir); err != nil {
 		return fmt.Errorf("zero downtime drain build image: %w", err)
 	}
+	r.trackImageTag(r.sourceTag)
 	return nil
+}
+
+func (r *zeroDowntimeDrainResources) trackImageTag(tag string) {
+	for _, tracked := range r.imageTags {
+		if tracked == tag {
+			return
+		}
+	}
+	r.imageTags = append(r.imageTags, tag)
 }
 
 func (r *zeroDowntimeDrainResources) cleanup(ctx context.Context) error {
 	var errs []error
-	if err := r.cleanupContainers(ctx); err != nil {
+	if err := r.runCleanupContainers(ctx); err != nil {
 		errs = append(errs, err)
 	}
-	for _, ref := range r.imageRefs {
-		if err := dockerCompatibilityCommand(ctx, "image", "rm", "-f", ref); err != nil {
-			errs = append(errs, fmt.Errorf("remove zero downtime drain registry image: %w", err))
+	for _, tag := range r.imageTags {
+		if err := r.runCleanupCommand(ctx, "image", "rm", "-f", tag); err != nil {
+			errs = append(errs, fmt.Errorf("remove zero downtime drain image %q: %w", tag, err))
 		}
 	}
-	if err := dockerCompatibilityCommand(ctx, "image", "rm", "-f", r.sourceTag); err != nil {
-		errs = append(errs, fmt.Errorf("remove zero downtime drain source image: %w", err))
-	}
 	return errors.Join(errs...)
+}
+
+func (r *zeroDowntimeDrainResources) runCleanupContainers(ctx context.Context) error {
+	if r.cleanupContainersFunc != nil {
+		return r.cleanupContainersFunc(ctx)
+	}
+	return r.cleanupContainers(ctx)
+}
+
+func (r *zeroDowntimeDrainResources) runCleanupCommand(ctx context.Context, args ...string) error {
+	if r.cleanupCommand != nil {
+		return r.cleanupCommand(ctx, args...)
+	}
+	return dockerCompatibilityCommand(ctx, args...)
 }
 
 func (r *zeroDowntimeDrainResources) cleanupContainers(ctx context.Context) error {
@@ -294,10 +318,9 @@ func runZeroDowntimeDrainSide(ctx context.Context, side, binaryPath, parent, dom
 	if err != nil {
 		return SideResult{}, fmt.Errorf("zero downtime drain exchange admin credential: %w", err)
 	}
-	if err := pushZeroDowntimeDrainImage(ctx, setup.fixture.Root, setup.image, resources.sourceTag, "compat-"+side, setup.token); err != nil {
+	if err := pushZeroDowntimeDrainImage(ctx, setup.fixture.Root, setup.image, resources, "compat-"+side, setup.token); err != nil {
 		return SideResult{}, err
 	}
-	resources.imageRefs[side] = setup.image
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	stopErr := instance.Stop(stopCtx)
 	stopCancel()
@@ -361,11 +384,14 @@ func zeroDowntimeDrainServeArgs(side, configPath string) []string {
 	return []string{"serve", "--config", configPath}
 }
 
-func pushZeroDowntimeDrainImage(ctx context.Context, workDir, image, sourceTag, username, token string) error {
+func pushZeroDowntimeDrainImage(ctx context.Context, workDir, image string, resources *zeroDowntimeDrainResources, username, token string) error {
 	registry := strings.Split(image, "/")[0]
-	if err := dockerCompatibilityCommand(ctx, "tag", sourceTag, image); err != nil {
+	if err := dockerCompatibilityCommand(ctx, "tag", resources.sourceTag, image); err != nil {
 		return fmt.Errorf("zero downtime drain tag image: %w", err)
 	}
+	// Record the exact local registry tag before any later operation can fail.
+	// Cleanup removes tags individually rather than broadly pruning Docker state.
+	resources.trackImageTag(image)
 	configDir := filepath.Join(workDir, "docker-config")
 	if err := os.MkdirAll(configDir, 0o700); err != nil {
 		return fmt.Errorf("zero downtime drain Docker config: %w", err)

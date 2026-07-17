@@ -83,6 +83,46 @@ func TestManagedProxyPullBaseImageRetriesOnlyTransientNetworkFailures(t *testing
 	})
 }
 
+type zeroDowntimeDrainCleanupRunner struct {
+	commands [][]string
+	failures map[string]error
+}
+
+func (r *zeroDowntimeDrainCleanupRunner) command(_ context.Context, args ...string) error {
+	r.commands = append(r.commands, args)
+	return r.failures[args[len(args)-1]]
+}
+
+func TestZeroDowntimeDrainCleanupAttemptsEveryTrackedTagAfterFailures(t *testing.T) {
+	containerCleanupErr := errors.New("remove containers failed")
+	sourceCleanupErr := errors.New("remove source failed")
+	oldCleanupErr := errors.New("remove old registry tag failed")
+	runner := &zeroDowntimeDrainCleanupRunner{failures: map[string]error{
+		"gordon-compat-zero-drain:test":                   sourceCleanupErr,
+		"localhost:41001/gordon-compat-drain-test:latest": oldCleanupErr,
+	}}
+	resources := &zeroDowntimeDrainResources{
+		imageTags: []string{
+			"gordon-compat-zero-drain:test",
+			"localhost:41001/gordon-compat-drain-test:latest",
+			"localhost:41002/gordon-compat-drain-test:latest",
+		},
+		cleanupCommand:        runner.command,
+		cleanupContainersFunc: func(context.Context) error { return containerCleanupErr },
+	}
+
+	err := resources.cleanup(context.Background())
+
+	require.ErrorIs(t, err, containerCleanupErr)
+	require.ErrorIs(t, err, sourceCleanupErr)
+	require.ErrorIs(t, err, oldCleanupErr)
+	require.Equal(t, [][]string{
+		{"image", "rm", "-f", "gordon-compat-zero-drain:test"},
+		{"image", "rm", "-f", "localhost:41001/gordon-compat-drain-test:latest"},
+		{"image", "rm", "-f", "localhost:41002/gordon-compat-drain-test:latest"},
+	}, runner.commands)
+}
+
 func TestManagedProxyCleanupJoinsPrimaryErrorAndAttemptsAllOwnedResources(t *testing.T) {
 	primaryErr := errors.New("primary scenario failure")
 	oldCleanupErr := errors.New("remove old failed")
