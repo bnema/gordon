@@ -208,17 +208,20 @@ func TestService_GetTarget_ConcurrentMissSharesSnapshotLookup(t *testing.T) {
 	assert.Equal(t, int32(1), calls.Load())
 }
 
-func TestService_IsKnownHostUsesSnapshotAndRegistryConfig(t *testing.T) {
+func TestService_RegistryClassificationComesFromSnapshotDespiteConfigMismatch(t *testing.T) {
 	provider := outmocks.NewMockRouteSnapshotProvider(t)
-	registry := readyEntry(t, "registry.example.com", "localhost", 1)
+	registry := readyEntry(t, "registry.example.com", "registry.internal", 1)
 	snapshot := routeSnapshot(t, 1, readyEntry(t, "app.example.com", "198.51.100.1", 1))
 	snapshot.RegistryForwardingTarget = &registry
-	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(snapshot, nil).Once()
-	svc := NewSnapshotService(provider, Config{RegistryDomain: "registry.example.com"})
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(snapshot, nil).Times(3)
+	svc := NewSnapshotService(provider, Config{RegistryDomain: "wrong-registry.example.com"})
 
-	assert.True(t, svc.IsRegistryDomain("Registry.Example.com"))
 	assert.True(t, svc.IsKnownHost(testContext(), "App.Example.com"))
 	assert.True(t, svc.IsKnownHost(testContext(), "registry.example.com"))
+	target, err := svc.GetTarget(testContext(), "registry.example.com")
+	require.NoError(t, err)
+	assert.True(t, target.Registry)
+	assert.Equal(t, "registry.internal", target.Host)
 }
 
 func TestLocalSnapshotDrainWaiter_MapsOldContainerIDToOpaqueInFlightKey(t *testing.T) {

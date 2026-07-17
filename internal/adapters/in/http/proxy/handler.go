@@ -78,26 +78,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Registry routing is snapshot-first too: in a split deployment the registry
-	// is not necessarily on this edge host. Never synthesize localhost here.
-	if h.proxySvc.IsRegistryDomain(host) {
-		log.Debug().Msg("resolving registry snapshot target")
-		target, err := h.proxySvc.GetTarget(ctx, host)
-		if err != nil {
-			log.Warn().Err(err).Msg("registry snapshot target unavailable")
-			proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		h.forwardToRegistry(w, r, target)
-		return
-	}
-
-	// Get target for this domain
+	// Resolve the target and its routing kind atomically from one snapshot. In a
+	// split deployment registry ownership is control-plane state, never edge-local
+	// server.registry_domain configuration.
 	log.Debug().Str("resolving_target_for", host).Msg("looking up proxy target")
 	target, err := h.proxySvc.GetTarget(ctx, host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
 		proxyError(w, "404 page not found", http.StatusNotFound)
+		return
+	}
+	if target.Registry {
+		log.Debug().Msg("resolving registry snapshot target")
+		h.forwardToRegistry(w, r, target)
 		return
 	}
 

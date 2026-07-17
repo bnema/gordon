@@ -96,7 +96,7 @@ func (s *Service) Load(ctx context.Context) error {
 		return log.WrapErr(err, "failed to load routes")
 	}
 	newConfig.Routes = routes
-	externalRoutes, err := loadExternalRoutes(s.viper.Get("external_routes"))
+	externalRoutes, err := LoadExternalRoutes(s.viper.Get("external_routes"))
 	if err != nil {
 		return log.WrapErr(err, "failed to load external routes")
 	}
@@ -221,8 +221,10 @@ func loadStringMap(raw any) map[string]string {
 	return result
 }
 
-// loadExternalRoutes loads and canonicalizes external route mappings.
-func loadExternalRoutes(raw any) (map[string]string, error) {
+// LoadExternalRoutes loads and canonicalizes external route mappings. Keeping this
+// conversion at the Viper boundary avoids treating dotted route domains as nested
+// configuration paths.
+func LoadExternalRoutes(raw any) (map[string]string, error) {
 	result := make(map[string]string)
 	if raw == nil {
 		return result, nil
@@ -246,6 +248,12 @@ func loadExternalRoutes(raw any) (map[string]string, error) {
 		result[canonicalKey] = vs
 	}
 	return result, nil
+}
+
+// loadExternalRoutes remains for package-local compatibility; callers outside
+// this package must use LoadExternalRoutes.
+func loadExternalRoutes(raw any) (map[string]string, error) {
+	return LoadExternalRoutes(raw)
 }
 
 // loadStringArrayMap loads a map[string][]string from a viper value.

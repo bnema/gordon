@@ -59,13 +59,13 @@ func TestClientAcceptsNewerIgnoresStaleAndClones(t *testing.T) {
 	client.Stop()
 }
 
-func TestClientReconnectRequiresNewerValidSnapshotForHealth(t *testing.T) {
+func TestClientReconnectLowerSnapshotStaysUnhealthyAndIdenticalGenerationConfirmsSync(t *testing.T) {
 	finishFirstStream := make(chan struct{})
 	reconnected := make(chan struct{})
 	messages := make(chan *edgev1.RouteTargetSnapshot, 2)
 	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, call int) error {
 		if call == 0 {
-			if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
+			if err := stream.Send(testSnapshotMessage(t, 2)); err != nil {
 				return err
 			}
 			select {
@@ -107,13 +107,37 @@ func TestClientReconnectRequiresNewerValidSnapshotForHealth(t *testing.T) {
 
 	messages <- testSnapshotMessage(t, 1)
 	waitFor(t, func() bool { return server.CallCount() >= 3 && client.Health().Connected })
-	assert.False(t, client.Health().Healthy, "a stale snapshot cannot restore health")
+	assert.False(t, client.Health().Healthy, "a lower snapshot cannot restore health")
 
+	before := client.Health()
 	messages <- testSnapshotMessage(t, 2)
-	waitFor(t, func() bool {
-		health := client.Health()
-		return health.Healthy && health.LastAcceptedGeneration == 2
-	})
+	waitFor(t, func() bool { return client.Health().Healthy })
+	health := client.Health()
+	assert.Equal(t, domain.RouteTargetGeneration(2), health.LastAcceptedGeneration)
+	assert.Equal(t, before.LastUpdate, health.LastUpdate, "sync confirmation is not an accepted update")
+	client.Stop()
+}
+
+func TestClientConflictingEqualGenerationIsUnhealthy(t *testing.T) {
+	messages := make(chan *edgev1.RouteTargetSnapshot, 1)
+	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, _ int) error {
+		if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
+			return err
+		}
+		message := <-messages
+		return stream.Send(message)
+	}}
+	client := newTestClient(t, server)
+	require.NoError(t, client.Start(context.Background()))
+	waitFor(t, func() bool { return client.Health().Healthy })
+	conflict := testSnapshotMessage(t, 1)
+	conflict.Entries[0].TargetHost = "other-target.example"
+	messages <- conflict
+	waitFor(t, func() bool { return client.Health().ErrorCategory == ErrorInvalid })
+	assert.False(t, client.Health().Healthy)
+	current, err := client.CurrentSnapshot(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "target.example", current.Entries[0].TargetHost)
 	client.Stop()
 }
 

@@ -58,7 +58,6 @@ func TestForwardToTarget_H2CEndToEnd(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("grpc.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "grpc.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        port,
@@ -91,7 +90,6 @@ func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("web.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "web.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
@@ -135,7 +133,6 @@ func TestForwardToTarget_OriginalHostPreserved(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("external.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "external.example.com").Return(&domain.ProxyTarget{
 		Host:         "127.0.0.1",
 		Port:         backendPort,
@@ -172,7 +169,6 @@ func TestForwardToTarget_RouteHostPreservedForManagedTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
@@ -220,7 +216,6 @@ func TestForwardToTarget_PreservesHostAndForwardedHeaders(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
@@ -277,7 +272,6 @@ func TestForwardToTarget_ResponseSizeLimits(t *testing.T) {
 			proxySvc := inmocks.NewMockProxyService(t)
 			backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{MaxResponseSize: 1024})
-			proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 			proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 				Host: "127.0.0.1", Port: backendPort, ContainerID: "c-1", Scheme: "http",
 			}, nil)
@@ -299,7 +293,6 @@ func TestForwardToTarget_ContextCanceled_Returns499(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        8080,
@@ -328,7 +321,6 @@ func TestForwardToTarget_BackendDown_Returns503(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("down.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "down.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        1,
@@ -358,7 +350,6 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,

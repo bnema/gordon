@@ -140,7 +140,7 @@ func (s *Service) resolveSnapshotTarget(ctx context.Context, domainName string) 
 		return snapshotLookupResult{}, nil
 	}
 
-	entry, found := findSnapshotEntry(snapshot, domainName)
+	entry, registry, found := findSnapshotEntry(snapshot, domainName)
 	if !found || entry.Unavailable() {
 		if found && entry.UnavailableReason == domain.RouteTargetUnavailableReasonPolicyBlocked {
 			return snapshotLookupResult{}, domain.ErrSSRFBlocked
@@ -151,6 +151,7 @@ func (s *Service) resolveSnapshotTarget(ctx context.Context, domainName string) 
 	if err != nil {
 		return snapshotLookupResult{}, fmt.Errorf("convert route snapshot target: %w", err)
 	}
+	target.Registry = registry
 	result := &target
 	// Draining targets remain routable for the current request but are deliberately
 	// not retained: a following request must observe the drain transition.
@@ -160,16 +161,19 @@ func (s *Service) resolveSnapshotTarget(ctx context.Context, domainName string) 
 	return snapshotLookupResult{target: result}, nil
 }
 
-func findSnapshotEntry(snapshot domain.RouteTargetSnapshot, domainName string) (domain.RouteTargetEntry, bool) {
+// findSnapshotEntry returns target data and its routing kind from one immutable
+// snapshot. Registry classification must travel with the selected target rather
+// than coming from edge-local configuration.
+func findSnapshotEntry(snapshot domain.RouteTargetSnapshot, domainName string) (domain.RouteTargetEntry, bool, bool) {
 	for _, entry := range snapshot.Entries {
 		if entry.CanonicalDomain == domainName {
-			return entry, true
+			return entry, false, true
 		}
 	}
 	if snapshot.RegistryForwardingTarget != nil && snapshot.RegistryForwardingTarget.CanonicalDomain == domainName {
-		return *snapshot.RegistryForwardingTarget, true
+		return *snapshot.RegistryForwardingTarget, true, true
 	}
-	return domain.RouteTargetEntry{}, false
+	return domain.RouteTargetEntry{}, false, false
 }
 
 func (s *Service) cachedTarget(domainName string) *domain.ProxyTarget {
@@ -320,14 +324,11 @@ func (s *Service) IsRegistryDomain(host string) bool {
 	return configured && canonicalHost == registryDomain
 }
 
-// IsKnownHost returns true if host is configured as registry or appears in the current snapshot.
+// IsKnownHost returns true when the current snapshot contains the host.
 func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	canonicalHost, ok := domain.CanonicalRouteDomain(host)
 	if !ok {
 		return false
-	}
-	if s.IsRegistryDomain(canonicalHost) {
-		return true
 	}
 	if s.snapshotProvider == nil {
 		return false
@@ -336,7 +337,7 @@ func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	if err != nil || snapshot.Validate() != nil || !s.observeSnapshot(snapshot.Generation) {
 		return false
 	}
-	_, found := findSnapshotEntry(snapshot, canonicalHost)
+	_, _, found := findSnapshotEntry(snapshot, canonicalHost)
 	return found
 }
 

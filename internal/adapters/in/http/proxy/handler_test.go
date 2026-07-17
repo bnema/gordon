@@ -61,9 +61,8 @@ func TestHandler_RoutesToRegistrySnapshotTarget(t *testing.T) {
 
 	proxySvc := inmocks.NewMockProxyService(t)
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("registry.example.com").Return(true)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "registry.example.com").Return(&domain.ProxyTarget{
-		Host: "127.0.0.1", Port: registryPort, Scheme: "http", OriginalHost: "registry.internal",
+		Host: "127.0.0.1", Port: registryPort, Scheme: "http", OriginalHost: "registry.internal", Registry: true,
 	}, nil)
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
@@ -91,7 +90,6 @@ func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			proxySvc := inmocks.NewMockProxyService(t)
 			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-			proxySvc.EXPECT().IsRegistryDomain(tt.wantHost).Return(false)
 			proxySvc.EXPECT().GetTarget(mock.Anything, tt.wantHost).Return(nil, domain.ErrNoTargetAvailable)
 
 			handler := NewHandler(proxySvc, nil, testLogger())
@@ -132,7 +130,6 @@ func TestHandler_Returns404WhenNoTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("unknown.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "unknown.example.com").Return(nil, domain.ErrNoTargetAvailable)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
@@ -155,7 +152,6 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 
 	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 
@@ -201,7 +197,6 @@ func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxBodySize: 1024,
 	})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
@@ -239,7 +234,6 @@ func TestHandler_UpdatedConfigReflected(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxConcurrentConns: 0,
 	}).Once()
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false).Once()
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(nil, domain.ErrNoTargetAvailable).Once()
 
 	handler := NewHandler(proxySvc, nil, testLogger())
@@ -276,7 +270,6 @@ func TestHandler_NoConcurrencyLimitWhenZero(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxConcurrentConns: 0,
 	})
-	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
 	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,

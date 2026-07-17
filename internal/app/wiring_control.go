@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -19,7 +21,9 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	configusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
+	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 )
 
 // controlRoleDependencies makes the narrowly-scoped control server testable.
@@ -71,7 +75,7 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if hub == nil {
 		return fmt.Errorf("control route snapshot hub is required")
 	}
-	if err := startControlSnapshotProducer(ctx, cfg, deps, hub); err != nil {
+	if err := startControlSnapshotProducer(ctx, v, cfg, deps, hub); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -100,15 +104,19 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	}
 }
 
-func startControlSnapshotProducer(ctx context.Context, cfg Config, deps controlRoleDependencies, hub *edgesnapshot.SnapshotHub) error {
+func startControlSnapshotProducer(ctx context.Context, v *viper.Viper, cfg Config, deps controlRoleDependencies, hub *edgesnapshot.SnapshotHub) error {
 	if deps.newRuntimeStateSubscriber == nil || deps.newSnapshotProducer == nil {
 		return fmt.Errorf("control route snapshot producer dependencies are required")
+	}
+	options, err := controlProducerOptions(v, cfg)
+	if err != nil {
+		return fmt.Errorf("load control external routes: %w", err)
 	}
 	subscriber, err := deps.newRuntimeStateSubscriber(ctx, cfg.Runtime)
 	if err != nil {
 		return fmt.Errorf("create control runtime state subscriber: %w", err)
 	}
-	producer, err := deps.newSnapshotProducer(subscriber, hub, controlProducerOptions(cfg))
+	producer, err := deps.newSnapshotProducer(subscriber, hub, options)
 	if err != nil {
 		return fmt.Errorf("create control route snapshot producer: %w", err)
 	}
@@ -121,19 +129,40 @@ func startControlSnapshotProducer(ctx context.Context, cfg Config, deps controlR
 // controlProducerOptions converts only explicit control routing contracts into
 // producer inputs. It intentionally never forwards Config, container state, or
 // a runtime endpoint to edge snapshots.
-func controlProducerOptions(cfg Config) edgesnapshot.ProducerOptions {
+func controlProducerOptions(v *viper.Viper, cfg Config) (edgesnapshot.ProducerOptions, error) {
 	options := edgesnapshot.ProducerOptions{EdgeAlias: cfg.Control.EdgeAlias}
-	if strings.TrimSpace(cfg.Server.RegistryDomain) == "" {
-		return options
+	if strings.TrimSpace(cfg.Server.RegistryDomain) != "" {
+		options.Registry = &edgesnapshot.RegistryTarget{
+			Domain:   cfg.Server.RegistryDomain,
+			Alias:    cfg.Control.RegistryAlias,
+			Port:     cfg.Control.RegistryPort,
+			Scheme:   "http",
+			Protocol: domain.RouteTargetProtocolHTTP1,
+		}
 	}
-	options.Registry = &edgesnapshot.RegistryTarget{
-		Domain:   cfg.Server.RegistryDomain,
-		Alias:    cfg.Control.RegistryAlias,
-		Port:     cfg.Control.RegistryPort,
-		Scheme:   "http",
-		Protocol: domain.RouteTargetProtocolHTTP1,
+	if v == nil {
+		return options, fmt.Errorf("control configuration is required")
 	}
-	return options
+	routes, err := configusecase.LoadExternalRoutes(v.Get("external_routes"))
+	if err != nil {
+		return options, err
+	}
+	domains := make([]string, 0, len(routes))
+	for domainName := range routes {
+		domains = append(domains, domainName)
+	}
+	sort.Strings(domains)
+	options.External = make([]domain.RouteTargetEntry, 0, len(domains))
+	for _, domainName := range domains {
+		// Generation is intentionally a producer concern. The placeholder only
+		// permits entry validation; snapshotFromRuntime re-stamps it atomically.
+		entry, resolveErr := proxyusecase.ResolveExternalRouteTarget(domainName, routes[domainName], 1)
+		if resolveErr != nil {
+			return options, fmt.Errorf("external route %q: %w", domainName, resolveErr)
+		}
+		options.External = append(options.External, entry)
+	}
+	return options, nil
 }
 
 // newControlSnapshotServer is composable so route orchestration can publish to

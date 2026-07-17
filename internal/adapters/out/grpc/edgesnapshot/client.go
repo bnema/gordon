@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -247,7 +248,7 @@ func (c *Client) setConnected() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A transport reconnect only establishes the stream. The edge is healthy
-	// again after this stream supplies a strictly newer valid snapshot.
+	// again after this stream confirms the existing view or supplies a newer one.
 	c.health.Connected = true
 	c.health.Healthy = false
 	c.health.ErrorCategory = ErrorNone
@@ -269,8 +270,24 @@ func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.hasData && snapshot.Generation <= c.snapshot.Generation {
-		return false, nil
+	if c.hasData {
+		switch {
+		case snapshot.Generation < c.snapshot.Generation:
+			// A lower generation cannot establish that a reconnected stream is
+			// synchronized with our current routing view.
+			return false, nil
+		case snapshot.Generation == c.snapshot.Generation:
+			if !reflect.DeepEqual(snapshot, c.snapshot) {
+				return false, fmt.Errorf("conflicting route snapshot generation %d", snapshot.Generation)
+			}
+			// A byte-for-byte equivalent routing view is the reconnect sync
+			// acknowledgement. Preserve both the stored clone and acceptance
+			// metadata; this is not a new update.
+			c.health.Healthy = true
+			c.health.Connected = true
+			c.health.ErrorCategory = ErrorNone
+			return false, nil
+		}
 	}
 	c.snapshot = snapshot.Clone()
 	c.hasData = true

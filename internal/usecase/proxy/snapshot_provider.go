@@ -260,7 +260,7 @@ func (p *LocalSnapshotProvider) managedSnapshotEntry(ctx context.Context, route 
 }
 
 func externalUnavailableOnError(ctx context.Context, domainName, targetAddr string, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
-	entry, err := externalSnapshotEntry(domainName, targetAddr, generation)
+	entry, err := ResolveExternalRouteTarget(domainName, targetAddr, generation)
 	if err == nil || ctx.Err() != nil {
 		return entry, err
 	}
@@ -379,7 +379,10 @@ func runningInContainer() bool {
 	return os.Getenv("KUBERNETES_SERVICE_HOST") != "" || os.Getenv("DOCKER_CONTAINER") != "" || os.Getenv("container") != ""
 }
 
-func externalSnapshotEntry(domainName, targetAddr string, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
+// ResolveExternalRouteTarget pins and validates an external endpoint before it
+// is placed in a routing snapshot. The configured host remains the upstream
+// Host header while the resolved public address is used for dialing.
+func ResolveExternalRouteTarget(domainName, targetAddr string, generation domain.RouteTargetGeneration) (domain.RouteTargetEntry, error) {
 	host, portText, err := net.SplitHostPort(targetAddr)
 	if err != nil {
 		return domain.RouteTargetEntry{}, fmt.Errorf("invalid external route target: %w", err)

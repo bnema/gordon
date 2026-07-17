@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -28,6 +29,21 @@ func TestControlTokenPrefersConfigThenNamedEnvironment(t *testing.T) {
 	t.Setenv("EDGE_CONTROL_TOKEN", "from-environment")
 	assert.Equal(t, "configured", controlToken(EdgeControlConfig{Token: " configured ", TokenEnv: "EDGE_CONTROL_TOKEN"}))
 	assert.Equal(t, "from-environment", controlToken(EdgeControlConfig{TokenEnv: "EDGE_CONTROL_TOKEN"}))
+}
+
+func TestControlProducerOptionsLoadsCanonicalExternalRoutesFailClosed(t *testing.T) {
+	v := viper.New()
+	v.Set("external_routes", map[string]any{"External.Example.com": "198.51.100.10:8443"})
+	options, err := controlProducerOptions(v, Config{Control: ControlConfig{EdgeAlias: "gordon-edge"}})
+	require.NoError(t, err)
+	require.Len(t, options.External, 1)
+	assert.Equal(t, "external.example.com", options.External[0].CanonicalDomain)
+	assert.Equal(t, "198.51.100.10", options.External[0].TargetHost)
+	assert.Equal(t, "198.51.100.10", options.External[0].UpstreamHost)
+
+	v.Set("external_routes", map[string]any{"blocked.example.com": "127.0.0.1:8080"})
+	_, err = controlProducerOptions(v, Config{Control: ControlConfig{EdgeAlias: "gordon-edge"}})
+	assert.ErrorIs(t, err, domain.ErrSSRFBlocked)
 }
 
 func TestControlTransportDefaultsToTLSAndPlaintextIsExplicit(t *testing.T) {

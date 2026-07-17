@@ -2,6 +2,7 @@ package edgesnapshot
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -67,6 +68,35 @@ func TestProducerFailsClosedWhenAttachmentDoesNotMatchControlContract(t *testing
 	require.Len(t, current.Entries, 1)
 	assert.True(t, current.Entries[0].Unavailable())
 	assert.Equal(t, domain.RouteTargetUnavailableReasonNoTarget, current.Entries[0].UnavailableReason)
+}
+
+func TestProducerPublishesResolvedExternalRouteWithRuntimeGeneration(t *testing.T) {
+	external, err := domain.NewExternalReadyRouteTargetEntry("external.example.com", "198.51.100.10", "upstream.example.com", 8443, "http", domain.RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	snapshots := make(chan domain.RuntimeActualStateSnapshot, 1)
+	snapshots <- producerRuntimeSnapshot(7, "app.example.com", "gordon-target-app-example-com")
+	hub := NewSnapshotHub()
+	producer, err := NewProducer(producerSubscriber{snapshots}, hub, ProducerOptions{EdgeAlias: "gordon-edge", External: []domain.RouteTargetEntry{external}})
+	require.NoError(t, err)
+	require.NoError(t, producer.Start(t.Context()))
+
+	snapshot, err := hub.Current(t.Context())
+	require.NoError(t, err)
+	require.Len(t, snapshot.Entries, 2)
+	assert.Equal(t, domain.RouteTargetGeneration(7), snapshot.Entries[0].Generation)
+	assert.Equal(t, domain.RouteTargetGeneration(7), snapshot.Entries[1].Generation)
+	assert.Equal(t, "upstream.example.com", snapshot.Entries[1].UpstreamHost)
+	assert.NotContains(t, fmt.Sprintf("%#v", snapshot), "private-container")
+}
+
+func TestProducerRejectsExternalConflictWithManagedRoute(t *testing.T) {
+	external, err := domain.NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.10", "upstream.example.com", 8443, "http", domain.RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	snapshots := make(chan domain.RuntimeActualStateSnapshot, 1)
+	snapshots <- producerRuntimeSnapshot(1, "app.example.com", "gordon-target-app-example-com")
+	producer, err := NewProducer(producerSubscriber{snapshots}, NewSnapshotHub(), ProducerOptions{EdgeAlias: "gordon-edge", External: []domain.RouteTargetEntry{external}})
+	require.NoError(t, err)
+	assert.ErrorContains(t, producer.Start(t.Context()), "external target duplicates route domain")
 }
 
 func TestProducerRejectsUnsafeRegistryAlias(t *testing.T) {

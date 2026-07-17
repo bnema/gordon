@@ -74,11 +74,28 @@ func NewProducer(subscriber out.RuntimeStateSubscriber, hub *SnapshotHub, option
 		}
 	}
 	external := make([]domain.RouteTargetEntry, len(options.External))
+	externalDomains := make(map[string]struct{}, len(options.External))
 	for index, entry := range options.External {
 		if err := entry.ValidateSplitReachability(); err != nil {
 			return nil, fmt.Errorf("external target %d: %w", index, err)
 		}
+		if entry.UpstreamHost == "" || entry.Attachment != domain.RouteTargetAttachmentNotRequired {
+			return nil, fmt.Errorf("external target %d must be an external route entry", index)
+		}
+		if _, exists := externalDomains[entry.CanonicalDomain]; exists {
+			return nil, fmt.Errorf("duplicate external target domain %q", entry.CanonicalDomain)
+		}
+		externalDomains[entry.CanonicalDomain] = struct{}{}
 		external[index] = entry
+	}
+	if options.Registry != nil {
+		registry, err := registryRouteEntry(*options.Registry, 1)
+		if err != nil {
+			return nil, err
+		}
+		if _, exists := externalDomains[registry.CanonicalDomain]; exists {
+			return nil, fmt.Errorf("external target duplicates registry domain %q", registry.CanonicalDomain)
+		}
 	}
 	return &Producer{subscriber: subscriber, hub: hub, edgeAlias: edgeAlias, registry: cloneRegistryTarget(options.Registry), external: external}, nil
 }
@@ -117,7 +134,16 @@ func (p *Producer) waitForInitial(ctx context.Context) (<-chan domain.RuntimeAct
 					if !open {
 						break subscription
 					}
-					if p.publish(snapshot) {
+					// Invalid runtime state is not a control routing conflict; wait for
+					// the next valid state rather than making startup transiently fail.
+					if snapshot.Validate() != nil {
+						continue
+					}
+					published, publishErr := p.publish(snapshot)
+					if publishErr != nil {
+						return nil, publishErr
+					}
+					if published {
 						return updates, nil
 					}
 				}
@@ -143,7 +169,9 @@ func (p *Producer) run(ctx context.Context, updates <-chan domain.RuntimeActualS
 					subscriptionClosed = true
 					continue
 				}
-				p.publish(snapshot)
+				// Later malformed runtime views are fail-closed: they are never
+				// published over the last known-good snapshot.
+				_, _ = p.publish(snapshot)
 			}
 		}
 		if err := waitForRetry(ctx, backoff); err != nil {
@@ -159,28 +187,28 @@ func (p *Producer) run(ctx context.Context, updates <-chan domain.RuntimeActualS
 	}
 }
 
-func (p *Producer) publish(runtimeSnapshot domain.RuntimeActualStateSnapshot) bool {
+func (p *Producer) publish(runtimeSnapshot domain.RuntimeActualStateSnapshot) (bool, error) {
 	if err := runtimeSnapshot.Validate(); err != nil {
-		return false
+		return false, fmt.Errorf("invalid runtime snapshot: %w", err)
 	}
 	p.mu.Lock()
 	if runtimeSnapshot.Generation <= p.generation {
 		p.mu.Unlock()
-		return false
+		return false, nil
 	}
 	p.mu.Unlock()
 
 	snapshot, err := p.snapshotFromRuntime(runtimeSnapshot)
 	if err != nil {
-		return false
+		return false, err
 	}
 	if err := p.hub.Publish(snapshot); err != nil {
-		return false
+		return false, err
 	}
 	p.mu.Lock()
 	p.generation = runtimeSnapshot.Generation
 	p.mu.Unlock()
-	return true
+	return true, nil
 }
 
 func (p *Producer) snapshotFromRuntime(runtimeSnapshot domain.RuntimeActualStateSnapshot) (domain.RouteTargetSnapshot, error) {
