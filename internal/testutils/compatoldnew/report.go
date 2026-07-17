@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -26,9 +27,12 @@ type ReportMetadata struct {
 }
 
 // SideResult associates a captured artifact with the target that produced it.
+// ValidationError is deliberately separate from the artifact: observations
+// must be compared and persisted before a broken contract fails the scenario.
 type SideResult struct {
-	Side     string
-	Artifact Artifact
+	Side            string
+	Artifact        Artifact
+	ValidationError error
 }
 
 // CompareSideResults routes every comparison through Compare and writes the
@@ -53,10 +57,29 @@ func CompareSideResultsWithMetadata(old, new SideResult, allow *AllowlistedDiffe
 	report.BaselineCommit = metadata.BaselineCommit
 	report.CandidateCommit = metadata.CandidateCommit
 	report.RerunCommand = metadata.RerunCommand
+	if err := writeSideArtifacts(artifactDir, old, new); err != nil {
+		return Report{}, fmt.Errorf("compare sides write side artifacts: %w", err)
+	}
 	if err := report.WriteArtifactDirectory(artifactDir); err != nil {
 		return Report{}, fmt.Errorf("compare sides write report: %w", err)
 	}
+	if err := validationErrors(old, new); err != nil {
+		return report, err
+	}
 	return report, nil
+}
+
+func validationErrors(old, new SideResult) error {
+	var errors []string
+	for _, result := range []SideResult{old, new} {
+		if result.ValidationError != nil {
+			errors = append(errors, fmt.Sprintf("%s validation: %v", result.Side, result.ValidationError))
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return fmt.Errorf("compatibility contract failure after report emission: %s", strings.Join(errors, "; "))
 }
 
 func NewReport(failures []Failure, total int) Report {
@@ -76,16 +99,93 @@ func (r Report) WriteArtifactDirectory(dir string) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
-	b, err := r.JSON()
+	b, err := json.MarshalIndent(redactArtifactValue(r), "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "compat-report.json"), b, 0o600); err != nil {
+	if err := writePrivateFile(filepath.Join(dir, "compat-report.json"), b); err != nil {
 		return err
 	}
 	var diffs []string
 	for _, f := range r.Failures {
-		diffs = append(diffs, NormalizedDiff(f.OldValue, f.NewValue))
+		diffs = append(diffs, NormalizedDiff(redactArtifactValue(f.OldValue), redactArtifactValue(f.NewValue)))
 	}
-	return os.WriteFile(filepath.Join(dir, "normalized.diff"), []byte(strings.Join(diffs, "\n")), 0o600)
+	return writePrivateFile(filepath.Join(dir, "normalized.diff"), []byte(strings.Join(diffs, "\n")))
+}
+
+func writeSideArtifacts(dir string, old, new SideResult) error {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return err
+	}
+	for _, side := range []struct {
+		name  string
+		value any
+	}{
+		{"old.raw.json", old.Artifact.RawValue()},
+		{"new.raw.json", new.Artifact.RawValue()},
+		{"old.normalized.json", old.Artifact.NormalizedValue()},
+		{"new.normalized.json", new.Artifact.NormalizedValue()},
+	} {
+		body, err := json.MarshalIndent(redactArtifactValue(side.value), "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal %s: %w", side.name, err)
+		}
+		if err := writePrivateFile(filepath.Join(dir, side.name), body); err != nil {
+			return fmt.Errorf("write %s: %w", side.name, err)
+		}
+	}
+	return nil
+}
+
+func writePrivateFile(path string, body []byte) error {
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+var sensitiveArtifactKey = regexp.MustCompile(`(?i)(token|authorization|credential|password|secret)`)
+var artifactBearer = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[^\s"']+`)
+var artifactSensitiveValue = regexp.MustCompile(`(?i)\b(?:token|authorization|credential|password|secret)=[^\s"']+`)
+var artifactJWT = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b`)
+
+// redactArtifactValue serializes through JSON so structs and maps receive the
+// same recursive secret filtering before any artifact reaches disk.
+func redactArtifactValue(value any) any {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return "<unserializable artifact>"
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return "<unserializable artifact>"
+	}
+	return redactArtifactJSON(decoded)
+}
+
+func redactArtifactJSON(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if sensitiveArtifactKey.MatchString(key) {
+				out[key] = "<redacted>"
+				continue
+			}
+			out[key] = redactArtifactJSON(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = redactArtifactJSON(child)
+		}
+		return out
+	case string:
+		typed = artifactBearer.ReplaceAllString(typed, "<redacted authorization>")
+		typed = artifactSensitiveValue.ReplaceAllString(typed, "<redacted>")
+		return artifactJWT.ReplaceAllString(typed, "<redacted token>")
+	default:
+		return value
+	}
 }

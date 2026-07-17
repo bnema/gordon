@@ -1,5 +1,6 @@
 /gordon
 .env
 dist/
+artifacts/compat/
 docs/plans/
 .worktrees/

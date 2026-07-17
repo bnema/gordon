@@ -18,9 +18,13 @@ func TestCompareSidesAlwaysWritesActionableReportOnDiff(t *testing.T) {
 	if report.Failed != 1 {
 		t.Fatalf("report=%+v", report)
 	}
-	for _, name := range []string{"compat-report.json", "normalized.diff"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+	for _, name := range []string{"compat-report.json", "normalized.diff", "old.raw.json", "new.raw.json", "old.normalized.json", "new.normalized.json"} {
+		info, err := os.Stat(filepath.Join(dir, name))
+		if err != nil {
 			t.Fatalf("missing report artifact %s: %v", name, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("artifact %s mode=%o, want 600", name, info.Mode().Perm())
 		}
 	}
 }

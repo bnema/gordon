@@ -86,14 +86,11 @@ func executeRoutesListJSON(ctx context.Context, side, binaryPath string, fixture
 		Level:      LevelSemantic,
 	})
 	if err != nil {
-		return SideResult{}, err
+		return SideResult{Side: side, Artifact: newExactCLIObservation("gordon routes list --json", map[string]any{"captureError": "command capture failed"}), ValidationError: err}, nil
 	}
 
-	artifact, err := routesListJSONArtifact(result.Artifact)
-	if err != nil {
-		return SideResult{}, fmt.Errorf("routes list JSON %s output: %w", side, err)
-	}
-	return SideResult{Side: side, Artifact: artifact}, nil
+	artifact, validationErr := routesListJSONArtifact(result.Artifact)
+	return SideResult{Side: side, Artifact: artifact, ValidationError: validationErr}, nil
 }
 
 func routesListJSONEnvironment(fixture SideFixture) []string {
@@ -109,24 +106,26 @@ func routesListJSONEnvironment(fixture SideFixture) []string {
 func routesListJSONArtifact(capture Artifact) (CLIArtifact, error) {
 	raw, ok := capture.RawValue().(map[string]any)
 	if !ok {
-		return CLIArtifact{}, fmt.Errorf("unexpected capture type %T", capture.RawValue())
+		artifact := newExactCLIObservation("gordon routes list --json", map[string]any{"captureError": fmt.Sprintf("unexpected capture type %T", capture.RawValue())})
+		return artifact, fmt.Errorf("unexpected capture type %T", capture.RawValue())
 	}
-	exitCode, ok := raw["exitCode"].(int)
-	if !ok {
-		return CLIArtifact{}, fmt.Errorf("missing integer exit code")
-	}
-	stdout, ok := raw["stdout"].(string)
-	if !ok {
-		return CLIArtifact{}, fmt.Errorf("missing stdout")
+	exitCode, exitOK := raw["exitCode"].(int)
+	stdout, stdoutOK := raw["stdout"].(string)
+	stderr, stderrOK := raw["stderr"].(string)
+	observed := map[string]any{"exitCode": exitCode, "stderr": stderr}
+	if !exitOK || !stdoutOK || !stderrOK {
+		artifact := newExactCLIObservation("gordon routes list --json", observed)
+		return artifact, fmt.Errorf("missing command observation fields")
 	}
 	var payload any
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		return CLIArtifact{}, fmt.Errorf("decode JSON: %w", err)
+		observed["stdout"] = stdout
+		observed["decodeError"] = "invalid JSON"
+		artifact := newExactCLIObservation("gordon routes list --json", observed)
+		return artifact, fmt.Errorf("decode JSON: %w", err)
 	}
-	return NewCLIArtifact("gordon routes list --json", map[string]any{
-		"exitCode": exitCode,
-		"json":     payload,
-	}, LevelSemantic), nil
+	observed["json"] = payload
+	return newExactCLIObservation("gordon routes list --json", observed), nil
 }
 
 func routesListJSONRerunCommand() string {

@@ -110,19 +110,27 @@ func RunCompatibilityAdminAuthAndRouteCRUD(ctx context.Context, repoRoot, artifa
 	}
 	defer os.RemoveAll(parent)
 
-	old, err := runAdminAPISide(ctx, SideOld, binaries.Old.BinaryPath, parent)
-	if err != nil {
-		return Report{}, err
+	old, oldErr := runAdminAPISide(ctx, SideOld, binaries.Old.BinaryPath, parent)
+	if oldErr != nil {
+		old = adminAPICaptureFailure(SideOld, oldErr)
 	}
-	new, err := runAdminAPISide(ctx, SideNew, binaries.New.BinaryPath, parent)
-	if err != nil {
-		return Report{}, err
+	new, newErr := runAdminAPISide(ctx, SideNew, binaries.New.BinaryPath, parent)
+	if newErr != nil {
+		new = adminAPICaptureFailure(SideNew, newErr)
 	}
 	return CompareSideResultsWithMetadata(old, new, nil, artifactDir, ReportMetadata{
 		BaselineCommit:  binaries.Old.Commit,
 		CandidateCommit: binaries.New.Commit,
 		RerunCommand:    adminAPIRerunCommand(),
 	})
+}
+
+func adminAPICaptureFailure(side string, validationErr error) SideResult {
+	return SideResult{
+		Side:            side,
+		Artifact:        HTTPArtifact{baseArtifact{Raw: map[string]any{"captureError": "admin API capture failed"}, Normalized: map[string]any{"captureError": "admin API capture failed"}, SourceRef: "admin route auth and CRUD sequence", Compare: LevelExact}},
+		ValidationError: validationErr,
+	}
 }
 
 type adminAPISide struct {
@@ -176,11 +184,8 @@ func runAdminAPISide(ctx context.Context, side, binaryPath, parent string) (_ Si
 	if err != nil {
 		return SideResult{}, fmt.Errorf("admin API %s exchange credential: %w; logs: %s", side, err, instance.Logs())
 	}
-	artifact, err := captureAdminRouteCRUD(ctx, "http://"+address, accessToken)
-	if err != nil {
-		return SideResult{}, fmt.Errorf("admin API %s capture: %w; logs: %s", side, err, instance.Logs())
-	}
-	return SideResult{Side: side, Artifact: artifact}, nil
+	artifact, validationErr := captureAdminRouteCRUD(ctx, "http://"+address, accessToken)
+	return SideResult{Side: side, Artifact: artifact, ValidationError: validationErr}, nil
 }
 
 func stageAdminAPISide(parent string) (adminAPISide, error) {
@@ -314,11 +319,15 @@ func exchangeAdminToken(ctx context.Context, baseURL, token, side string) (strin
 }
 
 type adminOperation struct {
-	Name      string            `json:"name"`
-	Status    int               `json:"status"`
-	Headers   map[string]string `json:"headers"`
-	JSON      any               `json:"json"`
-	DTOFields []string          `json:"dtoFields"`
+	Name             string            `json:"name"`
+	Status           int               `json:"status"`
+	Headers          map[string]string `json:"headers"`
+	Body             string            `json:"body"`
+	JSON             any               `json:"json"`
+	DecodeError      string            `json:"decodeError,omitempty"`
+	RequestError     string            `json:"requestError,omitempty"`
+	DTOFields        []string          `json:"dtoFields"`
+	ValidationErrors []string          `json:"validationErrors,omitempty"`
 }
 
 func captureAdminRouteCRUD(ctx context.Context, baseURL, token string) (HTTPArtifact, error) {
@@ -340,25 +349,31 @@ func captureAdminRouteCRUD(ctx context.Context, baseURL, token string) (HTTPArti
 		{"delete", http.MethodDelete, "/admin/routes/" + domain, "", "Bearer " + token, http.StatusOK, []string{"status"}},
 		{"missing-after-delete", http.MethodGet, "/admin/routes/" + domain, "", "Bearer " + token, http.StatusNotFound, []string{"error"}},
 	}
+	var contractFailures []string
 	for _, spec := range requests {
-		op, err := captureAdminOperation(ctx, client, baseURL, spec.name, spec.method, spec.path, spec.body, spec.auth, spec.expectedStatus, spec.expectedFields)
-		if err != nil {
-			return HTTPArtifact{}, err
-		}
+		op := captureAdminOperation(ctx, client, baseURL, spec.name, spec.method, spec.path, spec.body, spec.auth, spec.expectedStatus, spec.expectedFields)
 		operations = append(operations, op)
+		contractFailures = append(contractFailures, op.ValidationErrors...)
 	}
-	return HTTPArtifact{baseArtifact{
+	artifact := HTTPArtifact{baseArtifact{
 		Raw:        map[string]any{"operations": operations},
 		Normalized: normalizeAdminOperations(operations),
 		SourceRef:  "admin route auth and CRUD sequence",
-		Compare:    LevelSemantic,
-	}}, nil
+		Compare:    LevelExact,
+	}}
+	if len(contractFailures) > 0 {
+		return artifact, fmt.Errorf("%s", strings.Join(contractFailures, "; "))
+	}
+	return artifact, nil
 }
 
-func captureAdminOperation(ctx context.Context, client *http.Client, baseURL, name, method, path, body, authorization string, expectedStatus int, expectedFields []string) (adminOperation, error) {
+func captureAdminOperation(ctx context.Context, client *http.Client, baseURL, name, method, path, body, authorization string, expectedStatus int, expectedFields []string) adminOperation {
+	op := adminOperation{Name: name, Headers: map[string]string{}, DTOFields: expectedFields}
 	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, strings.NewReader(body))
 	if err != nil {
-		return adminOperation{}, err
+		op.RequestError = err.Error()
+		op.ValidationErrors = []string{fmt.Sprintf("%s create request: %v", name, err)}
+		return op
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
@@ -368,28 +383,36 @@ func captureAdminOperation(ctx context.Context, client *http.Client, baseURL, na
 	}
 	response, err := client.Do(req)
 	if err != nil {
-		return adminOperation{}, fmt.Errorf("%s: %w", name, err)
+		op.RequestError = err.Error()
+		op.ValidationErrors = []string{fmt.Sprintf("%s request: %v", name, err)}
+		return op
 	}
 	defer response.Body.Close()
+	op.Status = response.StatusCode
+	op.Headers = adminSafeHeaders(response.Header)
 	bodyBytes, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
 	if err != nil {
-		return adminOperation{}, fmt.Errorf("%s read response: %w", name, err)
+		op.RequestError = fmt.Sprintf("read response: %v", err)
+		op.ValidationErrors = []string{fmt.Sprintf("%s read response: %v", name, err)}
+		return op
 	}
-	var payload any
-	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		return adminOperation{}, fmt.Errorf("%s decode JSON: %w", name, err)
+	op.Body = string(bodyBytes)
+	if err := json.Unmarshal(bodyBytes, &op.JSON); err != nil {
+		op.DecodeError = "invalid JSON"
+		op.ValidationErrors = append(op.ValidationErrors, fmt.Sprintf("%s decode JSON: %v", name, err))
 	}
-	headers := adminSafeHeaders(response.Header)
 	if response.StatusCode != expectedStatus {
-		return adminOperation{}, fmt.Errorf("%s: expected HTTP %d, got %d: %s", name, expectedStatus, response.StatusCode, bodyBytes)
+		op.ValidationErrors = append(op.ValidationErrors, fmt.Sprintf("%s: expected HTTP %d, got %d", name, expectedStatus, response.StatusCode))
 	}
-	if err := validateAdminHeaders(name, headers, authorization != ""); err != nil {
-		return adminOperation{}, err
+	if err := validateAdminHeaders(name, op.Headers, authorization != ""); err != nil {
+		op.ValidationErrors = append(op.ValidationErrors, err.Error())
 	}
-	if err := validateDTOFields(name, payload, expectedFields); err != nil {
-		return adminOperation{}, err
+	if op.DecodeError == "" {
+		if err := validateDTOFields(name, op.JSON, expectedFields); err != nil {
+			op.ValidationErrors = append(op.ValidationErrors, err.Error())
+		}
 	}
-	return adminOperation{Name: name, Status: response.StatusCode, Headers: headers, JSON: payload, DTOFields: expectedFields}, nil
+	return op
 }
 
 func adminSafeHeaders(headers http.Header) map[string]string {
