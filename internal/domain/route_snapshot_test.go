@@ -343,6 +343,101 @@ func TestRouteTargetSnapshotTargetKeyChangesForRoutingTargetChanges(t *testing.T
 	}
 }
 
+func TestRouteTargetEntryValidateRejectsStaleOrForgedTargetKeys(t *testing.T) {
+	base, err := NewExternalReadyRouteTargetEntry("app.example.com", "198.51.100.9", "upstream.example", 8443, "https", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name   string
+		mutate func(*RouteTargetEntry)
+	}{
+		{name: "canonical domain", mutate: func(entry *RouteTargetEntry) { entry.CanonicalDomain = "other.example.com" }},
+		{name: "target host", mutate: func(entry *RouteTargetEntry) { entry.TargetHost = "198.51.100.10" }},
+		{name: "target port", mutate: func(entry *RouteTargetEntry) { entry.TargetPort = 9443 }},
+		{name: "scheme", mutate: func(entry *RouteTargetEntry) { entry.Scheme = "http" }},
+		{name: "protocol", mutate: func(entry *RouteTargetEntry) { entry.Protocol = RouteTargetProtocolH2C }},
+		{name: "upstream host", mutate: func(entry *RouteTargetEntry) { entry.UpstreamHost = "other-upstream.example" }},
+		{name: "attachment", mutate: func(entry *RouteTargetEntry) { entry.Attachment = RouteTargetAttachmentAttached }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+" stale", func(t *testing.T) {
+			stale := base
+			tt.mutate(&stale)
+			require.True(t, stale.TargetKey.Valid())
+			require.ErrorIs(t, stale.Validate(), ErrInvalidRoute)
+		})
+		t.Run(tt.name+" forged", func(t *testing.T) {
+			forged := base
+			tt.mutate(&forged)
+			forged.TargetKey = RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
+			require.True(t, forged.TargetKey.Valid())
+			require.ErrorIs(t, forged.Validate(), ErrInvalidRoute)
+		})
+	}
+}
+
+func TestRouteTargetEntryTargetKeyCanonicalizesEndpointIdentity(t *testing.T) {
+	dnsLower := mustReadyRouteTargetEntry(t, "app.example.com", "app_alias", 8080, 1)
+	dnsUpper := mustReadyRouteTargetEntry(t, "app.example.com", "APP_ALIAS.", 8080, 2)
+	require.Equal(t, dnsLower.TargetKey, dnsUpper.TargetKey)
+
+	ipCompressed := mustReadyRouteTargetEntry(t, "app.example.com", "2001:db8::1", 8080, 1)
+	ipExpanded := mustReadyRouteTargetEntry(t, "app.example.com", "2001:0db8:0:0:0:0:0:1", 8080, 2)
+	require.Equal(t, ipCompressed.TargetKey, ipExpanded.TargetKey)
+
+	externalLower, err := NewExternalReadyRouteTargetEntry("external.example.com", "2001:db8::1", "api.upstream.example", 443, "https", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	externalEquivalent, err := NewExternalReadyRouteTargetEntry("external.example.com", "2001:0db8:0:0:0:0:0:1", "API.UPSTREAM.EXAMPLE.", 443, "https", RouteTargetProtocolHTTP1, 2)
+	require.NoError(t, err)
+	require.Equal(t, externalLower.TargetKey, externalEquivalent.TargetKey)
+
+	changed, err := NewExternalReadyRouteTargetEntry("external.example.com", "2001:db8::2", "api.upstream.example", 443, "https", RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	require.NotEqual(t, externalLower.TargetKey, changed.TargetKey)
+}
+
+func TestRouteTargetSnapshotCloneIsIndependent(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	registry := mustReadyRouteTargetEntry(t, "registry.example.com", "registry", 5000, 1)
+	original := RouteTargetSnapshot{
+		Generation:               1,
+		Entries:                  []RouteTargetEntry{entry},
+		RegistryForwardingTarget: &registry,
+	}
+
+	clone := original.Clone()
+	require.Equal(t, original, clone)
+	require.NotSame(t, &original.Entries[0], &clone.Entries[0])
+	require.NotSame(t, original.RegistryForwardingTarget, clone.RegistryForwardingTarget)
+
+	clone.Entries[0].TargetHost = "clone"
+	clone.RegistryForwardingTarget.TargetHost = "clone-registry"
+	require.Equal(t, "app", original.Entries[0].TargetHost)
+	require.Equal(t, "registry", original.RegistryForwardingTarget.TargetHost)
+
+	original.Entries[0].TargetHost = "original"
+	original.RegistryForwardingTarget.TargetHost = "original-registry"
+	require.Equal(t, "clone", clone.Entries[0].TargetHost)
+	require.Equal(t, "clone-registry", clone.RegistryForwardingTarget.TargetHost)
+}
+
+func TestRouteTargetSnapshotCloneSupportsConcurrentIndependentUse(t *testing.T) {
+	entry := mustReadyRouteTargetEntry(t, "app.example.com", "app", 8080, 1)
+	registry := mustReadyRouteTargetEntry(t, "registry.example.com", "registry", 5000, 1)
+	snapshot := RouteTargetSnapshot{Generation: 1, Entries: []RouteTargetEntry{entry}, RegistryForwardingTarget: &registry}
+
+	for range 16 {
+		clone := snapshot.Clone()
+		t.Run("independent clone", func(t *testing.T) {
+			t.Parallel()
+			clone.Entries[0].TargetHost = "worker"
+			clone.RegistryForwardingTarget.TargetHost = "worker-registry"
+			require.Equal(t, "worker", clone.Entries[0].TargetHost)
+			require.Equal(t, "worker-registry", clone.RegistryForwardingTarget.TargetHost)
+		})
+	}
+}
+
 func mustReadyRouteTargetEntry(t *testing.T, domainName, host string, port int, generation RouteTargetGeneration) RouteTargetEntry {
 	t.Helper()
 	entry, err := NewReadyRouteTargetEntry(domainName, host, port, "http", RouteTargetProtocolHTTP1, generation)

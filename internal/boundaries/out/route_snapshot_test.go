@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -39,18 +40,6 @@ func TestRouteSnapshotPorts_AcceptCancelledContextAndKeepWatcherChannelReceiveOn
 		t.Fatalf("get current snapshot: %v", err)
 	}
 
-	watcher := mocks.NewMockRouteSnapshotWatcher(t)
-	updates := make(chan domain.RouteTargetSnapshot)
-	close(updates)
-	watcher.EXPECT().WatchSnapshots(ctx).Return((<-chan domain.RouteTargetSnapshot)(updates), nil)
-	stream, err := watcher.WatchSnapshots(ctx)
-	if err != nil {
-		t.Fatalf("watch snapshots: %v", err)
-	}
-	if stream == nil {
-		t.Fatal("watch snapshots returned a nil stream")
-	}
-
 	coordinator := mocks.NewMockEdgeDrainCoordinator(t)
 	targetKey, err := domain.NewRouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567")
 	if err != nil {
@@ -62,6 +51,43 @@ func TestRouteSnapshotPorts_AcceptCancelledContextAndKeepWatcherChannelReceiveOn
 	}
 	if err := ctx.Err(); err == nil {
 		t.Fatal("expected cancelled context to remain observable by port implementations")
+	}
+}
+
+// TestRouteSnapshotWatcherContract provides a transport-independent contract fixture
+// for every RouteSnapshotWatcher implementation.
+func TestRouteSnapshotWatcherContract(t *testing.T) {
+	assertRouteSnapshotWatcherContract(t, func(ctx context.Context) (<-chan domain.RouteTargetSnapshot, error) {
+		updates := make(chan domain.RouteTargetSnapshot)
+		go func() {
+			defer close(updates)
+			<-ctx.Done()
+		}()
+		return updates, nil
+	})
+}
+
+func assertRouteSnapshotWatcherContract(t *testing.T, watch func(context.Context) (<-chan domain.RouteTargetSnapshot, error)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	updates, err := watch(ctx)
+	if err != nil {
+		t.Fatalf("watch snapshots: %v", err)
+	}
+	if updates == nil {
+		t.Fatal("successful WatchSnapshots returned a nil stream")
+	}
+
+	cancel()
+	select {
+	case _, open := <-updates:
+		if open {
+			t.Fatal("watcher did not close its stream after context cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("watcher did not promptly close its stream after context cancellation")
 	}
 }
 

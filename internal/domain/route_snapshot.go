@@ -89,11 +89,26 @@ func (k RouteTargetKey) Valid() bool {
 	return true
 }
 
-// RouteTargetSnapshot is the routing-only view of edge targets.
+// RouteTargetSnapshot is the routing-only view of edge targets. Snapshot values are
+// immutable after publication; callers that need to retain or modify one must use Clone.
 type RouteTargetSnapshot struct {
 	Generation               RouteTargetGeneration
 	Entries                  []RouteTargetEntry
 	RegistryForwardingTarget *RouteTargetEntry
+}
+
+// Clone returns an independent copy safe for the caller to retain or modify.
+func (s RouteTargetSnapshot) Clone() RouteTargetSnapshot {
+	clone := s
+	if s.Entries != nil {
+		clone.Entries = make([]RouteTargetEntry, len(s.Entries))
+		copy(clone.Entries, s.Entries)
+	}
+	if s.RegistryForwardingTarget != nil {
+		registryTarget := *s.RegistryForwardingTarget
+		clone.RegistryForwardingTarget = &registryTarget
+	}
+	return clone
 }
 
 // Validate verifies the snapshot is a coherent, self-contained routing view.
@@ -362,6 +377,9 @@ func (e RouteTargetEntry) validateRoutableTarget() error {
 	if !e.TargetKey.Valid() {
 		return fmt.Errorf("%w: route target key is invalid", ErrInvalidRoute)
 	}
+	if e.TargetKey != e.derivedTargetKey() {
+		return fmt.Errorf("%w: route target key does not match routing target", ErrInvalidRoute)
+	}
 	if e.UpstreamHost == "" {
 		if e.Attachment != RouteTargetAttachmentAttached {
 			return fmt.Errorf("%w: attached route target requires edge attachment", ErrInvalidRoute)
@@ -387,17 +405,31 @@ func (e *RouteTargetEntry) setCanonicalDomain(domainName string) error {
 }
 
 func (e *RouteTargetEntry) setDerivedTargetKey() {
+	e.TargetKey = e.derivedTargetKey()
+}
+
+func (e RouteTargetEntry) derivedTargetKey() RouteTargetKey {
 	payload := strings.Join([]string{
 		e.CanonicalDomain,
-		e.TargetHost,
+		canonicalRouteTargetIdentityHost(e.TargetHost),
 		fmt.Sprintf("%d", e.TargetPort),
 		e.Scheme,
 		string(e.Protocol),
-		e.UpstreamHost,
+		canonicalRouteTargetIdentityHost(e.UpstreamHost),
 		string(e.Attachment),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(payload))
-	e.TargetKey = RouteTargetKey(routeTargetKeyPrefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
+	return RouteTargetKey(routeTargetKeyPrefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
+}
+
+// canonicalRouteTargetIdentityHost keeps endpoint spelling transport-friendly while
+// making DNS aliases and equivalent IP literal spellings share one target identity.
+func canonicalRouteTargetIdentityHost(host string) string {
+	host = strings.TrimSuffix(host, ".")
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
 }
 
 func (e RouteTargetEntry) validStatus() bool {
