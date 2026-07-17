@@ -3,17 +3,19 @@ package services
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"net"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -23,323 +25,226 @@ import (
 const defaultVolumePrefix = "gordon-service"
 
 type Service struct {
-	runtime        out.ContainerRuntime
-	secretProvider out.SecretProvider
-	volumePrefix   string
+	runtime           out.RuntimeStandaloneServiceManager
+	secretProvider    out.SecretProvider
+	sourceComponentID string
+	instanceSecret    [sha256.Size]byte
+	generation        atomic.Uint64
+	now               func() time.Time
 }
 
+// NewService preserves monolith callers by adapting the broad local runtime to the narrow service port.
 func NewService(runtime out.ContainerRuntime) *Service {
-	return &Service{runtime: runtime, volumePrefix: defaultVolumePrefix}
+	return newService(NewLocalRuntimeStandaloneServiceManager(runtime), nil, "gordon-control", newStandaloneServiceInstanceSecret())
 }
 
+// NewServiceWithSecretProvider preserves monolith callers by adapting the broad local runtime to the narrow service port.
 func NewServiceWithSecretProvider(runtime out.ContainerRuntime, secretProvider out.SecretProvider) *Service {
-	return &Service{runtime: runtime, secretProvider: secretProvider, volumePrefix: defaultVolumePrefix}
+	return newService(NewLocalRuntimeStandaloneServiceManager(runtime), secretProvider, "gordon-control", newStandaloneServiceInstanceSecret())
 }
 
+// NewServiceWithVolumePrefix preserves monolith callers that configure managed-volume names.
 func NewServiceWithVolumePrefix(runtime out.ContainerRuntime, volumePrefix string) *Service {
-	if volumePrefix == "" {
-		volumePrefix = defaultVolumePrefix
+	return newService(newLocalRuntimeStandaloneServiceManager(runtime, volumePrefix), nil, "gordon-control", newStandaloneServiceInstanceSecret())
+}
+
+// NewServiceWithRuntimeStandaloneServiceManager creates the control-side service with a narrow runtime port.
+func NewServiceWithRuntimeStandaloneServiceManager(runtime out.RuntimeStandaloneServiceManager) *Service {
+	return newService(runtime, nil, "gordon-control", newStandaloneServiceInstanceSecret())
+}
+
+// NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider creates the control-side service with secret resolution.
+func NewServiceWithRuntimeStandaloneServiceManagerAndSecretProvider(runtime out.RuntimeStandaloneServiceManager, secretProvider out.SecretProvider) *Service {
+	return newService(runtime, secretProvider, "gordon-control", newStandaloneServiceInstanceSecret())
+}
+
+func newService(runtime out.RuntimeStandaloneServiceManager, secretProvider out.SecretProvider, sourceComponentID string, instanceSecret [sha256.Size]byte) *Service {
+	if strings.TrimSpace(sourceComponentID) == "" {
+		sourceComponentID = "gordon-control"
 	}
-	return &Service{runtime: runtime, volumePrefix: volumePrefix}
+	return &Service{
+		runtime:           runtime,
+		secretProvider:    secretProvider,
+		sourceComponentID: sourceComponentID,
+		instanceSecret:    instanceSecret,
+		now:               func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func newStandaloneServiceInstanceSecret() [sha256.Size]byte {
+	var instanceSecret [sha256.Size]byte
+	if _, err := cryptorand.Read(instanceSecret[:]); err != nil {
+		panic("standalone service command identity entropy unavailable")
+	}
+	return instanceSecret
 }
 
 func (s *Service) Reconcile(ctx context.Context, configured []domain.StandaloneService) error {
-	containers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		return fmt.Errorf("list standalone service containers: %w", err)
+	if s.runtime == nil {
+		return fmt.Errorf("runtime standalone service manager unavailable")
 	}
-	existing := managedServiceContainers(containers)
+	states, err := s.runtime.ListStandaloneServiceState(ctx)
+	if err != nil {
+		return fmt.Errorf("list standalone service state: %w", err)
+	}
+	existing := standaloneServiceStateByName(states)
 	configuredNames := make(map[string]struct{}, len(configured))
-	for _, svc := range configured {
-		configuredNames[svc.Name] = struct{}{}
-		if err := s.reconcileOne(ctx, svc, existing[svc.Name]); err != nil {
+	for _, service := range configured {
+		configuredNames[service.Name] = struct{}{}
+		if !service.Enabled {
+			if len(existing[service.Name]) == 0 {
+				continue
+			}
+			if err := s.remove(ctx, service.Name); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := s.apply(ctx, service, existing[service.Name]); err != nil {
 			return err
 		}
 	}
-	for name, containers := range existing {
-		if _, ok := configuredNames[name]; ok {
-			continue
+	removedNames := make([]string, 0)
+	for name := range existing {
+		if _, ok := configuredNames[name]; !ok {
+			removedNames = append(removedNames, name)
 		}
-		if err := s.stopRemoved(ctx, name, containers); err != nil {
+	}
+	sort.Strings(removedNames)
+	for _, name := range removedNames {
+		if err := s.remove(ctx, name); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (s *Service) apply(ctx context.Context, service domain.StandaloneService, existing []domain.RuntimeStandaloneServiceState) error {
+	env, err := s.serviceEnv(ctx, service)
+	if err != nil {
+		return fmt.Errorf("resolve standalone service %q environment: %w", service.Name, err)
+	}
+	hash, err := serviceConfigHashWithEnv(service, env)
+	if err != nil {
+		return fmt.Errorf("hash standalone service %q config: %w", service.Name, err)
+	}
+	if !standaloneServiceNeedsApply(service, hash, existing) {
+		return nil
+	}
+	result, err := s.runtime.ApplyStandaloneService(ctx, domain.ApplyStandaloneServiceCommand{
+		RuntimeCommandIdentity: s.desiredIdentity("apply", hash),
+		Service:                service.ForRuntimeApply(),
+		ResolvedEnv:            env,
+		ConfigHash:             hash,
+	})
+	if err != nil {
+		return fmt.Errorf("apply standalone service %q: %w", service.Name, err)
+	}
+	if err := standaloneServiceCommandResultError(result); err != nil {
+		return fmt.Errorf("apply standalone service %q: %w", service.Name, err)
+	}
+	return nil
+}
+
+func (s *Service) remove(ctx context.Context, name string) error {
+	result, err := s.runtime.RemoveStandaloneService(ctx, domain.RemoveStandaloneServiceCommand{
+		RuntimeCommandIdentity: s.imperativeIdentity("remove", name),
+		Name:                   name,
+	})
+	if err != nil {
+		return fmt.Errorf("remove standalone service %q: %w", name, err)
+	}
+	if err := standaloneServiceCommandResultError(result); err != nil {
+		return fmt.Errorf("remove standalone service %q: %w", name, err)
+	}
+	return nil
+}
+
+func standaloneServiceNeedsApply(service domain.StandaloneService, hash string, existing []domain.RuntimeStandaloneServiceState) bool {
+	if len(existing) == 0 || len(existing) > 1 {
+		return true
+	}
+	state := existing[0]
+	if state.ConfigHash != hash || state.Status != domain.ContainerStatusRunning {
+		return true
+	}
+	return service.Readiness.Type != "" && service.Readiness.Type != domain.StandaloneServiceReadinessNone
+}
+
+func standaloneServiceStateByName(states []domain.RuntimeStandaloneServiceState) map[string][]domain.RuntimeStandaloneServiceState {
+	existing := make(map[string][]domain.RuntimeStandaloneServiceState)
+	for _, state := range states {
+		if strings.TrimSpace(state.Name) == "" {
+			continue
+		}
+		existing[state.Name] = append(existing[state.Name], state)
+	}
+	return existing
+}
+
+func standaloneServiceCommandResultError(result domain.RuntimeCommandResult) error {
+	if result.Status != domain.RuntimeCommandStatusFailed && result.Status != domain.RuntimeCommandStatusDenied {
+		return nil
+	}
+	if result.Error == nil || strings.TrimSpace(result.Error.Message) == "" {
+		return fmt.Errorf("runtime command failed")
+	}
+	return fmt.Errorf("%s", result.Error.Message)
 }
 
 func (s *Service) Status(ctx context.Context) ([]domain.StandaloneServiceStatus, error) {
-	containers, err := s.runtime.ListContainers(ctx, true)
+	if s.runtime == nil {
+		return nil, fmt.Errorf("runtime standalone service manager unavailable")
+	}
+	states, err := s.runtime.ListStandaloneServiceState(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list standalone service containers: %w", err)
+		return nil, fmt.Errorf("list standalone service state: %w", err)
 	}
-	statuses := make([]domain.StandaloneServiceStatus, 0)
-	for _, container := range containers {
-		if container.Labels[domain.LabelService] != "true" {
-			continue
+	statuses := make([]domain.StandaloneServiceStatus, 0, len(states))
+	for _, state := range states {
+		statuses = append(statuses, domain.StandaloneServiceStatus(state))
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		if statuses[i].Name != statuses[j].Name {
+			return statuses[i].Name < statuses[j].Name
 		}
-		statuses = append(statuses, domain.StandaloneServiceStatus{
-			Name:          container.Labels[domain.LabelServiceName],
-			ContainerID:   container.ID,
-			ContainerName: container.Name,
-			Status:        containerStatus(container),
-			ConfigHash:    container.Labels[domain.LabelServiceConfigHash],
-		})
-	}
-	sort.Slice(statuses, func(i, j int) bool { return statuses[i].Name < statuses[j].Name })
+		return statuses[i].ContainerID < statuses[j].ContainerID
+	})
 	return statuses, nil
 }
 
-func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService, existing []*domain.Container) error {
-	cleanup := normalizeCleanup(svc.Cleanup)
-	if !svc.Enabled {
-		return s.stopDisabled(ctx, svc.Name, cleanup, existing)
-	}
-	env, err := s.serviceEnv(ctx, svc)
-	if err != nil {
-		return fmt.Errorf("resolve standalone service %q environment: %w", svc.Name, err)
-	}
-	hash, err := serviceConfigHashWithEnv(svc, env)
-	if err != nil {
-		return fmt.Errorf("hash standalone service %q config: %w", svc.Name, err)
-	}
-	if len(existing) == 0 {
-		return s.createAndStart(ctx, svc, hash, env)
-	}
-	sort.SliceStable(existing, func(i, j int) bool {
-		leftRunning := containerStatus(existing[i]) == domain.ContainerStatusRunning
-		rightRunning := containerStatus(existing[j]) == domain.ContainerStatusRunning
-		if leftRunning != rightRunning {
-			return leftRunning
-		}
-		return existing[i].ID < existing[j].ID
-	})
-	current := existing[0]
-	if current.Labels[domain.LabelServiceConfigHash] != hash {
-		if err := s.recreate(ctx, svc, cleanup, existing, hash, env); err != nil {
-			return err
-		}
-		return nil
-	}
-	for _, duplicate := range existing[1:] {
-		if err := s.cleanupContainer(ctx, svc.Name, "duplicate", cleanup, duplicate); err != nil {
-			return err
-		}
-	}
-	if containerStatus(current) != domain.ContainerStatusRunning {
-		if err := s.runtime.StartContainer(ctx, current.ID); err != nil {
-			return fmt.Errorf("start standalone service %q container: %w", svc.Name, err)
-		}
-	}
-	if err := s.waitReadiness(ctx, current.ID, svc); err != nil {
-		return err
-	}
-	return nil
+func (s *Service) desiredIdentity(kind, hash string) domain.RuntimeCommandIdentity {
+	return s.identity(kind + ":" + hash)
 }
 
-func (s *Service) recreate(ctx context.Context, svc domain.StandaloneService, cleanup domain.StandaloneServiceCleanup, existing []*domain.Container, hash string, env []string) error {
-	for _, container := range existing {
-		if containerStatus(container) == domain.ContainerStatusRunning {
-			if err := s.runtime.StopContainer(ctx, container.ID); err != nil {
-				return fmt.Errorf("stop stale standalone service %q container: %w", svc.Name, err)
-			}
-		}
-		if cleanup.RemoveContainer {
-			if err := s.runtime.RemoveContainer(ctx, container.ID, true); err != nil {
-				return fmt.Errorf("remove stale standalone service %q container: %w", svc.Name, err)
-			}
-		}
+func (s *Service) imperativeIdentity(kind, subject string) domain.RuntimeCommandIdentity {
+	cleanSubject := strings.TrimSpace(subject)
+	if cleanSubject == "" {
+		cleanSubject = "all"
 	}
-	return s.createAndStart(ctx, svc, hash, env)
+	generation := s.generation.Add(1)
+	return s.identityWithGeneration(fmt.Sprintf("%s:%s:%d", kind, cleanSubject, generation), generation)
 }
 
-func (s *Service) stopDisabled(ctx context.Context, name string, cleanup domain.StandaloneServiceCleanup, existing []*domain.Container) error {
-	for _, container := range existing {
-		if err := s.cleanupContainer(ctx, name, "disabled", cleanup, container); err != nil {
-			return err
-		}
-	}
-	return nil
+func (s *Service) identity(key string) domain.RuntimeCommandIdentity {
+	return s.identityWithGeneration(key, s.generation.Add(1))
 }
 
-func (s *Service) stopRemoved(ctx context.Context, name string, existing []*domain.Container) error {
-	for _, container := range existing {
-		cleanup := cleanupFromLabels(container.Labels)
-		if err := s.cleanupContainer(ctx, name, "removed", cleanup, container); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) cleanupContainer(ctx context.Context, name, reason string, cleanup domain.StandaloneServiceCleanup, container *domain.Container) error {
-	if containerStatus(container) == domain.ContainerStatusRunning {
-		if err := s.runtime.StopContainer(ctx, container.ID); err != nil {
-			return fmt.Errorf("stop %s standalone service %q container: %w", reason, name, err)
-		}
-	}
-	if cleanup.RemoveContainer {
-		if err := s.runtime.RemoveContainer(ctx, container.ID, true); err != nil {
-			return fmt.Errorf("remove %s standalone service %q container: %w", reason, name, err)
-		}
-	}
-	if err := s.removeManagedVolumes(ctx, name, cleanup, container); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Service) removeManagedVolumes(ctx context.Context, name string, cleanup domain.StandaloneServiceCleanup, container *domain.Container) error {
-	if cleanup.PreserveVolumes {
-		return nil
-	}
-	managed := managedVolumeSet(container.Labels)
-	for _, mount := range container.VolumeMounts {
-		if mount.Type != "volume" || mount.Name == "" {
-			continue
-		}
-		if _, ok := managed[mount.Name]; !ok {
-			continue
-		}
-		if err := s.runtime.RemoveVolume(ctx, mount.Name, true); err != nil {
-			return fmt.Errorf("remove standalone service %q volume %q: %w", name, mount.Name, err)
-		}
-	}
-	return nil
-}
-
-func managedVolumeSet(labels map[string]string) map[string]struct{} {
-	values := strings.Split(labels[domain.LabelServiceManagedVolumes], ",")
-	managed := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		name := strings.TrimSpace(value)
-		if name == "" {
-			continue
-		}
-		managed[name] = struct{}{}
-	}
-	return managed
-}
-
-func cleanupFromLabels(labels map[string]string) domain.StandaloneServiceCleanup {
-	cleanup := domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true}
-	if value, ok := labels[domain.LabelServiceCleanupPreserveVolumes]; ok {
-		if parsed, err := strconv.ParseBool(value); err == nil {
-			cleanup.PreserveVolumes = parsed
-		}
-	}
-	if value, ok := labels[domain.LabelServiceCleanupRemoveContainer]; ok {
-		if parsed, err := strconv.ParseBool(value); err == nil {
-			cleanup.RemoveContainer = parsed
-		}
-	}
-	return cleanup
-}
-
-func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneService, hash string, env []string) error {
-	config, err := s.containerConfig(ctx, svc, hash, env)
-	if err != nil {
-		return err
-	}
-	container, err := s.runtime.CreateContainer(ctx, config)
-	if err != nil {
-		return fmt.Errorf("create standalone service %q container: %w", svc.Name, err)
-	}
-	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
-		return fmt.Errorf("start standalone service %q container: %w", svc.Name, err)
-	}
-	if err := s.waitReadiness(ctx, container.ID, svc); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneService, hash string, env []string) (*domain.ContainerConfig, error) {
-	var imageVolumes []string
-	if len(svc.Volumes) == 0 {
-		var err error
-		imageVolumes, err = s.runtime.InspectImageVolumes(ctx, svc.Image)
-		if err != nil {
-			return nil, fmt.Errorf("inspect standalone service %q image volumes: %w", svc.Name, err)
-		}
-	}
-	mounts := ResolveVolumeMounts(s.volumePrefix, svc.Name, svc.Volumes, imageVolumes)
-	volumes := make(map[string]string)
-	readOnlyVolumes := make(map[string]string)
-	managedVolumes := make([]string, 0)
-	for _, mount := range mounts {
-		if mount.Managed {
-			managedVolumes = append(managedVolumes, mount.Source)
-		}
-		if mount.ReadOnly {
-			readOnlyVolumes[mount.Target] = mount.Source
-			continue
-		}
-		volumes[mount.Target] = mount.Source
-	}
-	publishes, err := portPublishes(svc)
-	if err != nil {
-		return nil, err
-	}
-	return &domain.ContainerConfig{
-		Image:           svc.Image,
-		Name:            serviceContainerName(svc.Name),
-		Env:             env,
-		PortPublishes:   publishes,
-		Labels:          serviceLabels(svc.Name, hash, normalizeCleanup(svc.Cleanup), managedVolumes),
-		AutoRemove:      false,
-		RestartPolicy:   domain.RestartPolicyAlways,
-		Volumes:         emptyToNil(volumes),
-		ReadOnlyVolumes: emptyToNil(readOnlyVolumes),
-	}, nil
-}
-
-func managedServiceContainers(containers []*domain.Container) map[string][]*domain.Container {
-	managed := make(map[string][]*domain.Container)
-	for _, container := range containers {
-		if container == nil || container.Labels[domain.LabelService] != "true" {
-			continue
-		}
-		name := container.Labels[domain.LabelServiceName]
-		if name == "" {
-			continue
-		}
-		managed[name] = append(managed[name], container)
-	}
-	return managed
-}
-
-func serviceLabels(name, hash string, cleanup domain.StandaloneServiceCleanup, managedVolumes []string) map[string]string {
-	sort.Strings(managedVolumes)
-	return map[string]string{
-		domain.LabelManaged:                       "true",
-		domain.LabelService:                       "true",
-		domain.LabelServiceName:                   name,
-		domain.LabelServiceConfigHash:             hash,
-		domain.LabelServiceManagedVolumes:         strings.Join(managedVolumes, ","),
-		domain.LabelServiceCleanupPreserveVolumes: strconv.FormatBool(cleanup.PreserveVolumes),
-		domain.LabelServiceCleanupRemoveContainer: strconv.FormatBool(cleanup.RemoveContainer),
+func (s *Service) identityWithGeneration(key string, generation uint64) domain.RuntimeCommandIdentity {
+	namespacedKey := s.keyedDigest([]byte(key))
+	return domain.RuntimeCommandIdentity{
+		ID:                domain.RuntimeCommandID("standalone-service:" + namespacedKey),
+		IdempotencyKey:    namespacedKey,
+		Generation:        generation,
+		SourceComponentID: s.sourceComponentID,
+		RequestedAt:       s.now().UTC(),
 	}
 }
 
-func portPublishes(svc domain.StandaloneService) ([]domain.ContainerPortPublish, error) {
-	publishes := make([]domain.ContainerPortPublish, 0, len(svc.Ports))
-	for _, port := range svc.Ports {
-		if port.Publish == "" {
-			continue
-		}
-		host, hostPort, err := net.SplitHostPort(port.Publish)
-		if err != nil {
-			return nil, fmt.Errorf("parse standalone service %q port %q publish: %w", svc.Name, port.Name, err)
-		}
-		hostPortNumber, err := strconv.Atoi(hostPort)
-		if err != nil {
-			return nil, fmt.Errorf("parse standalone service %q port %q publish port: %w", svc.Name, port.Name, err)
-		}
-		publishes = append(publishes, domain.ContainerPortPublish{
-			HostIP: host, HostPort: hostPortNumber, ContainerPort: port.Container, Protocol: port.Protocol,
-		})
-	}
-	return publishes, nil
+func (s *Service) keyedDigest(payload []byte) string {
+	digest := hmac.New(sha256.New, s.instanceSecret[:])
+	_, _ = digest.Write(payload)
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 func serviceConfigHash(svc domain.StandaloneService) (string, error) {
@@ -454,25 +359,79 @@ func envMapToList(values map[string]string) []string {
 	return env
 }
 
-func (s *Service) waitReadiness(ctx context.Context, containerID string, svc domain.StandaloneService) error {
-	readiness := svc.Readiness
-	if readiness.Type == "" || readiness.Type == domain.StandaloneServiceReadinessNone {
-		return nil
+func managedServiceContainers(containers []*domain.Container) map[string][]*domain.Container {
+	managed := make(map[string][]*domain.Container)
+	for _, container := range containers {
+		if container == nil || container.Labels[domain.LabelService] != "true" {
+			continue
+		}
+		name := container.Labels[domain.LabelServiceName]
+		if name == "" {
+			continue
+		}
+		managed[name] = append(managed[name], container)
 	}
-	readyCtx := ctx
-	cancel := func() {}
-	if readiness.Timeout > 0 {
-		readyCtx, cancel = context.WithTimeout(ctx, readiness.Timeout)
+	return managed
+}
+
+func managedVolumeSet(labels map[string]string) map[string]struct{} {
+	values := strings.Split(labels[domain.LabelServiceManagedVolumes], ",")
+	managed := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		name := strings.TrimSpace(value)
+		if name == "" {
+			continue
+		}
+		managed[name] = struct{}{}
 	}
-	defer cancel()
-	switch readiness.Type {
-	case domain.StandaloneServiceReadinessTCP:
-		return waitTCPReadiness(readyCtx, svc)
-	case domain.StandaloneServiceReadinessLog:
-		return s.waitLogReadiness(readyCtx, containerID, svc)
-	default:
-		return fmt.Errorf("unsupported standalone service %q readiness type %q", svc.Name, readiness.Type)
+	return managed
+}
+
+func cleanupFromLabels(labels map[string]string) domain.StandaloneServiceCleanup {
+	cleanup := domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true}
+	if value, ok := labels[domain.LabelServiceCleanupPreserveVolumes]; ok {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cleanup.PreserveVolumes = parsed
+		}
 	}
+	if value, ok := labels[domain.LabelServiceCleanupRemoveContainer]; ok {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			cleanup.RemoveContainer = parsed
+		}
+	}
+	return cleanup
+}
+
+func serviceLabels(name, hash string, cleanup domain.StandaloneServiceCleanup, managedVolumes []string) map[string]string {
+	sort.Strings(managedVolumes)
+	return map[string]string{
+		domain.LabelManaged:                       "true",
+		domain.LabelService:                       "true",
+		domain.LabelServiceName:                   name,
+		domain.LabelServiceConfigHash:             hash,
+		domain.LabelServiceManagedVolumes:         strings.Join(managedVolumes, ","),
+		domain.LabelServiceCleanupPreserveVolumes: strconv.FormatBool(cleanup.PreserveVolumes),
+		domain.LabelServiceCleanupRemoveContainer: strconv.FormatBool(cleanup.RemoveContainer),
+	}
+}
+
+func portPublishes(svc domain.StandaloneService) ([]domain.ContainerPortPublish, error) {
+	publishes := make([]domain.ContainerPortPublish, 0, len(svc.Ports))
+	for _, port := range svc.Ports {
+		if port.Publish == "" {
+			continue
+		}
+		host, hostPort, err := net.SplitHostPort(port.Publish)
+		if err != nil {
+			return nil, fmt.Errorf("parse standalone service %q port %q publish: %w", svc.Name, port.Name, err)
+		}
+		hostPortNumber, err := strconv.Atoi(hostPort)
+		if err != nil {
+			return nil, fmt.Errorf("parse standalone service %q port %q publish port: %w", svc.Name, port.Name, err)
+		}
+		publishes = append(publishes, domain.ContainerPortPublish{HostIP: host, HostPort: hostPortNumber, ContainerPort: port.Container, Protocol: port.Protocol})
+	}
+	return publishes, nil
 }
 
 func waitTCPReadiness(ctx context.Context, svc domain.StandaloneService) error {
@@ -507,7 +466,7 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 		}
 		host, hostPort, err := net.SplitHostPort(port.Publish)
 		if err != nil {
-			return "", fmt.Errorf("parse standalone service %q tcp readiness publish: %w", svc.Name, err)
+			return "", fmt.Errorf("parse standalone service %q tcp readiness port %q publish: %w", svc.Name, port.Name, err)
 		}
 		switch host {
 		case "::":
@@ -520,48 +479,11 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 	return "", fmt.Errorf("standalone service %q tcp readiness requires a published tcp port", svc.Name)
 }
 
-func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc domain.StandaloneService) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	var lastErr error
-	for {
-		if err := ctx.Err(); err != nil {
-			return logReadinessTimeoutError(svc.Name, err, lastErr)
-		}
-		found, err := s.logContains(ctx, containerID, svc.Readiness.Path, svc.Readiness.Contains)
-		if err == nil && found {
-			return nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-		// Continue polling until timeout; many services create the log after start.
-		select {
-		case <-ctx.Done():
-			return logReadinessTimeoutError(svc.Name, ctx.Err(), lastErr)
-		case <-ticker.C:
-		}
-	}
-}
-
 func logReadinessTimeoutError(serviceName string, timeoutErr, lastErr error) error {
 	if lastErr != nil {
 		return fmt.Errorf("standalone service %q log readiness timed out: %w; last read error: %w", serviceName, timeoutErr, lastErr)
 	}
 	return fmt.Errorf("standalone service %q log readiness timed out: %w", serviceName, timeoutErr)
-}
-
-func (s *Service) logContains(ctx context.Context, containerID, path, contains string) (bool, error) {
-	reader, err := s.runtime.CopyFromContainer(ctx, containerID, path)
-	if err != nil {
-		return false, err
-	}
-	defer reader.Close()
-	content, err := io.ReadAll(reader)
-	if err != nil {
-		return false, err
-	}
-	return strings.Contains(string(content), contains), nil
 }
 
 func normalizeCleanup(cleanup domain.StandaloneServiceCleanup) domain.StandaloneServiceCleanup {
