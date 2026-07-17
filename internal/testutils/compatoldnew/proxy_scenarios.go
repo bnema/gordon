@@ -19,8 +19,16 @@ const (
 	managedHTTPRouteScenarioName = "proxy/managed-http-route"
 	managedHTTPRouteMarker       = "gordon-compat-managed-http-route\n"
 	managedHTTPRouteImagePort    = 8080
+	managedHTTPRouteExposedPort  = 9090
 	managedHTTPRouteAttempts     = 2
 )
+
+const managedHTTPRouteDockerfile = `FROM busybox:1.36.1
+LABEL gordon.proxy.port=8080
+EXPOSE 9090
+RUN mkdir -p /www && printf 'gordon-compat-managed-http-route\n' > /www/index.html
+CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
+`
 
 // ProxyScenarios returns Phase 5 proxy compatibility scenario shells.
 func ProxyScenarios() []Scenario {
@@ -77,9 +85,7 @@ func RunCompatibilityManagedHTTPRoute(ctx context.Context, repoRoot, artifactDir
 	defer func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if cleanupErr := resources.cleanup(cleanupCtx); cleanupErr != nil && err == nil {
-			err = fmt.Errorf("managed proxy compatibility cleanup: %w", cleanupErr)
-		}
+		err = joinManagedProxyCleanupError(err, resources.cleanup(cleanupCtx))
 	}()
 	if err := resources.buildImage(ctx); err != nil {
 		return Report{}, err
@@ -120,9 +126,10 @@ func RunCompatibilityManagedHTTPRoute(ctx context.Context, repoRoot, artifactDir
 }
 
 type managedProxyResources struct {
-	runID      string
-	imageTag   string
-	containers map[string]string
+	runID          string
+	imageTag       string
+	containers     map[string]string
+	cleanupCommand func(context.Context, ...string) error
 }
 
 func newManagedProxyResources(runID string) *managedProxyResources {
@@ -131,9 +138,10 @@ func newManagedProxyResources(runID string) *managedProxyResources {
 		tagPart = tagPart[:70]
 	}
 	return &managedProxyResources{
-		runID:      runID,
-		imageTag:   "gordon-compat-managed-http-route:" + tagPart,
-		containers: make(map[string]string),
+		runID:          runID,
+		imageTag:       "gordon-compat-managed-http-route:" + tagPart,
+		containers:     make(map[string]string),
+		cleanupCommand: dockerCompatibilityCommand,
 	}
 }
 
@@ -143,13 +151,7 @@ func (r *managedProxyResources) buildImage(ctx context.Context) error {
 		return fmt.Errorf("managed proxy build image: create Dockerfile directory: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	const dockerfile = `FROM busybox:1.36.1
-LABEL gordon.proxy.port=8080
-EXPOSE 8080
-RUN mkdir -p /www && printf 'gordon-compat-managed-http-route\n' > /www/index.html
-CMD ["httpd", "-f", "-p", "8080", "-h", "/www"]
-`
-	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte(managedHTTPRouteDockerfile), 0o600); err != nil {
 		return fmt.Errorf("managed proxy build image: write Dockerfile: %w", err)
 	}
 	labels := ResourceLabels(r.runID, "shared", managedHTTPRouteScenarioName)
@@ -171,6 +173,13 @@ func (r *managedProxyResources) requireImageProxyPort(ctx context.Context) error
 	if strings.TrimSpace(value) != strconv.Itoa(managedHTTPRouteImagePort) {
 		return fmt.Errorf("managed proxy image proxy-port label: expected %d", managedHTTPRouteImagePort)
 	}
+	exposed, err := dockerCompatibilityOutput(ctx, "image", "inspect", "--format", "{{range $port, $_ := .Config.ExposedPorts}}{{$port}}{{end}}", r.imageTag)
+	if err != nil {
+		return fmt.Errorf("managed proxy image exposed port: %w", err)
+	}
+	if strings.TrimSpace(exposed) != strconv.Itoa(managedHTTPRouteExposedPort)+"/tcp" {
+		return fmt.Errorf("managed proxy image exposed port: expected %d/tcp", managedHTTPRouteExposedPort)
+	}
 	return nil
 }
 
@@ -189,7 +198,7 @@ func (r *managedProxyResources) startContainer(ctx context.Context, side, domain
 		"--label", "gordon.managed=true",
 		"--label", "gordon.domain=" + domain,
 		"--label", "gordon.route=" + domain,
-		"-p", "127.0.0.1::8080", r.imageTag,
+		"-p", managedHTTPRoutePublishAddress(), r.imageTag,
 	}
 	if err := dockerCompatibilityCommand(ctx, args...); err != nil {
 		return "", fmt.Errorf("start managed proxy container: %w", err)
@@ -208,6 +217,17 @@ func (r *managedProxyResources) startContainer(ctx context.Context, side, domain
 	return address, nil
 }
 
+func managedHTTPRoutePublishAddress() string {
+	return "127.0.0.1::" + strconv.Itoa(managedHTTPRouteImagePort)
+}
+
+func joinManagedProxyCleanupError(primaryErr, cleanupErr error) error {
+	if cleanupErr == nil {
+		return primaryErr
+	}
+	return errors.Join(primaryErr, fmt.Errorf("managed proxy compatibility cleanup: %w", cleanupErr))
+}
+
 func (r *managedProxyResources) cleanup(ctx context.Context) error {
 	var errs []error
 	for _, side := range []string{SideOld, SideNew} {
@@ -215,7 +235,7 @@ func (r *managedProxyResources) cleanup(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	if err := dockerCompatibilityCommand(ctx, "image", "rm", "-f", r.imageTag); err != nil {
+	if err := r.runCleanupCommand(ctx, "image", "rm", "-f", r.imageTag); err != nil {
 		errs = append(errs, fmt.Errorf("remove managed proxy image: %w", err))
 	}
 	return errors.Join(errs...)
@@ -226,11 +246,18 @@ func (r *managedProxyResources) removeContainer(ctx context.Context, side string
 	if name == "" {
 		return nil
 	}
-	if err := dockerCompatibilityCommand(ctx, "rm", "-f", name); err != nil {
+	if err := r.runCleanupCommand(ctx, "rm", "-f", name); err != nil {
 		return fmt.Errorf("remove managed proxy %s container: %w", side, err)
 	}
 	delete(r.containers, side)
 	return nil
+}
+
+func (r *managedProxyResources) runCleanupCommand(ctx context.Context, args ...string) error {
+	if r.cleanupCommand != nil {
+		return r.cleanupCommand(ctx, args...)
+	}
+	return dockerCompatibilityCommand(ctx, args...)
 }
 
 func dockerCompatibilityCommand(ctx context.Context, args ...string) error {

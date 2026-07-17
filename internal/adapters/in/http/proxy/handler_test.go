@@ -43,10 +43,15 @@ func TestHandler_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 }
 
 func TestHandler_RoutesToRegistry(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	registryPort := listener.Addr().(*net.TCPAddr).Port
+	require.NoError(t, listener.Close())
+
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
-		RegistryPort: 5000,
+		RegistryPort: registryPort,
 	})
 	proxySvc.EXPECT().IsRegistryDomain("registry.example.com").Return(true)
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
@@ -59,7 +64,8 @@ func TestHandler_RoutesToRegistry(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	assert.True(t, w.Code == http.StatusBadGateway || w.Code == http.StatusServiceUnavailable)
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Contains(t, w.Body.String(), "Registry Unavailable")
 }
 
 func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {

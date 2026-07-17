@@ -1,7 +1,9 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -220,6 +222,29 @@ func TestService_GetTarget_ExternalRoute_InvalidPort(t *testing.T) {
 			assert.Nil(t, result)
 		})
 	}
+}
+
+func TestResolveTargetMetadata_InvalidProxyPortLogsExactWarningAndFallsBack(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := &Service{runtime: runtime}
+	var logs bytes.Buffer
+	ctx := zerowrap.WithCtx(context.Background(), zerowrap.New(zerowrap.Config{Level: "warn", Format: "json", Output: &logs}))
+
+	runtime.EXPECT().GetImageLabels(ctx, "invalid-port:latest").Return(map[string]string{
+		domain.LabelProxyPort: "oops",
+	}, nil)
+	runtime.EXPECT().GetImageExposedPorts(ctx, "invalid-port:latest").Return([]int{7000}, nil)
+
+	meta, err := svc.resolveTargetMetadata(ctx, "invalid-port:latest")
+	require.NoError(t, err)
+	assert.Equal(t, 7000, meta.Port)
+
+	var warning map[string]any
+	require.NoError(t, json.Unmarshal(logs.Bytes(), &warning))
+	assert.Equal(t, "warn", warning["level"])
+	assert.Equal(t, "invalid port label value", warning["message"])
+	assert.Equal(t, domain.LabelProxyPort, warning["label"])
+	assert.Equal(t, "oops", warning["port_value"])
 }
 
 func TestService_RegisterTarget(t *testing.T) {
