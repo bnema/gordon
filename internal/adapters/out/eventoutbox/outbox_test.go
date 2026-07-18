@@ -57,6 +57,37 @@ func TestOutboxPersistsOutageAndReplaysAfterRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, entries)
 }
+func TestOutboxBoundsCorruptQuarantineRetention(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"001.json.corrupt", "002.json.corrupt", "003.json.corrupt"} {
+		require.NoError(t, os.WriteFile(dir+"/"+name, []byte("bad"), 0600))
+	}
+	outbox, err := New(Config{Dir: dir, MaxEntries: 10, MaxBytes: 1024, MaxCorruptEntries: 2, MaxCorruptBytes: 16}, &testPublisher{})
+	require.NoError(t, err)
+	require.NoError(t, outbox.Healthy())
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	require.Equal(t, "002.json.corrupt", entries[0].Name())
+	require.Equal(t, "003.json.corrupt", entries[1].Name())
+}
+
+func TestOutboxRejectsSymlinkEntriesWithoutFollowingThem(t *testing.T) {
+	dir := t.TempDir()
+	target := dir + "/outside"
+	require.NoError(t, os.WriteFile(target, []byte("private"), 0600))
+	if err := os.Symlink(target, dir+"/unsafe.json"); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	outbox, err := New(Config{Dir: dir}, &testPublisher{})
+	require.NoError(t, err)
+	require.Error(t, outbox.Healthy())
+	require.Error(t, outbox.PublishComponentEvent(context.Background(), testEvent()))
+	contents, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, []byte("private"), contents)
+}
+
 func TestOutboxQuarantinesCorruptEntry(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(dir+"/000.json", []byte("not json"), 0600))

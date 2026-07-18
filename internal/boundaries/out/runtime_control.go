@@ -8,6 +8,14 @@ import (
 )
 
 // RuntimeCommandClient sends narrow runtime intent commands to a runtime worker.
+// RuntimeCommandResultStore durably remembers terminal successful or denied
+// command outcomes by their opaque dedupe key. Failed operations are never
+// stored so callers may retry them.
+type RuntimeCommandResultStore interface {
+	LoadRuntimeCommandResult(ctx context.Context, dedupeKey string) (domain.RuntimeCommandResult, bool, error)
+	SaveRuntimeCommandResult(ctx context.Context, dedupeKey string, result domain.RuntimeCommandResult) error
+}
+
 type RuntimeCommandClient interface {
 	DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error)
 	RestartRoute(ctx context.Context, command domain.RestartRouteCommand) (domain.RuntimeCommandResult, error)

@@ -85,7 +85,7 @@ func (e *ProductionEffects) ImagePushed(ctx context.Context, event domain.Compon
 	if !ok {
 		return ErrUnhandledComponentEvent
 	}
-	if err := e.imagePushed.Handle(ctx, imagePushedEvent(event, payload)); err != nil {
+	if err := e.imagePushed.Handle(withComponentEventDedupeKey(ctx, event.DedupeKey()), imagePushedEvent(event, payload)); err != nil {
 		return fmt.Errorf("handle pushed image: %w", err)
 	}
 	return e.audit.AuditComponentEvent(ctx, event)
@@ -106,7 +106,7 @@ func (e *ProductionEffects) ManualDeploy(ctx context.Context, event domain.Compo
 	if !ok {
 		return ErrUnhandledComponentEvent
 	}
-	if err := e.manual.Handle(ctx, domain.Event{ID: event.ID, Type: domain.EventManualDeploy, Timestamp: event.Timestamp, Route: payload.Domain, Data: &domain.ManualDeployPayload{Domain: payload.Domain}}); err != nil {
+	if err := e.manual.Handle(withComponentEventDedupeKey(ctx, event.DedupeKey()), domain.Event{ID: event.ID, Type: domain.EventManualDeploy, Timestamp: event.Timestamp, Route: payload.Domain, Data: &domain.ManualDeployPayload{Domain: payload.Domain}}); err != nil {
 		return fmt.Errorf("handle manual deploy: %w", err)
 	}
 	return e.audit.AuditComponentEvent(ctx, event)

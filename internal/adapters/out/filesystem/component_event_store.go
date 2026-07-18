@@ -17,6 +17,7 @@ import (
 type ComponentEventStore struct {
 	path     string
 	capacity int
+	syncDir  func(string) error
 	mu       sync.Mutex
 }
 
@@ -32,7 +33,7 @@ func NewComponentEventStore(path string, capacity int) (*ComponentEventStore, er
 	if path == "" {
 		return nil, fmt.Errorf("component event store path is required")
 	}
-	store := &ComponentEventStore{path: path, capacity: capacity}
+	store := &ComponentEventStore{path: filepath.Clean(path), capacity: capacity, syncDir: syncParentDirectory}
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, err := store.readLocked(); err != nil {
@@ -125,6 +126,9 @@ func (s *ComponentEventStore) writeLocked(data componentEventStoreData) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
 		return fmt.Errorf("create component event store directory: %w", err)
 	}
+	if err := os.Chmod(filepath.Dir(s.path), 0700); err != nil { //nolint:gosec // owner-only directory permissions
+		return fmt.Errorf("secure component event store directory: %w", err)
+	}
 	contents, err := json.Marshal(data)
 	if err != nil {
 		return fmt.Errorf("encode component event store: %w", err)
@@ -152,6 +156,9 @@ func (s *ComponentEventStore) writeLocked(data componentEventStoreData) error {
 	}
 	if err := os.Rename(temporaryName, s.path); err != nil {
 		return fmt.Errorf("replace component event store: %w", err)
+	}
+	if err := s.syncDir(filepath.Dir(s.path)); err != nil {
+		return fmt.Errorf("sync component event store directory: %w", err)
 	}
 	return nil
 }

@@ -14,6 +14,19 @@ import (
 // inspection are deliberately unavailable in the split control process.
 type RuntimeCommandContainerService struct{ runtime RouteCommander }
 
+type componentEventDedupeContextKey struct{}
+
+type eventRouteCommander interface {
+	DeployRouteForEvent(context.Context, domain.Route, string) (domain.RuntimeCommandResult, error)
+}
+
+func withComponentEventDedupeKey(ctx context.Context, key string) context.Context {
+	if key == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, componentEventDedupeContextKey{}, key)
+}
+
 func NewRuntimeCommandContainerService(runtime RouteCommander) *RuntimeCommandContainerService {
 	return &RuntimeCommandContainerService{runtime: runtime}
 }
@@ -21,6 +34,14 @@ func NewRuntimeCommandContainerService(runtime RouteCommander) *RuntimeCommandCo
 func (s *RuntimeCommandContainerService) Deploy(ctx context.Context, route domain.Route) (*domain.Container, error) {
 	if s == nil || s.runtime == nil {
 		return nil, fmt.Errorf("runtime command facade unavailable")
+	}
+	if eventKey, ok := ctx.Value(componentEventDedupeContextKey{}).(string); ok && eventKey != "" {
+		if eventRuntime, supported := s.runtime.(eventRouteCommander); supported {
+			if _, err := eventRuntime.DeployRouteForEvent(ctx, route, eventKey); err != nil {
+				return nil, err
+			}
+			return &domain.Container{Name: route.Domain}, nil
+		}
 	}
 	if _, err := s.runtime.DeployRoute(ctx, route); err != nil {
 		return nil, err

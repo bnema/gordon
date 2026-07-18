@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -320,8 +322,19 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 		return nil, nil, log.WrapErr(err, "failed to start runtime event bus")
 	}
 
+	resultStore, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{
+		Path: filepath.Join(resolveDataDir(cfg.Server.DataDir), "runtime-command-results.json"),
+	})
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("open runtime command result store: %w", err)
+	}
+	if err := resultStore.Healthy(); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("runtime command result store unhealthy: %w", err)
+	}
 	policy := runtimeRolePolicy(cfg, v)
-	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy)
+	worker := container.NewRuntimeWorkerWithPolicyAndResultStore(svc.containerSvc, policy, resultStore)
 	drainRegistry = container.NewRuntimeDrainRegistry(svc.containerSvc.RuntimeDrainRouteState)
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)

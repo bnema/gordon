@@ -178,6 +178,16 @@ func TestServiceRouteStatusesUnavailableDependency(t *testing.T) {
 	assert.Contains(t, err.Error(), "runtime state subscriber unavailable")
 }
 
+func TestServiceEventDeployUsesEnvelopeDedupeKeyAsCommandIdentity(t *testing.T) {
+	runtime := &fakeRuntimeCommandClient{}
+	svc := NewService(nil, runtime, "control-1")
+	eventKey := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	_, err := svc.DeployRouteForEvent(t.Context(), domain.Route{Domain: "app.example.com", Image: "app:latest"}, eventKey)
+	require.NoError(t, err)
+	assert.Equal(t, eventKey, runtime.deploy.IdempotencyKey)
+	assert.Equal(t, domain.RuntimeCommandID("component-event:"+eventKey), runtime.deploy.ID)
+}
+
 func TestServiceUnavailableDependencies(t *testing.T) {
 	svc := NewService(nil, nil, "control-1")
 	_, err := svc.DeployRoute(context.Background(), domain.Route{Domain: "app.example.com", Image: "app:latest"})

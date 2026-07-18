@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -46,13 +47,15 @@ type runtimePolicyDeniedEventPublisher interface {
 
 // RuntimeWorker adapts local container.Service behavior to runtime intent commands.
 type RuntimeWorker struct {
-	service runtimeWorkerService
-	policy  RuntimePolicy
-	now     func() time.Time
+	service     runtimeWorkerService
+	policy      RuntimePolicy
+	resultStore out.RuntimeCommandResultStore
+	now         func() time.Time
 
 	mu                      sync.Mutex
 	completedByDedupeKey    map[string]domain.RuntimeCommandResult
 	completedDedupeKeyOrder []string
+	pendingByDedupeKey      map[string]domain.RuntimeCommandResult
 	inFlightByDedupeKey     map[string]*runtimeWorkerInFlight
 	policyDeniedEvents      []domain.RuntimePolicyDeniedEvent
 }
@@ -70,11 +73,17 @@ type runtimeWorkerInFlight struct {
 
 // NewRuntimeWorkerWithPolicy creates a local runtime worker with explicit policy mode.
 func NewRuntimeWorkerWithPolicy(service runtimeWorkerService, policy RuntimePolicy) *RuntimeWorker {
+	return NewRuntimeWorkerWithPolicyAndResultStore(service, policy, nil)
+}
+
+// NewRuntimeWorkerWithPolicyAndResultStore adds durable terminal command
+// idempotency. The store is optional for embedded/test deployments.
+func NewRuntimeWorkerWithPolicyAndResultStore(service runtimeWorkerService, policy RuntimePolicy, store out.RuntimeCommandResultStore) *RuntimeWorker {
 	policy = policy.normalize()
 	if setter, ok := service.(runtimePolicySetter); ok {
 		setter.SetRuntimePolicy(policy)
 	}
-	return &RuntimeWorker{service: service, policy: policy, now: time.Now, completedByDedupeKey: make(map[string]domain.RuntimeCommandResult), inFlightByDedupeKey: make(map[string]*runtimeWorkerInFlight)}
+	return &RuntimeWorker{service: service, policy: policy, resultStore: store, now: time.Now, completedByDedupeKey: make(map[string]domain.RuntimeCommandResult), pendingByDedupeKey: make(map[string]domain.RuntimeCommandResult), inFlightByDedupeKey: make(map[string]*runtimeWorkerInFlight)}
 }
 
 // PolicyDeniedEvents returns policy findings recorded by this worker in observe or enforce mode.
@@ -196,23 +205,74 @@ func (w *RuntimeWorker) runOnce(ctx context.Context, identity domain.RuntimeComm
 			return w.failedResult(identity, ctx.Err()), nil
 		}
 	}
+	pending, retryPending := w.pendingByDedupeKey[key]
 	inFlight := &runtimeWorkerInFlight{done: make(chan struct{})}
 	w.inFlightByDedupeKey[key] = inFlight
 	w.mu.Unlock()
 
-	result, cacheResult := w.run(identity, op)
+	// A terminal mutation whose acknowledgement could not be persisted is kept
+	// in memory and retried before allowing its event acknowledgement. This
+	// avoids repeating the mutation while the runtime process remains alive.
+	if retryPending {
+		err := w.resultStore.SaveRuntimeCommandResult(ctx, key, pending)
+		if err != nil {
+			persistErr := fmt.Errorf("persist runtime command result: %w", err)
+			w.finishInFlight(key, inFlight, pending, persistErr, false, true)
+			return pending, persistErr
+		}
+		w.finishInFlight(key, inFlight, pending, nil, true, false)
+		return pending, nil
+	}
 
+	// A restarted worker first consults the durable terminal-result store. This
+	// occurs after the in-flight slot is reserved, so duplicate callers cannot
+	// race a store miss into duplicate mutations.
+	if result, found, err := w.loadStoredResult(ctx, key); err != nil {
+		w.finishInFlight(key, inFlight, domain.RuntimeCommandResult{}, err, false, false)
+		return domain.RuntimeCommandResult{}, err
+	} else if found {
+		w.finishInFlight(key, inFlight, result, nil, true, false)
+		return result, nil
+	}
+
+	result, cacheResult := w.run(identity, op)
+	var persistErr error
+	if cacheResult && w.resultStore != nil {
+		if err := w.resultStore.SaveRuntimeCommandResult(ctx, key, result); err != nil {
+			// The mutation may already be visible. Reconcile actual state before a
+			// transport retry; never turn an event retry into a unique restart.
+			_ = w.service.SyncContainers(ctx)
+			persistErr = fmt.Errorf("persist runtime command result: %w", err)
+		}
+	}
+	w.finishInFlight(key, inFlight, result, persistErr, cacheResult && persistErr == nil, cacheResult && persistErr != nil)
+	return result, persistErr
+}
+
+func (w *RuntimeWorker) loadStoredResult(ctx context.Context, key string) (domain.RuntimeCommandResult, bool, error) {
+	if w.resultStore == nil {
+		return domain.RuntimeCommandResult{}, false, nil
+	}
+	result, found, err := w.resultStore.LoadRuntimeCommandResult(ctx, key)
+	if err != nil {
+		return domain.RuntimeCommandResult{}, false, fmt.Errorf("load runtime command result: %w", err)
+	}
+	return result, found, nil
+}
+
+func (w *RuntimeWorker) finishInFlight(key string, flight *runtimeWorkerInFlight, result domain.RuntimeCommandResult, err error, cache, pending bool) {
 	w.mu.Lock()
-	if cacheResult {
+	defer w.mu.Unlock()
+	if cache {
+		delete(w.pendingByDedupeKey, key)
 		w.rememberCompletedResultLocked(key, result)
+	} else if pending {
+		w.pendingByDedupeKey[key] = result
 	}
 	delete(w.inFlightByDedupeKey, key)
-	inFlight.result = result
-	inFlight.err = nil
-	close(inFlight.done)
-	w.mu.Unlock()
-
-	return result, nil
+	flight.result = result
+	flight.err = err
+	close(flight.done)
 }
 
 func (w *RuntimeWorker) run(identity domain.RuntimeCommandIdentity, op func() error) (domain.RuntimeCommandResult, bool) {

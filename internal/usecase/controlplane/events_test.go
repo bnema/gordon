@@ -12,6 +12,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	containerusecase "github.com/bnema/gordon/internal/usecase/container"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +77,70 @@ func TestEventDispatcherRetriesFailureAndDeduplicatesSuccess(t *testing.T) {
 	require.NoError(t, d.HandleComponentEvent(context.Background(), event))
 	require.EqualValues(t, 2, h.calls.Load(), "failed effects must not be acknowledged")
 }
+
+type failOnceAckStore struct {
+	failed    bool
+	processed map[string]bool
+}
+
+func (s *failOnceAckStore) IsComponentEventProcessed(_ context.Context, key string) (bool, error) {
+	return s.processed[key], nil
+}
+func (s *failOnceAckStore) MarkComponentEventProcessed(_ context.Context, key string, _ time.Time) error {
+	if !s.failed {
+		s.failed = true
+		return errors.New("ack store unavailable")
+	}
+	s.processed[key] = true
+	return nil
+}
+
+type durableEffectRuntimeService struct{ deploys atomic.Int32 }
+
+func (s *durableEffectRuntimeService) Deploy(context.Context, domain.Route) (*domain.Container, error) {
+	s.deploys.Add(1)
+	return &domain.Container{}, nil
+}
+func (*durableEffectRuntimeService) Restart(context.Context, string, bool) error { return nil }
+func (*durableEffectRuntimeService) ReconcileRemovedRoute(context.Context, string) (*domain.CleanupReport, error) {
+	return &domain.CleanupReport{}, nil
+}
+func (*durableEffectRuntimeService) SyncContainers(context.Context) error              { return nil }
+func (*durableEffectRuntimeService) AutoStart(context.Context, []domain.Route) error   { return nil }
+func (*durableEffectRuntimeService) List(context.Context) map[string]*domain.Container { return nil }
+func (*durableEffectRuntimeService) ListRoutesWithDetails(context.Context) []domain.RouteInfo {
+	return nil
+}
+func (*durableEffectRuntimeService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
+	return nil, nil
+}
+
+func TestEventEffectAckFailureRedeliveryAfterWorkerRestartMutatesOnce(t *testing.T) {
+	resultPath := t.TempDir() + "/runtime-command-results.json"
+	store, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{Path: resultPath})
+	require.NoError(t, err)
+	runtime := &durableEffectRuntimeService{}
+	event := componentEvent(domain.ComponentEventTypeRegistryImagePushed, domain.RegistryImagePushedPayload{Repository: "app", Reference: "v1", Digest: "sha256:abc"})
+	event.Origin = domain.ComponentRoleRegistry
+	ack := &failOnceAckStore{processed: make(map[string]bool)}
+	effect := func(worker *containerusecase.RuntimeWorker) func(context.Context, domain.ComponentEventEnvelope) error {
+		return func(ctx context.Context, envelope domain.ComponentEventEnvelope) error {
+			_, deployErr := worker.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "event-command", IdempotencyKey: envelope.DedupeKey(), Generation: 1, SourceComponentID: "control"}, Domain: "app.example", Image: "app:v1"})
+			return deployErr
+		}
+	}
+	first := containerusecase.NewRuntimeWorkerWithPolicyAndResultStore(runtime, containerusecase.NewRuntimePolicy(containerusecase.RuntimePolicyModeObserve), store)
+	dispatcher := NewEventDispatcher(EventDispatcherOptions{ImagePushedEffect: effect(first), AckStore: ack})
+	require.Error(t, dispatcher.HandleComponentEvent(t.Context(), event), "effect succeeded but acknowledgement failed")
+
+	restartedStore, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{Path: resultPath})
+	require.NoError(t, err)
+	second := containerusecase.NewRuntimeWorkerWithPolicyAndResultStore(runtime, containerusecase.NewRuntimePolicy(containerusecase.RuntimePolicyModeObserve), restartedStore)
+	restartedDispatcher := NewEventDispatcher(EventDispatcherOptions{ImagePushedEffect: effect(second), AckStore: ack})
+	require.NoError(t, restartedDispatcher.HandleComponentEvent(t.Context(), event))
+	require.EqualValues(t, 1, runtime.deploys.Load())
+}
+
 func TestEventDispatcherSingleflightsConcurrentDelivery(t *testing.T) {
 	h := &countingHandler{}
 	d := NewEventDispatcher(EventDispatcherOptions{ImagePushed: []out.EventHandler{h}})

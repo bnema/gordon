@@ -21,16 +21,20 @@ import (
 )
 
 const (
-	defaultMaxEntries = 10000
-	defaultMaxBytes   = int64(64 << 20)
+	defaultMaxEntries        = 10000
+	defaultMaxBytes          = int64(64 << 20)
+	defaultMaxCorruptEntries = 64
+	defaultMaxCorruptBytes   = int64(8 << 20)
 )
 
 type Config struct {
-	Dir          string
-	MaxEntries   int
-	MaxBytes     int64
-	InitialRetry time.Duration
-	MaxRetry     time.Duration
+	Dir               string
+	MaxEntries        int
+	MaxBytes          int64
+	MaxCorruptEntries int
+	MaxCorruptBytes   int64
+	InitialRetry      time.Duration
+	MaxRetry          time.Duration
 }
 
 type record struct {
@@ -50,6 +54,8 @@ type Outbox struct {
 	publisher              out.ComponentEventPublisher
 	maxEntries             int
 	maxBytes               int64
+	maxCorruptEntries      int
+	maxCorruptBytes        int64
 	initialRetry, maxRetry time.Duration
 
 	mu        sync.Mutex
@@ -73,6 +79,12 @@ func New(cfg Config, publisher out.ComponentEventPublisher) (*Outbox, error) {
 	if cfg.MaxBytes <= 0 {
 		cfg.MaxBytes = defaultMaxBytes
 	}
+	if cfg.MaxCorruptEntries <= 0 {
+		cfg.MaxCorruptEntries = defaultMaxCorruptEntries
+	}
+	if cfg.MaxCorruptBytes <= 0 {
+		cfg.MaxCorruptBytes = defaultMaxCorruptBytes
+	}
 	if cfg.InitialRetry <= 0 {
 		cfg.InitialRetry = 100 * time.Millisecond
 	}
@@ -85,7 +97,10 @@ func New(cfg Config, publisher out.ComponentEventPublisher) (*Outbox, error) {
 	if err := os.Chmod(cfg.Dir, 0700); err != nil { //nolint:gosec // owner-only directory permissions
 		return nil, fmt.Errorf("secure event outbox: %w", err)
 	}
-	o := &Outbox{dir: cfg.Dir, publisher: publisher, maxEntries: cfg.MaxEntries, maxBytes: cfg.MaxBytes, initialRetry: cfg.InitialRetry, maxRetry: cfg.MaxRetry}
+	o := &Outbox{dir: cfg.Dir, publisher: publisher, maxEntries: cfg.MaxEntries, maxBytes: cfg.MaxBytes, maxCorruptEntries: cfg.MaxCorruptEntries, maxCorruptBytes: cfg.MaxCorruptBytes, initialRetry: cfg.InitialRetry, maxRetry: cfg.MaxRetry}
+	if err := o.pruneCorrupt(); err != nil {
+		o.healthErr = err
+	}
 	if err := o.checkCorrupt(); err != nil {
 		o.healthErr = err
 	}
@@ -144,11 +159,18 @@ func (o *Outbox) PublishComponentEvent(ctx context.Context, event domain.Compone
 func (o *Outbox) persist(event domain.ComponentEventEnvelope) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+	if err := o.pruneCorruptLocked(); err != nil {
+		return "", err
+	}
 	entries, bytes, err := o.entriesLocked()
 	if err != nil {
 		return "", err
 	}
-	if len(entries) >= o.maxEntries || bytes >= o.maxBytes {
+	corruptCount, err := o.corruptCountLocked()
+	if err != nil {
+		return "", err
+	}
+	if len(entries)+corruptCount >= o.maxEntries || bytes >= o.maxBytes {
 		return "", errors.New("event outbox is full")
 	}
 	p := event.Payload.(domain.RegistryImagePushedPayload)
@@ -281,11 +303,22 @@ func readRecord(path string) (domain.ComponentEventEnvelope, error) {
 	return e, nil
 }
 func (o *Outbox) quarantine(path string, cause error) error {
+	rel, err := filepath.Rel(o.dir, path)
+	if err != nil || filepath.Base(rel) != rel || filepath.Ext(rel) != ".json" {
+		return errors.New("refusing to quarantine unsafe outbox path")
+	}
+	o.mu.Lock()
 	q := path + ".corrupt"
 	if err := os.Rename(path, q); err != nil {
+		o.mu.Unlock()
 		return fmt.Errorf("quarantine corrupt outbox entry: %w", err)
 	}
-	err := fmt.Errorf("corrupt event outbox entry %s: %w", filepath.Base(path), cause)
+	if err := o.pruneCorruptLocked(); err != nil {
+		o.mu.Unlock()
+		return err
+	}
+	o.mu.Unlock()
+	err = fmt.Errorf("corrupt event outbox entry %s: %w", filepath.Base(path), cause)
 	o.setHealth(err)
 	return err
 }
@@ -301,6 +334,85 @@ func (o *Outbox) checkCorrupt() error {
 	}
 	return nil
 }
+func (o *Outbox) pruneCorrupt() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.pruneCorruptLocked()
+}
+
+func (o *Outbox) corruptCountLocked() (int, error) {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return 0, err
+	}
+	count := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".corrupt") {
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return 0, fmt.Errorf("unsafe symlink in event outbox: %s", entry.Name())
+			}
+			info, infoErr := entry.Info()
+			if infoErr != nil || !info.Mode().IsRegular() {
+				return 0, fmt.Errorf("unsafe corrupt event outbox entry: %s", entry.Name())
+			}
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (o *Outbox) pruneCorruptLocked() error {
+	entries, err := os.ReadDir(o.dir)
+	if err != nil {
+		return err
+	}
+	type corruptEntry struct {
+		path string
+		info fs.FileInfo
+	}
+	corrupt := make([]corruptEntry, 0)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".corrupt") {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("unsafe symlink in event outbox: %s", entry.Name())
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil || !info.Mode().IsRegular() {
+			return fmt.Errorf("unsafe corrupt event outbox entry: %s", entry.Name())
+		}
+		corrupt = append(corrupt, corruptEntry{path: filepath.Join(o.dir, entry.Name()), info: info})
+	}
+	sort.Slice(corrupt, func(i, j int) bool {
+		if corrupt[i].info.ModTime().Equal(corrupt[j].info.ModTime()) {
+			return corrupt[i].path < corrupt[j].path
+		}
+		return corrupt[i].info.ModTime().Before(corrupt[j].info.ModTime())
+	})
+	maxEntries := o.maxCorruptEntries
+	if maxEntries > o.maxEntries {
+		maxEntries = o.maxEntries
+	}
+	maxBytes := o.maxCorruptBytes
+	if maxBytes > o.maxBytes {
+		maxBytes = o.maxBytes
+	}
+	var bytes int64
+	for _, entry := range corrupt {
+		bytes += entry.info.Size()
+	}
+	for len(corrupt) > maxEntries || bytes > maxBytes {
+		oldest := corrupt[0]
+		if err := os.Remove(oldest.path); err != nil {
+			return fmt.Errorf("remove old corrupt event outbox entry: %w", err)
+		}
+		bytes -= oldest.info.Size()
+		corrupt = corrupt[1:]
+	}
+	return nil
+}
+
 func (o *Outbox) entries() ([]string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -315,15 +427,24 @@ func (o *Outbox) entriesLocked() ([]string, int64, error) {
 	paths := make([]string, 0, len(ds))
 	var total int64
 	for _, d := range ds {
-		if d.IsDir() || filepath.Ext(d.Name()) != ".json" {
+		name := d.Name()
+		if d.IsDir() || (filepath.Ext(name) != ".json" && !strings.HasSuffix(name, ".corrupt")) {
 			continue
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil, 0, fmt.Errorf("unsafe symlink in event outbox: %s", name)
 		}
 		info, e := d.Info()
 		if e != nil {
 			return nil, 0, e
 		}
-		paths = append(paths, filepath.Join(o.dir, d.Name()))
+		if !info.Mode().IsRegular() {
+			return nil, 0, fmt.Errorf("unsafe non-regular event outbox entry: %s", name)
+		}
 		total += info.Size()
+		if filepath.Ext(name) == ".json" {
+			paths = append(paths, filepath.Join(o.dir, name))
+		}
 	}
 	sort.Strings(paths)
 	return paths, total, nil

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -182,6 +183,57 @@ func TestRuntimeWorkerIdempotencyReturnsCachedResult(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first, second)
 	assert.Equal(t, []string{"Deploy:app.example.com:app:latest"}, fake.calls)
+}
+
+func TestRuntimeWorkerDurablyDedupesSuccessfulCommandAcrossRestart(t *testing.T) {
+	path := t.TempDir() + "/runtime-command-results.json"
+	store, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{Path: path})
+	require.NoError(t, err)
+	fake := &fakeRuntimeWorkerService{}
+	command := domain.DeployRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("durable-event-command"), Domain: "app.example.com", Image: "app:latest"}
+	first := NewRuntimeWorkerWithPolicyAndResultStore(fake, NewRuntimePolicy(RuntimePolicyModeObserve), store)
+	_, err = first.DeployRoute(t.Context(), command)
+	require.NoError(t, err)
+
+	// A new worker models a process restart before a redelivered event arrives.
+	restartedStore, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{Path: path})
+	require.NoError(t, err)
+	second := NewRuntimeWorkerWithPolicyAndResultStore(fake, NewRuntimePolicy(RuntimePolicyModeObserve), restartedStore)
+	result, err := second.DeployRoute(t.Context(), command)
+	require.NoError(t, err)
+	require.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
+	require.Equal(t, []string{"Deploy:app.example.com:app:latest"}, fake.calls)
+}
+
+type retryingRuntimeCommandResultStore struct {
+	failSaves bool
+	saves     int
+}
+
+func (*retryingRuntimeCommandResultStore) LoadRuntimeCommandResult(context.Context, string) (domain.RuntimeCommandResult, bool, error) {
+	return domain.RuntimeCommandResult{}, false, nil
+}
+func (s *retryingRuntimeCommandResultStore) SaveRuntimeCommandResult(context.Context, string, domain.RuntimeCommandResult) error {
+	s.saves++
+	if s.failSaves {
+		return errors.New("result store unavailable")
+	}
+	return nil
+}
+
+func TestRuntimeWorkerRetriesTerminalResultPersistenceWithoutRepeatingMutation(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{}
+	store := &retryingRuntimeCommandResultStore{failSaves: true}
+	command := domain.DeployRouteCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("retry-terminal-persistence"), Domain: "app.example.com", Image: "app:latest"}
+	worker := NewRuntimeWorkerWithPolicyAndResultStore(fake, NewRuntimePolicy(RuntimePolicyModeObserve), store)
+
+	_, err := worker.DeployRoute(t.Context(), command)
+	require.Error(t, err)
+	store.failSaves = false
+	_, err = worker.DeployRoute(t.Context(), command)
+	require.NoError(t, err)
+	require.Equal(t, 2, store.saves)
+	require.Equal(t, []string{"Deploy:app.example.com:app:latest", "Sync"}, fake.calls)
 }
 
 func TestRuntimeWorkerRetriesFailedCommandsButCachesSucceededAndPolicyDeniedResults(t *testing.T) {

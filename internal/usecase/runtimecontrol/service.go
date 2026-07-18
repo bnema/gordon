@@ -60,6 +60,31 @@ func (s *Service) DeployRoute(ctx context.Context, route domain.Route) (domain.R
 	}
 	version := s.desiredStateVersion([]domain.Route{route})
 	identity := s.desiredIdentity("deploy", version)
+	return s.deployRoute(ctx, route, version, identity)
+}
+
+// DeployRouteForEvent preserves the transport envelope dedupe key all the way
+// to the runtime command. Event redelivery therefore resolves the same desired
+// deployment after a control or runtime restart.
+func (s *Service) DeployRouteForEvent(ctx context.Context, route domain.Route, eventDedupeKey string) (domain.RuntimeCommandResult, error) {
+	if s.runtime == nil {
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime command client unavailable")
+	}
+	if strings.TrimSpace(eventDedupeKey) == "" {
+		return domain.RuntimeCommandResult{}, fmt.Errorf("component event dedupe key is required")
+	}
+	version := s.desiredStateVersion([]domain.Route{route})
+	identity := domain.RuntimeCommandIdentity{
+		ID:                domain.RuntimeCommandID("component-event:" + eventDedupeKey),
+		IdempotencyKey:    eventDedupeKey,
+		Generation:        s.generation.Add(1),
+		SourceComponentID: s.sourceComponentID,
+		RequestedAt:       s.now().UTC(),
+	}
+	return s.deployRoute(ctx, route, version, identity)
+}
+
+func (s *Service) deployRoute(ctx context.Context, route domain.Route, version string, identity domain.RuntimeCommandIdentity) (domain.RuntimeCommandResult, error) {
 	return s.runtime.DeployRoute(ctx, domain.DeployRouteCommand{RuntimeCommandIdentity: identity, Domain: route.Domain, Image: route.Image, RouteVersion: version, Env: route.Env, InternalDeploy: true})
 }
 
