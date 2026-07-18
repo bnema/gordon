@@ -5,6 +5,8 @@ TAG := v2-dev
 DEV_TAG := v2-dev-$(shell date +%Y%m%d-%H%M%S)
 DIST_DIR := ./dist
 ENGINE := podman
+GORELEASER ?= goreleaser
+RELEASE_SMOKE_IMAGE ?= gordon-release-smoke:local
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -62,6 +64,7 @@ COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
+	release-check release-smoke release-image-smoke \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
 	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
 
@@ -296,6 +299,40 @@ build-local: ## Build binary for current platform
 	@echo "Binary built: $(DIST_DIR)/gordon"
 
 ##@ Release
+
+release-check: ## Validate release and workflow configuration
+	@$(GORELEASER) check
+	@if command -v actionlint >/dev/null 2>&1; then actionlint; else echo "actionlint not installed; workflow syntax is validated in CI"; fi
+
+release-smoke: release-check ## Build and execute snapshot release bundles without publishing
+	@$(GORELEASER) release --snapshot --clean --skip=docker
+	@set -eu; \
+		archives=$$(find $(DIST_DIR) -maxdepth 1 -type f -name 'gordon_linux_*.tar.gz' | sort); \
+		test "$$(printf '%s\n' "$$archives" | sed '/^$$/d' | wc -l)" -eq 2; \
+		for archive in $$archives; do \
+			tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
+			tar -xzf "$$archive" -C "$$tmp"; \
+			test -x "$$tmp/gordon"; \
+			test -f "$$tmp/LICENSE"; \
+			test -f "$$tmp/README.md"; \
+			test -f "$$tmp/gordon.toml.example"; \
+			go version -m "$$tmp/gordon" >/dev/null; \
+			case "$$archive" in \
+				*_"$$(go env GOARCH)".tar.gz) \
+					"$$tmp/gordon" --help >/dev/null; \
+					"$$tmp/gordon" serve --help >/dev/null; \
+					"$$tmp/gordon" migrate --help >/dev/null ;; \
+			esac; \
+			rm -rf "$$tmp"; trap - EXIT HUP INT TERM; \
+		done
+
+release-image-smoke: ## Build the production image and verify every role uses the single binary
+	@docker info >/dev/null
+	@trap 'docker image rm -f "$(RELEASE_SMOKE_IMAGE)" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+		docker build --target=source-image -t "$(RELEASE_SMOKE_IMAGE)" .; \
+		for role in monolith control runtime edge registry; do \
+			docker run --rm "$(RELEASE_SMOKE_IMAGE)" serve --role "$$role" --help >/dev/null; \
+		done
 
 build-push: build ## Build and push Docker images
 	@echo "Cleaning up dangling images..."

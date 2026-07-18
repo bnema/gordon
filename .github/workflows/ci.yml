@@ -4,122 +4,48 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    outputs:
-      go: ${{ steps.filter.outputs.go }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            go:
-              - '**.go'
-              - 'api/proto/**'
-              - 'buf.yaml'
-              - 'buf.gen.yaml'
-              - 'go.mod'
-              - 'go.sum'
-              - '.golangci.yml'
-              - '.gitleaks.toml'
-              - 'Makefile'
-              - '.github/workflows/**'
+  go-ci:
+    name: Go lint and test
+    uses: bnema/gh-actions/.github/workflows/go-ci.yml@main
+    with:
+      go-version: 1.26.5
+      lint-version: v2.12.2
+      lint-command: make lint
+      test-command: go test -race ./...
 
-  gitleaks:
-    name: Current tree secret scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Block secrets in the current tree
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
-
-  lint:
-    name: Lint
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
+  generated-and-secrets:
+    name: Generated code and current-tree secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
-
-      - name: Cache Go modules
-        uses: actions/cache@v6
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
-
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
-        with:
-          version: v2.12.2
-
-  podman-rootless:
-    name: Rootless Podman migration gate
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Verify rootless Podman is available
-        run: |
-          podman info --format '{{.Host.Security.Rootless}}' | grep -x true
-      - name: Run migration compatibility gate with Podman opt-in
-        run: GORDON_COMPAT_PODMAN=1 make compat-harness-migration
-
-  test:
-    name: Test
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-
-      - name: Cache Go modules
-        uses: actions/cache@v6
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
-
-      - name: Cache Go build cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-
+          go-version: 1.26.5
 
       - name: Set up buf
         uses: bufbuild/buf-setup-action@v1
         with:
           version: 1.71.0
 
-      - name: Install protobuf generators
+      - name: Install pinned generators and gitleaks
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          go install github.com/gitleaks/gitleaks/v8@v8.30.0
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
+
+      - name: Validate workflow definitions
+        run: actionlint
 
       - name: Check generated protobuf bindings
         run: make proto-check
 
-      - name: Run tests
-        run: go test -race -v ./...
+      - name: Scan the current tree for secrets
+        run: make gitleaks

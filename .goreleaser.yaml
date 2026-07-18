@@ -1,17 +1,15 @@
 version: 2
 
-before:
-  hooks:
-
 git:
   prerelease_suffix: "-"
+  tag_sort: smartsemver
 
 release:
   draft: true
   prerelease: auto
 
 builds:
-  - id: "gordon"
+  - id: gordon
     main: ./main.go
     binary: gordon
     goos:
@@ -25,15 +23,41 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
 
-# Docker builds disabled for v2.0.0 release (will add back with proper buildx setup)
-# dockers:
-# docker_manifests:
-
 archives:
-  - name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+  - id: gordon
+    ids: [gordon]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - gordon.toml.example
+
+dockers_v2:
+  - id: gordon
+    ids: [gordon]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/bnema/gordon
+    tags:
+      - "{{ .Tag }}"
+      - "{{ if not .IsPrerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    extra_files:
+      - gordon.toml.example
+    flags:
+      - "--target=release"
+    sbom: false
+    labels:
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.description: "Self-hosted container deployment platform; one binary provides all Gordon roles"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.source: "{{ .GitURL }}"
+      org.opencontainers.image.version: "{{ .Version }}"
 
 checksum:
-  name_template: "checksums.txt"
+  name_template: checksums.txt
 
 changelog:
   sort: asc

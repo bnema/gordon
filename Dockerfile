@@ -1,71 +1,42 @@
-# Gordon v2 - Production Dockerfile
-# Multi-stage build for optimized container image
+# Gordon uses one binary for monolith, control, runtime, edge, and registry roles.
+# The default target builds from source; GoReleaser selects the release target
+# and injects its already-built binary for the requested platform.
 
-# Build stage
 FROM golang:1.26.5-alpine3.24 AS builder
-
-# Install build dependencies
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 RUN apk add --no-cache git ca-certificates tzdata
-
-# Set working directory
-WORKDIR /app
-
-# Copy go mod files
+WORKDIR /src
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
-
-# Copy source code
 COPY . .
+RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+    -trimpath \
+    -ldflags='-w -s' \
+    -o /out/gordon .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-w -s -extldflags "-static"' \
-    -a -installsuffix cgo \
-    -o gordon .
-
-# Runtime stage
-FROM alpine:3.24
-
-# Install runtime dependencies
-RUN apk add --no-cache \
-    ca-certificates \
-    docker-cli \
-    curl \
-    wget \
-    tzdata \
-    && rm -rf /var/cache/apk/*
-
-# Create non-root user
-RUN adduser -D -s /bin/sh gordon
-
-# Set working directory
+FROM alpine:3.24 AS runtime-base
+RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata \
+    && adduser -D -s /bin/sh gordon \
+    && mkdir -p /app /data \
+    && chown -R gordon:gordon /app /data
 WORKDIR /app
+USER gordon
+EXPOSE 8088 5000
+ENTRYPOINT ["/app/gordon"]
+CMD ["serve"]
+LABEL org.opencontainers.image.source="https://github.com/bnema/gordon" \
+      org.opencontainers.image.description="Self-hosted container deployment platform"
 
-# Copy binary from builder
-COPY --from=builder /app/gordon .
-
-# Create data directory
-RUN mkdir -p /data && chown gordon:gordon /data
-
-# Copy default configuration (optional)
+FROM runtime-base AS source-image
+COPY --from=builder --chown=gordon:gordon /out/gordon /app/gordon
 COPY --chown=gordon:gordon gordon.toml.example /app/gordon.toml.example
 
-# Switch to non-root user
-USER gordon
+FROM runtime-base AS release
+ARG TARGETPLATFORM
+COPY --chown=gordon:gordon ${TARGETPLATFORM}/gordon /app/gordon
+COPY --chown=gordon:gordon gordon.toml.example /app/gordon.toml.example
 
-# Expose ports
-EXPOSE 8088 5000
-
-# Admin health is served on the registry/admin listener and is gated by auth in
-# normal deployments, so this image does not declare a Docker healthcheck.
-
-# Default command
-CMD ["./gordon", "serve"]
-
-# Metadata
-LABEL maintainer="bnemam"
-LABEL version="2.0"
-LABEL description="Event-driven container deployment platform"
-LABEL org.opencontainers.image.source="https://github.com/bnema/gordon"
+# Keep ordinary `docker build .` source-compatible while allowing GoReleaser to
+# select `--target=release` for its multi-platform artifact context.
+FROM source-image AS final

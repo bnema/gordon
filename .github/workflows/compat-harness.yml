@@ -5,13 +5,14 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
   compat-harness:
-    name: Old/new compatibility slices
+    name: Required old/new and runtime compatibility gates
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -20,23 +21,23 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
+          go-version: 1.26.5
 
-      - name: Cache Go modules
+      - name: Cache Go modules and build output
         uses: actions/cache@v6
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-mod-
+            ${{ runner.os }}-go-
 
-      - name: Cache Go build cache
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-
+      - name: Preflight required Docker runtime
+        run: |
+          docker info
+          docker version
+          jq --version
 
       - name: Run config compatibility slice
         env:
@@ -53,41 +54,54 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-api
 
-      - name: Preflight Linux TLS and UDP edge traffic ownership
+      - name: Run Linux traffic compatibility gate
         run: |
           test "$(uname -s)" = Linux
           make compat-harness-traffic
 
-      - name: Run Docker registry and event-sync compatibility gate
+      - name: Run runtime compatibility gate
+        run: make compat-harness-runtime
+
+      - name: Run registry compatibility gate
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-registry
 
-      - name: Run Docker proxy compatibility slices
+      - name: Run proxy compatibility gate
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-proxy
 
-      - name: Run Docker current-security compatibility gates
+      - name: Run current-security compatibility gate
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-security
 
-      - name: Run blocking rootless Podman old-to-split migration gate
+      - name: Install and preflight rootless Podman
         run: |
           sudo apt-get update
           sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
-          sudo loginctl enable-linger "$(id -un)"
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$XDG_RUNTIME_DIR"
           test "$(id -u)" -ne 0
-          podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
-          GORDON_COMPAT_PODMAN=1 make compat-harness-migration
+          runtime_dir="/run/user/$(id -u)"
+          sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$runtime_dir"
+          echo "XDG_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime_dir" podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
+          XDG_RUNTIME_DIR="$runtime_dir" podman version
 
-      - name: Run full test suite with real scenarios gated off
+      - name: Run rootless Podman migration gate twice
         env:
-          GORDON_COMPAT_RUN_REAL: "0"
-        run: make test
+          GORDON_COMPAT_PODMAN: "1"
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: |
+          make compat-harness-migration
+          make count2
+
+      - name: Clean runtime fixtures
+        if: always()
+        run: |
+          docker ps -aq --filter label=gordon.compat.run | xargs -r docker rm -f
+          podman ps -aq --filter label=gordon.compat.run | xargs -r podman rm -f
+          podman pod ps -aq --filter label=gordon.compat.run | xargs -r podman pod rm -f
 
       - name: Upload compatibility reports
         if: always()
@@ -95,4 +109,4 @@ jobs:
         with:
           name: compatibility-harness-reports
           path: artifacts/compat
-          if-no-files-found: warn
+          if-no-files-found: error
