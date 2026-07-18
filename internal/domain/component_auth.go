@@ -33,7 +33,16 @@ const (
 	ComponentScopeRegistryEventPublish ComponentScope = "registry:event:publish"
 	ComponentScopeRegistryStatus       ComponentScope = "registry:status"
 	ComponentScopeRegistryInspect      ComponentScope = "registry:inspect"
+	ComponentScopeControlEventPublish  ComponentScope = "control:event:publish"
+	ComponentScopeEventsWatch          ComponentScope = "events:watch"
+	// ComponentScopeAnyEventPublish is an interceptor-only sentinel. It accepts
+	// one of the role-specific publishing scopes and is never grantable itself.
+	ComponentScopeAnyEventPublish ComponentScope = "events:any:publish"
 )
+
+// ComponentRoleEventPublisher is an interceptor-only role selector for RPCs
+// whose authenticated origin may be registry, runtime, edge, or control.
+const ComponentRoleEventPublisher ComponentRole = "event-publisher"
 
 // AllComponentScopes returns every recognized component scope in stable order.
 func AllComponentScopes() []ComponentScope {
@@ -52,6 +61,8 @@ func AllComponentScopes() []ComponentScope {
 		ComponentScopeRegistryEventPublish,
 		ComponentScopeRegistryStatus,
 		ComponentScopeRegistryInspect,
+		ComponentScopeControlEventPublish,
+		ComponentScopeEventsWatch,
 	}
 }
 
@@ -82,6 +93,8 @@ func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
 			ComponentScopeRuntimeSelfUpdate,
 			ComponentScopeRuntimeDrainAck,
 			ComponentScopeRegistryInspect,
+			ComponentScopeControlEventPublish,
+			ComponentScopeEventsWatch,
 		}
 	case ComponentRoleRuntime:
 		return []ComponentScope{

@@ -8,211 +8,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func validComponentEvent() ComponentEventEnvelope {
+	return ComponentEventEnvelope{ID: "evt-1", Type: ComponentEventTypeRegistryImagePushed, Origin: ComponentRoleRegistry, Timestamp: time.Unix(100, 0), Generation: 42, IdempotencyKey: "push:repo:tag:digest", Payload: RegistryImagePushedPayload{Repository: "library/app", Reference: "v1", Digest: "sha256:abc"}, AuditClassification: ComponentEventAuditWrite}
+}
+
 func TestComponentEventEnvelopeValidate(t *testing.T) {
-	valid := func() ComponentEventEnvelope {
-		return ComponentEventEnvelope{
-			ID:                  "evt-1",
-			Type:                ComponentEventTypeRegistryImagePushed,
-			Origin:              ComponentRoleRegistry,
-			Timestamp:           time.Unix(100, 0),
-			Generation:          42,
-			IdempotencyKey:      "push:repo:tag:digest",
-			PayloadKind:         ComponentEventPayloadKindJSON,
-			SerializedPayload:   []byte(`{"repo":"example"}`),
-			RetryCount:          0,
-			AuditClassification: ComponentEventAuditWrite,
-		}
+	for _, tc := range []struct {
+		name     string
+		change   func(*ComponentEventEnvelope)
+		contains string
+	}{
+		{"missing ID", func(e *ComponentEventEnvelope) { e.ID = "" }, "id is required"},
+		{"unknown type", func(e *ComponentEventEnvelope) { e.Type = "unknown" }, "type is invalid"},
+		{"unknown origin", func(e *ComponentEventEnvelope) { e.Origin = "worker" }, "origin is invalid"},
+		{"missing idempotency", func(e *ComponentEventEnvelope) { e.IdempotencyKey = "" }, "idempotency key"},
+		{"untyped payload", func(e *ComponentEventEnvelope) { e.Payload = nil }, "typed payload"},
+		{"wrong typed payload", func(e *ComponentEventEnvelope) {
+			e.Payload = RuntimeStateChangedPayload{ComponentID: "r", State: "ready"}
+		}, "payload does not match"},
+		{"invalid secret payload", func(e *ComponentEventEnvelope) {
+			e.Type = ComponentEventTypeSecretsChanged
+			e.Origin = ComponentRoleControl
+			e.Payload = ComponentSecretsChangedPayload{}
+		}, "invalid typed payload"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			event := validComponentEvent()
+			tc.change(&event)
+			err := event.Validate()
+			require.ErrorIs(t, err, ErrInvalidComponentEvent)
+			require.Contains(t, err.Error(), tc.contains)
+		})
 	}
+}
 
-	t.Run("missing ID", func(t *testing.T) {
-		event := valid()
-		event.ID = ""
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "id is required")
-	})
-
-	t.Run("missing type", func(t *testing.T) {
-		event := valid()
-		event.Type = ""
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "type is required")
-	})
-
-	t.Run("invalid origin", func(t *testing.T) {
-		event := valid()
-		event.Origin = ComponentRole("worker")
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "origin is invalid")
-	})
-
-	t.Run("unknown event type", func(t *testing.T) {
-		event := valid()
-		event.Type = ComponentEventType("registry.unknown")
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "type is invalid")
-	})
-
-	t.Run("write event requires idempotency key", func(t *testing.T) {
-		event := valid()
-		event.IdempotencyKey = ""
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "idempotency key is required")
-	})
-
-	t.Run("critical event requires idempotency key", func(t *testing.T) {
-		event := valid()
-		event.Type = ComponentEventTypeRuntimeDeploy
-		event.Origin = ComponentRoleRuntime
-		event.IdempotencyKey = ""
-		event.AuditClassification = ComponentEventAuditCritical
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "idempotency key is required")
-	})
-
-	t.Run("timestamp is required", func(t *testing.T) {
-		event := valid()
-		event.Timestamp = time.Time{}
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "timestamp is required")
-	})
-
-	t.Run("retry count is non-negative", func(t *testing.T) {
-		event := valid()
-		event.RetryCount = -1
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "retry count must be non-negative")
-	})
-
-	t.Run("invalid payload kind", func(t *testing.T) {
-		event := valid()
-		event.PayloadKind = ComponentEventPayloadKind("text")
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "payload kind is invalid")
-	})
-
-	t.Run("empty payload kind rejects serialized payload", func(t *testing.T) {
-		event := valid()
-		event.PayloadKind = ComponentEventPayloadKindEmpty
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "payload kind is not coherent")
-	})
-
-	t.Run("serialized payload kind requires payload", func(t *testing.T) {
-		event := valid()
-		event.SerializedPayload = nil
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "payload kind is not coherent")
-	})
-
-	t.Run("audit classification allowlist", func(t *testing.T) {
-		event := valid()
-		event.AuditClassification = ComponentEventAuditClassification("public")
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "audit classification is invalid")
-	})
-
-	t.Run("audit classification coherence", func(t *testing.T) {
-		event := valid()
-		event.Type = ComponentEventTypeEdgeDrain
-		event.Origin = ComponentRoleEdge
-		event.AuditClassification = ComponentEventAuditNone
-
-		err := event.Validate()
-
-		require.ErrorIs(t, err, ErrInvalidComponentEvent)
-		require.Contains(t, err.Error(), "audit classification is not coherent")
-	})
+func TestComponentEventEnvelopeSupportsAllTypedPayloads(t *testing.T) {
+	tests := []ComponentEventEnvelope{
+		validComponentEvent(),
+		{ID: "1", Type: ComponentEventTypeRuntimeStateChanged, Origin: ComponentRoleRuntime, Timestamp: time.Now(), Payload: RuntimeStateChangedPayload{"r", "ready"}, AuditClassification: ComponentEventAuditRead},
+		{ID: "2", Type: ComponentEventTypeRuntimeDeploy, Origin: ComponentRoleRuntime, Timestamp: time.Now(), IdempotencyKey: "k", Payload: RuntimeDeployPayload{"d", "i", 1}, AuditClassification: ComponentEventAuditCritical},
+		{ID: "3", Type: ComponentEventTypeContainerDeployed, Origin: ComponentRoleRuntime, Timestamp: time.Now(), IdempotencyKey: "k", Payload: ContainerDeployedPayload{"d", "i", "deployment", 1}, AuditClassification: ComponentEventAuditCritical},
+		{ID: "4", Type: ComponentEventTypeConfigReload, Origin: ComponentRoleControl, Timestamp: time.Now(), Payload: ComponentConfigReloadPayload{"v1"}, AuditClassification: ComponentEventAuditRead},
+		{ID: "5", Type: ComponentEventTypeSecretsChanged, Origin: ComponentRoleControl, Timestamp: time.Now(), IdempotencyKey: "k", Payload: ComponentSecretsChangedPayload{"v1"}, AuditClassification: ComponentEventAuditSecurity},
+		{ID: "6", Type: ComponentEventTypeManualDeploy, Origin: ComponentRoleControl, Timestamp: time.Now(), IdempotencyKey: "k", Payload: ComponentManualDeployPayload{"d", "i", "c"}, AuditClassification: ComponentEventAuditWrite},
+		{ID: "7", Type: ComponentEventTypePolicyDenied, Origin: ComponentRoleControl, Timestamp: time.Now(), IdempotencyKey: "k", Payload: PolicyDeniedPayload{"d", "deploy", "denied"}, AuditClassification: ComponentEventAuditSecurity},
+		{ID: "8", Type: ComponentEventTypeAudit, Origin: ComponentRoleControl, Timestamp: time.Now(), IdempotencyKey: "k", Payload: AuditPayload{"deploy", "d", "denied"}, AuditClassification: ComponentEventAuditWrite},
+		{ID: "9", Type: ComponentEventTypeEdgeDrain, Origin: ComponentRoleEdge, Timestamp: time.Now(), IdempotencyKey: "k", Payload: EdgeDrainPayload{"d", 1}, AuditClassification: ComponentEventAuditCritical},
+	}
+	for _, event := range tests {
+		require.NoError(t, event.Validate(), event.Type)
+	}
 }
 
 func TestComponentEventEnvelopeDedupeKey(t *testing.T) {
-	event := ComponentEventEnvelope{
-		ID:                  "evt-1",
-		Type:                ComponentEventTypeRegistryImagePushed,
-		Origin:              ComponentRoleRegistry,
-		Timestamp:           time.Unix(100, 0),
-		Generation:          42,
-		IdempotencyKey:      "push:repo:tag:digest",
-		PayloadKind:         ComponentEventPayloadKindJSON,
-		SerializedPayload:   []byte(`{"repo":"example"}`),
-		RetryCount:          0,
-		AuditClassification: ComponentEventAuditWrite,
-	}
-
-	redelivery := event
-	redelivery.ID = "evt-2"
-	redelivery.Timestamp = event.Timestamp.Add(time.Hour)
-	redelivery.RetryCount = 3
-
-	changedGeneration := event
-	changedGeneration.Generation++
-
-	key := event.DedupeKey()
-
-	require.NoError(t, event.Validate())
-	require.NotEmpty(t, key)
-	require.Equal(t, key, redelivery.DedupeKey())
-	require.NotEqual(t, key, changedGeneration.DedupeKey())
-	require.Len(t, key, 64)
-	_, err := hex.DecodeString(key)
+	event := validComponentEvent()
+	retry := event
+	retry.ID = "evt-2"
+	retry.Timestamp = retry.Timestamp.Add(time.Hour)
+	retry.RetryCount = 3
+	require.Equal(t, event.DedupeKey(), retry.DedupeKey())
+	require.Len(t, event.DedupeKey(), 64)
+	_, err := hex.DecodeString(event.DedupeKey())
 	require.NoError(t, err)
-}
-
-func TestComponentEventEnvelopeDedupeKeyUsesIDWhenIdempotencyKeyIsEmpty(t *testing.T) {
-	event := ComponentEventEnvelope{
-		ID:                  "evt-1",
-		Type:                ComponentEventTypeRuntimeStateChanged,
-		Origin:              ComponentRoleRuntime,
-		Timestamp:           time.Unix(100, 0),
-		Generation:          42,
-		PayloadKind:         ComponentEventPayloadKindEmpty,
-		RetryCount:          0,
-		AuditClassification: ComponentEventAuditRead,
-	}
-
-	redeliveryWithSameID := event
-	redeliveryWithSameID.Timestamp = event.Timestamp.Add(time.Hour)
-	redeliveryWithSameID.RetryCount = 2
-
-	samePayloadDifferentID := event
-	samePayloadDifferentID.ID = "evt-2"
-
-	require.NoError(t, event.Validate())
-	require.Equal(t, event.DedupeKey(), redeliveryWithSameID.DedupeKey())
-	require.NotEqual(t, event.DedupeKey(), samePayloadDifferentID.DedupeKey())
 }

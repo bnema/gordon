@@ -73,7 +73,7 @@ func authenticateComponent(
 		return nil, status.Error(codes.PermissionDenied, "component RPC scope not configured")
 	}
 	requiredRole, ok := methodRoles[fullMethod]
-	if !ok || !domain.IsKnownComponentRole(requiredRole) {
+	if !ok || (!domain.IsKnownComponentRole(requiredRole) && requiredRole != domain.ComponentRoleEventPublisher) {
 		return nil, status.Error(codes.PermissionDenied, "component RPC role not configured")
 	}
 
@@ -82,18 +82,53 @@ func authenticateComponent(
 		return nil, status.Error(codes.Unauthenticated, "bearer token required")
 	}
 
-	identity, err := validator.ValidateToken(ctx, token, required)
+	identity, err := validateRequiredScope(ctx, validator, token, required)
 	if err != nil {
 		return nil, componentAuthStatusError(err)
 	}
 	if identity == nil {
 		return nil, status.Error(codes.Unauthenticated, "component identity required")
 	}
-	if identity.Role != requiredRole {
+	if requiredRole == domain.ComponentRoleEventPublisher {
+		if !eventPublisherRole(identity.Role) {
+			return nil, status.Error(codes.PermissionDenied, "component token role not permitted")
+		}
+	} else if identity.Role != requiredRole {
 		return nil, status.Error(codes.PermissionDenied, "component token role not permitted")
 	}
 
 	return ContextWithComponentIdentity(ctx, identity), nil
+}
+
+// validateRequiredScope recognizes the event publisher sentinel without making
+// a broad publish scope grantable. Existing role-specific tokens remain valid.
+func validateRequiredScope(ctx context.Context, validator ComponentTokenValidator, token string, required domain.ComponentScope) (*domain.ComponentIdentity, error) {
+	if required != domain.ComponentScopeAnyEventPublish {
+		return validator.ValidateToken(ctx, token, required)
+	}
+	var lastErr error
+	for _, scope := range []domain.ComponentScope{
+		domain.ComponentScopeRegistryEventPublish,
+		domain.ComponentScopeRuntimeEventPublish,
+		domain.ComponentScopeEdgeDrain,
+		domain.ComponentScopeControlEventPublish,
+	} {
+		identity, err := validator.ValidateToken(ctx, token, scope)
+		if err == nil {
+			return identity, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+func eventPublisherRole(role domain.ComponentRole) bool {
+	switch role {
+	case domain.ComponentRoleRegistry, domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleControl:
+		return true
+	default:
+		return false
+	}
 }
 
 func bearerTokenFromIncomingContext(ctx context.Context) (string, bool) {

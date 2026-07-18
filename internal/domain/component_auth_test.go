@@ -22,6 +22,8 @@ func TestComponentAuthScopes(t *testing.T) {
 		"registry:event:publish",
 		"registry:status",
 		"registry:inspect",
+		"control:event:publish",
+		"events:watch",
 	}, AllComponentScopes())
 
 	assert.Equal(t, []ComponentScope{
@@ -32,6 +34,8 @@ func TestComponentAuthScopes(t *testing.T) {
 		ComponentScopeRuntimeSelfUpdate,
 		ComponentScopeRuntimeDrainAck,
 		ComponentScopeRegistryInspect,
+		ComponentScopeControlEventPublish,
+		ComponentScopeEventsWatch,
 	}, DefaultComponentScopesForRole(ComponentRoleControl))
 
 	assert.Equal(t, []ComponentScope{
