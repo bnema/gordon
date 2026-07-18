@@ -55,6 +55,7 @@ type Manager struct {
 	lastReloadStatus string
 	lastReloadError  string
 	serverConfigs    atomic.Value
+	shutdown         bool
 
 	// splitDialing prevents a split edge from being redirected by DNS after
 	// the control plane has admitted a backend alias.
@@ -212,6 +213,13 @@ func (m *Manager) apply(ctx context.Context, graph *domain.TrafficGraph, configs
 
 	nextGraph := cloneTrafficGraph(*graph)
 	m.mu.Lock()
+	if m.shutdown {
+		err := fmt.Errorf("traffic manager is shut down")
+		m.lastReloadStatus = reloadStatusError
+		m.lastReloadError = err.Error()
+		m.mu.Unlock()
+		return err
+	}
 	newListeners, createdListeners, tcpUpdates, err := m.prepareTCPListeners(ctx, &nextGraph)
 	if err != nil {
 		m.lastReloadStatus = reloadStatusError
@@ -244,7 +252,6 @@ func (m *Manager) apply(ctx context.Context, graph *domain.TrafficGraph, configs
 	if configs != nil {
 		m.serverConfigs.Store(*configs)
 	}
-	m.snapshot.Store(&nextGraph)
 	serverRuntimes := retainedServerRuntimes(configs, newListeners, createdListeners)
 	for _, runtime := range createdListeners {
 		runtime.start()
@@ -252,6 +259,13 @@ func (m *Manager) apply(ctx context.Context, graph *domain.TrafficGraph, configs
 	for _, runtime := range createdUDPListeners {
 		runtime.start()
 	}
+
+	// Set the graph before draining retained UDP sessions so their backend
+	// lookup observes the replacement. Keep the manager lock until the removed
+	// runtimes stop: Status then remains an exact apply-complete signal and
+	// cannot expose the new graph while old listener sockets are still owned.
+	m.snapshot.Store(&nextGraph)
+	stoppedTCP, stoppedUDP := stopReplacedTrafficRuntimes(ctx, &nextGraph, oldListeners, oldUDPListeners, newListeners, newUDPListeners)
 	m.lastReloadStatus = reloadStatusOK
 	m.lastReloadError = ""
 	m.mu.Unlock()
@@ -259,7 +273,6 @@ func (m *Manager) apply(ctx context.Context, graph *domain.TrafficGraph, configs
 	for _, runtime := range serverRuntimes {
 		refreshRuntimeServers(runtime)
 	}
-	stoppedTCP, stoppedUDP := stopReplacedTrafficRuntimes(ctx, &nextGraph, oldListeners, oldUDPListeners, newListeners, newUDPListeners)
 	logAppliedTrafficGraph(ctx, newListeners, newUDPListeners, createdListeners, createdUDPListeners, stoppedTCP, stoppedUDP)
 	return nil
 }
@@ -345,6 +358,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.shutdown = true
 	listeners := m.listeners
 	udpListeners := m.udpListeners
 	m.listeners = map[string]*entryPointRuntime{}

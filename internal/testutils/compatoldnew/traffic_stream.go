@@ -132,12 +132,12 @@ func newTrafficGraphStreamFixture(ctx context.Context) (*trafficGraphStreamFixtu
 	if err != nil {
 		return cleanup(fmt.Errorf("traffic stream backends: %w", err), nil)
 	}
-	initialAddresses, err := reserveTrafficProtocolAddresses()
+	initialAddresses, err := reserveDistinctTrafficProtocolAddresses()
 	if err != nil {
 		backends.close()
 		return cleanup(err, nil)
 	}
-	updatedAddresses, err := reserveTrafficProtocolAddresses()
+	updatedAddresses, err := reserveDistinctTrafficProtocolAddresses(initialAddresses)
 	if err != nil {
 		backends.close()
 		return cleanup(err, nil)
@@ -181,6 +181,47 @@ func newTrafficGraphStreamFixture(ctx context.Context) (*trafficGraphStreamFixtu
 	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte("edge traffic")) })
 	go func() { f.loopDone <- app.RunEdgeTrafficApplyLoop(loopCtx, cfg, handler, f.client, f.manager) }()
 	return f, nil
+}
+
+// reserveDistinctTrafficProtocolAddresses prevents an update graph from
+// retaining a same-address runtime. The fixture verifies that every initial
+// listener was released, so the two graph generations must not share a port.
+func reserveDistinctTrafficProtocolAddresses(excluded ...trafficProtocolAddresses) (trafficProtocolAddresses, error) {
+	const attempts = 32
+
+	used := make(map[string]struct{})
+	for _, addresses := range excluded {
+		for _, address := range trafficProtocolAddressList(addresses) {
+			used[address] = struct{}{}
+		}
+	}
+	for range attempts {
+		addresses, err := reserveTrafficProtocolAddresses()
+		if err != nil {
+			return trafficProtocolAddresses{}, err
+		}
+		candidate := make(map[string]struct{})
+		unique := true
+		for _, address := range trafficProtocolAddressList(addresses) {
+			if _, exists := used[address]; exists {
+				unique = false
+				break
+			}
+			if _, exists := candidate[address]; exists {
+				unique = false
+				break
+			}
+			candidate[address] = struct{}{}
+		}
+		if unique {
+			return addresses, nil
+		}
+	}
+	return trafficProtocolAddresses{}, fmt.Errorf("reserve distinct traffic protocol addresses after %d attempts", attempts)
+}
+
+func trafficProtocolAddressList(addresses trafficProtocolAddresses) []string {
+	return []string{addresses.smart, addresses.mux, addresses.raw, addresses.udp}
 }
 
 func (f *trafficGraphStreamFixture) publish(generation domain.TrafficGraphGeneration, graph domain.TrafficGraph) error {
