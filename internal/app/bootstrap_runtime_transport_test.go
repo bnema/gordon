@@ -42,6 +42,10 @@ func TestMigrationBootstrapUsesMonolithRegistryForOldServingProbe(t *testing.T) 
 
 	require.NoError(t, service.setBootstrapListeners(&checkpoint))
 	assert.Equal(t, "127.0.0.1:15000", checkpoint.OldServingProbeEndpoint)
+	assert.Equal(t, []MigrationPortBinding{
+		{Role: "edge", HostIP: "127.0.0.1", HostPort: 8081, ContainerPort: 8081, Protocol: "tcp"},
+		{Role: "edge", HostIP: "127.0.0.1", HostPort: 15000, ContainerPort: 15000, Protocol: "tcp"},
+	}, checkpoint.PublicPortBindings)
 }
 
 func TestPrivateEdgeProbePortAvailabilityRejectsCollision(t *testing.T) {

@@ -27,7 +27,8 @@ type ComponentConfigFile struct {
 // into generated role manifests. ExternalRoutes must be the raw value loaded
 // from Viper, not an arbitrary config file or environment value.
 type ComponentConfigOptions struct {
-	ExternalRoutes any
+	ExternalRoutes   any
+	FinalEdgeBinding *MigrationPortBinding
 }
 
 // WriteComponentConfigManifests materializes only the configuration each role
@@ -58,9 +59,9 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 	if err != nil {
 		return nil, err
 	}
-	var externalRoutes any
-	if len(options) == 1 {
-		externalRoutes = options[0].ExternalRoutes
+	externalRoutes, finalEdgeBinding, err := componentManifestOptions(options, cfg.Server.Port)
+	if err != nil {
+		return nil, err
 	}
 	controlRouting, err := componentControlRoutingConfig(cfg, externalRoutes)
 	if err != nil {
@@ -68,7 +69,7 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 	}
 	files := make([]ComponentConfigFile, 0, len(componentRoles))
 	for _, role := range componentRoles {
-		data, err := toml.Marshal(componentRoleConfig(cfg, role, migrationID, controlListenAddress, controlEndpoint, controlRouting, true))
+		data, err := toml.Marshal(componentRoleConfig(cfg, role, migrationID, controlListenAddress, controlEndpoint, controlRouting, true, ""))
 		if err != nil {
 			return nil, fmt.Errorf("encode %s component configuration: %w", role, err)
 		}
@@ -81,7 +82,7 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 	// Activation recreates edge with this sibling config. Keeping it separate
 	// makes the prepared-only bypass impossible to retain on the public edge;
 	// runtime selects this fixed name only for the final listener transaction.
-	finalEdge, err := toml.Marshal(componentRoleConfig(cfg, domain.ComponentRoleEdge, migrationID, controlListenAddress, controlEndpoint, controlRouting, false))
+	finalEdge, err := toml.Marshal(componentRoleConfig(cfg, domain.ComponentRoleEdge, migrationID, controlListenAddress, controlEndpoint, controlRouting, false, finalEdgeHostIP(finalEdgeBinding)))
 	if err != nil {
 		return nil, fmt.Errorf("encode final edge component configuration: %w", err)
 	}
@@ -89,6 +90,24 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 		return nil, fmt.Errorf("write final edge component configuration: %w", err)
 	}
 	return files, nil
+}
+
+func finalEdgeHostIP(binding *MigrationPortBinding) string {
+	if binding == nil {
+		return ""
+	}
+	return binding.HostIP
+}
+
+func componentManifestOptions(options []ComponentConfigOptions, edgePort int) (any, *MigrationPortBinding, error) {
+	if len(options) == 0 {
+		return nil, nil, nil
+	}
+	binding := options[0].FinalEdgeBinding
+	if binding != nil && !validFinalEdgeConfigBinding(*binding, edgePort) {
+		return nil, nil, fmt.Errorf("invalid final edge listener binding")
+	}
+	return options[0].ExternalRoutes, binding, nil
 }
 
 // normalizeComponentServingLimits translates omitted monolith settings into the
@@ -129,7 +148,12 @@ func normalizeComponentServingLimits(cfg *Config) error {
 	return nil
 }
 
-func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, controlListenAddress, controlEndpoint string, controlRouting map[string]any, migrationProbeEnabled bool) map[string]any {
+func validFinalEdgeConfigBinding(binding MigrationPortBinding, edgePort int) bool {
+	return validMigrationPortBinding(binding) && binding.Role == string(domain.ComponentRoleEdge) && binding.Protocol == "tcp" &&
+		binding.HostPort == edgePort && binding.ContainerPort == edgePort
+}
+
+func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, controlListenAddress, controlEndpoint string, controlRouting map[string]any, migrationProbeEnabled bool, publishedHostIP string) map[string]any {
 	// These are role contracts, not filtered copies of Config. In particular,
 	// edge and registry use strict TOML decoders and must never receive legacy
 	// server/auth sections (which may contain control-plane secret references).
@@ -180,10 +204,12 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			"control":    map[string]any{"event_endpoint": controlEndpoint, "event_token_env": "GORDON_COMPONENT_REGISTRY_TOKEN", "insecure_tls": true, "outbox_max_entries": 10000, "outbox_max_bytes": "64MB"},
 		}
 	case domain.ComponentRoleEdge:
-		// Only the generated final manifest enables the narrow rootless host-port
-		// hairpin identity. The prepared listener retains its credential-bound
-		// probe path and never accepts unauthenticated hairpin traffic.
-		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "migration_hairpin_enabled": !migrationProbeEnabled, "registry_forward_token_env": registryForwardTokenEnvVar, "tls": map[string]any{"mode": edgeTLSModeExternal}}
+		// Only a generated final manifest whose typed runtime publish is confined
+		// to loopback enables rootless hairpin admission. Public host bindings
+		// never gain an unauthenticated plaintext path.
+		hostIP := net.ParseIP(publishedHostIP)
+		hairpinEnabled := !migrationProbeEnabled && hostIP != nil && hostIP.IsLoopback()
+		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "published_host_ip": publishedHostIP, "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "migration_hairpin_enabled": hairpinEnabled, "registry_forward_token_env": registryForwardTokenEnvVar, "tls": map[string]any{"mode": edgeTLSModeExternal}}
 		if migrationProbeEnabled {
 			edge["migration_probe_token_env"] = "GORDON_MIGRATION_PROBE_TOKEN"
 		}

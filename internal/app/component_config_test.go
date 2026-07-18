@@ -157,7 +157,8 @@ func TestComponentConfigSeparatesPreparedProbeAndFinalPublicEdge(t *testing.T) {
 	cfg := Config{}
 	cfg.Server.Port, cfg.Server.RegistryPort = 18080, 15000
 	cfg.Runtime.Token = "private-runtime-handoff-token"
-	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	finalBinding := MigrationPortBinding{Role: "edge", HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 18080, Protocol: "tcp"}
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"), ComponentConfigOptions{FinalEdgeBinding: &finalBinding})
 	require.NoError(t, err)
 	preparedPath := componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleEdge]
 	prepared, err := os.ReadFile(preparedPath)
@@ -170,12 +171,27 @@ func TestComponentConfigSeparatesPreparedProbeAndFinalPublicEdge(t *testing.T) {
 	assert.NotContains(t, string(prepared), migrationProbeToken(cfg.Runtime.Token))
 	assert.Contains(t, string(final), "migration_probe_enabled = false")
 	assert.Contains(t, string(final), "migration_hairpin_enabled = true")
+	assert.Contains(t, string(final), "published_host_ip = '127.0.0.1'")
 	assert.NotContains(t, string(final), "migration_probe_token_env")
 	assert.NotContains(t, string(final), migrationProbeToken(cfg.Runtime.Token))
 	finalConfig, err := initEdgeConfig(filepath.Join(filepath.Dir(preparedPath), "edge-final.toml"))
 	require.NoError(t, err)
 	assert.False(t, finalConfig.Edge.MigrationProbeEnabled)
 	assert.True(t, finalConfig.Edge.MigrationHairpinEnabled)
+	assert.Equal(t, "127.0.0.1", finalConfig.Edge.PublishedHostIP)
+}
+
+func TestComponentConfigDisablesHairpinForPublicFinalBinding(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = 18080
+	binding := MigrationPortBinding{Role: "edge", HostIP: "0.0.0.0", HostPort: 18080, ContainerPort: 18080, Protocol: "tcp"}
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"), ComponentConfigOptions{FinalEdgeBinding: &binding})
+	require.NoError(t, err)
+	preparedPath := componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleEdge]
+	final, err := os.ReadFile(filepath.Join(filepath.Dir(preparedPath), "edge-final.toml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(final), "published_host_ip = '0.0.0.0'")
+	assert.Contains(t, string(final), "migration_hairpin_enabled = false")
 }
 
 func TestComponentConfigManifestsUseStrictRoleSchemas(t *testing.T) {

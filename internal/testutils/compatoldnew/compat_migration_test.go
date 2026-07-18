@@ -640,9 +640,9 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 		require.NoError(f.t, portErr)
 		bindings := strings.FieldsFunc(strings.TrimSpace(ports), func(r rune) bool { return r == '\n' })
 		require.ElementsMatch(f.t, []string{
-			fmt.Sprintf("%d/tcp -> 0.0.0.0:%d", f.port, f.port),
-			"15000/tcp -> 0.0.0.0:15000",
-		}, bindings, "final edge must own configured public HTTP and registry listeners")
+			fmt.Sprintf("%d/tcp -> 127.0.0.1:%d", f.port, f.port),
+			"15000/tcp -> 127.0.0.1:15000",
+		}, bindings, "final edge listeners must be confined to the host TLS terminator on loopback")
 		networks, networkErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
 		require.NoError(f.t, networkErr)
 		require.Equal(f.t, []string{f.network, "gordon-internal-migration-g1"}, normalizeNetworkSet(networks), "final edge must retain exactly the managed app and internal networks")

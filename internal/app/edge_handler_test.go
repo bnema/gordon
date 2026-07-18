@@ -89,6 +89,7 @@ func TestEdgeHandlerFinalMigrationHairpinAllowsOnlyMatchingDirectPeer(t *testing
 	cfg.Edge.TLS.Mode = edgeTLSModeExternal
 	cfg.Edge.TrustedProxyCIDRs = []string{"127.0.0.1/32"}
 	cfg.Edge.MigrationHairpinEnabled = true
+	cfg.Edge.PublishedHostIP = "127.0.0.1"
 	writer := &edgeAccessWriter{}
 	log := zerowrap.New(zerowrap.Config{Level: "disabled"})
 	handler := edgeHTTPHandlerWithMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -120,6 +121,28 @@ func TestEdgeHandlerFinalMigrationHairpinAllowsOnlyMatchingDirectPeer(t *testing
 	// A hairpin has direct-peer access only. It is not a trusted terminator, so
 	// its client identity continues to be the TCP peer rather than spoofed XFF.
 	assert.Equal(t, "10.88.0.4", writer.entry(t, 0).ClientIP)
+}
+
+func TestEdgeHandlerPublicBindingDeniesMatchingPeerHairpin(t *testing.T) {
+	cfg := defaultEdgeConfig()
+	cfg.Edge.TLS.Mode = edgeTLSModeExternal
+	cfg.Edge.TrustedProxyCIDRs = []string{"127.0.0.1/32"}
+	cfg.Edge.MigrationHairpinEnabled = true
+	cfg.Edge.PublishedHostIP = "0.0.0.0"
+	log := zerowrap.New(zerowrap.Config{Level: "disabled"})
+	handler := edgeHTTPHandlerWithMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), nil, cfg, log, nil)
+	req := httptest.NewRequest(http.MethodGet, "http://edge.test/", nil)
+	req.RemoteAddr = "10.88.0.4:34567"
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("10.88.0.4"), Port: 18081}))
+	req.Header.Set("X-Forwarded-For", "127.0.0.1")
+	req.Header.Set("Forwarded", "for=127.0.0.1")
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 }
 
 func TestEdgeHandlerMigrationProbeBypassesOnlyStrictDirectPeerCheck(t *testing.T) {

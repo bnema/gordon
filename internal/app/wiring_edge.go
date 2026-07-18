@@ -235,7 +235,10 @@ const migrationProbeHeader = "X-Gordon-Migration-Probe"
 // all later security and proxy routing middleware. Every missing or invalid
 // credential is handled by the existing strict middleware and remains 403.
 func migrationProbeOrStrictDirectPeerCIDRAllowlist(cfg EdgeConfig, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	strict := middleware.StrictDirectPeerCIDRAllowlistOrHairpin(trustedNets, cfg.Edge.MigrationHairpinEnabled, log)
+	// Re-check confinement at wiring time as defense in depth for tests and any
+	// future caller that constructs EdgeConfig without strict file decoding.
+	allowHairpin := cfg.Edge.MigrationHairpinEnabled && isLoopbackHostIP(cfg.Edge.PublishedHostIP)
+	strict := middleware.StrictDirectPeerCIDRAllowlistOrHairpin(trustedNets, allowHairpin, log)
 	if !cfg.Edge.MigrationProbeEnabled {
 		return strict
 	}

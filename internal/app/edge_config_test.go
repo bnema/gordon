@@ -76,6 +76,25 @@ mode = "external"
 	require.ErrorContains(t, err, "migration_probe_token_env")
 }
 
+func TestInitEdgeConfigRejectsHairpinOnPublicHostBinding(t *testing.T) {
+	path := writeEdgeConfig(t, `
+[control]
+endpoint = "control.internal:9090"
+token_env = "EDGE_TOKEN"
+insecure_tls = true
+[edge]
+listen_address = "0.0.0.0:8080"
+trusted_proxy_cidrs = ["127.0.0.1/32"]
+migration_hairpin_enabled = true
+published_host_ip = "0.0.0.0"
+[edge.tls]
+mode = "external"
+`)
+
+	_, err := initEdgeConfig(path)
+	require.ErrorContains(t, err, "loopback published host IP")
+}
+
 func TestInitEdgeConfigRejectsCombinedMigrationProbeAndHairpin(t *testing.T) {
 	path := writeEdgeConfig(t, `
 [control]

@@ -54,7 +54,11 @@ type EdgeServingConfig struct {
 	// MigrationHairpinEnabled is emitted only in the generated final migration
 	// manifest. It permits rootless host-port NAT only when the direct peer is
 	// exactly the accepted local TCP address; it never trusts forwarded headers.
-	MigrationHairpinEnabled bool          `toml:"migration_hairpin_enabled"`
+	MigrationHairpinEnabled bool `toml:"migration_hairpin_enabled"`
+	// PublishedHostIP records the typed runtime host binding used for this
+	// listener. It grants no trust by itself; loopback confinement is required
+	// before migration hairpin admission can be enabled.
+	PublishedHostIP         string        `toml:"published_host_ip"`
 	RegistryForwardTokenEnv string        `toml:"registry_forward_token_env"`
 	TLS                     EdgeTLSConfig `toml:"tls"`
 }
@@ -141,7 +145,15 @@ func validateEdgeConfig(cfg EdgeConfig) error {
 	if cfg.Edge.MigrationHairpinEnabled && !strings.EqualFold(strings.TrimSpace(cfg.Edge.TLS.Mode), edgeTLSModeExternal) {
 		return fmt.Errorf("edge.migration_hairpin_enabled requires edge.tls.mode=external")
 	}
+	if cfg.Edge.MigrationHairpinEnabled && !isLoopbackHostIP(cfg.Edge.PublishedHostIP) {
+		return fmt.Errorf("edge.migration_hairpin_enabled requires a loopback published host IP")
+	}
 	return validateEdgeTLSContract(cfg)
+}
+
+func isLoopbackHostIP(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }
 
 func validateEdgeTrustedProxyCIDRs(cidrs []string) error {

@@ -184,7 +184,10 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.RegistryPort)
 	}
 	if checkpoint.PublicPortBindings == nil && s.config.Server.Port > 0 && s.config.Server.RegistryPort > 0 {
-		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
+		// Split edge accepts plaintext only from the host TLS terminator. Confine
+		// both final publishes to loopback so rootless hairpin admission cannot
+		// expose an unauthenticated listener on a host network interface.
+		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "127.0.0.1", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "127.0.0.1", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
 	}
 	if !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
 		return fmt.Errorf("invalid runtime bootstrap transport")
@@ -234,7 +237,15 @@ func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint)
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component configuration")
 	}
-	files, err := WriteComponentConfigManifests(s.config, migrationComponentConfigDirectory(s.envDirectory, checkpoint.MigrationID, checkpoint.ComponentGeneration), ComponentConfigOptions{ExternalRoutes: s.externalRoutes})
+	options := ComponentConfigOptions{ExternalRoutes: s.externalRoutes}
+	if s.config.Server.Port > 0 {
+		finalBinding, err := finalEdgeListenerBinding(checkpoint.PublicPortBindings, s.config.Server.Port)
+		if err != nil {
+			return err
+		}
+		options.FinalEdgeBinding = &finalBinding
+	}
+	files, err := WriteComponentConfigManifests(s.config, migrationComponentConfigDirectory(s.envDirectory, checkpoint.MigrationID, checkpoint.ComponentGeneration), options)
 	if err != nil {
 		return err
 	}
@@ -243,6 +254,21 @@ func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint)
 		checkpoint.ConfigFileReferences = append(checkpoint.ConfigFileReferences, file.Path)
 	}
 	return nil
+}
+
+func finalEdgeListenerBinding(bindings []MigrationPortBinding, edgePort int) (MigrationPortBinding, error) {
+	var selected MigrationPortBinding
+	matches := 0
+	for _, binding := range bindings {
+		if validFinalEdgeConfigBinding(binding, edgePort) {
+			selected = binding
+			matches++
+		}
+	}
+	if matches != 1 {
+		return MigrationPortBinding{}, fmt.Errorf("final edge listener binding is required")
+	}
+	return selected, nil
 }
 
 func migrationComponentConfigDirectory(envDirectory, migrationID string, generation uint64) string {
