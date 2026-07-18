@@ -62,11 +62,11 @@ gordon version
 ### From Source
 
 ```bash
-# Requires Go 1.25+
+# Requires Go 1.26+
 git clone https://github.com/bnema/gordon.git
 cd gordon
-make build
-sudo mv gordon /usr/local/bin/
+make build-local
+sudo install -m 0755 dist/gordon /usr/local/bin/gordon
 ```
 
 ## Container Runtime Setup
