@@ -195,7 +195,7 @@ func (d *EventDispatcher) dispatchImagePushed(ctx context.Context, event domain.
 	if d.opts.ImagePushedEffect != nil {
 		return d.opts.ImagePushedEffect(ctx, event)
 	}
-	return runLegacyHandlers(ctx, d.opts.ImagePushed, domain.Event{ID: event.ID, Type: domain.EventImagePushed, Timestamp: event.Timestamp, ImageName: payload.Repository, Tag: payload.Reference, Data: domain.ImagePushedPayload{Name: payload.Repository, Reference: payload.Reference}})
+	return runLegacyHandlers(ctx, d.opts.ImagePushed, domain.Event{ID: event.ID, Type: domain.EventImagePushed, Timestamp: event.Timestamp, ImageName: payload.Repository, Tag: payload.Reference, Data: domain.ImagePushedPayload{Name: payload.Repository, Reference: payload.Reference, Manifest: append([]byte(nil), payload.Manifest...), Annotations: cloneAnnotations(payload.Annotations)}})
 }
 
 func (d *EventDispatcher) dispatchConfigReload(ctx context.Context, event domain.ComponentEventEnvelope, payload domain.ComponentConfigReloadPayload) error {
@@ -335,4 +335,15 @@ func (d *EventDispatcher) saveIntentsLocked(ctx context.Context) error {
 		return fmt.Errorf("save manual deployment intents: %w", err)
 	}
 	return nil
+}
+
+func cloneAnnotations(annotations map[string]string) map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		copy[key] = value
+	}
+	return copy
 }

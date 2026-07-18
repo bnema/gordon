@@ -162,7 +162,7 @@ func EventFromProto(message *eventsv1.EventEnvelope, origin domain.ComponentRole
 
 func payloadFromProto(message *eventsv1.EventEnvelope) (domain.ComponentEventPayload, error) {
 	if payload := message.GetRegistryImagePushed(); payload != nil {
-		return domain.RegistryImagePushedPayload{Repository: payload.GetRepository(), Reference: payload.GetReference(), Digest: payload.GetDigest()}, nil
+		return domain.RegistryImagePushedPayload{Repository: payload.GetRepository(), Reference: payload.GetReference(), Digest: payload.GetDigest(), Manifest: append([]byte(nil), payload.GetManifest()...), Annotations: cloneAnnotations(payload.GetAnnotations())}, nil
 	}
 	if payload := message.GetRuntimeStateChanged(); payload != nil {
 		return domain.RuntimeStateChangedPayload{ComponentID: payload.GetComponentId(), State: payload.GetState()}, nil
@@ -206,7 +206,7 @@ func EventToProto(event domain.ComponentEventEnvelope) (*eventsv1.EventEnvelope,
 	out := &eventsv1.EventEnvelope{Id: event.ID, Type: string(event.Type), Origin: string(event.Origin), Timestamp: timestamppb.New(event.Timestamp), Generation: event.Generation, IdempotencyKey: event.IdempotencyKey, RetryCount: retryCount, AuditClassification: string(event.AuditClassification)}
 	switch payload := event.Payload.(type) {
 	case domain.RegistryImagePushedPayload:
-		out.Payload = &eventsv1.EventEnvelope_RegistryImagePushed{RegistryImagePushed: &eventsv1.RegistryImagePushedPayload{Repository: payload.Repository, Reference: payload.Reference, Digest: payload.Digest}}
+		out.Payload = &eventsv1.EventEnvelope_RegistryImagePushed{RegistryImagePushed: &eventsv1.RegistryImagePushedPayload{Repository: payload.Repository, Reference: payload.Reference, Digest: payload.Digest, Manifest: append([]byte(nil), payload.Manifest...), Annotations: cloneAnnotations(payload.Annotations)}}
 	case domain.RuntimeStateChangedPayload:
 		out.Payload = &eventsv1.EventEnvelope_RuntimeStateChanged{RuntimeStateChanged: &eventsv1.RuntimeStateChangedPayload{ComponentId: payload.ComponentID, State: payload.State}}
 	case domain.RuntimeDeployPayload:
@@ -229,4 +229,15 @@ func EventToProto(event domain.ComponentEventEnvelope) (*eventsv1.EventEnvelope,
 		return nil, fmt.Errorf("unknown typed payload")
 	}
 	return out, nil
+}
+
+func cloneAnnotations(annotations map[string]string) map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		copy[key] = value
+	}
+	return copy
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -48,7 +49,25 @@ type ComponentEventPayload interface {
 	fingerprint() string
 }
 
-type RegistryImagePushedPayload struct{ Repository, Reference, Digest string }
+// RegistryImagePushedPayload carries the exact OCI inputs consumed by image
+// automation. Bounds keep the component-event transport from becoming a
+// general-purpose blob channel.
+type RegistryImagePushedPayload struct {
+	Repository  string
+	Reference   string
+	Digest      string
+	Manifest    []byte
+	Annotations map[string]string
+}
+
+const (
+	maxComponentEventManifestBytes = 4 << 20
+	maxComponentEventAnnotations   = 64
+	maxComponentEventAnnotationKey = 256
+	maxComponentEventAnnotationVal = 4096
+	maxComponentEventAnnotationAll = 64 << 10
+)
+
 type RuntimeStateChangedPayload struct{ ComponentID, State string }
 type RuntimeDeployPayload struct {
 	Domain, Image string
@@ -90,7 +109,29 @@ func required(values ...string) error {
 	return nil
 }
 func (p RegistryImagePushedPayload) Validate() error {
-	return required(p.Repository, p.Reference, p.Digest)
+	if err := required(p.Repository, p.Reference, p.Digest); err != nil {
+		return err
+	}
+	if len(p.Manifest) > maxComponentEventManifestBytes {
+		return fmt.Errorf("manifest exceeds %d bytes", maxComponentEventManifestBytes)
+	}
+	if len(p.Annotations) > maxComponentEventAnnotations {
+		return fmt.Errorf("annotations exceed %d entries", maxComponentEventAnnotations)
+	}
+	total := 0
+	for key, value := range p.Annotations {
+		if strings.TrimSpace(key) == "" || len(key) > maxComponentEventAnnotationKey {
+			return errors.New("annotation key is invalid")
+		}
+		if len(value) > maxComponentEventAnnotationVal {
+			return errors.New("annotation value is too large")
+		}
+		total += len(key) + len(value)
+		if total > maxComponentEventAnnotationAll {
+			return errors.New("annotations are too large")
+		}
+	}
+	return nil
 }
 func (p RuntimeStateChangedPayload) Validate() error { return required(p.ComponentID, p.State) }
 func (p RuntimeDeployPayload) Validate() error {
@@ -119,7 +160,18 @@ func (p EdgeDrainPayload) Validate() error {
 	return required(p.Domain)
 }
 func (p RegistryImagePushedPayload) fingerprint() string {
-	return p.Repository + "\x00" + p.Reference + "\x00" + p.Digest
+	h := sha256.New()
+	_, _ = h.Write([]byte(p.Repository + "\x00" + p.Reference + "\x00" + p.Digest + "\x00"))
+	_, _ = h.Write(p.Manifest)
+	keys := make([]string, 0, len(p.Annotations))
+	for key := range p.Annotations {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		_, _ = h.Write([]byte("\x00" + key + "\x00" + p.Annotations[key]))
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 func (p RuntimeStateChangedPayload) fingerprint() string { return p.ComponentID + "\x00" + p.State }
 func (p RuntimeDeployPayload) fingerprint() string {

@@ -18,7 +18,7 @@ func registryImagePushedIdempotencyKey(image, digest string) string {
 	return fmt.Sprintf("%s:%s:%s", image, digest, registryImagePushedAction)
 }
 
-func (s *Service) publishComponentImagePushed(ctx context.Context, image, reference, digest string) error {
+func (s *Service) publishComponentImagePushed(ctx context.Context, image, reference, digest string, manifest []byte, annotations map[string]string) error {
 	key := registryImagePushedIdempotencyKey(image, digest)
 	id := fmt.Sprintf("registry-%x", sha256.Sum256([]byte(key)))
 	return s.componentEvents.PublishComponentEvent(ctx, domain.ComponentEventEnvelope{
@@ -29,9 +29,22 @@ func (s *Service) publishComponentImagePushed(ctx context.Context, image, refere
 		IdempotencyKey:      key,
 		AuditClassification: domain.ComponentEventAuditCritical,
 		Payload: domain.RegistryImagePushedPayload{
-			Repository: image,
-			Reference:  reference,
-			Digest:     digest,
+			Repository:  image,
+			Reference:   reference,
+			Digest:      digest,
+			Manifest:    append([]byte(nil), manifest...),
+			Annotations: cloneAnnotations(annotations),
 		},
 	})
+}
+
+func cloneAnnotations(annotations map[string]string) map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		copy[key] = value
+	}
+	return copy
 }

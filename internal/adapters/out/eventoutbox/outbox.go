@@ -38,6 +38,8 @@ type record struct {
 	Generation                                                       uint64
 	RetryCount                                                       int
 	Repository, Reference, Digest                                    string
+	Manifest                                                         []byte
+	Annotations                                                      map[string]string
 }
 
 // Outbox persists an event before delivery. A successful Publish means the event
@@ -150,7 +152,7 @@ func (o *Outbox) persist(event domain.ComponentEventEnvelope) (string, error) {
 		return "", errors.New("event outbox is full")
 	}
 	p := event.Payload.(domain.RegistryImagePushedPayload)
-	r := record{ID: event.ID, Type: string(event.Type), Origin: string(event.Origin), Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano), IdempotencyKey: event.IdempotencyKey, Generation: event.Generation, RetryCount: event.RetryCount, AuditClassification: string(event.AuditClassification), Repository: p.Repository, Reference: p.Reference, Digest: p.Digest}
+	r := record{ID: event.ID, Type: string(event.Type), Origin: string(event.Origin), Timestamp: event.Timestamp.UTC().Format(time.RFC3339Nano), IdempotencyKey: event.IdempotencyKey, Generation: event.Generation, RetryCount: event.RetryCount, AuditClassification: string(event.AuditClassification), Repository: p.Repository, Reference: p.Reference, Digest: p.Digest, Manifest: append([]byte(nil), p.Manifest...), Annotations: cloneAnnotations(p.Annotations)}
 	data, err := json.Marshal(r)
 	if err != nil {
 		return "", fmt.Errorf("marshal event outbox record: %w", err)
@@ -272,7 +274,7 @@ func readRecord(path string) (domain.ComponentEventEnvelope, error) {
 	if err != nil {
 		return domain.ComponentEventEnvelope{}, err
 	}
-	e := domain.ComponentEventEnvelope{ID: r.ID, Type: domain.ComponentEventType(r.Type), Origin: domain.ComponentRole(r.Origin), Timestamp: timestamp, Generation: r.Generation, IdempotencyKey: r.IdempotencyKey, RetryCount: r.RetryCount, AuditClassification: domain.ComponentEventAuditClassification(r.AuditClassification), Payload: domain.RegistryImagePushedPayload{Repository: r.Repository, Reference: r.Reference, Digest: r.Digest}}
+	e := domain.ComponentEventEnvelope{ID: r.ID, Type: domain.ComponentEventType(r.Type), Origin: domain.ComponentRole(r.Origin), Timestamp: timestamp, Generation: r.Generation, IdempotencyKey: r.IdempotencyKey, RetryCount: r.RetryCount, AuditClassification: domain.ComponentEventAuditClassification(r.AuditClassification), Payload: domain.RegistryImagePushedPayload{Repository: r.Repository, Reference: r.Reference, Digest: r.Digest, Manifest: append([]byte(nil), r.Manifest...), Annotations: cloneAnnotations(r.Annotations)}}
 	if err := e.Validate(); err != nil {
 		return domain.ComponentEventEnvelope{}, err
 	}
@@ -355,4 +357,15 @@ func next(v, max time.Duration) time.Duration {
 		return max
 	}
 	return v * 2
+}
+
+func cloneAnnotations(annotations map[string]string) map[string]string {
+	if len(annotations) == 0 {
+		return nil
+	}
+	copy := make(map[string]string, len(annotations))
+	for key, value := range annotations {
+		copy[key] = value
+	}
+	return copy
 }

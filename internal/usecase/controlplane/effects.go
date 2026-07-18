@@ -7,7 +7,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -25,17 +25,51 @@ type AuditSink interface {
 	AuditComponentEvent(context.Context, domain.ComponentEventEnvelope) error
 }
 
-// ProductionEffects adapts typed component events to existing control
-// decisions and the narrow runtime command facade.
+// ProductionEffects adapts typed component events to established domain event
+// handlers. Image automation deliberately stays in auto.ImagePushDispatcher:
+// this adapter must not grow a second, subtly different deploy path.
 type ProductionEffects struct {
-	config  in.ConfigService
-	runtime RouteCommander
-	audit   AuditSink
+	imagePushed out.EventHandler
+	manual      out.EventHandler
+	runtime     RouteCommander
+	audit       AuditSink
 }
 
-func NewProductionEffects(config in.ConfigService, runtime RouteCommander, audit AuditSink) (*ProductionEffects, error) {
-	if config == nil {
-		return nil, fmt.Errorf("control config service is required")
+// ImagePushedHandlers preserves monolith fan-out ordering: label/tag automation
+// classifies the event first, then configured routes receive the same push.
+// Neither action is reimplemented in control-plane code.
+type ImagePushedHandlers struct {
+	automation out.EventHandler
+	configured out.EventHandler
+}
+
+func NewImagePushedHandlers(automation, configured out.EventHandler) (*ImagePushedHandlers, error) {
+	if automation == nil || configured == nil {
+		return nil, fmt.Errorf("image automation and configured-route handlers are required")
+	}
+	return &ImagePushedHandlers{automation: automation, configured: configured}, nil
+}
+
+func (h *ImagePushedHandlers) CanHandle(eventType domain.EventType) bool {
+	return eventType == domain.EventImagePushed
+}
+
+func (h *ImagePushedHandlers) Handle(ctx context.Context, event domain.Event) error {
+	if err := h.automation.Handle(ctx, event); err != nil {
+		return err
+	}
+	return h.configured.Handle(ctx, event)
+}
+
+// NewProductionEffects requires existing image and manual handlers from
+// wiring, preserving monolith automation while retaining the established
+// runtime reconciliation effect for broad configuration changes.
+func NewProductionEffects(imagePushed, manual out.EventHandler, runtime RouteCommander, audit AuditSink) (*ProductionEffects, error) {
+	if imagePushed == nil {
+		return nil, fmt.Errorf("control image-pushed handler is required")
+	}
+	if manual == nil {
+		return nil, fmt.Errorf("control manual-deploy handler is required")
 	}
 	if runtime == nil {
 		return nil, fmt.Errorf("control runtime command facade is required")
@@ -43,7 +77,7 @@ func NewProductionEffects(config in.ConfigService, runtime RouteCommander, audit
 	if audit == nil {
 		return nil, fmt.Errorf("control audit sink is required")
 	}
-	return &ProductionEffects{config: config, runtime: runtime, audit: audit}, nil
+	return &ProductionEffects{imagePushed: imagePushed, manual: manual, runtime: runtime, audit: audit}, nil
 }
 
 func (e *ProductionEffects) ImagePushed(ctx context.Context, event domain.ComponentEventEnvelope) error {
@@ -51,11 +85,8 @@ func (e *ProductionEffects) ImagePushed(ctx context.Context, event domain.Compon
 	if !ok {
 		return ErrUnhandledComponentEvent
 	}
-	image := imageReference(payload.Repository, payload.Reference)
-	for _, route := range e.config.FindRoutesByImage(ctx, image) {
-		if _, err := e.runtime.DeployRoute(domain.WithInternalDeploy(ctx), route); err != nil {
-			return fmt.Errorf("deploy route %q for pushed image: %w", route.Domain, err)
-		}
+	if err := e.imagePushed.Handle(ctx, imagePushedEvent(event, payload)); err != nil {
+		return fmt.Errorf("handle pushed image: %w", err)
 	}
 	return e.audit.AuditComponentEvent(ctx, event)
 }
@@ -75,15 +106,8 @@ func (e *ProductionEffects) ManualDeploy(ctx context.Context, event domain.Compo
 	if !ok {
 		return ErrUnhandledComponentEvent
 	}
-	route, err := e.config.GetRoute(ctx, payload.Domain)
-	if err != nil {
-		return fmt.Errorf("get manual deploy route %q: %w", payload.Domain, err)
-	}
-	if route == nil {
-		return fmt.Errorf("manual deploy route %q not found", payload.Domain)
-	}
-	if _, err := e.runtime.DeployRoute(domain.WithInternalDeploy(ctx), *route); err != nil {
-		return fmt.Errorf("deploy manual route %q: %w", payload.Domain, err)
+	if err := e.manual.Handle(ctx, domain.Event{ID: event.ID, Type: domain.EventManualDeploy, Timestamp: event.Timestamp, Route: payload.Domain, Data: &domain.ManualDeployPayload{Domain: payload.Domain}}); err != nil {
+		return fmt.Errorf("handle manual deploy: %w", err)
 	}
 	return e.audit.AuditComponentEvent(ctx, event)
 }
@@ -98,6 +122,17 @@ func (e *ProductionEffects) SecretsChanged(ctx context.Context, event domain.Com
 		return fmt.Errorf("reconcile changed secrets: %w", err)
 	}
 	return e.audit.AuditComponentEvent(ctx, event)
+}
+
+func imagePushedEvent(event domain.ComponentEventEnvelope, payload domain.RegistryImagePushedPayload) domain.Event {
+	return domain.Event{
+		ID: event.ID, Type: domain.EventImagePushed, Timestamp: event.Timestamp,
+		ImageName: payload.Repository, Tag: payload.Reference,
+		Data: domain.ImagePushedPayload{
+			Name: payload.Repository, Reference: payload.Reference,
+			Manifest: append([]byte(nil), payload.Manifest...), Annotations: cloneAnnotations(payload.Annotations),
+		},
+	}
 }
 
 func (e *ProductionEffects) RuntimeState(ctx context.Context, event domain.ComponentEventEnvelope) error {

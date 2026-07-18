@@ -115,12 +115,14 @@ func TestControlRoleBringup(t *testing.T) {
 	ack, err := events.PublishEvent(validEventContext, event)
 	require.NoError(t, err)
 	assert.False(t, ack.GetAck().GetDuplicate())
-	require.Eventually(t, func() bool { return runtime.worker.calls() == 2 }, time.Second, time.Millisecond)
+	// The manual deploy created a durable intent for app:v1, so the matching
+	// registry push is consumed without issuing a second runtime command.
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, 1, runtime.worker.calls(), "matching push must be suppressed after manual deploy")
 	ack, err = events.PublishEvent(validEventContext, event)
 	require.NoError(t, err)
 	assert.True(t, ack.GetAck().GetDuplicate())
-	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, 2, runtime.worker.calls(), "duplicate image event must not repeat its production effect")
+	assert.Equal(t, 1, runtime.worker.calls(), "duplicate image event must not repeat its production effect")
 
 	wrongScopeContext := grpctest.AuthenticatedContext(context.Background(), "edge-only-token")
 	_, err = events.PublishEvent(wrongScopeContext, controlRoleImageEvent())

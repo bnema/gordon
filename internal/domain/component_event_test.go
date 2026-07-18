@@ -42,6 +42,19 @@ func TestComponentEventEnvelopeValidate(t *testing.T) {
 	}
 }
 
+func TestRegistryImagePushedPayloadBoundsAndFingerprint(t *testing.T) {
+	payload := RegistryImagePushedPayload{Repository: "app", Reference: "v1", Digest: "sha256:abc", Manifest: []byte(`{"schemaVersion":2}`), Annotations: map[string]string{"org.opencontainers.image.source": "https://example.test/app"}}
+	require.NoError(t, payload.Validate())
+	changed := payload
+	changed.Manifest = []byte(`{"schemaVersion":3}`)
+	require.NotEqual(t, payload.fingerprint(), changed.fingerprint())
+	payload.Manifest = make([]byte, maxComponentEventManifestBytes+1)
+	require.Error(t, payload.Validate())
+	payload.Manifest = nil
+	payload.Annotations = map[string]string{"": "invalid"}
+	require.Error(t, payload.Validate())
+}
+
 func TestComponentEventEnvelopeSupportsAllTypedPayloads(t *testing.T) {
 	tests := []ComponentEventEnvelope{
 		validComponentEvent(),

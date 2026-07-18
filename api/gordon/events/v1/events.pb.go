@@ -517,11 +517,15 @@ func (*EventEnvelope_Audit) isEventEnvelope_Payload() {}
 
 func (*EventEnvelope_EdgeDrain) isEventEnvelope_Payload() {}
 
+// Bounded at the domain boundary: manifest <= 4 MiB; annotations <= 64
+// entries, 64 KiB total. These are OCI automation inputs, not arbitrary data.
 type RegistryImagePushedPayload struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Repository    string                 `protobuf:"bytes,1,opt,name=repository,proto3" json:"repository,omitempty"`
 	Reference     string                 `protobuf:"bytes,2,opt,name=reference,proto3" json:"reference,omitempty"`
 	Digest        string                 `protobuf:"bytes,3,opt,name=digest,proto3" json:"digest,omitempty"`
+	Manifest      []byte                 `protobuf:"bytes,4,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	Annotations   map[string]string      `protobuf:"bytes,5,rep,name=annotations,proto3" json:"annotations,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -575,6 +579,20 @@ func (x *RegistryImagePushedPayload) GetDigest() string {
 		return x.Digest
 	}
 	return ""
+}
+
+func (x *RegistryImagePushedPayload) GetManifest() []byte {
+	if x != nil {
+		return x.Manifest
+	}
+	return nil
+}
+
+func (x *RegistryImagePushedPayload) GetAnnotations() map[string]string {
+	if x != nil {
+		return x.Annotations
+	}
+	return nil
 }
 
 type RuntimeStateChangedPayload struct {
@@ -1117,13 +1135,18 @@ const file_gordon_events_v1_events_proto_rawDesc = "" +
 	"\x05audit\x18\x1c \x01(\v2\x1e.gordon.events.v1.AuditPayloadH\x00R\x05audit\x12C\n" +
 	"\n" +
 	"edge_drain\x18\x1d \x01(\v2\".gordon.events.v1.EdgeDrainPayloadH\x00R\tedgeDrainB\t\n" +
-	"\apayload\"r\n" +
+	"\apayload\"\xaf\x02\n" +
 	"\x1aRegistryImagePushedPayload\x12\x1e\n" +
 	"\n" +
 	"repository\x18\x01 \x01(\tR\n" +
 	"repository\x12\x1c\n" +
 	"\treference\x18\x02 \x01(\tR\treference\x12\x16\n" +
-	"\x06digest\x18\x03 \x01(\tR\x06digest\"U\n" +
+	"\x06digest\x18\x03 \x01(\tR\x06digest\x12\x1a\n" +
+	"\bmanifest\x18\x04 \x01(\fR\bmanifest\x12_\n" +
+	"\vannotations\x18\x05 \x03(\v2=.gordon.events.v1.RegistryImagePushedPayload.AnnotationsEntryR\vannotations\x1a>\n" +
+	"\x10AnnotationsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"U\n" +
 	"\x1aRuntimeStateChangedPayload\x12!\n" +
 	"\fcomponent_id\x18\x01 \x01(\tR\vcomponentId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\"d\n" +
@@ -1178,7 +1201,7 @@ func file_gordon_events_v1_events_proto_rawDescGZIP() []byte {
 	return file_gordon_events_v1_events_proto_rawDescData
 }
 
-var file_gordon_events_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_gordon_events_v1_events_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_gordon_events_v1_events_proto_goTypes = []any{
 	(*PublishEventRequest)(nil),        // 0: gordon.events.v1.PublishEventRequest
 	(*PublishEventResponse)(nil),       // 1: gordon.events.v1.PublishEventResponse
@@ -1196,13 +1219,14 @@ var file_gordon_events_v1_events_proto_goTypes = []any{
 	(*PolicyDeniedPayload)(nil),        // 13: gordon.events.v1.PolicyDeniedPayload
 	(*AuditPayload)(nil),               // 14: gordon.events.v1.AuditPayload
 	(*EdgeDrainPayload)(nil),           // 15: gordon.events.v1.EdgeDrainPayload
-	(*timestamppb.Timestamp)(nil),      // 16: google.protobuf.Timestamp
+	nil,                                // 16: gordon.events.v1.RegistryImagePushedPayload.AnnotationsEntry
+	(*timestamppb.Timestamp)(nil),      // 17: google.protobuf.Timestamp
 }
 var file_gordon_events_v1_events_proto_depIdxs = []int32{
 	5,  // 0: gordon.events.v1.PublishEventRequest.event:type_name -> gordon.events.v1.EventEnvelope
 	4,  // 1: gordon.events.v1.PublishEventResponse.ack:type_name -> gordon.events.v1.EventAck
 	5,  // 2: gordon.events.v1.WatchEventsResponse.event:type_name -> gordon.events.v1.EventEnvelope
-	16, // 3: gordon.events.v1.EventEnvelope.timestamp:type_name -> google.protobuf.Timestamp
+	17, // 3: gordon.events.v1.EventEnvelope.timestamp:type_name -> google.protobuf.Timestamp
 	6,  // 4: gordon.events.v1.EventEnvelope.registry_image_pushed:type_name -> gordon.events.v1.RegistryImagePushedPayload
 	7,  // 5: gordon.events.v1.EventEnvelope.runtime_state_changed:type_name -> gordon.events.v1.RuntimeStateChangedPayload
 	8,  // 6: gordon.events.v1.EventEnvelope.runtime_deploy:type_name -> gordon.events.v1.RuntimeDeployPayload
@@ -1213,15 +1237,16 @@ var file_gordon_events_v1_events_proto_depIdxs = []int32{
 	13, // 11: gordon.events.v1.EventEnvelope.policy_denied:type_name -> gordon.events.v1.PolicyDeniedPayload
 	14, // 12: gordon.events.v1.EventEnvelope.audit:type_name -> gordon.events.v1.AuditPayload
 	15, // 13: gordon.events.v1.EventEnvelope.edge_drain:type_name -> gordon.events.v1.EdgeDrainPayload
-	0,  // 14: gordon.events.v1.EventService.PublishEvent:input_type -> gordon.events.v1.PublishEventRequest
-	2,  // 15: gordon.events.v1.EventService.WatchEvents:input_type -> gordon.events.v1.WatchEventsRequest
-	1,  // 16: gordon.events.v1.EventService.PublishEvent:output_type -> gordon.events.v1.PublishEventResponse
-	3,  // 17: gordon.events.v1.EventService.WatchEvents:output_type -> gordon.events.v1.WatchEventsResponse
-	16, // [16:18] is the sub-list for method output_type
-	14, // [14:16] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	16, // 14: gordon.events.v1.RegistryImagePushedPayload.annotations:type_name -> gordon.events.v1.RegistryImagePushedPayload.AnnotationsEntry
+	0,  // 15: gordon.events.v1.EventService.PublishEvent:input_type -> gordon.events.v1.PublishEventRequest
+	2,  // 16: gordon.events.v1.EventService.WatchEvents:input_type -> gordon.events.v1.WatchEventsRequest
+	1,  // 17: gordon.events.v1.EventService.PublishEvent:output_type -> gordon.events.v1.PublishEventResponse
+	3,  // 18: gordon.events.v1.EventService.WatchEvents:output_type -> gordon.events.v1.WatchEventsResponse
+	17, // [17:19] is the sub-list for method output_type
+	15, // [15:17] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_gordon_events_v1_events_proto_init() }
@@ -1247,7 +1272,7 @@ func file_gordon_events_v1_events_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gordon_events_v1_events_proto_rawDesc), len(file_gordon_events_v1_events_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

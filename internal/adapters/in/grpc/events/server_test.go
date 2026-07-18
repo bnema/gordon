@@ -67,6 +67,24 @@ func TestPublishEventRejectsWrongRoleScopeAndMissingAuth(t *testing.T) {
 	require.Equal(t, codes.Unauthenticated, status.Code(err))
 }
 
+func TestEventProtoPreservesImageAutomationInputs(t *testing.T) {
+	original := domain.ComponentEventEnvelope{
+		ID: "image", Type: domain.ComponentEventTypeRegistryImagePushed, Origin: domain.ComponentRoleRegistry,
+		Timestamp: time.Now().UTC(), IdempotencyKey: "push-app-v1", AuditClassification: domain.ComponentEventAuditWrite,
+		Payload: domain.RegistryImagePushedPayload{
+			Repository: "app", Reference: "v1", Digest: "sha256:abc", Manifest: []byte(`{"schemaVersion":2}`),
+			Annotations: map[string]string{"org.opencontainers.image.source": "https://example.test/app"},
+		},
+	}
+	wire, err := EventToProto(original)
+	require.NoError(t, err)
+	decoded, err := EventFromProto(wire, domain.ComponentRoleRegistry)
+	require.NoError(t, err)
+	payload, ok := decoded.Payload.(domain.RegistryImagePushedPayload)
+	require.True(t, ok)
+	require.Equal(t, original.Payload, payload)
+}
+
 func TestEventProtoRejectsForbiddenUntypedPayload(t *testing.T) {
 	_, err := EventFromProto(&eventsv1.EventEnvelope{Id: "bad", Type: string(domain.ComponentEventTypeRegistryImagePushed), Timestamp: timestamppb.Now(), AuditClassification: string(domain.ComponentEventAuditWrite)}, domain.ComponentRoleRegistry)
 	require.Error(t, err)

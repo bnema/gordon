@@ -26,8 +26,11 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/auto"
+	autopreview "github.com/bnema/gordon/internal/usecase/auto/preview"
 	"github.com/bnema/gordon/internal/usecase/componentevents"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	"github.com/bnema/gordon/internal/usecase/container"
 	controlplaneusecase "github.com/bnema/gordon/internal/usecase/controlplane"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
@@ -144,10 +147,10 @@ func runControlServers(ctx context.Context, v *viper.Viper, cfg Config, deps con
 	if err != nil {
 		return err
 	}
-	return serveControlHTTPAndGRPC(ctx, cfg, deps.listen, listener, server, controlServices, log)
+	return serveControlHTTPAndGRPC(ctx, cfg, deps.listen, listener, server, controlServices, dispatcher, log)
 }
 
-func serveControlHTTPAndGRPC(ctx context.Context, cfg Config, listen func(string, string) (net.Listener, error), grpcListener net.Listener, grpcServer *grpc.Server, controlServices *services, log zerowrap.Logger) error {
+func serveControlHTTPAndGRPC(ctx context.Context, cfg Config, listen func(string, string) (net.Listener, error), grpcListener net.Listener, grpcServer *grpc.Server, controlServices *services, dispatcher *controlplaneusecase.EventDispatcher, log zerowrap.Logger) error {
 	httpListener, err := controlHTTPListener(cfg, listen)
 	if err != nil {
 		return log.WrapErr(err, "failed to listen for control HTTP")
@@ -155,6 +158,9 @@ func serveControlHTTPAndGRPC(ctx context.Context, cfg Config, listen func(string
 	var httpServer *http.Server
 	if httpListener != nil {
 		defer httpListener.Close()
+		// The production admin deploy endpoint enters the same durable dispatcher
+		// as remote registry events, so manual suppression is observable after restart.
+		controlServices.adminHandler.SetComponentEventHandler(dispatcher)
 		httpServer = newControlHTTPServer(controlHTTPHandler(controlServices, cfg, log))
 	}
 
@@ -201,6 +207,39 @@ func initializeControlDrainRelay(ctx context.Context, cfg Config, deps controlRo
 // newControlEventDispatcher wires typed component events to existing control
 // decisions and the narrow runtime command facade. It never creates a local
 // container runtime or service.
+// newControlProductionEffects assembles the legacy handlers around a runtime
+// command facade. The event adapter below is intentionally a bridge only: the
+// auto dispatcher remains the sole image classification decision point.
+func newControlProductionEffects(ctx context.Context, cfg Config, config *configusecase.Service, runtime controlplaneusecase.RouteCommander, log zerowrap.Logger) (*controlplaneusecase.ProductionEffects, error) {
+	containerFacade := controlplaneusecase.NewRuntimeCommandContainerService(runtime)
+	blobStorage, err := filesystem.NewBlobStorage(resolveDataDir(cfg.Server.DataDir), log)
+	if err != nil {
+		return nil, fmt.Errorf("open image label blob storage: %w", err)
+	}
+	registryDomain, legacyRegistryDomains := resolveRegistryDomains(cfg)
+	autoRoute := container.NewAutoRouteHandler(ctx, config, containerFacade, blobStorage, registryDomain, legacyRegistryDomains...)
+	previewStore := filesystem.NewPreviewStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json"))
+	previewService := autopreview.NewService(previewStore, config.GetPreviewConfig().TTL).
+		WithDeployer(containerFacade).
+		WithRouteManager(config).
+		WithRegistryDomain(config.GetRegistryDomain())
+	if err := previewService.Load(ctx); err != nil {
+		return nil, fmt.Errorf("load control previews: %w", err)
+	}
+	autoPreview := autopreview.NewAutoPreviewHandler(ctx, config, previewService)
+	automation := auto.NewImagePushDispatcher(config, autoRoute, autoPreview)
+	imagePushed, err := controlplaneusecase.NewImagePushedHandlers(automation, container.NewImagePushedHandler(ctx, containerFacade, config))
+	if err != nil {
+		return nil, err
+	}
+	return controlplaneusecase.NewProductionEffects(
+		imagePushed,
+		container.NewManualDeployHandler(ctx, containerFacade, config),
+		runtime,
+		controlplaneusecase.NewLogAuditSink(),
+	)
+}
+
 func newControlEventDispatcher(ctx context.Context, v *viper.Viper, cfg Config) (*controlplaneusecase.EventDispatcher, error) {
 	controlConfig := configusecase.NewService(v, nil)
 	if err := controlConfig.Load(ctx); err != nil {
@@ -214,7 +253,7 @@ func newControlEventDispatcher(ctx context.Context, v *viper.Viper, cfg Config) 
 	if runtimeClient != nil {
 		eventRuntime = runtimecontrol.NewService(controlConfig, runtimeClient, "gordon-control")
 	}
-	effects, err := controlplaneusecase.NewProductionEffects(controlConfig, eventRuntime, controlplaneusecase.NewLogAuditSink())
+	effects, err := newControlProductionEffects(ctx, cfg, controlConfig, eventRuntime, zerowrap.FromCtx(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("create control component event effects: %w", err)
 	}

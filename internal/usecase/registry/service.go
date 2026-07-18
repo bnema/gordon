@@ -199,7 +199,7 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	// manual deploy correlation belongs to control, not this storage owner.
 	if !strings.HasPrefix(manifest.Reference, "sha256:") {
 		if s.componentEvents != nil {
-			if err := s.publishComponentImagePushed(ctx, manifest.Name, manifest.Reference, digest); err != nil {
+			if err := s.publishComponentImagePushed(ctx, manifest.Name, manifest.Reference, digest, manifest.Data, manifest.Annotations); err != nil {
 				// Manifest storage is authoritative. A durable outbox makes this
 				// path recoverable, so its outage must not turn a successful PUT into
 				// a registry failure.

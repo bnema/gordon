@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bnema/gordon/internal/boundaries/in"
+
 	"github.com/bnema/zerowrap"
+	"github.com/google/uuid"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
@@ -63,6 +65,7 @@ type Handler struct {
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
 	runtimeControl  runtimeControlService
+	componentEvents in.ComponentEventHandler
 	log             zerowrap.Logger
 }
 
@@ -213,6 +216,7 @@ type HandlerDeps struct {
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
 	RuntimeControl  runtimeControlService
+	ComponentEvents in.ComponentEventHandler
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -234,6 +238,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
 		runtimeControl:  deps.RuntimeControl,
+		componentEvents: deps.ComponentEvents,
 		log:             deps.Log,
 	}
 }
@@ -1763,6 +1768,16 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		return
 	}
 
+	if h.componentEvents != nil {
+		if err := h.dispatchManualDeploy(ctx, *route); err != nil {
+			log.Error().Err(err).Str("domain", deployDomain).Msg("manual deploy component event failed")
+			h.sendError(w, http.StatusServiceUnavailable, "deploy unavailable")
+			return
+		}
+		h.sendJSON(w, http.StatusOK, dto.DeployResponse{Status: "deployed", Domain: deployDomain})
+		return
+	}
+
 	if h.runtimeControl != nil {
 		result, err := h.runtimeControl.DeployRoute(ctx, *route)
 		if h.handleRuntimeControlResult(w, log, deployDomain, result, err, "deploy") {
@@ -2397,4 +2412,20 @@ func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := h.publicTLSSvc.Status(ctx)
 	h.sendJSON(w, http.StatusOK, dto.TLSStatusFromDomain(status))
+}
+
+// SetComponentEventHandler wires durable control events after the control event
+// dispatcher is constructed. It is intentionally optional for monolith wiring.
+func (h *Handler) SetComponentEventHandler(handler in.ComponentEventHandler) {
+	h.componentEvents = handler
+}
+
+func (h *Handler) dispatchManualDeploy(ctx context.Context, route domain.Route) error {
+	id := "manual-" + uuid.NewString()
+	return h.componentEvents.HandleComponentEvent(ctx, domain.ComponentEventEnvelope{
+		ID: id, Type: domain.ComponentEventTypeManualDeploy, Origin: domain.ComponentRoleControl,
+		Timestamp: time.Now().UTC(), IdempotencyKey: id,
+		AuditClassification: domain.ComponentEventAuditCritical,
+		Payload:             domain.ComponentManualDeployPayload{Domain: route.Domain, Image: route.Image, CorrelationID: id},
+	})
 }

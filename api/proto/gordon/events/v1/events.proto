@@ -42,7 +42,15 @@ message EventEnvelope {
   }
 }
 
-message RegistryImagePushedPayload { string repository = 1; string reference = 2; string digest = 3; }
+// Bounded at the domain boundary: manifest <= 4 MiB; annotations <= 64
+// entries, 64 KiB total. These are OCI automation inputs, not arbitrary data.
+message RegistryImagePushedPayload {
+  string repository = 1;
+  string reference = 2;
+  string digest = 3;
+  bytes manifest = 4;
+  map<string, string> annotations = 5;
+}
 message RuntimeStateChangedPayload { string component_id = 1; string state = 2; }
 message RuntimeDeployPayload { string domain = 1; string image = 2; uint64 generation = 3; }
 message ContainerDeployedPayload { string domain = 1; string image = 2; string deployment_id = 3; uint64 generation = 4; }
