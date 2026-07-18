@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	edgesnapshotgrpc "github.com/bnema/gordon/internal/adapters/in/grpc/edgesnapshot"
 	eventsgrpc "github.com/bnema/gordon/internal/adapters/in/grpc/events"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/componentevents"
@@ -28,6 +30,7 @@ import (
 	controlplaneusecase "github.com/bnema/gordon/internal/usecase/controlplane"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
+	"github.com/bnema/gordon/internal/usecase/runtimecontrol"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 )
 
@@ -78,6 +81,11 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	ctx = zerowrap.WithCtx(ctx, log)
 	warnDeprecatedConfigKeys(v, log)
 
+	dispatcher, err := newControlEventDispatcher(ctx, v, cfg)
+	if err != nil {
+		return log.WrapErr(err, "create control component event dispatcher")
+	}
+
 	validator, err := deps.newComponentTokenValidator(cfg, log)
 	if err != nil {
 		return log.WrapErr(err, "failed to initialize control component token validator")
@@ -97,13 +105,9 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if err != nil {
 		return log.WrapErr(err, "publish initial control traffic graph")
 	}
-	var drainRelay edgesnapshot.RuntimeDrainAckReceiver
-	if deps.newRuntimeDrainAckReceiver != nil {
-		relay, relayErr := deps.newRuntimeDrainAckReceiver(ctx, cfg.Runtime)
-		if relayErr != nil {
-			return log.WrapErr(relayErr, "create runtime route drain relay")
-		}
-		drainRelay = relay
+	drainRelay, err := initializeControlDrainRelay(ctx, cfg, deps)
+	if err != nil {
+		return log.WrapErr(err, "create runtime route drain relay")
 	}
 	drainCoordinator, err := edgesnapshot.NewDrainCoordinator(hub, edgesnapshot.DrainCoordinatorOptions{
 		Runtime:             drainRelay,
@@ -120,9 +124,6 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	}
 	defer listener.Close()
 
-	// The dispatcher is the sole control event owner. It validates, serializes,
-	// and acknowledges typed component events before transport confirms delivery.
-	dispatcher := controlplaneusecase.NewEventDispatcher(controlplaneusecase.EventDispatcherOptions{})
 	server, err := newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
 	if err != nil {
 		return err
@@ -138,6 +139,50 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	case serveErr := <-errCh:
 		return log.WrapErr(serveErr, "control snapshot gRPC server stopped")
 	}
+}
+
+func initializeControlDrainRelay(ctx context.Context, cfg Config, deps controlRoleDependencies) (edgesnapshot.RuntimeDrainAckReceiver, error) {
+	if deps.newRuntimeDrainAckReceiver == nil {
+		return nil, nil
+	}
+	return deps.newRuntimeDrainAckReceiver(ctx, cfg.Runtime)
+}
+
+// newControlEventDispatcher wires typed component events to existing control
+// decisions and the narrow runtime command facade. It never creates a local
+// container runtime or service.
+func newControlEventDispatcher(ctx context.Context, v *viper.Viper, cfg Config) (*controlplaneusecase.EventDispatcher, error) {
+	controlConfig := configusecase.NewService(v, nil)
+	if err := controlConfig.Load(ctx); err != nil {
+		return nil, fmt.Errorf("load control event configuration: %w", err)
+	}
+	runtimeClient, err := createRuntimeCommandClient(ctx, cfg.Runtime)
+	if err != nil {
+		return nil, fmt.Errorf("create control event runtime client: %w", err)
+	}
+	var eventRuntime controlplaneusecase.RouteCommander = unavailableControlRouteCommander{}
+	if runtimeClient != nil {
+		eventRuntime = runtimecontrol.NewService(controlConfig, runtimeClient, "gordon-control")
+	}
+	effects, err := controlplaneusecase.NewProductionEffects(controlConfig, eventRuntime, controlplaneusecase.NewLogAuditSink())
+	if err != nil {
+		return nil, fmt.Errorf("create control component event effects: %w", err)
+	}
+	store, err := filesystem.NewComponentEventStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "component-events.json"), 1024)
+	if err != nil {
+		return nil, fmt.Errorf("open control component event store: %w", err)
+	}
+	return controlplaneusecase.NewEventDispatcher(controlplaneusecase.EventDispatcherOptions{
+		ImagePushedEffect:  effects.ImagePushed,
+		ConfigReloadEffect: effects.ConfigReload,
+		ManualDeployEffect: effects.ManualDeploy,
+		SecretsEffect:      effects.SecretsChanged,
+		RuntimeState:       effects.RuntimeState,
+		RuntimeEvent:       effects.RuntimeEvent,
+		PolicyAudit:        effects.PolicyAudit,
+		AckStore:           store,
+		IntentStore:        store,
+	}), nil
 }
 
 func controlSnapshotProducerError(err error, log zerowrap.Logger) error {
@@ -349,6 +394,20 @@ func cleanupControlLogger(cleanup func()) {
 	if cleanup != nil {
 		cleanup()
 	}
+}
+
+// unavailableControlRouteCommander preserves a fully wired dispatcher in
+// configurations that are only serving route snapshots. It is not a no-op:
+// a command event is rejected for transport retry until a runtime endpoint is
+// configured.
+type unavailableControlRouteCommander struct{}
+
+func (unavailableControlRouteCommander) DeployRoute(context.Context, domain.Route) (domain.RuntimeCommandResult, error) {
+	return domain.RuntimeCommandResult{}, fmt.Errorf("runtime.endpoint is required for control component events")
+}
+
+func (unavailableControlRouteCommander) ReconcileConfiguredRoutes(context.Context, string) (domain.RuntimeCommandResult, error) {
+	return domain.RuntimeCommandResult{}, fmt.Errorf("runtime.endpoint is required for control component events")
 }
 
 func gracefulStop(server *grpc.Server) {

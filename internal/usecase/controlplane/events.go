@@ -14,7 +14,17 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-var ErrUnhandledComponentEvent = errors.New("component event has no control-plane route")
+var (
+	ErrUnhandledComponentEvent = errors.New("component event has no control-plane route")
+	ErrEffectNotConfigured     = errors.New("component event effect is not configured")
+)
+
+// ManualIntentStore preserves manual-deploy correlation across a control
+// restart. Implementations must store only image references and expiry times.
+type ManualIntentStore interface {
+	LoadManualDeploymentIntents(context.Context) (map[string]time.Time, error)
+	SaveManualDeploymentIntents(context.Context, map[string]time.Time) error
+}
 
 // EventDispatcherOptions deliberately accepts existing domain-event handlers.
 // It is an adapter only: deployment, routing, preview, and proxy decisions stay
@@ -24,24 +34,33 @@ type EventDispatcherOptions struct {
 	ConfigReload []out.EventHandler
 	ManualDeploy []out.EventHandler
 	Secrets      []out.EventHandler
-	RuntimeState func(context.Context, domain.ComponentEventEnvelope) error
-	RuntimeEvent func(context.Context, domain.ComponentEventEnvelope) error
-	PolicyAudit  func(context.Context, domain.ComponentEventEnvelope) error
-	AckStore     out.ComponentEventAckStore
-	Capacity     int
-	IntentTTL    time.Duration
+	// Typed effects preserve the transport envelope for production decisions.
+	// Legacy handlers remain supported through the domain.Event adapter below.
+	ImagePushedEffect  func(context.Context, domain.ComponentEventEnvelope) error
+	ConfigReloadEffect func(context.Context, domain.ComponentEventEnvelope) error
+	ManualDeployEffect func(context.Context, domain.ComponentEventEnvelope) error
+	SecretsEffect      func(context.Context, domain.ComponentEventEnvelope) error
+	RuntimeState       func(context.Context, domain.ComponentEventEnvelope) error
+	RuntimeEvent       func(context.Context, domain.ComponentEventEnvelope) error
+	PolicyAudit        func(context.Context, domain.ComponentEventEnvelope) error
+	AckStore           out.ComponentEventAckStore
+	IntentStore        ManualIntentStore
+	Capacity           int
+	IntentTTL          time.Duration
 }
 
 // EventDispatcher validates typed envelopes, serializes equal dedupe keys, and
 // records success only after all effects complete. A failed delivery can thus
 // be retried by the registry outbox or component client.
 type EventDispatcher struct {
-	opts     EventDispatcherOptions
-	mu       sync.Mutex
-	complete map[string]*list.Element
-	lru      *list.List
-	flights  map[string]*eventFlight
-	intents  map[string]manualIntent
+	opts         EventDispatcherOptions
+	mu           sync.Mutex
+	complete     map[string]*list.Element
+	lru          *list.List
+	flights      map[string]*eventFlight
+	intents      map[string]manualIntent
+	intentsOnce  sync.Once
+	intentsError error
 }
 type completedEvent struct {
 	key string
@@ -69,6 +88,9 @@ func (d *EventDispatcher) HandleComponentEvent(ctx context.Context, event domain
 		return fmt.Errorf("validate component event: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := d.loadIntents(ctx); err != nil {
 		return err
 	}
 	key := event.DedupeKey()
@@ -147,20 +169,13 @@ func (d *EventDispatcher) markCompleted(ctx context.Context, key string) error {
 func (d *EventDispatcher) dispatch(ctx context.Context, event domain.ComponentEventEnvelope) error {
 	switch payload := event.Payload.(type) {
 	case domain.RegistryImagePushedPayload:
-		if d.consumeManualIntent(imageReference(payload.Repository, payload.Reference)) {
-			return nil
-		}
-		return runLegacyHandlers(ctx, d.opts.ImagePushed, domain.Event{ID: event.ID, Type: domain.EventImagePushed, Timestamp: event.Timestamp, ImageName: payload.Repository, Tag: payload.Reference, Data: domain.ImagePushedPayload{Name: payload.Repository, Reference: payload.Reference}})
+		return d.dispatchImagePushed(ctx, event, payload)
 	case domain.ComponentConfigReloadPayload:
-		return runLegacyHandlers(ctx, d.opts.ConfigReload, domain.Event{ID: event.ID, Type: domain.EventConfigReload, Timestamp: event.Timestamp, Data: domain.ConfigReloadPayload{Source: payload.Version}})
+		return d.dispatchConfigReload(ctx, event, payload)
 	case domain.ComponentManualDeployPayload:
-		if err := runLegacyHandlers(ctx, d.opts.ManualDeploy, domain.Event{ID: event.ID, Type: domain.EventManualDeploy, Timestamp: event.Timestamp, Route: payload.Domain, Data: &domain.ManualDeployPayload{Domain: payload.Domain}}); err != nil {
-			return err
-		}
-		d.rememberManualIntent(imageReferenceFromImage(payload.Image))
-		return nil
+		return d.dispatchManualDeploy(ctx, event, payload)
 	case domain.ComponentSecretsChangedPayload:
-		return runLegacyHandlers(ctx, d.opts.Secrets, domain.Event{ID: event.ID, Type: domain.EventSecretsChanged, Timestamp: event.Timestamp, Data: domain.SecretsChangedPayload{Operation: payload.Version}})
+		return d.dispatchSecretsChanged(ctx, event, payload)
 	case domain.RuntimeStateChangedPayload:
 		return d.runState(ctx, event)
 	case domain.RuntimeDeployPayload, domain.ContainerDeployedPayload, domain.EdgeDrainPayload:
@@ -170,6 +185,44 @@ func (d *EventDispatcher) dispatch(ctx context.Context, event domain.ComponentEv
 	default:
 		return ErrUnhandledComponentEvent
 	}
+}
+
+func (d *EventDispatcher) dispatchImagePushed(ctx context.Context, event domain.ComponentEventEnvelope, payload domain.RegistryImagePushedPayload) error {
+	suppressed, err := d.consumeManualIntent(ctx, imageReference(payload.Repository, payload.Reference))
+	if err != nil || suppressed {
+		return err
+	}
+	if d.opts.ImagePushedEffect != nil {
+		return d.opts.ImagePushedEffect(ctx, event)
+	}
+	return runLegacyHandlers(ctx, d.opts.ImagePushed, domain.Event{ID: event.ID, Type: domain.EventImagePushed, Timestamp: event.Timestamp, ImageName: payload.Repository, Tag: payload.Reference, Data: domain.ImagePushedPayload{Name: payload.Repository, Reference: payload.Reference}})
+}
+
+func (d *EventDispatcher) dispatchConfigReload(ctx context.Context, event domain.ComponentEventEnvelope, payload domain.ComponentConfigReloadPayload) error {
+	if d.opts.ConfigReloadEffect != nil {
+		return d.opts.ConfigReloadEffect(ctx, event)
+	}
+	return runLegacyHandlers(ctx, d.opts.ConfigReload, domain.Event{ID: event.ID, Type: domain.EventConfigReload, Timestamp: event.Timestamp, Data: domain.ConfigReloadPayload{Source: payload.Version}})
+}
+
+func (d *EventDispatcher) dispatchManualDeploy(ctx context.Context, event domain.ComponentEventEnvelope, payload domain.ComponentManualDeployPayload) error {
+	var err error
+	if d.opts.ManualDeployEffect != nil {
+		err = d.opts.ManualDeployEffect(ctx, event)
+	} else {
+		err = runLegacyHandlers(ctx, d.opts.ManualDeploy, domain.Event{ID: event.ID, Type: domain.EventManualDeploy, Timestamp: event.Timestamp, Route: payload.Domain, Data: &domain.ManualDeployPayload{Domain: payload.Domain}})
+	}
+	if err != nil {
+		return err
+	}
+	return d.rememberManualIntent(ctx, imageReferenceFromImage(payload.Image))
+}
+
+func (d *EventDispatcher) dispatchSecretsChanged(ctx context.Context, event domain.ComponentEventEnvelope, payload domain.ComponentSecretsChangedPayload) error {
+	if d.opts.SecretsEffect != nil {
+		return d.opts.SecretsEffect(ctx, event)
+	}
+	return runLegacyHandlers(ctx, d.opts.Secrets, domain.Event{ID: event.ID, Type: domain.EventSecretsChanged, Timestamp: event.Timestamp, Data: domain.SecretsChangedPayload{Operation: payload.Version}})
 }
 func runLegacyHandlers(ctx context.Context, handlers []out.EventHandler, event domain.Event) error {
 	for _, handler := range handlers {
@@ -183,19 +236,19 @@ func runLegacyHandlers(ctx context.Context, handlers []out.EventHandler, event d
 }
 func (d *EventDispatcher) runState(ctx context.Context, event domain.ComponentEventEnvelope) error {
 	if d.opts.RuntimeState == nil {
-		return nil
+		return ErrEffectNotConfigured
 	}
 	return d.opts.RuntimeState(ctx, event)
 }
 func (d *EventDispatcher) runRuntime(ctx context.Context, event domain.ComponentEventEnvelope) error {
 	if d.opts.RuntimeEvent == nil {
-		return nil
+		return ErrEffectNotConfigured
 	}
 	return d.opts.RuntimeEvent(ctx, event)
 }
 func (d *EventDispatcher) runPolicyAudit(ctx context.Context, event domain.ComponentEventEnvelope) error {
 	if d.opts.PolicyAudit == nil {
-		return nil
+		return ErrEffectNotConfigured
 	}
 	return d.opts.PolicyAudit(ctx, event)
 }
@@ -207,9 +260,9 @@ func imageReference(repository, reference string) string {
 	return strings.TrimSpace(repository) + ":" + strings.TrimSpace(reference)
 }
 func imageReferenceFromImage(image string) string { return strings.TrimSpace(image) }
-func (d *EventDispatcher) rememberManualIntent(image string) {
+func (d *EventDispatcher) rememberManualIntent(ctx context.Context, image string) error {
 	if image == "" {
-		return
+		return nil
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -225,16 +278,20 @@ func (d *EventDispatcher) rememberManualIntent(image string) {
 		delete(d.intents, discard)
 	}
 	d.intents[image] = manualIntent{expires: time.Now().Add(d.opts.IntentTTL)}
+	return d.saveIntentsLocked(ctx)
 }
-func (d *EventDispatcher) consumeManualIntent(image string) bool {
+func (d *EventDispatcher) consumeManualIntent(ctx context.Context, image string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.pruneIntentsLocked(time.Now())
 	if _, ok := d.intents[image]; ok {
 		delete(d.intents, image)
-		return true
+		if err := d.saveIntentsLocked(ctx); err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }
 func (d *EventDispatcher) pruneIntentsLocked(now time.Time) {
 	for image, intent := range d.intents {
@@ -242,4 +299,40 @@ func (d *EventDispatcher) pruneIntentsLocked(now time.Time) {
 			delete(d.intents, image)
 		}
 	}
+}
+
+func (d *EventDispatcher) loadIntents(ctx context.Context) error {
+	if d.opts.IntentStore == nil {
+		return nil
+	}
+	d.intentsOnce.Do(func() {
+		intents, err := d.opts.IntentStore.LoadManualDeploymentIntents(ctx)
+		if err != nil {
+			d.intentsError = fmt.Errorf("load manual deployment intents: %w", err)
+			return
+		}
+		now := time.Now()
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		for image, expires := range intents {
+			if expires.After(now) {
+				d.intents[image] = manualIntent{expires: expires}
+			}
+		}
+	})
+	return d.intentsError
+}
+
+func (d *EventDispatcher) saveIntentsLocked(ctx context.Context) error {
+	if d.opts.IntentStore == nil {
+		return nil
+	}
+	intents := make(map[string]time.Time, len(d.intents))
+	for image, intent := range d.intents {
+		intents[image] = intent.expires.UTC()
+	}
+	if err := d.opts.IntentStore.SaveManualDeploymentIntents(ctx, intents); err != nil {
+		return fmt.Errorf("save manual deployment intents: %w", err)
+	}
+	return nil
 }
