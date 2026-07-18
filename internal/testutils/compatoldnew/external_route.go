@@ -189,7 +189,10 @@ func createExternalRouteNetwork(ctx context.Context, name, subnet string, labels
 		"--label", LabelFixture + "=" + labels[LabelFixture],
 		name,
 	}
-	cmd := exec.CommandContext(ctx, "docker", args...) // #nosec G204 -- harness-generated Docker command.
+	cmd, err := newIsolatedCommand(ctx, "docker", args, nil, nil, true)
+	if err != nil {
+		return false, fmt.Errorf("prepare external route Docker network")
+	}
 	if _, err := cmd.Output(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

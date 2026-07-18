@@ -14,33 +14,30 @@ import (
 	"time"
 )
 
-func TestCommandEnvironmentStripsInheritedGordonVariablesAndHonorsOverrides(t *testing.T) {
-	t.Setenv("GORDON_CONFIG", "/inherited/config")
-	t.Setenv("GORDON_FOO", "inherited-foo")
-	t.Setenv("GORDON_RUNTIME_SOCKET", "inherited-socket")
+func TestCommandEnvironmentUsesOnlySafeScenarioContract(t *testing.T) {
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "ambient-secret")
+	t.Setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+	t.Setenv("DOCKER_CONFIG", "/home/user/.docker")
 	t.Setenv("PATH", "/essential/path")
 
-	env := commandEnvironment([]string{
-		"GORDON_OVERRIDE=first",
-		"GORDON_OVERRIDE=last",
-		"ORDINARY_OVERRIDE=first",
-		"ORDINARY_OVERRIDE=last",
-	})
+	env, err := commandEnvironmentForScenario([]string{"GORDON_CONFIG=/explicit/config", "GORDON_ROLE=monolith"}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	values := environmentValues(t, env)
-	for _, key := range []string{"GORDON_CONFIG", "GORDON_FOO", "GORDON_RUNTIME_SOCKET"} {
+	if values["PATH"] != "/essential/path" || values["GORDON_CONFIG"] != "/explicit/config" {
+		t.Fatalf("safe scenario values missing: %#v", values)
+	}
+	for _, key := range []string{"AWS_SECRET_ACCESS_KEY", "SSH_AUTH_SOCK", "DOCKER_CONFIG", "DOCKER_HOST"} {
 		if _, found := values[key]; found {
-			t.Fatalf("inherited %s was passed to child: %#v", key, values)
+			t.Fatalf("ambient %s was passed to child: %#v", key, values)
 		}
 	}
-	if values["PATH"] != "/essential/path" {
-		t.Fatalf("essential inherited environment missing: %#v", values)
+	if _, err := commandEnvironmentForScenario([]string{"ADMIN_TOKEN=leak"}, nil, false); err == nil {
+		t.Fatal("expected unregistered secret to be rejected")
 	}
-	if values["GORDON_OVERRIDE"] != "last" || values["ORDINARY_OVERRIDE"] != "last" {
-		t.Fatalf("explicit overrides did not win: %#v", values)
-	}
-	configValues := environmentValues(t, commandEnvironment([]string{"GORDON_CONFIG=/explicit/config"}))
-	if configValues["GORDON_CONFIG"] != "/explicit/config" {
-		t.Fatalf("explicit GORDON_CONFIG did not win: %#v", configValues)
+	if _, err := commandEnvironmentForScenario([]string{"UNRELATED=leak"}, nil, false); err == nil {
+		t.Fatal("expected non-contract environment key to be rejected")
 	}
 }
 

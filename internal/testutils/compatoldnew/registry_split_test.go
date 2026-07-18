@@ -237,7 +237,7 @@ func (f *splitRegistryFixture) startRegistry(t *testing.T, ctx context.Context) 
 	if f.registry != nil {
 		return
 	}
-	f.registry = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.registryConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-registry"), "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ExcludeEnv: splitNonRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.registryPort)}}
+	f.registry = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.registryConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-registry")}, SensitiveEnv: []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}, ExcludeEnv: splitNonRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.registryPort)}}
 	if err := f.registry.Start(ctx, "serve", "--role", "registry", "--config", f.registryConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func (f *splitRegistryFixture) startRuntime(t *testing.T, ctx context.Context) {
 	if f.runtime != nil {
 		return
 	}
-	f.runtime = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-runtime"), "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789", "DOCKER_HOST=unix://" + f.engine.socket}, ExcludeEnv: []string{"PODMAN_HOST", "CONTAINER_HOST", "XDG_RUNTIME_DIR"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.runtimePort)}}
+	f.runtime = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-runtime")}, SensitiveEnv: []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}, RuntimeRequired: true, ExcludeEnv: []string{"PODMAN_HOST", "CONTAINER_HOST", "XDG_RUNTIME_DIR"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.runtimePort)}}
 	if err := f.runtime.Start(ctx, "serve", "--role", "runtime", "--config", f.controlConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func (f *splitRegistryFixture) startControl(t *testing.T, ctx context.Context) {
 	if f.control != nil {
 		return
 	}
-	f.control = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-control"), "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ExcludeEnv: splitNonRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.controlPort)}}
+	f.control = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-control")}, SensitiveEnv: []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}, ExcludeEnv: splitNonRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.controlPort)}}
 	if err := f.control.Start(ctx, "serve", "--role", "control", "--config", f.controlConfig); err != nil {
 		t.Fatal(err)
 	}

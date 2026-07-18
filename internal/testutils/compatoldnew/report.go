@@ -192,6 +192,18 @@ var sensitiveArtifactKey = regexp.MustCompile(`(?i)(token|authorization|credenti
 var artifactBearer = regexp.MustCompile(`(?i)\b(?:bearer|basic)\s+[^\s"']+`)
 var artifactSensitiveAssignment = regexp.MustCompile(`(?i)(\b(?:token|authorization|credential|password|secret)\b\s*[:=]\s*)(?:(?:bearer|basic)\s+[^\s"']+|"[^"]*"|'[^']*'|[^\s,"'}\]]+)`)
 var artifactJWT = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b`)
+var artifactPrivatePath = regexp.MustCompile(`(?:/home/[^\s"']+|/Users/[^\s"']+|(?:unix://)?/(?:var/)?run/[^\s"']*\.sock)`)
+
+// redactCapturedOutput removes registered fixture values and common credential
+// forms before command output can be retained in an artifact or diagnostic.
+func redactCapturedOutput(value string, sensitive ...string) string {
+	for _, secret := range sensitive {
+		if secret != "" {
+			value = strings.ReplaceAll(value, secret, "<redacted>")
+		}
+	}
+	return redactArtifactString(value)
+}
 
 // redactArtifactValue serializes through JSON so structs and maps receive the
 // same recursive secret filtering before any artifact reaches disk.
@@ -250,5 +262,7 @@ func redactArtifactString(value string) string {
 	}
 	value = artifactSensitiveAssignment.ReplaceAllString(value, "${1}<redacted>")
 	value = artifactBearer.ReplaceAllString(value, "<redacted authorization>")
-	return artifactJWT.ReplaceAllString(value, "<redacted token>")
+	value = artifactJWT.ReplaceAllString(value, "<redacted token>")
+	value = artifactPrivatePath.ReplaceAllString(value, "<private-path>")
+	return normalizeString(value)
 }

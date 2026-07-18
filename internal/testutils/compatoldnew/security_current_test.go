@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -433,9 +432,11 @@ func securitySocketReference(value string) bool {
 }
 
 func securityBuildCandidate(ctx context.Context, repoRoot, output string) error {
-	cmd := exec.CommandContext(ctx, "go", "build", "-o", output, "./main.go") // #nosec G204 -- fixed candidate build command.
+	cmd, err := newIsolatedCommand(ctx, "go", []string{"build", "-o", output, "./main.go"}, []string{"CGO_ENABLED=0"}, nil, false)
+	if err != nil {
+		return fmt.Errorf("prepare go build: %w", err)
+	}
 	cmd.Dir = repoRoot
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if _, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go build failed")
 	}
@@ -443,7 +444,10 @@ func securityBuildCandidate(ctx context.Context, repoRoot, output string) error 
 }
 
 func securityCommand(ctx context.Context, dir, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- fixed compatibility harness commands.
+	cmd, err := newIsolatedCommand(ctx, name, args, nil, nil, false)
+	if err != nil {
+		return fmt.Errorf("prepare %s: %w", name, err)
+	}
 	cmd.Dir = dir
 	if _, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s failed", name)
@@ -452,7 +456,10 @@ func securityCommand(ctx context.Context, dir, name string, args ...string) erro
 }
 
 func securityCommandOutput(ctx context.Context, dir, name string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- fixed compatibility harness commands.
+	cmd, err := newIsolatedCommand(ctx, name, args, nil, nil, false)
+	if err != nil {
+		return "", fmt.Errorf("prepare %s: %w", name, err)
+	}
 	cmd.Dir = dir
 	output, err := cmd.Output()
 	if err != nil {

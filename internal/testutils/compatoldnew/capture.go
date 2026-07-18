@@ -96,8 +96,11 @@ type CommandCaptureRequest struct {
 	Args       []string
 	Dir        string
 	Env        []string
-	Source     string
-	Level      ComparisonLevel
+	// SensitiveEnv is only for registered in-memory fixture secrets. It is
+	// supplied to the child but redacted before output can become an artifact.
+	SensitiveEnv []SensitiveEnvironment
+	Source       string
+	Level        ComparisonLevel
 }
 
 // CaptureCommand records independent stdout, stderr, and process exit status.
@@ -115,14 +118,15 @@ func CaptureCommand(ctx context.Context, request CommandCaptureRequest) (CLIArti
 	if level == "" {
 		level = LevelExact
 	}
-	// #nosec G204 -- compatibility tests intentionally execute a selected binary.
-	cmd := exec.CommandContext(ctx, request.BinaryPath, request.Args...)
+	cmd, err := newIsolatedCommand(ctx, request.BinaryPath, request.Args, request.Env, request.SensitiveEnv, false)
+	if err != nil {
+		return CLIArtifact{}, fmt.Errorf("capture command %q: %w", source, err)
+	}
 	cmd.Dir = request.Dir
-	cmd.Env = commandEnvironment(request.Env)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	exitCode := 0
 	if err != nil {
 		var exitErr *exec.ExitError
@@ -136,8 +140,8 @@ func CaptureCommand(ctx context.Context, request CommandCaptureRequest) (CLIArti
 		"args":        redactArguments(request.Args),
 		"environment": redactedEnvironment(request.Env),
 		"exitCode":    exitCode,
-		"stdout":      stdout.String(),
-		"stderr":      stderr.String(),
+		"stdout":      redactCapturedOutput(stdout.String(), sensitiveValues(request.SensitiveEnv)...),
+		"stderr":      redactCapturedOutput(stderr.String(), sensitiveValues(request.SensitiveEnv)...),
 	}
 	return NewCLIArtifact(source, raw, level), nil
 }

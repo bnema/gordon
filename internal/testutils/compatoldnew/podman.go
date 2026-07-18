@@ -19,7 +19,11 @@ func PodmanAvailable(ctx context.Context) error {
 	if _, err := exec.LookPath("podman"); err != nil {
 		return fmt.Errorf("podman unavailable: binary not found in PATH: %w", err)
 	}
-	if out, err := exec.CommandContext(ctx, "podman", "info", "--format", "{{.Host.OCIRuntime.Name}}").CombinedOutput(); err != nil {
+	cmd, err := newIsolatedCommand(ctx, "podman", []string{"info", "--format", "{{.Host.OCIRuntime.Name}}"}, nil, nil, false)
+	if err != nil {
+		return fmt.Errorf("podman unavailable: prepare podman info: %w", err)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("podman unavailable: podman info failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -121,8 +125,10 @@ func podmanOutput(ctx context.Context, args ...string) (string, error) {
 	if _, err := exec.LookPath("podman"); err != nil {
 		return "", fmt.Errorf("podman unavailable: binary not found in PATH: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "podman")
-	cmd.Args = append([]string{"podman"}, args...)
+	cmd, err := newIsolatedCommand(ctx, "podman", args, nil, nil, false)
+	if err != nil {
+		return "", fmt.Errorf("prepare podman command: %w", err)
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("podman %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))

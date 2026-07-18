@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,8 +46,10 @@ type CommandRunner interface {
 type ExecCommandRunner struct{}
 
 func (ExecCommandRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
-	// #nosec G204 -- compatibility tests intentionally execute caller-provided git/go commands.
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd, err := newIsolatedCommand(ctx, name, args, nil, nil, false)
+	if err != nil {
+		return nil, fmt.Errorf("prepare %s: %w", name, err)
+	}
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {

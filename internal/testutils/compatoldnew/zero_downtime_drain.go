@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -432,8 +431,10 @@ func pushZeroDowntimeDrainImage(ctx context.Context, workDir, image string, reso
 	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(config), 0o600); err != nil {
 		return fmt.Errorf("zero downtime drain Docker credentials: %w", err)
 	}
-	push := exec.CommandContext(ctx, "docker", "push", image) // #nosec G204 -- fixture image reference only.
-	push.Env = append(os.Environ(), "DOCKER_CONFIG="+configDir)
+	push, err := newIsolatedCommand(ctx, "docker", []string{"push", image}, []string{"DOCKER_CONFIG=" + configDir}, nil, true)
+	if err != nil {
+		return fmt.Errorf("zero downtime drain prepare registry push: %w", err)
+	}
 	if output, err := push.CombinedOutput(); err != nil {
 		return fmt.Errorf("zero downtime drain registry push failed: %s (%q)", classifyZeroDowntimeDrainDockerError(string(output)), string(output))
 	}
