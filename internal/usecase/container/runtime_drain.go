@@ -16,7 +16,12 @@ var (
 	ErrRuntimeDrainConflicting = errors.New("conflicting runtime drain acknowledgement")
 )
 
-const runtimeDrainLedgerLimit = 1024
+const (
+	// runtimeDrainPendingLimit is deliberately independent from bounded remote
+	// registration/terminal ledgers. Active waiters cannot be evicted safely.
+	runtimeDrainPendingLimit = 1024
+	runtimeDrainLedgerLimit  = 1024
+)
 
 type RuntimeDrainTargetResolver func(containerID string) (domain.RuntimeRouteState, bool)
 type runtimeDrainIdentity struct {
@@ -95,6 +100,11 @@ func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 	if _, exists := r.pending[identity]; exists {
 		return false
 	}
+	// Fail closed instead of displacing an active waiter. Returning false makes
+	// the lifecycle use deploy.drain_delay as its bounded fallback.
+	if len(r.pending) >= runtimeDrainPendingLimit {
+		return false
+	}
 	pending := &runtimeDrainPending{containerID: containerID, done: make(chan struct{})}
 	// Registration may arrive before lifecycle preparation. Do not reuse a
 	// registration left behind by a cancelled generation.
@@ -110,7 +120,11 @@ func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 }
 
 // PrepareRouteDrain is the authenticated control-to-runtime registration RPC
-// target. It is idempotent and may arrive before or after PrepareDrain.
+// target. It may arrive before or after PrepareDrain. Generations are monotonic
+// control epochs rather than contiguous sequence numbers: coalesced transitions
+// can legitimately skip values, so a replacement must be strictly newer, not
+// literally previous+1. An equal generation is idempotent only when no
+// replacement is awaiting registration.
 func (r *RuntimeDrainRegistry) PrepareRouteDrain(ctx context.Context, canonicalDomain string, generation domain.RouteTargetGeneration, key domain.RouteTargetKey) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -133,6 +147,9 @@ func (r *RuntimeDrainRegistry) PrepareRouteDrain(ctx context.Context, canonicalD
 		return ErrRuntimeDrainStale
 	}
 	if previous == generation {
+		if r.awaitingNewRegistration[identity] {
+			return ErrRuntimeDrainStale
+		}
 		return nil
 	}
 	if err := r.canRegisterGenerationLocked(identity, generation, known); err != nil {

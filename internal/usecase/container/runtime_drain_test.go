@@ -95,6 +95,86 @@ func TestRuntimeDrainRegistryCancelRejectsOldAcknowledgementsUntilNewRegistratio
 	}
 }
 
+func TestRuntimeDrainRegistryAcceptsGapGenerationOnlyAfterReplacement(t *testing.T) {
+	state, key := testRuntimeDrainState(t)
+	registry := testRuntimeDrainRegistry(state)
+
+	require.True(t, registry.PrepareDrain("old-id"))
+	require.NoError(t, registry.PrepareRouteDrain(context.Background(), "app.example.com", 7, key))
+	registry.CancelDrain("old-id")
+	require.True(t, registry.PrepareDrain("old-id"))
+
+	// Equal cannot replace a cancelled registration. Control generations are
+	// monotonic epochs, not sequence numbers, so the safe replacement may skip.
+	equal := registry.PrepareRouteDrain(context.Background(), "app.example.com", 7, key)
+	assert.ErrorIs(t, equal, ErrRuntimeDrainStale)
+	require.NoError(t, registry.PrepareRouteDrain(context.Background(), "app.example.com", 42, key))
+
+	assert.ErrorIs(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, key, 7)), ErrRuntimeDrainStale)
+	assert.ErrorIs(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, key, 41)), ErrRuntimeDrainStale)
+
+	result := make(chan bool, 1)
+	go func() { result <- registry.WaitForNoInFlight(context.Background(), "old-id", time.Second) }()
+	select {
+	case <-result:
+		t.Fatal("old or intermediate acknowledgement released replacement")
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, key, 42)))
+	assert.True(t, <-result)
+}
+
+func TestRuntimeDrainRegistryCapsConcurrentPendingAndReleasesCapacity(t *testing.T) {
+	type prepared struct {
+		id  string
+		key domain.RouteTargetKey
+		ok  bool
+	}
+	states := make(map[string]domain.RuntimeRouteState, runtimeDrainPendingLimit+1)
+	keys := make(map[string]domain.RouteTargetKey, runtimeDrainPendingLimit+1)
+	for index := range runtimeDrainPendingLimit + 1 {
+		id := fmt.Sprintf("old-%d", index)
+		state, ok := runtimeReadyRouteState(1, "app.example.com", &domain.Container{Name: fmt.Sprintf("private-%d", index), Status: string(domain.ContainerStatusRunning), Ports: []int{8080}})
+		require.True(t, ok)
+		key, err := domain.ManagedRouteTargetKeyFromRuntimeState(state)
+		require.NoError(t, err)
+		states[id], keys[id] = state, key
+	}
+	registry := NewRuntimeDrainRegistry(func(id string) (domain.RuntimeRouteState, bool) { state, ok := states[id]; return state, ok })
+
+	start := make(chan struct{})
+	results := make(chan prepared, runtimeDrainPendingLimit+1)
+	for index := range runtimeDrainPendingLimit + 1 {
+		id := fmt.Sprintf("old-%d", index)
+		go func() {
+			<-start
+			results <- prepared{id: id, key: keys[id], ok: registry.PrepareDrain(id)}
+		}()
+	}
+	close(start)
+
+	var successful prepared
+	var rejected string
+	successes := 0
+	for range runtimeDrainPendingLimit + 1 {
+		result := <-results
+		if result.ok {
+			successful = result
+			successes++
+		} else {
+			rejected = result.id
+		}
+	}
+	require.Equal(t, runtimeDrainPendingLimit, successes)
+	require.NotEmpty(t, rejected)
+	assert.Len(t, registry.pending, runtimeDrainPendingLimit, "active waiters are never evicted")
+
+	require.NoError(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, successful.key, 1)))
+	assert.True(t, registry.WaitForNoInFlight(context.Background(), successful.id, time.Second))
+	assert.Len(t, registry.pending, runtimeDrainPendingLimit-1)
+	assert.True(t, registry.PrepareDrain(rejected), "completed waiter releases one admission slot")
+}
+
 func TestRuntimeDrainRegistryTombstonesBoundAndFailClosed(t *testing.T) {
 	states := make(map[string]domain.RuntimeRouteState, runtimeDrainLedgerLimit+1)
 	keys := make(map[string]domain.RouteTargetKey, runtimeDrainLedgerLimit+1)
