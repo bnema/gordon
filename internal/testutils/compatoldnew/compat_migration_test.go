@@ -100,8 +100,13 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	// original exec must not claim success; a fresh CLI observes and retries the
 	// durably committed result after the old container has gone away.
 	fixture.runSwitchExpectCallerTermination()
+	// The replacement runtime owns the transaction after it stops this caller's
+	// monolith. A new process must observe its durable terminal result before
+	// inspecting listener state; Podman can still report the old container as
+	// running for a brief interval after StopContainer returns.
+	fixture.awaitInterruptedSwitchTerminalStatus()
 	fixture.assertSwitchedTraffic()
-	fixture.assertInterruptedSwitchStatusAndRetry()
+	fixture.assertInterruptedSwitchRetry()
 }
 
 type realMigrationFixture struct {
@@ -562,9 +567,15 @@ func (f *realMigrationFixture) assertRuntimeSocketExclusive() {
 
 func (f *realMigrationFixture) assertSwitchedTraffic() {
 	f.t.Helper()
-	oldRunning, err := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.old)
-	require.NoError(f.t, err)
-	require.Equal(f.t, "false", strings.TrimSpace(oldRunning), "runtime-owned listener cutover stops the old serving monolith")
+	// The durable terminal checkpoint has already been observed by a fresh
+	// process. Wait only for rootless Podman's state cache to reflect the
+	// completed runtime transaction; this is not a completion shortcut.
+	var oldState string
+	var inspectErr error
+	require.Eventually(f.t, func() bool {
+		oldState, inspectErr = podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.old)
+		return inspectErr == nil && strings.TrimSpace(oldState) == "false"
+	}, 10*time.Second, 50*time.Millisecond, "runtime-owned listener cutover must stop the old serving monolith (last state=%q, last error=%v)", strings.TrimSpace(oldState), inspectErr)
 	f.assertFinalEdgeBindingsAndNetwork()
 
 	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
@@ -620,19 +631,35 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 	f.t.Fatal("final edge was not found")
 }
 
-func (f *realMigrationFixture) assertInterruptedSwitchStatusAndRetry() {
+// runFreshMigrationCLI deliberately uses the candidate binary from outside
+// the stopped monolith. It is the observer a homelab operator has after the
+// in-container switch caller loses its connection.
+func (f *realMigrationFixture) runFreshMigrationCLI(args ...string) (string, error) {
 	f.t.Helper()
-	run := func(args ...string) (string, error) {
-		command := exec.CommandContext(f.ctx, filepath.Join(f.root, "gordon"), args...) // #nosec G204 -- candidate binary and arguments are fixture-owned.
-		command.Env = append(os.Environ(), "DOCKER_HOST=unix://"+f.socket, "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
-		output, err := command.CombinedOutput()
-		return string(output), err
-	}
+	command := exec.CommandContext(f.ctx, filepath.Join(f.root, "gordon"), args...) // #nosec G204 -- candidate binary and arguments are fixture-owned.
+	command.Env = append(os.Environ(), "DOCKER_HOST=unix://"+f.socket, "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+// awaitInterruptedSwitchTerminalStatus is intentionally before any final
+// container assertion: StopContainer is asynchronous in rootless Podman, but
+// the runtime only stores switched after the final edge is healthy and its app
+// network has been restored. This proves the observed state is a completed
+// runtime-owned transaction rather than a fixture timing assumption.
+func (f *realMigrationFixture) awaitInterruptedSwitchTerminalStatus() {
+	f.t.Helper()
+	var lastStatus string
+	var lastErr error
 	require.Eventually(f.t, func() bool {
-		status, err := run("migrate", "status", "--config", f.config, "--json")
-		return err == nil && strings.Contains(status, `"phase":"switched"`)
-	}, 10*time.Second, 100*time.Millisecond, "fresh status after terminated caller must read the runtime-durable switched checkpoint")
-	retry, err := run("migrate", "switch", "--config", f.config, "--json")
+		lastStatus, lastErr = f.runFreshMigrationCLI("migrate", "status", "--config", f.config, "--json")
+		return lastErr == nil && strings.Contains(lastStatus, `"phase":"switched"`)
+	}, 10*time.Second, 100*time.Millisecond, "fresh status after terminated caller must read the runtime-durable switched checkpoint (last status=%q, last error=%v)", strings.TrimSpace(lastStatus), lastErr)
+}
+
+func (f *realMigrationFixture) assertInterruptedSwitchRetry() {
+	f.t.Helper()
+	retry, err := f.runFreshMigrationCLI("migrate", "switch", "--config", f.config, "--json")
 	require.NoError(f.t, err, "a retry after a terminated caller must converge without a second cutover")
 	require.Contains(f.t, retry, `"phase":"switched"`)
 }
