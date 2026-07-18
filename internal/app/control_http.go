@@ -23,6 +23,10 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	imagesusecase "github.com/bnema/gordon/internal/usecase/images"
+	logsusecase "github.com/bnema/gordon/internal/usecase/logs"
+	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
+	volumesusecase "github.com/bnema/gordon/internal/usecase/volumes"
 )
 
 // newControlRoleServices constructs only control-owned services. In particular
@@ -53,16 +57,60 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	initRuntimeControlFacade(svc)
 	svc.healthSvc = newControlHealthService(configSvc, svc.runtimeControl)
 	svc.reloadCoordinator = newReloadCoordinator(v, configSvc, nil, nil, nil, nil, log)
+	if err := wireControlManagementFacades(cfg, svc, log); err != nil {
+		return nil, err
+	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:      svc.configSvc,
 		AuthSvc:        svc.authSvc,
+		SecretSvc:      svc.secretSvc,
 		HealthSvc:      svc.healthSvc,
+		LogSvc:         svc.logSvc,
+		ImageSvc:       svc.imageSvc,
+		VolumeSvc:      svc.volumeSvc,
 		ReloadTrigger:  svc.reloadCoordinator,
 		RuntimeControl: svc.runtimeControl,
+		NetworkSvc:     controlNetworkService{runtime: controlRuntimeStateSubscriber(svc.runtimeCommandClient)},
 		TrafficSvc:     nil,
 		Log:            log,
 	})
 	return svc, nil
+}
+
+// wireControlManagementFacades supplies management operations through the
+// narrow runtime RPC client and control-owned secret/config stores. It never
+// creates local registry storage, a proxy, or a container runtime.
+func controlRuntimeStateSubscriber(client out.RuntimeCommandClient) out.RuntimeStateSubscriber {
+	subscriber, _ := client.(out.RuntimeStateSubscriber)
+	return subscriber
+}
+
+func wireControlManagementFacades(cfg Config, svc *services, log zerowrap.Logger) error {
+	if svc == nil {
+		return fmt.Errorf("control services are required")
+	}
+	_, _, _, secretStore, err := createDomainSecretStore(cfg, log)
+	if err != nil {
+		return fmt.Errorf("create control secret store: %w", err)
+	}
+	svc.secretSvc = secretsusecase.NewService(secretStore, log, nil)
+
+	if svc.runtimeCommandClient == nil {
+		return nil
+	}
+	if runtimeLogs, ok := svc.runtimeCommandClient.(out.RuntimeLogReader); ok {
+		svc.logSvc = logsusecase.NewServiceWithRuntimeLogReader(resolveLogFilePath(cfg), cfg.Logging.File.Enabled, nil, runtimeLogs, log)
+	}
+	if runtimeImages, ok := svc.runtimeCommandClient.(out.RuntimeImageManager); ok {
+		// Registry data belongs to gordon-registry. The image service treats nil
+		// stores as runtime-only and returns a stable unsupported error for a
+		// registry prune request rather than reaching into registry storage.
+		svc.imageSvc = imagesusecase.NewServiceWithRuntimeImageManager(runtimeImages, nil, nil, log)
+	}
+	if runtimeVolumes, ok := svc.runtimeCommandClient.(out.RuntimeVolumeManager); ok {
+		svc.volumeSvc = volumesusecase.NewServiceWithRuntimeVolumeManager(runtimeVolumes)
+	}
+	return nil
 }
 
 // controlHTTPHandler intentionally shares the auth and admin adapters with the

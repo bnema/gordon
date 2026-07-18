@@ -129,6 +129,11 @@ func (s *Service) appendRegistryImages(
 	seenRepoTags map[string]struct{},
 	repoDisplayByNormalized map[string]string,
 ) ([]domain.ImageInfo, error) {
+	// Split control intentionally has no registry storage. Runtime images
+	// remain useful while registry-only entries are simply unavailable.
+	if s.manifestStorage == nil {
+		return images, nil
+	}
 	repositories, err := s.manifestStorage.ListRepositories()
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list repositories")
@@ -199,6 +204,9 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 // It keeps the "latest" tag when present and keeps keepLast most-recent
 // non-latest tags from tagInfos.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+	if s.manifestStorage == nil || s.blobStorage == nil {
+		return domain.ImagePruneReport{}, fmt.Errorf("registry image prune: %w", domain.ErrNotImplemented)
+	}
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PruneRegistry",

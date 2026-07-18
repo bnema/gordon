@@ -314,8 +314,12 @@ func (s phase4StateSubscriber) SubscribeRuntimeState(context.Context) (<-chan do
 
 func writePhase4RoleConfig(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "gordon.toml")
+	dataDir := t.TempDir()
+	path := filepath.Join(dataDir, "gordon.toml")
 	require.NoError(t, os.WriteFile(path, []byte(`
+[auth]
+enabled = true
+secrets_backend = "unsafe"
 [control]
 listen_address = "127.0.0.1:0"
 endpoint = "127.0.0.1:1"
@@ -323,6 +327,7 @@ token = "test-token"
 insecure_tls = true
 [server]
 port = 0
+data_dir = "`+dataDir+`"
 `), 0600))
 	return path
 }

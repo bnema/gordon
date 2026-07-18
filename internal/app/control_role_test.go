@@ -23,12 +23,12 @@ import (
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
 	eventsv1 "github.com/bnema/gordon/api/gordon/events/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/testutils/grpctest"
-	authusecase "github.com/bnema/gordon/internal/usecase/auth"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
 
@@ -97,8 +97,10 @@ func TestControlRoleBringup(t *testing.T) {
 
 	assertControlAdminDenied(t, httpBase, "")
 	assertControlAdminDenied(t, httpBase, "Bearer definitely-invalid")
-	adminToken := controlRoleAdminToken(t)
+	adminToken := controlRoleAdminToken(t, configPath)
 	assertControlAdminConfig(t, httpBase, adminToken)
+	assertControlAdminSurfaceResponses(t, httpBase, adminToken)
+	assertControlRemoteSmoke(t, httpBase, controlRoleRemoteToken(t, configPath))
 
 	deploy := controlRoleRequest(t, http.MethodPost, httpBase+"/admin/deploy/app.example.com", adminToken)
 	require.Equal(t, http.StatusOK, deploy.StatusCode)
@@ -185,13 +187,24 @@ secrets_backend = "unsafe"
 	return configPath
 }
 
-func controlRoleAdminToken(t *testing.T) string {
+func controlRoleAdminToken(t *testing.T, configPath string) string {
 	t.Helper()
-	service := authusecase.NewService(authusecase.Config{
-		Enabled: true, AuthType: domain.AuthTypeToken,
-		TokenSecret: []byte("control-role-test-token-secret-at-least-32-bytes"),
-	}, nil, zerowrap.Default())
+	_, cfg, err := initConfig(configPath)
+	require.NoError(t, err)
+	_, service, err := createAuthService(context.Background(), cfg, zerowrap.Default())
+	require.NoError(t, err)
 	token, err := service.GenerateAccessToken(context.Background(), "control-role-admin", []string{"admin:*:*"}, time.Minute)
+	require.NoError(t, err)
+	return token
+}
+
+func controlRoleRemoteToken(t *testing.T, configPath string) string {
+	t.Helper()
+	_, cfg, err := initConfig(configPath)
+	require.NoError(t, err)
+	_, service, err := createAuthService(context.Background(), cfg, zerowrap.Default())
+	require.NoError(t, err)
+	token, err := service.GenerateToken(context.Background(), "control-role-remote", []string{"admin:*:*"}, 24*time.Hour)
 	require.NoError(t, err)
 	return token
 }
@@ -214,6 +227,68 @@ func assertControlAdminConfig(t *testing.T, baseURL, token string) {
 		require.Equal(t, http.StatusOK, response.StatusCode, path)
 		response.Body.Close()
 	}
+}
+
+// assertControlAdminSurfaceResponses is a production-listener regression test:
+// every route family must reject invalid input or report an explicit unavailable
+// capability, never panic or produce an accidental 500 in split control.
+func assertControlAdminSurfaceResponses(t *testing.T, baseURL, token string) {
+	t.Helper()
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/admin/networks"},
+		{http.MethodGet, "/admin/status"},
+		{http.MethodGet, "/admin/health"},
+		{http.MethodPost, "/admin/bootstrap"},
+		{http.MethodGet, "/admin/config"},
+		{http.MethodGet, "/admin/auth/verify"},
+		{http.MethodGet, "/admin/volumes"},
+		{http.MethodPost, "/admin/volumes/prune"},
+		{http.MethodGet, "/admin/attachments/orphans"},
+		{http.MethodPost, "/admin/attachments/prune"},
+		{http.MethodGet, "/admin/tls/status"},
+		{http.MethodGet, "/admin/traffic/status"},
+		{http.MethodGet, "/admin/backups"},
+		{http.MethodGet, "/admin/attachments/by-image/app"},
+		{http.MethodGet, "/admin/attachments"},
+		{http.MethodGet, "/admin/routes/by-image/app"},
+		{http.MethodGet, "/admin/routes?detailed=true"},
+		{http.MethodGet, "/admin/routes/app.example.com/attachments"},
+		{http.MethodGet, "/admin/routes/app.example.com/cleanup"},
+		{http.MethodGet, "/admin/secrets/app.example.com"},
+		{http.MethodPost, "/admin/deploy-intent/app:v1"},
+		{http.MethodGet, "/admin/tags/app"},
+		{http.MethodGet, "/admin/images"},
+		{http.MethodGet, "/admin/logs/app.example.com"},
+		{http.MethodGet, "/admin/autoroute/allowed-domains"},
+		{http.MethodGet, "/admin/previews"},
+		{http.MethodDelete, "/admin/preview/preview.example.com"},
+	}
+	for _, test := range tests {
+		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			response := controlRoleRequest(t, test.method, baseURL+test.path, token)
+			defer response.Body.Close()
+			assert.NotEqual(t, http.StatusInternalServerError, response.StatusCode)
+			assert.Contains(t, response.Header.Get("Content-Type"), "application/json")
+		})
+	}
+}
+
+func assertControlRemoteSmoke(t *testing.T, baseURL, token string) {
+	t.Helper()
+	client := remote.NewClient(baseURL, remote.WithToken(token))
+	_, err := client.GetStatus(context.Background())
+	require.NoError(t, err)
+	_, err = client.ListRoutes(context.Background())
+	require.NoError(t, err)
+	_, err = client.GetConfig(context.Background())
+	require.NoError(t, err)
+	_, err = client.ListNetworks(context.Background())
+	require.NoError(t, err)
+	_, err = client.GetTrafficStatus(context.Background())
+	require.NoError(t, err)
 }
 
 func controlRoleRequest(t *testing.T, method, url, token string) *http.Response {

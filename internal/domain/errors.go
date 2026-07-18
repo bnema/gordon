@@ -5,6 +5,10 @@ import "errors"
 // Domain errors represent business-level errors that can occur in the system.
 // These errors are used across layers to communicate specific failure conditions.
 var (
+	// ErrNotImplemented identifies a deliberately unavailable split-role
+	// capability. Adapters translate it to a stable HTTP 501 response.
+	ErrNotImplemented = errors.New("operation not implemented")
+
 	// Container errors
 	ErrContainerNotFound   = errors.New("container not found")
 	ErrContainerExists     = errors.New("container already exists")

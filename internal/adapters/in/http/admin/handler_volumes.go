@@ -33,7 +33,7 @@ func (h *Handler) handleListVolumes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Err(err).Msg("failed to list volumes")
-		h.sendError(w, http.StatusInternalServerError, "failed to list volumes")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime volume service unavailable")
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *Handler) handlePruneVolumes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Err(err).Msg("failed to prune volumes")
-		h.sendError(w, http.StatusInternalServerError, "failed to prune volumes")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime volume service unavailable")
 		return
 	}
 

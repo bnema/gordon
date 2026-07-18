@@ -47,6 +47,12 @@ type runtimeControlService interface {
 	RouteStatuses(ctx context.Context, routes []domain.Route) (map[string]string, error)
 }
 
+// networkService is deliberately narrower than ContainerService so split
+// control can query sanitized runtime state without a local runtime adapter.
+type networkService interface {
+	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc       in.ConfigService
@@ -65,6 +71,7 @@ type Handler struct {
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
 	runtimeControl  runtimeControlService
+	networkSvc      networkService
 	componentEvents in.ComponentEventHandler
 	log             zerowrap.Logger
 }
@@ -216,6 +223,7 @@ type HandlerDeps struct {
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
 	RuntimeControl  runtimeControlService
+	NetworkSvc      networkService
 	ComponentEvents in.ComponentEventHandler
 }
 
@@ -238,6 +246,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
 		runtimeControl:  deps.RuntimeControl,
+		networkSvc:      deps.NetworkSvc,
 		componentEvents: deps.ComponentEvents,
 		log:             deps.Log,
 	}
@@ -341,7 +350,7 @@ func (h *Handler) handleAttachmentOrphans(w http.ResponseWriter, r *http.Request
 	if h.containerSvc == nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Msg("container service not available for orphaned attachment listing")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		h.sendError(w, http.StatusServiceUnavailable, "container service not available")
 		return
 	}
 	attachments, err := h.containerSvc.ListOrphanedAttachments(ctx)
@@ -367,7 +376,7 @@ func (h *Handler) handleAttachmentPrune(w http.ResponseWriter, r *http.Request) 
 	if h.containerSvc == nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Msg("container service not available for orphaned attachment cleanup")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		h.sendError(w, http.StatusServiceUnavailable, "container service not available")
 		return
 	}
 	stop := r.URL.Query().Get("stop") == "true"
@@ -655,28 +664,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	if routeDomain == "" {
-		if r.URL.Query().Get("detailed") == "true" {
-			if err := h.containerSvc.SyncContainers(ctx); err != nil {
-				h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
-				h.sendError(w, http.StatusInternalServerError, "failed to list routes")
-				return
-			}
-			configured := h.configSvc.GetRoutes(ctx)
-			routes := mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx))
-			response := make([]routeInfoResponse, 0, len(routes))
-			for _, route := range routes {
-				response = append(response, toRouteInfoResponse(route))
-			}
-			h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
-			return
-		}
-
-		routes := h.configSvc.GetRoutes(ctx)
-		response := make([]routeResponse, 0, len(routes))
-		for _, route := range routes {
-			response = append(response, toRouteResponse(route))
-		}
-		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
+		h.handleRoutesList(w, r)
 		return
 	}
 
@@ -694,6 +682,12 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 			h.sendError(w, http.StatusBadRequest, "domain required in path")
 			return
 		}
+		if h.containerSvc == nil {
+			// Attachment runtime details are intentionally not exposed by the split
+			// runtime protocol. Return the compatible empty detail shape instead.
+			h.sendJSON(w, http.StatusOK, dto.AttachmentsResponse{Attachments: []attachmentResponse{}})
+			return
+		}
 		attachments := h.containerSvc.ListAttachments(ctx, parentDomain)
 		response := make([]attachmentResponse, 0, len(attachments))
 		for _, attachment := range attachments {
@@ -709,6 +703,57 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 	h.sendJSON(w, http.StatusOK, toRouteResponse(*route))
+}
+
+func (h *Handler) handleRoutesList(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.URL.Query().Get("detailed") != "true" {
+		routes := h.configSvc.GetRoutes(ctx)
+		response := make([]routeResponse, 0, len(routes))
+		for _, route := range routes {
+			response = append(response, toRouteResponse(route))
+		}
+		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
+		return
+	}
+	configured := h.configSvc.GetRoutes(ctx)
+	routes, err := h.routeDetails(ctx, configured)
+	if err != nil {
+		if h.containerSvc == nil {
+			h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+		} else {
+			h.sendError(w, http.StatusInternalServerError, "failed to list routes")
+		}
+		return
+	}
+	response := make([]routeInfoResponse, 0, len(routes))
+	for _, route := range routes {
+		response = append(response, toRouteInfoResponse(route))
+	}
+	h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
+}
+
+func (h *Handler) routeDetails(ctx context.Context, configured []domain.Route) ([]domain.RouteInfo, error) {
+	if h.containerSvc != nil {
+		if err := h.containerSvc.SyncContainers(ctx); err != nil {
+			h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
+			return nil, err
+		}
+		return mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx)), nil
+	}
+	statuses := map[string]string{}
+	if h.runtimeControl != nil {
+		var err error
+		statuses, err = h.runtimeControl.RouteStatuses(ctx, configured)
+		if err != nil {
+			return nil, err
+		}
+	}
+	routes := make([]domain.RouteInfo, 0, len(configured))
+	for _, route := range configured {
+		routes = append(routes, domain.RouteInfo{Domain: route.Domain, Image: route.Image, ContainerStatus: statuses[route.Domain]})
+	}
+	return routes, nil
 }
 
 func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Request, routeDomain string) {
@@ -729,7 +774,7 @@ func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Reque
 	})
 	if !ok {
 		log.Error().Str("domain", routeDomain).Msg("route cleanup preview unavailable")
-		h.sendError(w, http.StatusInternalServerError, "route cleanup preview unavailable")
+		h.sendError(w, http.StatusNotImplemented, "route cleanup preview unavailable from control")
 		return
 	}
 
@@ -1072,9 +1117,17 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	networks, err := h.containerSvc.ListNetworks(ctx)
+	networkSource := h.networkSvc
+	if networkSource == nil {
+		if h.containerSvc == nil {
+			h.sendError(w, http.StatusServiceUnavailable, "network service unavailable")
+			return
+		}
+		networkSource = h.containerSvc
+	}
+	networks, err := networkSource.ListNetworks(ctx)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, "failed to list networks")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime network service unavailable")
 		return
 	}
 
@@ -2006,7 +2059,7 @@ func (h *Handler) handleProcessLogs(w http.ResponseWriter, r *http.Request, line
 	logLines, err := h.logSvc.GetProcessLogs(ctx, lines)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get process logs")
-		h.sendError(w, http.StatusInternalServerError, "failed to get logs")
+		h.sendError(w, http.StatusServiceUnavailable, "process log service unavailable")
 		return
 	}
 
@@ -2028,7 +2081,7 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	logLines, err := h.logSvc.GetContainerLogs(ctx, logDomain, lines)
 	if err != nil {
 		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to get container logs")
-		h.sendError(w, http.StatusInternalServerError, "failed to get container logs")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime log service unavailable")
 		return
 	}
 
