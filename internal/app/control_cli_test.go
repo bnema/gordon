@@ -43,6 +43,7 @@ func TestControlRoleRemoteManagementCommands(t *testing.T) {
 		{"deploy", []string{"deploy", "app.example.com", "--json"}, "", []string{"domain", "status"}, 0},
 		{"images", []string{"images", "list", "--json"}, "", nil, 503},
 		{"logs", []string{"logs", "app.example.com", "--lines", "2"}, "", nil, 0},
+		{"migrate", []string{"migrate", "plan", "--json"}, "", []string{"checks", "ready"}, 0},
 		{"networks", []string{"networks", "list", "--json"}, "", []string{"[]"}, 0},
 		{"pin", []string{"pin", "list", "pin.example.com", "--json"}, "", nil, 503},
 		{"preview", []string{"preview", "list", "--json"}, "", nil, 503},

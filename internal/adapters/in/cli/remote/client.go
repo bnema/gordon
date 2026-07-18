@@ -317,6 +317,43 @@ func parseResponse(resp *http.Response, target any) error {
 	return nil
 }
 
+// Migration methods intentionally use raw JSON to keep the remote transport
+// independent of app wiring (and therefore free of app/adapter import cycles).
+func (c *Client) MigrationPlan(ctx context.Context) (json.RawMessage, error) {
+	return c.migration(ctx, http.MethodGet, "/migration/plan", nil)
+}
+func (c *Client) MigrationPrepare(ctx context.Context, checkpoint any) (json.RawMessage, error) {
+	return c.migration(ctx, http.MethodPost, "/migration/prepare", checkpoint)
+}
+func (c *Client) MigrationSwitch(ctx context.Context) (json.RawMessage, error) {
+	return c.migration(ctx, http.MethodPost, "/migration/switch", nil)
+}
+func (c *Client) MigrationStatus(ctx context.Context) (json.RawMessage, error) {
+	return c.migration(ctx, http.MethodGet, "/migration/status", nil)
+}
+func (c *Client) MigrationResume(ctx context.Context) (json.RawMessage, error) {
+	return c.migration(ctx, http.MethodPost, "/migration/resume", nil)
+}
+func (c *Client) migration(ctx context.Context, method, path string, body any) (json.RawMessage, error) {
+	var encoded []byte
+	var err error
+	if body != nil {
+		encoded, err = json.Marshal(body)
+		if err != nil {
+			return nil, fmt.Errorf("encode migration request: %w", err)
+		}
+	}
+	resp, err := c.doRequest(ctx, method, path, encoded)
+	if err != nil {
+		return nil, err
+	}
+	var result json.RawMessage
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // HTTPError represents an HTTP error response with a status code.
 // Use errors.As to check for specific status codes in error handling.
 type HTTPError struct {

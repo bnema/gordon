@@ -84,6 +84,7 @@ func TestRemoteControlCobraSmoke(t *testing.T) {
 		{"autoroute JSON", []string{"autoroute", "allow", "list", "--json"}, `"*.example.com"`, ""},
 		{"TLS JSON", []string{"tls", "status", "--json"}, `"acme_enabled"`, ""},
 		{"traffic JSON", []string{"traffic", "status", "--json"}, `"last_reload_status"`, ""},
+		{"migration plan JSON", []string{"migrate", "plan", "--json"}, `"ready": true`, ""},
 		// The split control listener does not own these runtime/registry services.
 		// Their capability response is part of the command contract, not a skip.
 		{"volumes capability", []string{"volumes", "list", "--json"}, "", "503"},
@@ -205,6 +206,8 @@ func newRemoteControlSmokeListener(t *testing.T) *remoteControlSmokeListener {
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"acme_enabled": false})
 		case request.Method == http.MethodGet && path == "/traffic/status":
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"last_reload_status": "ok"})
+		case request.Method == http.MethodGet && path == "/migration/plan":
+			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"checks": []any{}, "ready": true})
 		case request.Method == http.MethodGet && (path == "/volumes" || path == "/images" || path == "/previews"):
 			writeRemoteControlSmokeJSON(t, w, http.StatusServiceUnavailable, map[string]string{"error": "capability unavailable"})
 		default:

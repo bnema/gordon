@@ -57,6 +57,24 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 	}
 }
 
+// Migration is intentionally remote/control-plane only until the local CLI can
+// obtain the runtime-owned rootless Podman probe without a socket capability.
+func (l *localControlPlane) MigrationPlan(context.Context) (app.MigrationPreflightReport, error) {
+	return app.MigrationPreflightReport{}, fmt.Errorf("migration requires the running control plane; use --remote")
+}
+func (l *localControlPlane) MigrationPrepare(context.Context, app.MigrationCheckpoint) (*app.MigrationCheckpoint, error) {
+	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+}
+func (l *localControlPlane) MigrationSwitch(context.Context) (*app.MigrationCheckpoint, error) {
+	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+}
+func (l *localControlPlane) MigrationStatus(context.Context) (*app.MigrationCheckpoint, error) {
+	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+}
+func (l *localControlPlane) MigrationResume(context.Context) (*app.MigrationCheckpoint, error) {
+	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+}
+
 func (l *localControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {
 	if l.containerSvc != nil {
 		if err := l.containerSvc.SyncContainers(ctx); err != nil {

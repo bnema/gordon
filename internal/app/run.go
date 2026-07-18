@@ -305,6 +305,7 @@ type services struct {
 	publicTLSRuntime      publicTLSRuntime
 	runtimeCommandClient  out.RuntimeCommandClient
 	runtimeControl        *runtimecontrol.Service
+	migrationSvc          *MigrationService
 	trafficManager        *trafficadapter.Manager
 	tlsHTTPEntryPoints    map[string]struct{}
 	smartHTTPEntryPoints  map[string]struct{}
