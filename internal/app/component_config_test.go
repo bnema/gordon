@@ -157,6 +157,56 @@ func TestComponentConfigManifestsUseStrictRoleSchemas(t *testing.T) {
 	require.NoError(t, err, "registry config must be accepted by its strict decoder")
 }
 
+func TestComponentConfigManifestsNormalizeSparseServingLimits(t *testing.T) {
+	files, err := WriteComponentConfigManifests(Config{}, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	byRole := componentConfigReferences(componentConfigPaths(files))
+
+	registry, err := initRegistryConfig(byRole[domain.ComponentRoleRegistry])
+	require.NoError(t, err)
+	assert.Equal(t, "95MB", registry.Limits.MaxBlobChunkSize)
+	assert.Equal(t, "1GB", registry.Limits.MaxBlobSize)
+
+	edge, err := initEdgeConfig(byRole[domain.ComponentRoleEdge])
+	require.NoError(t, err)
+	assert.Equal(t, "512MB", edge.Edge.MaxProxyBodySize)
+	assert.Equal(t, "1GB", edge.Edge.MaxProxyResponseSize)
+}
+
+func TestComponentConfigManifestsPreserveExplicitServingLimits(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.MaxBlobChunkSize = "7MB"
+	cfg.Server.MaxBlobSize = "11MB"
+	cfg.Server.MaxProxyBodySize = "13MB"
+	cfg.Server.MaxProxyResponseSize = "17MB"
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	byRole := componentConfigReferences(componentConfigPaths(files))
+
+	registry, err := initRegistryConfig(byRole[domain.ComponentRoleRegistry])
+	require.NoError(t, err)
+	assert.Equal(t, cfg.Server.MaxBlobChunkSize, registry.Limits.MaxBlobChunkSize)
+	assert.Equal(t, cfg.Server.MaxBlobSize, registry.Limits.MaxBlobSize)
+	edge, err := initEdgeConfig(byRole[domain.ComponentRoleEdge])
+	require.NoError(t, err)
+	assert.Equal(t, cfg.Server.MaxProxyBodySize, edge.Edge.MaxProxyBodySize)
+	assert.Equal(t, cfg.Server.MaxProxyResponseSize, edge.Edge.MaxProxyResponseSize)
+}
+
+func TestComponentConfigManifestsRejectInvalidServingLimitsBeforeLaunch(t *testing.T) {
+	cases := []func(*Config){
+		func(cfg *Config) { cfg.Server.MaxBlobChunkSize = "not-a-size" },
+		func(cfg *Config) { cfg.Server.MaxBlobChunkSize, cfg.Server.MaxBlobSize = "2GB", "1GB" },
+		func(cfg *Config) { cfg.Server.MaxProxyBodySize = "not-a-size" },
+	}
+	for _, configure := range cases {
+		cfg := Config{}
+		configure(&cfg)
+		_, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+		require.Error(t, err)
+	}
+}
+
 func TestComponentConfigUsesPrivateControlBindAndInternalAlias(t *testing.T) {
 	cfg := Config{}
 	cfg.Control.ListenAddress = "127.0.0.1:9443"

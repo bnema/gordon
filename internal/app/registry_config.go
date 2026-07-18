@@ -103,10 +103,19 @@ func validateRegistryServing(cfg RegistryConfig) error {
 	return nil
 }
 func validateRegistryLimits(cfg RegistryConfig) error {
-	for _, item := range []struct{ raw, name string }{{cfg.Limits.MaxBlobChunkSize, "limits.max_blob_chunk_size"}, {cfg.Limits.MaxBlobSize, "limits.max_blob_size"}, {cfg.Control.OutboxMaxBytes, "control.outbox_max_bytes"}} {
-		if _, err := registrySize(item.raw, item.name); err != nil {
-			return err
-		}
+	chunk, err := registrySize(cfg.Limits.MaxBlobChunkSize, "limits.max_blob_chunk_size")
+	if err != nil {
+		return err
+	}
+	total, err := registrySize(cfg.Limits.MaxBlobSize, "limits.max_blob_size")
+	if err != nil {
+		return err
+	}
+	if total < chunk {
+		return fmt.Errorf("limits.max_blob_size must be greater than or equal to limits.max_blob_chunk_size")
+	}
+	if _, err := registrySize(cfg.Control.OutboxMaxBytes, "control.outbox_max_bytes"); err != nil {
+		return err
 	}
 	if cfg.Control.OutboxMaxEntries <= 0 {
 		return fmt.Errorf("control.outbox_max_entries must be positive")

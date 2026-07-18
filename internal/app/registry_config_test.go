@@ -46,3 +46,21 @@ event_token = "token"
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "listen.tls.mode")
 }
+
+func TestRegistryConfigRejectsTotalBlobLimitBelowChunkLimit(t *testing.T) {
+	path := writeRegistryConfig(t, `[storage]
+data_dir = "/tmp/data"
+[limits]
+max_blob_chunk_size = "2GB"
+max_blob_size = "1GB"
+[listen]
+address = "127.0.0.1:5000"
+[listen.tls]
+mode = "disabled"
+[control]
+event_endpoint = "127.0.0.1:9092"
+event_token = "token"
+`)
+	_, err := initRegistryConfig(path)
+	require.ErrorContains(t, err, "max_blob_size")
+}

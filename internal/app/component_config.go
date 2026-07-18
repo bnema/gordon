@@ -51,6 +51,9 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 	if !ok {
 		return nil, fmt.Errorf("component configuration directory must be beneath migration/config/<id>/<generation>")
 	}
+	if err := normalizeComponentServingLimits(&cfg); err != nil {
+		return nil, err
+	}
 	controlListenAddress, controlEndpoint, err := componentControlNetworking(cfg.Control.ListenAddress)
 	if err != nil {
 		return nil, err
@@ -86,6 +89,44 @@ func WriteComponentConfigManifests(cfg Config, directory string, options ...Comp
 		return nil, fmt.Errorf("write final edge component configuration: %w", err)
 	}
 	return files, nil
+}
+
+// normalizeComponentServingLimits translates omitted monolith settings into the
+// explicit values strict component role manifests require. Non-empty values are
+// validated, rather than replaced, so a malformed operator configuration stops
+// migration before any component is launched.
+func normalizeComponentServingLimits(cfg *Config) error {
+	defaults := defaultRegistryConfig()
+	if strings.TrimSpace(cfg.Server.MaxBlobChunkSize) == "" {
+		cfg.Server.MaxBlobChunkSize = defaults.Limits.MaxBlobChunkSize
+	}
+	if strings.TrimSpace(cfg.Server.MaxBlobSize) == "" {
+		cfg.Server.MaxBlobSize = defaults.Limits.MaxBlobSize
+	}
+	chunk, err := registrySize(cfg.Server.MaxBlobChunkSize, "server.max_blob_chunk_size")
+	if err != nil {
+		return err
+	}
+	total, err := registrySize(cfg.Server.MaxBlobSize, "server.max_blob_size")
+	if err != nil {
+		return err
+	}
+	if total < chunk {
+		return fmt.Errorf("server.max_blob_size must be greater than or equal to server.max_blob_chunk_size")
+	}
+	if strings.TrimSpace(cfg.Server.MaxProxyBodySize) == "" {
+		cfg.Server.MaxProxyBodySize = "512MB"
+	}
+	if strings.TrimSpace(cfg.Server.MaxProxyResponseSize) == "" {
+		cfg.Server.MaxProxyResponseSize = "1GB"
+	}
+	if _, err := edgeByteSize(cfg.Server.MaxProxyBodySize, 512<<20, "server.max_proxy_body_size"); err != nil {
+		return err
+	}
+	if _, err := edgeByteSize(cfg.Server.MaxProxyResponseSize, 1<<30, "server.max_proxy_response_size"); err != nil {
+		return err
+	}
+	return nil
 }
 
 func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, controlListenAddress, controlEndpoint string, controlRouting map[string]any, migrationProbeEnabled bool) map[string]any {
