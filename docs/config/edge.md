@@ -6,8 +6,10 @@
 
 TLS termination is explicit. There is no plaintext default. Split edges support only operator-provided certificate files or explicit external TLS termination. Gordon-managed ACME issuance and challenge handling remain monolith-only until a certificate/challenge delivery protocol exists; an edge never silently falls back from ACME to another mode.
 
-- `mode = "files"` requires a certificate and key; Gordon serves HTTPS itself.
-- `mode = "external"` permits HTTP only from `trusted_proxy_cidrs`. Put the terminating load balancer or reverse-proxy CIDRs in that list. Direct HTTP connections are rejected, and forwarded client addresses are trusted only from those CIDRs.
+- `mode = "files"` requires a certificate and key; Gordon serves HTTPS itself on streamed TLS-capable entrypoints. Certificate files are loaded at startup: restart the edge after replacing them.
+- `mode = "external"` permits the dedicated plaintext HTTP listener only from `trusted_proxy_cidrs`. Put the terminating load balancer or reverse-proxy CIDRs in that list. Direct HTTP connections are rejected, and forwarded client addresses are trusted only from those CIDRs. TLS-capable streamed entrypoints may only use TLS passthrough in this mode; HTTP TLS fallback fails startup rather than silently serving plaintext.
+
+The edge receives a separate authenticated, sanitized traffic graph after its route snapshot. It owns the graph's `tls_mux`, `smart_tcp`, TCP, and UDP listeners; duplicate or conflicting listener addresses fail startup. Backends must be explicit aliases or non-loopback reachable addresses. The edge never reads full control configuration, runtime state, or token stores beyond its configured control token.
 
 ```toml
 [control]

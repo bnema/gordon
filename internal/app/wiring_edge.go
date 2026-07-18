@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,10 +20,12 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	httpproxy "github.com/bnema/gordon/internal/adapters/in/http/proxy"
+	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
 	edgesnapshotclient "github.com/bnema/gordon/internal/adapters/out/grpc/edgesnapshot"
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	"github.com/bnema/gordon/pkg/bytesize"
 )
@@ -31,15 +34,17 @@ import (
 // absence of runtime/socket/config-service constructors is an ownership guard:
 // an edge consumes snapshots and proxies requests, nothing more.
 type edgeRoleDependencies struct {
-	listen        func(network, address string) (net.Listener, error)
-	dialSnapshot  func(context.Context, EdgeControlConfig) (*edgesnapshotclient.Client, *grpc.ClientConn, error)
-	newHTTPServer func(string, http.Handler) *http.Server
+	listen            func(network, address string) (net.Listener, error)
+	dialSnapshot      func(context.Context, EdgeControlConfig) (*edgesnapshotclient.Client, *grpc.ClientConn, error)
+	newHTTPServer     func(string, http.Handler) *http.Server
+	newTrafficManager func() *trafficadapter.Manager
 }
 
 func productionEdgeRoleDependencies() edgeRoleDependencies {
 	return edgeRoleDependencies{
-		listen:       net.Listen,
-		dialSnapshot: newEdgeSnapshotClient,
+		listen:            net.Listen,
+		dialSnapshot:      newEdgeSnapshotClient,
+		newTrafficManager: trafficadapter.NewManager,
 		newHTTPServer: func(address string, handler http.Handler) *http.Server {
 			return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		},
@@ -73,46 +78,21 @@ func runEdgeWithDependencies(ctx context.Context, configPath string, deps edgeRo
 	}
 	defer closeAccessLog()
 
-	snapshotClient, stopSnapshotClient, err := startEdgeSnapshotClient(ctx, cfg.Control, deps, log)
+	routes, connection, stopRoutes, err := startEdgeSnapshotClient(ctx, cfg.Control, deps, log)
 	if err != nil {
 		return err
 	}
-	defer stopSnapshotClient()
-
-	proxyCfg, err := buildEdgeProxyConfig(cfg)
-	if err != nil {
-		return err
+	defer stopRoutes()
+	graphs := edgesnapshotclient.NewTrafficGraphClient(connection)
+	if err := graphs.Start(ctx); err != nil {
+		return log.WrapErr(err, "start edge traffic graph client")
 	}
-	proxyService := proxy.NewSnapshotService(snapshotClient, proxyCfg, snapshotClient)
-	snapshotClient.SetSnapshotAcceptanceObserver(proxyService)
-	defer proxyService.Close()
-	proxyHandler := httpproxy.NewHandler(proxyService, nil, log)
-	listener, err := listenEdge(cfg, deps)
-	if err != nil {
-		return log.WrapErr(err, "listen for edge HTTP")
-	}
-	defer listener.Close()
-
-	server := deps.newHTTPServer(listener.Addr().String(), edgeHTTPHandlerWithMiddleware(proxyHandler, snapshotClient, cfg, log, accessWriter))
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Serve(listener) }()
-	log.Info().Str("addr", listener.Addr().String()).Str("tls_mode", cfg.Edge.TLS.Mode).Msg("gordon-edge HTTP server started")
-
-	select {
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			_ = server.Close()
-			return err
-		}
+	defer graphs.Stop()
+	err = runEdgeTraffic(ctx, cfg, deps, log, accessWriter, routes, graphs)
+	if errors.Is(err, context.Canceled) && ctx.Err() != nil {
 		return nil
-	case serveErr := <-errCh:
-		if serveErr == http.ErrServerClosed {
-			return nil
-		}
-		return log.WrapErr(serveErr, "edge HTTP server stopped")
 	}
+	return err
 }
 
 func initEdgeLogger() (zerowrap.Logger, func(), error) {
@@ -139,19 +119,19 @@ func openEdgeAccessLog(cfg EdgeConfig, log zerowrap.Logger) (out.AccessLogWriter
 	return writer, func() { _ = writer.Close() }, nil
 }
 
-func startEdgeSnapshotClient(ctx context.Context, control EdgeControlConfig, deps edgeRoleDependencies, log zerowrap.Logger) (*edgesnapshotclient.Client, func(), error) {
+func startEdgeSnapshotClient(ctx context.Context, control EdgeControlConfig, deps edgeRoleDependencies, log zerowrap.Logger) (*edgesnapshotclient.Client, *grpc.ClientConn, func(), error) {
 	snapshotClient, connection, err := deps.dialSnapshot(ctx, control)
 	if err != nil {
-		return nil, nil, log.WrapErr(err, "create edge route snapshot client")
+		return nil, nil, nil, log.WrapErr(err, "create edge route snapshot client")
 	}
 	if snapshotClient == nil || connection == nil {
-		return nil, nil, fmt.Errorf("edge route snapshot client and connection are required")
+		return nil, nil, nil, fmt.Errorf("edge route snapshot client and connection are required")
 	}
 	if err := snapshotClient.Start(ctx); err != nil {
 		_ = connection.Close()
-		return nil, nil, log.WrapErr(err, "start edge route snapshot client")
+		return nil, nil, nil, log.WrapErr(err, "start edge route snapshot client")
 	}
-	return snapshotClient, func() {
+	return snapshotClient, connection, func() {
 		snapshotClient.Stop()
 		_ = connection.Close()
 	}, nil
@@ -281,4 +261,286 @@ func controlToken(cfg EdgeControlConfig) string {
 		return strings.TrimSpace(os.Getenv(envKey))
 	}
 	return ""
+}
+
+// runEdgeTraffic owns every split public traffic entrypoint. Control only
+// supplies validated snapshots; no control configuration or runtime state is
+// retained by this process.
+func runEdgeTraffic(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, log zerowrap.Logger, accessWriter out.AccessLogWriter, routes *edgesnapshotclient.Client, graphs *edgesnapshotclient.TrafficGraphClient) error {
+	handler, closeProxy, err := newEdgeTrafficProxy(cfg, log, accessWriter, routes)
+	if err != nil {
+		return err
+	}
+	defer closeProxy()
+
+	updates := edgeTrafficUpdateChannel(graphs)
+	_, initialGraph, err := waitForInitialEdgeSnapshots(ctx, routes, graphs)
+	if err != nil {
+		return err
+	}
+	manager, tlsConfig, handlers, shutdownManager, err := initializeEdgeTrafficManager(ctx, cfg, deps, handler, initialGraph.Graph, log)
+	if err != nil {
+		return err
+	}
+	defer shutdownManager()
+
+	runCtx, cancelRun := context.WithCancel(ctx)
+	defer cancelRun()
+	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, handlers, log)
+
+	server, errCh, err := startEdgeDedicatedHTTP(cfg, deps, handler, log)
+	if err != nil {
+		return err
+	}
+
+	select {
+	case <-ctx.Done():
+		// Stop receives before draining listeners so no new graph can create a
+		// listener while shutdown is in progress.
+		graphs.Stop()
+		routes.Stop()
+		shutdownManager()
+		return shutdownEdgeHTTP(server)
+	case serveErr := <-errCh:
+		graphs.Stop()
+		routes.Stop()
+		shutdownManager()
+		if serveErr == nil || serveErr == http.ErrServerClosed {
+			return nil
+		}
+		return log.WrapErr(serveErr, "edge HTTP server stopped")
+	}
+}
+
+func newEdgeTrafficProxy(cfg EdgeConfig, log zerowrap.Logger, accessWriter out.AccessLogWriter, routes *edgesnapshotclient.Client) (http.Handler, func(), error) {
+	proxyCfg, err := buildEdgeProxyConfig(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	proxyService := proxy.NewSnapshotService(routes, proxyCfg, routes)
+	routes.SetSnapshotAcceptanceObserver(proxyService)
+	handler := edgeHTTPHandlerWithMiddleware(httpproxy.NewHandler(proxyService, nil, log), routes, cfg, log, accessWriter)
+	return handler, proxyService.Close, nil
+}
+
+func edgeTrafficUpdateChannel(graphs *edgesnapshotclient.TrafficGraphClient) <-chan domain.TrafficGraphSnapshot {
+	updates := make(chan domain.TrafficGraphSnapshot, 1)
+	graphs.SetTrafficGraphAcceptanceObserver(func(snapshot domain.TrafficGraphSnapshot) {
+		select {
+		case updates <- snapshot:
+		default:
+			select {
+			case <-updates:
+			default:
+			}
+			select {
+			case updates <- snapshot:
+			default:
+			}
+		}
+	})
+	return updates
+}
+
+func initializeEdgeTrafficManager(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, handler http.Handler, graph domain.TrafficGraph, log zerowrap.Logger) (*trafficadapter.Manager, *tls.Config, edgeTrafficHandlers, func(), error) {
+	if err := validateEdgeTrafficTLSMode(cfg, graph); err != nil {
+		return nil, nil, edgeTrafficHandlers{}, nil, err
+	}
+	if edgeDedicatedHTTPEnabled(cfg) && edgeGraphAddressConflict(cfg.Edge.ListenAddress, graph.EntryPoints) {
+		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("edge.listen_address conflicts with a streamed traffic entrypoint")
+	}
+	newManager := deps.newTrafficManager
+	if newManager == nil {
+		newManager = trafficadapter.NewManager
+	}
+	manager := newManager()
+	if manager == nil {
+		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("edge traffic manager is required")
+	}
+	shutdown := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("edge traffic manager shutdown error")
+		}
+	}
+	tlsConfig, err := edgeTLSConfig(cfg)
+	if err != nil {
+		shutdown()
+		return nil, nil, edgeTrafficHandlers{}, nil, err
+	}
+	handlers, err := configureEdgeTrafficHandlers(manager, graph, cfg, handler, tlsConfig, edgeTrafficHandlers{})
+	if err == nil {
+		err = manager.Apply(ctx, &graph)
+	}
+	if err != nil {
+		shutdown()
+		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("apply initial edge traffic graph: %w", err)
+	}
+	return manager, tlsConfig, handlers, shutdown, nil
+}
+
+func startEdgeDedicatedHTTP(cfg EdgeConfig, deps edgeRoleDependencies, handler http.Handler, log zerowrap.Logger) (*http.Server, <-chan error, error) {
+	if !edgeDedicatedHTTPEnabled(cfg) {
+		return nil, nil, nil
+	}
+	listener, err := listenEdge(cfg, deps)
+	if err != nil {
+		return nil, nil, log.WrapErr(err, "listen for externally terminated edge HTTP")
+	}
+	server := deps.newHTTPServer(listener.Addr().String(), handler)
+	errs := make(chan error, 1)
+	go func() { errs <- server.Serve(listener) }()
+	log.Info().Str("addr", listener.Addr().String()).Msg("gordon-edge external HTTP listener started")
+	return server, errs, nil
+}
+
+func waitForInitialEdgeSnapshots(ctx context.Context, routes *edgesnapshotclient.Client, graphs *edgesnapshotclient.TrafficGraphClient) (domain.RouteTargetSnapshot, domain.TrafficGraphSnapshot, error) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		routeSnapshot, routeErr := routes.CurrentSnapshot(ctx)
+		graphSnapshot, graphErr := graphs.CurrentTrafficGraph(ctx)
+		if routeErr == nil && graphErr == nil {
+			return routeSnapshot, graphSnapshot, nil
+		}
+		select {
+		case <-ctx.Done():
+			return domain.RouteTargetSnapshot{}, domain.TrafficGraphSnapshot{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+type edgeTrafficHandlers struct {
+	tlsMux map[string]struct{}
+	smart  map[string]struct{}
+}
+
+func configureEdgeTrafficHandlers(manager *trafficadapter.Manager, graph domain.TrafficGraph, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, previous edgeTrafficHandlers) (edgeTrafficHandlers, error) {
+	if err := validateEdgeTrafficTLSMode(cfg, graph); err != nil {
+		return previous, err
+	}
+	next := edgeTrafficHandlers{tlsMux: map[string]struct{}{}, smart: map[string]struct{}{}}
+	for _, entry := range graph.EntryPoints {
+		switch entry.Protocol {
+		case domain.EntryPointProtocolTLSMux:
+			next.tlsMux[entry.Name] = struct{}{}
+		case domain.EntryPointProtocolSmartTCP:
+			next.smart[entry.Name] = struct{}{}
+		}
+	}
+	for name := range previous.tlsMux {
+		if _, ok := next.tlsMux[name]; !ok {
+			manager.SetTLSHTTPServer(name, nil, nil)
+		}
+	}
+	for name := range previous.smart {
+		if _, ok := next.smart[name]; !ok {
+			manager.SetSmartTCPHTTPServer(name, nil, nil)
+			manager.SetSmartTCPTLSServer(name, nil, nil)
+		}
+	}
+	var plainProtocols http.Protocols
+	plainProtocols.SetHTTP1(true)
+	plainProtocols.SetUnencryptedHTTP2(true)
+	for name := range next.smart {
+		manager.SetSmartTCPHTTPServer(name, handler, &plainProtocols)
+		if tlsConfig != nil {
+			manager.SetSmartTCPTLSServer(name, handler, tlsConfig)
+		} else {
+			manager.SetSmartTCPTLSServer(name, nil, nil)
+		}
+	}
+	for name := range next.tlsMux {
+		if tlsConfig != nil {
+			manager.SetTLSHTTPServer(name, handler, tlsConfig)
+		} else {
+			manager.SetTLSHTTPServer(name, nil, nil)
+		}
+	}
+	return next, nil
+}
+
+func validateEdgeTrafficTLSMode(cfg EdgeConfig, graph domain.TrafficGraph) error {
+	if strings.EqualFold(cfg.Edge.TLS.Mode, edgeTLSModeFiles) {
+		return nil
+	}
+	for _, router := range graph.Routers {
+		if router.Protocol != domain.RouterProtocolHTTP {
+			continue
+		}
+		for _, entry := range graph.EntryPoints {
+			if entry.Name == router.EntryPoint && (entry.Protocol == domain.EntryPointProtocolTLSMux || entry.Protocol == domain.EntryPointProtocolSmartTCP) {
+				return fmt.Errorf("edge.tls.mode=external cannot serve HTTP router %q on TLS-capable entrypoint %q without a local certificate; use the dedicated external HTTP listener or TLS passthrough", router.Name, entry.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager *trafficadapter.Manager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, handlers edgeTrafficHandlers, log zerowrap.Logger) {
+	lastGeneration := domain.TrafficGraphGeneration(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case snapshot := <-updates:
+			if snapshot.Generation <= lastGeneration {
+				continue
+			}
+			if edgeDedicatedHTTPEnabled(cfg) && edgeGraphAddressConflict(cfg.Edge.ListenAddress, snapshot.Graph.EntryPoints) {
+				log.Error().Uint64("generation", uint64(snapshot.Generation)).Msg("edge traffic graph update conflicts with dedicated external HTTP listener; retaining last known-good graph")
+				continue
+			}
+			next, err := configureEdgeTrafficHandlers(manager, snapshot.Graph, cfg, handler, tlsConfig, handlers)
+			if err == nil {
+				err = manager.Apply(ctx, &snapshot.Graph)
+			}
+			if err != nil {
+				log.Error().Err(err).Uint64("generation", uint64(snapshot.Generation)).Msg("edge traffic graph update rejected; retaining last known-good graph")
+				continue
+			}
+			handlers, lastGeneration = next, snapshot.Generation
+		}
+	}
+}
+
+func edgeDedicatedHTTPEnabled(cfg EdgeConfig) bool {
+	return strings.EqualFold(cfg.Edge.TLS.Mode, edgeTLSModeExternal)
+}
+
+func edgeGraphAddressConflict(address string, entryPoints []domain.EntryPoint) bool {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entryPoints {
+		if entry.Protocol == domain.EntryPointProtocolUDP {
+			continue
+		}
+		entryHost, entryPort, splitErr := net.SplitHostPort(entry.Address)
+		if splitErr != nil || port != entryPort {
+			continue
+		}
+		if host == entryHost || edgeWildcardHost(host) || edgeWildcardHost(entryHost) {
+			return true
+		}
+	}
+	return false
+}
+
+func edgeWildcardHost(host string) bool { return host == "" || host == "0.0.0.0" || host == "::" }
+
+func shutdownEdgeHTTP(server *http.Server) error {
+	if server == nil {
+		return nil
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
+		return err
+	}
+	return nil
 }

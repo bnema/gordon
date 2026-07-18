@@ -42,6 +42,7 @@ type TrafficGraphClient struct {
 	initialBackoff time.Duration
 	maxBackoff     time.Duration
 	retryWait      func(context.Context, time.Duration) bool
+	observer       func(domain.TrafficGraphSnapshot)
 }
 
 func NewTrafficGraphClient(conn grpc.ClientConnInterface, options ...Option) *TrafficGraphClient {
@@ -113,6 +114,15 @@ func (c *TrafficGraphClient) TrafficGraphHealth() TrafficGraphHealth {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.health
+}
+
+// SetTrafficGraphAcceptanceObserver installs a callback for validated graph
+// snapshots. The callback is invoked after the client lock is released so a
+// slow listener application can never block graph reads or shutdown.
+func (c *TrafficGraphClient) SetTrafficGraphAcceptanceObserver(observer func(domain.TrafficGraphSnapshot)) {
+	c.mu.Lock()
+	c.observer = observer
+	c.mu.Unlock()
 }
 
 func (c *TrafficGraphClient) watch(ctx context.Context, runID uint64, done chan struct{}) {
@@ -187,21 +197,29 @@ func (c *TrafficGraphClient) accept(message *edgev1.TrafficGraphSnapshot) (bool,
 		return false, err
 	}
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	if c.hasData {
 		if snapshot.Generation < c.snapshot.Generation {
+			c.mu.Unlock()
 			return false, nil
 		}
 		if snapshot.Generation == c.snapshot.Generation {
 			if !reflect.DeepEqual(snapshot, c.snapshot) {
+				c.mu.Unlock()
 				return false, fmt.Errorf("conflicting traffic graph generation %d", snapshot.Generation)
 			}
 			c.health.Healthy, c.health.Connected, c.health.ErrorCategory = true, true, ErrorNone
+			c.mu.Unlock()
 			return true, nil
 		}
 	}
 	c.snapshot, c.hasData = snapshot.Clone(), true
 	c.health = TrafficGraphHealth{Healthy: true, Connected: true, LastAcceptedGeneration: snapshot.Generation, LastUpdate: time.Now().UTC()}
+	observer := c.observer
+	accepted := snapshot.Clone()
+	c.mu.Unlock()
+	if observer != nil {
+		observer(accepted)
+	}
 	return true, nil
 }
 
