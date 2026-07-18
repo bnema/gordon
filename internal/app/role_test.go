@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"testing"
 
@@ -95,25 +94,6 @@ func TestRunWithRoleInvalidRoleFailsBeforeRunner(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid role")
 	assert.Empty(t, *calls)
-}
-
-func TestRoleNotImplemented(t *testing.T) {
-	tests := []struct {
-		role Role
-		run  func(context.Context, string) error
-	}{
-		{role: RoleRegistry, run: runRegistryImpl},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.role), func(t *testing.T) {
-			err := tt.run(context.Background(), "config.toml")
-			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrRoleNotImplemented))
-			assert.Contains(t, err.Error(), string(tt.role))
-			assert.Contains(t, err.Error(), "not implemented")
-		})
-	}
 }
 
 func TestRunDefaultsToMonolithPath(t *testing.T) {

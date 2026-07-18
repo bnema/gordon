@@ -17,28 +17,8 @@ const (
 	RoleRegistry Role = "registry"
 )
 
-// ErrRoleNotImplemented is returned for parsed roles whose service graph is not wired yet.
-var ErrRoleNotImplemented = errors.New("role not implemented")
-
 // ErrRoleRuntimeOwnership is returned when a role tries to instantiate a runtime adapter it does not own.
 var ErrRoleRuntimeOwnership = errors.New("role does not own runtime adapter")
-
-// RoleNotImplementedError reports a parsed role whose service graph is not wired yet.
-type RoleNotImplementedError struct {
-	Role Role
-}
-
-func (e RoleNotImplementedError) Error() string {
-	return fmt.Sprintf("role %q not implemented", e.Role)
-}
-
-func (e RoleNotImplementedError) Unwrap() error {
-	return ErrRoleNotImplemented
-}
-
-func newRoleNotImplementedError(role Role) error {
-	return RoleNotImplementedError{Role: role}
-}
 
 func roleMayInstantiateRuntimeAdapter(role Role) bool {
 	switch role {

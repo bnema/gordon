@@ -29,6 +29,7 @@ type Service struct {
 	blobStorage      out.BlobStorage
 	manifestStorage  out.ManifestStorage
 	eventBus         out.EventPublisher
+	componentEvents  out.ComponentEventPublisher
 	metrics          *telemetry.Metrics
 	suppressedImages sync.Map // imageName -> *time.Timer
 }
@@ -44,10 +45,15 @@ func NewService(
 	manifestStorage out.ManifestStorage,
 	eventBus out.EventPublisher,
 ) *Service {
+	return NewServiceWithComponentEvents(blobStorage, manifestStorage, eventBus, nil)
+}
+
+// NewServiceWithComponentEvents adds the typed component-event boundary used
+// by the standalone registry. The legacy in-process event bus remains only for
+// monolith compatibility.
+func NewServiceWithComponentEvents(blobStorage out.BlobStorage, manifestStorage out.ManifestStorage, eventBus out.EventPublisher, componentEvents out.ComponentEventPublisher) *Service {
 	return &Service{
-		blobStorage:     blobStorage,
-		manifestStorage: manifestStorage,
-		eventBus:        eventBus,
+		blobStorage: blobStorage, manifestStorage: manifestStorage, eventBus: eventBus, componentEvents: componentEvents,
 	}
 }
 
@@ -188,18 +194,23 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 		s.metrics.ImagePushSize.Add(ctx, int64(len(manifest.Data)), attrs)
 	}
 
-	// Publish image pushed event only for tag references (not digests).
-	// A docker push sends manifests by both digest and tag; firing only on
-	// tag prevents duplicate deploy triggers for the same push.
-	if s.eventBus != nil && !strings.HasPrefix(manifest.Reference, "sha256:") {
-		if s.IsDeployEventSuppressed(manifest.Name) {
-			log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
-		} else {
-			if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
-				Name:        manifest.Name,
-				Reference:   manifest.Reference,
-				Manifest:    manifest.Data,
-				Annotations: manifest.Annotations,
+	// A docker push sends manifests by both digest and tag; only tag manifests
+	// produce an image event. The split registry always emits its typed event:
+	// manual deploy correlation belongs to control, not this storage owner.
+	if !strings.HasPrefix(manifest.Reference, "sha256:") {
+		if s.componentEvents != nil {
+			if err := s.publishComponentImagePushed(ctx, manifest.Name, manifest.Reference, digest); err != nil {
+				// Manifest storage is authoritative. A durable outbox makes this
+				// path recoverable, so its outage must not turn a successful PUT into
+				// a registry failure.
+				log.Warn().Err(err).Msg("failed to persist registry component event")
+			}
+		}
+		if s.eventBus != nil {
+			if s.IsDeployEventSuppressed(manifest.Name) {
+				log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
+			} else if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
+				Name: manifest.Name, Reference: manifest.Reference, Manifest: manifest.Data, Annotations: manifest.Annotations,
 			}); err != nil {
 				log.Warn().Err(err).Msg("failed to publish image pushed event")
 			}
