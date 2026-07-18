@@ -27,6 +27,7 @@ type localControlPlane struct {
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
+	migration       func() (*app.MigrationService, error)
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -54,25 +55,53 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		logSvc:          kernel.Logs(),
 		volumeSvc:       kernel.Volumes(),
 		publicTLSSvc:    kernel.PublicTLS(),
+		migration:       kernel.Migration,
 	}
 }
 
-// Migration is intentionally remote/control-plane only until the local CLI can
-// obtain the runtime-owned rootless Podman probe without a socket capability.
-func (l *localControlPlane) MigrationPlan(context.Context) (app.MigrationPreflightReport, error) {
-	return app.MigrationPreflightReport{}, fmt.Errorf("migration requires the running control plane; use --remote")
+// Migration is initiated through the existing monolith Kernel. The local CLI
+// receives only this facade; the monolith's embedded runtime worker remains
+// the explicit transitional socket authority until the runtime handoff.
+func (l *localControlPlane) migrationService() (*app.MigrationService, error) {
+	if l == nil || l.migration == nil {
+		return nil, fmt.Errorf("local monolith migration is unavailable")
+	}
+	return l.migration()
 }
-func (l *localControlPlane) MigrationPrepare(context.Context, app.MigrationCheckpoint) (*app.MigrationCheckpoint, error) {
-	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+func (l *localControlPlane) MigrationPlan(ctx context.Context) (app.MigrationPreflightReport, error) {
+	svc, err := l.migrationService()
+	if err != nil {
+		return app.MigrationPreflightReport{}, err
+	}
+	return svc.Plan(ctx)
 }
-func (l *localControlPlane) MigrationSwitch(context.Context) (*app.MigrationCheckpoint, error) {
-	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+func (l *localControlPlane) MigrationPrepare(ctx context.Context, checkpoint app.MigrationCheckpoint) (*app.MigrationCheckpoint, error) {
+	svc, err := l.migrationService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Prepare(ctx, checkpoint)
+}
+func (l *localControlPlane) MigrationSwitch(ctx context.Context) (*app.MigrationCheckpoint, error) {
+	svc, err := l.migrationService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Switch(ctx)
 }
 func (l *localControlPlane) MigrationStatus(context.Context) (*app.MigrationCheckpoint, error) {
-	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+	svc, err := l.migrationService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Status()
 }
-func (l *localControlPlane) MigrationResume(context.Context) (*app.MigrationCheckpoint, error) {
-	return nil, fmt.Errorf("migration requires the running control plane; use --remote")
+func (l *localControlPlane) MigrationResume(ctx context.Context) (*app.MigrationCheckpoint, error) {
+	svc, err := l.migrationService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.Resume(ctx)
 }
 
 func (l *localControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {

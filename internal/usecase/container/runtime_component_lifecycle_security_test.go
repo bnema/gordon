@@ -2,6 +2,8 @@ package container
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/mock"
@@ -20,6 +22,25 @@ func TestRuntimeComponentLifecycleRejectsUnlabeledGordonNamedWorkload(t *testing
 		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStop, PreserveVolumes: true,
 	})
 	require.Error(t, err)
+}
+
+func TestRuntimeComponentLifecycleStartUsesRoleConfigAndPersistentStorage(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "2")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "edge.yaml")
+	require.NoError(t, os.WriteFile(configPath, []byte("server: {}\n"), 0o600))
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(config *domain.ContainerConfig) bool {
+		return config.Name == "gordon-edge-fixture-g2" && config.Labels[domain.LabelComponent] == "true" && config.Labels[domain.LabelComponentRole] == "edge" && config.Labels[domain.LabelComponentGeneration] == "2" && config.Labels[domain.LabelComponentMigrationID] == "fixture" && len(config.Volumes) == 0 && config.ReadOnlyVolumes["/etc/gordon/role.yaml"] == configPath && len(config.Cmd) == 5 && config.Cmd[0] == "serve" && config.Cmd[2] == "edge"
+	})).Return(&domain.Container{ID: "edge"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "edge").Return(nil).Once()
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "test", IdempotencyKey: "test", Generation: 2, SourceComponentID: "gordon-control"}, TargetComponentID: "gordon-edge-fixture-g2", TargetComponentRole: domain.ComponentRoleEdge,
+		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g2", ConfigFile: configPath, PreserveVolumes: true,
+	})
+	require.NoError(t, err)
 }
 
 func TestRuntimeComponentLifecycleStartCreatesFullyLabeledSocketlessComponent(t *testing.T) {

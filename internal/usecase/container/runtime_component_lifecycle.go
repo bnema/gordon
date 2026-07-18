@@ -110,6 +110,15 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	}
 	labels := componentLifecycleLabels(command)
 	config := &domain.ContainerConfig{Image: command.DesiredImage, Name: command.TargetComponentID, Env: env, Labels: labels, NetworkMode: command.InternalNetwork, RestartPolicy: domain.RestartPolicyAlways}
+	if command.ConfigFile != "" {
+		if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
+			return err
+		}
+		config.Cmd = []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.yaml"}
+		config.ReadOnlyVolumes = map[string]string{"/etc/gordon/role.yaml": command.ConfigFile}
+		config.Volumes = componentPersistentVolumes(command)
+		config.Aliases = []string{"gordon-" + string(command.TargetComponentRole)}
+	}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return err
 	}
@@ -237,6 +246,31 @@ func isManagedLifecycleComponent(container *domain.Container, command domain.Run
 
 // componentLifecycleEnvironment reads only a runtime-owned generated env file.
 // It returns generic errors and never includes values in failures or logs.
+func componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[string]string {
+	// Persistent state belongs to explicit named volumes. Edge is stateless;
+	// registry storage is distinct so it can never be removed with a component.
+	name := "gordon-" + string(command.TargetComponentRole) + "-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
+	if command.TargetComponentRole == domain.ComponentRoleEdge {
+		return nil
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRegistry {
+		name = "gordon-registry-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
+	}
+	return map[string]string{"/var/lib/gordon": name}
+}
+
+func approvedComponentConfigFile(path string) error {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if !filepath.IsAbs(clean) || !strings.Contains(clean, "/migration/config/") {
+		return fmt.Errorf("invalid component configuration file")
+	}
+	info, err := os.Lstat(clean)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("invalid component configuration file")
+	}
+	return nil
+}
+
 func componentLifecycleEnvironment(path string) ([]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil

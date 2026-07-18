@@ -221,7 +221,7 @@ func componentEnvAdder(manifest *ComponentEnvManifest, environment map[string]st
 func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
 	// GORDON_ROLE is process-local role selection, never a config override.
 	for _, key := range sortedEnvironmentKeys(environment, func(key string) bool {
-		return strings.HasPrefix(key, "GORDON_") && key != "GORDON_ROLE"
+		return strings.HasPrefix(key, "GORDON_") && key != "GORDON_ROLE" && key != "GORDON_MIGRATION_IMAGE"
 	}) {
 		add(key, []domain.ComponentRole{domain.ComponentRoleControl}, true)
 	}

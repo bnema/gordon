@@ -9,6 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	launcher := &recordingComponentLauncher{}
+	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, launcher)
+	require.NoError(t, err)
+	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store)
+	require.NoError(t, err)
+	service.WithMigrationOrchestrator(orchestrator)
+	_, err = service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration"})
+	require.Error(t, err)
+	assert.Empty(t, launcher.calls)
+	require.NoFileExists(t, store.Path())
+}
+
 func TestMigrationOrchestratorDryRunAndPrepareAreOrderedIdempotent(t *testing.T) {
 	launcher := &recordingComponentLauncher{}
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))

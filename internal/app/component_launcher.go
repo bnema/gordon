@@ -55,6 +55,7 @@ type ComponentLaunchComponent struct {
 	Image            string
 	InternalNetwork  string
 	EnvironmentFile  string
+	ConfigFile       string
 	Labels           map[string]string
 	DesiredStateHash string
 }
@@ -83,6 +84,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	}
 	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
+	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
 		hash := componentLaunchHash(componentID, image, plan.InternalNetwork)
@@ -90,7 +92,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		if err != nil {
 			return ComponentLaunchPlan{}, err
 		}
-		plan.Components = append(plan.Components, ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], Labels: labels, DesiredStateHash: hash})
+		plan.Components = append(plan.Components, ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash})
 	}
 	return plan, nil
 }
@@ -175,7 +177,7 @@ func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.Runti
 	result, err := l.runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: l.now().UTC()},
 		TargetComponentID:      component.ComponentID, TargetComponentRole: component.Role, TargetVersion: component.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
-		LifecycleAction: action, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, PreserveVolumes: true,
+		LifecycleAction: action, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PreserveVolumes: true,
 	})
 	if err != nil {
 		return fmt.Errorf("send component %s command: %w", operation, err)

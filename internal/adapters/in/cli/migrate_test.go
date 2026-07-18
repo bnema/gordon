@@ -28,6 +28,22 @@ func (migrationCLIFake) MigrationStatus(context.Context) (*app.MigrationCheckpoi
 func (migrationCLIFake) MigrationResume(context.Context) (*app.MigrationCheckpoint, error) {
 	return nil, nil
 }
+func TestLocalControlPlaneUsesKernelMigrationFacade(t *testing.T) {
+	service, err := app.NewMigrationService(app.NewMigrationPreflight(app.MigrationPreflightProbes{}), mustMigrationStore(t))
+	require.NoError(t, err)
+	plane := &localControlPlane{migration: func() (*app.MigrationService, error) { return service, nil }}
+	report, err := plane.MigrationPlan(context.Background())
+	require.NoError(t, err)
+	assert.False(t, report.Ready)
+}
+
+func mustMigrationStore(t *testing.T) *app.MigrationCheckpointStore {
+	t.Helper()
+	store, err := app.NewMigrationCheckpointStore(t.TempDir() + "/migration.json")
+	require.NoError(t, err)
+	return store
+}
+
 func TestMigratePlanJSON(t *testing.T) {
 	var out bytes.Buffer
 	err := runMigrateOperation(context.Background(), migrationCLIFake{}, &out, true, func(ctx context.Context, s migrationControlPlane) (any, error) { return s.MigrationPlan(ctx) })

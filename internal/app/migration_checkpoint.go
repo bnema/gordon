@@ -39,6 +39,7 @@ type MigrationCheckpoint struct {
 	EdgeAppNetworks         []string `json:"edge_app_networks,omitempty"`
 	ConnectedEdgeNetworks   []string `json:"connected_edge_networks,omitempty"`
 	EnvFileReferences       []string `json:"env_file_references,omitempty"`
+	ConfigFileReferences    []string `json:"config_file_references,omitempty"`
 	RouteSnapshotGeneration uint64   `json:"route_snapshot_generation,omitempty"`
 	// SwitchAttempts and LastRetryPhase are deliberately metadata only; they
 	// allow a failed cutover to be resumed without deleting the old path.

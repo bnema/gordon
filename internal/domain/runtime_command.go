@@ -204,7 +204,10 @@ type RuntimeSelfUpdateCommand struct {
 	DesiredStateHash string
 	InternalNetwork  string
 	EnvironmentFile  string
-	PreserveVolumes  bool
+	// ConfigFile is an approved, read-only role manifest under the migration
+	// directory. It is not a general host bind or a secret transport.
+	ConfigFile      string
+	PreserveVolumes bool
 }
 
 // Validate checks that self-update is a Gordon component lifecycle operation, not an unmanaged mutation.

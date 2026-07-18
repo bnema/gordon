@@ -225,7 +225,7 @@ func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, c
 		}
 		orchestrator.WithTrafficSwitcher(switcher)
 	}
-	svc.migrationSvc.WithMigrationOrchestrator(orchestrator)
+	svc.migrationSvc.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE"))
 	return nil
 }
 

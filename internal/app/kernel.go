@@ -4,12 +4,18 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	"github.com/bnema/gordon/internal/usecase/container"
 	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
@@ -29,6 +35,14 @@ type Kernel struct {
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
 	cleanup         func()
+	// Migration is initialized lazily because ordinary local CLI commands must
+	// not create migration files or contact the runtime. The initializer is
+	// composed around the already-running monolith runtime worker, never a
+	// second Docker/Podman adapter owned by the CLI.
+	migrationOnce sync.Once
+	migrationSvc  *MigrationService
+	migrationErr  error
+	migrationInit func() (*MigrationService, error)
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -81,7 +95,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			cleanup()
 		}
 
-		return &Kernel{
+		kernel := &Kernel{
 			authEnabled:     cfg.Auth.Enabled,
 			configSvc:       svc.configSvc,
 			secretSvc:       svc.secretSvc,
@@ -94,7 +108,11 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			volumeSvc:       svc.volumeSvc,
 			publicTLSSvc:    svc.publicTLSSvc,
 			cleanup:         wrappedCleanup,
-		}, nil
+		}
+		kernel.migrationInit = func() (*MigrationService, error) {
+			return newMonolithMigrationService(configPath, cfg, svc)
+		}
+		return kernel, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
 	}
@@ -153,4 +171,87 @@ func (k *Kernel) Volumes() in.VolumeService { return k.volumeSvc }
 
 func (k *Kernel) PublicTLS() in.PublicTLSService { return k.publicTLSSvc }
 
+// Migration returns the migration facade owned by the existing monolith.
+// During bootstrap the monolith remains the sole socket authority and sends
+// lifecycle intents through its embedded runtime worker. This boundary keeps
+// the local CLI from constructing a second raw runtime adapter.
+func (k *Kernel) Migration() (*MigrationService, error) {
+	if k == nil || k.migrationInit == nil {
+		return nil, fmt.Errorf("local monolith migration is unavailable")
+	}
+	k.migrationOnce.Do(func() { k.migrationSvc, k.migrationErr = k.migrationInit() })
+	return k.migrationSvc, k.migrationErr
+}
+
 func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }
+
+// monolithMigrationRuntime is a deliberately narrow transitional authority.
+// It is backed by the monolith's existing worker/lifecycle manager; it does
+// not expose the runtime adapter or socket to the CLI or migration service.
+type monolithMigrationRuntime struct {
+	worker *container.RuntimeWorker
+	probe  out.RuntimeEnvironmentProbe
+}
+
+func (r *monolithMigrationRuntime) SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
+	return r.worker.SelfUpdate(ctx, command)
+}
+
+func (r *monolithMigrationRuntime) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnvironment, error) {
+	if r == nil || r.probe == nil {
+		return out.RuntimeEnvironment{}, fmt.Errorf("runtime environment probe unavailable")
+	}
+	return r.probe.ProbeRuntimeEnvironment(ctx)
+}
+
+func (r *monolithMigrationRuntime) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	if r == nil || r.worker == nil {
+		return nil, fmt.Errorf("runtime state unavailable")
+	}
+	snapshot, err := r.worker.Snapshot(ctx, 1, "monolith-migration", "gordon-monolith")
+	if err != nil {
+		return nil, err
+	}
+	updates := make(chan domain.RuntimeActualStateSnapshot, 1)
+	updates <- snapshot
+	close(updates)
+	return updates, nil
+}
+
+func newMonolithMigrationService(configPath string, cfg Config, svc *services) (*MigrationService, error) {
+	if svc == nil || svc.runtime == nil || svc.containerSvc == nil {
+		return nil, fmt.Errorf("monolith runtime migration is unavailable")
+	}
+	// The worker is the existing monolith socket authority. It is retained only
+	// until the split runtime channel handoff; no local CLI capability reaches
+	// svc.runtime directly.
+	policy := runtimeRolePolicy(cfg, nil)
+	// Migration component networks use a fixed, allowlisted prefix even when
+	// the legacy monolith did not enable application network isolation.
+	policy.ManagedNetworkPrefix = "gordon-internal"
+	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy).
+		WithComponentLifecycleManager(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy))
+	bridge := &monolithMigrationRuntime{worker: worker, probe: svc.runtime}
+	store, err := NewMigrationCheckpointStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "checkpoint.json"))
+	if err != nil {
+		return nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)
+	}
+	preflight := newControlMigrationPreflight(configPath, cfg, bridge, bridge)
+	migration, err := NewMigrationService(preflight, store, MigrationEnvOptions{
+		Config: cfg, Environment: componentEnvironmentFromEnviron(os.Environ()),
+		Directory: filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "env"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	launcher, err := NewRuntimeComponentLauncher(bridge)
+	if err != nil {
+		return nil, err
+	}
+	orchestrator, err := NewMigrationOrchestrator(preflight, store, launcher)
+	if err != nil {
+		return nil, err
+	}
+	orchestrator.WithRuntimeSnapshotAppNetworks(bridge)
+	return migration.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE")), nil
+}

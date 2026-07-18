@@ -156,6 +156,12 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 		if isRuntimeSocketMount(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
+		// Gordon role manifests are the sole host-file exception. They are
+		// generated with restrictive permissions under migration/config and may
+		// only be mounted read-only by a labeled component container.
+		if isApprovedComponentConfigBind(cfg, source) {
+			continue
+		}
 		if isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
@@ -201,6 +207,14 @@ func runtimePolicyImageRegistry(image string) string {
 func isRuntimeSocketMount(source string) bool {
 	clean := filepath.Clean(strings.TrimSpace(source))
 	return strings.HasSuffix(clean, ".sock") && (strings.Contains(clean, "/podman/") || strings.Contains(clean, "podman.sock") || strings.Contains(clean, "docker.sock"))
+}
+
+func isApprovedComponentConfigBind(cfg domain.ContainerConfig, source string) bool {
+	if cfg.Labels[domain.LabelComponent] != "true" {
+		return false
+	}
+	clean := filepath.Clean(strings.TrimSpace(source))
+	return filepath.IsAbs(clean) && strings.Contains(clean, "/migration/config/")
 }
 
 func isUnsafeHostBind(source string) bool {

@@ -28,6 +28,7 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 		Config: cfg,
 		Environment: map[string]string{
 			"GORDON_SERVER_PORT":         "8080",
+			"GORDON_MIGRATION_IMAGE":     "fixture.invalid/gordon:next",
 			"PASSWORD_STORE_DIR":         "/redacted/pass",
 			"CLOUDFLARE_DNS_API_TOKEN":   secret,
 			"AWS_ACCESS_KEY_ID":          "fixture-access",
@@ -101,7 +102,7 @@ func TestMigrationEnvOptionsAcceptOnlyAllowlistedExplicitEnvFile(t *testing.T) {
 	assert.NotContains(t, err.Error(), "fixture-value-not-reported")
 }
 
-func TestMigrationPrepareWritesOnlyEnvReferences(t *testing.T) {
+func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 	preflight := NewMigrationPreflight(MigrationPreflightProbes{
 		Runtime: func(_ context.Context) (RuntimePreflightTarget, error) {
 			return RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true}, nil
@@ -119,5 +120,11 @@ func TestMigrationPrepareWritesOnlyEnvReferences(t *testing.T) {
 	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})
 	require.NoError(t, err)
 	require.NotEmpty(t, checkpoint.EnvFileReferences)
+	require.Len(t, checkpoint.ConfigFileReferences, 4)
 	assert.NotContains(t, strings.Join(checkpoint.EnvFileReferences, " "), "8080")
+	for _, reference := range checkpoint.ConfigFileReferences {
+		info, statErr := os.Stat(reference)
+		require.NoError(t, statErr)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -13,13 +14,15 @@ import (
 // does not launch components, switch listeners, delete volumes, or access a
 // runtime socket; those mutations are introduced by later migration phases.
 type MigrationService struct {
-	preflight    *MigrationPreflight
-	store        *MigrationCheckpointStore
-	now          func() time.Time
-	envManifest  *ComponentEnvManifest
-	envError     error
-	envDirectory string
-	orchestrator *MigrationOrchestrator
+	preflight      *MigrationPreflight
+	store          *MigrationCheckpointStore
+	now            func() time.Time
+	envManifest    *ComponentEnvManifest
+	envError       error
+	envDirectory   string
+	config         Config
+	candidateImage string
+	orchestrator   *MigrationOrchestrator
 }
 
 // NewMigrationService accepts an optional, already-loaded component env plan.
@@ -40,6 +43,7 @@ func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpoi
 			return nil, err
 		}
 		service.envManifest, service.envError = manifest, err
+		service.config = options.Config
 		service.envDirectory = options.Directory
 		if service.envDirectory == "" {
 			service.envDirectory = filepath.Join(filepath.Dir(store.Path()), "env")
@@ -54,6 +58,15 @@ func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpoi
 func (s *MigrationService) WithMigrationOrchestrator(orchestrator *MigrationOrchestrator) *MigrationService {
 	if s != nil {
 		s.orchestrator = orchestrator
+	}
+	return s
+}
+
+// WithMigrationCandidateImage supplies the explicitly configured Gordon image
+// used by split components. The value is never copied to reports or errors.
+func (s *MigrationService) WithMigrationCandidateImage(image string) *MigrationService {
+	if s != nil {
+		s.candidateImage = strings.TrimSpace(image)
 	}
 	return s
 }
@@ -90,6 +103,9 @@ func (s *MigrationService) Prepare(ctx context.Context, checkpoint MigrationChec
 	if err := s.writeComponentEnv(&checkpoint); err != nil {
 		return nil, err
 	}
+	if err := s.writeComponentConfig(&checkpoint); err != nil {
+		return nil, err
+	}
 	if err := s.store.Save(checkpoint); err != nil {
 		return nil, err
 	}
@@ -113,6 +129,18 @@ func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (Mi
 	if checkpoint.Phase != MigrationPhasePrepared {
 		return MigrationCheckpoint{}, fmt.Errorf("prepare requires prepared phase")
 	}
+	if checkpoint.ComponentGeneration == 0 {
+		checkpoint.ComponentGeneration = 1
+	}
+	if checkpoint.TargetImage == "" && s.orchestrator != nil {
+		checkpoint.TargetImage = s.candidateImage
+	}
+	if checkpoint.TargetImage == "" && s.orchestrator != nil {
+		return MigrationCheckpoint{}, fmt.Errorf("migration candidate image is not configured")
+	}
+	if checkpoint.OldServingPath == "" {
+		checkpoint.OldServingPath = "monolith"
+	}
 	if checkpoint.StartedAt.IsZero() {
 		checkpoint.StartedAt = s.now().UTC()
 	}
@@ -128,6 +156,24 @@ func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error)
 		return MigrationCheckpoint{MigrationID: "migration"}, nil
 	}
 	return MigrationCheckpoint{}, err
+}
+
+func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint) error {
+	if s.envManifest == nil {
+		return nil
+	}
+	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
+		return fmt.Errorf("invalid migration ID for component configuration")
+	}
+	files, err := WriteComponentConfigManifests(s.config, filepath.Join(filepath.Dir(s.envDirectory), "config", checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration)))
+	if err != nil {
+		return err
+	}
+	checkpoint.ConfigFileReferences = checkpoint.ConfigFileReferences[:0]
+	for _, file := range files {
+		checkpoint.ConfigFileReferences = append(checkpoint.ConfigFileReferences, file.Path)
+	}
+	return nil
 }
 
 func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) error {
