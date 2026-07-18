@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // MigrationOrchestrator performs the non-public prepare sequence. Bootstrap is
@@ -176,18 +177,25 @@ func (o *MigrationOrchestrator) startPlan(ctx context.Context, plan ComponentLau
 		}
 	}
 	for _, component := range plan.Components {
-		if slices.Contains(checkpoint.PreparedComponents, component.ComponentID) {
-			continue
+		if !slices.Contains(checkpoint.PreparedComponents, component.ComponentID) {
+			if err := o.launcher.StartComponent(ctx, component); err != nil {
+				return fmt.Errorf("start %s: %w", component.Role, err)
+			}
+			checkpoint.PreparedComponents = append(checkpoint.PreparedComponents, component.ComponentID)
+			if err := o.store.Save(*checkpoint); err != nil {
+				return fmt.Errorf("checkpoint %s start: %w", component.Role, err)
+			}
 		}
-		if err := o.launcher.StartComponent(ctx, component); err != nil {
-			return fmt.Errorf("start %s: %w", component.Role, err)
-		}
-		checkpoint.PreparedComponents = append(checkpoint.PreparedComponents, component.ComponentID)
-		if err := o.store.Save(*checkpoint); err != nil {
-			return fmt.Errorf("checkpoint %s start: %w", component.Role, err)
+		// Control and runtime are the bootstrap pair. The replacement runtime
+		// must prove authenticated health and state before registry or edge can
+		// receive a command from it.
+		if component.Role == domain.ComponentRoleRuntime {
+			if err := o.transferRuntimeCommandChannel(ctx, plan, checkpoint); err != nil {
+				return err
+			}
 		}
 	}
-	return o.transferRuntimeCommandChannel(ctx, plan, checkpoint)
+	return nil
 }
 
 func (o *MigrationOrchestrator) transferRuntimeCommandChannel(ctx context.Context, plan ComponentLaunchPlan, checkpoint *MigrationCheckpoint) error {

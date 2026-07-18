@@ -102,6 +102,20 @@ message RuntimeSelfUpdateCommand {
   string internal_network = 12;
   string environment_file = 13;
   bool preserve_volumes = 14;
+  // config_file is a runtime-validated role manifest path, never an arbitrary
+  // host mount. It is required for component lifecycle start/replace.
+  string config_file = 15;
+  repeated ComponentPortBinding port_publishes = 16;
+}
+
+// ComponentPortBinding carries a deterministic migration listener binding.
+// Runtime validates the narrow bootstrap/final listener allowlist; it is not
+// a general container-engine port option.
+message ComponentPortBinding {
+  string host_ip = 1;
+  int32 host_port = 2;
+  int32 container_port = 3;
+  string protocol = 4;
 }
 
 message ApplyCommandRequest {

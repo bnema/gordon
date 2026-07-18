@@ -206,7 +206,11 @@ type RuntimeSelfUpdateCommand struct {
 	EnvironmentFile  string
 	// ConfigFile is an approved, read-only role manifest under the migration
 	// directory. It is not a general host bind or a secret transport.
-	ConfigFile      string
+	ConfigFile string
+	// PortPublishes are explicit checkpointed listener bindings. Lifecycle
+	// policy validates their role, address, and phase; raw engine port options
+	// are never accepted from control.
+	PortPublishes   []ContainerPortPublish
 	PreserveVolumes bool
 }
 

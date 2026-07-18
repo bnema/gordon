@@ -68,6 +68,34 @@ func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlC
 	return receiver, nil
 }
 
+// newRuntimeHandoffDialer dials only the checkpointed loopback bootstrap
+// endpoint of a prepared runtime. Authentication remains mandatory even though
+// the transport is loopback during the migration proof.
+func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
+	return func(ctx context.Context, component ComponentLaunchComponent) (RuntimeHandoffClient, error) {
+		if strings.TrimSpace(component.BootstrapEndpoint) == "" {
+			return nil, fmt.Errorf("replacement runtime bootstrap endpoint is required")
+		}
+		if runtimeControlToken(cfg) == "" {
+			return nil, fmt.Errorf("replacement runtime authentication token is required")
+		}
+		target := cfg
+		target.Endpoint = component.BootstrapEndpoint
+		// Bootstrap listeners are host-loopback only and the role's gRPC server
+		// uses component credentials rather than public TLS.
+		target.Insecure = true
+		client, err := createRuntimeCommandClient(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		handoff, ok := client.(RuntimeHandoffClient)
+		if !ok {
+			return nil, fmt.Errorf("replacement runtime client lacks handoff protocol")
+		}
+		return handoff, nil
+	}
+}
+
 func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeStateSubscriber, error) {
 	client, err := createRuntimeCommandClient(ctx, cfg)
 	if err != nil {

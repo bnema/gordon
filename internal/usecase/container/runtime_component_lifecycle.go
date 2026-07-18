@@ -90,6 +90,9 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	if strings.TrimSpace(command.DesiredImage) == "" || !safeComponentNetwork(command.InternalNetwork) {
 		return fmt.Errorf("invalid component desired state")
 	}
+	if !approvedPreparedPortPublishes(command.TargetComponentRole, command.PortPublishes) {
+		return fmt.Errorf("invalid component bootstrap port binding")
+	}
 	if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
 		return err
 	}
@@ -121,6 +124,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 		Env:             env,
 		Labels:          labels,
 		NetworkMode:     command.InternalNetwork,
+		PortPublishes:   append([]domain.ContainerPortPublish(nil), command.PortPublishes...),
 		RestartPolicy:   domain.RestartPolicyAlways,
 		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
 		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": command.ConfigFile},
@@ -128,6 +132,10 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 		Aliases:         []string{"gordon-" + string(command.TargetComponentRole)},
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		// This identity is derived from the validated lifecycle target and is
+		// consumed only by gordon-runtime when publishing its authenticated
+		// health/state identity.
+		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
 		if source, rewritten := runtimeComponentSocketMount(config.Env); source != "" {
 			// The runtime process is the sole post-cutover socket authority. The
 			// source socket is never mounted into control, edge, or registry.
@@ -322,6 +330,32 @@ func runtimeComponentSocketMount(environment []string) (string, []string) {
 		return path, copyOf
 	}
 	return "", copyOf
+}
+
+func approvedPreparedPortPublishes(role domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
+	for _, port := range ports {
+		if !validLoopbackBootstrapPort(port) || !allowedPreparedPort(role, port) {
+			return false
+		}
+	}
+	return true
+}
+
+func validLoopbackBootstrapPort(port domain.ContainerPortPublish) bool {
+	return port.Protocol == domain.NetworkProtocolTCP && port.HostIP == "127.0.0.1" && port.HostPort >= 1 && port.HostPort <= 65535 && port.ContainerPort >= 1 && port.ContainerPort <= 65535
+}
+
+func allowedPreparedPort(role domain.ComponentRole, port domain.ContainerPortPublish) bool {
+	switch role {
+	case domain.ComponentRoleRuntime:
+		return port.HostPort == 19444 && port.ContainerPort == 9444
+	case domain.ComponentRoleControl:
+		return port.HostPort == 19090 || port.HostPort == 19443
+	case domain.ComponentRoleEdge:
+		return port.HostPort == 18080
+	default:
+		return false
+	}
 }
 
 func safeComponentNetwork(network string) bool {

@@ -141,10 +141,34 @@ func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (Mi
 	if checkpoint.OldServingPath == "" {
 		checkpoint.OldServingPath = "monolith"
 	}
+	s.setBootstrapListeners(&checkpoint)
 	if checkpoint.StartedAt.IsZero() {
 		checkpoint.StartedAt = s.now().UTC()
 	}
 	return checkpoint, nil
+}
+
+// setBootstrapListeners uses only fixed values or configured final ports.
+// It intentionally cannot observe an engine-assigned address.
+func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint) {
+	if checkpoint.BootstrapControlEndpoint == "" {
+		checkpoint.BootstrapControlEndpoint = "127.0.0.1:19443"
+	}
+	if checkpoint.BootstrapRuntimeEndpoint == "" {
+		checkpoint.BootstrapRuntimeEndpoint = "127.0.0.1:19444"
+	}
+	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
+		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
+	}
+	if checkpoint.PreparedPortBindings == nil {
+		checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: 19444, ContainerPort: 9444, Protocol: "tcp"}}
+		if s.config.Server.Port > 0 {
+			checkpoint.PreparedPortBindings = append(checkpoint.PreparedPortBindings, MigrationPortBinding{Role: "edge", HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: s.config.Server.Port, Protocol: "tcp"})
+		}
+	}
+	if checkpoint.PublicPortBindings == nil && s.config.Server.Port > 0 && s.config.Server.RegistryPort > 0 {
+		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
+	}
 }
 
 func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error) {

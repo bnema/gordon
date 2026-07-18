@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -227,8 +229,16 @@ func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServ
 		runtimeRoleRouteDrainAckReceiver(worker),
 		runtimeRoleStandaloneServiceManager(worker),
 		runtimeRoleEnvironmentProbe(worker),
-		"gordon-runtime",
+		runtimeRoleComponentID(),
 	)
+}
+
+func runtimeRoleComponentID() string {
+	id := strings.TrimSpace(os.Getenv("GORDON_COMPONENT_ID"))
+	if strings.HasPrefix(id, "gordon-runtime-") && !strings.ContainsAny(id, " /\\") {
+		return id
+	}
+	return "gordon-runtime"
 }
 
 func runtimeRoleEnvironmentProbe(worker in.RuntimeWorker) out.RuntimeEnvironmentProbe {
@@ -247,7 +257,7 @@ func runtimeRoleStateSubscriber(worker in.RuntimeWorker) out.RuntimeStateSubscri
 	if !ok {
 		return nil
 	}
-	return &pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: "gordon-runtime"}
+	return &pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: runtimeRoleComponentID()}
 }
 
 type pollingRuntimeStateSubscriber struct {

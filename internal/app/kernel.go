@@ -244,7 +244,7 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	if err != nil {
 		return nil, err
 	}
-	launcher, err := NewRuntimeComponentLauncher(bridge)
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(bridge, newRuntimeHandoffDialer(cfg.Runtime))
 	if err != nil {
 		return nil, err
 	}

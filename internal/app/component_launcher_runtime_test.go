@@ -27,12 +27,15 @@ func TestRuntimeComponentLauncherUsesOnlyLifecycleCommands(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, launcher.CreateInternalNetwork(context.Background(), plan))
 	require.NoError(t, launcher.StartComponent(context.Background(), plan.Components[0]))
-	require.NoError(t, launcher.TransferRuntimeCommandChannel(context.Background(), plan.Components[0]))
-	require.Len(t, updater.commands, 3)
+	// A launcher without an authenticated target can bootstrap components but
+	// must never pretend the runtime handoff succeeded.
+	runtimeComponent, ok := componentForRole(plan, domain.ComponentRoleRuntime)
+	require.True(t, ok)
+	require.Error(t, launcher.TransferRuntimeCommandChannel(context.Background(), runtimeComponent))
+	require.Len(t, updater.commands, 2)
 	assert.Equal(t, domain.RuntimeComponentLifecycleEnsureNetwork, updater.commands[0].LifecycleAction)
 	assert.Equal(t, domain.RuntimeComponentLifecycleStart, updater.commands[1].LifecycleAction)
 	assert.Equal(t, plan.Components[0].DesiredStateHash, updater.commands[1].DesiredStateHash)
 	assert.True(t, updater.commands[1].PreserveVolumes)
-	assert.Equal(t, domain.RuntimeComponentLifecycleTransferChannel, updater.commands[2].LifecycleAction)
 	assert.NotEmpty(t, updater.commands[1].IdempotencyKey)
 }

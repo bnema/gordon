@@ -63,10 +63,10 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole) map[string]any {
 	case domain.ComponentRoleRuntime:
 		return map[string]any{
 			"server": map[string]any{"data_dir": "/var/lib/gordon", "runtime": "unix:///run/gordon/runtime.sock"},
-			// The runtime listener is private to the component network. Its
-			// endpoint is provisioned by the runtime command channel, not copied
-			// from control's client endpoint.
-			"runtime": map[string]any{},
+			// 9444 is the fixed migration bootstrap listener. The only host
+			// publication is the checkpointed 127.0.0.1:19444 binding; no
+			// engine-selected endpoint is emitted into artifacts.
+			"runtime": map[string]any{"listen_address": "0.0.0.0:9444"},
 			"volumes": cfg.Volumes,
 		}
 	case domain.ComponentRoleRegistry:

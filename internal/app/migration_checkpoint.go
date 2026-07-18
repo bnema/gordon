@@ -23,6 +23,17 @@ const (
 	MigrationPhaseSwitched MigrationPhase = "switched"
 )
 
+// MigrationPortBinding is an explicit, serialized migration listener binding.
+// It is intentionally numeric and deterministic: no runtime-assigned port may
+// be persisted in a checkpoint or role artifact.
+type MigrationPortBinding struct {
+	Role          string `json:"role"`
+	HostIP        string `json:"host_ip"`
+	HostPort      int    `json:"host_port"`
+	ContainerPort int    `json:"container_port"`
+	Protocol      string `json:"protocol"`
+}
+
 type MigrationCheckpoint struct {
 	MigrationID               string         `json:"migration_id"`
 	SourceVersion             string         `json:"source_version,omitempty"`
@@ -34,6 +45,14 @@ type MigrationCheckpoint struct {
 	OldServingPath            string         `json:"old_serving_path,omitempty"`
 	PreparedComponents        []string       `json:"prepared_components,omitempty"`
 	RuntimeChannelTransferred bool           `json:"runtime_channel_transferred,omitempty"`
+	// Bootstrap endpoints are fixed loopback endpoints used only while the
+	// monolith proves the replacement runtime. They are persisted so resume
+	// never discovers or records an engine-assigned address.
+	BootstrapControlEndpoint   string                 `json:"bootstrap_control_endpoint,omitempty"`
+	BootstrapRuntimeEndpoint   string                 `json:"bootstrap_runtime_endpoint,omitempty"`
+	BootstrapEdgeProbeEndpoint string                 `json:"bootstrap_edge_probe_endpoint,omitempty"`
+	PreparedPortBindings       []MigrationPortBinding `json:"prepared_port_bindings,omitempty"`
+	PublicPortBindings         []MigrationPortBinding `json:"public_port_bindings,omitempty"`
 	// EdgeAppNetworks records only managed network names selected from the
 	// runtime snapshot; it never contains container IDs or socket details.
 	EdgeAppNetworks         []string `json:"edge_app_networks,omitempty"`
@@ -235,7 +254,26 @@ func validateCheckpoint(checkpoint MigrationCheckpoint) error {
 			return fmt.Errorf("invalid migration checkpoint")
 		}
 	}
+	for _, binding := range append(append([]MigrationPortBinding(nil), checkpoint.PreparedPortBindings...), checkpoint.PublicPortBindings...) {
+		if !validMigrationPortBinding(binding) {
+			return fmt.Errorf("invalid migration checkpoint")
+		}
+	}
 	return nil
+}
+
+func validMigrationPortBinding(binding MigrationPortBinding) bool {
+	if binding.Role != string("control") && binding.Role != string("runtime") && binding.Role != string("registry") && binding.Role != string("edge") {
+		return false
+	}
+	if binding.HostPort < 1 || binding.HostPort > 65535 || binding.ContainerPort < 1 || binding.ContainerPort > 65535 {
+		return false
+	}
+	if binding.Protocol != "tcp" || (binding.HostIP != "127.0.0.1" && binding.HostIP != "0.0.0.0") {
+		return false
+	}
+	// Prepared components can only expose a loopback bootstrap/probe port.
+	return true
 }
 func phaseRank(phase MigrationPhase) int {
 	switch phase {

@@ -82,7 +82,7 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
-	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory); err != nil {
+	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime); err != nil {
 		return nil, err
 	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
@@ -201,12 +201,12 @@ func controlHTTPHandler(svc *services, cfg Config, log zerowrap.Logger) http.Han
 // wireControlMigrationRuntime composes only authenticated runtime clients. A
 // missing endpoint or WS05 split deploy/drain checker leaves cutover disabled;
 // this function never falls back to a local Docker-compatible adapter/socket.
-func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber) error {
+func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber, runtimeConfig RuntimeControlConfig) error {
 	updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater)
 	if !ok {
 		return nil
 	}
-	launcher, err := NewRuntimeComponentLauncher(updater)
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(updater, newRuntimeHandoffDialer(runtimeConfig))
 	if err != nil {
 		return fmt.Errorf("create runtime component launcher: %w", err)
 	}

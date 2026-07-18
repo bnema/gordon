@@ -424,7 +424,19 @@ func protoStandaloneServiceState(service *runtimev1.RuntimeStandaloneServiceStat
 }
 
 func domainSelfUpdate(command domain.RuntimeSelfUpdateCommand) *runtimev1.RuntimeSelfUpdateCommand {
-	return &runtimev1.RuntimeSelfUpdateCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID, TargetComponentRole: string(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: string(command.Policy), PolicyDecisionId: command.PolicyDecisionID, ApprovedBy: command.ApprovedBy, LifecycleAction: string(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, PreserveVolumes: command.PreserveVolumes}
+	result := &runtimev1.RuntimeSelfUpdateCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID, TargetComponentRole: string(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: string(command.Policy), PolicyDecisionId: command.PolicyDecisionID, ApprovedBy: command.ApprovedBy, LifecycleAction: string(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, PreserveVolumes: command.PreserveVolumes}
+	for _, port := range command.PortPublishes {
+		if !validProtoComponentPort(port) {
+			continue
+		}
+		// #nosec G115 -- validProtoComponentPort bounds both values to int32.
+		result.PortPublishes = append(result.PortPublishes, &runtimev1.ComponentPortBinding{HostIp: port.HostIP, HostPort: int32(port.HostPort), ContainerPort: int32(port.ContainerPort), Protocol: string(port.Protocol)})
+	}
+	return result
+}
+
+func validProtoComponentPort(port domain.ContainerPortPublish) bool {
+	return port.HostPort >= 0 && port.HostPort <= maxInt32 && port.ContainerPort >= 0 && port.ContainerPort <= maxInt32
 }
 
 func responseResult(resp *runtimev1.ApplyCommandResponse, err error) (domain.RuntimeCommandResult, error) {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -23,6 +24,21 @@ import (
 type RuntimeCommandChannelTransfer interface {
 	TransferRuntimeCommandChannel(context.Context, ComponentLaunchComponent) error
 }
+
+// RuntimeHandoffClient is the authenticated, migration-safe surface required
+// before control can trust a replacement runtime. It intentionally contains no
+// engine adapter or socket capability.
+type RuntimeHandoffClient interface {
+	out.RuntimeSelfUpdater
+	out.RuntimeEnvironmentProbe
+	out.RuntimeStateSubscriber
+	out.RuntimeHealthClient
+}
+
+// RuntimeHandoffDialer creates an authenticated client for the deterministic
+// bootstrap endpoint of the prepared runtime. Implementations must not fall
+// back to the old runtime endpoint on an error.
+type RuntimeHandoffDialer func(context.Context, ComponentLaunchComponent) (RuntimeHandoffClient, error)
 
 type ComponentLauncher interface {
 	CreateInternalNetwork(context.Context, ComponentLaunchPlan) error
@@ -58,6 +74,11 @@ type ComponentLaunchComponent struct {
 	ConfigFile       string
 	Labels           map[string]string
 	DesiredStateHash string
+	// PortPublishes contains only checkpointed deterministic bindings. During
+	// prepare these are loopback bootstrap/probe bindings; final public
+	// bindings are supplied only by the separately authorized activate action.
+	PortPublishes     []domain.ContainerPortPublish
+	BootstrapEndpoint string
 }
 
 func (p ComponentLaunchPlan) Roles() []domain.ComponentRole {
@@ -92,7 +113,11 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		if err != nil {
 			return ComponentLaunchPlan{}, err
 		}
-		plan.Components = append(plan.Components, ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash})
+		component := ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash, PortPublishes: componentPreparedPorts(checkpoint.PreparedPortBindings, role)}
+		if role == domain.ComponentRoleRuntime {
+			component.BootstrapEndpoint = checkpoint.BootstrapRuntimeEndpoint
+		}
+		plan.Components = append(plan.Components, component)
 	}
 	return plan, nil
 }
@@ -118,6 +143,16 @@ func componentLaunchHash(componentID, image, network string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func componentPreparedPorts(bindings []MigrationPortBinding, role domain.ComponentRole) []domain.ContainerPortPublish {
+	ports := make([]domain.ContainerPortPublish, 0)
+	for _, binding := range bindings {
+		if binding.Role == string(role) {
+			ports = append(ports, domain.ContainerPortPublish{HostIP: binding.HostIP, HostPort: binding.HostPort, ContainerPort: binding.ContainerPort, Protocol: domain.NetworkProtocol(binding.Protocol)})
+		}
+	}
+	return ports
+}
+
 func componentEnvReferences(references []string) map[domain.ComponentRole]string {
 	byRole := make(map[domain.ComponentRole]string)
 	for _, reference := range references {
@@ -132,15 +167,24 @@ func componentEnvReferences(references []string) map[domain.ComponentRole]string
 // RuntimeComponentLauncher serializes lifecycle intents into authenticated
 // RuntimeSelfUpdate commands. It has no container runtime field by design.
 type RuntimeComponentLauncher struct {
+	mu      sync.RWMutex
 	runtime out.RuntimeSelfUpdater
+	handoff RuntimeHandoffDialer
 	now     func() time.Time
 }
 
 func NewRuntimeComponentLauncher(runtime out.RuntimeSelfUpdater) (*RuntimeComponentLauncher, error) {
-	if runtime == nil {
+	return NewRuntimeComponentLauncherWithHandoff(runtime, nil)
+}
+
+// NewRuntimeComponentLauncherWithHandoff makes runtime authority swappable
+// only after a live, authenticated replacement has proved its identity and
+// actual-state stream. Until then all commands continue to use oldRuntime.
+func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, handoff RuntimeHandoffDialer) (*RuntimeComponentLauncher, error) {
+	if oldRuntime == nil {
 		return nil, fmt.Errorf("runtime self-update client is required")
 	}
-	return &RuntimeComponentLauncher{runtime: runtime, now: time.Now}, nil
+	return &RuntimeComponentLauncher{runtime: oldRuntime, handoff: handoff, now: time.Now}, nil
 }
 
 func (l *RuntimeComponentLauncher) CreateInternalNetwork(ctx context.Context, plan ComponentLaunchPlan) error {
@@ -153,7 +197,70 @@ func (l *RuntimeComponentLauncher) StopComponent(ctx context.Context, component 
 	return l.send(ctx, domain.RuntimeComponentLifecycleStop, component, componentGeneration(component), componentMigrationID(component), "stop")
 }
 func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Context, component ComponentLaunchComponent) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentGeneration(component), componentMigrationID(component), "transfer-channel")
+	if component.Role != domain.ComponentRoleRuntime {
+		return fmt.Errorf("runtime command channel can only transfer to runtime")
+	}
+	if l == nil || l.handoff == nil {
+		return fmt.Errorf("runtime handoff target is not configured")
+	}
+	// This acknowledgement is deliberately sent through the old authority. It
+	// authorizes bootstrap but does not claim the handoff succeeded.
+	if err := l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentGeneration(component), componentMigrationID(component), "transfer-channel"); err != nil {
+		return err
+	}
+	target, err := l.handoff(ctx, component)
+	if err != nil {
+		return fmt.Errorf("connect authenticated replacement runtime: %w", err)
+	}
+	if err := proveRuntimeHandoff(ctx, target, component); err != nil {
+		return fmt.Errorf("prove replacement runtime: %w", err)
+	}
+	l.mu.Lock()
+	l.runtime = target
+	l.mu.Unlock()
+	return nil
+}
+
+func proveRuntimeHandoff(ctx context.Context, target RuntimeHandoffClient, component ComponentLaunchComponent) error {
+	if target == nil {
+		return fmt.Errorf("replacement runtime client is required")
+	}
+	probe, err := target.ProbeRuntimeEnvironment(ctx)
+	if err != nil {
+		return fmt.Errorf("probe replacement runtime environment: %w", err)
+	}
+	if !probe.APIReachable || !probe.Rootless {
+		return fmt.Errorf("replacement runtime environment is not rootless and reachable")
+	}
+	if err := target.PingRuntime(ctx); err != nil {
+		return fmt.Errorf("check replacement runtime health: %w", err)
+	}
+	updates, err := target.SubscribeRuntimeState(ctx)
+	if err != nil {
+		return fmt.Errorf("subscribe replacement runtime state: %w", err)
+	}
+	select {
+	case snapshot, ok := <-updates:
+		if !ok {
+			return fmt.Errorf("replacement runtime state stream closed")
+		}
+		return verifyRuntimeHandoffSnapshot(component, snapshot)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func verifyRuntimeHandoffSnapshot(component ComponentLaunchComponent, snapshot domain.RuntimeActualStateSnapshot) error {
+	if snapshot.SourceComponentID != component.ComponentID {
+		return fmt.Errorf("replacement runtime state source does not match component")
+	}
+	generation := componentGeneration(component)
+	for _, container := range snapshot.Containers {
+		if container.Name == component.ComponentID && container.Status == domain.ContainerStatusRunning && container.Generation == generation && container.Labels[domain.LabelComponent] == "true" && container.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) && container.Labels[domain.LabelComponentGeneration] == fmt.Sprintf("%d", generation) {
+			return nil
+		}
+	}
+	return fmt.Errorf("replacement runtime component generation is not live")
 }
 func (l *RuntimeComponentLauncher) CheckComponentHealth(ctx context.Context, component ComponentLaunchComponent) error {
 	return l.send(ctx, domain.RuntimeComponentLifecycleHealth, component, componentGeneration(component), componentMigrationID(component), "health")
@@ -174,10 +281,16 @@ func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.Runti
 	if generation == 0 || strings.TrimSpace(migrationID) == "" {
 		return fmt.Errorf("component lifecycle identity is required")
 	}
-	result, err := l.runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
+	l.mu.RLock()
+	runtime := l.runtime
+	l.mu.RUnlock()
+	if runtime == nil {
+		return fmt.Errorf("runtime self-update client is required")
+	}
+	result, err := runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: l.now().UTC()},
 		TargetComponentID:      component.ComponentID, TargetComponentRole: component.Role, TargetVersion: component.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
-		LifecycleAction: action, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PreserveVolumes: true,
+		LifecycleAction: action, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PortPublishes: append([]domain.ContainerPortPublish(nil), component.PortPublishes...), PreserveVolumes: true,
 	})
 	if err != nil {
 		return fmt.Errorf("send component %s command: %w", operation, err)
