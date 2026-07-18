@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -160,6 +163,210 @@ func TestControlRoleBringup(t *testing.T) {
 	}
 }
 
+// TestControlRoleMigrationPreflightProductionListener exercises the production
+// control HTTP listener through the real authenticated runtime gRPC adapter.
+// The fake reports only the runtime-owned, sanitized probe boundary; it does
+// not provide a socket or permit migration mutations.
+func TestControlRoleMigrationPreflightProductionListener(t *testing.T) {
+	const (
+		rawSocket = "/run/user/1000/podman/podman.sock"
+		rawSecret = "fixture-preflight-secret"
+	)
+	passing := out.RuntimeEnvironment{
+		Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true,
+		ImagePullable: true, NetworkFeasible: true, DiskAvailable: 1 << 30, DiskSufficient: true,
+	}
+	tests := []struct {
+		name       string
+		report     out.RuntimeEnvironment
+		probeErr   error
+		wantStatus int
+	}{
+		{name: "rootless Podman passes", report: passing, wantStatus: http.StatusOK},
+		{name: "Docker is rejected", report: out.RuntimeEnvironment{Engine: "docker", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}, wantStatus: http.StatusUnprocessableEntity},
+		{name: "rootful Podman is rejected", report: out.RuntimeEnvironment{Engine: "podman", APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}, wantStatus: http.StatusUnprocessableEntity},
+		{name: "unavailable runtime is rejected", probeErr: errors.New("runtime unavailable at " + rawSocket + " token=" + rawSecret), wantStatus: http.StatusUnprocessableEntity},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(TokenSecretEnvVar, "migration-production-listener-token-secret-at-least-32-bytes")
+			probe := &controlRoleMigrationProbe{report: tc.report, err: tc.probeErr}
+			runtime := startControlRoleRuntimeWithProbe(t, probe)
+			defer runtime.stop()
+			runtime.state = newControlRoleStateSubscriber()
+			configPath := writeControlRoleConfig(t, runtime.listener.Addr().String())
+
+			listeners := make(chan net.Listener, 2)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				done <- runControlWithDependencies(ctx, configPath, controlRoleDependencies{
+					listen: func(network, address string) (net.Listener, error) {
+						listener, err := net.Listen(network, address)
+						if err == nil {
+							listeners <- listener
+						}
+						return listener, err
+					},
+					newComponentTokenValidator: func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error) {
+						return controlRoleComponentValidator{}, nil
+					},
+					newSnapshotHub:             edgesnapshot.NewSnapshotHub,
+					newEventHub:                productionControlRoleDependencies().newEventHub,
+					newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
+					newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
+					newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
+					setupConfigHotReload:       func(context.Context, configWatcher, loadedConfigApplier) error { return nil },
+					newSnapshotProducer:        edgesnapshot.NewProducer,
+					newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				require.NoError(t, <-done)
+			})
+
+			runtime.state.Publish(phase4ManagedRuntimeSnapshot(1, "migration-runtime"))
+			_ = controlRoleListener(t, listeners) // production gRPC listener is live too.
+			httpListener := controlRoleListener(t, listeners)
+			baseURL := "http://" + httpListener.Addr().String()
+			adminToken := controlRoleAdminToken(t, configPath)
+			cliToken := controlRoleRemoteToken(t, configPath)
+
+			if tc.wantStatus == http.StatusOK {
+				assertMigrationPreflightAuthContract(t, baseURL, configPath)
+				require.Zero(t, probe.calls(), "authentication failures must not reach runtime")
+			}
+
+			configBefore, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+			checkpointPath := filepath.Join(filepath.Dir(configPath), "migration", "checkpoint.json")
+			_, err = os.Stat(checkpointPath)
+			require.ErrorIs(t, err, os.ErrNotExist)
+
+			response := controlRoleRequest(t, http.MethodGet, baseURL+"/admin/migration/plan", adminToken)
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			require.NoError(t, err)
+			require.Equal(t, tc.wantStatus, response.StatusCode)
+			require.Contains(t, response.Header.Get("Content-Type"), "application/json")
+			assert.NotContains(t, string(body), rawSocket)
+			assert.NotContains(t, string(body), rawSecret)
+
+			var report MigrationPreflightReport
+			require.NoError(t, json.Unmarshal(body, &report))
+			assert.Equal(t, tc.wantStatus == http.StatusOK, report.Ready)
+			assertMigrationPreflightReport(t, report)
+			require.Equal(t, 1, probe.calls(), "plan must make exactly one runtime probe RPC")
+			if tc.wantStatus == http.StatusOK {
+				probe.reset()
+				// This executes the public Cobra command against the production
+				// listener rather than a CLI fake or an httptest handler.
+				cliBody := controlRoleMigrationPlanCLI(t, baseURL, cliToken)
+				assert.NotContains(t, string(cliBody), rawSocket)
+				assert.NotContains(t, string(cliBody), rawSecret)
+				var cliReport MigrationPreflightReport
+				require.NoError(t, json.Unmarshal(cliBody, &cliReport))
+				assert.Equal(t, report, cliReport)
+				require.Equal(t, 1, probe.calls(), "CLI plan must make exactly one runtime probe RPC")
+			}
+			assert.Zero(t, runtime.worker.calls(), "dry-run must not issue runtime commands")
+			configAfter, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, configBefore, configAfter, "preflight must not rewrite config")
+			_, err = os.Stat(checkpointPath)
+			require.ErrorIs(t, err, os.ErrNotExist, "plan must not create a checkpoint")
+		})
+	}
+}
+
+func controlRoleMigrationPlanCLI(t *testing.T, baseURL, token string) []byte {
+	t.Helper()
+	command := exec.Command("go", "run", ".", "--remote", baseURL, "--token", token, "migrate", "plan", "--json")
+	command.Dir = filepath.Join("..", "..")
+	output, err := command.CombinedOutput()
+	require.NoError(t, err, string(output))
+	return output
+}
+
+func controlRoleListener(t *testing.T, listeners <-chan net.Listener) net.Listener {
+	t.Helper()
+	select {
+	case listener := <-listeners:
+		return listener
+	case <-time.After(time.Second):
+		t.Fatal("control listener did not start")
+		return nil
+	}
+}
+
+func assertMigrationPreflightAuthContract(t *testing.T, baseURL, configPath string) {
+	t.Helper()
+	limitedToken := controlRoleScopedToken(t, configPath, "migration-limited", []string{"admin:routes:read"})
+	for _, tc := range []struct {
+		name, authorization string
+		want                int
+	}{
+		{name: "missing", want: http.StatusUnauthorized},
+		{name: "malformed", authorization: "Bearer malformed-token", want: http.StatusUnauthorized},
+		{name: "forbidden", authorization: limitedToken, want: http.StatusForbidden},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			response := controlRoleRequest(t, http.MethodGet, baseURL+"/admin/migration/plan", tc.authorization)
+			defer response.Body.Close()
+			require.Equal(t, tc.want, response.StatusCode)
+			assertControlJSONShape(t, response, "error")
+		})
+	}
+}
+
+func assertMigrationPreflightReport(t *testing.T, report MigrationPreflightReport) {
+	t.Helper()
+	require.Len(t, report.Checks, 12)
+	for _, check := range report.Checks {
+		assert.NotEmpty(t, check.Name)
+		assert.NotEmpty(t, check.Category)
+		assert.NotEmpty(t, check.Remediation)
+		assert.Contains(t, []PreflightStatus{PreflightPass, PreflightFail, PreflightWarning}, check.Status)
+	}
+	runtimeCheck := report.Checks[0]
+	assert.Equal(t, "rootless_podman", runtimeCheck.Name)
+	assert.Equal(t, PreflightRuntime, runtimeCheck.Category)
+	if report.Ready {
+		assert.Equal(t, PreflightPass, runtimeCheck.Status)
+	} else {
+		assert.Equal(t, PreflightFail, runtimeCheck.Status)
+		assert.Contains(t, runtimeCheck.Remediation, "rootless Podman")
+	}
+}
+
+type controlRoleMigrationProbe struct {
+	mu     sync.Mutex
+	report out.RuntimeEnvironment
+	err    error
+	count  int
+}
+
+func (p *controlRoleMigrationProbe) ProbeRuntimeEnvironment(context.Context) (out.RuntimeEnvironment, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.count++
+	return p.report, p.err
+}
+
+func (p *controlRoleMigrationProbe) calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.count
+}
+
+func (p *controlRoleMigrationProbe) reset() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.count = 0
+}
+
 func writeControlRoleConfig(t *testing.T, runtimeEndpoint string) string {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -200,11 +407,16 @@ burst = 10000
 
 func controlRoleAdminToken(t *testing.T, configPath string) string {
 	t.Helper()
+	return controlRoleScopedToken(t, configPath, "control-role-admin", []string{"admin:*:*"})
+}
+
+func controlRoleScopedToken(t *testing.T, configPath, subject string, scopes []string) string {
+	t.Helper()
 	_, cfg, err := initConfig(configPath)
 	require.NoError(t, err)
 	_, service, err := createAuthService(context.Background(), cfg, zerowrap.Default())
 	require.NoError(t, err)
-	token, err := service.GenerateAccessToken(context.Background(), "control-role-admin", []string{"admin:*:*"}, time.Minute)
+	token, err := service.GenerateAccessToken(context.Background(), subject, scopes, time.Minute)
 	require.NoError(t, err)
 	return token
 }
@@ -714,6 +926,11 @@ type controlRoleRuntime struct {
 
 func startControlRoleRuntime(t *testing.T) *controlRoleRuntime {
 	t.Helper()
+	return startControlRoleRuntimeWithProbe(t, nil)
+}
+
+func startControlRoleRuntimeWithProbe(t *testing.T, probe out.RuntimeEnvironmentProbe) *controlRoleRuntime {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	runtime := &controlRoleRuntime{listener: listener, worker: &controlRoleRuntimeWorker{}}
@@ -723,7 +940,7 @@ func startControlRoleRuntime(t *testing.T) *controlRoleRuntime {
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, runtimegrpc.MethodScopes(), runtimegrpc.MethodRoles())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, runtimegrpc.MethodScopes(), runtimegrpc.MethodRoles())),
 	)
-	runtimev1.RegisterRuntimeServiceServer(runtime.server, runtimegrpc.NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager(runtime.worker, nil, nil, nil, runtime, controlRoleDrainReceiver{}, nil, "runtime-test"))
+	runtimev1.RegisterRuntimeServiceServer(runtime.server, runtimegrpc.NewServerWithEnvironmentProbe(runtime.worker, nil, nil, nil, runtime, controlRoleDrainReceiver{}, nil, probe, "runtime-test"))
 	go func() { _ = runtime.server.Serve(listener) }()
 	return runtime
 }
