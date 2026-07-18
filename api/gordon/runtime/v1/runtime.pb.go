@@ -3509,7 +3509,7 @@ var File_gordon_runtime_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\n" +
-	"\x1fgordon/runtime/v1/runtime.proto\x12\x11gordon.runtime.v1\x1a\x1dgordon/common/v1/common.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xe0\x01\n" +
+	"\x1fgordon/runtime/v1/runtime.proto\x12\x11gordon.runtime.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dgordon/common/v1/common.proto\"\xe0\x01\n" +
 	"\x16RuntimeCommandIdentity\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0fidempotency_key\x18\x02 \x01(\tR\x0eidempotencyKey\x12\x1e\n" +

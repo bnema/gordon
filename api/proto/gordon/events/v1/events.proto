@@ -12,11 +12,20 @@ service EventService {
   rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
 }
 
-message PublishEventRequest { EventEnvelope event = 1; }
-message PublishEventResponse { EventAck ack = 1; }
+message PublishEventRequest {
+  EventEnvelope event = 1;
+}
+message PublishEventResponse {
+  EventAck ack = 1;
+}
 message WatchEventsRequest {}
-message WatchEventsResponse { EventEnvelope event = 1; }
-message EventAck { string event_id = 1; bool duplicate = 2; }
+message WatchEventsResponse {
+  EventEnvelope event = 1;
+}
+message EventAck {
+  string event_id = 1;
+  bool duplicate = 2;
+}
 
 message EventEnvelope {
   string id = 1;
@@ -51,14 +60,45 @@ message RegistryImagePushedPayload {
   bytes manifest = 4;
   map<string, string> annotations = 5;
 }
-message RuntimeStateChangedPayload { string component_id = 1; string state = 2; }
-message RuntimeDeployPayload { string domain = 1; string image = 2; uint64 generation = 3; }
-message ContainerDeployedPayload { string domain = 1; string image = 2; string deployment_id = 3; uint64 generation = 4; }
+message RuntimeStateChangedPayload {
+  string component_id = 1;
+  string state = 2;
+}
+message RuntimeDeployPayload {
+  string domain = 1;
+  string image = 2;
+  uint64 generation = 3;
+}
+message ContainerDeployedPayload {
+  string domain = 1;
+  string image = 2;
+  string deployment_id = 3;
+  uint64 generation = 4;
+}
 // Config reload carries a revision only; raw configuration is forbidden.
-message ConfigReloadPayload { string version = 1; }
+message ConfigReloadPayload {
+  string version = 1;
+}
 // Secret changes carry a revision only; secret names and values are forbidden.
-message SecretsChangedPayload { string version = 1; }
-message ManualDeployPayload { string domain = 1; string image = 2; string correlation_id = 3; }
-message PolicyDeniedPayload { string decision_id = 1; string action = 2; string reason = 3; }
-message AuditPayload { string action = 1; string subject = 2; string outcome = 3; }
-message EdgeDrainPayload { string domain = 1; uint64 generation = 2; }
+message SecretsChangedPayload {
+  string version = 1;
+}
+message ManualDeployPayload {
+  string domain = 1;
+  string image = 2;
+  string correlation_id = 3;
+}
+message PolicyDeniedPayload {
+  string decision_id = 1;
+  string action = 2;
+  string reason = 3;
+}
+message AuditPayload {
+  string action = 1;
+  string subject = 2;
+  string outcome = 3;
+}
+message EdgeDrainPayload {
+  string domain = 1;
+  uint64 generation = 2;
+}

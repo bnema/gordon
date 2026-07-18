@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package gordon.runtime.v1;
 
-import "gordon/common/v1/common.proto";
 import "google/protobuf/timestamp.proto";
+import "gordon/common/v1/common.proto";
 
 option go_package = "github.com/bnema/gordon/api/gordon/runtime/v1;runtimev1";
 
