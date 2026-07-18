@@ -12,17 +12,20 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/testutils/remotemanagement"
 )
 
 // remoteManagementFamilies is deliberately an inventory rather than a method
 // matrix. A management family added to NewRootCmd must decide whether it has a
 // remote command-level contract and be registered here with a Cobra smoke.
-var remoteManagementFamilies = map[string]struct{}{
-	"attachments": {}, "autoroute": {}, "backups": {}, "bootstrap": {}, "config": {},
-	"deploy": {}, "images": {}, "logs": {}, "networks": {}, "pin": {}, "preview": {},
-	"push": {}, "reload": {}, "restart": {}, "routes": {}, "secrets": {}, "status": {},
-	"tls": {}, "traffic": {}, "volumes": {},
-}
+var remoteManagementFamilies = func() map[string]struct{} {
+	families := make(map[string]struct{}, len(remotemanagement.Families))
+	for _, family := range remotemanagement.Families {
+		families[family] = struct{}{}
+	}
+	return families
+}()
 
 func TestRemoteManagementFamilyInventory(t *testing.T) {
 	root := NewRootCmd()

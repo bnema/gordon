@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"text/tabwriter"
 	"time"
 
@@ -274,11 +273,12 @@ func newBackupRunCmd() *cobra.Command {
 			if result.Backup == nil {
 				return fmt.Errorf("backup run completed without backup payload")
 			}
-			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backup Result")); err != nil {
+			out := cmd.OutOrStdout()
+			if err := cliWriteLine(out, cliRenderTitle("Backup Result")); err != nil {
 				return err
 			}
 
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT\tBACKUP_ID\tSIZE"); err != nil {
 				return err
 			}
@@ -313,16 +313,17 @@ func newBackupDetectCmd() *cobra.Command {
 				return fmt.Errorf("failed to detect databases: %w", err)
 			}
 
+			out := cmd.OutOrStdout()
 			if len(dbs) == 0 {
-				if err := cliWriteLine(os.Stdout, cliRenderMuted("No supported databases detected")); err != nil {
+				if err := cliWriteLine(out, cliRenderMuted("No supported databases detected")); err != nil {
 					return err
 				}
 				return nil
 			}
-			if err := cliWriteLine(os.Stdout, cliRenderTitle("Detected Databases")); err != nil {
+			if err := cliWriteLine(out, cliRenderTitle("Detected Databases")); err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "NAME\tTYPE\tHOST\tPORT\tIMAGE"); err != nil {
 				return err
 			}
@@ -357,16 +358,17 @@ func newBackupStatusCmd() *cobra.Command {
 				return fmt.Errorf("failed to get backup status: %w", err)
 			}
 
+			out := cmd.OutOrStdout()
 			if len(jobs) == 0 {
-				if err := cliWriteLine(os.Stdout, cliRenderMuted("No backup status available")); err != nil {
+				if err := cliWriteLine(out, cliRenderMuted("No backup status available")); err != nil {
 					return err
 				}
 				return nil
 			}
-			if err := cliWriteLine(os.Stdout, cliRenderTitle("Backup Status")); err != nil {
+			if err := cliWriteLine(out, cliRenderTitle("Backup Status")); err != nil {
 				return err
 			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 			if _, err := fmt.Fprintln(w, "DOMAIN\tDB\tSTATUS\tSTARTED_AT"); err != nil {
 				return err
 			}

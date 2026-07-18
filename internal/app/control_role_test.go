@@ -186,7 +186,10 @@ enabled = true
 secrets_backend = "unsafe"
 
 [api.rate_limit]
-enabled = false
+enabled = true
+global_rps = 10000
+per_ip_rps = 10000
+burst = 10000
 
 [routes]
 "app.example.com" = "app:v1"
