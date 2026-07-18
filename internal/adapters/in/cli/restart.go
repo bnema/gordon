@@ -39,16 +39,16 @@ Examples:
 				if handle.isRemote && !withAttachments && shouldFallbackToLocal(err) {
 					domain, localErr := app.SendDeploySignal(restartDomain)
 					if localErr == nil {
-						fmt.Println(styles.RenderWarning(fmt.Sprintf("Remote restart failed (%v), used local deploy-signal fallback", err)))
-						fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restart signal sent for %s (local deploy path)", domain)))
-						return nil
+						if writeErr := cliWriteLine(cmd.OutOrStdout(), styles.RenderWarning(fmt.Sprintf("Remote restart failed (%v), used local deploy-signal fallback", err))); writeErr != nil {
+							return writeErr
+						}
+						return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Restart signal sent for %s (local deploy path)", domain)))
 					}
 					return fmt.Errorf("remote restart failed: %w; local fallback failed: %v", err, localErr)
 				}
 				return fmt.Errorf("failed to restart: %w", err)
 			}
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Restarted %s", result.Domain)))
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Restarted %s", result.Domain)))
 		},
 	}
 
