@@ -58,14 +58,13 @@ func TestForwardToTarget_H2CEndToEnd(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "grpc.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "grpc.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        port,
 		ContainerID: "grpc-1",
 		Scheme:      "http",
 		Protocol:    "h2c",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("grpc-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
@@ -90,13 +89,12 @@ func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "web.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "web.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "web-1",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("web-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
@@ -133,15 +131,14 @@ func TestForwardToTarget_OriginalHostPreserved(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "external.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "external.example.com").Return(&domain.ProxyTarget{
 		Host:         "127.0.0.1",
 		Port:         backendPort,
 		ContainerID:  "must-not-track-container-id",
 		TargetKey:    domain.RouteTargetKey("rtk_abcdefghijklmnopqrstuvwxyz234567"),
 		Scheme:       "http",
 		OriginalHost: "upstream.example.com",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("rtk_abcdefghijklmnopqrstuvwxyz234567").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
@@ -169,14 +166,13 @@ func TestForwardToTarget_RouteHostPreservedForManagedTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "c-1",
 		Scheme:      "http",
 		RouteHost:   "app.example.com",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
@@ -216,14 +212,13 @@ func TestForwardToTarget_PreservesHostAndForwardedHeaders(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 	backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "c-1",
 		Scheme:      "http",
 		RouteHost:   "app.example.com",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, gordonhttp.ParseTrustedProxies([]string{"10.0.0.0/8"}), zerowrap.Default())
 	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/headers", nil)
@@ -272,10 +267,9 @@ func TestForwardToTarget_ResponseSizeLimits(t *testing.T) {
 			proxySvc := inmocks.NewMockProxyService(t)
 			backendPort := backend.Listener.Addr().(*net.TCPAddr).Port
 			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{MaxResponseSize: 1024})
-			proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+			proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 				Host: "127.0.0.1", Port: backendPort, ContainerID: "c-1", Scheme: "http",
-			}, nil)
-			proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+			}, func() {}, nil)
 
 			handler := NewHandler(proxySvc, nil, zerowrap.Default())
 			req := httptest.NewRequest(http.MethodGet, "http://app.example.com/large", nil)
@@ -293,13 +287,12 @@ func TestForwardToTarget_ContextCanceled_Returns499(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        8080,
 		ContainerID: "c-sse",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-sse").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 	handler.appTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
@@ -321,13 +314,12 @@ func TestForwardToTarget_BackendDown_Returns503(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "down.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "down.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        1,
 		ContainerID: "c-down",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-down").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 
@@ -350,13 +342,12 @@ func TestForwardToTarget_ProxyHeaderSet(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "c-1",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, zerowrap.Default())
 

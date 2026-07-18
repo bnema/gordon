@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -61,9 +62,9 @@ func TestHandler_RoutesToRegistrySnapshotTarget(t *testing.T) {
 
 	proxySvc := inmocks.NewMockProxyService(t)
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "registry.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "registry.example.com").Return(&domain.ProxyTarget{
 		Host: "127.0.0.1", Port: registryPort, Scheme: "http", OriginalHost: "registry.internal", Registry: true,
-	}, nil)
+	}, func() {}, nil)
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
 
@@ -90,7 +91,7 @@ func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			proxySvc := inmocks.NewMockProxyService(t)
 			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-			proxySvc.EXPECT().GetTarget(mock.Anything, tt.wantHost).Return(nil, domain.ErrNoTargetAvailable)
+			proxySvc.EXPECT().AcquireTarget(mock.Anything, tt.wantHost).Return(nil, func() {}, domain.ErrNoTargetAvailable)
 
 			handler := NewHandler(proxySvc, nil, testLogger())
 			srv := httptest.NewServer(handler)
@@ -130,7 +131,7 @@ func TestHandler_Returns404WhenNoTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "unknown.example.com").Return(nil, domain.ErrNoTargetAvailable)
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "unknown.example.com").Return(nil, func() {}, domain.ErrNoTargetAvailable)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
 
@@ -140,6 +141,38 @@ func TestHandler_Returns404WhenNoTarget(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestHandler_ReleasesAcquiredTargetWhenForwardingFails(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+	var releases atomic.Int32
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host: "127.0.0.1", Port: 8080, Scheme: "://invalid",
+	}, func() { releases.Add(1) }, nil)
+
+	handler := NewHandler(proxySvc, nil, testLogger())
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+	req.Host = "app.example.com"
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, int32(1), releases.Load())
+}
+
+func TestHandler_ReleasesAcquiredTargetOnProxyPanic(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+	var releases atomic.Int32
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+		Host: "127.0.0.1", Port: 8080, Scheme: "http",
+	}, func() { releases.Add(1) }, nil)
+
+	handler := NewHandler(proxySvc, nil, testLogger())
+	handler.appTransport = roundTripFunc(func(*http.Request) (*http.Response, error) { panic("transport panic") })
+	req := httptest.NewRequest(http.MethodGet, "http://app.example.com/", nil)
+	req.Host = "app.example.com"
+	require.Panics(t, func() { handler.ServeHTTP(httptest.NewRecorder(), req) })
+	assert.Equal(t, int32(1), releases.Load())
 }
 
 func TestHandler_ProxiesToTarget(t *testing.T) {
@@ -161,8 +194,7 @@ func TestHandler_ProxiesToTarget(t *testing.T) {
 		ContainerID: "c-1",
 		Scheme:      "http",
 	}
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(target, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(target, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
 
@@ -197,13 +229,12 @@ func TestHandler_ReadsMaxBodySizeConfig(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxBodySize: 1024,
 	})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "c-1",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
 
@@ -234,7 +265,7 @@ func TestHandler_UpdatedConfigReflected(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxConcurrentConns: 0,
 	}).Once()
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(nil, domain.ErrNoTargetAvailable).Once()
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(nil, func() {}, domain.ErrNoTargetAvailable).Once()
 
 	handler := NewHandler(proxySvc, nil, testLogger())
 
@@ -270,13 +301,12 @@ func TestHandler_NoConcurrencyLimitWhenZero(t *testing.T) {
 	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{
 		MaxConcurrentConns: 0,
 	})
-	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
+	proxySvc.EXPECT().AcquireTarget(mock.Anything, "app.example.com").Return(&domain.ProxyTarget{
 		Host:        "127.0.0.1",
 		Port:        backendPort,
 		ContainerID: "c-1",
 		Scheme:      "http",
-	}, nil)
-	proxySvc.EXPECT().TrackInFlight("c-1").Return(func() {})
+	}, func() {}, nil)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
 

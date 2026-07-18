@@ -9,8 +9,15 @@ import (
 // ProxyService defines the contract for proxy routing and state management.
 // HTTP request handling is the adapter's responsibility (adapters/in/http/proxy).
 type ProxyService interface {
-	// GetTarget returns the proxy target for a given domain.
+	// GetTarget returns the proxy target for a given domain. Non-request callers
+	// that do not participate in drain accounting may use this method.
 	GetTarget(ctx context.Context, domain string) (*domain.ProxyTarget, error)
+
+	// AcquireTarget resolves a request target and registers application traffic
+	// before a route-drain transition can observe its in-flight count. Release is
+	// idempotent and must be deferred by request callers. Registry targets use a
+	// no-op release because registry accounting is intentionally separate.
+	AcquireTarget(ctx context.Context, domain string) (*domain.ProxyTarget, func(), error)
 
 	// RegisterTarget registers a new proxy target for a domain.
 	RegisterTarget(ctx context.Context, domain string, target *domain.ProxyTarget) error

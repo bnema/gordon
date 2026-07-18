@@ -16,7 +16,9 @@ type ProxyCacheInvalidator interface {
 // container. PrepareDrain must run before the traffic switch; it pins the old
 // target identity until WaitForNoInFlight or CancelDrain releases it.
 type ProxyDrainWaiter interface {
-	PrepareDrain(containerID string)
+	// PrepareDrain pins the exact old association before the traffic switch.
+	// It reports false when that association could not be registered.
+	PrepareDrain(containerID string) bool
 	CancelDrain(containerID string)
 	WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool
 }

@@ -85,37 +85,38 @@ func NewRuntimeDrainRegistry(resolve RuntimeDrainTargetResolver) *RuntimeDrainRe
 
 // PrepareDrain resolves and pins the old target before the traffic switch. A
 // later control acknowledgement may therefore safely arrive before WaitForNoInFlight.
-func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) {
+func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 	if r == nil || containerID == "" || r.resolve == nil {
-		return
+		return false
 	}
 	state, ok := r.resolve(containerID)
 	if !ok {
-		return
+		return false
 	}
 	key, err := domain.ManagedRouteTargetKeyFromRuntimeState(state)
 	if err != nil {
-		return
+		return false
 	}
 	canonicalDomain, ok := domain.CanonicalRouteDomain(state.Domain)
 	if !ok {
-		return
+		return false
 	}
 	identity := runtimeDrainIdentity{domain: canonicalDomain, key: key}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return
+		return false
 	}
-	if _, exists := r.pendingByContainer[containerID]; exists {
-		return
+	if existing, exists := r.pendingByContainer[containerID]; exists {
+		return existing == identity
 	}
 	if _, exists := r.pending[identity]; exists {
-		return
+		return false
 	}
 	r.pending[identity] = &runtimeDrainPending{containerID: containerID, done: make(chan struct{})}
 	r.pendingByContainer[containerID] = identity
+	return true
 }
 
 // CancelDrain releases a registration on rollback. Any later acknowledgement is
@@ -136,8 +137,6 @@ func (r *RuntimeDrainRegistry) WaitForNoInFlight(ctx context.Context, containerI
 	if r == nil || containerID == "" {
 		return false
 	}
-	r.PrepareDrain(containerID)
-
 	r.mu.Lock()
 	identity, exists := r.pendingByContainer[containerID]
 	if !exists {

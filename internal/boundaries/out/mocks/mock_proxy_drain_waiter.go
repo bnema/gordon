@@ -79,9 +79,20 @@ func (_c *MockProxyDrainWaiter_CancelDrain_Call) RunAndReturn(run func(container
 }
 
 // PrepareDrain provides a mock function for the type MockProxyDrainWaiter
-func (_mock *MockProxyDrainWaiter) PrepareDrain(containerID string) {
-	_mock.Called(containerID)
-	return
+func (_mock *MockProxyDrainWaiter) PrepareDrain(containerID string) bool {
+	ret := _mock.Called(containerID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PrepareDrain")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = returnFunc(containerID)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
 }
 
 // MockProxyDrainWaiter_PrepareDrain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PrepareDrain'
@@ -108,13 +119,13 @@ func (_c *MockProxyDrainWaiter_PrepareDrain_Call) Run(run func(containerID strin
 	return _c
 }
 
-func (_c *MockProxyDrainWaiter_PrepareDrain_Call) Return() *MockProxyDrainWaiter_PrepareDrain_Call {
-	_c.Call.Return()
+func (_c *MockProxyDrainWaiter_PrepareDrain_Call) Return(b bool) *MockProxyDrainWaiter_PrepareDrain_Call {
+	_c.Call.Return(b)
 	return _c
 }
 
-func (_c *MockProxyDrainWaiter_PrepareDrain_Call) RunAndReturn(run func(containerID string)) *MockProxyDrainWaiter_PrepareDrain_Call {
-	_c.Run(run)
+func (_c *MockProxyDrainWaiter_PrepareDrain_Call) RunAndReturn(run func(containerID string) bool) *MockProxyDrainWaiter_PrepareDrain_Call {
+	_c.Call.Return(run)
 	return _c
 }
 

@@ -231,6 +231,64 @@ func (r *recordingEdgeDrainReporter) snapshot() []domain.RouteDrainState {
 	return append([]domain.RouteDrainState(nil), r.states...)
 }
 
+func TestService_AcquireTargetRegistersBeforeSnapshotTransitionCanReportZero(t *testing.T) {
+	old := readyEntry(t, "app.example.com", "old.internal", 1)
+	newTarget := readyEntry(t, "app.example.com", "new.internal", 2)
+	provider := outmocks.NewMockRouteSnapshotProvider(t)
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(routeSnapshot(t, 1, old), nil).Once()
+	reporter := &recordingEdgeDrainReporter{}
+	svc := NewSnapshotService(provider, Config{}, reporter)
+	defer svc.Close()
+
+	selected := make(chan struct{})
+	continueAcquire := make(chan struct{})
+	svc.acquireTargetSelected = func() {
+		close(selected)
+		<-continueAcquire
+	}
+	acquired := make(chan func(), 1)
+	go func() {
+		_, release, err := svc.AcquireTarget(testContext(), "app.example.com")
+		if err != nil {
+			t.Errorf("acquire target: %v", err)
+			return
+		}
+		acquired <- release
+	}()
+	select {
+	case <-selected:
+	case <-time.After(time.Second):
+		t.Fatal("request did not pause after target selection")
+	}
+
+	transitioned := make(chan struct{})
+	go func() {
+		svc.ObserveAcceptedRouteSnapshot(&domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}}, routeSnapshot(t, 2, newTarget))
+		close(transitioned)
+	}()
+	select {
+	case <-transitioned:
+		t.Fatal("transition reported before selected request was registered")
+	default:
+	}
+
+	close(continueAcquire)
+	var release func()
+	select {
+	case release = <-acquired:
+	case <-time.After(time.Second):
+		t.Fatal("request was not acquired")
+	}
+	select {
+	case <-transitioned:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot transition did not complete")
+	}
+	assert.Empty(t, reporter.snapshot(), "registered request prevents a zero-in-flight report")
+	release()
+	waitForProxy(t, func() bool { return len(reporter.snapshot()) == 1 })
+}
+
 func TestService_EdgeSnapshotTransitionRoutesNewTargetAndReportsOldAtZero(t *testing.T) {
 	provider := outmocks.NewMockRouteSnapshotProvider(t)
 	old := readyEntry(t, "app.example.com", "old.internal", 1)

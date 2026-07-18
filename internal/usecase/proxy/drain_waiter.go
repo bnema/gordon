@@ -23,11 +23,11 @@ func NewLocalSnapshotDrainWaiter(provider *LocalSnapshotProvider, service *Servi
 
 // PrepareDrain pins the private lifecycle association before the replacement
 // starts receiving traffic. It exposes neither the ID nor the derived key.
-func (w *LocalSnapshotDrainWaiter) PrepareDrain(containerID string) {
+func (w *LocalSnapshotDrainWaiter) PrepareDrain(containerID string) bool {
 	if w == nil || w.provider == nil {
-		return
+		return false
 	}
-	w.provider.PrepareDrain(containerID)
+	return w.provider.PrepareDrain(containerID)
 }
 
 // CancelDrain releases a prepared association when a replacement rolls back
@@ -47,9 +47,11 @@ func (w *LocalSnapshotDrainWaiter) WaitForNoInFlight(ctx context.Context, contai
 	if w == nil || w.provider == nil || w.service == nil || containerID == "" {
 		return true
 	}
-	w.PrepareDrain(containerID)
 	key, ok := w.provider.TargetKeyForContainer(containerID)
 	if !ok {
+		// Direct legacy callers retain the historical no-traffic success. The
+		// lifecycle service calls PrepareDrain first and applies its delay
+		// fallback when this exact association cannot be registered.
 		return true
 	}
 	defer w.provider.ReleaseTargetKeyForContainer(containerID)

@@ -39,6 +39,82 @@ func (_m *MockProxyService) EXPECT() *MockProxyService_Expecter {
 	return &MockProxyService_Expecter{mock: &_m.Mock}
 }
 
+// AcquireTarget provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) AcquireTarget(ctx context.Context, domain1 string) (*domain.ProxyTarget, func(), error) {
+	ret := _mock.Called(ctx, domain1)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AcquireTarget")
+	}
+
+	var r0 *domain.ProxyTarget
+	var r1 func()
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.ProxyTarget, func(), error)); ok {
+		return returnFunc(ctx, domain1)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.ProxyTarget); ok {
+		r0 = returnFunc(ctx, domain1)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.ProxyTarget)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) func()); ok {
+		r1 = returnFunc(ctx, domain1)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).(func())
+		}
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, domain1)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockProxyService_AcquireTarget_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AcquireTarget'
+type MockProxyService_AcquireTarget_Call struct {
+	*mock.Call
+}
+
+// AcquireTarget is a helper method to define mock.On call
+//   - ctx context.Context
+//   - domain1 string
+func (_e *MockProxyService_Expecter) AcquireTarget(ctx any, domain1 any) *MockProxyService_AcquireTarget_Call {
+	return &MockProxyService_AcquireTarget_Call{Call: _e.mock.On("AcquireTarget", ctx, domain1)}
+}
+
+func (_c *MockProxyService_AcquireTarget_Call) Run(run func(ctx context.Context, domain1 string)) *MockProxyService_AcquireTarget_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockProxyService_AcquireTarget_Call) Return(proxyTarget *domain.ProxyTarget, fn func(), err error) *MockProxyService_AcquireTarget_Call {
+	_c.Call.Return(proxyTarget, fn, err)
+	return _c
+}
+
+func (_c *MockProxyService_AcquireTarget_Call) RunAndReturn(run func(ctx context.Context, domain1 string) (*domain.ProxyTarget, func(), error)) *MockProxyService_AcquireTarget_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetTarget provides a mock function for the type MockProxyService
 func (_mock *MockProxyService) GetTarget(ctx context.Context, domain1 string) (*domain.ProxyTarget, error) {
 	ret := _mock.Called(ctx, domain1)

@@ -149,15 +149,17 @@ func (p *LocalSnapshotProvider) TargetKeyForContainer(containerID string) (domai
 // Invariant: refreshes prune every non-current association unless it is pinned
 // here; WaitForNoInFlight or CancelDrain always releases the pin. This keeps
 // removed-route IDs bounded without evicting an old target during its drain.
-func (p *LocalSnapshotProvider) PrepareDrain(containerID string) {
+func (p *LocalSnapshotProvider) PrepareDrain(containerID string) bool {
 	if p == nil || containerID == "" {
-		return
+		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, found := p.containerTargetKeys[containerID]; found {
 		p.preparedDrains[containerID] = struct{}{}
+		return true
 	}
+	return false
 }
 
 // ReleaseTargetKeyForContainer drops a prepared lifecycle association after

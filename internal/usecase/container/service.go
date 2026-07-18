@@ -1045,13 +1045,15 @@ func (s *Service) activateAndStabilizeNewContainer(ctx context.Context, domainNa
 // exact waiter and timeout used to prepare it so a config reload cannot switch
 // its eventual release to an unrelated delay path.
 type preparedDrain struct {
-	waiter  out.ProxyDrainWaiter
-	timeout time.Duration
-	once    sync.Once
+	waiter        out.ProxyDrainWaiter
+	timeout       time.Duration
+	fallbackDelay time.Duration
+	registered    bool
+	once          sync.Once
 }
 
 func (d *preparedDrain) cancel(oldContainerID string) {
-	if d == nil {
+	if d == nil || !d.registered {
 		return
 	}
 	d.once.Do(func() {
@@ -1064,6 +1066,10 @@ func (d *preparedDrain) wait(ctx context.Context, oldContainerID string) {
 		return
 	}
 	d.once.Do(func() {
+		if !d.registered {
+			waitDrainDelay(ctx, d.fallbackDelay)
+			return
+		}
 		timeout := d.timeout
 		if timeout == 0 {
 			timeout = 30 * time.Second
@@ -1073,7 +1079,8 @@ func (d *preparedDrain) wait(ctx context.Context, oldContainerID string) {
 			log.Warn().
 				Str("old_container_id", oldContainerID).
 				Dur("drain_timeout", timeout).
-				Msg("drain wait timed out; old container may still have in-flight traffic")
+				Msg("drain wait did not complete; applying drain-delay fallback")
+			waitDrainDelay(ctx, d.fallbackDelay)
 		}
 	})
 }
@@ -1099,8 +1106,12 @@ func (s *Service) prepareDrain(oldContainerID string) *preparedDrain {
 	if invalidator == nil && !usesRuntimeRemoteDrainWaiter(waiter, cfg) {
 		return nil
 	}
-	waiter.PrepareDrain(oldContainerID)
-	return &preparedDrain{waiter: waiter, timeout: cfg.DrainTimeout}
+	return &preparedDrain{
+		waiter:        waiter,
+		timeout:       cfg.DrainTimeout,
+		fallbackDelay: configuredDrainDelay(cfg),
+		registered:    waiter.PrepareDrain(oldContainerID),
+	}
 }
 
 func usesRuntimeRemoteDrainWaiter(waiter out.ProxyDrainWaiter, cfg Config) bool {
@@ -1144,15 +1155,22 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 		return
 	}
 
-	drainDelay := 2 * time.Second
+	waitDrainDelay(ctx, configuredDrainDelay(cfg))
+}
+
+func configuredDrainDelay(cfg Config) time.Duration {
 	if cfg.DrainDelayConfigured {
-		drainDelay = cfg.DrainDelay
+		return cfg.DrainDelay
 	}
-	if drainDelay <= 0 {
+	return 2 * time.Second
+}
+
+func waitDrainDelay(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
 		return
 	}
 	select {
-	case <-time.After(drainDelay):
+	case <-time.After(delay):
 	case <-ctx.Done():
 	}
 }

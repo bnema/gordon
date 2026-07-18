@@ -49,6 +49,14 @@ type Service struct {
 	invalidationVersion uint64
 	targetLookup        singleflight.Group
 
+	// requestAcquireMu serializes request admission against an accepted snapshot
+	// transition. A request selected from the old view is counted before that
+	// transition can decide the old target has drained.
+	requestAcquireMu sync.Mutex
+	// acquireTargetSelected is a package-private test synchronization hook. It
+	// runs after selection and before application traffic is registered.
+	acquireTargetSelected func()
+
 	inFlight         map[string]int
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
@@ -105,6 +113,43 @@ type edgeDrainIdentity struct {
 type edgeDrain struct {
 	state    domain.RouteDrainState
 	reported bool
+}
+
+// AcquireTarget atomically admits an HTTP request to its selected application
+// target. It must be used instead of GetTarget followed by TrackInFlight: an
+// accepted snapshot transition may otherwise report an old target at zero in
+// the gap between selection and registration.
+func (s *Service) AcquireTarget(ctx context.Context, domainName string) (*domain.ProxyTarget, func(), error) {
+	s.requestAcquireMu.Lock()
+	defer s.requestAcquireMu.Unlock()
+
+	target, err := s.GetTarget(ctx, domainName)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if target.Registry {
+		// Registry requests have dedicated accounting and never participate in an
+		// application target's drain state.
+		return target, func() {}, nil
+	}
+	s.notifyAcquireTargetSelected()
+	return target, s.TrackInFlight(inFlightKey(target)), nil
+}
+
+func inFlightKey(target *domain.ProxyTarget) string {
+	if target != nil && target.TargetKey != "" {
+		return string(target.TargetKey)
+	}
+	if target != nil {
+		return target.ContainerID
+	}
+	return ""
+}
+
+func (s *Service) notifyAcquireTargetSelected() {
+	if s.acquireTargetSelected != nil {
+		s.acquireTargetSelected()
+	}
 }
 
 // GetTarget returns the proxy target for a given domain.
@@ -245,6 +290,12 @@ func (s *Service) ObserveAcceptedRouteSnapshot(previous *domain.RouteTargetSnaps
 	if previous == nil || s.drainReporter == nil {
 		return
 	}
+
+	// Admission and transition detection share one critical section. Therefore a
+	// request selected from the retired view is registered before startEdgeDrain
+	// can observe zero, while later requests must resolve from the new view.
+	s.requestAcquireMu.Lock()
+	defer s.requestAcquireMu.Unlock()
 
 	// Invalidate all cached routes before scheduling reports. New requests fetch
 	// from the already-installed current snapshot rather than retaining an old

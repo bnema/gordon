@@ -82,12 +82,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// split deployment registry ownership is control-plane state, never edge-local
 	// server.registry_domain configuration.
 	log.Debug().Str("resolving_target_for", host).Msg("looking up proxy target")
-	target, err := h.proxySvc.GetTarget(ctx, host)
+	target, releaseTarget, err := h.proxySvc.AcquireTarget(ctx, host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
 		proxyError(w, "404 page not found", http.StatusNotFound)
 		return
 	}
+	// AcquireTarget registers application traffic before a drain transition can
+	// observe it. Defer its idempotent release immediately so malformed targets,
+	// reverse-proxy aborts, and panics cannot strand drain accounting.
+	defer releaseTarget()
 	if target.Registry {
 		log.Debug().Msg("resolving registry snapshot target")
 		h.forwardToRegistry(w, r, target)
