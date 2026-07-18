@@ -24,6 +24,7 @@ import (
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 )
 
 // controlRoleDependencies makes the narrowly-scoped control server testable.
@@ -32,9 +33,11 @@ type controlRoleDependencies struct {
 	listen                     func(network, address string) (net.Listener, error)
 	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
 	newSnapshotHub             func() *edgesnapshot.SnapshotHub
+	newTrafficGraphHub         func() *edgesnapshot.TrafficGraphHub
 	newRuntimeStateSubscriber  func(context.Context, RuntimeControlConfig) (out.RuntimeStateSubscriber, error)
 	newRuntimeDrainAckReceiver func(context.Context, RuntimeControlConfig) (out.RouteDrainAckReceiver, error)
 	newSnapshotProducer        func(out.RuntimeStateSubscriber, *edgesnapshot.SnapshotHub, edgesnapshot.ProducerOptions) (*edgesnapshot.Producer, error)
+	newTrafficGraphProducer    func(*edgesnapshot.SnapshotHub, *edgesnapshot.TrafficGraphHub, edgesnapshot.TrafficGraphProducerOptions) (*edgesnapshot.TrafficGraphProducer, error)
 }
 
 func productionControlRoleDependencies() controlRoleDependencies {
@@ -42,9 +45,11 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		listen:                     net.Listen,
 		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
 		newSnapshotHub:             edgesnapshot.NewSnapshotHub,
+		newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
 		newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
 		newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
 		newSnapshotProducer:        edgesnapshot.NewProducer,
+		newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
 	}
 }
 
@@ -63,9 +68,7 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if err != nil {
 		return err
 	}
-	if cleanup != nil {
-		defer cleanup()
-	}
+	defer cleanupControlLogger(cleanup)
 	ctx = zerowrap.WithCtx(ctx, log)
 	warnDeprecatedConfigKeys(v, log)
 
@@ -82,6 +85,10 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 			return nil
 		}
 		return log.WrapErr(err, "publish initial control route snapshot")
+	}
+	trafficHub, err := initializeControlTrafficGraph(ctx, v, cfg, deps, hub)
+	if err != nil {
+		return log.WrapErr(err, "publish initial control traffic graph")
 	}
 	var drainRelay edgesnapshot.RuntimeDrainAckReceiver
 	if deps.newRuntimeDrainAckReceiver != nil {
@@ -106,7 +113,7 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	}
 	defer listener.Close()
 
-	server, err := newControlSnapshotServerWithDrain(cfg, validator, hub, drainCoordinator)
+	server, err := newControlSnapshotServerWithTrafficGraphAndDrain(cfg, validator, hub, trafficHub, drainCoordinator)
 	if err != nil {
 		return err
 	}
@@ -148,6 +155,57 @@ func startControlSnapshotProducer(ctx context.Context, v *viper.Viper, cfg Confi
 // controlProducerOptions converts only explicit control routing contracts into
 // producer inputs. It intentionally never forwards Config, container state, or
 // a runtime endpoint to edge snapshots.
+func initializeControlTrafficGraph(ctx context.Context, v *viper.Viper, cfg Config, deps controlRoleDependencies, routes *edgesnapshot.SnapshotHub) (*edgesnapshot.TrafficGraphHub, error) {
+	newHub := deps.newTrafficGraphHub
+	if newHub == nil {
+		newHub = edgesnapshot.NewTrafficGraphHub
+	}
+	graphs := newHub()
+	if graphs == nil {
+		return nil, fmt.Errorf("control traffic graph hub is required")
+	}
+	if err := startControlTrafficGraphProducer(ctx, v, cfg, deps, routes, graphs); err != nil {
+		return nil, err
+	}
+	return graphs, nil
+}
+
+func startControlTrafficGraphProducer(ctx context.Context, v *viper.Viper, cfg Config, deps controlRoleDependencies, routes *edgesnapshot.SnapshotHub, graphs *edgesnapshot.TrafficGraphHub) error {
+	newProducer := deps.newTrafficGraphProducer
+	if newProducer == nil {
+		newProducer = edgesnapshot.NewTrafficGraphProducer
+	}
+	options, err := controlTrafficGraphProducerOptions(v, cfg)
+	if err != nil {
+		return err
+	}
+	producer, err := newProducer(routes, graphs, options)
+	if err != nil {
+		return fmt.Errorf("create control traffic graph producer: %w", err)
+	}
+	return producer.Start(ctx)
+}
+
+// controlTrafficGraphProducerOptions selects only edge-safe, canonical routing
+// values. The edge receives the resulting graph, never this Config value.
+func controlTrafficGraphProducerOptions(v *viper.Viper, cfg Config) (edgesnapshot.TrafficGraphProducerOptions, error) {
+	routeOptions, err := controlProducerOptions(v, cfg)
+	if err != nil {
+		return edgesnapshot.TrafficGraphProducerOptions{}, err
+	}
+	services, err := servicecfg.ToDomain(cfg.Services)
+	if err != nil {
+		return edgesnapshot.TrafficGraphProducerOptions{}, fmt.Errorf("convert standalone service config: %w", err)
+	}
+	return edgesnapshot.TrafficGraphProducerOptions{
+		EntryPoints:          cfg.EntryPoints,
+		Traffic:              cfg.Traffic,
+		ExternalRouteTargets: routeOptions.External,
+		NetworkServices:      cfg.NetworkServices,
+		Services:             services,
+	}, nil
+}
+
 func controlProducerOptions(v *viper.Viper, cfg Config) (edgesnapshot.ProducerOptions, error) {
 	options := edgesnapshot.ProducerOptions{EdgeAlias: cfg.Control.EdgeAlias}
 	if strings.TrimSpace(cfg.Server.RegistryDomain) != "" {
@@ -191,6 +249,10 @@ func newControlSnapshotServer(cfg Config, validator interceptors.ComponentTokenV
 }
 
 func newControlSnapshotServerWithDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
+	return newControlSnapshotServerWithTrafficGraphAndDrain(cfg, validator, hub, nil, drainReceiver)
+}
+
+func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
 	if validator == nil {
 		return nil, fmt.Errorf("control component token validator is required")
 	}
@@ -206,7 +268,13 @@ func newControlSnapshotServerWithDrain(cfg Config, validator interceptors.Compon
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 	)
-	if drainReceiver != nil {
+	if trafficHub != nil {
+		serverAdapter := edgesnapshotgrpc.NewServerWithTrafficGraphSource(hub, trafficHub)
+		if drainReceiver != nil {
+			serverAdapter = edgesnapshotgrpc.NewServerWithDrainStateReceiverAndTrafficGraphSource(hub, drainReceiver, trafficHub)
+		}
+		edgev1.RegisterEdgeServiceServer(server, serverAdapter)
+	} else if drainReceiver != nil {
 		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithDrainStateReceiver(hub, drainReceiver))
 	} else {
 		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
@@ -226,6 +294,12 @@ func controlServerTransportCredentials(cfg Config) (credentials.TransportCredent
 		return nil, fmt.Errorf("load control TLS certificate: %w", err)
 	}
 	return credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}), nil
+}
+
+func cleanupControlLogger(cleanup func()) {
+	if cleanup != nil {
+		cleanup()
+	}
 }
 
 func gracefulStop(server *grpc.Server) {

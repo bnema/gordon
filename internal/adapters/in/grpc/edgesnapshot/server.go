@@ -40,6 +40,12 @@ func NewServerWithDrainStateReceiver(source edgesnapshot.Source, receiver edgesn
 	return &Server{source: source, drainReceiver: receiver}
 }
 
+// NewServerWithDrainStateReceiverAndTrafficGraphSource exposes all independent
+// edge contracts without allowing transport code to read control configuration.
+func NewServerWithDrainStateReceiverAndTrafficGraphSource(source edgesnapshot.Source, receiver edgesnapshot.DrainStateReceiver, trafficSource edgesnapshot.TrafficGraphSource) *Server {
+	return &Server{source: source, drainReceiver: receiver, trafficSource: trafficSource}
+}
+
 // MethodScopes declares the narrow permissions needed by each EdgeService RPC.
 func MethodScopes() map[string]domain.ComponentScope {
 	return map[string]domain.ComponentScope{
