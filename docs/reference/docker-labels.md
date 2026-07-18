@@ -198,6 +198,22 @@ CMD ["npm", "start"]
 
 Gordon routes HTTP to port 3000.
 
+## Split component labels
+
+Runtime writes and validates component ownership labels; control/edge/registry must not use labels as authentication. Component credentials and private transports remain authoritative.
+
+| Label | Purpose |
+| --- | --- |
+| `gordon.component` | Marks a Gordon split component |
+| `gordon.component.role` | `control`, `runtime`, `edge`, or `registry` |
+| `gordon.component.version` | Candidate version |
+| `gordon.component.generation` | Monotonic component generation |
+| `gordon.component.migration-id` | Owning migration checkpoint |
+| `gordon.component.owner` | Lifecycle owner |
+| `gordon.component.desired-state-hash` | Detects manifest drift without embedding config/secrets |
+
+During migration, runtime refuses ambiguous Gordon-named resources without the exact ownership labels. Use `docker` or `podman` interchangeably for the inspection examples according to the active engine.
+
 ## Related
 
 - [Configuration Overview](../config/index.md)

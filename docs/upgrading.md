@@ -1,461 +1,58 @@
 # Upgrading Gordon
 
-This guide covers breaking changes and migration steps between major versions.
+## Safe binary upgrade
 
-## Route-Domain Validation
+1. Back up the config and `server.data_dir` with Gordon stopped or using a storage-consistent snapshot.
+2. Read the target release notes and validate the config with the target binary in staging.
+3. Keep the previous binary and backup until application and registry probes pass.
+4. Upgrade, restart the current deployment mode, then check `gordon status` and logs.
 
-Route keys must be plain hostnames. Use inline tables like `"app.example.com" = { image = "myapp:latest" }`. Gordon still reads legacy `http://...` route entries for backward compatibility and rewrites them on the next save. Update `[routes]`, CLI commands, and automation that reference the old values.
+Do not start two runtime owners against the same engine and data directory.
 
-## Next major: Unified smart TCP entrypoints
+## Moving from monolith to split mode
 
-### Breaking: `server.port` / `server.tls_port` no longer define public listeners
-
-Public application traffic is configured entrypoint-first. Migrate old HTTP/HTTPS listener settings to a smart TCP edge entrypoint.
-
-**Before:**
-
-```toml
-[server]
-port = 8088
-tls_port = 8443
-registry_port = 5000
-gordon_domain = "gordon.example.com"
-```
-
-**After:**
-
-```toml
-[server]
-registry_port = 5000
-gordon_domain = "gordon.example.com"
-
-[entrypoints.edge]
-address = ":443"
-protocol = "smart_tcp"
-```
-
-`edge` is the conventional route default, but it has no built-in port. `address = ":443"`, `address = ":9000"`, firewall forwarding, and container mappings such as `-p 443:9000` are deployment choices, not protocol modes. The `smart_tcp` protocol accepts TCP, sniffs HTTP/h2c/TLS, routes TLS passthrough by SNI when configured, and otherwise uses normal Gordon HTTPS fallback.
-
-If you run rootless and cannot bind 443 directly, bind a high port and map external ports to it:
-
-```toml
-[entrypoints.edge]
-address = ":9000"
-protocol = "smart_tcp"
-```
+The supported production path is the checkpointed rootless-Podman migration. Do not manually create four services from the monolith TOML. Gordon generates strict role manifests and scoped environment files.
 
 ```bash
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=9000
-sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
-sudo firewall-cmd --reload
+gordon migrate plan --config ~/.config/gordon/gordon.toml --json
+gordon migrate prepare --config ~/.config/gordon/gordon.toml --json
+gordon migrate switch --config ~/.config/gordon/gordon.toml --json
 ```
 
-Keep `server.registry_port` for Docker/Podman push and pull traffic; it is separate from public app entrypoints.
-
-### ACME migration notes
-
-- DNS-01 (`cloudflare-dns-01`) does not require a special external port 80 edge.
-- HTTP-01 requires an HTTP-capable `smart_tcp` entrypoint reachable on external port 80 for each hostname being validated.
-- TLS-ALPN-01 is unsupported.
-- Normal HTTPS fallback certificate priority is static certificates, then public ACME certificates, then Gordon's internal CA.
-
-## v2.30.0 to v2.31.0
-
-### Breaking: Default Port Changes
-
-Gordon now defaults to unprivileged ports that work without root or firewall rules:
-
-| Setting | Old default | New default |
-|---------|-------------|-------------|
-| `server.port` | `80` | `8088` |
-| `server.registry_port` | `5000` | `5000` (unchanged) |
-| `server.tls_port` | *(n/a)* | `8443` |
-
-**If you relied on the old defaults** (no explicit `port` in your config), add the port explicitly:
-
-```toml
-[server]
-port = 80
-```
-
-Or set up firewall port forwarding to the new defaults:
+If the invoking monolith exits during runtime transfer, use a fresh shell:
 
 ```bash
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
-sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
-sudo firewall-cmd --reload
+gordon migrate status --config ~/.config/gordon/gordon.toml --json
+gordon migrate resume --config ~/.config/gordon/gordon.toml --json
 ```
 
-### New: Internal Certificate Authority
+See the [migration runbook](./operations/migration.md) for requirements, failure handling, and the rollback boundary.
 
-Gordon now includes an internal CA for automatic on-demand TLS. Set `tls_port = 0` to disable. See [Server Configuration](./config/server.md#internal-ca-and-tls) for details.
+## Configuration checks
 
-### Required for Cloudflare/Proxy Setups: `proxy_allowed_ips`
-
-The internal CA's HTTP onboarding gate rejects non-localhost HTTP requests by default. If Gordon sits behind Cloudflare or another reverse proxy, add the proxy's edge IPs to `proxy_allowed_ips`:
-
-```toml
-[server]
-proxy_allowed_ips = [
-  "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22",
-  "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
-  "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22",
-  "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
-  "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
-]
-```
-
-Without this, all proxied HTTP traffic returns `403 Forbidden`. Set `tls_port = 0` to disable the internal CA and skip this requirement.
-
-### Breaking: `server.gordon_domain` Replaces `server.registry_domain`
-
-Gordon now uses `server.gordon_domain` as the public registry and admin host. Migrate older configs that still set only `server.registry_domain` before restarting:
-
-**Before:**
-
-```toml
-[server]
-registry_domain = "gordon.example.com"
-```
-
-**After:**
-
-```toml
-[server]
-gordon_domain = "gordon.example.com"
-```
-
-If you do not migrate, `gordon status --remote ...` and `gordon routes list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
-
-### Staged Registry Host Rename
-
-If you cannot rename the Gordon registry host in one step, keep the new host in `server.gordon_domain` and list the old Gordon registry hosts in `server.legacy_registry_domains` during the cutover:
-
-```toml
-[server]
-gordon_domain = "gordon.example.com"
-legacy_registry_domains = [
-  "registry.example.com",
-  "registry.example.com:5000",
-]
-```
-
-Recommended rollout:
-
-1. Set `gordon_domain` to the new host.
-2. Add every old Gordon registry host that clients still use to `legacy_registry_domains`.
-3. Restart Gordon.
-4. Move Docker/Podman logins, pushes, pulls, and image references to the new host.
-5. Remove `legacy_registry_domains` after every client has moved.
-
-During the transition, Gordon treats both the current and legacy hosts as its own registry for image matching and internal pulls, then saves canonical refs back to `gordon_domain`. Remote CLI and admin API traffic should use the new `gordon_domain`.
-
-### Breaking: `gordon rollback` Renamed to `gordon pin`
-
-If you have scripts or runbooks using `gordon rollback`, switch them to `gordon pin`:
+Current public application listeners use `[entrypoints.<name>]`; `server.gordon_domain` is the registry/admin host. `server.registry_port` remains the monolith/registry listen port. Verify current output with:
 
 ```bash
-gordon pin app.example.com
-gordon pin app.example.com --tag v2.30.1
-gordon pin list app.example.com
+gordon config show --json
+gordon serve --help
+gordon migrate --help
 ```
 
-### Breaking-ish: `routes list` Is Inventory-Only
-
-`gordon routes list` now shows domain/image inventory only. Detailed runtime state, HTTP probe status, and attachment status moved to `gordon routes status`.
-
-If you have automation parsing status-like fields from `routes list`, migrate it to `routes status --json`.
-
-### New: Public ACME TLS
-
-Gordon can now obtain public certificates with `[tls.acme]` using either `http-01` or `cloudflare-dns-01`.
-
-- Normal HTTPS fallback must be available on a TLS-capable entrypoint
-- `http-01` needs an HTTP-capable smart TCP entrypoint reachable on external port 80 for each hostname being validated
-- `cloudflare-dns-01` needs a Cloudflare token with zone-read and DNS-edit access for every zone used by HTTPS routes and does not require a special port-80 edge
-- `obtain_batch_size` limits new ACME orders per reconcile pass to reduce rate-limit spikes
-
-### New: DNS Resolver Settings for ACME DNS-01
-
-`[dns]` controls the recursive resolvers Gordon uses to verify public DNS propagation for ACME DNS-01.
-
-Add this if you need non-default resolvers, split-horizon-aware testing, or a slower propagation window:
+Route keys must be hostnames, for example:
 
 ```toml
-[dns]
-resolvers = ["1.1.1.1:53", "8.8.8.8:53"]
-propagation_timeout = "5m"
-polling_interval = "5s"
+[routes]
+"app.example.com" = { image = "myapp:latest" }
 ```
 
-### Runtime Change: Managed Containers Use Restart Policy `always`
+Password authentication is not supported. Use scoped tokens and a production secret backend. Keep `legacy_registry_domains` only while clients move to `gordon_domain`.
 
-Newly created managed route containers now use the runtime restart policy `always`. Existing containers pick this up on redeploy/recreate.
+## Recovery
 
-This improves crash recovery and keeps Docker/Podman behavior aligned with Gordon's startup reconciliation.
+Before split switch succeeds, repair the failed preflight/probe and rerun `switch` or `resume`; the old serving path remains retained. After `switched`, there is no automatic reverse-migration command. Restore monolith only as disaster recovery from a verified backup after stopping split public and runtime owners.
 
-### New: Saved Remote Inference for Targeted Commands
+## Related
 
-When you do not pass `--remote`, Gordon can now infer a saved remote for some target-based commands when exactly one configured remote matches the route, image, attachment target, or repository.
-
-If multiple remotes match or probing fails, Gordon now stops and asks you to pass `--remote` explicitly instead of guessing.
-
-### New: Dedicated Access Log
-
-You can now enable `logging.access_log.*` for a dedicated HTTP access log separate from the main process log. This is useful for request auditing, GoAccess, CrowdSec, or fail2ban-style tooling.
-
-## v2.16.0 to v2.30.0
-
-### Breaking: Password Authentication Removed
-
-Gordon v2.30.0 removes password-based authentication entirely. Only token-based authentication is supported.
-
-**What changed:**
-
-- `auth.type = "password"` is no longer accepted
-- `auth.password` and `auth.password_hash` config fields are removed
-- The `gordon auth password hash` CLI command is removed
-- The `gordon auth login` command now requires `--token` (no more interactive password prompt)
-- The `/auth/password` endpoint now returns `410 Gone`
-- Long-lived tokens are no longer accepted on admin/registry endpoints — they must be exchanged for ephemeral tokens via `/auth/token`
-
-**New features:**
-
-- `auth.access_token_ttl` configures the lifetime of ephemeral access tokens issued by `/auth/token` (default: `"15m"`)
-- `gordon auth show-token` prints the stored token for a remote
-- `gordon auth logout` removes the stored token locally
-- Automatic token exchange: the CLI transparently exchanges long-lived tokens for ephemeral ones before API calls
-- Admin scopes (`admin:*:*`, `admin:routes:read`, etc.) allow fine-grained access control for remote CLI operations
-
-**Migration steps:**
-
-1. **Before upgrading**, generate a token on your current Gordon instance:
-
-   ```bash
-   gordon auth token generate --subject deploy --scopes "push,pull" --expiry 0
-   ```
-
-   Save this token securely. You will need it after upgrading. Admin scopes (`admin:*:*`) are only available after upgrading to v2.30.0 — regenerate your token with admin scopes after the upgrade if needed.
-
-2. **Update remotes** to use the generated token:
-
-   ```bash
-   gordon auth login --token <token>
-   # or
-   gordon remotes set-token prod <token>
-   ```
-
-3. **Update your config** to remove password fields:
-
-   **Before (v2.16.0):**
-
-   ```toml
-   [auth]
-   enabled = true
-   secrets_backend = "pass"
-   username = "deploy"
-   password_hash = "gordon/auth/password_hash"
-   token_secret = "gordon/auth/token_secret"
-   ```
-
-   **After (v2.30.0):**
-
-   ```toml
-   [auth]
-   enabled = true
-   secrets_backend = "pass"
-   token_secret = "gordon/auth/token_secret"
-   access_token_ttl = "15m"
-   ```
-
-4. **Update CI/CD pipelines** to use `GORDON_TOKEN` environment variable for authentication. See the [deployment guides](./deployment/index.md).
-
-5. **Upgrade the binary** and restart:
-
-   ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
-   systemctl --user restart gordon
-   ```
-
-6. **Verify** the server starts without errors:
-
-   ```bash
-   journalctl --user -u gordon -f
-   ```
-
-### New: Configurable Access Token TTL
-
-Ephemeral access tokens issued by `/auth/token` now have a configurable lifetime via `auth.access_token_ttl` (default `"15m"`, maximum `"1h"`).
-
-Tokens with a lifetime at or below `MaxAccessTokenLifetime` (1 hour) are treated as ephemeral: they skip token store validation for performance, which means they **cannot be individually revoked**. They become invalid only when they naturally expire. Shortening `auth.access_token_ttl` only reduces the exposure window; it does not enable per-token revocation. If you need explicit revocation, use a stored long-lived token instead of `/auth/token`.
-
-```toml
-[auth]
-access_token_ttl = "30m"
-```
-
-### New: Admin Scopes
-
-Tokens can now include fine-grained admin scopes for remote CLI operations:
-
-```bash
-# Full admin access
-gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expiry 0
-
-# Read-only monitoring
-gordon auth token generate --subject monitor --scopes "admin:status:read" --expiry 30d
-
-# CI deploy with route read + config write
-gordon auth token generate --subject ci --scopes "push,pull,admin:routes:read,admin:config:write" --expiry 0
-```
-
-See [Token Scopes](./config/auth.md#token-scopes) for the full list.
-
-## v2.6.0 to v2.7.0
-
-### Breaking: Token Secret Required
-
-Gordon v2.7.0 requires a `token_secret` for JWT authentication. The server will not start without it configured.
-
-**Error you'll see:**
-```
-Error: token_secret is required for JWT token generation; set GORDON_AUTH_TOKEN_SECRET environment variable or configure auth.token_secret
-```
-
-**Choose one of these migration options:**
-
-#### Option A: Environment Variable (simplest)
-
-```bash
-# Generate a random secret
-export GORDON_AUTH_TOKEN_SECRET="$(openssl rand -base64 32)"
-
-# Add to your shell profile or systemd service
-echo 'export GORDON_AUTH_TOKEN_SECRET="your-secret"' >> ~/.bashrc
-```
-
-For systemd services:
-```bash
-mkdir -p ~/.config/systemd/user/gordon.service.d
-cat > ~/.config/systemd/user/gordon.service.d/token.conf << EOF
-[Service]
-Environment="GORDON_AUTH_TOKEN_SECRET=$(openssl rand -base64 32)"
-EOF
-systemctl --user daemon-reload
-systemctl --user restart gordon
-```
-
-#### Option B: Config File with Pass (recommended for production)
-
-```bash
-# Generate and store secret in pass
-openssl rand -base64 32 | pass insert -e gordon/auth/token_secret
-
-# Update your gordon.toml
-```
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-token_secret = "gordon/auth/token_secret"
-```
-
-#### Option C: Config File with Unsafe Backend (development only)
-
-```bash
-# Generate secret file
-mkdir -p ~/.gordon/secrets
-openssl rand -base64 32 > ~/.gordon/secrets/token_secret
-chmod 600 ~/.gordon/secrets/token_secret
-```
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "unsafe"
-token_secret = "token_secret"
-```
-
-### Breaking: Unsafe Token Store Warning
-
-Using `secrets_backend = "unsafe"` now logs a warning on startup:
-```
-WRN using unsafe secrets backend - secrets are stored in plain text
-```
-
-This is intentional to encourage secure secret storage in production. The warning can be ignored for development.
-
-### New Features
-
-- **Attachment secrets discovery**: `gordon secrets list <domain>` now shows secrets for attachment containers
-- **Auth login command**: `gordon auth login --remote <name>` for token authentication
-- **Rate limiting**: Configurable rate limits under `[api.rate_limit]`
-
-### Security Improvements
-
-v2.7.0 includes a comprehensive security audit with:
-
-- JWT tokens now include "not before" (nbf) claim
-- SSRF protection for external routes
-- Security headers middleware
-- Rate limiting on registry and token endpoints
-- Command injection prevention in pass provider
-- Path traversal prevention in secrets store
-
-## v2.5.0 to v2.6.0
-
-### Breaking: Config Restructure
-
-The `[secrets]` and `[registry_auth]` sections were merged into `[auth]`.
-
-**Before (v2.5.0):**
-```toml
-[secrets]
-backend = "pass"
-
-[registry_auth]
-enabled = true
-type = "password"
-password_hash = "gordon/registry/password_hash"
-```
-
-**After (v2.6.0+):**
-```toml
-[auth]
-enabled = true
-secrets_backend = "pass"
-password_hash = "gordon/auth/password_hash"
-```
-
-### Breaking: Auth Enabled by Default
-
-Gordon keeps auth enabled by default. If you set `auth.enabled = false`, Gordon runs in local-only mode (`/admin/*` disabled, `/v2/*` loopback-only).
-
-### Breaking: Secret Paths Changed
-
-If using pass or sops, update your secret paths:
-- `gordon/registry/*` → `gordon/auth/*`
-
-## General Upgrade Process
-
-1. **Read the changelog** for your target version
-2. **Backup your config** before upgrading
-3. **Test in staging** if possible
-4. **Upgrade the binary**:
-   ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
-   ```
-5. **Restart Gordon**:
-   ```bash
-   systemctl --user restart gordon
-   ```
-6. **Check logs** for any errors:
-   ```bash
-   gordon logs
-   ```
-
-## Getting Help
-
-- [GitHub Issues](https://github.com/bnema/gordon/issues)
-- [Documentation](https://gordon.bnema.dev/docs)
+- [Migration](./operations/migration.md)
+- [Split mode](./operations/split-mode.md)
+- [Release gates](./reference/release-gates.md)

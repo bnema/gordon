@@ -2,6 +2,14 @@
 
 This page summarizes Gordon's security-related configuration knobs and the defaults operators should know before exposing an instance.
 
+## Split component isolation
+
+The engine API is root-equivalent authority. In split mode only runtime may receive `DOCKER_HOST`, `PODMAN_HOST`, `CONTAINER_HOST`, or an engine socket mount. Control uses Gordon's authenticated private Unix RPC; edge and registry use scoped component credentials. Never publish component gRPC listeners.
+
+Registry requests terminate at edge and are forwarded with a dedicated credential to the `gordon-registry` private-network alias, not loopback. Generated split edge manifests use external TLS mode: an operator-owned listener/upstream owns public TLS, while private component plaintext is confined to the component network.
+
+Generated role environment files are `0600`. Do not copy, log, or commit them. Preserve migration checkpoints and durable registry outbox state during recovery.
+
 ## Registry upload quotas
 
 Registry blob uploads are bounded by two limits under `[server]`:
@@ -85,9 +93,9 @@ Security behavior:
 - HTTP-looking or TLS-looking malformed traffic is rejected and never bypasses to raw fallback.
 - Entry-point-wide `trusted_cidrs` applies before sniffing to all protocols; raw fallback has its own narrower policy for private fallback exposure.
 
-## Docker network isolation
+## Runtime network isolation
 
-Per-app Docker networks are enabled by default. To block direct external egress from isolated networks, opt into Docker internal networks:
+Per-app Docker/Podman networks are enabled by default. To block direct external egress from isolated networks, opt into Docker internal networks:
 
 ```toml
 [network_isolation]

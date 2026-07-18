@@ -1,52 +1,49 @@
 # Compatibility harness
 
-The old/new harness compares `origin/main` (the baseline) with the current checkout. Override the baseline only when needed:
+The harness compares `origin/main` with the current checkout where old/new parity applies and runs current-only split security/migration contracts where baseline parity is not meaningful.
+
+## Make targets
 
 ```bash
-GORDON_COMPAT_BASELINE_REF=<branch-tag-or-commit> make compat-harness-config
+make compat-harness-config
+make compat-harness-cli
+make compat-harness-api
+make compat-harness-proxy
+make compat-harness-traffic
+make compat-harness-runtime
+make compat-harness-registry
+make compat-harness-security
+GORDON_COMPAT_PODMAN=1 make compat-harness-migration
+GORDON_COMPAT_PODMAN=1 make count2
 ```
 
-## Executable slices
+`config` and `cli` do not require an engine. API/proxy/traffic/registry/security targets perform Docker preflight and parse JSON test output so required scenarios cannot pass by skipping. Migration always runs deterministic protocol checks; `GORDON_COMPAT_PODMAN=1` additionally makes the authentic rootless-Podman old-to-split scenario mandatory. `count2` repeats the complete migration gate.
 
-Run the CI slices exactly as follows:
+Override the comparison baseline only deliberately:
 
 ```bash
-make compat-harness-config  # TestCompatibilityConfigShowJSON
-make compat-harness-cli     # TestCompatibilityRoutesListJSON
-make compat-harness-api     # Docker preflight + TestCompatibilityAdminAuthAndRouteCRUD
-make compat-harness-proxy   # Docker preflight + managed, external, and zero-downtime routes
+GORDON_COMPAT_BASELINE_REF=<ref> make compat-harness-config
 ```
 
-The executable real old/new targets set `GORDON_COMPAT_RUN_REAL=1` themselves, so they cannot pass by skipping; API and proxy also set `GORDON_COMPAT_REQUIRE_RUNTIME=1` and run `docker info`, making Docker a hard CI/local requirement. The proxy target runs its three real tests in one Go test build/invocation, parses its JSON output, and requires each exact top-level test to pass once with no skip. Ordinary `go test ./...` leaves real scenarios gated off, so it needs neither a baseline checkout nor a container runtime.
+Reports default below ignored `artifacts/compat/`. They are private diagnostic data, redacted by the harness, and must still be reviewed before sharing. Never commit raw artifacts.
 
-The three Docker scenarios use Docker's compatible CLI intentionally. Their `PodmanRequired=false` means *not specifically Podman*; it does not mean no runtime is required. Pending Podman e2e coverage remains opt-in through `GORDON_COMPAT_PODMAN=1` and requires `podman info`.
+## Covered split contracts
 
-The Make targets derive `COMPAT_ARTIFACT_DIR` from `GORDON_COMPAT_ARTIFACT_DIR` when set, otherwise retain reports under the ignored repository-root `artifacts/compat` directory. Relative `GORDON_COMPAT_ARTIFACT_DIR` values are resolved from the repository root; absolute values are used unchanged. An explicit `COMPAT_ARTIFACT_DIR=...` make variable still takes precedence. Each target deterministically overwrites its expected files, then prints the baseline ref, report path, and exact focused rerun command. Every slice writes private (`0600`) diagnostic files:
+- CLI/config/admin compatibility;
+- managed, external, zero-downtime, and distributed-drain traffic;
+- TCP/UDP/TLS listener ownership and authenticated traffic streams;
+- runtime adapter behavior;
+- OCI old/new behavior, split registry push events, durable outbox replay, and control deduplication;
+- component credential scope and absence of engine sockets from edge/registry;
+- deterministic and authentic rootless Podman migration, interruption/resume, missing environment, and fail-closed switching.
 
-- `compat-report.json` and `normalized.diff`
-- `old.raw.json`, `new.raw.json`, `old.normalized.json`, and `new.normalized.json`
+The exact selected tests and skip assertions live in `Makefile`; treat it as the executable source of truth.
 
-The harness redacts tokens, authorization credentials, and secret-bearing metadata before writing artifacts, including recursively embedded JSON diagnostics. A configured baseline is compared normally: a behavior difference against a custom ref (including the pre-fix API delete behavior) is reported rather than hidden or allowlisted.
+## Fixture policy
 
-Focused reruns are:
+Use generic domains, credentials, and paths. Isolate state. Declare runtime requirements. A pending scenario is not coverage and must fail if selected. Every real scenario needs an exact rerun command, bounded cleanup, redacted artifacts, and a no-skip assertion.
 
-```bash
-GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$' -count=1
-GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$' -count=1
-GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$' -count=1
-GORDON_COMPAT_ARTIFACT_DIR=artifacts/compat GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=origin/main go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain)$' -count=1
-```
+## Related
 
-The proxy reports are `artifacts/compat/proxy/`, `artifacts/compat/proxy-external/`, and `artifacts/compat/proxy-zero-drain/` (or beneath `<COMPAT_ARTIFACT_DIR>`), each with `compat-report.json` and diagnostic side files. The external route uses a run-unique exact-owned Docker CGNAT network. The drain route holds an old response open, deploys a distinct replacement, confirms new traffic, and only then releases the old response; it uses an exact-owned marker volume. Harness resources are labeled and removed on completion, including failure paths; inspect Docker only by printed run-specific labels while debugging.
-
-## Scenario and fixture policy
-
-Exactly eight scenario names are implemented: `cli/config-show-json`, `cli/routes-list-json`, `api/auth-missing-invalid`, `api/route-list-detail`, `api/route-add-update-remove`, `proxy/managed-http-route`, `proxy/external-route`, and `proxy/zero-downtime-drain`. Remaining proxy shells are pending: `proxy/unknown-host`, `proxy/h2c-backend`, `proxy/registry-domain-routing`, `proxy/body-size-limit`, and `proxy/access-log-emitted`. All other shells, including migration and security, are also pending. Pending scenarios are not coverage: selecting one fails, and policy guards keep them from silently becoming passing work.
-
-When adding a fixture:
-
-1. Use generic config, domains, credentials, and paths.
-2. Declare every compatibility surface it exercises.
-3. Isolate old and new data/home directories.
-4. Mark Podman requirements and provide an actionable pending reason until real execution exists.
-5. Add an exact rerun command and verify the report plus all four raw/normalized side files.
+- [Release gates](./release-gates.md)
+- [Migration](../operations/migration.md)

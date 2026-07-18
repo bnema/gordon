@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Complete configuration reference with all options and their default values.
+Complete source/monolith configuration reference. Split migration generates strict role-specific TOML; those manifests are not filtered copies of this file and should not be hand-authored.
 
 ## Full Configuration Example
 
@@ -9,6 +9,7 @@ Complete configuration reference with all options and their default values.
 # SERVER
 # =============================================================================
 [server]
+port = 8088                                  # Generated split edge listener during migration; monolith uses entrypoints
 registry_port = 5000                         # Container registry port
 tls_cert_file = ""                           # PEM cert path (optional, for static TLS fallback)
 tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
@@ -20,6 +21,12 @@ max_blob_size = "1GB"                        # Max cumulative size per registry 
 registry_allowed_ips = []                    # IPs or CIDR ranges allowed to access the registry (empty = allow all)
 proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach HTTP proxy paths (empty = allow all, e.g. Cloudflare IPs)
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
+
+# =============================================================================
+# SPLIT MIGRATION RUNTIME HANDOFF
+# =============================================================================
+[runtime]
+token_env = "GORDON_RUNTIME_HANDOFF_TOKEN" # Prefer a named environment variable; do not put token values in TOML
 
 # =============================================================================
 # ENTRYPOINTS
