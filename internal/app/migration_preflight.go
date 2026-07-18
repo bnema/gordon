@@ -95,6 +95,29 @@ func NewMigrationPreflight(probes MigrationPreflightProbes) *MigrationPreflight 
 	return &MigrationPreflight{probes: probes}
 }
 
+// PreflightProductionDependencies is the control composition seam for
+// preflight construction. Production always supplies the real constructor;
+// listener tests can inject a failing read-only probe without changing host
+// paths, permissions, listeners, or container state.
+type PreflightProductionDependencies struct {
+	NewMigrationPreflight func(string, Config, out.RuntimeEnvironmentProbe, out.RuntimeStateSubscriber) *MigrationPreflight
+}
+
+func productionPreflightProductionDependencies() PreflightProductionDependencies {
+	return PreflightProductionDependencies{NewMigrationPreflight: newControlMigrationPreflight}
+}
+
+func (d PreflightProductionDependencies) build(configPath string, cfg Config, runtime out.RuntimeEnvironmentProbe, inventory out.RuntimeStateSubscriber) (*MigrationPreflight, error) {
+	if d.NewMigrationPreflight == nil {
+		return nil, fmt.Errorf("production migration preflight constructor is required")
+	}
+	preflight := d.NewMigrationPreflight(configPath, cfg, runtime, inventory)
+	if preflight == nil {
+		return nil, fmt.Errorf("production migration preflight is required")
+	}
+	return preflight, nil
+}
+
 // newControlMigrationPreflight keeps filesystem/config checks in control while
 // delegating runtime facts and actual state to authenticated runtime RPCs.
 // It deliberately receives no runtime adapter or socket path.

@@ -33,7 +33,7 @@ import (
 // newControlRoleServices constructs only control-owned services. In particular
 // it does not call createOutputAdapters or createStorage: container sockets,
 // registry storage, and public traffic listeners belong to other roles.
-func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string) (*services, error) {
+func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string, preflightProduction PreflightProductionDependencies) (*services, error) {
 	configSvc := configusecase.NewService(v, nil)
 	if err := configSvc.Load(ctx); err != nil {
 		return nil, fmt.Errorf("load control configuration: %w", err)
@@ -69,7 +69,11 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	// Docker-compatible socket or constructs a local runtime adapter.
 	runtimeProbe, _ := svc.runtimeCommandClient.(out.RuntimeEnvironmentProbe)
 	runtimeInventory, _ := svc.runtimeCommandClient.(out.RuntimeStateSubscriber)
-	svc.migrationSvc, err = NewMigrationService(newControlMigrationPreflight(configPath, cfg, runtimeProbe, runtimeInventory), checkpointStore)
+	preflight, err := preflightProduction.build(configPath, cfg, runtimeProbe, runtimeInventory)
+	if err != nil {
+		return nil, fmt.Errorf("create production migration preflight: %w", err)
+	}
+	svc.migrationSvc, err = NewMigrationService(preflight, checkpointStore)
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}

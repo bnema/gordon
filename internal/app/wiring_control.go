@@ -51,6 +51,7 @@ type controlRoleDependencies struct {
 	setupConfigHotReload       func(context.Context, configWatcher, loadedConfigApplier) error
 	newSnapshotProducer        func(out.RuntimeStateSubscriber, *edgesnapshot.SnapshotHub, edgesnapshot.ProducerOptions) (*edgesnapshot.Producer, error)
 	newTrafficGraphProducer    func(*edgesnapshot.SnapshotHub, *edgesnapshot.TrafficGraphHub, edgesnapshot.TrafficGraphProducerOptions) (*edgesnapshot.TrafficGraphProducer, error)
+	preflightProduction        PreflightProductionDependencies
 }
 
 func productionControlRoleDependencies() controlRoleDependencies {
@@ -65,6 +66,7 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		setupConfigHotReload:       setupConfigHotReload,
 		newSnapshotProducer:        edgesnapshot.NewProducer,
 		newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
+		preflightProduction:        productionPreflightProductionDependencies(),
 	}
 }
 
@@ -90,7 +92,11 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	// Control owns configuration, user authentication/token management, and
 	// the remote-compatible admin API. This graph deliberately contains no
 	// local runtime, registry storage, or public proxy listener.
-	controlServices, err := newControlRoleServices(ctx, v, cfg, log, configPath)
+	preflightProduction := deps.preflightProduction
+	if preflightProduction.NewMigrationPreflight == nil {
+		preflightProduction = productionPreflightProductionDependencies()
+	}
+	controlServices, err := newControlRoleServices(ctx, v, cfg, log, configPath, preflightProduction)
 	if err != nil {
 		return log.WrapErr(err, "initialize control services")
 	}

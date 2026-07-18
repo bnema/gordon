@@ -281,6 +281,142 @@ func TestControlRoleMigrationPreflightProductionListener(t *testing.T) {
 	}
 }
 
+func TestControlRoleMigrationPreflightProductionListenerNonRuntimeFailures(t *testing.T) {
+	const rawError = "not-to-be-reported"
+	passing := out.RuntimeEnvironment{
+		Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true,
+		ImagePullable: true, NetworkFeasible: true, DiskAvailable: 1 << 30, DiskSufficient: true,
+	}
+	tests := []struct {
+		name, failedCheck string
+		category          PreflightCategory
+		remediation       string
+	}{
+		{name: "target image", failedCheck: "image", category: PreflightRuntime, remediation: "make the configured Gordon image available to the rootless Podman user"},
+		{name: "configuration", failedCheck: "config", category: PreflightConfig, remediation: "fix the configuration error without changing the running deployment"},
+		{name: "data directory", failedCheck: "data", category: PreflightStorage, remediation: "make the configured data directory accessible and writable"},
+		{name: "registry storage", failedCheck: "registry", category: PreflightStorage, remediation: "create and authorize the configured registry storage directory before migration"},
+		{name: "environment directory", failedCheck: "env", category: PreflightEnv, remediation: "create and authorize the configured environment directory and required files before migration"},
+		{name: "secret backend", failedCheck: "secrets", category: PreflightEnv, remediation: "configure an available secret provider before migration"},
+		{name: "public ports", failedCheck: "ports", category: PreflightPorts, remediation: "free public ports or keep them owned by the current Gordon deployment"},
+		{name: "component network", failedCheck: "network", category: PreflightNetwork, remediation: "ensure the internal component network name is available"},
+		{name: "managed inventory", failedCheck: "inventory", category: PreflightState, remediation: "resolve unmanaged or ambiguous Gordon resources before migration"},
+		{name: "disk space", failedCheck: "disk", category: PreflightDisk, remediation: "free enough disk space for the target component images"},
+		{name: "component credentials", failedCheck: "credentials", category: PreflightCredentials, remediation: "configure storage that can safely hold component credentials"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(TokenSecretEnvVar, "migration-production-listener-failure-token-secret-at-least-32-bytes")
+			runtime := startControlRoleRuntimeWithProbe(t, &controlRoleMigrationProbe{report: passing})
+			defer runtime.stop()
+			runtime.state = newControlRoleStateSubscriber()
+			configPath := writeControlRoleConfig(t, runtime.listener.Addr().String())
+			dataDir := filepath.Dir(configPath)
+
+			listeners := make(chan net.Listener, 2)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() {
+				done <- runControlWithDependencies(ctx, configPath, controlRoleDependencies{
+					listen: func(network, address string) (net.Listener, error) {
+						listener, listenErr := net.Listen(network, address)
+						if listenErr == nil {
+							listeners <- listener
+						}
+						return listener, listenErr
+					},
+					newComponentTokenValidator: func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error) {
+						return controlRoleComponentValidator{}, nil
+					},
+					newSnapshotHub:             edgesnapshot.NewSnapshotHub,
+					newEventHub:                productionControlRoleDependencies().newEventHub,
+					newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
+					newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
+					newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
+					setupConfigHotReload:       func(context.Context, configWatcher, loadedConfigApplier) error { return nil },
+					newSnapshotProducer:        edgesnapshot.NewProducer,
+					newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
+					preflightProduction: PreflightProductionDependencies{NewMigrationPreflight: func(string, Config, out.RuntimeEnvironmentProbe, out.RuntimeStateSubscriber) *MigrationPreflight {
+						probes := passingMigrationProbes(nil)
+						setFailingMigrationProbe(&probes, tc.failedCheck)
+						return NewMigrationPreflight(probes)
+					}},
+				})
+			}()
+			t.Cleanup(func() {
+				cancel()
+				require.NoError(t, <-done)
+			})
+
+			runtime.state.Publish(phase4ManagedRuntimeSnapshot(1, "migration-runtime"))
+			_ = controlRoleListener(t, listeners)
+			httpListener := controlRoleListener(t, listeners)
+			// Control startup may initialize its own durable auth/registry fixtures;
+			// take the baseline only once the production listener is ready.
+			beforeConfig, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+			beforeFiles, err := os.ReadDir(dataDir)
+			require.NoError(t, err)
+			response := controlRoleRequest(t, http.MethodGet, "http://"+httpListener.Addr().String()+"/admin/migration/plan", controlRoleAdminToken(t, configPath))
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			require.NoError(t, err)
+			require.Equal(t, http.StatusUnprocessableEntity, response.StatusCode)
+			assert.NotContains(t, string(body), rawError)
+
+			var report MigrationPreflightReport
+			require.NoError(t, json.Unmarshal(body, &report))
+			require.False(t, report.Ready)
+			require.Len(t, report.Checks, 12)
+			failures := make([]PreflightCheck, 0, 1)
+			for _, check := range report.Checks {
+				if check.Status == PreflightFail {
+					failures = append(failures, check)
+				}
+			}
+			require.Equal(t, []PreflightCheck{{Name: checkNameForProbe(tc.failedCheck), Category: tc.category, Status: PreflightFail, Remediation: tc.remediation}}, failures)
+			assert.Zero(t, runtime.worker.calls(), "preflight must not issue runtime commands")
+			afterConfig, err := os.ReadFile(configPath)
+			require.NoError(t, err)
+			assert.Equal(t, beforeConfig, afterConfig, "preflight must not rewrite config")
+			afterFiles, err := os.ReadDir(dataDir)
+			require.NoError(t, err)
+			assert.Equal(t, beforeFiles, afterFiles, "preflight must not create files")
+			_, err = os.Stat(filepath.Join(dataDir, "migration", "checkpoint.json"))
+			require.ErrorIs(t, err, os.ErrNotExist, "preflight must not create a checkpoint")
+		})
+	}
+}
+
+func checkNameForProbe(probe string) string {
+	switch probe {
+	case "image":
+		return "target_image"
+	case "config":
+		return "configuration"
+	case "data":
+		return "data_directory"
+	case "registry":
+		return "registry_storage"
+	case "env":
+		return "environment_directory"
+	case "secrets":
+		return "secret_backend"
+	case "ports":
+		return "public_ports"
+	case "network":
+		return "component_network"
+	case "inventory":
+		return "managed_inventory"
+	case "disk":
+		return "disk_space"
+	case "credentials":
+		return "component_credentials"
+	default:
+		return ""
+	}
+}
+
 func controlRoleMigrationPlanCLI(t *testing.T, baseURL, token string) []byte {
 	t.Helper()
 	command := exec.Command("go", "run", ".", "--remote", baseURL, "--token", token, "migrate", "plan", "--json")
