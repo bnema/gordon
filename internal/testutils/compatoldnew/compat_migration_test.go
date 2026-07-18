@@ -640,7 +640,7 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 		}, bindings, "final edge must own configured public HTTP and registry listeners")
 		networks, networkErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
 		require.NoError(f.t, networkErr)
-		require.Contains(f.t, strings.FieldsFunc(networks, func(r rune) bool { return r == ';' }), f.network, "final edge must retain the managed app network")
+		require.ElementsMatch(f.t, []string{f.network, "gordon-internal-migration-g1"}, strings.FieldsFunc(networks, func(r rune) bool { return r == ';' }), "final edge must retain exactly the managed app and internal networks")
 		return
 	}
 	f.t.Fatal("final edge was not found")

@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,4 +103,36 @@ func TestRuntimeSelfUpdateCommandValidateRequiresComponentLifecyclePolicy(t *tes
 	withoutPolicy := command
 	withoutPolicy.PolicyDecisionID = ""
 	require.ErrorIs(t, withoutPolicy.Validate(), ErrInvalidRuntimeCommand)
+}
+
+func TestRuntimeSelfUpdateCommandValidateBoundsAndSanitizesEdgeAppNetworks(t *testing.T) {
+	command := RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: RuntimeCommandIdentity{ID: RuntimeCommandID("cmd-edge"), IdempotencyKey: "self-update:edge:1", Generation: 1, SourceComponentID: "control-1"},
+		TargetComponentID:      "gordon-edge-fixture-g1", TargetComponentRole: ComponentRoleEdge, TargetVersion: "1.2.3", Policy: RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: RuntimeComponentLifecycleActivate,
+		EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"},
+	}
+	require.NoError(t, command.Validate())
+
+	unsafeName := command
+	unsafeName.EdgeAppNetworks = []string{"../engine-network"}
+	require.ErrorIs(t, unsafeName.Validate(), ErrInvalidRuntimeCommand)
+
+	tooLong := command
+	tooLong.EdgeAppNetworks = []string{strings.Repeat("a", MaxEdgeAppNetworkNameLength+1)}
+	require.ErrorIs(t, tooLong.Validate(), ErrInvalidRuntimeCommand)
+
+	duplicate := command
+	duplicate.EdgeAppNetworks = []string{"gordon-app-one", "gordon-app-one"}
+	require.ErrorIs(t, duplicate.Validate(), ErrInvalidRuntimeCommand)
+
+	tooMany := command
+	tooMany.EdgeAppNetworks = make([]string, MaxEdgeAppNetworks+1)
+	for i := range tooMany.EdgeAppNetworks {
+		tooMany.EdgeAppNetworks[i] = "gordon-app"
+	}
+	require.ErrorIs(t, tooMany.Validate(), ErrInvalidRuntimeCommand)
+
+	nonActivation := command
+	nonActivation.LifecycleAction = RuntimeComponentLifecycleStart
+	require.ErrorIs(t, nonActivation.Validate(), ErrInvalidRuntimeCommand)
 }

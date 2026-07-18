@@ -474,8 +474,12 @@ type RuntimeSelfUpdateCommand struct {
 	// these ports before stopping it.
 	OldServingComponentId string                  `protobuf:"bytes,17,opt,name=old_serving_component_id,json=oldServingComponentId,proto3" json:"old_serving_component_id,omitempty"`
 	FinalPortPublishes    []*ComponentPortBinding `protobuf:"bytes,18,rep,name=final_port_publishes,json=finalPortPublishes,proto3" json:"final_port_publishes,omitempty"`
-	unknownFields         protoimpl.UnknownFields
-	sizeCache             protoimpl.SizeCache
+	// edge_app_networks carries only managed application network names that the
+	// prepared edge already uses. Runtime bounds and validates these names; raw
+	// engine network IDs are never accepted by this RPC.
+	EdgeAppNetworks []string `protobuf:"bytes,19,rep,name=edge_app_networks,json=edgeAppNetworks,proto3" json:"edge_app_networks,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RuntimeSelfUpdateCommand) Reset() {
@@ -630,6 +634,13 @@ func (x *RuntimeSelfUpdateCommand) GetOldServingComponentId() string {
 func (x *RuntimeSelfUpdateCommand) GetFinalPortPublishes() []*ComponentPortBinding {
 	if x != nil {
 		return x.FinalPortPublishes
+	}
+	return nil
+}
+
+func (x *RuntimeSelfUpdateCommand) GetEdgeAppNetworks() []string {
+	if x != nil {
+		return x.EdgeAppNetworks
 	}
 	return nil
 }
@@ -3532,7 +3543,7 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x120\n" +
 	"\x14expected_route_count\x18\x03 \x01(\x05R\x12expectedRouteCount\x122\n" +
 	"\x15desired_state_version\x18\x04 \x01(\tR\x13desiredStateVersion\x12R\n" +
-	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\x80\a\n" +
+	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\xac\a\n" +
 	"\x18RuntimeSelfUpdateCommand\x12E\n" +
 	"\bidentity\x18\x01 \x01(\v2).gordon.runtime.v1.RuntimeCommandIdentityR\bidentity\x12.\n" +
 	"\x13target_component_id\x18\x02 \x01(\tR\x11targetComponentId\x122\n" +
@@ -3554,7 +3565,8 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"configFile\x12N\n" +
 	"\x0eport_publishes\x18\x10 \x03(\v2'.gordon.runtime.v1.ComponentPortBindingR\rportPublishes\x127\n" +
 	"\x18old_serving_component_id\x18\x11 \x01(\tR\x15oldServingComponentId\x12Y\n" +
-	"\x14final_port_publishes\x18\x12 \x03(\v2'.gordon.runtime.v1.ComponentPortBindingR\x12finalPortPublishes\"\x8f\x01\n" +
+	"\x14final_port_publishes\x18\x12 \x03(\v2'.gordon.runtime.v1.ComponentPortBindingR\x12finalPortPublishes\x12*\n" +
+	"\x11edge_app_networks\x18\x13 \x03(\tR\x0fedgeAppNetworks\"\x8f\x01\n" +
 	"\x14ComponentPortBinding\x12\x17\n" +
 	"\ahost_ip\x18\x01 \x01(\tR\x06hostIp\x12\x1b\n" +
 	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12%\n" +

@@ -111,6 +111,10 @@ message RuntimeSelfUpdateCommand {
   // these ports before stopping it.
   string old_serving_component_id = 17;
   repeated ComponentPortBinding final_port_publishes = 18;
+  // edge_app_networks carries only managed application network names that the
+  // prepared edge already uses. Runtime bounds and validates these names; raw
+  // engine network IDs are never accepted by this RPC.
+  repeated string edge_app_networks = 19;
 }
 
 // ComponentPortBinding carries a deterministic migration listener binding.

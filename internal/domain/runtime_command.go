@@ -186,6 +186,15 @@ func (c ReconcileRuntimeCommand) Validate() error {
 	return nil
 }
 
+const (
+	// MaxEdgeAppNetworks bounds a cross-component activation request so it
+	// cannot be used to turn the runtime into a general network attachment API.
+	MaxEdgeAppNetworks = 16
+	// MaxEdgeAppNetworkNameLength admits Docker/Podman-compatible managed names
+	// while limiting untrusted RPC allocation and log payloads.
+	MaxEdgeAppNetworkNameLength = 255
+)
+
 // RuntimeSelfUpdateCommand asks a managed Gordon runtime component to update itself under policy.
 type RuntimeSelfUpdateCommand struct {
 	RuntimeCommandIdentity
@@ -248,7 +257,56 @@ func (c RuntimeSelfUpdateCommand) Validate() error {
 	if c.LifecycleAction != "" && !isKnownRuntimeComponentLifecycleAction(c.LifecycleAction) {
 		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
 	}
+	if err := validateEdgeAppNetworks(c); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateEdgeAppNetworks(command RuntimeSelfUpdateCommand) error {
+	if len(command.EdgeAppNetworks) == 0 {
+		return nil
+	}
+	if command.TargetComponentRole != ComponentRoleEdge || command.LifecycleAction != RuntimeComponentLifecycleActivate {
+		return fmt.Errorf("%w: edge app networks require edge activation", ErrInvalidRuntimeCommand)
+	}
+	if len(command.EdgeAppNetworks) > MaxEdgeAppNetworks {
+		return fmt.Errorf("%w: too many edge app networks", ErrInvalidRuntimeCommand)
+	}
+	seen := make(map[string]struct{}, len(command.EdgeAppNetworks))
+	for _, name := range command.EdgeAppNetworks {
+		if !IsSafeEdgeAppNetworkName(name) {
+			return fmt.Errorf("%w: edge app network name is invalid", ErrInvalidRuntimeCommand)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("%w: duplicate edge app network", ErrInvalidRuntimeCommand)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// IsSafeEdgeAppNetworkName accepts a single portable network name without
+// normalizing it. Validation is deliberately fail-closed so its raw input can
+// never be interpreted as an engine ID, path, or shell fragment downstream.
+func IsSafeEdgeAppNetworkName(name string) bool {
+	if name == "" || name != strings.TrimSpace(name) || len(name) > MaxEdgeAppNetworkNameLength || !isASCIIAlphanumeric(name[0]) {
+		return false
+	}
+	for index := range len(name) {
+		if !isSafeNetworkNameCharacter(name[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSafeNetworkNameCharacter(char byte) bool {
+	return isASCIIAlphanumeric(char) || char == '.' || char == '_' || char == '-'
+}
+
+func isASCIIAlphanumeric(char byte) bool {
+	return char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9'
 }
 
 // RuntimeCommandError is a sanitized command failure suitable for cross-boundary transport.

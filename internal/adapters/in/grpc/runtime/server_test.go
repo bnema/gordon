@@ -136,6 +136,33 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	assert.True(t, worker.self.PreserveVolumes)
 }
 
+func TestServerRuntimeSelfUpdatePreservesValidatedEdgeAppNetworks(t *testing.T) {
+	worker := &fakeRuntimeWorker{}
+	server := NewServer(worker, "runtime-1")
+	command := &runtimev1.RuntimeSelfUpdateCommand{
+		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), PreserveVolumes: true,
+		EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"},
+	}
+
+	_, err := server.RuntimeSelfUpdate(context.Background(), &runtimev1.RuntimeSelfUpdateRequest{Command: command})
+	require.NoError(t, err)
+	assert.Equal(t, command.EdgeAppNetworks, worker.self.EdgeAppNetworks)
+}
+
+func TestServerRuntimeSelfUpdateRejectsUnsafeEdgeAppNetworks(t *testing.T) {
+	worker := &fakeRuntimeWorker{}
+	server := NewServer(worker, "runtime-1")
+	command := &runtimev1.RuntimeSelfUpdateCommand{
+		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), PreserveVolumes: true,
+		EdgeAppNetworks: []string{"gordon-app-one", "../engine-network"},
+	}
+
+	_, err := server.RuntimeSelfUpdate(context.Background(), &runtimev1.RuntimeSelfUpdateRequest{Command: command})
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Empty(t, worker.self.EdgeAppNetworks)
+}
+
 func TestServerWatchActualStateStreamsSanitizedSnapshots(t *testing.T) {
 	snapshot := testActualStateSnapshot()
 	state := &fakeRuntimeStateSubscriber{snapshots: []domain.RuntimeActualStateSnapshot{snapshot}}

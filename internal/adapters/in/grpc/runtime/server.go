@@ -240,7 +240,11 @@ func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSe
 	if req == nil || req.Command == nil {
 		return nil, status.Error(codes.InvalidArgument, "runtime self-update command is required")
 	}
-	result, err := s.worker.SelfUpdate(ctx, protoSelfUpdate(req.Command))
+	command := protoSelfUpdate(req.Command)
+	if err := command.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid runtime self-update command")
+	}
+	result, err := s.worker.SelfUpdate(ctx, command)
 	if err != nil {
 		return nil, err
 	}
@@ -636,6 +640,9 @@ func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.Runtime
 			result.FinalPortPublishes = append(result.FinalPortPublishes, domain.ContainerPortPublish{HostIP: port.HostIp, HostPort: int(port.HostPort), ContainerPort: int(port.ContainerPort), Protocol: domain.NetworkProtocol(port.Protocol)})
 		}
 	}
+	// RuntimeSelfUpdate validates this bounded, name-only field before passing
+	// it to the worker. Copy it to avoid retaining the protobuf request slice.
+	result.EdgeAppNetworks = append([]string(nil), command.EdgeAppNetworks...)
 	return result
 }
 

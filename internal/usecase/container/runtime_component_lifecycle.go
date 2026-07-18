@@ -375,6 +375,9 @@ func (m *runtimeComponentLifecycleManager) preparedEdgeAppNetworks(ctx context.C
 	if len(command.EdgeAppNetworks) == 0 {
 		return nil, nil
 	}
+	if len(command.EdgeAppNetworks) > domain.MaxEdgeAppNetworks {
+		return nil, m.deniedAppNetwork(command)
+	}
 	networks, err := m.runtime.ListNetworks(ctx)
 	if err != nil {
 		return nil, componentLifecycleError("list edge networks", err)
@@ -745,14 +748,11 @@ func validManagedAppNetwork(network *domain.NetworkInfo, name, prefix string) bo
 }
 
 func safeManagedAppNetworkName(name, prefix string) bool {
-	if name != strings.TrimSpace(name) {
+	if !domain.IsSafeEdgeAppNetworkName(name) {
 		return false
 	}
-	name, prefix = strings.TrimSpace(name), strings.TrimSpace(prefix)
-	if name == "" || prefix == "" || filepath.Base(name) != name || strings.ContainsAny(name, " /\\\\") {
-		return false
-	}
-	if name == "bridge" || name == "host" || name == "none" || name == "default" || safeComponentNetwork(name) || strings.HasPrefix(name, prefix+"-internal-") {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" || name == "bridge" || name == "host" || name == "none" || name == "default" || safeComponentNetwork(name) || strings.HasPrefix(name, prefix+"-internal-") {
 		return false
 	}
 	return strings.HasPrefix(name, prefix+"-")

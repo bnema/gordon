@@ -209,6 +209,11 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	assert.Equal(t, domain.RuntimeComponentLifecycleStart, worker.self.LifecycleAction)
 	assert.True(t, worker.self.PreserveVolumes)
 
+	edgeCommand := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-edge"), TargetComponentID: "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleActivate, EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"}, PreserveVolumes: true}
+	_, err = client.SelfUpdateRuntime(context.Background(), edgeCommand)
+	require.NoError(t, err)
+	assert.Equal(t, edgeCommand.EdgeAppNetworks, worker.self.EdgeAppNetworks)
+
 	require.NoError(t, client.PingRuntime(context.Background()))
 	version, err := client.RuntimeVersion(context.Background())
 	require.NoError(t, err)

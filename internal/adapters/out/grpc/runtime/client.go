@@ -108,6 +108,9 @@ func (c *Client) ListStandaloneServiceState(ctx context.Context) ([]domain.Runti
 }
 
 func (c *Client) SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
+	if err := command.Validate(); err != nil {
+		return domain.RuntimeCommandResult{}, err
+	}
 	resp, err := c.client.RuntimeSelfUpdate(ctx, &runtimev1.RuntimeSelfUpdateRequest{Command: domainSelfUpdate(command)})
 	return responseResult(resp, err)
 }
@@ -501,6 +504,9 @@ func domainSelfUpdate(command domain.RuntimeSelfUpdateCommand) *runtimev1.Runtim
 		// #nosec G115 -- validProtoComponentPort bounds both values to int32.
 		result.FinalPortPublishes = append(result.FinalPortPublishes, &runtimev1.ComponentPortBinding{HostIp: port.HostIP, HostPort: int32(port.HostPort), ContainerPort: int32(port.ContainerPort), Protocol: string(port.Protocol)})
 	}
+	// Validation in SelfUpdateRuntime has already bounded and sanitized these
+	// names. Copy them so no caller-owned slice crosses the RPC boundary.
+	result.EdgeAppNetworks = append([]string(nil), command.EdgeAppNetworks...)
 	return result
 }
 
