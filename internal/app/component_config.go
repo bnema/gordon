@@ -12,6 +12,8 @@ import (
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/bnema/gordon/internal/domain"
+	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 )
 
 // ComponentConfigFile is a role-scoped, non-secret configuration reference.
@@ -21,10 +23,20 @@ type ComponentConfigFile struct {
 	Path string               `json:"path"`
 }
 
+// ComponentConfigOptions contains the narrow, non-secret configuration copied
+// into generated role manifests. ExternalRoutes must be the raw value loaded
+// from Viper, not an arbitrary config file or environment value.
+type ComponentConfigOptions struct {
+	ExternalRoutes any
+}
+
 // WriteComponentConfigManifests materializes only the configuration each role
 // needs. Files are private, atomically replaced, and live beneath the
 // migration directory so the runtime can reject arbitrary host binds.
-func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentConfigFile, error) {
+func WriteComponentConfigManifests(cfg Config, directory string, options ...ComponentConfigOptions) ([]ComponentConfigFile, error) {
+	if len(options) > 1 {
+		return nil, fmt.Errorf("only one component configuration option is allowed")
+	}
 	if strings.TrimSpace(directory) == "" {
 		return nil, fmt.Errorf("component configuration directory is required")
 	}
@@ -43,9 +55,17 @@ func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentCon
 	if err != nil {
 		return nil, err
 	}
+	var externalRoutes any
+	if len(options) == 1 {
+		externalRoutes = options[0].ExternalRoutes
+	}
+	controlRouting, err := componentControlRoutingConfig(cfg, externalRoutes)
+	if err != nil {
+		return nil, err
+	}
 	files := make([]ComponentConfigFile, 0, len(componentRoles))
 	for _, role := range componentRoles {
-		data, err := toml.Marshal(componentRoleConfig(cfg, role, migrationID, controlListenAddress, controlEndpoint, true))
+		data, err := toml.Marshal(componentRoleConfig(cfg, role, migrationID, controlListenAddress, controlEndpoint, controlRouting, true))
 		if err != nil {
 			return nil, fmt.Errorf("encode %s component configuration: %w", role, err)
 		}
@@ -58,7 +78,7 @@ func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentCon
 	// Activation recreates edge with this sibling config. Keeping it separate
 	// makes the prepared-only bypass impossible to retain on the public edge;
 	// runtime selects this fixed name only for the final listener transaction.
-	finalEdge, err := toml.Marshal(componentRoleConfig(cfg, domain.ComponentRoleEdge, migrationID, controlListenAddress, controlEndpoint, false))
+	finalEdge, err := toml.Marshal(componentRoleConfig(cfg, domain.ComponentRoleEdge, migrationID, controlListenAddress, controlEndpoint, controlRouting, false))
 	if err != nil {
 		return nil, fmt.Errorf("encode final edge component configuration: %w", err)
 	}
@@ -68,24 +88,37 @@ func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentCon
 	return files, nil
 }
 
-func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, controlListenAddress, controlEndpoint string, migrationProbeEnabled bool) map[string]any {
+func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, controlListenAddress, controlEndpoint string, controlRouting map[string]any, migrationProbeEnabled bool) map[string]any {
 	// These are role contracts, not filtered copies of Config. In particular,
 	// edge and registry use strict TOML decoders and must never receive legacy
 	// server/auth sections (which may contain control-plane secret references).
 	switch role {
 	case domain.ComponentRoleControl:
-		return map[string]any{
+		control := map[string]any{
 			// Components share an isolated network; binding wildcard here permits
 			// the edge's gordon-control DNS alias without publishing a host port.
-			"control": map[string]any{"listen_address": controlListenAddress, "http": cfg.Control.HTTP, "insecure_tls": true},
+			"control": map[string]any{"listen_address": controlListenAddress, "insecure_tls": true, "edge_alias": cfg.Control.EdgeAlias, "registry_alias": cfg.Control.RegistryAlias, "registry_port": cfg.Control.RegistryPort, "drain_registration_timeout": cfg.Control.DrainRegistrationTimeout},
 			// Control reaches the new runtime only through its private Gordon RPC
 			// socket. This is not, and cannot be confused with, the Podman socket.
 			"runtime": map[string]any{"endpoint": migrationRuntimeSocketEndpoint(migrationID), "token_env": "GORDON_COMPONENT_RUNTIME_TOKEN"},
 			// Split control uses its own data volume. The only shared migration
 			// state is the narrowly mounted /var/lib/gordon/migration child.
 			"server": map[string]any{"data_dir": componentDataDirectory},
-			"auth":   map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_secret": cfg.Auth.TokenSecret},
+			// Token references and provider credentials remain in the private role
+			// environment/secrets store, never in a generated TOML manifest.
+			"auth": map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend},
 		}
+		for key, value := range controlRouting {
+			if key == "server" {
+				server := control["server"].(map[string]any)
+				for serverKey, serverValue := range value.(map[string]any) {
+					server[serverKey] = serverValue
+				}
+				continue
+			}
+			control[key] = value
+		}
+		return control
 	case domain.ComponentRoleRuntime:
 		return map[string]any{
 			"server":  map[string]any{"data_dir": componentDataDirectory, "runtime": "unix:///run/gordon/runtime.sock"},
@@ -122,6 +155,111 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 	default:
 		return nil
 	}
+}
+
+// componentControlRoutingConfig copies only values needed to construct control
+// route and traffic snapshots. It deliberately builds maps rather than copying
+// Config so TLS files, runtime authority, provider settings, service secrets,
+// and environment values cannot reach the control container.
+func componentControlRoutingConfig(cfg Config, rawExternalRoutes any) (map[string]any, error) {
+	externalRoutes, err := safeComponentExternalRoutes(rawExternalRoutes)
+	if err != nil {
+		return nil, err
+	}
+	entryPoints := make(map[string]any, len(cfg.EntryPoints))
+	for name, entry := range cfg.EntryPoints {
+		entryPoints[name] = map[string]any{
+			"address": entry.Address, "protocol": entry.Protocol, "trusted_cidrs": entry.TrustedCIDRs,
+			"raw_fallback": entry.RawFallback, "raw_fallback_trusted_cidrs": entry.RawFallbackTrustedCIDRs,
+			"allow_public_raw_fallback": entry.AllowPublicRawFallback,
+		}
+	}
+	tcpRouters := make([]map[string]any, 0, len(cfg.Traffic.TCP.Routers))
+	for _, router := range cfg.Traffic.TCP.Routers {
+		tcpRouters = append(tcpRouters, safeComponentRouter(router.Name, router.EntryPoint, router.Host, router.SNI, router.Service))
+	}
+	udpRouters := make([]map[string]any, 0, len(cfg.Traffic.UDP.Routers))
+	for _, router := range cfg.Traffic.UDP.Routers {
+		udpRouters = append(udpRouters, safeComponentRouter(router.Name, router.EntryPoint, router.Host, router.SNI, router.Service))
+	}
+	tlsRouters := make([]map[string]any, 0, len(cfg.Traffic.TLS.Routers))
+	for _, router := range cfg.Traffic.TLS.Routers {
+		tlsRouters = append(tlsRouters, safeComponentRouter(router.Name, router.EntryPoint, router.Host, router.SNI, router.Service))
+	}
+	return map[string]any{
+		"server": map[string]any{
+			"port": cfg.Server.Port, "registry_port": cfg.Server.RegistryPort,
+			"gordon_domain": cfg.Server.GordonDomain, "registry_domain": cfg.Server.RegistryDomain,
+			"legacy_registry_domains": cfg.Server.LegacyRegistryDomains,
+			"max_proxy_body_size":     cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize,
+			"max_concurrent_connections": cfg.Server.MaxConcurrentConns,
+		},
+		"entrypoints": entryPoints,
+		"traffic": map[string]any{
+			"tcp": map[string]any{"routers": tcpRouters, "dial_timeout": cfg.Traffic.TCP.DialTimeout, "idle_timeout": cfg.Traffic.TCP.IdleTimeout, "drain_timeout": cfg.Traffic.TCP.DrainTimeout, "max_connections": cfg.Traffic.TCP.MaxConnections},
+			"udp": map[string]any{"routers": udpRouters, "idle_timeout": cfg.Traffic.UDP.IdleTimeout, "drain_timeout": cfg.Traffic.UDP.DrainTimeout, "max_sessions": cfg.Traffic.UDP.MaxSessions},
+			"tls": map[string]any{"routers": tlsRouters},
+		},
+		"network_services": safeComponentNetworkServices(cfg),
+		"services":         safeComponentServices(cfg),
+		"external_routes":  externalRoutes,
+	}, nil
+}
+
+func safeComponentExternalRoutes(raw any) (map[string]string, error) {
+	if raw == nil {
+		return map[string]string{}, nil
+	}
+	routes, err := configusecase.LoadExternalRoutes(raw)
+	if err != nil {
+		return nil, err
+	}
+	domains := make([]string, 0, len(routes))
+	for routeDomain := range routes {
+		domains = append(domains, routeDomain)
+	}
+	sort.Strings(domains)
+	safe := make(map[string]string, len(domains))
+	for _, routeDomain := range domains {
+		if _, err := proxyusecase.ResolveExternalRouteTarget(routeDomain, routes[routeDomain], 1); err != nil {
+			return nil, fmt.Errorf("external route %q: %w", routeDomain, err)
+		}
+		safe[routeDomain] = routes[routeDomain]
+	}
+	return safe, nil
+}
+
+func safeComponentRouter(name, entryPoint, host, sni, service string) map[string]any {
+	return map[string]any{"name": name, "entrypoint": entryPoint, "host": host, "sni": sni, "service": service}
+}
+
+func safeComponentNetworkServices(cfg Config) []map[string]any {
+	services := make([]map[string]any, 0, len(cfg.NetworkServices))
+	for _, service := range cfg.NetworkServices {
+		ports := make([]map[string]any, 0, len(service.Ports))
+		for _, port := range service.Ports {
+			ports = append(ports, map[string]any{"name": port.Name, "container": port.Container, "protocol": port.Protocol})
+		}
+		services = append(services, map[string]any{"name": service.Name, "ports": ports})
+	}
+	return services
+}
+
+func safeComponentServices(cfg Config) []map[string]any {
+	services := make([]map[string]any, 0, len(cfg.Services))
+	for _, service := range cfg.Services {
+		ports := make([]map[string]any, 0, len(service.Ports))
+		for _, port := range service.Ports {
+			ports = append(ports, map[string]any{
+				"name": port.Name, "container": port.Container, "protocol": port.Protocol, "publish": port.Publish,
+				"private": port.Private, "public": port.Public, "trusted_cidrs": port.TrustedCIDRs,
+			})
+		}
+		// Image and port routing are required by traffic graph validation. Do not
+		// carry Env, EnvFile, Secrets, Volumes, or provider-backed readiness data.
+		services = append(services, map[string]any{"name": service.Name, "image": service.Image, "enabled": service.Enabled, "ports": ports})
+	}
+	return services
 }
 
 // componentControlNetworking preserves the configured control port while

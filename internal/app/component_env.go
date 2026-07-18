@@ -79,6 +79,9 @@ type MigrationEnvOptions struct {
 	// must be explicitly allowlisted and non-secret-like before values are read.
 	ExplicitEnvFile string
 	Directory       string
+	// ExternalRoutes is the raw Viper external_routes value. It is validated
+	// before the non-secret control routing manifest is written.
+	ExternalRoutes any
 }
 
 const maxExplicitComponentEnvBytes int64 = 64 << 10

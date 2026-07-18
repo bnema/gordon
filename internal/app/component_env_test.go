@@ -132,9 +132,10 @@ func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)
 	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:      Config{},
-		Environment: map[string]string{"GORDON_SERVER_PORT": "8080"},
-		Directory:   filepath.Join(t.TempDir(), "env"),
+		Config:         Config{},
+		Environment:    map[string]string{"GORDON_SERVER_PORT": "8080"},
+		Directory:      filepath.Join(t.TempDir(), "env"),
+		ExternalRoutes: map[string]any{"public.example.test": "198.51.100.10:8443"},
 	})
 	require.NoError(t, err)
 	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})
@@ -142,6 +143,10 @@ func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 	require.NotEmpty(t, checkpoint.EnvFileReferences)
 	require.Len(t, checkpoint.ConfigFileReferences, 4)
 	assert.NotContains(t, strings.Join(checkpoint.EnvFileReferences, " "), "8080")
+	controlConfig := componentConfigReferences(checkpoint.ConfigFileReferences)[domain.ComponentRoleControl]
+	controlContents, readErr := os.ReadFile(controlConfig)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(controlContents), "public.example.test")
 	for _, reference := range checkpoint.ConfigFileReferences {
 		info, statErr := os.Stat(reference)
 		require.NoError(t, statErr)

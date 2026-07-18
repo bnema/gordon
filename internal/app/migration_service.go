@@ -23,6 +23,7 @@ type MigrationService struct {
 	envError       error
 	envDirectory   string
 	config         Config
+	externalRoutes any
 	candidateImage string
 	orchestrator   *MigrationOrchestrator
 }
@@ -46,6 +47,7 @@ func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpoi
 		}
 		service.envManifest, service.envError = manifest, err
 		service.config = options.Config
+		service.externalRoutes = options.ExternalRoutes
 		service.envDirectory = options.Directory
 		if service.envDirectory == "" {
 			service.envDirectory = filepath.Join(filepath.Dir(store.Path()), "env")
@@ -227,7 +229,7 @@ func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint)
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component configuration")
 	}
-	files, err := WriteComponentConfigManifests(s.config, migrationComponentConfigDirectory(s.envDirectory, checkpoint.MigrationID, checkpoint.ComponentGeneration))
+	files, err := WriteComponentConfigManifests(s.config, migrationComponentConfigDirectory(s.envDirectory, checkpoint.MigrationID, checkpoint.ComponentGeneration), ComponentConfigOptions{ExternalRoutes: s.externalRoutes})
 	if err != nil {
 		return err
 	}

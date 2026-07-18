@@ -10,6 +10,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
+	servicecfg "github.com/bnema/gordon/internal/usecase/services"
+	"github.com/bnema/gordon/internal/usecase/traffic"
 )
 
 func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {
@@ -55,6 +58,63 @@ func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {
 	for _, file := range files {
 		assert.Equal(t, ".toml", filepath.Ext(file.Path), "role configs must be consumable by role TOML decoders")
 	}
+}
+
+func TestComponentControlConfigOwnsSafeRoutingContractWithoutAuthorityLeaks(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.DataDir = "/host/private-data"
+	cfg.Server.Port = 18080
+	cfg.Server.RegistryPort = 15000
+	cfg.Server.GordonDomain = "app.example.test"
+	cfg.Server.RegistryDomain = "registry.example.test"
+	cfg.Server.LegacyRegistryDomains = []string{"old-registry.example.test"}
+	cfg.Server.TLSCertFile = "/host/private-cert.pem"
+	cfg.Server.TLSKeyFile = "/host/private-key.pem"
+	cfg.Control.EdgeAlias = "gordon-edge"
+	cfg.Control.RegistryAlias = "gordon-registry"
+	cfg.Control.RegistryPort = 15000
+	cfg.Control.DrainRegistrationTimeout = "7s"
+	cfg.Runtime.Endpoint = "unix:///host/podman.sock"
+	cfg.Runtime.Token = "runtime-token"
+	cfg.Auth.TokenSecret = "auth-token-reference"
+	cfg.Auth.Username = "admin"
+	cfg.Services = []servicecfg.Config{{Name: "metrics", Image: "example.test/metrics:latest", Enabled: true, Env: []string{"PASSWORD=never-copy"}, EnvFile: "/host/service.env", Secrets: []servicecfg.SecretRefConfig{{Name: "api", Key: "token"}}, Ports: []servicecfg.PortConfig{{Name: "http", Container: 9090, Protocol: domain.NetworkProtocolTCP, Publish: "198.51.100.10:9090"}}}}
+	cfg.EntryPoints = map[string]traffic.EntryPointConfig{"metrics": {Address: ":9000", Protocol: domain.EntryPointProtocolTCP}}
+	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "metrics", EntryPoint: "metrics", Service: "metrics:http"}}
+	cfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "dns", Ports: []traffic.PortConfig{{Name: "dns", Container: 53, Protocol: domain.NetworkProtocolUDP}}}}
+
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"), ComponentConfigOptions{ExternalRoutes: map[string]any{"public.example.test": "198.51.100.10:8443"}})
+	require.NoError(t, err)
+	control, err := os.ReadFile(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleControl])
+	require.NoError(t, err)
+	contents := string(control)
+	for _, required := range []string{"gordon_domain = 'app.example.test'", "registry_domain = 'registry.example.test'", "legacy_registry_domains = ['old-registry.example.test']", "edge_alias = 'gordon-edge'", "registry_alias = 'gordon-registry'", "drain_registration_timeout = '7s'", "[external_routes]", "public.example.test", "[entrypoints.metrics]", "[traffic.tcp]", "[[network_services]]", "[[services]]"} {
+		assert.Contains(t, contents, required)
+	}
+	for _, forbidden := range []string{"/host/private-key.pem", "/host/private-cert.pem", "/host/podman.sock", "runtime-token", "auth-token-reference", "PASSWORD=never-copy", "/host/service.env", "token'"} {
+		assert.NotContains(t, contents, forbidden)
+	}
+}
+
+func TestGeneratedControlConfigPublishesInitialRegistryForwardingTarget(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.RegistryDomain = "registry.example.test"
+	cfg.Server.RegistryPort = 15000
+	cfg.Control.RegistryAlias = "gordon-registry"
+	cfg.Control.RegistryPort = 15000
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	v, controlCfg, err := initConfig(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleControl])
+	require.NoError(t, err)
+	options, err := controlProducerOptions(v, controlCfg)
+	require.NoError(t, err)
+	require.NotNil(t, options.Registry)
+	assert.Equal(t, edgesnapshot.RegistryTarget{Domain: "registry.example.test", Alias: "gordon-registry", Port: 15000, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1}, *options.Registry)
+}
+
+func TestWriteComponentConfigManifestsRejectsUnsafeExternalRoutes(t *testing.T) {
+	_, err := WriteComponentConfigManifests(Config{}, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"), ComponentConfigOptions{ExternalRoutes: map[string]any{"blocked.example.test": "127.0.0.1:8080"}})
+	require.ErrorIs(t, err, domain.ErrSSRFBlocked)
 }
 
 func TestComponentConfigSeparatesPreparedProbeAndFinalPublicEdge(t *testing.T) {

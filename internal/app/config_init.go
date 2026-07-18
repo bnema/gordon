@@ -131,6 +131,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("control.edge_alias", "gordon-edge")
 	v.SetDefault("control.registry_alias", "gordon-registry")
 	v.SetDefault("control.registry_port", 5000)
+	v.SetDefault("control.drain_registration_timeout", "5s")
 	// The management HTTP listener is opt-in so upgrading an existing split
 	// control deployment cannot unexpectedly expose an API. Production control
 	// deployments must configure [control.http] explicitly.

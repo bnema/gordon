@@ -79,8 +79,9 @@ type ControlConfig struct {
 	EdgeAlias string `mapstructure:"edge_alias"`
 	// RegistryAlias and RegistryPort are the control-owned internal registry
 	// target contract; neither accepts host loopback endpoints.
-	RegistryAlias string `mapstructure:"registry_alias"`
-	RegistryPort  int    `mapstructure:"registry_port"`
+	RegistryAlias            string `mapstructure:"registry_alias"`
+	RegistryPort             int    `mapstructure:"registry_port"`
+	DrainRegistrationTimeout string `mapstructure:"drain_registration_timeout"`
 	// HTTP is the management API listener. It is deliberately separate from
 	// ListenAddress, which is reserved for component gRPC traffic.
 	HTTP struct {
