@@ -9,6 +9,7 @@ import (
 
 	eventsv1 "github.com/bnema/gordon/api/gordon/events/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/componentevents"
 	"google.golang.org/grpc/codes"
@@ -19,10 +20,18 @@ import (
 // Server adapts the typed event wire contract to the control-owned hub.
 type Server struct {
 	eventsv1.UnimplementedEventServiceServer
-	hub *componentevents.EventHub
+	hub     *componentevents.EventHub
+	handler out.ComponentEventHandler
 }
 
 func NewServer(hub *componentevents.EventHub) *Server { return &Server{hub: hub} }
+
+// NewDispatchingServer acknowledges a delivery only after the control-owned
+// dispatcher has completed its effects. This keeps outbox retries effective:
+// a failed effect is never hidden by transport-level hub de-duplication.
+func NewDispatchingServer(hub *componentevents.EventHub, handler out.ComponentEventHandler) *Server {
+	return &Server{hub: hub, handler: handler}
+}
 
 // MethodScopes and MethodRoles are consumed by the common component auth
 // interceptors. Publish accepts only role-specific publish scopes via its
@@ -61,6 +70,11 @@ func (s *Server) PublishEvent(ctx context.Context, request *eventsv1.PublishEven
 	}
 	if !roleMayPublish(identity.Role, event.Type) {
 		return nil, status.Error(codes.PermissionDenied, "authenticated role may not publish event type")
+	}
+	if s.handler != nil {
+		if err := s.handler.HandleComponentEvent(ctx, event); err != nil {
+			return nil, hubError(err)
+		}
 	}
 	ack, err := s.hub.Publish(ctx, event)
 	if err != nil {

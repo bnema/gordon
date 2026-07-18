@@ -17,11 +17,15 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
+	eventsv1 "github.com/bnema/gordon/api/gordon/events/v1"
 	edgesnapshotgrpc "github.com/bnema/gordon/internal/adapters/in/grpc/edgesnapshot"
+	eventsgrpc "github.com/bnema/gordon/internal/adapters/in/grpc/events"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/componentevents"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	controlplaneusecase "github.com/bnema/gordon/internal/usecase/controlplane"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
@@ -33,6 +37,7 @@ type controlRoleDependencies struct {
 	listen                     func(network, address string) (net.Listener, error)
 	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
 	newSnapshotHub             func() *edgesnapshot.SnapshotHub
+	newEventHub                func(int) *componentevents.EventHub
 	newTrafficGraphHub         func() *edgesnapshot.TrafficGraphHub
 	newRuntimeStateSubscriber  func(context.Context, RuntimeControlConfig) (out.RuntimeStateSubscriber, error)
 	newRuntimeDrainAckReceiver func(context.Context, RuntimeControlConfig) (out.RouteDrainAckReceiver, error)
@@ -45,6 +50,7 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		listen:                     net.Listen,
 		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
 		newSnapshotHub:             edgesnapshot.NewSnapshotHub,
+		newEventHub:                componentevents.NewEventHub,
 		newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
 		newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
 		newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
@@ -81,10 +87,11 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 		return fmt.Errorf("control route snapshot hub is required")
 	}
 	if err := startControlSnapshotProducer(ctx, v, cfg, deps, hub); err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		return log.WrapErr(err, "publish initial control route snapshot")
+		return controlSnapshotProducerError(err, log)
+	}
+	eventHub, err := controlEventHub(deps)
+	if err != nil {
+		return err
 	}
 	trafficHub, err := initializeControlTrafficGraph(ctx, v, cfg, deps, hub)
 	if err != nil {
@@ -113,7 +120,10 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	}
 	defer listener.Close()
 
-	server, err := newControlSnapshotServerWithTrafficGraphAndDrain(cfg, validator, hub, trafficHub, drainCoordinator)
+	// The dispatcher is the sole control event owner. It validates, serializes,
+	// and acknowledges typed component events before transport confirms delivery.
+	dispatcher := controlplaneusecase.NewEventDispatcher(controlplaneusecase.EventDispatcherOptions{})
+	server, err := newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
 	if err != nil {
 		return err
 	}
@@ -128,6 +138,25 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	case serveErr := <-errCh:
 		return log.WrapErr(serveErr, "control snapshot gRPC server stopped")
 	}
+}
+
+func controlSnapshotProducerError(err error, log zerowrap.Logger) error {
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return log.WrapErr(err, "publish initial control route snapshot")
+}
+
+func controlEventHub(deps controlRoleDependencies) (*componentevents.EventHub, error) {
+	newHub := deps.newEventHub
+	if newHub == nil {
+		newHub = componentevents.NewEventHub
+	}
+	hub := newHub(1024)
+	if hub == nil {
+		return nil, fmt.Errorf("control component event hub is required")
+	}
+	return hub, nil
 }
 
 func startControlSnapshotProducer(ctx context.Context, v *viper.Viper, cfg Config, deps controlRoleDependencies, hub *edgesnapshot.SnapshotHub) error {
@@ -253,6 +282,13 @@ func newControlSnapshotServerWithDrain(cfg Config, validator interceptors.Compon
 }
 
 func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
+	return newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg, validator, hub, trafficHub, drainReceiver, nil)
+}
+
+// newControlSnapshotServerWithTrafficGraphDrainAndEvents co-hosts the typed
+// event intake with the existing sanitized edge streams. Event transport is
+// authenticated with its own method scopes; it never receives runtime sockets.
+func newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver, eventServer eventsv1.EventServiceServer) (*grpc.Server, error) {
 	if validator == nil {
 		return nil, fmt.Errorf("control component token validator is required")
 	}
@@ -263,10 +299,20 @@ func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator inte
 	if err != nil {
 		return nil, err
 	}
+	scopes := edgesnapshotgrpc.MethodScopes()
+	roles := edgesnapshotgrpc.MethodRoles()
+	if eventServer != nil {
+		for method, scope := range eventsgrpc.MethodScopes() {
+			scopes[method] = scope
+		}
+		for method, role := range eventsgrpc.MethodRoles() {
+			roles[method] = role
+		}
+	}
 	server := grpc.NewServer(
 		grpc.Creds(transport),
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, scopes, roles)),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, scopes, roles)),
 	)
 	if trafficHub != nil {
 		serverAdapter := edgesnapshotgrpc.NewServerWithTrafficGraphSource(hub, trafficHub)
@@ -278,6 +324,9 @@ func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator inte
 		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithDrainStateReceiver(hub, drainReceiver))
 	} else {
 		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
+	}
+	if eventServer != nil {
+		eventsv1.RegisterEventServiceServer(server, eventServer)
 	}
 	return server, nil
 }
