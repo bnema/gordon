@@ -20,6 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	EdgeService_WatchRouteSnapshots_FullMethodName = "/gordon.edge.v1.EdgeService/WatchRouteSnapshots"
+	EdgeService_WatchTrafficGraphs_FullMethodName  = "/gordon.edge.v1.EdgeService/WatchTrafficGraphs"
 	EdgeService_ReportDrainState_FullMethodName    = "/gordon.edge.v1.EdgeService/ReportDrainState"
 )
 
@@ -31,6 +32,8 @@ const (
 type EdgeServiceClient interface {
 	// WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
 	WatchRouteSnapshots(ctx context.Context, in *WatchRouteSnapshotsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RouteTargetSnapshot], error)
+	// WatchTrafficGraphs sends the complete sanitized traffic graph for an edge.
+	WatchTrafficGraphs(ctx context.Context, in *WatchTrafficGraphsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TrafficGraphSnapshot], error)
 	// ReportDrainState accepts the narrow, opaque drain state produced by an edge.
 	ReportDrainState(ctx context.Context, in *ReportDrainStateRequest, opts ...grpc.CallOption) (*ReportDrainStateResponse, error)
 }
@@ -62,6 +65,25 @@ func (c *edgeServiceClient) WatchRouteSnapshots(ctx context.Context, in *WatchRo
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EdgeService_WatchRouteSnapshotsClient = grpc.ServerStreamingClient[RouteTargetSnapshot]
 
+func (c *edgeServiceClient) WatchTrafficGraphs(ctx context.Context, in *WatchTrafficGraphsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TrafficGraphSnapshot], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EdgeService_ServiceDesc.Streams[1], EdgeService_WatchTrafficGraphs_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchTrafficGraphsRequest, TrafficGraphSnapshot]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EdgeService_WatchTrafficGraphsClient = grpc.ServerStreamingClient[TrafficGraphSnapshot]
+
 func (c *edgeServiceClient) ReportDrainState(ctx context.Context, in *ReportDrainStateRequest, opts ...grpc.CallOption) (*ReportDrainStateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReportDrainStateResponse)
@@ -80,6 +102,8 @@ func (c *edgeServiceClient) ReportDrainState(ctx context.Context, in *ReportDrai
 type EdgeServiceServer interface {
 	// WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
 	WatchRouteSnapshots(*WatchRouteSnapshotsRequest, grpc.ServerStreamingServer[RouteTargetSnapshot]) error
+	// WatchTrafficGraphs sends the complete sanitized traffic graph for an edge.
+	WatchTrafficGraphs(*WatchTrafficGraphsRequest, grpc.ServerStreamingServer[TrafficGraphSnapshot]) error
 	// ReportDrainState accepts the narrow, opaque drain state produced by an edge.
 	ReportDrainState(context.Context, *ReportDrainStateRequest) (*ReportDrainStateResponse, error)
 	mustEmbedUnimplementedEdgeServiceServer()
@@ -94,6 +118,9 @@ type UnimplementedEdgeServiceServer struct{}
 
 func (UnimplementedEdgeServiceServer) WatchRouteSnapshots(*WatchRouteSnapshotsRequest, grpc.ServerStreamingServer[RouteTargetSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method WatchRouteSnapshots not implemented")
+}
+func (UnimplementedEdgeServiceServer) WatchTrafficGraphs(*WatchTrafficGraphsRequest, grpc.ServerStreamingServer[TrafficGraphSnapshot]) error {
+	return status.Error(codes.Unimplemented, "method WatchTrafficGraphs not implemented")
 }
 func (UnimplementedEdgeServiceServer) ReportDrainState(context.Context, *ReportDrainStateRequest) (*ReportDrainStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportDrainState not implemented")
@@ -130,6 +157,17 @@ func _EdgeService_WatchRouteSnapshots_Handler(srv interface{}, stream grpc.Serve
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EdgeService_WatchRouteSnapshotsServer = grpc.ServerStreamingServer[RouteTargetSnapshot]
 
+func _EdgeService_WatchTrafficGraphs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchTrafficGraphsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EdgeServiceServer).WatchTrafficGraphs(m, &grpc.GenericServerStream[WatchTrafficGraphsRequest, TrafficGraphSnapshot]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EdgeService_WatchTrafficGraphsServer = grpc.ServerStreamingServer[TrafficGraphSnapshot]
+
 func _EdgeService_ReportDrainState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReportDrainStateRequest)
 	if err := dec(in); err != nil {
@@ -164,6 +202,11 @@ var EdgeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "WatchRouteSnapshots",
 			Handler:       _EdgeService_WatchRouteSnapshots_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchTrafficGraphs",
+			Handler:       _EdgeService_WatchTrafficGraphs_Handler,
 			ServerStreams: true,
 		},
 	},

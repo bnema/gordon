@@ -20,6 +20,7 @@ type ComponentScope string
 
 const (
 	ComponentScopeRoutesWatch          ComponentScope = "routes:watch"
+	ComponentScopeTrafficWatch         ComponentScope = "traffic:watch"
 	ComponentScopeEdgeDrain            ComponentScope = "edge:drain"
 	ComponentScopeRuntimeDeploy        ComponentScope = "runtime:deploy"
 	ComponentScopeRuntimeReconcile     ComponentScope = "runtime:reconcile"
@@ -38,6 +39,7 @@ const (
 func AllComponentScopes() []ComponentScope {
 	return []ComponentScope{
 		ComponentScopeRoutesWatch,
+		ComponentScopeTrafficWatch,
 		ComponentScopeEdgeDrain,
 		ComponentScopeRuntimeDeploy,
 		ComponentScopeRuntimeReconcile,
@@ -89,6 +91,7 @@ func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
 	case ComponentRoleEdge:
 		return []ComponentScope{
 			ComponentScopeRoutesWatch,
+			ComponentScopeTrafficWatch,
 			ComponentScopeEdgeDrain,
 		}
 	case ComponentRoleRegistry:

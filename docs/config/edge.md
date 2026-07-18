@@ -4,7 +4,7 @@
 
 ## TLS contract
 
-TLS termination is explicit. There is no plaintext default.
+TLS termination is explicit. There is no plaintext default. Split edges support only operator-provided certificate files or explicit external TLS termination. Gordon-managed ACME issuance and challenge handling remain monolith-only until a certificate/challenge delivery protocol exists; an edge never silently falls back from ACME to another mode.
 
 - `mode = "files"` requires a certificate and key; Gordon serves HTTPS itself.
 - `mode = "external"` permits HTTP only from `trusted_proxy_cidrs`. Put the terminating load balancer or reverse-proxy CIDRs in that list. Direct HTTP connections are rejected, and forwarded client addresses are trusted only from those CIDRs.

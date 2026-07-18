@@ -10,12 +10,82 @@ option go_package = "github.com/bnema/gordon/api/gordon/edge/v1;edgev1";
 service EdgeService {
   // WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
   rpc WatchRouteSnapshots(WatchRouteSnapshotsRequest) returns (stream RouteTargetSnapshot);
+  // WatchTrafficGraphs sends the complete sanitized traffic graph for an edge.
+  rpc WatchTrafficGraphs(WatchTrafficGraphsRequest) returns (stream TrafficGraphSnapshot);
   // ReportDrainState accepts the narrow, opaque drain state produced by an edge.
   rpc ReportDrainState(ReportDrainStateRequest) returns (ReportDrainStateResponse);
 }
 
 // WatchRouteSnapshotsRequest deliberately has no routing selectors.
 message WatchRouteSnapshotsRequest {}
+
+// WatchTrafficGraphsRequest deliberately has no selectors: the authenticated
+// edge receives exactly its control-owned sanitized graph.
+message WatchTrafficGraphsRequest {}
+
+// TrafficGraphSnapshot carries traffic options, entry points, routers, and
+// backends only. Certificates, keys, ACME state, and control configuration are
+// intentionally absent.
+message TrafficGraphSnapshot {
+  uint64 generation = 1;
+  TrafficOptions options = 2;
+  repeated TrafficEntryPoint entry_points = 3;
+  repeated TrafficRouter routers = 4;
+  repeated TrafficService services = 5;
+}
+
+message TrafficOptions {
+  TrafficTCPOptions tcp = 1;
+  TrafficUDPOptions udp = 2;
+}
+
+message TrafficTCPOptions {
+  int64 dial_timeout_nanos = 1;
+  int64 idle_timeout_nanos = 2;
+  int64 drain_timeout_nanos = 3;
+  int64 max_connections = 4;
+}
+
+message TrafficUDPOptions {
+  int64 idle_timeout_nanos = 1;
+  int64 drain_timeout_nanos = 2;
+  int64 max_sessions = 3;
+}
+
+message TrafficEntryPoint {
+  string name = 1;
+  string address = 2;
+  string protocol = 3;
+  repeated string trusted_cidrs = 4;
+  string raw_fallback = 5;
+  repeated string raw_fallback_trusted_cidrs = 6;
+  bool allow_public_raw_fallback = 7;
+}
+
+message TrafficRouter {
+  string name = 1;
+  string entry_point = 2;
+  string protocol = 3;
+  TrafficRule rule = 4;
+  string service = 5;
+}
+
+message TrafficRule {
+  string host = 1;
+  string sni = 2;
+}
+
+message TrafficService {
+  string name = 1;
+  repeated TrafficBackend backends = 2;
+}
+
+message TrafficBackend {
+  string name = 1;
+  string host = 2;
+  int32 port = 3;
+  string protocol = 4;
+}
 
 // RouteTargetSnapshot is the complete sanitized routing view for an edge.
 message RouteTargetSnapshot {

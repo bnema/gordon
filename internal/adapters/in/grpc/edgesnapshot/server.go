@@ -21,12 +21,18 @@ const maxProtoInt32 = 1<<31 - 1
 type Server struct {
 	edgev1.UnimplementedEdgeServiceServer
 	source        edgesnapshot.Source
+	trafficSource edgesnapshot.TrafficGraphSource
 	drainReceiver edgesnapshot.DrainStateReceiver
 }
 
 // NewServer constructs an edge snapshot server from a control-owned source.
 func NewServer(source edgesnapshot.Source) *Server {
 	return &Server{source: source}
+}
+
+// NewServerWithTrafficGraphSource exposes both independent sanitized streams.
+func NewServerWithTrafficGraphSource(source edgesnapshot.Source, trafficSource edgesnapshot.TrafficGraphSource) *Server {
+	return &Server{source: source, trafficSource: trafficSource}
 }
 
 // NewServerWithDrainStateReceiver also relays structurally valid drain reports.
@@ -38,6 +44,7 @@ func NewServerWithDrainStateReceiver(source edgesnapshot.Source, receiver edgesn
 func MethodScopes() map[string]domain.ComponentScope {
 	return map[string]domain.ComponentScope{
 		edgev1.EdgeService_WatchRouteSnapshots_FullMethodName: domain.ComponentScopeRoutesWatch,
+		edgev1.EdgeService_WatchTrafficGraphs_FullMethodName:  domain.ComponentScopeTrafficWatch,
 		edgev1.EdgeService_ReportDrainState_FullMethodName:    domain.ComponentScopeEdgeDrain,
 	}
 }
@@ -46,6 +53,7 @@ func MethodScopes() map[string]domain.ComponentScope {
 func MethodRoles() map[string]domain.ComponentRole {
 	return map[string]domain.ComponentRole{
 		edgev1.EdgeService_WatchRouteSnapshots_FullMethodName: domain.ComponentRoleEdge,
+		edgev1.EdgeService_WatchTrafficGraphs_FullMethodName:  domain.ComponentRoleEdge,
 		edgev1.EdgeService_ReportDrainState_FullMethodName:    domain.ComponentRoleEdge,
 	}
 }
@@ -89,6 +97,56 @@ func (s *Server) WatchRouteSnapshots(_ *edgev1.WatchRouteSnapshotsRequest, strea
 			sent = snapshot.Generation
 		}
 	}
+}
+
+// WatchTrafficGraphs sends the current graph followed by strictly newer updates.
+func (s *Server) WatchTrafficGraphs(_ *edgev1.WatchTrafficGraphsRequest, stream edgev1.EdgeService_WatchTrafficGraphsServer) error {
+	if s.trafficSource == nil {
+		return status.Error(codes.FailedPrecondition, "traffic graph source not configured")
+	}
+	ctx := stream.Context()
+	updates, err := s.trafficSource.SubscribeTrafficGraphs(ctx)
+	if err != nil {
+		return sourceError(err)
+	}
+	var sent domain.TrafficGraphGeneration
+	current, err := s.trafficSource.CurrentTrafficGraph(ctx)
+	if err == nil {
+		if err := s.sendTrafficGraph(stream, current); err != nil {
+			return err
+		}
+		sent = current.Generation
+	} else if !errors.Is(err, edgesnapshot.ErrNoTrafficGraph) {
+		return sourceError(err)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Error(codes.Canceled, ctx.Err().Error())
+		case snapshot, ok := <-updates:
+			if !ok {
+				return nil
+			}
+			if snapshot.Generation <= sent {
+				continue
+			}
+			if err := s.sendTrafficGraph(stream, snapshot); err != nil {
+				return err
+			}
+			sent = snapshot.Generation
+		}
+	}
+}
+
+func (s *Server) sendTrafficGraph(stream edgev1.EdgeService_WatchTrafficGraphsServer, snapshot domain.TrafficGraphSnapshot) error {
+	message, err := TrafficGraphSnapshotToProto(snapshot)
+	if err != nil {
+		return status.Error(codes.Internal, "invalid traffic graph source data")
+	}
+	if err := stream.Context().Err(); err != nil {
+		return status.Error(codes.Canceled, err.Error())
+	}
+	return stream.Send(message)
 }
 
 func (s *Server) sendSnapshot(stream edgev1.EdgeService_WatchRouteSnapshotsServer, snapshot domain.RouteTargetSnapshot) error {

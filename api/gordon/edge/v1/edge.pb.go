@@ -110,6 +110,643 @@ func (*WatchRouteSnapshotsRequest) Descriptor() ([]byte, []int) {
 	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{0}
 }
 
+// WatchTrafficGraphsRequest deliberately has no selectors: the authenticated
+// edge receives exactly its control-owned sanitized graph.
+type WatchTrafficGraphsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchTrafficGraphsRequest) Reset() {
+	*x = WatchTrafficGraphsRequest{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchTrafficGraphsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchTrafficGraphsRequest) ProtoMessage() {}
+
+func (x *WatchTrafficGraphsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchTrafficGraphsRequest.ProtoReflect.Descriptor instead.
+func (*WatchTrafficGraphsRequest) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{1}
+}
+
+// TrafficGraphSnapshot carries traffic options, entry points, routers, and
+// backends only. Certificates, keys, ACME state, and control configuration are
+// intentionally absent.
+type TrafficGraphSnapshot struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Generation    uint64                 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
+	Options       *TrafficOptions        `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
+	EntryPoints   []*TrafficEntryPoint   `protobuf:"bytes,3,rep,name=entry_points,json=entryPoints,proto3" json:"entry_points,omitempty"`
+	Routers       []*TrafficRouter       `protobuf:"bytes,4,rep,name=routers,proto3" json:"routers,omitempty"`
+	Services      []*TrafficService      `protobuf:"bytes,5,rep,name=services,proto3" json:"services,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficGraphSnapshot) Reset() {
+	*x = TrafficGraphSnapshot{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficGraphSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficGraphSnapshot) ProtoMessage() {}
+
+func (x *TrafficGraphSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficGraphSnapshot.ProtoReflect.Descriptor instead.
+func (*TrafficGraphSnapshot) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *TrafficGraphSnapshot) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *TrafficGraphSnapshot) GetOptions() *TrafficOptions {
+	if x != nil {
+		return x.Options
+	}
+	return nil
+}
+
+func (x *TrafficGraphSnapshot) GetEntryPoints() []*TrafficEntryPoint {
+	if x != nil {
+		return x.EntryPoints
+	}
+	return nil
+}
+
+func (x *TrafficGraphSnapshot) GetRouters() []*TrafficRouter {
+	if x != nil {
+		return x.Routers
+	}
+	return nil
+}
+
+func (x *TrafficGraphSnapshot) GetServices() []*TrafficService {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+type TrafficOptions struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tcp           *TrafficTCPOptions     `protobuf:"bytes,1,opt,name=tcp,proto3" json:"tcp,omitempty"`
+	Udp           *TrafficUDPOptions     `protobuf:"bytes,2,opt,name=udp,proto3" json:"udp,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficOptions) Reset() {
+	*x = TrafficOptions{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficOptions) ProtoMessage() {}
+
+func (x *TrafficOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficOptions.ProtoReflect.Descriptor instead.
+func (*TrafficOptions) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *TrafficOptions) GetTcp() *TrafficTCPOptions {
+	if x != nil {
+		return x.Tcp
+	}
+	return nil
+}
+
+func (x *TrafficOptions) GetUdp() *TrafficUDPOptions {
+	if x != nil {
+		return x.Udp
+	}
+	return nil
+}
+
+type TrafficTCPOptions struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	DialTimeoutNanos  int64                  `protobuf:"varint,1,opt,name=dial_timeout_nanos,json=dialTimeoutNanos,proto3" json:"dial_timeout_nanos,omitempty"`
+	IdleTimeoutNanos  int64                  `protobuf:"varint,2,opt,name=idle_timeout_nanos,json=idleTimeoutNanos,proto3" json:"idle_timeout_nanos,omitempty"`
+	DrainTimeoutNanos int64                  `protobuf:"varint,3,opt,name=drain_timeout_nanos,json=drainTimeoutNanos,proto3" json:"drain_timeout_nanos,omitempty"`
+	MaxConnections    int64                  `protobuf:"varint,4,opt,name=max_connections,json=maxConnections,proto3" json:"max_connections,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TrafficTCPOptions) Reset() {
+	*x = TrafficTCPOptions{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficTCPOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficTCPOptions) ProtoMessage() {}
+
+func (x *TrafficTCPOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficTCPOptions.ProtoReflect.Descriptor instead.
+func (*TrafficTCPOptions) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TrafficTCPOptions) GetDialTimeoutNanos() int64 {
+	if x != nil {
+		return x.DialTimeoutNanos
+	}
+	return 0
+}
+
+func (x *TrafficTCPOptions) GetIdleTimeoutNanos() int64 {
+	if x != nil {
+		return x.IdleTimeoutNanos
+	}
+	return 0
+}
+
+func (x *TrafficTCPOptions) GetDrainTimeoutNanos() int64 {
+	if x != nil {
+		return x.DrainTimeoutNanos
+	}
+	return 0
+}
+
+func (x *TrafficTCPOptions) GetMaxConnections() int64 {
+	if x != nil {
+		return x.MaxConnections
+	}
+	return 0
+}
+
+type TrafficUDPOptions struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	IdleTimeoutNanos  int64                  `protobuf:"varint,1,opt,name=idle_timeout_nanos,json=idleTimeoutNanos,proto3" json:"idle_timeout_nanos,omitempty"`
+	DrainTimeoutNanos int64                  `protobuf:"varint,2,opt,name=drain_timeout_nanos,json=drainTimeoutNanos,proto3" json:"drain_timeout_nanos,omitempty"`
+	MaxSessions       int64                  `protobuf:"varint,3,opt,name=max_sessions,json=maxSessions,proto3" json:"max_sessions,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *TrafficUDPOptions) Reset() {
+	*x = TrafficUDPOptions{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficUDPOptions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficUDPOptions) ProtoMessage() {}
+
+func (x *TrafficUDPOptions) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficUDPOptions.ProtoReflect.Descriptor instead.
+func (*TrafficUDPOptions) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *TrafficUDPOptions) GetIdleTimeoutNanos() int64 {
+	if x != nil {
+		return x.IdleTimeoutNanos
+	}
+	return 0
+}
+
+func (x *TrafficUDPOptions) GetDrainTimeoutNanos() int64 {
+	if x != nil {
+		return x.DrainTimeoutNanos
+	}
+	return 0
+}
+
+func (x *TrafficUDPOptions) GetMaxSessions() int64 {
+	if x != nil {
+		return x.MaxSessions
+	}
+	return 0
+}
+
+type TrafficEntryPoint struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Name                    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Address                 string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
+	Protocol                string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	TrustedCidrs            []string               `protobuf:"bytes,4,rep,name=trusted_cidrs,json=trustedCidrs,proto3" json:"trusted_cidrs,omitempty"`
+	RawFallback             string                 `protobuf:"bytes,5,opt,name=raw_fallback,json=rawFallback,proto3" json:"raw_fallback,omitempty"`
+	RawFallbackTrustedCidrs []string               `protobuf:"bytes,6,rep,name=raw_fallback_trusted_cidrs,json=rawFallbackTrustedCidrs,proto3" json:"raw_fallback_trusted_cidrs,omitempty"`
+	AllowPublicRawFallback  bool                   `protobuf:"varint,7,opt,name=allow_public_raw_fallback,json=allowPublicRawFallback,proto3" json:"allow_public_raw_fallback,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *TrafficEntryPoint) Reset() {
+	*x = TrafficEntryPoint{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficEntryPoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficEntryPoint) ProtoMessage() {}
+
+func (x *TrafficEntryPoint) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficEntryPoint.ProtoReflect.Descriptor instead.
+func (*TrafficEntryPoint) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *TrafficEntryPoint) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TrafficEntryPoint) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *TrafficEntryPoint) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *TrafficEntryPoint) GetTrustedCidrs() []string {
+	if x != nil {
+		return x.TrustedCidrs
+	}
+	return nil
+}
+
+func (x *TrafficEntryPoint) GetRawFallback() string {
+	if x != nil {
+		return x.RawFallback
+	}
+	return ""
+}
+
+func (x *TrafficEntryPoint) GetRawFallbackTrustedCidrs() []string {
+	if x != nil {
+		return x.RawFallbackTrustedCidrs
+	}
+	return nil
+}
+
+func (x *TrafficEntryPoint) GetAllowPublicRawFallback() bool {
+	if x != nil {
+		return x.AllowPublicRawFallback
+	}
+	return false
+}
+
+type TrafficRouter struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	EntryPoint    string                 `protobuf:"bytes,2,opt,name=entry_point,json=entryPoint,proto3" json:"entry_point,omitempty"`
+	Protocol      string                 `protobuf:"bytes,3,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	Rule          *TrafficRule           `protobuf:"bytes,4,opt,name=rule,proto3" json:"rule,omitempty"`
+	Service       string                 `protobuf:"bytes,5,opt,name=service,proto3" json:"service,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficRouter) Reset() {
+	*x = TrafficRouter{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficRouter) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficRouter) ProtoMessage() {}
+
+func (x *TrafficRouter) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficRouter.ProtoReflect.Descriptor instead.
+func (*TrafficRouter) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TrafficRouter) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TrafficRouter) GetEntryPoint() string {
+	if x != nil {
+		return x.EntryPoint
+	}
+	return ""
+}
+
+func (x *TrafficRouter) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
+func (x *TrafficRouter) GetRule() *TrafficRule {
+	if x != nil {
+		return x.Rule
+	}
+	return nil
+}
+
+func (x *TrafficRouter) GetService() string {
+	if x != nil {
+		return x.Service
+	}
+	return ""
+}
+
+type TrafficRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Host          string                 `protobuf:"bytes,1,opt,name=host,proto3" json:"host,omitempty"`
+	Sni           string                 `protobuf:"bytes,2,opt,name=sni,proto3" json:"sni,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficRule) Reset() {
+	*x = TrafficRule{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficRule) ProtoMessage() {}
+
+func (x *TrafficRule) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficRule.ProtoReflect.Descriptor instead.
+func (*TrafficRule) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *TrafficRule) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *TrafficRule) GetSni() string {
+	if x != nil {
+		return x.Sni
+	}
+	return ""
+}
+
+type TrafficService struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Backends      []*TrafficBackend      `protobuf:"bytes,2,rep,name=backends,proto3" json:"backends,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficService) Reset() {
+	*x = TrafficService{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficService) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficService) ProtoMessage() {}
+
+func (x *TrafficService) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficService.ProtoReflect.Descriptor instead.
+func (*TrafficService) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *TrafficService) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TrafficService) GetBackends() []*TrafficBackend {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+type TrafficBackend struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Host          string                 `protobuf:"bytes,2,opt,name=host,proto3" json:"host,omitempty"`
+	Port          int32                  `protobuf:"varint,3,opt,name=port,proto3" json:"port,omitempty"`
+	Protocol      string                 `protobuf:"bytes,4,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TrafficBackend) Reset() {
+	*x = TrafficBackend{}
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficBackend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficBackend) ProtoMessage() {}
+
+func (x *TrafficBackend) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficBackend.ProtoReflect.Descriptor instead.
+func (*TrafficBackend) Descriptor() ([]byte, []int) {
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TrafficBackend) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TrafficBackend) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+func (x *TrafficBackend) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *TrafficBackend) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
+	}
+	return ""
+}
+
 // RouteTargetSnapshot is the complete sanitized routing view for an edge.
 type RouteTargetSnapshot struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
@@ -122,7 +759,7 @@ type RouteTargetSnapshot struct {
 
 func (x *RouteTargetSnapshot) Reset() {
 	*x = RouteTargetSnapshot{}
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[1]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -134,7 +771,7 @@ func (x *RouteTargetSnapshot) String() string {
 func (*RouteTargetSnapshot) ProtoMessage() {}
 
 func (x *RouteTargetSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[1]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -147,7 +784,7 @@ func (x *RouteTargetSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteTargetSnapshot.ProtoReflect.Descriptor instead.
 func (*RouteTargetSnapshot) Descriptor() ([]byte, []int) {
-	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{1}
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RouteTargetSnapshot) GetGeneration() uint64 {
@@ -191,7 +828,7 @@ type RouteTargetEntry struct {
 
 func (x *RouteTargetEntry) Reset() {
 	*x = RouteTargetEntry{}
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -203,7 +840,7 @@ func (x *RouteTargetEntry) String() string {
 func (*RouteTargetEntry) ProtoMessage() {}
 
 func (x *RouteTargetEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -216,7 +853,7 @@ func (x *RouteTargetEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteTargetEntry.ProtoReflect.Descriptor instead.
 func (*RouteTargetEntry) Descriptor() ([]byte, []int) {
-	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{2}
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RouteTargetEntry) GetCanonicalDomain() string {
@@ -313,7 +950,7 @@ type ReportDrainStateRequest struct {
 
 func (x *ReportDrainStateRequest) Reset() {
 	*x = ReportDrainStateRequest{}
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[3]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -325,7 +962,7 @@ func (x *ReportDrainStateRequest) String() string {
 func (*ReportDrainStateRequest) ProtoMessage() {}
 
 func (x *ReportDrainStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[3]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -338,7 +975,7 @@ func (x *ReportDrainStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportDrainStateRequest.ProtoReflect.Descriptor instead.
 func (*ReportDrainStateRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{3}
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ReportDrainStateRequest) GetCanonicalDomain() string {
@@ -392,7 +1029,7 @@ type ReportDrainStateResponse struct {
 
 func (x *ReportDrainStateResponse) Reset() {
 	*x = ReportDrainStateResponse{}
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[4]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -404,7 +1041,7 @@ func (x *ReportDrainStateResponse) String() string {
 func (*ReportDrainStateResponse) ProtoMessage() {}
 
 func (x *ReportDrainStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_edge_v1_edge_proto_msgTypes[4]
+	mi := &file_gordon_edge_v1_edge_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -417,7 +1054,7 @@ func (x *ReportDrainStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportDrainStateResponse.ProtoReflect.Descriptor instead.
 func (*ReportDrainStateResponse) Descriptor() ([]byte, []int) {
-	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{4}
+	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{14}
 }
 
 var File_gordon_edge_v1_edge_proto protoreflect.FileDescriptor
@@ -425,7 +1062,54 @@ var File_gordon_edge_v1_edge_proto protoreflect.FileDescriptor
 const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	"\n" +
 	"\x19gordon/edge/v1/edge.proto\x12\x0egordon.edge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x1c\n" +
-	"\x1aWatchRouteSnapshotsRequest\"\xd1\x01\n" +
+	"\x1aWatchRouteSnapshotsRequest\"\x1b\n" +
+	"\x19WatchTrafficGraphsRequest\"\xab\x02\n" +
+	"\x14TrafficGraphSnapshot\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x01 \x01(\x04R\n" +
+	"generation\x128\n" +
+	"\aoptions\x18\x02 \x01(\v2\x1e.gordon.edge.v1.TrafficOptionsR\aoptions\x12D\n" +
+	"\fentry_points\x18\x03 \x03(\v2!.gordon.edge.v1.TrafficEntryPointR\ventryPoints\x127\n" +
+	"\arouters\x18\x04 \x03(\v2\x1d.gordon.edge.v1.TrafficRouterR\arouters\x12:\n" +
+	"\bservices\x18\x05 \x03(\v2\x1e.gordon.edge.v1.TrafficServiceR\bservices\"z\n" +
+	"\x0eTrafficOptions\x123\n" +
+	"\x03tcp\x18\x01 \x01(\v2!.gordon.edge.v1.TrafficTCPOptionsR\x03tcp\x123\n" +
+	"\x03udp\x18\x02 \x01(\v2!.gordon.edge.v1.TrafficUDPOptionsR\x03udp\"\xc8\x01\n" +
+	"\x11TrafficTCPOptions\x12,\n" +
+	"\x12dial_timeout_nanos\x18\x01 \x01(\x03R\x10dialTimeoutNanos\x12,\n" +
+	"\x12idle_timeout_nanos\x18\x02 \x01(\x03R\x10idleTimeoutNanos\x12.\n" +
+	"\x13drain_timeout_nanos\x18\x03 \x01(\x03R\x11drainTimeoutNanos\x12'\n" +
+	"\x0fmax_connections\x18\x04 \x01(\x03R\x0emaxConnections\"\x94\x01\n" +
+	"\x11TrafficUDPOptions\x12,\n" +
+	"\x12idle_timeout_nanos\x18\x01 \x01(\x03R\x10idleTimeoutNanos\x12.\n" +
+	"\x13drain_timeout_nanos\x18\x02 \x01(\x03R\x11drainTimeoutNanos\x12!\n" +
+	"\fmax_sessions\x18\x03 \x01(\x03R\vmaxSessions\"\x9d\x02\n" +
+	"\x11TrafficEntryPoint\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aaddress\x18\x02 \x01(\tR\aaddress\x12\x1a\n" +
+	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12#\n" +
+	"\rtrusted_cidrs\x18\x04 \x03(\tR\ftrustedCidrs\x12!\n" +
+	"\fraw_fallback\x18\x05 \x01(\tR\vrawFallback\x12;\n" +
+	"\x1araw_fallback_trusted_cidrs\x18\x06 \x03(\tR\x17rawFallbackTrustedCidrs\x129\n" +
+	"\x19allow_public_raw_fallback\x18\a \x01(\bR\x16allowPublicRawFallback\"\xab\x01\n" +
+	"\rTrafficRouter\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
+	"\ventry_point\x18\x02 \x01(\tR\n" +
+	"entryPoint\x12\x1a\n" +
+	"\bprotocol\x18\x03 \x01(\tR\bprotocol\x12/\n" +
+	"\x04rule\x18\x04 \x01(\v2\x1b.gordon.edge.v1.TrafficRuleR\x04rule\x12\x18\n" +
+	"\aservice\x18\x05 \x01(\tR\aservice\"3\n" +
+	"\vTrafficRule\x12\x12\n" +
+	"\x04host\x18\x01 \x01(\tR\x04host\x12\x10\n" +
+	"\x03sni\x18\x02 \x01(\tR\x03sni\"`\n" +
+	"\x0eTrafficService\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12:\n" +
+	"\bbackends\x18\x02 \x03(\v2\x1e.gordon.edge.v1.TrafficBackendR\bbackends\"h\n" +
+	"\x0eTrafficBackend\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
+	"\x04port\x18\x03 \x01(\x05R\x04port\x12\x1a\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"\xd1\x01\n" +
 	"\x13RouteTargetSnapshot\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x04R\n" +
@@ -463,9 +1147,10 @@ const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	"\x12DrainTimeoutReason\x12$\n" +
 	" DRAIN_TIMEOUT_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19DRAIN_TIMEOUT_REASON_EDGE\x10\x01\x12 \n" +
-	"\x1cDRAIN_TIMEOUT_REASON_CONTROL\x10\x022\xde\x01\n" +
+	"\x1cDRAIN_TIMEOUT_REASON_CONTROL\x10\x022\xc7\x02\n" +
 	"\vEdgeService\x12h\n" +
-	"\x13WatchRouteSnapshots\x12*.gordon.edge.v1.WatchRouteSnapshotsRequest\x1a#.gordon.edge.v1.RouteTargetSnapshot0\x01\x12e\n" +
+	"\x13WatchRouteSnapshots\x12*.gordon.edge.v1.WatchRouteSnapshotsRequest\x1a#.gordon.edge.v1.RouteTargetSnapshot0\x01\x12g\n" +
+	"\x12WatchTrafficGraphs\x12).gordon.edge.v1.WatchTrafficGraphsRequest\x1a$.gordon.edge.v1.TrafficGraphSnapshot0\x01\x12e\n" +
 	"\x10ReportDrainState\x12'.gordon.edge.v1.ReportDrainStateRequest\x1a(.gordon.edge.v1.ReportDrainStateResponseB3Z1github.com/bnema/gordon/api/gordon/edge/v1;edgev1b\x06proto3"
 
 var (
@@ -481,30 +1166,50 @@ func file_gordon_edge_v1_edge_proto_rawDescGZIP() []byte {
 }
 
 var file_gordon_edge_v1_edge_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gordon_edge_v1_edge_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_gordon_edge_v1_edge_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_gordon_edge_v1_edge_proto_goTypes = []any{
 	(DrainTimeoutReason)(0),            // 0: gordon.edge.v1.DrainTimeoutReason
 	(*WatchRouteSnapshotsRequest)(nil), // 1: gordon.edge.v1.WatchRouteSnapshotsRequest
-	(*RouteTargetSnapshot)(nil),        // 2: gordon.edge.v1.RouteTargetSnapshot
-	(*RouteTargetEntry)(nil),           // 3: gordon.edge.v1.RouteTargetEntry
-	(*ReportDrainStateRequest)(nil),    // 4: gordon.edge.v1.ReportDrainStateRequest
-	(*ReportDrainStateResponse)(nil),   // 5: gordon.edge.v1.ReportDrainStateResponse
-	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
+	(*WatchTrafficGraphsRequest)(nil),  // 2: gordon.edge.v1.WatchTrafficGraphsRequest
+	(*TrafficGraphSnapshot)(nil),       // 3: gordon.edge.v1.TrafficGraphSnapshot
+	(*TrafficOptions)(nil),             // 4: gordon.edge.v1.TrafficOptions
+	(*TrafficTCPOptions)(nil),          // 5: gordon.edge.v1.TrafficTCPOptions
+	(*TrafficUDPOptions)(nil),          // 6: gordon.edge.v1.TrafficUDPOptions
+	(*TrafficEntryPoint)(nil),          // 7: gordon.edge.v1.TrafficEntryPoint
+	(*TrafficRouter)(nil),              // 8: gordon.edge.v1.TrafficRouter
+	(*TrafficRule)(nil),                // 9: gordon.edge.v1.TrafficRule
+	(*TrafficService)(nil),             // 10: gordon.edge.v1.TrafficService
+	(*TrafficBackend)(nil),             // 11: gordon.edge.v1.TrafficBackend
+	(*RouteTargetSnapshot)(nil),        // 12: gordon.edge.v1.RouteTargetSnapshot
+	(*RouteTargetEntry)(nil),           // 13: gordon.edge.v1.RouteTargetEntry
+	(*ReportDrainStateRequest)(nil),    // 14: gordon.edge.v1.ReportDrainStateRequest
+	(*ReportDrainStateResponse)(nil),   // 15: gordon.edge.v1.ReportDrainStateResponse
+	(*timestamppb.Timestamp)(nil),      // 16: google.protobuf.Timestamp
 }
 var file_gordon_edge_v1_edge_proto_depIdxs = []int32{
-	3, // 0: gordon.edge.v1.RouteTargetSnapshot.entries:type_name -> gordon.edge.v1.RouteTargetEntry
-	3, // 1: gordon.edge.v1.RouteTargetSnapshot.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
-	6, // 2: gordon.edge.v1.ReportDrainStateRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
-	0, // 3: gordon.edge.v1.ReportDrainStateRequest.timeout_reason:type_name -> gordon.edge.v1.DrainTimeoutReason
-	1, // 4: gordon.edge.v1.EdgeService.WatchRouteSnapshots:input_type -> gordon.edge.v1.WatchRouteSnapshotsRequest
-	4, // 5: gordon.edge.v1.EdgeService.ReportDrainState:input_type -> gordon.edge.v1.ReportDrainStateRequest
-	2, // 6: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.RouteTargetSnapshot
-	5, // 7: gordon.edge.v1.EdgeService.ReportDrainState:output_type -> gordon.edge.v1.ReportDrainStateResponse
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	4,  // 0: gordon.edge.v1.TrafficGraphSnapshot.options:type_name -> gordon.edge.v1.TrafficOptions
+	7,  // 1: gordon.edge.v1.TrafficGraphSnapshot.entry_points:type_name -> gordon.edge.v1.TrafficEntryPoint
+	8,  // 2: gordon.edge.v1.TrafficGraphSnapshot.routers:type_name -> gordon.edge.v1.TrafficRouter
+	10, // 3: gordon.edge.v1.TrafficGraphSnapshot.services:type_name -> gordon.edge.v1.TrafficService
+	5,  // 4: gordon.edge.v1.TrafficOptions.tcp:type_name -> gordon.edge.v1.TrafficTCPOptions
+	6,  // 5: gordon.edge.v1.TrafficOptions.udp:type_name -> gordon.edge.v1.TrafficUDPOptions
+	9,  // 6: gordon.edge.v1.TrafficRouter.rule:type_name -> gordon.edge.v1.TrafficRule
+	11, // 7: gordon.edge.v1.TrafficService.backends:type_name -> gordon.edge.v1.TrafficBackend
+	13, // 8: gordon.edge.v1.RouteTargetSnapshot.entries:type_name -> gordon.edge.v1.RouteTargetEntry
+	13, // 9: gordon.edge.v1.RouteTargetSnapshot.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
+	16, // 10: gordon.edge.v1.ReportDrainStateRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
+	0,  // 11: gordon.edge.v1.ReportDrainStateRequest.timeout_reason:type_name -> gordon.edge.v1.DrainTimeoutReason
+	1,  // 12: gordon.edge.v1.EdgeService.WatchRouteSnapshots:input_type -> gordon.edge.v1.WatchRouteSnapshotsRequest
+	2,  // 13: gordon.edge.v1.EdgeService.WatchTrafficGraphs:input_type -> gordon.edge.v1.WatchTrafficGraphsRequest
+	14, // 14: gordon.edge.v1.EdgeService.ReportDrainState:input_type -> gordon.edge.v1.ReportDrainStateRequest
+	12, // 15: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.RouteTargetSnapshot
+	3,  // 16: gordon.edge.v1.EdgeService.WatchTrafficGraphs:output_type -> gordon.edge.v1.TrafficGraphSnapshot
+	15, // 17: gordon.edge.v1.EdgeService.ReportDrainState:output_type -> gordon.edge.v1.ReportDrainStateResponse
+	15, // [15:18] is the sub-list for method output_type
+	12, // [12:15] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_gordon_edge_v1_edge_proto_init() }
@@ -518,7 +1223,7 @@ func file_gordon_edge_v1_edge_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gordon_edge_v1_edge_proto_rawDesc), len(file_gordon_edge_v1_edge_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
