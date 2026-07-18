@@ -229,10 +229,36 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 	return nil
 }
 
+const (
+	runtimeHandoffStartupTimeout = 10 * time.Second
+	runtimeHandoffRetryInterval  = 50 * time.Millisecond
+)
+
+// proveRuntimeHandoff allows a just-started runtime a short, bounded window to
+// bind its private bootstrap listener. A lifecycle Start acknowledgement means
+// only that Podman started the process; it does not prove gRPC is accepting yet.
 func proveRuntimeHandoff(ctx context.Context, target RuntimeHandoffClient, component ComponentLaunchComponent) error {
 	if target == nil {
 		return fmt.Errorf("replacement runtime client is required")
 	}
+	startupCtx, cancel := context.WithTimeout(ctx, runtimeHandoffStartupTimeout)
+	defer cancel()
+	for {
+		err := proveRuntimeHandoffOnce(startupCtx, target, component)
+		if err == nil || !isTransientRuntimeHandoffError(err) {
+			return err
+		}
+		timer := time.NewTimer(runtimeHandoffRetryInterval)
+		select {
+		case <-startupCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("replacement runtime did not become ready: %w", err)
+		case <-timer.C:
+		}
+	}
+}
+
+func proveRuntimeHandoffOnce(ctx context.Context, target RuntimeHandoffClient, component ComponentLaunchComponent) error {
 	probe, err := target.ProbeRuntimeEnvironment(ctx)
 	if err != nil {
 		return fmt.Errorf("probe replacement runtime environment: %w", err)
@@ -256,6 +282,10 @@ func proveRuntimeHandoff(ctx context.Context, target RuntimeHandoffClient, compo
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func isTransientRuntimeHandoffError(err error) bool {
+	return err != nil && (strings.Contains(strings.ToLower(err.Error()), "connection refused") || strings.Contains(strings.ToLower(err.Error()), "connection error") || strings.Contains(strings.ToLower(err.Error()), "unavailable"))
 }
 
 func verifyRuntimeHandoffSnapshot(component ComponentLaunchComponent, snapshot domain.RuntimeActualStateSnapshot) error {

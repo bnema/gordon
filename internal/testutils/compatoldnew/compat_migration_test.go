@@ -164,7 +164,10 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	// The old serving Gordon is deliberately a normal rootless container, not
 	// host-networked: its authenticated bootstrap proof must cross Podman's
 	// host gateway to the runtime's loopback-only publish.
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
+	// Publish every configured legacy listener. The authenticated runtime probe
+	// must recognize these as owned by the running managed monolith rather than
+	// attempting a bind inside the monolith's own network namespace.
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }

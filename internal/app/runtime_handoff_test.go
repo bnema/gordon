@@ -14,10 +14,12 @@ import (
 )
 
 type handoffRuntime struct {
-	commands []domain.RuntimeSelfUpdateCommand
-	probe    out.RuntimeEnvironment
-	pingErr  error
-	states   []domain.RuntimeActualStateSnapshot
+	commands    []domain.RuntimeSelfUpdateCommand
+	probe       out.RuntimeEnvironment
+	probeErrors []error
+	probeCalls  int
+	pingErr     error
+	states      []domain.RuntimeActualStateSnapshot
 }
 
 func (r *handoffRuntime) SelfUpdateRuntime(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
@@ -25,6 +27,10 @@ func (r *handoffRuntime) SelfUpdateRuntime(_ context.Context, command domain.Run
 	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
 }
 func (r *handoffRuntime) ProbeRuntimeEnvironment(context.Context) (out.RuntimeEnvironment, error) {
+	r.probeCalls++
+	if len(r.probeErrors) >= r.probeCalls {
+		return out.RuntimeEnvironment{}, r.probeErrors[r.probeCalls-1]
+	}
 	return r.probe, nil
 }
 func (r *handoffRuntime) PingRuntime(context.Context) error              { return r.pingErr }
@@ -49,6 +55,14 @@ func TestRuntimeComponentLauncherHandoffProvesAndSwapsRuntime(t *testing.T) {
 	assert.Equal(t, domain.RuntimeComponentLifecycleTransferChannel, old.commands[0].LifecycleAction)
 	require.NoError(t, launcher.StartComponent(context.Background(), ComponentLaunchComponent{Role: domain.ComponentRoleRegistry, ComponentID: "gordon-registry-fixture-g1", Image: "example.invalid/gordon:v2", InternalNetwork: component.InternalNetwork, Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"}}))
 	assert.Len(t, newRuntime.commands, 1, "post-proof component operations must use the new runtime")
+}
+
+func TestProveRuntimeHandoffRetriesTransientRuntimeStartup(t *testing.T) {
+	component := ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"}}
+	target := &handoffRuntime{probe: out.RuntimeEnvironment{APIReachable: true, Rootless: true}, probeErrors: []error{errors.New("connection refused")}, states: []domain.RuntimeActualStateSnapshot{{SourceComponentID: component.ComponentID, Containers: []domain.RuntimeContainerState{{Name: component.ComponentID, Status: domain.ContainerStatusRunning, Generation: 1, Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "runtime", domain.LabelComponentGeneration: "1"}}}}}}
+
+	require.NoError(t, proveRuntimeHandoff(t.Context(), target, component))
+	assert.Equal(t, 2, target.probeCalls)
 }
 
 func TestRuntimeComponentLauncherHandoffDoesNotSwapWithoutTargetProof(t *testing.T) {
