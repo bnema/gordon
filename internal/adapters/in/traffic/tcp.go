@@ -483,7 +483,7 @@ func (r *entryPointRuntime) proxyToBackend(tracked *trackedTCPConn, client net.C
 func (r *entryPointRuntime) proxyToBackendAfterDial(tracked *trackedTCPConn, client net.Conn, backend domain.TrafficBackend, options domain.TCPOptions, afterDial func()) bool {
 	dialCtx, cancel := context.WithTimeout(r.ctx, options.DialTimeout)
 	defer cancel()
-	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
+	backendConn, err := r.manager.dialBackend(dialCtx, "tcp", backend)
 	if err != nil {
 		r.counters.totalErrors.Add(1)
 		_ = client.Close()

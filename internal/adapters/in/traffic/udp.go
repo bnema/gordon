@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,7 +169,7 @@ func (r *udpEntryPointRuntime) session(key string, clientAddr net.Addr, options 
 	}
 	r.mu.Unlock()
 	dialCtx, cancel := context.WithTimeout(r.ctx, udpDialTimeout(options))
-	backendConn, err := (&net.Dialer{}).DialContext(dialCtx, "udp", net.JoinHostPort(backend.Host, strconv.Itoa(backend.Port)))
+	backendConn, err := r.manager.dialBackend(dialCtx, "udp", backend)
 	cancel()
 	if err != nil {
 		r.counters.totalErrors.Add(1)

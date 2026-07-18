@@ -55,14 +55,32 @@ type Manager struct {
 	lastReloadStatus string
 	lastReloadError  string
 	serverConfigs    atomic.Value
+
+	// splitDialing prevents a split edge from being redirected by DNS after
+	// the control plane has admitted a backend alias.
+	splitDialing bool
+	resolver     backendResolver
+	dialer       backendDialer
 }
 
-// NewManager creates a traffic manager.
+// NewManager creates a traffic manager for the monolith.
 func NewManager() *Manager {
+	return newManager()
+}
+
+// NewSplitManager creates a traffic manager for a split edge. Backend DNS is
+// resolved and validated at dial time to prevent DNS/CNAME rebinding.
+func NewSplitManager() *Manager {
+	return newSplitManager(nil, nil)
+}
+
+func newManager() *Manager {
 	manager := &Manager{
 		listeners:        map[string]*entryPointRuntime{},
 		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
+		resolver:         net.DefaultResolver,
+		dialer:           &net.Dialer{},
 	}
 	manager.serverConfigs.Store(serverConfigBundle{
 		tlsHTTP:   tlsHTTPServers{},

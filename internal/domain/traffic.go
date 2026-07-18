@@ -130,7 +130,7 @@ func validateSplitTrafficBackend(backend TrafficBackend) error {
 		return fmt.Errorf("backend host is a forbidden runtime identity")
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return validateSplitTrafficIP(ip)
+		return ValidateSplitTrafficIP(ip)
 	}
 	if !validTrafficBackendAlias(host) {
 		return fmt.Errorf("backend host is not a control-safe alias")
@@ -143,8 +143,10 @@ func forbiddenTrafficRuntimeIdentity(host string) bool {
 		host == "gordon-control" || host == "gordon-runtime" || host == "gordon-edge" || host == "gordon-registry"
 }
 
-func validateSplitTrafficIP(ip net.IP) error {
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+// ValidateSplitTrafficIP rejects addresses a separate edge must never dial.
+// Private and routable public addresses are intentionally permitted.
+func ValidateSplitTrafficIP(ip net.IP) error {
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
 		return fmt.Errorf("backend host is not split reachable")
 	}
 	return nil // Private and routable public addresses are explicit control-safe targets.

@@ -44,7 +44,7 @@ func productionEdgeRoleDependencies() edgeRoleDependencies {
 	return edgeRoleDependencies{
 		listen:            net.Listen,
 		dialSnapshot:      newEdgeSnapshotClient,
-		newTrafficManager: func() edgeTrafficManager { return trafficadapter.NewManager() },
+		newTrafficManager: func() edgeTrafficManager { return trafficadapter.NewSplitManager() },
 		newHTTPServer: func(address string, handler http.Handler) *http.Server {
 			return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		},
@@ -276,7 +276,7 @@ func runEdgeTraffic(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependenci
 	}
 	newManager := deps.newTrafficManager
 	if newManager == nil {
-		newManager = func() edgeTrafficManager { return trafficadapter.NewManager() }
+		newManager = func() edgeTrafficManager { return trafficadapter.NewSplitManager() }
 	}
 	manager := newManager()
 	if manager == nil {
