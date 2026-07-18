@@ -208,27 +208,80 @@ func (s *UnsafeStore) ensureComponentTokenSubdir(subdir string) (string, error) 
 	return dir, nil
 }
 
-func writeComponentTokenAtomic(dir, path string, payload []byte) error {
-	tmp, err := os.CreateTemp(dir, ".component-token-*")
+type componentTokenTempFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type componentTokenDirectory interface {
+	Sync() error
+	Close() error
+}
+
+// componentTokenFileOps makes durability failures testable without weakening
+// production's restrictive file policy.
+type componentTokenFileOps struct {
+	createTemp func(string, string) (componentTokenTempFile, error)
+	rename     func(string, string) error
+	remove     func(string) error
+	openDir    func(string) (componentTokenDirectory, error)
+}
+
+func newComponentTokenFileOps() componentTokenFileOps {
+	return componentTokenFileOps{
+		createTemp: func(dir, pattern string) (componentTokenTempFile, error) { return os.CreateTemp(dir, pattern) },
+		rename:     os.Rename,
+		remove:     os.Remove,
+		openDir: func(path string) (componentTokenDirectory, error) {
+			return os.Open(path)
+		},
+	}
+}
+
+func (s *UnsafeStore) writeComponentTokenAtomic(dir, path string, payload []byte) error {
+	ops := s.componentTokenOps
+	tmp, err := ops.createTemp(dir, ".component-token-*")
 	if err != nil {
 		return fmt.Errorf("create component token temporary file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = tmp.Close()
+		}
+		_ = ops.remove(tmpPath)
+	}()
 
 	if err := tmp.Chmod(0600); err != nil {
-		_ = tmp.Close()
 		return fmt.Errorf("restrict component token temporary file permissions: %w", err)
 	}
 	if _, err := tmp.Write(payload); err != nil {
-		_ = tmp.Close()
 		return fmt.Errorf("write component token temporary file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fmt.Errorf("sync component token temporary file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close component token temporary file: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	closed = true
+	if err := ops.rename(tmpPath, path); err != nil {
 		return fmt.Errorf("atomically replace component token record: %w", err)
+	}
+	dirFile, err := ops.openDir(dir)
+	if err != nil {
+		return fmt.Errorf("open component token directory for sync: %w", err)
+	}
+	if err := dirFile.Sync(); err != nil {
+		_ = dirFile.Close()
+		return fmt.Errorf("sync component token directory: %w", err)
+	}
+	if err := dirFile.Close(); err != nil {
+		return fmt.Errorf("close component token directory: %w", err)
 	}
 	return nil
 }
@@ -262,7 +315,7 @@ func (s *UnsafeStore) CreateComponentToken(_ context.Context, record *domain.Com
 	if err != nil {
 		return err
 	}
-	if err := writeComponentTokenAtomic(dir, s.componentTokenPath(record.KeyID), payload); err != nil {
+	if err := s.writeComponentTokenAtomic(dir, s.componentTokenPath(record.KeyID), payload); err != nil {
 		return err
 	}
 	if record.RevokedAt.IsZero() {
@@ -276,7 +329,7 @@ func (s *UnsafeStore) CreateComponentToken(_ context.Context, record *domain.Com
 	if err != nil {
 		return err
 	}
-	return writeComponentTokenAtomic(revocationDir, s.componentTokenRevocationPath(record.KeyID), marker)
+	return s.writeComponentTokenAtomic(revocationDir, s.componentTokenRevocationPath(record.KeyID), marker)
 }
 
 // LookupComponentToken returns a copy of the matching component token record.
@@ -286,6 +339,9 @@ func (s *UnsafeStore) LookupComponentToken(_ context.Context, prefix, keyID stri
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if err := s.failedComponentRevocations[keyID]; err != nil {
+		return nil, fmt.Errorf("component token revocation persistence is unresolved: %w", err)
+	}
 	payload, err := os.ReadFile(s.componentTokenPath(keyID))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -333,11 +389,11 @@ func (s *UnsafeStore) updateComponentToken(keyID string, update func(*domain.Com
 	if err != nil {
 		return err
 	}
-	return writeComponentTokenAtomic(dir, path, payload)
+	return s.writeComponentTokenAtomic(dir, path, payload)
 }
 
 // RevokeComponentToken records an authoritative, monotonic revocation marker.
-func (s *UnsafeStore) RevokeComponentToken(_ context.Context, keyID string, revokedAt time.Time) error {
+func (s *UnsafeStore) RevokeComponentToken(_ context.Context, keyID string, revokedAt time.Time) (err error) {
 	if keyID == "" {
 		return fmt.Errorf("component token key ID is required")
 	}
@@ -348,6 +404,16 @@ func (s *UnsafeStore) RevokeComponentToken(_ context.Context, keyID string, revo
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if err != nil {
+			// A caller requested a revocation but its durable marker was not
+			// confirmed. This process must deny the token until persistence is
+			// repaired or the operation is retried successfully.
+			s.failedComponentRevocations[keyID] = err
+			return
+		}
+		delete(s.failedComponentRevocations, keyID)
+	}()
 	if _, err := os.ReadFile(s.componentTokenPath(keyID)); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("component token not found")
@@ -358,7 +424,7 @@ func (s *UnsafeStore) RevokeComponentToken(_ context.Context, keyID string, revo
 	if err != nil {
 		return err
 	}
-	return writeComponentTokenAtomic(dir, s.componentTokenRevocationPath(keyID), payload)
+	return s.writeComponentTokenAtomic(dir, s.componentTokenRevocationPath(keyID), payload)
 }
 
 // UpdateComponentTokenLastUsed records successful component token use.

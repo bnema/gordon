@@ -2,6 +2,7 @@ package tokenstore
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -33,6 +34,97 @@ func componentRecord(keyID, prefix string) *domain.ComponentTokenRecord {
 		TokenHash: "81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a",
 		CreatedAt: time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
 	}
+}
+
+type componentTokenTestFile struct {
+	*os.File
+	syncErr error
+}
+
+func (f componentTokenTestFile) Sync() error {
+	if f.syncErr != nil {
+		return f.syncErr
+	}
+	return f.File.Sync()
+}
+
+type componentTokenTestDirectory struct {
+	syncErr error
+}
+
+func (d componentTokenTestDirectory) Sync() error { return d.syncErr }
+func (componentTokenTestDirectory) Close() error  { return nil }
+
+func TestUnsafeComponentTokenAtomicWriteFailurePreservesOldRecord(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewUnsafeStore(dir, disabledTokenStoreLog())
+	require.NoError(t, err)
+	record := componentRecord("atomic-key", "gct_live")
+	require.NoError(t, store.CreateComponentToken(context.Background(), record))
+	path := store.componentTokenPath(record.KeyID)
+	old, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	t.Run("temporary sync", func(t *testing.T) {
+		ops := newComponentTokenFileOps()
+		ops.createTemp = func(dir, pattern string) (componentTokenTempFile, error) {
+			file, err := os.CreateTemp(dir, pattern)
+			return componentTokenTestFile{File: file, syncErr: context.DeadlineExceeded}, err
+		}
+		store.componentTokenOps = ops
+		err := store.UpdateComponentTokenLastUsed(context.Background(), record.KeyID, time.Unix(1, 0))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		actual, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		require.Equal(t, old, actual)
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		ops := newComponentTokenFileOps()
+		ops.rename = func(string, string) error { return errors.New("rename failed") }
+		store.componentTokenOps = ops
+		err := store.UpdateComponentTokenLastUsed(context.Background(), record.KeyID, time.Unix(2, 0))
+		require.ErrorContains(t, err, "rename failed")
+		actual, readErr := os.ReadFile(path)
+		require.NoError(t, readErr)
+		require.Equal(t, old, actual)
+	})
+
+	t.Run("directory open and sync", func(t *testing.T) {
+		ops := newComponentTokenFileOps()
+		ops.openDir = func(string) (componentTokenDirectory, error) { return nil, errors.New("open failed") }
+		store.componentTokenOps = ops
+		err := store.UpdateComponentTokenLastUsed(context.Background(), record.KeyID, time.Unix(3, 0))
+		require.ErrorContains(t, err, "open failed")
+
+		ops = newComponentTokenFileOps()
+		ops.openDir = func(string) (componentTokenDirectory, error) {
+			return componentTokenTestDirectory{syncErr: context.DeadlineExceeded}, nil
+		}
+		store.componentTokenOps = ops
+		err = store.UpdateComponentTokenLastUsed(context.Background(), record.KeyID, time.Unix(4, 0))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+}
+
+func TestUnsafeComponentTokenRevocationWriteFailureFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewUnsafeStore(dir, disabledTokenStoreLog())
+	require.NoError(t, err)
+	record := componentRecord("revocation-failure", "gct_live")
+	require.NoError(t, store.CreateComponentToken(context.Background(), record))
+	ops := newComponentTokenFileOps()
+	ops.createTemp = func(dir, pattern string) (componentTokenTempFile, error) {
+		file, createErr := os.CreateTemp(dir, pattern)
+		return componentTokenTestFile{File: file, syncErr: context.DeadlineExceeded}, createErr
+	}
+	store.componentTokenOps = ops
+
+	err = store.RevokeComponentToken(context.Background(), record.KeyID, time.Now())
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	found, lookupErr := store.LookupComponentToken(context.Background(), record.Prefix, record.KeyID)
+	require.ErrorIs(t, lookupErr, context.DeadlineExceeded)
+	require.Nil(t, found)
 }
 
 func TestUnsafeComponentTokenStoreLifecycleAndPersistence(t *testing.T) {
