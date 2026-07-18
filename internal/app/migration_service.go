@@ -19,6 +19,7 @@ type MigrationService struct {
 	envManifest  *ComponentEnvManifest
 	envError     error
 	envDirectory string
+	orchestrator *MigrationOrchestrator
 }
 
 // NewMigrationService accepts an optional, already-loaded component env plan.
@@ -45,6 +46,16 @@ func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpoi
 		}
 	}
 	return service, nil
+}
+
+// WithMigrationOrchestrator enables side-by-side component preparation for the
+// production control service. The launcher stays behind an authenticated
+// runtime boundary; this method does not introduce a local runtime adapter.
+func (s *MigrationService) WithMigrationOrchestrator(orchestrator *MigrationOrchestrator) *MigrationService {
+	if s != nil {
+		s.orchestrator = orchestrator
+	}
+	return s
 }
 
 func (s *MigrationService) Plan(ctx context.Context) (MigrationPreflightReport, error) {
@@ -81,6 +92,9 @@ func (s *MigrationService) Prepare(ctx context.Context, checkpoint MigrationChec
 	}
 	if err := s.store.Save(checkpoint); err != nil {
 		return nil, err
+	}
+	if s.orchestrator != nil {
+		return s.orchestrator.Prepare(ctx, checkpoint)
 	}
 	return s.store.Load()
 }

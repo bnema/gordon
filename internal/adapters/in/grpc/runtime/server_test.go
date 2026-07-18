@@ -92,11 +92,20 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 		TargetVersion:       "v1.2.3",
 		Policy:              string(domain.RuntimeSelfUpdatePolicyManualApproval),
 		PolicyDecisionId:    "decision-1",
+		LifecycleAction:     string(domain.RuntimeComponentLifecycleStart),
+		DesiredImage:        "example.invalid/gordon:v1.2.3",
+		DesiredStateHash:    "fixture-state-hash",
+		InternalNetwork:     "gordon-internal-fixture-g1",
+		EnvironmentFile:     "/redacted/control.env",
+		PreserveVolumes:     true,
 	}})
 
 	require.NoError(t, err)
 	assert.Equal(t, "cmd-self", resp.GetResult().CommandId)
 	assert.Equal(t, domain.ComponentRoleRuntime, worker.self.TargetComponentRole)
+	assert.Equal(t, domain.RuntimeComponentLifecycleStart, worker.self.LifecycleAction)
+	assert.Equal(t, "example.invalid/gordon:v1.2.3", worker.self.DesiredImage)
+	assert.True(t, worker.self.PreserveVolumes)
 }
 
 func TestServerWatchActualStateStreamsSanitizedSnapshots(t *testing.T) {

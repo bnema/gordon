@@ -94,6 +94,14 @@ message RuntimeSelfUpdateCommand {
   string policy = 6;
   string policy_decision_id = 7;
   string approved_by = 8;
+  // Lifecycle is an allowlisted Gordon-component desired-state command, never
+  // a raw engine invocation. The runtime remains the sole socket authority.
+  string lifecycle_action = 9;
+  string desired_image = 10;
+  string desired_state_hash = 11;
+  string internal_network = 12;
+  string environment_file = 13;
+  bool preserve_volumes = 14;
 }
 
 message ApplyCommandRequest {

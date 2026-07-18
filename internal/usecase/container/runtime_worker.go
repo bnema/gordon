@@ -50,6 +50,7 @@ type RuntimeWorker struct {
 	service     runtimeWorkerService
 	policy      RuntimePolicy
 	resultStore out.RuntimeCommandResultStore
+	lifecycle   RuntimeComponentLifecycleManager
 	now         func() time.Time
 
 	mu                      sync.Mutex
@@ -84,6 +85,16 @@ func NewRuntimeWorkerWithPolicyAndResultStore(service runtimeWorkerService, poli
 		setter.SetRuntimePolicy(policy)
 	}
 	return &RuntimeWorker{service: service, policy: policy, resultStore: store, now: time.Now, completedByDedupeKey: make(map[string]domain.RuntimeCommandResult), pendingByDedupeKey: make(map[string]domain.RuntimeCommandResult), inFlightByDedupeKey: make(map[string]*runtimeWorkerInFlight)}
+}
+
+// WithComponentLifecycleManager is called only by runtime-role composition.
+// Keeping it on RuntimeWorker makes the socket-owning capability impossible to
+// reach from control, edge, or registry wiring.
+func (w *RuntimeWorker) WithComponentLifecycleManager(manager RuntimeComponentLifecycleManager) *RuntimeWorker {
+	if w != nil {
+		w.lifecycle = manager
+	}
+	return w
 }
 
 // PolicyDeniedEvents returns policy findings recorded by this worker in observe or enforce mode.
@@ -140,13 +151,18 @@ func (w *RuntimeWorker) Reconcile(ctx context.Context, command domain.ReconcileR
 	})
 }
 
-// SelfUpdate validates policy intent but does not perform unmanaged local runtime mutations.
+// SelfUpdate realizes only allowlisted Gordon component lifecycle commands.
+// The lifecycle manager exists exclusively in the runtime role; an embedded
+// worker without it fails closed instead of exposing a raw local mutation.
 func (w *RuntimeWorker) SelfUpdate(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
 	if err := command.Validate(); err != nil {
 		return w.failedResult(command.RuntimeCommandIdentity, err), nil
 	}
 	return w.runWithPolicy(ctx, command.RuntimeCommandIdentity, "self_update", func() error { return w.policy.CheckSelfUpdate(command) }, command.PolicyDecisionID, func() error {
-		return errRuntimeSelfUpdateUnavailable
+		if w.lifecycle == nil {
+			return errRuntimeSelfUpdateUnavailable
+		}
+		return w.lifecycle.ApplyComponentLifecycle(ctx, command)
 	})
 }
 

@@ -73,6 +73,12 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-security
 
+      - name: Run rootless Podman migration availability gate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap
+          GORDON_COMPAT_PODMAN=1 make compat-harness-migration
+
       - name: Run full test suite with real scenarios gated off
         env:
           GORDON_COMPAT_RUN_REAL: "0"

@@ -457,8 +457,16 @@ type RuntimeSelfUpdateCommand struct {
 	Policy              string                  `protobuf:"bytes,6,opt,name=policy,proto3" json:"policy,omitempty"`
 	PolicyDecisionId    string                  `protobuf:"bytes,7,opt,name=policy_decision_id,json=policyDecisionId,proto3" json:"policy_decision_id,omitempty"`
 	ApprovedBy          string                  `protobuf:"bytes,8,opt,name=approved_by,json=approvedBy,proto3" json:"approved_by,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Lifecycle is an allowlisted Gordon-component desired-state command, never
+	// a raw engine invocation. The runtime remains the sole socket authority.
+	LifecycleAction  string `protobuf:"bytes,9,opt,name=lifecycle_action,json=lifecycleAction,proto3" json:"lifecycle_action,omitempty"`
+	DesiredImage     string `protobuf:"bytes,10,opt,name=desired_image,json=desiredImage,proto3" json:"desired_image,omitempty"`
+	DesiredStateHash string `protobuf:"bytes,11,opt,name=desired_state_hash,json=desiredStateHash,proto3" json:"desired_state_hash,omitempty"`
+	InternalNetwork  string `protobuf:"bytes,12,opt,name=internal_network,json=internalNetwork,proto3" json:"internal_network,omitempty"`
+	EnvironmentFile  string `protobuf:"bytes,13,opt,name=environment_file,json=environmentFile,proto3" json:"environment_file,omitempty"`
+	PreserveVolumes  bool   `protobuf:"varint,14,opt,name=preserve_volumes,json=preserveVolumes,proto3" json:"preserve_volumes,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RuntimeSelfUpdateCommand) Reset() {
@@ -545,6 +553,48 @@ func (x *RuntimeSelfUpdateCommand) GetApprovedBy() string {
 		return x.ApprovedBy
 	}
 	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetLifecycleAction() string {
+	if x != nil {
+		return x.LifecycleAction
+	}
+	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetDesiredImage() string {
+	if x != nil {
+		return x.DesiredImage
+	}
+	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetDesiredStateHash() string {
+	if x != nil {
+		return x.DesiredStateHash
+	}
+	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetInternalNetwork() string {
+	if x != nil {
+		return x.InternalNetwork
+	}
+	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetEnvironmentFile() string {
+	if x != nil {
+		return x.EnvironmentFile
+	}
+	return ""
+}
+
+func (x *RuntimeSelfUpdateCommand) GetPreserveVolumes() bool {
+	if x != nil {
+		return x.PreserveVolumes
+	}
+	return false
 }
 
 type ApplyCommandRequest struct {
@@ -3356,7 +3406,7 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x120\n" +
 	"\x14expected_route_count\x18\x03 \x01(\x05R\x12expectedRouteCount\x122\n" +
 	"\x15desired_state_version\x18\x04 \x01(\tR\x13desiredStateVersion\x12R\n" +
-	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\xfc\x02\n" +
+	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\xfb\x04\n" +
 	"\x18RuntimeSelfUpdateCommand\x12E\n" +
 	"\bidentity\x18\x01 \x01(\v2).gordon.runtime.v1.RuntimeCommandIdentityR\bidentity\x12.\n" +
 	"\x13target_component_id\x18\x02 \x01(\tR\x11targetComponentId\x122\n" +
@@ -3366,7 +3416,14 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x06policy\x18\x06 \x01(\tR\x06policy\x12,\n" +
 	"\x12policy_decision_id\x18\a \x01(\tR\x10policyDecisionId\x12\x1f\n" +
 	"\vapproved_by\x18\b \x01(\tR\n" +
-	"approvedBy\"\xd3\x02\n" +
+	"approvedBy\x12)\n" +
+	"\x10lifecycle_action\x18\t \x01(\tR\x0flifecycleAction\x12#\n" +
+	"\rdesired_image\x18\n" +
+	" \x01(\tR\fdesiredImage\x12,\n" +
+	"\x12desired_state_hash\x18\v \x01(\tR\x10desiredStateHash\x12)\n" +
+	"\x10internal_network\x18\f \x01(\tR\x0finternalNetwork\x12)\n" +
+	"\x10environment_file\x18\r \x01(\tR\x0fenvironmentFile\x12)\n" +
+	"\x10preserve_volumes\x18\x0e \x01(\bR\x0fpreserveVolumes\"\xd3\x02\n" +
 	"\x13ApplyCommandRequest\x12J\n" +
 	"\fdeploy_route\x18\x01 \x01(\v2%.gordon.runtime.v1.DeployRouteCommandH\x00R\vdeployRoute\x12M\n" +
 	"\rrestart_route\x18\x02 \x01(\v2&.gordon.runtime.v1.RestartRouteCommandH\x00R\frestartRoute\x12J\n" +

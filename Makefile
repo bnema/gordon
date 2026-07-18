@@ -238,9 +238,15 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
-compat-harness-migration: ## Run migration compatibility harness checks
-	@echo "Running migration compatibility scenario definition checks..."
+compat-harness-migration: ## Run migration prepare and rootless-Podman availability checks
+	@echo "Running deterministic Docker-compatible migration prepare/health fixture checks..."
+	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator)' -count=1
 	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+	@if [ "$${GORDON_COMPAT_PODMAN:-0}" = "1" ]; then \
+		echo "Verifying rootless Podman migration gate..."; \
+		test "$$(id -u)" -ne 0; \
+		podman info --format '{{.Host.Security.Rootless}}' | grep -qx true; \
+	fi
 
 compat-harness-security: ## Run blocking current-security compatibility gates
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,registry,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"

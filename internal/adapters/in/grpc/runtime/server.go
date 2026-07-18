@@ -602,7 +602,7 @@ func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.Runtime
 	if command == nil {
 		return domain.RuntimeSelfUpdateCommand{}
 	}
-	return domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy}
+	return domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy, LifecycleAction: domain.RuntimeComponentLifecycleAction(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, PreserveVolumes: command.PreserveVolumes}
 }
 
 func protoRuntimeCommandResult(result domain.RuntimeCommandResult) *runtimev1.RuntimeCommandResult {

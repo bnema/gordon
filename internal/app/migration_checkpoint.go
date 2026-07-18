@@ -24,17 +24,22 @@ const (
 )
 
 type MigrationCheckpoint struct {
-	MigrationID             string         `json:"migration_id"`
-	SourceVersion           string         `json:"source_version,omitempty"`
-	TargetVersion           string         `json:"target_version,omitempty"`
-	TargetImage             string         `json:"target_image,omitempty"`
-	StartedAt               time.Time      `json:"started_at"`
-	Phase                   MigrationPhase `json:"phase"`
-	ComponentGeneration     uint64         `json:"component_generation"`
-	OldServingPath          string         `json:"old_serving_path,omitempty"`
-	PreparedComponents      []string       `json:"prepared_components,omitempty"`
-	EnvFileReferences       []string       `json:"env_file_references,omitempty"`
-	RouteSnapshotGeneration uint64         `json:"route_snapshot_generation,omitempty"`
+	MigrationID               string         `json:"migration_id"`
+	SourceVersion             string         `json:"source_version,omitempty"`
+	TargetVersion             string         `json:"target_version,omitempty"`
+	TargetImage               string         `json:"target_image,omitempty"`
+	StartedAt                 time.Time      `json:"started_at"`
+	Phase                     MigrationPhase `json:"phase"`
+	ComponentGeneration       uint64         `json:"component_generation"`
+	OldServingPath            string         `json:"old_serving_path,omitempty"`
+	PreparedComponents        []string       `json:"prepared_components,omitempty"`
+	RuntimeChannelTransferred bool           `json:"runtime_channel_transferred,omitempty"`
+	// EdgeAppNetworks records only managed network names selected from the
+	// runtime snapshot; it never contains container IDs or socket details.
+	EdgeAppNetworks         []string `json:"edge_app_networks,omitempty"`
+	ConnectedEdgeNetworks   []string `json:"connected_edge_networks,omitempty"`
+	EnvFileReferences       []string `json:"env_file_references,omitempty"`
+	RouteSnapshotGeneration uint64   `json:"route_snapshot_generation,omitempty"`
 }
 
 type MigrationCheckpointStore struct {

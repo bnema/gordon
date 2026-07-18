@@ -363,7 +363,8 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 		return nil, nil, fmt.Errorf("runtime command result store unhealthy: %w", err)
 	}
 	policy := runtimeRolePolicy(cfg, v)
-	worker := container.NewRuntimeWorkerWithPolicyAndResultStore(svc.containerSvc, policy, resultStore)
+	worker := container.NewRuntimeWorkerWithPolicyAndResultStore(svc.containerSvc, policy, resultStore).
+		WithComponentLifecycleManager(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy))
 	drainRegistry = container.NewRuntimeDrainRegistry(svc.containerSvc.RuntimeDrainRouteState)
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)

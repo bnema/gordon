@@ -108,6 +108,15 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 	if strings.TrimSpace(command.TargetComponentID) == "" || !domain.IsKnownComponentRole(command.TargetComponentRole) {
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "only labeled Gordon component self-updates are allowed")
 	}
+	// Migration lifecycle commands are explicitly allowlisted, authenticated
+	// control intents for Gordon-owned component names. They are executed only
+	// by gordon-runtime and cannot carry raw engine flags or a socket path.
+	if command.LifecycleAction != "" {
+		if !strings.HasPrefix(command.TargetComponentID, "gordon-") {
+			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
+		}
+		return nil
+	}
 	if strings.TrimSpace(p.RuntimeComponentID) != "" && command.TargetComponentID != p.RuntimeComponentID {
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target component is not authorized")
 	}

@@ -32,6 +32,23 @@ const (
 	RuntimeSelfUpdatePolicyAutomaticPatch RuntimeSelfUpdatePolicy = "automatic_patch"
 )
 
+// RuntimeComponentLifecycleAction is the explicit, allowlisted lifecycle
+// vocabulary available to migration. It is intentionally not a raw runtime
+// operation or arbitrary Podman command.
+type RuntimeComponentLifecycleAction string
+
+const (
+	RuntimeComponentLifecycleReplace         RuntimeComponentLifecycleAction = "replace"
+	RuntimeComponentLifecycleEnsureNetwork   RuntimeComponentLifecycleAction = "ensure_network"
+	RuntimeComponentLifecycleStart           RuntimeComponentLifecycleAction = "start"
+	RuntimeComponentLifecycleStop            RuntimeComponentLifecycleAction = "stop"
+	RuntimeComponentLifecycleHealth          RuntimeComponentLifecycleAction = "health"
+	RuntimeComponentLifecycleLogs            RuntimeComponentLifecycleAction = "logs"
+	RuntimeComponentLifecycleConnect         RuntimeComponentLifecycleAction = "connect"
+	RuntimeComponentLifecycleRemove          RuntimeComponentLifecycleAction = "remove"
+	RuntimeComponentLifecycleTransferChannel RuntimeComponentLifecycleAction = "transfer_channel"
+)
+
 var (
 	// ErrInvalidRuntimeCommand is returned when a runtime intent command is malformed.
 	ErrInvalidRuntimeCommand = errors.New("invalid runtime command")
@@ -174,6 +191,15 @@ type RuntimeSelfUpdateCommand struct {
 	Policy              RuntimeSelfUpdatePolicy
 	PolicyDecisionID    string
 	ApprovedBy          string
+	// Lifecycle fields are a stable desired identity contract for Gordon
+	// components. They never contain a socket path, secret value, or raw engine
+	// option. Empty action retains pre-split self-update compatibility.
+	LifecycleAction  RuntimeComponentLifecycleAction
+	DesiredImage     string
+	DesiredStateHash string
+	InternalNetwork  string
+	EnvironmentFile  string
+	PreserveVolumes  bool
 }
 
 // Validate checks that self-update is a Gordon component lifecycle operation, not an unmanaged mutation.
@@ -196,6 +222,9 @@ func (c RuntimeSelfUpdateCommand) Validate() error {
 	if strings.TrimSpace(c.PolicyDecisionID) == "" {
 		return fmt.Errorf("%w: policy decision id is required", ErrInvalidRuntimeCommand)
 	}
+	if c.LifecycleAction != "" && !isKnownRuntimeComponentLifecycleAction(c.LifecycleAction) {
+		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
+	}
 	return nil
 }
 
@@ -215,6 +244,19 @@ type RuntimeCommandResult struct {
 	StartedAt      time.Time
 	CompletedAt    time.Time
 	Error          *RuntimeCommandError
+}
+
+func isKnownRuntimeComponentLifecycleAction(action RuntimeComponentLifecycleAction) bool {
+	switch action {
+	case RuntimeComponentLifecycleReplace, RuntimeComponentLifecycleEnsureNetwork,
+		RuntimeComponentLifecycleStart, RuntimeComponentLifecycleStop,
+		RuntimeComponentLifecycleHealth, RuntimeComponentLifecycleLogs,
+		RuntimeComponentLifecycleConnect, RuntimeComponentLifecycleRemove,
+		RuntimeComponentLifecycleTransferChannel:
+		return true
+	default:
+		return false
+	}
 }
 
 func isKnownRuntimeSelfUpdatePolicy(policy RuntimeSelfUpdatePolicy) bool {

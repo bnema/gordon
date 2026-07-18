@@ -82,6 +82,21 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
+	// Control composes migration through the authenticated runtime client only.
+	// A missing endpoint remains a preflight failure rather than falling back to
+	// a local Docker-compatible adapter or socket.
+	if updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater); ok {
+		launcher, launcherErr := NewRuntimeComponentLauncher(updater)
+		if launcherErr != nil {
+			return nil, fmt.Errorf("create runtime component launcher: %w", launcherErr)
+		}
+		orchestrator, orchestratorErr := NewMigrationOrchestrator(preflight, checkpointStore, launcher)
+		if orchestratorErr != nil {
+			return nil, fmt.Errorf("create migration orchestrator: %w", orchestratorErr)
+		}
+		orchestrator.WithRuntimeSnapshotAppNetworks(runtimeInventory)
+		svc.migrationSvc.WithMigrationOrchestrator(orchestrator)
+	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:      svc.configSvc,
 		AuthSvc:        svc.authSvc,
