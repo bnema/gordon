@@ -12,7 +12,7 @@ permissions:
 jobs:
   go-ci:
     name: Go lint and test
-    uses: bnema/gh-actions/.github/workflows/go-ci.yml@main
+    uses: bnema/gh-actions/.github/workflows/go-ci.yml@fcda8139e65ec45af95bc385e318351c86712d48 # main, verified immutable commit
     with:
       go-version: 1.26.5
       lint-version: v2.12.2
@@ -23,14 +23,14 @@ jobs:
     name: Generated code and current-tree secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.5
 
       - name: Set up buf
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-setup-action@3e33fea8596569a62fcaa33eb3880b6ac7098941 # v1.9.0
         with:
           version: 1.71.0
 

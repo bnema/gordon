@@ -59,10 +59,11 @@ Confirm:
 ```bash
 gordon migrate status --config ~/.config/gordon/gordon.toml --json
 podman ps --filter label=gordon.component=true
-curl -fsS https://gordon.example.com/v2/ >/dev/null
+status="$(curl -sS -o /dev/null -w '%{http_code}' https://gordon.example.com/v2/)"
+case "$status" in 200|401) ;; *) echo "registry probe failed: HTTP $status" >&2; exit 1;; esac
 ```
 
-The registry probe may return `401`; that still proves edge-to-registry reachability when auth is enabled. Also deploy a test image, verify app traffic, restart control and registry, then confirm queued push events replay without duplicate deployment intent.
+The registry probe accepts **only** `200` or `401`; `401` proves edge-to-registry reachability when auth is enabled. Any other status is a failed acceptance probe. Also deploy a test image, verify app traffic, restart control and registry, then confirm queued push events replay without duplicate deployment intent.
 
 ## Related
 

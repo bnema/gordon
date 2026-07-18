@@ -14,17 +14,20 @@ jobs:
   compat-harness:
     name: Required old/new and runtime compatibility gates
     runs-on: ubuntu-latest
+    env:
+      # Release gates never use a moving branch as their old-side baseline.
+      GORDON_COMPAT_BASELINE_REF: 8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: 1.26.5
 
       - name: Cache Go modules and build output
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/go/pkg/mod
@@ -105,7 +108,7 @@ jobs:
 
       - name: Upload compatibility reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: compatibility-harness-reports
           path: artifacts/compat

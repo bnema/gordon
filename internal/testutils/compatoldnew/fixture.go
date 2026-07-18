@@ -9,8 +9,11 @@ import (
 )
 
 const (
-	EnvCompatBaselineRef = "GORDON_COMPAT_BASELINE_REF"
-	EnvCompatPodman      = "GORDON_COMPAT_PODMAN"
+	// ImmutableCompatibilityBaseline is the pre-refactor release baseline.
+	// Never replace it with a moving branch: that can compare a candidate to itself.
+	ImmutableCompatibilityBaseline = "8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842"
+	EnvCompatBaselineRef           = "GORDON_COMPAT_BASELINE_REF"
+	EnvCompatPodman                = "GORDON_COMPAT_PODMAN"
 )
 
 // Surface is a stable compatibility surface tag.
@@ -90,7 +93,7 @@ func StageSideFixture(parentDir, sourceConfig string) (SideFixture, error) {
 func BaselineRefFromEnv() string {
 	ref := strings.TrimSpace(os.Getenv(EnvCompatBaselineRef))
 	if ref == "" {
-		return "origin/main"
+		return ImmutableCompatibilityBaseline
 	}
 	return ref
 }

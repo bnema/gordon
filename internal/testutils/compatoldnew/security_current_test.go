@@ -31,6 +31,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/componentauth"
+	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
 
@@ -62,6 +63,74 @@ func TestCompatibilitySecurityComponentEnvMinimization(t *testing.T) {
 	}
 	assert.NotContains(t, manifest.KeysForRole(domain.ComponentRoleRuntime), "WORKLOAD_DATABASE_PASSWORD")
 	assert.NotContains(t, manifest.RedactedSummary(), "fixture-token-not-reported")
+}
+
+// RunSecurityControlNoPodmanSocketAfterSplit verifies the generated control
+// launch manifest is socket-free while preserving the runtime-only endpoint.
+// This is the actual component-launch contract used by split deployments.
+func RunSecurityControlNoPodmanSocketAfterSplit(artifactDir string) (Report, error) {
+	manifest, err := securityComponentEnvManifest()
+	if err != nil {
+		return Report{}, err
+	}
+	controlKeys := manifest.KeysForRole(domain.ComponentRoleControl)
+	runtimeKeys := manifest.KeysForRole(domain.ComponentRoleRuntime)
+	return writeCurrentSecurityReport(artifactDir, map[string]bool{
+		"controlHasNoRuntimeEndpoint":    !containsString(controlKeys, "DOCKER_HOST"),
+		"controlHasNoWorkloadSecret":     !containsString(controlKeys, "WORKLOAD_DATABASE_PASSWORD"),
+		"runtimeRetainsRequiredEndpoint": runtimeKeys != nil && containsString(runtimeKeys, "DOCKER_HOST"),
+	})
+}
+
+// RunSecurityUnsafeRuntimeRequestDenied exercises the production runtime policy
+// manager with an untrusted, mutable image request. It must deny before an
+// adapter can receive a write-capable runtime command.
+func RunSecurityUnsafeRuntimeRequestDenied(artifactDir string) (Report, error) {
+	manager := container.NewRuntimeStandaloneServicePolicyManager(nil, container.RuntimePolicy{
+		Mode:                   container.RuntimePolicyModeEnforce,
+		AllowedImageRegistries: []string{"registry.example.test"},
+		RequireImageDigest:     true,
+	})
+	result, err := manager.ApplyStandaloneService(context.Background(), domain.ApplyStandaloneServiceCommand{
+		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "security-denied", IdempotencyKey: "security-denied", Generation: 1, SourceComponentID: "control"},
+		Service:                domain.StandaloneService{Name: "unsafe", Image: "untrusted.example.test/unsafe:latest", Enabled: true},
+		ConfigHash:             "security-policy",
+	})
+	if err != nil {
+		return Report{}, err
+	}
+	return writeCurrentSecurityReport(artifactDir, map[string]bool{
+		"adapterWasNotReached": result.Status == domain.RuntimeCommandStatusDenied,
+		"policyDenied":         result.Error != nil && strings.HasPrefix(result.Error.Code, "runtime_policy_denied:"),
+		"sanitizedError":       result.Error != nil && result.Error.Message == "runtime policy denied",
+	})
+}
+
+func securityComponentEnvManifest() (*app.ComponentEnvManifest, error) {
+	cfg := app.Config{}
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
+	cfg.Backups.Volumes.Enabled = true
+	cfg.Backups.Volumes.S3.Bucket = "fixture-bucket"
+	return app.BuildComponentEnvManifest(app.ComponentEnvManifestOptions{
+		Config: cfg,
+		Environment: map[string]string{
+			"CLOUDFLARE_DNS_API_TOKEN":   "fixture-token-not-reported",
+			"AWS_ACCESS_KEY_ID":          "fixture-access",
+			"AWS_SECRET_ACCESS_KEY":      "fixture-secret-not-reported",
+			"DOCKER_HOST":                "unix:///fixture/runtime.sock",
+			"WORKLOAD_DATABASE_PASSWORD": "fixture-workload-secret-not-reported",
+		},
+	})
+}
+
+func containsString(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 type securityAuthCase string

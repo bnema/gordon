@@ -2,21 +2,25 @@
 
 Gordon's current product supports monolith operation and an orchestrated four-role split deployment.
 
-| Topic | Canonical document |
-| --- | --- |
-| Install and initial service | [Installation](../installation.md) |
-| First deploy | [Getting started](../getting-started.md) |
-| Split architecture and trust boundaries | [Split mode](../operations/split-mode.md) |
-| Rootless migration and resume | [Migration runbook](../operations/migration.md) |
-| Split update and rollback boundary | [Split updates and rollback](../operations/split-updates-and-rollback.md) |
-| Current config | [Configuration reference](../config/reference.md) and `gordon.toml.example` |
-| Runtime/environment ownership | [Environment variables](./env-variables.md) |
-| Network and socket isolation | [Security hardening](../config/security-hardening.md) |
-| Labels and component inventory | [Labels](./docker-labels.md) |
-| Compatibility verification | [Compatibility harness](./compatibility-harness.md) |
-| Blocking release checks | [Release gates](./release-gates.md) |
-| Operational diagnosis | [Troubleshooting](./troubleshooting.md) |
-| Safe engineering handoff | [Agent handoff](../development/agent-handoff.md) |
+| Topic | Canonical document | Owner | Blocking gate |
+| --- | --- | --- | --- |
+| Install and initial service | [Installation](../installation.md) | Docs | `go test ./...` |
+| First deploy | [Getting started](../getting-started.md) | Docs | `go test ./...` |
+| Split architecture and trust boundaries | [Split mode](../operations/split-mode.md) | Architecture | `make compat-harness-security` |
+| Rootless migration and resume | [Migration runbook](../operations/migration.md) | Runtime | `GORDON_COMPAT_PODMAN=1 make compat-harness-migration` and `make count2` |
+| Split update and rollback boundary | [Split updates and rollback](../operations/split-updates-and-rollback.md) | Runtime | `make compat-harness-proxy` |
+| Current config | [Configuration reference](../config/reference.md) and `gordon.toml.example` | Config | `make proto-check` and config compatibility gate |
+| Runtime/environment ownership | [Environment variables](./env-variables.md) | Runtime | `make compat-harness-security` |
+| Network and socket isolation | [Security hardening](../config/security-hardening.md) | Security | `make compat-harness-security` |
+| Labels and component inventory | [Labels](./docker-labels.md) | Runtime | `make compat-harness-runtime` |
+| Compatibility verification | [Compatibility harness](./compatibility-harness.md) | Release | all `make compat-harness-*` targets |
+| Blocking release checks | [Release gates](./release-gates.md) | Release | CI required checks and `make release-smoke` |
+| Operational diagnosis | [Troubleshooting](./troubleshooting.md) | Operations | `go test ./...` |
+| Safe engineering handoff | [Agent handoff](../development/agent-handoff.md) | Engineering | PR checklist below |
+
+## Change ownership and PR gate matrix
+
+A change must update every canonical document in its row, identify the listed owner in review, and run the exact listed gate. Cross-cutting changes run the union of affected gates. Release changes additionally require immutable action/image pin review, `make release-check`, and non-publishing `make release-smoke`; publishing remains blocked until that smoke completes.
 
 ## Invariants
 

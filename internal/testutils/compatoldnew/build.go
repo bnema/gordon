@@ -76,6 +76,9 @@ func BuildOldAndNew(ctx context.Context, builder Builder, repoRoot, outputDir st
 	if err != nil {
 		return OldNewBinaries{}, fmt.Errorf("build compatibility candidate: %w", err)
 	}
+	if oldBuild.Commit == newBuild.Commit {
+		return OldNewBinaries{}, fmt.Errorf("refusing compatibility self-comparison: baseline and candidate resolve to the same commit %q", oldBuild.Commit)
+	}
 	return OldNewBinaries{Old: oldBuild, New: newBuild}, nil
 }
 

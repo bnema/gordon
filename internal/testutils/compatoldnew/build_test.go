@@ -18,6 +18,9 @@ type fakeRunner struct{ commands []recordedCommand }
 func (f *fakeRunner) Run(_ context.Context, dir, name string, args ...string) ([]byte, error) {
 	f.commands = append(f.commands, recordedCommand{dir: dir, name: name, args: append([]string{}, args...)})
 	if name == "git" && len(args) == 2 && args[0] == "rev-parse" {
+		if args[1] == "HEAD" {
+			return []byte("def456\n"), nil
+		}
 		return []byte("abc123\n"), nil
 	}
 	return []byte{}, nil
@@ -40,6 +43,24 @@ func TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation(t 
 	}
 }
 
+type sameCommitRunner struct{ fakeRunner }
+
+func (f *sameCommitRunner) Run(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	if name == "git" && len(args) == 2 && args[0] == "rev-parse" {
+		f.commands = append(f.commands, recordedCommand{dir: dir, name: name, args: append([]string{}, args...)})
+		return []byte("same-commit\n"), nil
+	}
+	return f.fakeRunner.Run(ctx, dir, name, args...)
+}
+
+func TestBuildOldAndNewRejectsBaselineThatResolvesToCandidate(t *testing.T) {
+	fr := &sameCommitRunner{}
+	_, err := BuildOldAndNew(context.Background(), GoBuilder{Runner: fr}, "/repo", t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "same commit") {
+		t.Fatalf("expected self-comparison refusal, got %v", err)
+	}
+}
+
 func TestGoBuilderBuildsCandidateFromCurrentWorkingTree(t *testing.T) {
 	t.Chdir(t.TempDir())
 	fr := &fakeRunner{}
@@ -47,7 +68,7 @@ func TestGoBuilderBuildsCandidateFromCurrentWorkingTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(res.BinaryPath, "/"+NewBinaryName) || res.Commit != "abc123" {
+	if !strings.HasSuffix(res.BinaryPath, "/"+NewBinaryName) || res.Commit != "def456" {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 	if !filepath.IsAbs(res.BinaryPath) {

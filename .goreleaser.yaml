@@ -48,13 +48,19 @@ dockers_v2:
       - gordon.toml.example
     flags:
       - "--target=release"
-    sbom: false
+      # Emit BuildKit SBOM and SLSA provenance attestations with the release image.
+      - "--sbom=true"
+      - "--provenance=mode=max"
+    sbom: true
     labels:
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.description: "Self-hosted container deployment platform; one binary provides all Gordon roles"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.source: "{{ .GitURL }}"
       org.opencontainers.image.version: "{{ .Version }}"
+
+sboms:
+  - artifacts: archive
 
 checksum:
   name_template: checksums.txt

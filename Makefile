@@ -6,7 +6,10 @@ DEV_TAG := v2-dev-$(shell date +%Y%m%d-%H%M%S)
 DIST_DIR := ./dist
 ENGINE := podman
 GORELEASER ?= goreleaser
-RELEASE_SMOKE_IMAGE ?= gordon-release-smoke:local
+# GoReleaser's deterministic snapshot image; override only to inspect a known snapshot tag.
+RELEASE_SMOKE_IMAGE ?= ghcr.io/bnema/gordon:v0.0.0-SNAPSHOT
+# Local runs may override this with COMPAT_BASELINE_REF=<immutable commit>.
+COMPAT_BASELINE_REF ?= $(or $(GORDON_COMPAT_BASELINE_REF),8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842)
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -55,7 +58,7 @@ COMPAT_REGISTRY_SPLIT_TEST := TestCompatibilitySplitRegistryEventFlow
 # Security is a current-candidate gate, not old/new baseline parity. The exact
 # tests below must each pass twice without a skip; the edge test needs Docker to
 # prove the candidate container has no runtime socket access.
-COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityRegistryNoPodmanSocket|TestCompatibilitySecurityComponentEnvMinimization|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
+COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityRegistryNoPodmanSocket|TestCompatibilitySecurityControlNoPodmanSocketAfterSplit|TestCompatibilitySecurityUnsafeRuntimeRequestDenied|TestCompatibilitySecurityComponentEnvMinimization|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
@@ -137,32 +140,32 @@ test-adapter: ## Run adapter layer tests only
 ##@ Compatibility Harness
 
 compat-harness-config: ## Run config compatibility harness checks
-	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
+	@echo "Baseline ref: $(COMPAT_BASELINE_REF)"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/config/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$(COMPAT_BASELINE_REF) go test ./internal/testutils/compatoldnew -run '^TestCompatibilityConfigShowJSON$$' -count=1"
 	@echo "Running config compatibility harness slice and policy guards..."
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityConfigShowJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityConfigShowJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-cli: ## Run CLI compatibility harness checks
-	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
+	@echo "Baseline ref: $(COMPAT_BASELINE_REF)"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/cli/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF=$(COMPAT_BASELINE_REF) go test ./internal/testutils/compatoldnew -run '^TestCompatibilityRoutesListJSON$$' -count=1"
 	@echo "Running CLI compatibility harness slice and policy guards..."
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityRoutesListJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityRoutesListJSON|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-api: ## Run API compatibility harness checks
-	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
+	@echo "Baseline ref: $(COMPAT_BASELINE_REF)"
 	@echo "Report path: $(COMPAT_ARTIFACT_DIR)/api/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$(COMPAT_BASELINE_REF) go test ./internal/testutils/compatoldnew -run '^TestCompatibilityAdminAuthAndRouteCRUD$$' -count=1"
 	@echo "Running Docker preflight, API compatibility slice, and policy guards..."
 	@docker info
-	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
+	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
 compat-harness-registry: ## Run blocking old/new OCI registry and event-sync compatibility gates
 	@echo "Running exact Docker-backed registry compatibility gate without skips..."
 	@docker info
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_REGISTRY_REAL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_REGISTRY_REAL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		for test in $$(printf '%s' '$(COMPAT_REGISTRY_REAL_TESTS)' | tr '|' ' '); do \
@@ -171,7 +174,7 @@ compat-harness-registry: ## Run blocking old/new OCI registry and event-sync com
 			fi; \
 		done
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_REGISTRY_SPLIT_TEST)$$' -count=2 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_REGISTRY_SPLIT_TEST)$$' -count=2 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		if ! jq -se --arg test "$(COMPAT_REGISTRY_SPLIT_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 2) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
@@ -204,7 +207,7 @@ compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership prefligh
 			fi; \
 		done
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_BINARY_TESTS))$$' -count=1 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_BINARY_TESTS))$$' -count=1 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_BINARY_TESTS)' | tr '|' ' '); do \
@@ -214,13 +217,13 @@ compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership prefligh
 		done
 
 compat-harness-proxy: ## Run the blocking Docker proxy compatibility gate
-	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"
+	@echo "Baseline ref: $(COMPAT_BASELINE_REF)"
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/proxy{,-external,-zero-drain}/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$${GORDON_COMPAT_BASELINE_REF:-origin/main} go test ./internal/testutils/compatoldnew -run '^($(COMPAT_PROXY_REAL_TESTS))$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF=$(COMPAT_BASELINE_REF) go test ./internal/testutils/compatoldnew -run '^($(COMPAT_PROXY_REAL_TESTS))$$' -count=1"
 	@echo "Running required Docker preflight and blocking proxy compatibility slices..."
 	@docker info
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_PROXY_REAL_TESTS)|$(COMPAT_PROXY_HARNESS_GUARDS))$$' -count=1 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_PROXY_REAL_TESTS)|$(COMPAT_PROXY_HARNESS_GUARDS))$$' -count=1 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		for test in $$(printf '%s' '$(COMPAT_PROXY_REAL_TESTS)' | tr '|' ' '); do \
@@ -269,11 +272,11 @@ compat-harness-migration: ## Run blocking migration protocol and rootless-Podman
 
 compat-harness-security: ## Run blocking current-security compatibility gates
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,registry,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
 	@echo "Running required Docker preflight and exact current-security gates..."
 	@docker info
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS)|$(COMPAT_SECURITY_HARNESS_GUARDS))$$' -count=2 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS)|$(COMPAT_SECURITY_HARNESS_GUARDS))$$' -count=2 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		for test in $$(printf '%s' '$(COMPAT_SECURITY_REAL_TESTS)' | tr '|' ' '); do \
@@ -304,8 +307,9 @@ release-check: ## Validate release and workflow configuration
 	@$(GORELEASER) check
 	@if command -v actionlint >/dev/null 2>&1; then actionlint; else echo "actionlint not installed; workflow syntax is validated in CI"; fi
 
-release-smoke: release-check ## Build and execute snapshot release bundles without publishing
-	@$(GORELEASER) release --snapshot --clean --skip=docker
+release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts and release image
+	@docker info >/dev/null
+	@$(GORELEASER) release --snapshot --clean
 	@set -eu; \
 		archives=$$(find $(DIST_DIR) -maxdepth 1 -type f -name 'gordon_linux_*.tar.gz' | sort); \
 		test "$$(printf '%s\n' "$$archives" | sed '/^$$/d' | wc -l)" -eq 2; \
@@ -325,11 +329,13 @@ release-smoke: release-check ## Build and execute snapshot release bundles witho
 			esac; \
 			rm -rf "$$tmp"; trap - EXIT HUP INT TERM; \
 		done
+	@$(MAKE) release-image-smoke
 
-release-image-smoke: ## Build the production image and verify every role uses the single binary
-	@docker info >/dev/null
-	@trap 'docker image rm -f "$(RELEASE_SMOKE_IMAGE)" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
-		docker build --target=source-image -t "$(RELEASE_SMOKE_IMAGE)" .; \
+release-image-smoke: ## Verify the exact GoReleaser release-target image and all five roles
+	@docker image inspect "$(RELEASE_SMOKE_IMAGE)" >/dev/null
+	@set -eu; \
+		entrypoint=$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$(RELEASE_SMOKE_IMAGE)"); \
+		test "$$entrypoint" = '["/app/gordon"]'; \
 		for role in monolith control runtime edge registry; do \
 			docker run --rm "$(RELEASE_SMOKE_IMAGE)" serve --role "$$role" --help >/dev/null; \
 		done

@@ -25,10 +25,10 @@ func TestStageSideFixtureCopiesConfigAndIsolatesHomeAndData(t *testing.T) {
 }
 
 func TestFixtureMetadata(t *testing.T) {
-	t.Run("baseline ref defaults to origin main", func(t *testing.T) {
+	t.Run("baseline ref defaults to immutable pre-refactor commit", func(t *testing.T) {
 		t.Setenv(EnvCompatBaselineRef, "")
 
-		require.Equal(t, "origin/main", BaselineRefFromEnv())
+		require.Equal(t, ImmutableCompatibilityBaseline, BaselineRefFromEnv())
 	})
 
 	t.Run("baseline ref uses explicit override", func(t *testing.T) {

@@ -159,9 +159,11 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"proxy/edge-traffic-graph-stream-matrix":           {},
 		"security/edge-no-podman-socket":                   {},
 		"security/registry-no-podman-socket":               {},
+		"security/control-no-podman-socket-after-split":    {},
 		"security/missing-component-token-rejected":        {},
 		"security/wrong-component-token-rejected":          {},
 		"security/wrong-scope-component-token-rejected":    {},
+		"security/unsafe-runtime-request-denied":           {},
 		"migration/monolith-existing-deployment-inventory": {},
 		"migration/monolith-to-split-preflight":            {},
 		"migration/component-startup-health":               {},
@@ -235,6 +237,7 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	require.True(t, podmanByName["cli/logs"])
 	require.False(t, podmanByName["security/edge-no-podman-socket"])
 	require.False(t, podmanByName["security/registry-no-podman-socket"])
+	require.False(t, podmanByName["security/control-no-podman-socket-after-split"])
 	require.False(t, podmanByName["security/missing-component-token-rejected"])
 	require.False(t, podmanByName["security/wrong-component-token-rejected"])
 
@@ -264,15 +267,11 @@ func TestMigrationAndSecurityScenariosDoNotSilentlyPass(t *testing.T) {
 		require.Empty(t, scenario.BlockReason, scenario.Name)
 	}
 	for _, scenario := range SecurityScenarios() {
-		if scenario.Status == ScenarioStatusImplemented {
-			continue
-		}
-		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
-		require.NotEmpty(t, scenario.BlockReason, scenario.Name)
-
+		require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
+		require.Empty(t, scenario.BlockReason, scenario.Name)
 		reason, skip := scenario.SkipReason()
-		require.True(t, skip, scenario.Name)
-		require.NotEmpty(t, reason, scenario.Name)
+		require.False(t, skip, scenario.Name)
+		require.Empty(t, reason, scenario.Name)
 	}
 }
 

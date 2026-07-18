@@ -7,14 +7,10 @@ func SecurityScenarios() []Scenario {
 	return []Scenario{
 		implementedScenario("security/edge-no-podman-socket", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/registry-no-podman-socket", SurfaceSecurity, "10.2 Runtime isolation checks", false),
-		securityScenario("security/control-no-podman-socket-after-split", true),
+		implementedScenario("security/control-no-podman-socket-after-split", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/missing-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/wrong-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/wrong-scope-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
-		securityScenario("security/unsafe-runtime-request-denied", false),
+		implementedScenario("security/unsafe-runtime-request-denied", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 	}
-}
-
-func securityScenario(name string, podmanRequired bool) Scenario {
-	return pendingScenario(name, SurfaceSecurity, "10.2 Runtime isolation checks", podmanRequired, "old/new security compatibility scenario execution is not implemented yet")
 }

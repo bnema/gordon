@@ -38,6 +38,24 @@ func TestCompatibilitySecurityRegistryNoPodmanSocket(t *testing.T) {
 	assertSecurityArtifactsSafe(t, artifactDir)
 }
 
+func TestCompatibilitySecurityControlNoPodmanSocketAfterSplit(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	artifactDir := compatibilityArtifactDir(t, "security-control")
+	report, err := RunSecurityControlNoPodmanSocketAfterSplit(artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, artifactDir)
+}
+
+func TestCompatibilitySecurityUnsafeRuntimeRequestDenied(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	artifactDir := compatibilityArtifactDir(t, "security-runtime-policy")
+	report, err := RunSecurityUnsafeRuntimeRequestDenied(artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, artifactDir)
+}
+
 func TestCompatibilitySecurityMissingComponentTokenRejected(t *testing.T) {
 	requireRealCompatibilityRun(t)
 	artifactDir := compatibilityArtifactDir(t, "security-auth-missing")
