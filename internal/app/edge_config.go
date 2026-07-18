@@ -49,8 +49,12 @@ type EdgeServingConfig struct {
 	// for rootless NAT, whose direct peer is not the loopback address selected
 	// for the host-only bootstrap listener. It is never enabled in final edge
 	// configuration.
-	MigrationProbeEnabled   bool          `toml:"migration_probe_enabled"`
-	MigrationProbeTokenEnv  string        `toml:"migration_probe_token_env"`
+	MigrationProbeEnabled  bool   `toml:"migration_probe_enabled"`
+	MigrationProbeTokenEnv string `toml:"migration_probe_token_env"`
+	// MigrationHairpinEnabled is emitted only in the generated final migration
+	// manifest. It permits rootless host-port NAT only when the direct peer is
+	// exactly the accepted local TCP address; it never trusts forwarded headers.
+	MigrationHairpinEnabled bool          `toml:"migration_hairpin_enabled"`
 	RegistryForwardTokenEnv string        `toml:"registry_forward_token_env"`
 	TLS                     EdgeTLSConfig `toml:"tls"`
 }
@@ -130,6 +134,12 @@ func validateEdgeConfig(cfg EdgeConfig) error {
 	}
 	if cfg.Edge.MigrationProbeEnabled && strings.TrimSpace(cfg.Edge.MigrationProbeTokenEnv) == "" {
 		return fmt.Errorf("edge.migration_probe_token_env is required when edge.migration_probe_enabled is true")
+	}
+	if cfg.Edge.MigrationProbeEnabled && cfg.Edge.MigrationHairpinEnabled {
+		return fmt.Errorf("edge.migration_probe_enabled and edge.migration_hairpin_enabled cannot both be true")
+	}
+	if cfg.Edge.MigrationHairpinEnabled && !strings.EqualFold(strings.TrimSpace(cfg.Edge.TLS.Mode), edgeTLSModeExternal) {
+		return fmt.Errorf("edge.migration_hairpin_enabled requires edge.tls.mode=external")
 	}
 	return validateEdgeTLSContract(cfg)
 }

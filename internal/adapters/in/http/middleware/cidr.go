@@ -152,7 +152,51 @@ func ProxyCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http
 // loopback access must be included in allowedNets. Forwarded headers are not
 // consulted, so an untrusted peer cannot spoof an allowed source.
 func StrictDirectPeerCIDRAllowlist(allowedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	return cidrAllowlist(allowedNets, func(r *http.Request) string {
-		return httphelper.ExtractRemoteIP(r.RemoteAddr)
-	}, "direct peer", false, log)
+	return StrictDirectPeerCIDRAllowlistOrHairpin(allowedNets, false, log)
+}
+
+// StrictDirectPeerCIDRAllowlistOrHairpin additionally permits a kernel TCP
+// hairpin only when the connection's remote and accepted local IPs are equal.
+// This is intentionally an identity check, not a CIDR: rootless host-port NAT
+// can present a container to itself, but a neighboring RFC1918 peer cannot
+// satisfy it. Forwarded headers are never used for either path.
+func StrictDirectPeerCIDRAllowlistOrHairpin(allowedNets []*net.IPNet, allowHairpin bool, log zerowrap.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		if len(allowedNets) == 0 {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			peer := httphelper.ExtractRemoteIP(r.RemoteAddr)
+			if httphelper.IsTrustedProxy(peer, allowedNets) || allowHairpin && isTCPHairpin(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			logDirectPeerDeny(w, r, peer, log)
+		})
+	}
+}
+
+func isTCPHairpin(r *http.Request) bool {
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	remoteIP := net.ParseIP(remoteHost)
+	localAddr, ok := r.Context().Value(http.LocalAddrContextKey).(*net.TCPAddr)
+	if !ok || remoteIP == nil || localAddr.IP == nil || localAddr.IP.IsUnspecified() {
+		return false
+	}
+	return remoteIP.Equal(localAddr.IP)
+}
+
+func logDirectPeerDeny(w http.ResponseWriter, r *http.Request, peer string, log zerowrap.Logger) {
+	log.Warn().
+		Str(zerowrap.FieldLayer, "adapter").
+		Str(zerowrap.FieldAdapter, "http").
+		Str(zerowrap.FieldMethod, r.Method).
+		Str(zerowrap.FieldClientIP, peer).
+		Msg("direct peer access denied by CIDR allowlist")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(dto.ErrorResponse{Error: "Forbidden"})
 }

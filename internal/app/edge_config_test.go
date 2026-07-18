@@ -76,6 +76,26 @@ mode = "external"
 	require.ErrorContains(t, err, "migration_probe_token_env")
 }
 
+func TestInitEdgeConfigRejectsCombinedMigrationProbeAndHairpin(t *testing.T) {
+	path := writeEdgeConfig(t, `
+[control]
+endpoint = "control.internal:9090"
+token_env = "EDGE_TOKEN"
+insecure_tls = true
+[edge]
+listen_address = "127.0.0.1:8080"
+trusted_proxy_cidrs = ["127.0.0.1/32"]
+migration_probe_enabled = true
+migration_probe_token_env = "GORDON_MIGRATION_PROBE_TOKEN"
+migration_hairpin_enabled = true
+[edge.tls]
+mode = "external"
+`)
+
+	_, err := initEdgeConfig(path)
+	require.ErrorContains(t, err, "cannot both be true")
+}
+
 func TestInitEdgeConfigTLSModes(t *testing.T) {
 	certPath, keyPath := writeEdgeCertificate(t)
 	filesPath := writeEdgeConfig(t, `

@@ -180,7 +180,10 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			"control":    map[string]any{"event_endpoint": controlEndpoint, "event_token_env": "GORDON_COMPONENT_REGISTRY_TOKEN", "insecure_tls": true, "outbox_max_entries": 10000, "outbox_max_bytes": "64MB"},
 		}
 	case domain.ComponentRoleEdge:
-		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "registry_forward_token_env": registryForwardTokenEnvVar, "tls": map[string]any{"mode": edgeTLSModeExternal}}
+		// Only the generated final manifest enables the narrow rootless host-port
+		// hairpin identity. The prepared listener retains its credential-bound
+		// probe path and never accepts unauthenticated hairpin traffic.
+		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "migration_hairpin_enabled": !migrationProbeEnabled, "registry_forward_token_env": registryForwardTokenEnvVar, "tls": map[string]any{"mode": edgeTLSModeExternal}}
 		if migrationProbeEnabled {
 			edge["migration_probe_token_env"] = "GORDON_MIGRATION_PROBE_TOKEN"
 		}

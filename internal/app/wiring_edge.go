@@ -214,10 +214,9 @@ func edgeHTTPHandlerWithMiddlewareAndHealth(proxyHandler http.Handler, snapshots
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
 	}
-	// External TLS termination has no safe direct plaintext path. The same
-	// CIDRs that make forwarded headers trustworthy are the only permitted peers.
-	// Unlike registry access, loopback is not implicitly trusted: operators must
-	// explicitly list it when their terminating proxy connects from localhost.
+	// Direct-peer admission and forwarded-header trust are distinct boundaries.
+	// A generated final migration edge may additionally recognize its exact
+	// rootless TCP hairpin, but it is not a trusted forwarding proxy.
 	if strings.EqualFold(cfg.Edge.TLS.Mode, edgeTLSModeExternal) {
 		middlewares = append(middlewares, migrationProbeOrStrictDirectPeerCIDRAllowlist(cfg, trustedNets, log))
 	}
@@ -236,7 +235,7 @@ const migrationProbeHeader = "X-Gordon-Migration-Probe"
 // all later security and proxy routing middleware. Every missing or invalid
 // credential is handled by the existing strict middleware and remains 403.
 func migrationProbeOrStrictDirectPeerCIDRAllowlist(cfg EdgeConfig, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
-	strict := middleware.StrictDirectPeerCIDRAllowlist(trustedNets, log)
+	strict := middleware.StrictDirectPeerCIDRAllowlistOrHairpin(trustedNets, cfg.Edge.MigrationHairpinEnabled, log)
 	if !cfg.Edge.MigrationProbeEnabled {
 		return strict
 	}
