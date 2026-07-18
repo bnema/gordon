@@ -32,6 +32,7 @@ type NetworkInfo struct {
 	ID         string
 	Name       string
 	Driver     string
+	Internal   bool
 	Containers []string
 	Labels     map[string]string
 }

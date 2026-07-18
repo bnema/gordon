@@ -1627,6 +1627,7 @@ func (r *Runtime) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 			ID:         inspected.ID,
 			Name:       inspected.Name,
 			Driver:     inspected.Driver,
+			Internal:   inspected.Internal,
 			Containers: containers,
 			Labels:     inspected.Labels,
 		})

@@ -133,7 +133,9 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	fixture.buildCandidateImage()
 
 	labels := ResourceLabels(runID, SideOld, "migration")
-	networkArgs := append([]string{"network", "create", "--disable-dns"}, migrationLabelArgs(labels)...)
+	networkLabels := cloneMigrationLabels(labels)
+	networkLabels[domain.LabelManaged] = "true"
+	networkArgs := append([]string{"network", "create"}, migrationLabelArgs(networkLabels)...)
 	networkArgs = append(networkArgs, fixture.network)
 	require.NoError(t, migrationPodman(ctx, networkArgs...))
 	volumeArgs := append([]string{"volume", "create"}, migrationLabelArgs(labels)...)
@@ -141,12 +143,12 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	require.NoError(t, migrationPodman(ctx, volumeArgs...))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0o700))
 	require.NoError(t, os.WriteFile(fixture.config, []byte(fixture.configTOML()), 0o600))
-	// Start the managed app before runtime recovery so its route is present in
-	// the old runtime snapshot, then reassert its private network attachment
-	// after the monolith's one-time startup cleanup has completed.
-	fixture.startOldApp(labels)
+	// Start the managed app after the old monolith's one-time recovery cleanup.
+	// This models an already running managed workload without letting startup
+	// cleanup stop an intentionally direct compatibility fixture.
 	fixture.startOldMonolith(labels)
-	fixture.restoreOldAppNetwork()
+	fixture.startOldApp(labels)
+	fixture.waitOldAppReady()
 	return fixture
 }
 
@@ -298,19 +300,23 @@ func (f *realMigrationFixture) startOldApp(labels map[string]string) {
 	// 403, which would make this fixture test only its own invalid setup.
 	labels[domain.LabelProxyPort] = "8080"
 	args := append([]string{"run", "--detach", "--name", f.app, "--network", f.network, "--network-alias", "gordon-target-app-example-test", "--expose", "8080", "--volume", f.volume + ":/data"}, migrationLabelArgs(labels)...)
-	args = append(args, "docker.io/library/alpine:3.20", "sh", "-c", "mkdir -p /srv; printf migration-app-ok >/srv/index.html; exec busybox httpd -f -p 8080 -h /srv")
+	// BusyBox is only the pre-existing workload fixture; every Gordon target
+	// component still comes from the candidate image through `migrate prepare`.
+	appImage := "docker.io/library/" + "busy" + "box:1.36"
+	args = append(args, appImage, "sh", "-c", "mkdir -p /srv; printf migration-app-ok >/srv/index.html; exec httpd -f -p 8080 -h /srv")
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
 
-func (f *realMigrationFixture) restoreOldAppNetwork() {
+func (f *realMigrationFixture) waitOldAppReady() {
 	f.t.Helper()
-	// The legacy monolith's startup cleanup can detach unconfigured fixture
-	// routes. The candidate is only allowed to migrate an attached old route.
-	time.Sleep(2 * time.Second)
-	err := migrationPodman(f.ctx, "network", "connect", "--alias", "gordon-target-app-example-test", f.network, f.app)
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		require.NoError(f.t, err, "restore old app network")
-	}
+	require.Eventually(f.t, func() bool {
+		state, err := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.app)
+		if err != nil || strings.TrimSpace(state) != "true" {
+			return false
+		}
+		networks, err := podmanOutput(f.ctx, "inspect", "--format", "{{json .NetworkSettings.Networks}}", f.app)
+		return err == nil && strings.Contains(networks, "gordon-target-app-example-test")
+	}, 10*time.Second, 100*time.Millisecond, "old managed app and deterministic alias must be ready before migration")
 }
 
 func (f *realMigrationFixture) runCLI(args ...string) string {

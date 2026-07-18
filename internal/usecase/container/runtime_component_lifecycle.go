@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -517,15 +518,92 @@ func (m *runtimeComponentLifecycleManager) logs(ctx context.Context, command dom
 	_, _ = io.Copy(io.Discard, io.LimitReader(logs, 64<<10))
 	return logs.Close()
 }
+
+// connect gives a prepared edge a single, verified attachment to a pre-existing
+// Gordon application network. It intentionally does not reuse the internal
+// component-network path: no command can use this action to gain arbitrary
+// network authority.
 func (m *runtimeComponentLifecycleManager) connect(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	if !safeComponentNetwork(command.InternalNetwork) {
-		return fmt.Errorf("invalid component network")
+	if command.TargetComponentRole != domain.ComponentRoleEdge || !safeManagedAppNetworkName(command.InternalNetwork, m.policy.ManagedNetworkPrefix) {
+		return m.deniedAppNetwork(command)
 	}
 	container, err := m.find(ctx, command)
-	if err != nil || container == nil {
+	if err != nil {
 		return err
 	}
-	return m.runtime.ConnectContainerToNetwork(ctx, container.Name, command.InternalNetwork)
+	if container == nil {
+		return fmt.Errorf("prepared edge component not found")
+	}
+	network, err := m.managedAppNetwork(ctx, command.InternalNetwork)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(network.Containers, container.Name) {
+		return nil
+	}
+	if err := m.runtime.ConnectContainerToNetwork(ctx, container.Name, network.Name); err != nil && !alreadyConnectedNetworkError(err) {
+		return err
+	}
+	return nil
+}
+
+func (m *runtimeComponentLifecycleManager) managedAppNetwork(ctx context.Context, name string) (*domain.NetworkInfo, error) {
+	networks, err := m.runtime.ListNetworks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list managed app networks: %w", err)
+	}
+	var found *domain.NetworkInfo
+	for _, network := range networks {
+		if network == nil || network.Name != name {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("managed app network is ambiguous")
+		}
+		found = network
+	}
+	if !validManagedAppNetwork(found, name, m.policy.ManagedNetworkPrefix) {
+		return nil, fmt.Errorf("invalid managed app network")
+	}
+	return found, nil
+}
+
+func validManagedAppNetwork(network *domain.NetworkInfo, name, prefix string) bool {
+	if network == nil || network.Name != name || network.Internal || network.Labels[domain.LabelManaged] != "true" || !safeManagedAppNetworkName(name, prefix) {
+		return false
+	}
+	return slices.ContainsFunc(network.Containers, safeGordonTargetAlias)
+}
+
+func safeManagedAppNetworkName(name, prefix string) bool {
+	if name != strings.TrimSpace(name) {
+		return false
+	}
+	name, prefix = strings.TrimSpace(name), strings.TrimSpace(prefix)
+	if name == "" || prefix == "" || filepath.Base(name) != name || strings.ContainsAny(name, " /\\\\") {
+		return false
+	}
+	if name == "bridge" || name == "host" || name == "none" || name == "default" || safeComponentNetwork(name) || strings.HasPrefix(name, prefix+"-internal-") {
+		return false
+	}
+	return strings.HasPrefix(name, prefix+"-")
+}
+
+func safeGordonTargetAlias(alias string) bool {
+	if alias != strings.TrimSpace(alias) {
+		return false
+	}
+	alias = strings.TrimSpace(alias)
+	return strings.HasPrefix(alias, "gordon-target-") && len(strings.TrimPrefix(alias, "gordon-target-")) != 0 && filepath.Base(alias) == alias && !strings.ContainsAny(alias, " /\\\\")
+}
+
+func alreadyConnectedNetworkError(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "already connected") || strings.Contains(message, "already exists")
+}
+
+func (m *runtimeComponentLifecycleManager) deniedAppNetwork(command domain.RuntimeSelfUpdateCommand) error {
+	return RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedNetworkDenied, Message: "edge app network is not Gordon-managed", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 }
 func (m *runtimeComponentLifecycleManager) remove(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	if !command.PreserveVolumes {

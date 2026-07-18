@@ -27,6 +27,7 @@ func TestRuntime_ListNetworksIncludesEndpointNames(t *testing.T) {
 				"Id":"net1",
 				"Name":"gordon-net",
 				"Driver":"bridge",
+				"Internal":true,
 				"Labels":{"gordon.managed":"true"},
 				"Containers":{"abc123":{"Name":"gordon-app.example.com","EndpointID":"ep1"}}
 			}`))
@@ -45,6 +46,7 @@ func TestRuntime_ListNetworksIncludesEndpointNames(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, networks, 1)
+	assert.True(t, networks[0].Internal)
 	assert.Equal(t, []string{"gordon-app.example.com", "gordon-target-app-example-com"}, networks[0].Containers)
 	assert.NotContains(t, networks[0].Containers, "abc123", "engine IDs must not cross the runtime boundary")
 }
