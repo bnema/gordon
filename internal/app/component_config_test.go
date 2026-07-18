@@ -38,7 +38,7 @@ func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {
 	assert.Contains(t, string(edge), "token_env")
 	control, err := os.ReadFile(byRole[domain.ComponentRoleControl])
 	require.NoError(t, err)
-	assert.Contains(t, string(control), "endpoint = 'gordon-runtime:9444'")
+	assert.Contains(t, string(control), "endpoint = 'unix:///var/lib/gordon/migration/fixture/runtime-control.sock'")
 	assert.NotContains(t, string(control), "127.0.0.1:19444")
 	registry, err := os.ReadFile(byRole[domain.ComponentRoleRegistry])
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestComponentConfigUsesInternalRuntimeAliasInsteadOfHostBootstrap(t *testin
 	require.NoError(t, err)
 	control, err := os.ReadFile(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleControl])
 	require.NoError(t, err)
-	assert.True(t, strings.Contains(string(control), "endpoint = 'gordon-runtime:9444'"))
+	assert.True(t, strings.Contains(string(control), "endpoint = 'unix:///var/lib/gordon/migration/fixture/runtime-control.sock'"))
 	assert.NotContains(t, string(control), cfg.Runtime.Endpoint)
 }
 

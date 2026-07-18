@@ -75,7 +75,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.runMissingEnvPlan()
 	fixture.runCLI("migrate", "prepare", "--json")
 	status := fixture.runCLI("migrate", "status", "--json")
-	require.Contains(t, status, `"bootstrap_runtime_endpoint":"host.containers.internal:`, "old monolith must use the private host gateway, not container loopback")
+	require.Contains(t, status, `"bootstrap_runtime_endpoint":"unix:///var/lib/gordon/migration/`, "old monolith must use the private Gordon Unix RPC socket")
 	fixture.assertPreparedTargets()
 	fixture.assertRuntimeBootstrapTransport()
 	fixture.assertRuntimeSocketExclusive()
@@ -162,8 +162,8 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	labels[domain.LabelRoute] = "true"
 	labels[domain.LabelDomain] = "app.example.test"
 	// The old serving Gordon is deliberately a normal rootless container, not
-	// host-networked: its authenticated bootstrap proof must cross Podman's
-	// host gateway to the runtime's loopback-only publish.
+	// host-networked. It creates target components only through its own mounted
+	// engine socket; the target handoff is a private Gordon Unix RPC socket.
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
@@ -234,8 +234,7 @@ func (f *realMigrationFixture) assertRuntimeBootstrapTransport() {
 		}
 		ports, portErr := podmanOutput(f.ctx, "port", container.resourceName())
 		require.NoError(f.t, portErr)
-		require.Contains(f.t, ports, "127.0.0.1:", "runtime bootstrap must be host-loopback only")
-		require.NotContains(f.t, ports, "0.0.0.0", "runtime bootstrap must not be public")
+		require.Empty(f.t, strings.TrimSpace(ports), "runtime Unix bootstrap must not publish TCP")
 		return
 	}
 	f.t.Fatal("prepared runtime was not found")
@@ -289,7 +288,6 @@ network_prefix = "gordon"
 [runtime]
 listen_address = "127.0.0.1:19444"
 token = "fixture-runtime-handoff-token"
-insecure = true
 
 [containers]
 security_profile = "compat"

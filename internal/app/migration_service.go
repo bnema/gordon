@@ -2,10 +2,8 @@ package app
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,28 +152,17 @@ func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (Mi
 	return checkpoint, nil
 }
 
-// setBootstrapListeners reserves one random high loopback port in checkpoint
-// state. The runtime owns its publication; components use the Podman host
-// gateway, never their own 127.0.0.1 namespace. Persisting the selected port
-// makes retries deterministic without accepting an arbitrary control input.
+// setBootstrapListeners records the deterministic private Gordon runtime
+// socket. It creates no host TCP publish and never exposes an engine socket.
 func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint) error {
 	if checkpoint == nil {
 		return fmt.Errorf("migration checkpoint is required")
 	}
-	if len(checkpoint.PreparedPortBindings) == 0 {
-		port, err := randomBootstrapRuntimePort()
-		if err != nil {
-			return fmt.Errorf("select runtime bootstrap port: %w", err)
-		}
-		checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: port, ContainerPort: bootstrapRuntimeContainerPort, Protocol: "tcp"}}
+	if len(checkpoint.PreparedPortBindings) != 0 {
+		return fmt.Errorf("runtime bootstrap must not publish TCP ports")
 	}
 	if checkpoint.BootstrapRuntimeEndpoint == "" {
-		for _, binding := range checkpoint.PreparedPortBindings {
-			if validPreparedMigrationPortBinding(binding) {
-				checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("%s:%d", bootstrapRuntimeHostGateway, binding.HostPort)
-				break
-			}
-		}
+		checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("unix://%s", filepath.Join(componentDataDirectory, "migration", checkpoint.MigrationID, bootstrapRuntimeSocketName))
 	}
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
@@ -190,15 +177,6 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 		return fmt.Errorf("invalid runtime bootstrap transport")
 	}
 	return nil
-}
-
-func randomBootstrapRuntimePort() (int, error) {
-	width := big.NewInt(int64(bootstrapRuntimePortMax - bootstrapRuntimePortMin + 1))
-	value, err := cryptorand.Int(cryptorand.Reader, width)
-	if err != nil {
-		return 0, err
-	}
-	return bootstrapRuntimePortMin + int(value.Int64()), nil
 }
 
 func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error) {
@@ -219,7 +197,7 @@ func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint)
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component configuration")
 	}
-	files, err := WriteComponentConfigManifests(s.config, filepath.Join(filepath.Dir(s.envDirectory), "config", checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration)))
+	files, err := WriteComponentConfigManifests(s.config, migrationComponentConfigDirectory(s.envDirectory, checkpoint.MigrationID, checkpoint.ComponentGeneration))
 	if err != nil {
 		return err
 	}
@@ -228,6 +206,14 @@ func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint)
 		checkpoint.ConfigFileReferences = append(checkpoint.ConfigFileReferences, file.Path)
 	}
 	return nil
+}
+
+func migrationComponentConfigDirectory(envDirectory, migrationID string, generation uint64) string {
+	parent := filepath.Dir(envDirectory)
+	if filepath.Base(parent) != "migration" {
+		parent = filepath.Join(parent, "migration")
+	}
+	return filepath.Join(parent, "config", migrationID, fmt.Sprintf("%d", generation))
 }
 
 func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) error {

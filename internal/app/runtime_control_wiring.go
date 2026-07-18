@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -28,13 +29,30 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 	if endpoint == "" {
 		return nil, nil
 	}
+	unixPath, unixEndpoint := runtimeUnixEndpoint(endpoint)
 	transportCredentials := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	newBearerCredentials := grpcauth.NewBearerTokenCredentials
-	if cfg.Insecure {
+	target := endpoint
+	if unixEndpoint {
+		if runtimeControlToken(cfg) == "" {
+			return nil, fmt.Errorf("unix runtime transport requires a scoped component token")
+		}
+		transportCredentials = insecure.NewCredentials()
+		newBearerCredentials = grpcauth.NewInsecureBearerTokenCredentials
+		target = "passthrough:///runtime-control"
+	} else if cfg.Insecure {
+		// Existing non-migration deployments may explicitly opt in to plaintext
+		// TCP. Generated migration role configs never set this; their Unix
+		// bootstrap is authenticated by a scoped component token.
 		transportCredentials = insecure.NewCredentials()
 		newBearerCredentials = grpcauth.NewInsecureBearerTokenCredentials
 	}
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(transportCredentials)}
+	if unixEndpoint {
+		opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", unixPath)
+		}))
+	}
 	if token := runtimeControlToken(cfg); token != "" {
 		creds, err := newBearerCredentials(token)
 		if err != nil {
@@ -42,7 +60,7 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 		}
 		opts = append(opts, grpc.WithPerRPCCredentials(creds))
 	}
-	conn, err := grpc.NewClient(endpoint, opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create runtime command client: %w", err)
 	}
@@ -69,12 +87,12 @@ func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlC
 	return receiver, nil
 }
 
-// newRuntimeHandoffDialer dials only the checkpointed private host-gateway
-// bootstrap endpoint of a prepared runtime. Authentication and the configured
-// TLS policy remain mandatory; migration never downgrades the transport.
+// newRuntimeHandoffDialer dials only the checkpointed private Gordon Unix
+// socket of a prepared runtime. Unix uses local insecure transport with the
+// required scoped component token; TCP remains TLS-only.
 func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 	return func(ctx context.Context, component ComponentLaunchComponent) (RuntimeHandoffClient, error) {
-		if !validBootstrapRuntimeEndpoint(component.BootstrapEndpoint, componentPortBindings(component.PortPublishes, component.Role)) {
+		if !validBootstrapRuntimeEndpoint(component.BootstrapEndpoint, nil) || component.Role != domain.ComponentRoleRuntime || len(component.PortPublishes) != 0 {
 			return nil, fmt.Errorf("replacement runtime bootstrap transport is invalid")
 		}
 		if runtimeControlToken(cfg) == "" {
@@ -94,12 +112,8 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 	}
 }
 
-func componentPortBindings(ports []domain.ContainerPortPublish, role domain.ComponentRole) []MigrationPortBinding {
-	bindings := make([]MigrationPortBinding, 0, len(ports))
-	for _, port := range ports {
-		bindings = append(bindings, MigrationPortBinding{Role: string(role), HostIP: port.HostIP, HostPort: port.HostPort, ContainerPort: port.ContainerPort, Protocol: string(port.Protocol)})
-	}
-	return bindings
+func runtimeUnixEndpoint(endpoint string) (string, bool) {
+	return runtimeBootstrapSocketPath(endpoint, componentDataDirectory)
 }
 
 func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeStateSubscriber, error) {

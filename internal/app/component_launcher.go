@@ -106,7 +106,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
-	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
+	if len(checkpoint.PreparedPortBindings) != 0 || (checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, nil)) {
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid runtime bootstrap transport")
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
@@ -116,7 +116,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		if err != nil {
 			return ComponentLaunchPlan{}, err
 		}
-		component := ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash, PortPublishes: componentPreparedPorts(checkpoint.PreparedPortBindings, role)}
+		component := ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash}
 		if role == domain.ComponentRoleRuntime {
 			component.BootstrapEndpoint = checkpoint.BootstrapRuntimeEndpoint
 		}

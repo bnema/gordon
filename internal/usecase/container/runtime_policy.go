@@ -60,6 +60,9 @@ type RuntimePolicy struct {
 	AllowedCapAdd          []string
 	RuntimeComponentID     string
 	RuntimeComponentRole   domain.ComponentRole
+	// MigrationStateRoot is the host data-dir migration root. Only generated
+	// Gordon component lifecycle commands may bind one immediate child of it.
+	MigrationStateRoot string
 }
 
 func NewRuntimePolicy(mode RuntimePolicyMode) RuntimePolicy {
@@ -144,28 +147,26 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 			return p.denied(identity, routeDomain, RuntimePolicyReasonCapabilityDenied, "container capability add is not allowed")
 		}
 	}
+	return p.checkContainerMounts(identity, routeDomain, cfg)
+}
+
+func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
 	for _, source := range cfg.Volumes {
 		if isRuntimeSocketMount(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
-		if isUnsafeHostBind(source) {
+		if !isApprovedMigrationRuntimeStateBind(p, cfg, source, false) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
 	for _, source := range cfg.ReadOnlyVolumes {
-		if isRuntimeSocketMount(source) {
-			if isApprovedRuntimeSocketBind(cfg, source) {
-				continue
-			}
+		if isRuntimeSocketMount(source) && !isApprovedRuntimeSocketBind(cfg, source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
 		// Gordon role manifests are the sole host-file exception. They are
 		// generated with restrictive permissions under migration/config and may
 		// only be mounted read-only by a labeled component container.
-		if isApprovedComponentConfigBind(cfg, source) {
-			continue
-		}
-		if isUnsafeHostBind(source) {
+		if !isRuntimeSocketMount(source) && !isApprovedComponentConfigBind(cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
@@ -220,6 +221,41 @@ func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool
 	// socket source discovered from its own scoped env file. The destination is
 	// fixed by the lifecycle manager; no other role reaches this exception.
 	return isRuntimeSocketMount(source)
+}
+
+func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string, readOnly bool) bool {
+	if cfg.Labels[domain.LabelComponent] != "true" || (cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) && cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleControl)) {
+		return false
+	}
+	if policy.MigrationStateRoot == "" || !filepath.IsAbs(source) {
+		return false
+	}
+	root := filepath.Clean(policy.MigrationStateRoot)
+	clean := filepath.Clean(source)
+	if filepath.Dir(clean) != root || filepath.Base(clean) == "." {
+		return false
+	}
+	id := filepath.Base(clean)
+	if !componentMigrationID(id) || filepath.Base(clean) != id {
+		return false
+	}
+	destination := filepath.Join("/var/lib/gordon/migration", id)
+	if cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) {
+		return !readOnly && cfg.Volumes[destination] == source
+	}
+	return readOnly && cfg.ReadOnlyVolumes[destination] == source
+}
+
+func componentMigrationID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, char := range id {
+		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func isApprovedComponentConfigBind(cfg domain.ContainerConfig, source string) bool {

@@ -33,9 +33,13 @@ func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentCon
 	if err := os.Chmod(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("secure component configuration directory: %w", err)
 	}
+	migrationID, ok := componentConfigMigrationID(directory)
+	if !ok {
+		return nil, fmt.Errorf("component configuration directory must be beneath migration/config/<id>/<generation>")
+	}
 	files := make([]ComponentConfigFile, 0, len(componentRoles))
 	for _, role := range componentRoles {
-		data, err := toml.Marshal(componentRoleConfig(cfg, role))
+		data, err := toml.Marshal(componentRoleConfig(cfg, role, migrationID))
 		if err != nil {
 			return nil, fmt.Errorf("encode %s component configuration: %w", role, err)
 		}
@@ -48,7 +52,7 @@ func WriteComponentConfigManifests(cfg Config, directory string) ([]ComponentCon
 	return files, nil
 }
 
-func componentRoleConfig(cfg Config, role domain.ComponentRole) map[string]any {
+func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID string) map[string]any {
 	// These are role contracts, not filtered copies of Config. In particular,
 	// edge and registry use strict TOML decoders and must never receive legacy
 	// server/auth sections (which may contain control-plane secret references).
@@ -56,20 +60,16 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole) map[string]any {
 	case domain.ComponentRoleControl:
 		return map[string]any{
 			"control": map[string]any{"listen_address": cfg.Control.ListenAddress, "http": cfg.Control.HTTP},
-			// Split control reaches runtime directly on the migration's internal
-			// network. The loopback host publish exists solely for the old
-			// monolith bootstrap proof and must never become a control endpoint.
-			"runtime": map[string]any{"endpoint": "gordon-runtime:9444"},
+			// Control reaches the new runtime only through its private Gordon RPC
+			// socket. This is not, and cannot be confused with, the Podman socket.
+			"runtime": map[string]any{"endpoint": migrationRuntimeSocketEndpoint(migrationID), "token_env": "GORDON_COMPONENT_RUNTIME_TOKEN"},
 			"server":  map[string]any{"data_dir": resolveDataDir(cfg.Server.DataDir)},
 			"auth":    map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_secret": cfg.Auth.TokenSecret},
 		}
 	case domain.ComponentRoleRuntime:
 		return map[string]any{
-			"server": map[string]any{"data_dir": "/var/lib/gordon", "runtime": "unix:///run/gordon/runtime.sock"},
-			// 9444 is the fixed migration bootstrap listener. The only host
-			// publication is the checkpointed 127.0.0.1:19444 binding; no
-			// engine-selected endpoint is emitted into artifacts.
-			"runtime": map[string]any{"listen_address": "0.0.0.0:9444"},
+			"server":  map[string]any{"data_dir": componentDataDirectory, "runtime": "unix:///run/gordon/runtime.sock"},
+			"runtime": map[string]any{"listen_address": migrationRuntimeSocketEndpoint(migrationID)},
 			"volumes": cfg.Volumes,
 		}
 	case domain.ComponentRoleRegistry:
@@ -94,6 +94,20 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole) map[string]any {
 	default:
 		return nil
 	}
+}
+
+func migrationRuntimeSocketEndpoint(migrationID string) string {
+	return "unix://" + filepath.Join(componentDataDirectory, "migration", migrationID, bootstrapRuntimeSocketName)
+}
+
+func componentConfigMigrationID(directory string) (string, bool) {
+	clean := filepath.Clean(directory)
+	// <data>/migration/config/<id>/<generation>
+	if filepath.Base(filepath.Dir(filepath.Dir(clean))) != "config" || filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(clean)))) != "migration" {
+		return "", false
+	}
+	id := filepath.Base(filepath.Dir(clean))
+	return id, componentLabelValue.MatchString(id)
 }
 
 func writePrivateAtomicFile(path string, data []byte) error {

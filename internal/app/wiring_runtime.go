@@ -94,11 +94,12 @@ func runRuntimeWithDependencies(ctx context.Context, configPath string, deps run
 		defer cleanupWorker()
 	}
 	addr := v.GetString("runtime.listen_address")
-	listener, err := deps.listen("tcp", addr)
+	listener, cleanupListener, err := runtimeRoleListener(deps.listen, addr, cfg.Server.DataDir)
 	if err != nil {
 		return log.WrapErr(err, "failed to listen for runtime gRPC")
 	}
 	defer listener.Close()
+	defer cleanupListener()
 
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, runtimegrpc.MethodScopes(), runtimegrpc.MethodRoles())),
@@ -231,6 +232,81 @@ func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServ
 		runtimeRoleEnvironmentProbe(worker),
 		runtimeRoleComponentID(),
 	)
+}
+
+// runtimeRoleListener supports TCP for normal deployments and the tightly
+// constrained Unix migration endpoint for split bootstrap. A Unix listener
+// never follows symlinks, removes only a stale socket, and is removed at stop.
+func runtimeRoleListener(listen func(string, string) (net.Listener, error), endpoint, dataDir string) (net.Listener, func(), error) {
+	if path, ok := runtimeBootstrapSocketPath(endpoint, resolveDataDir(dataDir)); ok {
+		if err := prepareRuntimeSocketPath(path); err != nil {
+			return nil, nil, err
+		}
+		listener, err := listen("unix", path)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			_ = listener.Close()
+			_ = os.Remove(path)
+			return nil, nil, fmt.Errorf("restrict runtime Unix socket: %w", err)
+		}
+		return listener, func() { _ = removeRuntimeSocket(path) }, nil
+	}
+	if strings.HasPrefix(strings.TrimSpace(endpoint), "unix:") {
+		return nil, nil, fmt.Errorf("invalid runtime Unix listener")
+	}
+	listener, err := listen("tcp", endpoint)
+	return listener, func() {}, err
+}
+
+func prepareRuntimeSocketPath(path string) error {
+	parent := filepath.Dir(path)
+	if err := secureRuntimeSocketParent(parent); err != nil {
+		return err
+	}
+	info, err := os.Lstat(path)
+	if err == nil {
+		if info.Mode()&os.ModeSocket == 0 {
+			return fmt.Errorf("runtime Unix socket path is not a socket")
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove stale runtime Unix socket: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("lstat runtime Unix socket: %w", err)
+	}
+	return nil
+}
+
+func secureRuntimeSocketParent(parent string) error {
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		return fmt.Errorf("create runtime Unix socket directory: %w", err)
+	}
+	for current := parent; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("invalid runtime Unix socket directory")
+		}
+		if current == filepath.Dir(current) {
+			break
+		}
+	}
+	if err := os.Chmod(parent, 0o700); err != nil { // #nosec G302 -- private socket directory requires owner execute.
+		return fmt.Errorf("restrict runtime Unix socket directory: %w", err)
+	}
+	return nil
+}
+
+func removeRuntimeSocket(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return err
+	}
+	return os.Remove(path)
 }
 
 func runtimeRoleComponentID() string {
@@ -397,5 +473,6 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 		AllowedImageRegistries: cfg.Images.AllowedRegistries,
 		RequireImageDigest:     cfg.Images.RequireDigest,
 		RuntimeComponentID:     "gordon-runtime",
+		MigrationStateRoot:     filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration"),
 	}
 }

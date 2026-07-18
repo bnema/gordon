@@ -146,10 +146,69 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
 		}
 	}
+	if err := m.mountMigrationRuntimeSocketState(command, config); err != nil {
+		return nil, err
+	}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return nil, err
 	}
 	return config, nil
+}
+
+// mountMigrationRuntimeSocketState gives runtime a writable private state
+// directory and control a read-only view for Unix socket connect. Other roles
+// receive neither. The directory is a generated immediate child of the
+// configured migration root and contains no engine socket.
+func (m *runtimeComponentLifecycleManager) mountMigrationRuntimeSocketState(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
+	if command.TargetComponentRole != domain.ComponentRoleRuntime && command.TargetComponentRole != domain.ComponentRoleControl {
+		return nil
+	}
+	if strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
+		// Legacy unit-only policy fixtures do not model migration state. Production
+		// runtime wiring always sets this root before lifecycle is available.
+		return nil
+	}
+	root := filepath.Clean(m.policy.MigrationStateRoot)
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("migration runtime socket root is not configured")
+	}
+	id := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if !componentMigrationID(id) {
+		return fmt.Errorf("invalid migration runtime socket identity")
+	}
+	source := filepath.Join(root, id)
+	if err := prepareMigrationSocketStateDirectory(root, source); err != nil {
+		return err
+	}
+	destination := filepath.Join("/var/lib/gordon/migration", id)
+	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		config.Volumes[destination] = source
+	} else {
+		config.ReadOnlyVolumes[destination] = source
+	}
+	return nil
+}
+
+func prepareMigrationSocketStateDirectory(root, path string) error {
+	if filepath.Dir(path) != root {
+		return fmt.Errorf("invalid migration runtime socket directory")
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return fmt.Errorf("create migration runtime socket directory: %w", err)
+	}
+	for current := path; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("invalid migration runtime socket directory")
+		}
+		if current == root {
+			break
+		}
+	}
+	if err := os.Chmod(path, 0o700); err != nil { // #nosec G302 -- private socket directory requires owner execute.
+		return fmt.Errorf("restrict migration runtime socket directory: %w", err)
+	}
+	return nil
 }
 
 type edgeActivation struct {
@@ -499,25 +558,10 @@ func runtimeComponentSocketMount(environment []string) (string, []string) {
 	return "", copyOf
 }
 
-func approvedPreparedPortPublishes(role domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
-	for _, port := range ports {
-		if !validLoopbackBootstrapPort(port) || !allowedPreparedPort(role, port) {
-			return false
-		}
-	}
-	return true
-}
-
-func validLoopbackBootstrapPort(port domain.ContainerPortPublish) bool {
-	return port.Protocol == domain.NetworkProtocolTCP && port.HostIP == "127.0.0.1" && port.HostPort >= 1 && port.HostPort <= 65535 && port.ContainerPort >= 1 && port.ContainerPort <= 65535
-}
-
-func allowedPreparedPort(role domain.ComponentRole, port domain.ContainerPortPublish) bool {
-	// The sole prepared host publish is a random high loopback bootstrap port
-	// for runtime. Control, edge and registry stay on the internal network;
-	// accepting their host bindings would turn migration preparation into an
-	// unintended public surface.
-	return role == domain.ComponentRoleRuntime && port.ContainerPort == 9444 && port.HostPort >= 20000 && port.HostPort <= 29999
+func approvedPreparedPortPublishes(_ domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
+	// Runtime bootstrap is Unix-only. Any prepare-time TCP publish would expose
+	// an unnecessary host surface and is rejected before reaching the engine.
+	return len(ports) == 0
 }
 
 func safeComponentNetwork(network string) bool {

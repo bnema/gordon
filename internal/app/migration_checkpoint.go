@@ -6,10 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
+	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,13 +17,10 @@ import (
 const (
 	maxMigrationCheckpointBytes int64 = 64 << 10
 
-	// A rootless container cannot use host loopback to reach a loopback-only
-	// published port. Podman's documented private host gateway is therefore
-	// the only migration bootstrap destination accepted in a component.
-	bootstrapRuntimeHostGateway   = "host.containers.internal"
-	bootstrapRuntimeContainerPort = 9444
-	bootstrapRuntimePortMin       = 20000
-	bootstrapRuntimePortMax       = 29999
+	// Runtime bootstrap is a private Gordon gRPC Unix socket, never an engine
+	// socket or a host-published TCP listener.
+	bootstrapRuntimeSocketName = "runtime-control.sock"
+	componentDataDirectory     = "/var/lib/gordon"
 )
 
 type MigrationPhase string
@@ -57,9 +53,8 @@ type MigrationCheckpoint struct {
 	OldServingPath            string         `json:"old_serving_path,omitempty"`
 	PreparedComponents        []string       `json:"prepared_components,omitempty"`
 	RuntimeChannelTransferred bool           `json:"runtime_channel_transferred,omitempty"`
-	// BootstrapRuntimeEndpoint is the component-visible endpoint for the
-	// loopback-only runtime publish. It must use bootstrapRuntimeHostGateway,
-	// never 127.0.0.1 (which resolves to the calling container).
+	// BootstrapRuntimeEndpoint is the component-visible private Unix endpoint.
+	// It is always beneath the runtime data directory's migration state.
 	BootstrapControlEndpoint   string `json:"bootstrap_control_endpoint,omitempty"`
 	BootstrapRuntimeEndpoint   string `json:"bootstrap_runtime_endpoint,omitempty"`
 	BootstrapEdgeProbeEndpoint string `json:"bootstrap_edge_probe_endpoint,omitempty"`
@@ -275,10 +270,10 @@ func validateCheckpoint(checkpoint MigrationCheckpoint) error {
 			return fmt.Errorf("invalid migration checkpoint")
 		}
 	}
-	for _, binding := range checkpoint.PreparedPortBindings {
-		if !validPreparedMigrationPortBinding(binding) {
-			return fmt.Errorf("invalid migration checkpoint")
-		}
+	// Bootstrap uses no TCP publication. Retain the field only so old
+	// checkpoints fail closed instead of silently acquiring a host gateway.
+	if len(checkpoint.PreparedPortBindings) != 0 {
+		return fmt.Errorf("invalid migration checkpoint")
 	}
 	for _, binding := range checkpoint.PublicPortBindings {
 		if !validMigrationPortBinding(binding) {
@@ -304,25 +299,25 @@ func validMigrationPortBinding(binding MigrationPortBinding) bool {
 // Prepared migration publishes are intentionally narrower than final public
 // listeners: only runtime receives one private bootstrap publish. Edge and
 // registry must use the internal network until cutover.
-func validPreparedMigrationPortBinding(binding MigrationPortBinding) bool {
-	return binding.Role == "runtime" && binding.HostIP == "127.0.0.1" && binding.Protocol == "tcp" && binding.ContainerPort == bootstrapRuntimeContainerPort && binding.HostPort >= bootstrapRuntimePortMin && binding.HostPort <= bootstrapRuntimePortMax
+func validBootstrapRuntimeEndpoint(endpoint string, _ []MigrationPortBinding) bool {
+	path, ok := runtimeBootstrapSocketPath(endpoint, componentDataDirectory)
+	return ok && filepath.Base(path) == bootstrapRuntimeSocketName
 }
 
-func validBootstrapRuntimeEndpoint(endpoint string, bindings []MigrationPortBinding) bool {
-	host, rawPort, err := net.SplitHostPort(strings.TrimSpace(endpoint))
-	if err != nil || host != bootstrapRuntimeHostGateway {
-		return false
+// runtimeBootstrapSocketPath accepts only a clean, absolute unix:// endpoint
+// directly below <data>/migration/<migration-id>. It deliberately rejects TCP,
+// relative paths, traversal, and any alternate socket name.
+func runtimeBootstrapSocketPath(endpoint, dataDir string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil || parsed.Scheme != "unix" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
 	}
-	port, err := strconv.Atoi(rawPort)
-	if err != nil || port < bootstrapRuntimePortMin || port > bootstrapRuntimePortMax {
-		return false
+	path := filepath.Clean(parsed.Path)
+	root := filepath.Join(filepath.Clean(dataDir), "migration")
+	if !filepath.IsAbs(path) || path != parsed.Path || filepath.Base(path) != bootstrapRuntimeSocketName || filepath.Dir(filepath.Dir(path)) != root || !componentLabelValue.MatchString(filepath.Base(filepath.Dir(path))) {
+		return "", false
 	}
-	for _, binding := range bindings {
-		if validPreparedMigrationPortBinding(binding) && binding.HostPort == port {
-			return true
-		}
-	}
-	return false
+	return path, true
 }
 func phaseRank(phase MigrationPhase) int {
 	switch phase {
