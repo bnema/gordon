@@ -50,7 +50,10 @@ type RuntimeDrainRegistry struct {
 	// registration while waiting for its replacement generation.
 	awaitingNewRegistration map[runtimeDrainIdentity]bool
 	completedOrder          []runtimeDrainIdentity
-	closed                  bool
+	// awaitingOverflow fails closed when CancelDrain cannot retain another
+	// identity. A missing identity must never make an old acknowledgement safe.
+	awaitingOverflow bool
+	closed           bool
 }
 
 var _ out.ProxyDrainWaiter = (*RuntimeDrainRegistry)(nil)
@@ -125,12 +128,15 @@ func (r *RuntimeDrainRegistry) PrepareRouteDrain(ctx context.Context, canonicalD
 	if r.closed {
 		return ErrRuntimeDrainUnknown
 	}
-	previous := r.lastGeneration[identity]
+	previous, known := r.lastGeneration[identity]
 	if previous > generation {
 		return ErrRuntimeDrainStale
 	}
 	if previous == generation {
 		return nil
+	}
+	if err := r.canRegisterGenerationLocked(identity, generation, known); err != nil {
+		return err
 	}
 	r.lastGeneration[identity] = generation
 	// A newer registration supersedes any terminal outcome for the old
@@ -140,16 +146,26 @@ func (r *RuntimeDrainRegistry) PrepareRouteDrain(ctx context.Context, canonicalD
 	}
 	delete(r.awaitingNewRegistration, identity)
 	if pending := r.pending[identity]; pending != nil {
-		// A lifecycle waiter can only bind to a newer registration; changing an
-		// already-bound waiter would make a late old acknowledgement ambiguous.
-		if pending.generation != 0 && pending.generation != generation {
-			return ErrRuntimeDrainStale
-		}
 		pending.generation = generation
 		if outcome, exists := r.completed[identity]; exists && outcome.generation == generation {
 			pending.completed, pending.result = true, outcome.result
 			close(pending.done)
 		}
+	}
+	return nil
+}
+
+func (r *RuntimeDrainRegistry) canRegisterGenerationLocked(identity runtimeDrainIdentity, generation domain.RouteTargetGeneration, known bool) error {
+	// A generation tombstone is replay protection, not a cache: evicting one
+	// would let a delayed acknowledgement become a new legacy acknowledgement.
+	// Refuse a new identity once full rather than making that ambiguous.
+	if !known && len(r.lastGeneration) >= runtimeDrainLedgerLimit {
+		return ErrRuntimeDrainUnknown
+	}
+	if pending := r.pending[identity]; pending != nil && pending.generation != 0 && pending.generation != generation {
+		// Do not advance the registration tombstone until the active waiter can
+		// bind to it; otherwise its exact acknowledgement would be rejected.
+		return ErrRuntimeDrainStale
 	}
 	return nil
 }
@@ -162,7 +178,14 @@ func (r *RuntimeDrainRegistry) CancelDrain(containerID string) {
 	defer r.mu.Unlock()
 	identity, exists := r.pendingByContainer[containerID]
 	if exists {
-		r.awaitingNewRegistration[identity] = true
+		if _, awaiting := r.awaitingNewRegistration[identity]; !awaiting && len(r.awaitingNewRegistration) >= runtimeDrainLedgerLimit {
+			// The API cannot return an admission error. Keep the overflow as a
+			// global fail-closed tombstone so a later reprepare cannot accept an
+			// unregistered, delayed acknowledgement.
+			r.awaitingOverflow = true
+		} else {
+			r.awaitingNewRegistration[identity] = true
+		}
 	}
 	r.releaseContainerLocked(containerID)
 }
@@ -237,10 +260,19 @@ func (r *RuntimeDrainRegistry) AcknowledgeRouteDrain(ctx context.Context, acknow
 }
 
 func (r *RuntimeDrainRegistry) matchAcknowledgementLocked(identity runtimeDrainIdentity, generation domain.RouteTargetGeneration) (domain.RouteTargetGeneration, error) {
+	// Cancellation invalidates every old acknowledgement, including one equal
+	// to the previously registered generation. Only a strictly newer,
+	// authenticated registration clears this state.
+	if r.awaitingNewRegistration[identity] {
+		return 0, ErrRuntimeDrainStale
+	}
 	registered := r.lastGeneration[identity]
 	if registered == 0 {
 		// Legacy in-process deployments have no control registration transport.
-		if pending := r.pending[identity]; pending == nil || r.awaitingNewRegistration[identity] {
+		if pending := r.pending[identity]; pending == nil || r.awaitingOverflow {
+			return 0, ErrRuntimeDrainUnknown
+		}
+		if len(r.lastGeneration) >= runtimeDrainLedgerLimit {
 			return 0, ErrRuntimeDrainUnknown
 		}
 		r.lastGeneration[identity], registered = generation, generation
@@ -262,40 +294,58 @@ func (r *RuntimeDrainRegistry) completeAcknowledgementLocked(identity runtimeDra
 		return ErrRuntimeDrainConflicting
 	}
 	pending := r.pending[identity]
-	if pending != nil && pending.generation != 0 && pending.generation != generation {
+	if pending == nil {
+		// A terminal outcome that has aged out is deliberately fail-closed:
+		// accepting a conflicting retry would be less safe than a timeout.
 		return ErrRuntimeDrainUnknown
 	}
-	if pending != nil && pending.generation == 0 {
+	if pending.generation != 0 && pending.generation != generation {
+		return ErrRuntimeDrainUnknown
+	}
+	if len(r.completed) >= runtimeDrainLedgerLimit {
+		r.trimCompletedToLocked(runtimeDrainLedgerLimit - 1)
+		if len(r.completed) >= runtimeDrainLedgerLimit {
+			return ErrRuntimeDrainUnknown
+		}
+	}
+	if pending.generation == 0 {
 		pending.generation = generation
 	}
 	r.completed[identity] = outcome
 	r.completedOrder = append(r.completedOrder, identity)
 	r.trimCompletedLocked()
-	if pending != nil {
-		pending.result, pending.completed = outcome.result, true
-		close(pending.done)
-	}
+	pending.result, pending.completed = outcome.result, true
+	close(pending.done)
 	return nil
 }
 
 func (r *RuntimeDrainRegistry) trimCompletedLocked() {
-	for len(r.completedOrder) > runtimeDrainLedgerLimit {
-		identity := r.completedOrder[0]
-		r.completedOrder = r.completedOrder[1:]
-		// Do not evict a terminal result that an active waiter still needs.
-		if r.pending[identity] == nil {
-			delete(r.completed, identity)
+	r.trimCompletedToLocked(runtimeDrainLedgerLimit)
+}
+
+func (r *RuntimeDrainRegistry) trimCompletedToLocked(limit int) {
+	// Keep FIFO order deterministic while removing stale queue entries.
+	order := r.completedOrder[:0]
+	for _, identity := range r.completedOrder {
+		if _, exists := r.completed[identity]; exists {
+			order = append(order, identity)
 		}
 	}
-	// Generation tombstones are replay protection; retain the newest bounded
-	// history, while active identities are never removed.
-	if len(r.lastGeneration) > runtimeDrainLedgerLimit*2 {
-		for identity := range r.lastGeneration {
-			if r.pending[identity] == nil {
-				delete(r.lastGeneration, identity)
-				delete(r.awaitingNewRegistration, identity)
-				break
+	r.completedOrder = order
+	for len(r.completed) > limit {
+		evicted := false
+		for index, identity := range r.completedOrder {
+			// An active waiter may still need its exact terminal outcome.
+			if r.pending[identity] != nil {
+				continue
 			}
+			delete(r.completed, identity)
+			r.completedOrder = append(r.completedOrder[:index], r.completedOrder[index+1:]...)
+			evicted = true
+			break
+		}
+		if !evicted {
+			return
 		}
 	}
 }

@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -482,4 +483,68 @@ func TestService_RegisterUnregisterRefreshAndInFlight(t *testing.T) {
 	assert.Equal(t, int64(1), svc.RegistryInFlight())
 	svc.ReleaseRegistryRequest()
 	assert.True(t, svc.DrainRegistryInFlight(time.Second))
+}
+
+type blockingEdgeDrainReporter struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (r *blockingEdgeDrainReporter) ReportDrainState(ctx context.Context, _ domain.RouteDrainState) error {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestService_EdgeDrainLedgersBoundOverLimit(t *testing.T) {
+	t.Run("pending admission cap", func(t *testing.T) {
+		release := make(chan struct{})
+		reporter := &blockingEdgeDrainReporter{started: make(chan struct{}, maxPendingEdgeDrains), release: release}
+		svc := NewSnapshotService(nil, Config{}, reporter)
+		defer svc.Close()
+		for index := range maxPendingEdgeDrains + 1 {
+			entry := readyEntry(t, fmt.Sprintf("app-%d.example.com", index), fmt.Sprintf("old-%d.internal", index), 1)
+			svc.startEdgeDrain(entry.CanonicalDomain, 2, entry.TargetKey)
+		}
+		waitForProxy(t, func() bool { return len(reporter.started) == maxPendingEdgeDrains })
+		svc.drainMu.Lock()
+		assert.Len(t, svc.pendingDrains, maxPendingEdgeDrains)
+		svc.drainMu.Unlock()
+		close(release)
+		waitForProxy(t, func() bool {
+			svc.drainMu.Lock()
+			defer svc.drainMu.Unlock()
+			return len(svc.pendingDrains) == 0
+		})
+	})
+
+	t.Run("completed FIFO cap", func(t *testing.T) {
+		reporter := &recordingEdgeDrainReporter{}
+		svc := NewSnapshotService(nil, Config{}, reporter)
+		defer svc.Close()
+		var first edgeDrainIdentity
+		for index := range maxPendingEdgeDrains + 1 {
+			entry := readyEntry(t, fmt.Sprintf("done-%d.example.com", index), fmt.Sprintf("done-%d.internal", index), 1)
+			identity := edgeDrainIdentity{domain: entry.CanonicalDomain, generation: 2, key: entry.TargetKey}
+			if index == 0 {
+				first = identity
+			}
+			svc.startEdgeDrain(identity.domain, identity.generation, identity.key)
+			waitForProxy(t, func() bool { return len(reporter.snapshot()) == index+1 })
+		}
+		svc.drainMu.Lock()
+		defer svc.drainMu.Unlock()
+		assert.Empty(t, svc.pendingDrains, "accepted reports are removed from active pending state")
+		assert.Len(t, svc.completedDrains, maxPendingEdgeDrains)
+		assert.Len(t, svc.completedDrainOrder, maxPendingEdgeDrains)
+		_, retained := svc.completedDrains[first]
+		assert.False(t, retained, "oldest terminal identity is pruned deterministically")
+	})
 }

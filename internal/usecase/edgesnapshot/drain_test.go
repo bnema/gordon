@@ -3,6 +3,7 @@ package edgesnapshot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -109,9 +110,43 @@ func TestDrainCoordinatorTimeoutRelaysExplicitControlReason(t *testing.T) {
 	assert.Equal(t, domain.RouteDrainTimeoutReasonControl, relay.acks[0].TimeoutReason)
 }
 
+func TestDrainCoordinatorBoundsPendingAndCompletedLedgersOverLimit(t *testing.T) {
+	hub := NewSnapshotHub()
+	coordinator, err := NewDrainCoordinator(hub, DrainCoordinatorOptions{})
+	require.NoError(t, err)
+	defer coordinator.Close()
+
+	oldEntries := make([]domain.RouteTargetEntry, 0, maxDrainLedgerEntries+1)
+	for index := range maxDrainLedgerEntries + 1 {
+		oldEntries = append(oldEntries, managedDrainEntryForDomain(t, 1, fmt.Sprintf("app-%d.example.com", index), fmt.Sprintf("private-%d", index)))
+	}
+	coordinator.observeTransition(&domain.RouteTargetSnapshot{Generation: 1, Entries: oldEntries}, domain.RouteTargetSnapshot{Generation: 2})
+	assert.Len(t, coordinator.pending, maxDrainLedgerEntries, "admission refuses the over-limit active drain")
+	assert.Len(t, coordinator.seen, maxDrainLedgerEntries)
+
+	for _, entry := range oldEntries[:maxDrainLedgerEntries] {
+		require.NoError(t, coordinator.ReportAuthenticatedDrainState(context.Background(), "gordon-edge", domain.RouteDrainState{CanonicalDomain: entry.CanonicalDomain, TransitionGeneration: 2, OldTargetKey: entry.TargetKey}))
+	}
+	assert.Empty(t, coordinator.pending)
+	assert.Len(t, coordinator.completed, maxDrainLedgerEntries)
+
+	extra := oldEntries[maxDrainLedgerEntries]
+	coordinator.pending[extra.TargetKey] = &pendingDrain{state: domain.RouteDrainState{CanonicalDomain: extra.CanonicalDomain, TransitionGeneration: 2, OldTargetKey: extra.TargetKey}, status: domain.RouteDrainStatusPending}
+	require.NoError(t, coordinator.ReportAuthenticatedDrainState(context.Background(), "gordon-edge", domain.RouteDrainState{CanonicalDomain: extra.CanonicalDomain, TransitionGeneration: 2, OldTargetKey: extra.TargetKey}))
+	assert.Len(t, coordinator.completed, maxDrainLedgerEntries, "FIFO terminal ledger prunes after the limit")
+	assert.LessOrEqual(t, len(coordinator.seen), maxDrainLedgerEntries)
+	_, retained := coordinator.completed[oldEntries[0].TargetKey]
+	assert.False(t, retained, "oldest terminal entry is pruned deterministically")
+}
+
 func managedDrainEntry(t *testing.T, generation domain.RouteTargetGeneration, backing string) domain.RouteTargetEntry {
 	t.Helper()
-	entry, err := domain.NewManagedReadyRouteTargetEntry("app.example.com", "gordon-target-app-example-com", 8080, "http", domain.RouteTargetProtocolHTTP1, generation, backing)
+	return managedDrainEntryForDomain(t, generation, "app.example.com", backing)
+}
+
+func managedDrainEntryForDomain(t *testing.T, generation domain.RouteTargetGeneration, domainName, backing string) domain.RouteTargetEntry {
+	t.Helper()
+	entry, err := domain.NewManagedReadyRouteTargetEntry(domainName, "gordon-target-app-example-com", 8080, "http", domain.RouteTargetProtocolHTTP1, generation, backing)
 	require.NoError(t, err)
 	return entry
 }
