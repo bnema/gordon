@@ -3,9 +3,13 @@ package compatoldnew
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -19,6 +23,7 @@ import (
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
 	edgesnapshotclient "github.com/bnema/gordon/internal/adapters/out/grpc/edgesnapshot"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
+	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/componentauth"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
@@ -33,7 +38,7 @@ func RunTrafficGraphStreamMatrix(ctx context.Context) (TrafficProtocolMatrix, er
 	if err != nil {
 		return TrafficProtocolMatrix{}, err
 	}
-	defer fixture.close()
+	defer func() { _ = fixture.close() }()
 
 	if err := fixture.publish(1, fixture.initial); err != nil {
 		return TrafficProtocolMatrix{}, err
@@ -56,6 +61,12 @@ func RunTrafficGraphStreamMatrix(ctx context.Context) (TrafficProtocolMatrix, er
 	}
 	if err := verifyTrafficListenerRelease(fixture.initialAddresses); err != nil {
 		return TrafficProtocolMatrix{}, fmt.Errorf("updated stream graph retained old listener: %w", err)
+	}
+	if err := fixture.close(); err != nil {
+		return TrafficProtocolMatrix{}, fmt.Errorf("cancel production traffic apply loop: %w", err)
+	}
+	if err := verifyTrafficListenerRelease(fixture.updatedAddresses); err != nil {
+		return TrafficProtocolMatrix{}, fmt.Errorf("production traffic apply loop retained listener after cancellation: %w", err)
 	}
 
 	return TrafficProtocolMatrix{Checks: []TrafficProtocolArtifact{
@@ -82,10 +93,10 @@ type trafficGraphStreamFixture struct {
 	initial          domain.TrafficGraph
 	updated          domain.TrafficGraph
 	hub              *edgesnapshot.TrafficGraphHub
-	generation       domain.TrafficGraphGeneration
-	applied          chan domain.TrafficGraphGeneration
-	applyErr         error
-	mu               sync.Mutex
+	loopCancel       context.CancelFunc
+	loopDone         chan error
+	closeOnce        sync.Once
+	closeErr         error
 }
 
 //nolint:gocyclo // Each independent transport setup step needs immediate, bounded cleanup.
@@ -96,7 +107,7 @@ func newTrafficGraphStreamFixture(ctx context.Context) (*trafficGraphStreamFixtu
 	}
 	cleanup := func(err error, f *trafficGraphStreamFixture) (*trafficGraphStreamFixture, error) {
 		if f != nil {
-			f.close()
+			_ = f.close()
 		} else {
 			_ = osRemoveAll(root)
 		}
@@ -131,19 +142,21 @@ func newTrafficGraphStreamFixture(ctx context.Context) (*trafficGraphStreamFixtu
 		backends.close()
 		return cleanup(err, nil)
 	}
-	cert, err := generatedTrafficTestCertificate()
+	certFile, keyFile, err := writeTrafficGraphStreamCertificate(root)
 	if err != nil {
 		backends.close()
 		return cleanup(err, nil)
 	}
-	f := &trafficGraphStreamFixture{root: root, backends: backends, initialAddresses: initialAddresses, updatedAddresses: updatedAddresses, hub: edgesnapshot.NewTrafficGraphHub(), manager: trafficadapter.NewManager(), applied: make(chan domain.TrafficGraphGeneration, 2)}
+	f := &trafficGraphStreamFixture{root: root, backends: backends, initialAddresses: initialAddresses, updatedAddresses: updatedAddresses, hub: edgesnapshot.NewTrafficGraphHub(), manager: trafficadapter.NewManager()}
 	f.initial, f.updated = trafficProtocolGraph(initialAddresses, backends), trafficProtocolGraph(updatedAddresses, backends)
 	streamOptions := domain.TrafficOptions{
 		TCP: domain.TCPOptions{DialTimeout: time.Second, IdleTimeout: time.Second, DrainTimeout: 100 * time.Millisecond},
 		UDP: domain.UDPOptions{IdleTimeout: time.Second, DrainTimeout: 100 * time.Millisecond},
 	}
 	f.initial.Options, f.updated.Options = streamOptions, streamOptions
-	configureTrafficProtocolHandlers(f.manager, cert)
+	f.loopDone = make(chan error, 1)
+	loopCtx, loopCancel := context.WithCancel(ctx)
+	f.loopCancel = loopCancel
 
 	f.listener, err = net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -161,23 +174,12 @@ func newTrafficGraphStreamFixture(ctx context.Context) (*trafficGraphStreamFixtu
 		return cleanup(fmt.Errorf("traffic stream client connection: %w", err), f)
 	}
 	f.client = edgesnapshotclient.NewTrafficGraphClient(f.connection, edgesnapshotclient.WithReconnectBackoff(time.Millisecond, 5*time.Millisecond))
-	f.client.SetTrafficGraphAcceptanceObserver(func(snapshot domain.TrafficGraphSnapshot) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		if f.applyErr == nil {
-			f.applyErr = f.manager.Apply(context.Background(), &snapshot.Graph)
-		}
-		if f.applyErr == nil {
-			f.generation = snapshot.Generation
-			select {
-			case f.applied <- snapshot.Generation:
-			default:
-			}
-		}
-	})
-	if err := f.client.Start(ctx); err != nil {
+	if err := f.client.Start(loopCtx); err != nil {
 		return cleanup(fmt.Errorf("start authenticated traffic stream: %w", err), f)
 	}
+	cfg := app.EdgeConfig{Edge: app.EdgeServingConfig{TLS: app.EdgeTLSConfig{Mode: "files", CertFile: certFile, KeyFile: keyFile}}}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte("edge traffic")) })
+	go func() { f.loopDone <- app.RunEdgeTrafficApplyLoop(loopCtx, cfg, handler, f.client, f.manager) }()
 	return f, nil
 }
 
@@ -189,29 +191,55 @@ func (f *trafficGraphStreamFixture) publish(generation domain.TrafficGraphGenera
 }
 
 func (f *trafficGraphStreamFixture) waitGeneration(ctx context.Context, want domain.TrafficGraphGeneration) error {
+	graph := f.initial
+	if want >= 2 {
+		graph = f.updated
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 	for {
-		f.mu.Lock()
-		got, applyErr := f.generation, f.applyErr
-		f.mu.Unlock()
-		if applyErr != nil {
-			return fmt.Errorf("apply streamed graph: %w", applyErr)
-		}
-		if got >= want {
+		health := f.client.TrafficGraphHealth()
+		if health.Healthy && health.LastAcceptedGeneration >= want && trafficGraphActive(f.manager, graph) {
 			return nil
 		}
 		select {
+		case err := <-f.loopDone:
+			return fmt.Errorf("production traffic apply loop stopped: %w", err)
+		default:
+		}
+		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for streamed generation %d (got %d, health %+v): %w", want, got, f.client.TrafficGraphHealth(), ctx.Err())
-		case <-f.applied:
+			return fmt.Errorf("wait for streamed generation %d (health %+v): %w", want, health, ctx.Err())
+		case <-ticker.C:
 		}
 	}
 }
 
+func trafficGraphActive(manager *trafficadapter.Manager, graph domain.TrafficGraph) bool {
+	status := manager.Status()
+	if status.LastReloadError != "" || len(status.EntryPoints) != len(graph.EntryPoints) {
+		return false
+	}
+	for _, expected := range graph.EntryPoints {
+		found := false
+		for _, actual := range status.EntryPoints {
+			if actual.Name == expected.Name && actual.Address == expected.Address && actual.Protocol == expected.Protocol && actual.Active {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
 func (f *trafficGraphStreamFixture) probe(addresses trafficProtocolAddresses) error {
 	for _, probe := range []func() error{
-		func() error { return probeTrafficHTTP(addresses.smart, false, "smart http") },
-		func() error { return probeTrafficHTTP(addresses.smart, true, "smart https") },
-		func() error { return probeTrafficHTTP(addresses.mux, true, "mux https") },
+		func() error { return probeTrafficHTTP(addresses.smart, false, "edge traffic") },
+		func() error { return probeTrafficHTTP(addresses.smart, true, "edge traffic") },
+		func() error { return probeTrafficHTTP(addresses.mux, true, "edge traffic") },
 		func() error { return probeTLSPassthrough(addresses.mux) },
 		func() error { return probeTrafficTCPEcho(addresses.raw) },
 		func() error { return probeTrafficUDPEcho(addresses.udp) },
@@ -223,37 +251,75 @@ func (f *trafficGraphStreamFixture) probe(addresses trafficProtocolAddresses) er
 	return nil
 }
 
-func (f *trafficGraphStreamFixture) close() {
+func (f *trafficGraphStreamFixture) close() error {
 	if f == nil {
-		return
+		return nil
 	}
-	if f.client != nil {
-		f.client.Stop()
-	}
-	if f.connection != nil {
-		_ = f.connection.Close()
-	}
-	if f.server != nil {
-		f.server.Stop()
-	}
-	if f.listener != nil {
-		_ = f.listener.Close()
-	}
-	if f.manager != nil {
-		shutdownTrafficManager(f.manager)
-	}
-	if f.backends != nil {
-		f.backends.close()
-	}
-	if f.root != "" {
-		_ = osRemoveAll(f.root)
-	}
+	f.closeOnce.Do(func() {
+		if f.loopCancel != nil {
+			f.loopCancel()
+		}
+		if f.loopDone != nil {
+			select {
+			case err := <-f.loopDone:
+				if err != nil {
+					f.closeErr = fmt.Errorf("production traffic apply loop: %w", err)
+				}
+			case <-time.After(5 * time.Second):
+				f.closeErr = fmt.Errorf("production traffic apply loop did not stop")
+			}
+		}
+		if f.client != nil {
+			f.client.Stop()
+		}
+		if f.connection != nil {
+			_ = f.connection.Close()
+		}
+		if f.server != nil {
+			f.server.Stop()
+		}
+		if f.listener != nil {
+			_ = f.listener.Close()
+		}
+		if f.backends != nil {
+			f.backends.close()
+		}
+		if f.root != "" {
+			_ = osRemoveAll(f.root)
+		}
+	})
+	return f.closeErr
 }
 
 // Kept as tiny variables so the stream fixture's cleanup behavior is easy to
 // exercise without retaining paths or token material in compatibility reports.
 var osMkdirTemp = func(pattern string) (string, error) { return os.MkdirTemp("", pattern) }
 var osRemoveAll = os.RemoveAll
+
+// writeTrafficGraphStreamCertificate gives the production edge loop ordinary
+// cert/key paths; it must load TLS through EdgeConfig rather than inherit an
+// in-memory test TLS configuration.
+func writeTrafficGraphStreamCertificate(root string) (string, string, error) {
+	certificate, err := generatedTrafficTestCertificate()
+	if err != nil {
+		return "", "", err
+	}
+	if len(certificate.Certificate) == 0 {
+		return "", "", fmt.Errorf("generated traffic certificate has no leaf")
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+	if err != nil {
+		return "", "", fmt.Errorf("marshal traffic certificate key: %w", err)
+	}
+	certFile, keyFile := filepath.Join(root, "edge-cert.pem"), filepath.Join(root, "edge-key.pem")
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]}), 0600); err != nil {
+		return "", "", fmt.Errorf("write traffic certificate: %w", err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0600); err != nil {
+		return "", "", fmt.Errorf("write traffic certificate key: %w", err)
+	}
+	return certFile, keyFile, nil
+}
 
 func startTrafficProtocolBackendsOn(host string) (*trafficProtocolBackends, error) {
 	result := &trafficProtocolBackends{}

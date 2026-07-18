@@ -283,7 +283,7 @@ func runEdgeTraffic(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependenci
 	if manager == nil {
 		return fmt.Errorf("edge traffic manager is required")
 	}
-	return runEdgeTrafficApplyLoop(ctx, cfg, deps, log, handler, graphs, manager)
+	return RunEdgeTrafficApplyLoop(ctx, cfg, handler, graphs, manager)
 }
 
 // edgeTrafficGraphProvider is deliberately limited to the sanitized graph
@@ -305,9 +305,16 @@ type edgeTrafficManager interface {
 	SetSmartTCPTLSServer(string, http.Handler, *tls.Config)
 }
 
-// runEdgeTrafficApplyLoop is the production split-edge traffic owner. It
-// waits for the authenticated initial graph, installs smart/TLS HTTP fallbacks,
-// applies subsequent accepted graphs, and drains listeners on shutdown.
+// RunEdgeTrafficApplyLoop is the production split-edge traffic owner. It is
+// intentionally callable from internal integration fixtures so they exercise
+// the identical authenticated-stream-to-listener-manager path as runEdgeImpl.
+func RunEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, handler http.Handler, graphs edgeTrafficGraphProvider, manager edgeTrafficManager) error {
+	return runEdgeTrafficApplyLoop(ctx, cfg, productionEdgeRoleDependencies(), zerowrap.FromCtx(ctx), handler, graphs, manager)
+}
+
+// runEdgeTrafficApplyLoop waits for the authenticated initial graph, installs
+// smart/TLS HTTP fallbacks, applies subsequent accepted graphs, and drains
+// listeners on shutdown.
 func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, log zerowrap.Logger, handler http.Handler, graphs edgeTrafficGraphProvider, manager edgeTrafficManager) error {
 	if graphs == nil || manager == nil {
 		return fmt.Errorf("edge traffic graph provider and manager are required")

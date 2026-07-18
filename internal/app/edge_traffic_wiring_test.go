@@ -90,13 +90,14 @@ func TestEdgeManagerOwnsTCPAndUDPEntrypoints(t *testing.T) {
 	require.NoError(t, manager.Shutdown(shutdownCtx))
 }
 
-// This calls runEdgeTrafficApplyLoop, the exact production helper used by
+// This calls RunEdgeTrafficApplyLoop, the exact production helper used by
 // runEdgeTraffic. The test only publishes to the authenticated gRPC hub: it
 // never applies a graph to the manager itself.
 func TestEdgeTrafficApplyLoopConsumesAuthenticatedGraphStream(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	log := zerowrap.New(zerowrap.Config{Level: "disabled", Output: io.Discard})
+	ctx = zerowrap.WithCtx(ctx, log)
 	backendHost := edgeLoopNonLoopbackHost(t)
 	backends := newEdgeLoopBackends(t, backendHost)
 	defer backends.close()
@@ -117,7 +118,7 @@ func TestEdgeTrafficApplyLoopConsumesAuthenticatedGraphStream(t *testing.T) {
 	manager := trafficadapter.NewManager()
 	loopDone := make(chan error, 1)
 	go func() {
-		loopDone <- runEdgeTrafficApplyLoop(ctx, cfg, productionEdgeRoleDependencies(), log,
+		loopDone <- RunEdgeTrafficApplyLoop(ctx, cfg,
 			http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("edge traffic")) }), client, manager)
 	}()
 
