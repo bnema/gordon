@@ -80,6 +80,15 @@ type ControlConfig struct {
 	// target contract; neither accepts host loopback endpoints.
 	RegistryAlias string `mapstructure:"registry_alias"`
 	RegistryPort  int    `mapstructure:"registry_port"`
+	// HTTP is the management API listener. It is deliberately separate from
+	// ListenAddress, which is reserved for component gRPC traffic.
+	HTTP struct {
+		ListenAddress string `mapstructure:"listen_address"`
+		TLSCertFile   string `mapstructure:"tls_cert_file"`
+		TLSKeyFile    string `mapstructure:"tls_key_file"`
+		// InsecureTLS is an explicit private/test-only plaintext opt-in.
+		InsecureTLS bool `mapstructure:"insecure_tls"`
+	} `mapstructure:"http"`
 }
 
 type Config struct {
@@ -270,7 +279,7 @@ type services struct {
 	backupSvc             *backup.Service
 	volumeBackupSvc       *backup.VolumeService
 	registrySvc           *registrySvc.Service
-	healthSvc             *health.Service
+	healthSvc             in.HealthService
 	logSvc                *logs.Service
 	imageSvc              *images.Service
 	volumeSvc             *volumesSvc.Service

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -81,11 +82,26 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	ctx = zerowrap.WithCtx(ctx, log)
 	warnDeprecatedConfigKeys(v, log)
 
+	// Control owns configuration, user authentication/token management, and
+	// the remote-compatible admin API. This graph deliberately contains no
+	// local runtime, registry storage, or public proxy listener.
+	controlServices, err := newControlRoleServices(ctx, v, cfg, log)
+	if err != nil {
+		return log.WrapErr(err, "initialize control services")
+	}
+	if err := setupConfigHotReload(ctx, controlServices.configSvc, controlServices.reloadCoordinator); err != nil {
+		return log.WrapErr(err, "watch control configuration")
+	}
+
 	dispatcher, err := newControlEventDispatcher(ctx, v, cfg)
 	if err != nil {
 		return log.WrapErr(err, "create control component event dispatcher")
 	}
 
+	return runControlServers(ctx, v, cfg, deps, log, controlServices, dispatcher)
+}
+
+func runControlServers(ctx context.Context, v *viper.Viper, cfg Config, deps controlRoleDependencies, log zerowrap.Logger, controlServices *services, dispatcher *controlplaneusecase.EventDispatcher) error {
 	validator, err := deps.newComponentTokenValidator(cfg, log)
 	if err != nil {
 		return log.WrapErr(err, "failed to initialize control component token validator")
@@ -128,17 +144,51 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if err != nil {
 		return err
 	}
-	errCh := make(chan error, 1)
-	go func() { errCh <- server.Serve(listener) }()
-	log.Info().Str("addr", listener.Addr().String()).Msg("gordon-control snapshot gRPC server started")
+	return serveControlHTTPAndGRPC(ctx, cfg, deps.listen, listener, server, controlServices, log)
+}
+
+func serveControlHTTPAndGRPC(ctx context.Context, cfg Config, listen func(string, string) (net.Listener, error), grpcListener net.Listener, grpcServer *grpc.Server, controlServices *services, log zerowrap.Logger) error {
+	httpListener, err := controlHTTPListener(cfg, listen)
+	if err != nil {
+		return log.WrapErr(err, "failed to listen for control HTTP")
+	}
+	var httpServer *http.Server
+	if httpListener != nil {
+		defer httpListener.Close()
+		httpServer = newControlHTTPServer(controlHTTPHandler(controlServices, cfg, log))
+	}
+
+	errCh := make(chan error, 2)
+	go func() { errCh <- grpcServer.Serve(grpcListener) }()
+	if httpServer != nil {
+		go func() {
+			if serveErr := httpServer.Serve(httpListener); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				errCh <- serveErr
+			}
+		}()
+		log.Info().Str("addr", httpListener.Addr().String()).Msg("gordon-control management HTTP server started")
+	}
+	log.Info().Str("addr", grpcListener.Addr().String()).Msg("gordon-control snapshot gRPC server started")
 
 	select {
 	case <-ctx.Done():
-		gracefulStop(server)
+		shutdownControlHTTP(httpServer)
+		gracefulStop(grpcServer)
 		return nil
 	case serveErr := <-errCh:
-		return log.WrapErr(serveErr, "control snapshot gRPC server stopped")
+		shutdownControlHTTP(httpServer)
+		gracefulStop(grpcServer)
+		return log.WrapErr(serveErr, "control server stopped")
 	}
+}
+
+func shutdownControlHTTP(server *http.Server) {
+	if server == nil {
+		return
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = server.Shutdown(shutdownCtx)
 }
 
 func initializeControlDrainRelay(ctx context.Context, cfg Config, deps controlRoleDependencies) (edgesnapshot.RuntimeDrainAckReceiver, error) {

@@ -131,6 +131,13 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("control.edge_alias", "gordon-edge")
 	v.SetDefault("control.registry_alias", "gordon-registry")
 	v.SetDefault("control.registry_port", 5000)
+	// The management HTTP listener is opt-in so upgrading an existing split
+	// control deployment cannot unexpectedly expose an API. Production control
+	// deployments must configure [control.http] explicitly.
+	v.SetDefault("control.http.listen_address", "")
+	v.SetDefault("control.http.tls_cert_file", "")
+	v.SetDefault("control.http.tls_key_file", "")
+	v.SetDefault("control.http.insecure_tls", false)
 	v.SetDefault("runtime.listen_address", "127.0.0.1:9091")
 	v.SetDefault("runtime.endpoint", "")
 	v.SetDefault("runtime.token", "")
