@@ -33,6 +33,14 @@ func TestCreateRuntimeCommandClientUsesPrivateUnixSocketWithRequiredToken(t *tes
 	require.Error(t, err, "Unix transport requires a component token")
 }
 
+func TestCreateRuntimeCommandClientRejectsUnixEndpointOutsideMigrationState(t *testing.T) {
+	_, err := createRuntimeCommandClient(context.Background(), RuntimeControlConfig{
+		Endpoint: "unix:///tmp/runtime-control.sock",
+		Token:    "component-token",
+	})
+	require.Error(t, err, "only the generated migration Unix socket is allowed")
+}
+
 func TestRuntimeControlConfigDefaultsAndMapsInsecureTransportOptIn(t *testing.T) {
 	v := viper.New()
 	require.NoError(t, loadConfig(v, ""))

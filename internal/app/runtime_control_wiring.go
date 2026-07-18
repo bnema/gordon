@@ -30,6 +30,9 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 		return nil, nil
 	}
 	unixPath, unixEndpoint := runtimeUnixEndpoint(endpoint)
+	if strings.HasPrefix(strings.ToLower(endpoint), "unix:") && !unixEndpoint {
+		return nil, fmt.Errorf("runtime Unix endpoint must be the generated migration socket")
+	}
 	transportCredentials := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})
 	newBearerCredentials := grpcauth.NewBearerTokenCredentials
 	target := endpoint

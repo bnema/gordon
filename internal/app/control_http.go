@@ -83,8 +83,14 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
-	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime, cfg); err != nil {
-		return nil, err
+	// A control-only deployment may start before its runtime role exists. Keep
+	// migration operations unavailable in that state; do not prevent the
+	// control snapshot service from starting. Once an authenticated runtime
+	// endpoint is configured, compose the migration lifecycle channel.
+	if svc.runtimeCommandClient != nil {
+		if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime, cfg); err != nil {
+			return nil, err
+		}
 	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:      svc.configSvc,
