@@ -33,7 +33,7 @@ import (
 // newControlRoleServices constructs only control-owned services. In particular
 // it does not call createOutputAdapters or createStorage: container sockets,
 // registry storage, and public traffic listeners belong to other roles.
-func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (*services, error) {
+func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string) (*services, error) {
 	configSvc := configusecase.NewService(v, nil)
 	if err := configSvc.Load(ctx); err != nil {
 		return nil, fmt.Errorf("load control configuration: %w", err)
@@ -68,7 +68,8 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	// Control receives only the sanitized runtime RPC probe. It never opens a
 	// Docker-compatible socket or constructs a local runtime adapter.
 	runtimeProbe, _ := svc.runtimeCommandClient.(out.RuntimeEnvironmentProbe)
-	svc.migrationSvc, err = NewMigrationService(newControlMigrationPreflight(cfg, runtimeProbe), checkpointStore)
+	runtimeInventory, _ := svc.runtimeCommandClient.(out.RuntimeStateSubscriber)
+	svc.migrationSvc, err = NewMigrationService(newControlMigrationPreflight(configPath, cfg, runtimeProbe, runtimeInventory), checkpointStore)
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}

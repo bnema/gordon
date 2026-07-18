@@ -90,7 +90,7 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	// Control owns configuration, user authentication/token management, and
 	// the remote-compatible admin API. This graph deliberately contains no
 	// local runtime, registry storage, or public proxy listener.
-	controlServices, err := newControlRoleServices(ctx, v, cfg, log)
+	controlServices, err := newControlRoleServices(ctx, v, cfg, log, configPath)
 	if err != nil {
 		return log.WrapErr(err, "initialize control services")
 	}
