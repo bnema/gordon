@@ -56,7 +56,10 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole) map[string]any {
 	case domain.ComponentRoleControl:
 		return map[string]any{
 			"control": map[string]any{"listen_address": cfg.Control.ListenAddress, "http": cfg.Control.HTTP},
-			"runtime": map[string]any{"endpoint": cfg.Runtime.Endpoint},
+			// Split control reaches runtime directly on the migration's internal
+			// network. The loopback host publish exists solely for the old
+			// monolith bootstrap proof and must never become a control endpoint.
+			"runtime": map[string]any{"endpoint": "gordon-runtime:9444"},
 			"server":  map[string]any{"data_dir": resolveDataDir(cfg.Server.DataDir)},
 			"auth":    map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_secret": cfg.Auth.TokenSecret},
 		}

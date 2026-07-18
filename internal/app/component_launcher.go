@@ -106,6 +106,9 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
+	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
+		return ComponentLaunchPlan{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
 		hash := componentLaunchHash(componentID, image, plan.InternalNetwork)

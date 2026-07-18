@@ -10,6 +10,7 @@ import (
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
 	outruntime "github.com/bnema/gordon/internal/adapters/out/grpc/runtime"
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -68,22 +69,19 @@ func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlC
 	return receiver, nil
 }
 
-// newRuntimeHandoffDialer dials only the checkpointed loopback bootstrap
-// endpoint of a prepared runtime. Authentication remains mandatory even though
-// the transport is loopback during the migration proof.
+// newRuntimeHandoffDialer dials only the checkpointed private host-gateway
+// bootstrap endpoint of a prepared runtime. Authentication and the configured
+// TLS policy remain mandatory; migration never downgrades the transport.
 func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 	return func(ctx context.Context, component ComponentLaunchComponent) (RuntimeHandoffClient, error) {
-		if strings.TrimSpace(component.BootstrapEndpoint) == "" {
-			return nil, fmt.Errorf("replacement runtime bootstrap endpoint is required")
+		if !validBootstrapRuntimeEndpoint(component.BootstrapEndpoint, componentPortBindings(component.PortPublishes, component.Role)) {
+			return nil, fmt.Errorf("replacement runtime bootstrap transport is invalid")
 		}
 		if runtimeControlToken(cfg) == "" {
 			return nil, fmt.Errorf("replacement runtime authentication token is required")
 		}
 		target := cfg
 		target.Endpoint = component.BootstrapEndpoint
-		// Bootstrap listeners are host-loopback only and the role's gRPC server
-		// uses component credentials rather than public TLS.
-		target.Insecure = true
 		client, err := createRuntimeCommandClient(ctx, target)
 		if err != nil {
 			return nil, err
@@ -94,6 +92,14 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 		}
 		return handoff, nil
 	}
+}
+
+func componentPortBindings(ports []domain.ContainerPortPublish, role domain.ComponentRole) []MigrationPortBinding {
+	bindings := make([]MigrationPortBinding, 0, len(ports))
+	for _, port := range ports {
+		bindings = append(bindings, MigrationPortBinding{Role: string(role), HostIP: port.HostIP, HostPort: port.HostPort, ContainerPort: port.ContainerPort, Protocol: string(port.Protocol)})
+	}
+	return bindings
 }
 
 func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeStateSubscriber, error) {

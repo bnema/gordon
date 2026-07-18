@@ -513,16 +513,11 @@ func validLoopbackBootstrapPort(port domain.ContainerPortPublish) bool {
 }
 
 func allowedPreparedPort(role domain.ComponentRole, port domain.ContainerPortPublish) bool {
-	switch role {
-	case domain.ComponentRoleRuntime:
-		return port.HostPort == 19444 && port.ContainerPort == 9444
-	case domain.ComponentRoleControl:
-		return port.HostPort == 19090 || port.HostPort == 19443
-	case domain.ComponentRoleEdge:
-		return port.HostPort == 18080
-	default:
-		return false
-	}
+	// The sole prepared host publish is a random high loopback bootstrap port
+	// for runtime. Control, edge and registry stay on the internal network;
+	// accepting their host bindings would turn migration preparation into an
+	// unintended public surface.
+	return role == domain.ComponentRoleRuntime && port.ContainerPort == 9444 && port.HostPort >= 20000 && port.HostPort <= 29999
 }
 
 func safeComponentNetwork(network string) bool {

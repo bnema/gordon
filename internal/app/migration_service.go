@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -143,40 +145,60 @@ func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (Mi
 	if checkpoint.OldServingPath == "" {
 		checkpoint.OldServingPath = "monolith"
 	}
-	s.setBootstrapListeners(&checkpoint)
+	if err := s.setBootstrapListeners(&checkpoint); err != nil {
+		return MigrationCheckpoint{}, err
+	}
 	if checkpoint.StartedAt.IsZero() {
 		checkpoint.StartedAt = s.now().UTC()
 	}
 	return checkpoint, nil
 }
 
-// setBootstrapListeners uses only fixed values or configured final ports.
-// It intentionally cannot observe an engine-assigned address.
-func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint) {
-	if checkpoint.BootstrapControlEndpoint == "" {
-		checkpoint.BootstrapControlEndpoint = "127.0.0.1:19443"
+// setBootstrapListeners reserves one random high loopback port in checkpoint
+// state. The runtime owns its publication; components use the Podman host
+// gateway, never their own 127.0.0.1 namespace. Persisting the selected port
+// makes retries deterministic without accepting an arbitrary control input.
+func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint) error {
+	if checkpoint == nil {
+		return fmt.Errorf("migration checkpoint is required")
+	}
+	if len(checkpoint.PreparedPortBindings) == 0 {
+		port, err := randomBootstrapRuntimePort()
+		if err != nil {
+			return fmt.Errorf("select runtime bootstrap port: %w", err)
+		}
+		checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: port, ContainerPort: bootstrapRuntimeContainerPort, Protocol: "tcp"}}
 	}
 	if checkpoint.BootstrapRuntimeEndpoint == "" {
-		checkpoint.BootstrapRuntimeEndpoint = "127.0.0.1:19444"
+		for _, binding := range checkpoint.PreparedPortBindings {
+			if validPreparedMigrationPortBinding(binding) {
+				checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("%s:%d", bootstrapRuntimeHostGateway, binding.HostPort)
+				break
+			}
+		}
 	}
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
 	}
-	// The old monolith remains bound to its configured listener while the
-	// prepared edge uses a separate fixed loopback port. Keep this endpoint
-	// deterministic so cutover never persists a runtime-discovered address.
 	if checkpoint.OldServingProbeEndpoint == "" && s.config.Server.Port > 0 {
 		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.Port)
-	}
-	if checkpoint.PreparedPortBindings == nil {
-		checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: 19444, ContainerPort: 9444, Protocol: "tcp"}}
-		if s.config.Server.Port > 0 {
-			checkpoint.PreparedPortBindings = append(checkpoint.PreparedPortBindings, MigrationPortBinding{Role: "edge", HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: s.config.Server.Port, Protocol: "tcp"})
-		}
 	}
 	if checkpoint.PublicPortBindings == nil && s.config.Server.Port > 0 && s.config.Server.RegistryPort > 0 {
 		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
 	}
+	if !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
+		return fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	return nil
+}
+
+func randomBootstrapRuntimePort() (int, error) {
+	width := big.NewInt(int64(bootstrapRuntimePortMax - bootstrapRuntimePortMin + 1))
+	value, err := cryptorand.Int(cryptorand.Reader, width)
+	if err != nil {
+		return 0, err
+	}
+	return bootstrapRuntimePortMin + int(value.Int64()), nil
 }
 
 func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error) {

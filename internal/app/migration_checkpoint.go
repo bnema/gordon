@@ -6,14 +6,26 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const maxMigrationCheckpointBytes int64 = 64 << 10
+const (
+	maxMigrationCheckpointBytes int64 = 64 << 10
+
+	// A rootless container cannot use host loopback to reach a loopback-only
+	// published port. Podman's documented private host gateway is therefore
+	// the only migration bootstrap destination accepted in a component.
+	bootstrapRuntimeHostGateway   = "host.containers.internal"
+	bootstrapRuntimeContainerPort = 9444
+	bootstrapRuntimePortMin       = 20000
+	bootstrapRuntimePortMax       = 29999
+)
 
 type MigrationPhase string
 
@@ -45,9 +57,9 @@ type MigrationCheckpoint struct {
 	OldServingPath            string         `json:"old_serving_path,omitempty"`
 	PreparedComponents        []string       `json:"prepared_components,omitempty"`
 	RuntimeChannelTransferred bool           `json:"runtime_channel_transferred,omitempty"`
-	// Bootstrap endpoints are fixed loopback endpoints used only while the
-	// monolith proves the replacement runtime. They are persisted so resume
-	// never discovers or records an engine-assigned address.
+	// BootstrapRuntimeEndpoint is the component-visible endpoint for the
+	// loopback-only runtime publish. It must use bootstrapRuntimeHostGateway,
+	// never 127.0.0.1 (which resolves to the calling container).
 	BootstrapControlEndpoint   string `json:"bootstrap_control_endpoint,omitempty"`
 	BootstrapRuntimeEndpoint   string `json:"bootstrap_runtime_endpoint,omitempty"`
 	BootstrapEdgeProbeEndpoint string `json:"bootstrap_edge_probe_endpoint,omitempty"`
@@ -263,10 +275,18 @@ func validateCheckpoint(checkpoint MigrationCheckpoint) error {
 			return fmt.Errorf("invalid migration checkpoint")
 		}
 	}
-	for _, binding := range append(append([]MigrationPortBinding(nil), checkpoint.PreparedPortBindings...), checkpoint.PublicPortBindings...) {
+	for _, binding := range checkpoint.PreparedPortBindings {
+		if !validPreparedMigrationPortBinding(binding) {
+			return fmt.Errorf("invalid migration checkpoint")
+		}
+	}
+	for _, binding := range checkpoint.PublicPortBindings {
 		if !validMigrationPortBinding(binding) {
 			return fmt.Errorf("invalid migration checkpoint")
 		}
+	}
+	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
+		return fmt.Errorf("invalid migration checkpoint")
 	}
 	return nil
 }
@@ -278,11 +298,31 @@ func validMigrationPortBinding(binding MigrationPortBinding) bool {
 	if binding.HostPort < 1 || binding.HostPort > 65535 || binding.ContainerPort < 1 || binding.ContainerPort > 65535 {
 		return false
 	}
-	if binding.Protocol != "tcp" || (binding.HostIP != "127.0.0.1" && binding.HostIP != "0.0.0.0") {
+	return binding.Protocol == "tcp" && (binding.HostIP == "127.0.0.1" || binding.HostIP == "0.0.0.0")
+}
+
+// Prepared migration publishes are intentionally narrower than final public
+// listeners: only runtime receives one private bootstrap publish. Edge and
+// registry must use the internal network until cutover.
+func validPreparedMigrationPortBinding(binding MigrationPortBinding) bool {
+	return binding.Role == "runtime" && binding.HostIP == "127.0.0.1" && binding.Protocol == "tcp" && binding.ContainerPort == bootstrapRuntimeContainerPort && binding.HostPort >= bootstrapRuntimePortMin && binding.HostPort <= bootstrapRuntimePortMax
+}
+
+func validBootstrapRuntimeEndpoint(endpoint string, bindings []MigrationPortBinding) bool {
+	host, rawPort, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil || host != bootstrapRuntimeHostGateway {
 		return false
 	}
-	// Prepared components can only expose a loopback bootstrap/probe port.
-	return true
+	port, err := strconv.Atoi(rawPort)
+	if err != nil || port < bootstrapRuntimePortMin || port > bootstrapRuntimePortMax {
+		return false
+	}
+	for _, binding := range bindings {
+		if validPreparedMigrationPortBinding(binding) && binding.HostPort == port {
+			return true
+		}
+	}
+	return false
 }
 func phaseRank(phase MigrationPhase) int {
 	switch phase {

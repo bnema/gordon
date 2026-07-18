@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,6 +36,10 @@ func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {
 	assert.NotContains(t, string(edge), "control-token-reference")
 	assert.Contains(t, string(edge), "[edge]")
 	assert.Contains(t, string(edge), "token_env")
+	control, err := os.ReadFile(byRole[domain.ComponentRoleControl])
+	require.NoError(t, err)
+	assert.Contains(t, string(control), "endpoint = 'gordon-runtime:9444'")
+	assert.NotContains(t, string(control), "127.0.0.1:19444")
 	registry, err := os.ReadFile(byRole[domain.ComponentRoleRegistry])
 	require.NoError(t, err)
 	assert.NotContains(t, string(registry), "control-token-reference")
@@ -61,6 +66,17 @@ func TestComponentConfigManifestsUseStrictRoleSchemas(t *testing.T) {
 	require.NoError(t, err, "edge config must be accepted by its strict decoder")
 	_, err = initRegistryConfig(byRole[domain.ComponentRoleRegistry])
 	require.NoError(t, err, "registry config must be accepted by its strict decoder")
+}
+
+func TestComponentConfigUsesInternalRuntimeAliasInsteadOfHostBootstrap(t *testing.T) {
+	cfg := Config{}
+	cfg.Runtime.Endpoint = "127.0.0.1:19444"
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	control, err := os.ReadFile(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleControl])
+	require.NoError(t, err)
+	assert.True(t, strings.Contains(string(control), "endpoint = 'gordon-runtime:9444'"))
+	assert.NotContains(t, string(control), cfg.Runtime.Endpoint)
 }
 
 func componentConfigPaths(files []ComponentConfigFile) []string {

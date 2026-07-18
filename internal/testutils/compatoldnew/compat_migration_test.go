@@ -74,8 +74,10 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.runCLI("migrate", "plan", "--json")
 	fixture.runMissingEnvPlan()
 	fixture.runCLI("migrate", "prepare", "--json")
-	fixture.runCLI("migrate", "status", "--json")
+	status := fixture.runCLI("migrate", "status", "--json")
+	require.Contains(t, status, `"bootstrap_runtime_endpoint":"host.containers.internal:`, "old monolith must use the private host gateway, not container loopback")
 	fixture.assertPreparedTargets()
+	fixture.assertRuntimeBootstrapTransport()
 	fixture.assertRuntimeSocketExclusive()
 
 	// A second prepare is an interruption/retry at the persisted checkpoint
@@ -159,7 +161,10 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	labels[domain.LabelManaged] = "true"
 	labels[domain.LabelRoute] = "true"
 	labels[domain.LabelDomain] = "app.example.test"
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", "host", "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
+	// The old serving Gordon is deliberately a normal rootless container, not
+	// host-networked: its authenticated bootstrap proof must cross Podman's
+	// host gateway to the runtime's loopback-only publish.
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
@@ -174,7 +179,7 @@ func (f *realMigrationFixture) startOldApp(labels map[string]string) {
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
 
-func (f *realMigrationFixture) runCLI(args ...string) {
+func (f *realMigrationFixture) runCLI(args ...string) string {
 	f.t.Helper()
 	args = append(args, "--config", f.config)
 	command := append([]string{"exec", "--env", "GORDON_MIGRATION_IMAGE=" + f.image, f.old, "gordon"}, args...)
@@ -182,6 +187,7 @@ func (f *realMigrationFixture) runCLI(args ...string) {
 	require.NoError(f.t, err, "candidate CLI %s", strings.Join(args, " "))
 	require.NotEmpty(f.t, strings.TrimSpace(out), "candidate CLI %s must return JSON", strings.Join(args, " "))
 	f.t.Logf("candidate CLI %s: %s", strings.Join(args, " "), strings.TrimSpace(out))
+	return out
 }
 
 func (f *realMigrationFixture) runMissingEnvPlan() {
@@ -213,6 +219,23 @@ func (f *realMigrationFixture) assertPreparedTargets() {
 	for _, role := range []string{"control", "runtime", "registry", "edge"} {
 		require.Contains(f.t, roles, role)
 	}
+}
+
+func (f *realMigrationFixture) assertRuntimeBootstrapTransport() {
+	f.t.Helper()
+	containers, err := InspectContainers(f.ctx, f.runID)
+	require.NoError(f.t, err)
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] != "runtime" {
+			continue
+		}
+		ports, portErr := podmanOutput(f.ctx, "port", container.resourceName())
+		require.NoError(f.t, portErr)
+		require.Contains(f.t, ports, "127.0.0.1:", "runtime bootstrap must be host-loopback only")
+		require.NotContains(f.t, ports, "0.0.0.0", "runtime bootstrap must not be public")
+		return
+	}
+	f.t.Fatal("prepared runtime was not found")
 }
 
 func (f *realMigrationFixture) assertRuntimeSocketExclusive() {
