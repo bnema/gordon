@@ -112,6 +112,30 @@ func TestGeneratedControlConfigPublishesInitialRegistryForwardingTarget(t *testi
 	assert.Equal(t, edgesnapshot.RegistryTarget{Domain: "registry.example.test", Alias: "gordon-registry", Port: 15000, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1}, *options.Registry)
 }
 
+func TestGeneratedControlRegistryTargetMatchesRegistryComponentListener(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.RegistryDomain = "registry.example.test"
+	cfg.Server.RegistryPort = 15000
+	// The legacy control default must not override the port actually bound by
+	// the generated registry role.
+	cfg.Control.RegistryAlias = "gordon-registry"
+	cfg.Control.RegistryPort = 5000
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	byRole := componentConfigReferences(componentConfigPaths(files))
+
+	v, controlCfg, err := initConfig(byRole[domain.ComponentRoleControl])
+	require.NoError(t, err)
+	options, err := controlProducerOptions(v, controlCfg)
+	require.NoError(t, err)
+	require.NotNil(t, options.Registry)
+	assert.Equal(t, 15000, options.Registry.Port)
+
+	registryCfg, err := initRegistryConfig(byRole[domain.ComponentRoleRegistry])
+	require.NoError(t, err)
+	assert.Equal(t, "0.0.0.0:15000", registryCfg.Listen.Address)
+}
+
 func TestWriteComponentConfigManifestsRejectsUnsafeExternalRoutes(t *testing.T) {
 	_, err := WriteComponentConfigManifests(Config{}, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"), ComponentConfigOptions{ExternalRoutes: map[string]any{"blocked.example.test": "127.0.0.1:8080"}})
 	require.ErrorIs(t, err, domain.ErrSSRFBlocked)

@@ -138,7 +138,7 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 		control := map[string]any{
 			// Components share an isolated network; binding wildcard here permits
 			// the edge's gordon-control DNS alias without publishing a host port.
-			"control": map[string]any{"listen_address": controlListenAddress, "insecure_tls": true, "edge_alias": cfg.Control.EdgeAlias, "registry_alias": cfg.Control.RegistryAlias, "registry_port": cfg.Control.RegistryPort, "drain_registration_timeout": cfg.Control.DrainRegistrationTimeout},
+			"control": map[string]any{"listen_address": controlListenAddress, "insecure_tls": true, "edge_alias": cfg.Control.EdgeAlias, "registry_alias": cfg.Control.RegistryAlias, "registry_port": cfg.Server.RegistryPort, "drain_registration_timeout": cfg.Control.DrainRegistrationTimeout},
 			// Control reaches the new runtime only through its private Gordon RPC
 			// socket. This is not, and cannot be confused with, the Podman socket.
 			"runtime": map[string]any{"endpoint": migrationRuntimeSocketEndpoint(migrationID), "token_env": "GORDON_COMPONENT_RUNTIME_TOKEN"},
