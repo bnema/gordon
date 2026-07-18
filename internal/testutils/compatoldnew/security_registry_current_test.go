@@ -34,6 +34,9 @@ func RunSecurityRegistryNoPodmanSocket(ctx context.Context, repoRoot, artifactDi
 	if err := securityBuildCandidate(ctx, repoRoot, binary); err != nil {
 		return Report{}, err
 	}
+	if _, err := securityBuildFDInspector(ctx, root); err != nil {
+		return Report{}, fmt.Errorf("build security fd inspector: %w", err)
+	}
 	config := filepath.Join(root, "registry.toml")
 	if err := os.WriteFile(config, []byte(securityRegistryConfig(port)), 0o600); err != nil {
 		return Report{}, err
@@ -44,10 +47,13 @@ func RunSecurityRegistryNoPodmanSocket(ctx context.Context, repoRoot, artifactDi
 		_ = securityCommand(context.Background(), repoRoot, "docker", "rm", "--force", name)
 		_ = securityCommand(context.Background(), repoRoot, "docker", "image", "rm", "--force", image)
 	}()
-	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM scratch\nCOPY gordon /gordon\nENTRYPOINT [\"/gordon\"]\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte(securityImageDockerfile()), 0o600); err != nil {
 		return Report{}, err
 	}
 	if err := securityCommand(ctx, root, "docker", "build", "--tag", image, "."); err != nil {
+		return Report{}, err
+	}
+	if err := securityFDInspectorNegativeControl(ctx, repoRoot, image); err != nil {
 		return Report{}, err
 	}
 	if err := securityCommand(ctx, repoRoot, "docker", "run", "--detach", "--rm", "--network", "host", "--name", name, "--mount", "type=bind,source="+config+",target=/registry.toml,readonly", image, "serve", "--role", "registry", "--config", "/registry.toml"); err != nil {
@@ -78,7 +84,7 @@ max_blob_size = "1KB"
 enabled = false
 [control]
 event_endpoint = "127.0.0.1:1"
-event_token = "gordon_component.registry-test-token"
+event_token = "test-component-token"
 insecure_tls = true
 outbox_max_entries = 10
 outbox_max_bytes = "1MB"

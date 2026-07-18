@@ -35,7 +35,7 @@ const (
 	securityMissingToken          securityAuthCase = "missing"
 	securityWrongComponentToken   securityAuthCase = "wrong_component"
 	securityWrongScopeToken       securityAuthCase = "wrong_scope"
-	securityUnknownComponentToken                  = "gordon_component.unknown-component.unknown-secret"
+	securityUnknownComponentToken                  = "invalid-component-token"
 )
 
 // RunSecurityComponentAuth exercises the actual control EdgeService transport
@@ -250,6 +250,9 @@ func RunSecurityEdgeNoPodmanSocket(ctx context.Context, repoRoot, artifactDir st
 	if err := securityBuildCandidate(ctx, repoRoot, binary); err != nil {
 		return Report{}, fmt.Errorf("build candidate security edge: %w", err)
 	}
+	if _, err := securityBuildFDInspector(ctx, root); err != nil {
+		return Report{}, fmt.Errorf("build security fd inspector: %w", err)
+	}
 	configPath := filepath.Join(root, "edge.toml")
 	if err := os.WriteFile(configPath, []byte(securityEdgeConfig(control.listener.Addr().String(), control.valid, port)), 0o600); err != nil {
 		return Report{}, err
@@ -260,11 +263,14 @@ func RunSecurityEdgeNoPodmanSocket(ctx context.Context, repoRoot, artifactDir st
 		_ = securityCommand(context.Background(), repoRoot, "docker", "rm", "--force", name)
 		_ = securityCommand(context.Background(), repoRoot, "docker", "image", "rm", "--force", image)
 	}()
-	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte("FROM scratch\nCOPY gordon /gordon\nENTRYPOINT [\"/gordon\"]\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "Dockerfile"), []byte(securityImageDockerfile()), 0o600); err != nil {
 		return Report{}, err
 	}
 	if err := securityCommand(ctx, root, "docker", "build", "--tag", image, "."); err != nil {
 		return Report{}, fmt.Errorf("build candidate edge container: %w", err)
+	}
+	if err := securityFDInspectorNegativeControl(ctx, repoRoot, image); err != nil {
+		return Report{}, err
 	}
 	if err := securityCommand(ctx, repoRoot, "docker", "run", "--detach", "--rm", "--network", "host", "--name", name, "--mount", "type=bind,source="+configPath+",target=/edge.toml,readonly", image, "serve", "--role", "edge", "--config", "/edge.toml"); err != nil {
 		return Report{}, fmt.Errorf("start candidate edge container: %w", err)
@@ -403,32 +409,16 @@ func securityContainerIsolation(ctx context.Context, repoRoot, name string) (boo
 	if err != nil {
 		return false, false, false, err
 	}
-	pidText, err := securityCommandOutput(ctx, repoRoot, "docker", "inspect", "--format", "{{.State.Pid}}", name)
+	inspection, err := securityInspectContainerFDs(ctx, repoRoot, name)
 	if err != nil {
 		return false, false, false, err
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(pidText))
-	if err != nil || pid < 1 {
-		return false, false, false, fmt.Errorf("candidate edge container did not expose a process PID")
-	}
-	fdDir := filepath.Join("/proc", strconv.Itoa(pid), "fd")
-	fds, err := os.ReadDir(fdDir)
-	if err != nil {
-		return false, false, false, fmt.Errorf("inspect candidate edge file descriptors: %w", err)
-	}
-	noSocketFD := true
-	for _, fd := range fds {
-		target, linkErr := os.Readlink(filepath.Join(fdDir, fd.Name()))
-		if linkErr == nil && securitySocketReference(target) {
-			noSocketFD = false
-		}
-	}
-	return !securitySocketReference(mounts), !securitySocketReference(env), noSocketFD, nil
+	return !securitySocketReference(mounts), !securitySocketReference(env), !inspection.AuthorityDetected, nil
 }
 
 func securitySocketReference(value string) bool {
 	value = strings.ToLower(value)
-	return strings.Contains(value, "docker.sock") || strings.Contains(value, "podman.sock") || strings.Contains(value, "docker_host=") || strings.Contains(value, "podman_host=")
+	return strings.Contains(value, "docker") || strings.Contains(value, "podman") || strings.Contains(value, "containerd") || strings.Contains(value, "cri-dockerd") || strings.Contains(value, "crio") || strings.Contains(value, "/cri.sock") || strings.Contains(value, "/cri/")
 }
 
 func securityBuildCandidate(ctx context.Context, repoRoot, output string) error {

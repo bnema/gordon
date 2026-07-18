@@ -16,8 +16,9 @@ func TestSanitizeError_NoSensitiveData(t *testing.T) {
 }
 
 func TestSanitizeError_KeyEqValue(t *testing.T) {
-	result := sanitizeError("token=sk-secret-goes-here provider said invalid")
-	assert.NotContains(t, result, "sk-secret-goes-here")
+	secret := t.Name()
+	result := sanitizeError("token=" + secret + " provider said invalid")
+	assert.NotContains(t, result, secret)
 	assert.Contains(t, result, "token=redacted")
 }
 
@@ -28,8 +29,9 @@ func TestSanitizeError_KeyEqQuotedValue(t *testing.T) {
 }
 
 func TestSanitizeError_KeyEqSingleQuotedValue(t *testing.T) {
-	result := sanitizeError(`key='my-api-key-12345' not found`)
-	assert.NotContains(t, result, "my-api-key-12345")
+	secret := t.Name()
+	result := sanitizeError("key='" + secret + "' not found")
+	assert.NotContains(t, result, secret)
 	assert.Contains(t, result, "key='redacted'")
 }
 
@@ -42,9 +44,11 @@ func TestSanitizeError_JSONKeyValue(t *testing.T) {
 }
 
 func TestSanitizeError_YAMLKeyValue(t *testing.T) {
-	result := sanitizeError("configuration error:\n  api_key: abcdef123456\n  password: hunter2")
-	assert.NotContains(t, result, "abcdef123456")
-	assert.NotContains(t, result, "hunter2")
+	apiKey := t.Name()
+	password := "password-" + t.Name()
+	result := sanitizeError("configuration error:\n  api_key: " + apiKey + "\n  password: " + password)
+	assert.NotContains(t, result, apiKey)
+	assert.NotContains(t, result, password)
 	assert.Contains(t, result, "api_key: redacted")
 	assert.Contains(t, result, "password: redacted")
 	// Non-sensitive context preserved
@@ -52,9 +56,11 @@ func TestSanitizeError_YAMLKeyValue(t *testing.T) {
 }
 
 func TestSanitizeError_CaseInsensitive(t *testing.T) {
-	result := sanitizeError("Token=sk-live-abc123 and SECRET=top-secret-value")
-	assert.NotContains(t, result, "sk-live-abc123")
-	assert.NotContains(t, result, "top-secret-value")
+	token := t.Name()
+	secret := "secret-" + t.Name()
+	result := sanitizeError("Token=" + token + " and SECRET=" + secret)
+	assert.NotContains(t, result, token)
+	assert.NotContains(t, result, secret)
 	assert.Contains(t, result, "Token=redacted")
 	assert.Contains(t, result, "SECRET=redacted")
 }

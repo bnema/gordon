@@ -2,6 +2,8 @@ package tokenstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -25,13 +27,14 @@ var (
 )
 
 func componentRecord(keyID, prefix string) *domain.ComponentTokenRecord {
+	tokenHash := sha256.Sum256([]byte(keyID + ":" + prefix))
 	return &domain.ComponentTokenRecord{
 		KeyID:     keyID,
 		Prefix:    prefix,
 		Name:      "runtime one",
 		Role:      domain.ComponentRoleRuntime,
 		Scopes:    []domain.ComponentScope{domain.ComponentScopeRuntimeDeploy},
-		TokenHash: "81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a",
+		TokenHash: hex.EncodeToString(tokenHash[:]),
 		CreatedAt: time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC),
 	}
 }
@@ -338,7 +341,7 @@ func TestComponentTokenStoreFactoryAndPassLifecycle(t *testing.T) {
 	found, err := store.LookupComponentToken(context.Background(), "gct_live", "pass/key")
 	require.NoError(t, err)
 	require.NotNil(t, found)
-	assert.Equal(t, "81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a81ecb2a5d9d0f2ee0e8f8f3e1d4c2b0a", found.TokenHash)
+	assert.Equal(t, componentRecord("pass/key", "gct_live").TokenHash, found.TokenHash)
 
 	require.NoError(t, store.UpdateComponentTokenLastUsed(context.Background(), "pass/key", time.Unix(1, 0).UTC()))
 	require.NoError(t, store.RevokeComponentToken(context.Background(), "pass/key", time.Unix(2, 0).UTC()))

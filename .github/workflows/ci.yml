@@ -27,8 +27,20 @@ jobs:
               - 'go.mod'
               - 'go.sum'
               - '.golangci.yml'
+              - '.gitleaks.toml'
               - 'Makefile'
               - '.github/workflows/**'
+
+  gitleaks:
+    name: Current tree secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Block secrets in the current tree
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
 
   lint:
     name: Lint

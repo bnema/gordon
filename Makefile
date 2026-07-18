@@ -56,7 +56,7 @@ COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 # Phony targets
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
-	lint fmt check mocks proto proto-check clean-test help \
+	lint fmt check mocks proto proto-check clean-test gitleaks help \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
 	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security
 
@@ -75,6 +75,9 @@ fmt: ## Format Go code
 lint: ## Run golangci-lint
 	@echo "Running linter..."
 	@golangci-lint run ./...
+
+gitleaks: ## Block on secrets in the current working tree
+	@gitleaks detect --source . --config .gitleaks.toml --no-git --redact
 
 mocks: ## Generate mocks using mockery
 	@echo "Generating mocks..."

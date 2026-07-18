@@ -122,7 +122,7 @@ func TestRemoteControlCobraSmoke(t *testing.T) {
 	require.Equal(t, []string{"redis:7"}, listener.state.removedAttachments)
 }
 
-const smokeLongLivedToken = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJjbGktc21va2UifQ."
+const smokeLongLivedToken = "remote-control-smoke-token"
 
 type remoteControlSmokeState struct {
 	mu                       sync.Mutex

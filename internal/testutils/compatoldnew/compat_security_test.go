@@ -16,10 +16,7 @@ func TestCompatibilitySecurityEdgeNoPodmanSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if err := DockerCompatibilityPreflight(ctx); err != nil {
-		if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
-			t.Fatalf("security edge isolation requires Docker: %v", err)
-		}
-		t.Skipf("security edge isolation requires Docker; start Docker then rerun make compat-harness-security: %v", err)
+		t.Fatalf("security edge isolation requires Docker: %v", err)
 	}
 	report, err := RunSecurityEdgeNoPodmanSocket(ctx, projectRoot(t), compatibilityArtifactDir(t, "security-edge"))
 	require.NoError(t, err)
@@ -32,10 +29,7 @@ func TestCompatibilitySecurityRegistryNoPodmanSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	if err := DockerCompatibilityPreflight(ctx); err != nil {
-		if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
-			t.Fatal(err)
-		}
-		t.Skipf("registry socket isolation requires Docker: %v", err)
+		t.Fatal(err)
 	}
 	artifactDir := compatibilityArtifactDir(t, "security-registry")
 	report, err := RunSecurityRegistryNoPodmanSocket(ctx, projectRoot(t), artifactDir)
