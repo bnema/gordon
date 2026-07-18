@@ -90,6 +90,7 @@ type Service struct {
 	logWriter        out.ContainerLogWriter
 	cacheInvalidator out.ProxyCacheInvalidator
 	drainWaiter      out.ProxyDrainWaiter
+	drainDelayWait   func(context.Context, time.Duration)
 	config           Config
 	configProvider   AttachmentConfigProvider // live config reads for attachments/networks (may be nil)
 	runtimePolicy    RuntimePolicy
@@ -161,6 +162,7 @@ func NewService(
 		envLoader:      envLoader,
 		eventBus:       eventBus,
 		logWriter:      logWriter,
+		drainDelayWait: waitDrainDelay,
 		config:         config,
 		configProvider: configProvider,
 		runtimePolicy:  NewRuntimePolicy(RuntimePolicyModeObserve),
@@ -1042,12 +1044,13 @@ func (s *Service) activateAndStabilizeNewContainer(ctx context.Context, domainNa
 }
 
 // preparedDrain owns a pin acquired before cache invalidation. It retains the
-// exact waiter and timeout used to prepare it so a config reload cannot switch
-// its eventual release to an unrelated delay path.
+// exact waiter, fallback timer, and timeout used to prepare it so a config
+// reload cannot switch its eventual release to an unrelated delay path.
 type preparedDrain struct {
 	waiter        out.ProxyDrainWaiter
 	timeout       time.Duration
 	fallbackDelay time.Duration
+	delayWait     func(context.Context, time.Duration)
 	registered    bool
 	once          sync.Once
 }
@@ -1067,7 +1070,7 @@ func (d *preparedDrain) wait(ctx context.Context, oldContainerID string) {
 	}
 	d.once.Do(func() {
 		if !d.registered {
-			waitDrainDelay(ctx, d.fallbackDelay)
+			d.waitForFallbackDelay(ctx)
 			return
 		}
 		timeout := d.timeout
@@ -1080,9 +1083,17 @@ func (d *preparedDrain) wait(ctx context.Context, oldContainerID string) {
 				Str("old_container_id", oldContainerID).
 				Dur("drain_timeout", timeout).
 				Msg("drain wait did not complete; applying drain-delay fallback")
-			waitDrainDelay(ctx, d.fallbackDelay)
+			d.waitForFallbackDelay(ctx)
 		}
 	})
+}
+
+func (d *preparedDrain) waitForFallbackDelay(ctx context.Context) {
+	wait := d.delayWait
+	if wait == nil {
+		wait = waitDrainDelay
+	}
+	wait(ctx, d.fallbackDelay)
 }
 
 // prepareDrain pins the old target only when this deployment will actually
@@ -1093,6 +1104,7 @@ func (s *Service) prepareDrain(oldContainerID string) *preparedDrain {
 	cfg := s.config
 	waiter := s.drainWaiter
 	invalidator := s.cacheInvalidator
+	delayWait := s.drainDelayWait
 	s.mu.RUnlock()
 	mode := cfg.DrainMode
 	if mode == "" {
@@ -1110,6 +1122,7 @@ func (s *Service) prepareDrain(oldContainerID string) *preparedDrain {
 		waiter:        waiter,
 		timeout:       cfg.DrainTimeout,
 		fallbackDelay: configuredDrainDelay(cfg),
+		delayWait:     delayWait,
 		registered:    waiter.PrepareDrain(oldContainerID),
 	}
 }
@@ -1155,7 +1168,17 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 		return
 	}
 
-	waitDrainDelay(ctx, configuredDrainDelay(cfg))
+	s.waitForConfiguredDrainDelay(ctx, configuredDrainDelay(cfg))
+}
+
+func (s *Service) waitForConfiguredDrainDelay(ctx context.Context, delay time.Duration) {
+	s.mu.RLock()
+	wait := s.drainDelayWait
+	s.mu.RUnlock()
+	if wait == nil {
+		wait = waitDrainDelay
+	}
+	wait(ctx, delay)
 }
 
 func configuredDrainDelay(cfg Config) time.Duration {

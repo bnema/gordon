@@ -31,6 +31,30 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+type drainDelayGate struct {
+	entered chan time.Duration
+	release chan struct{}
+}
+
+func newDrainDelayGate() *drainDelayGate {
+	return &drainDelayGate{entered: make(chan time.Duration), release: make(chan struct{})}
+}
+
+func (g *drainDelayGate) wait(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	select {
+	case g.entered <- delay:
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+}
+
 func TestService_PrepareDrainPinsBeforeTrafficInvalidation(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -64,6 +88,8 @@ func TestService_FailedSplitDrainPreparationFallsBackToConfiguredDelay(t *testin
 		runtime := mocks.NewMockContainerRuntime(t)
 		waiter := NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return domain.RuntimeRouteState{}, false })
 		svc := NewService(runtime, nil, nil, nil, Config{DrainMode: "inflight", DrainDelayConfigured: true, DrainDelay: 75 * time.Millisecond}, nil)
+		gate := newDrainDelayGate()
+		svc.drainDelayWait = gate.wait
 		svc.SetProxyDrainWaiter(waiter)
 		prepared := svc.prepareDrain("old-container")
 		require.NotNil(t, prepared)
@@ -73,18 +99,23 @@ func TestService_FailedSplitDrainPreparationFallsBackToConfiguredDelay(t *testin
 		runtime.EXPECT().StopContainer(mock.Anything, "old-container").Run(func(context.Context, string) { close(stopped) }).Return(nil).Once()
 		runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil).Once()
 		runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).Once()
-		go svc.finalizePreviousContainer(testContext(), "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+		done := make(chan struct{})
+		go func() {
+			svc.finalizePreviousContainer(testContext(), "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+			close(done)
+		}()
 
+		// A gate is a deterministic timer: the former 15ms/1s wall-clock checks
+		// observed scheduler timing rather than the cleanup-after-delay ordering.
+		require.Equal(t, 75*time.Millisecond, <-gate.entered, "fallback must use the configured drain delay")
 		select {
 		case <-stopped:
-			t.Fatal("old container stopped before configured drain delay")
-		case <-time.After(15 * time.Millisecond):
+			t.Fatal("old container stopped before configured drain delay was released")
+		default:
 		}
-		select {
-		case <-stopped:
-		case <-time.After(time.Second):
-			t.Fatal("old container was not cleaned up after drain delay")
-		}
+		close(gate.release)
+		<-stopped
+		<-done
 	})
 
 	t.Run("honors cancellation and explicit zero", func(t *testing.T) {
@@ -114,12 +145,13 @@ func TestService_FailedSplitDrainPreparationFallsBackToConfiguredDelay(t *testin
 				} else {
 					defer cancel()
 				}
-				go svc.finalizePreviousContainer(ctx, "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
-				select {
-				case <-stopped:
-				case <-time.After(100 * time.Millisecond):
-					t.Fatal("fallback did not respect cancellation or explicit zero delay")
-				}
+				done := make(chan struct{})
+				go func() {
+					svc.finalizePreviousContainer(ctx, "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+					close(done)
+				}()
+				<-stopped
+				<-done
 			})
 		}
 	})
