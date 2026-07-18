@@ -156,7 +156,8 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 
 	for _, role := range []string{"control", "runtime", "registry"} {
 		name := ContainerPrefix(runID, SideNew) + "-" + role
-		require.NoError(t, migrationRunSleep(ctx, name, network, volume, image, migrationFixtureLabels(runID, SideNew, role)))
+		require.NoError(t, migrationRunComponent(ctx, name, network, volume, image, migrationFixtureLabels(runID, SideNew, role), role))
+		require.Equal(t, role+"-healthy", migrationComponentHealth(t, ctx, name), "%s must provide a live component health endpoint", role)
 	}
 	edge := ContainerPrefix(runID, SideNew) + "-edge"
 	require.NoError(t, migrationRunHTTP(ctx, edge, network, volume, image, migrationFixtureLabels(runID, SideNew, "edge"), "migration-app-ok"))
@@ -335,10 +336,16 @@ func migrationFixtureImage(t *testing.T, ctx context.Context, runID string) stri
 	require.NoError(t, migrationPodman(ctx, "build", "--signature-policy", policy, "--tag", image, dir))
 	return image
 }
-func migrationRunSleep(ctx context.Context, name, network, volume, image string, labels map[string]string) error {
+func migrationRunComponent(ctx context.Context, name, network, volume, image string, labels map[string]string, role string) error {
 	args := append([]string{"run", "--detach", "--name", name, "--network", network, "--volume", volume + ":/data"}, migrationLabelArgs(labels)...)
-	args = append(args, image, "sh", "-c", "while :; do sleep 60; done")
+	args = append(args, image, "sh", "-c", "mkdir -p /srv; printf %s '"+role+"-healthy' >/srv/healthz; exec httpd -f -p 8080 -h /srv")
 	return migrationPodman(ctx, args...)
+}
+func migrationComponentHealth(t *testing.T, ctx context.Context, name string) string {
+	t.Helper()
+	health, err := podmanOutput(ctx, "exec", name, "wget", "-qO-", "http://127.0.0.1:8080/healthz")
+	require.NoError(t, err)
+	return strings.TrimSpace(health)
 }
 func migrationRunHTTP(ctx context.Context, name, network, volume, image string, labels map[string]string, body string) error {
 	args := append([]string{"run", "--detach", "--name", name, "--network", network, "--volume", volume + ":/data", "--publish", "127.0.0.1::8080"}, migrationLabelArgs(labels)...)
