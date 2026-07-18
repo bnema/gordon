@@ -15,6 +15,16 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
+	// Component labels identify split Gordon components. Their values are a
+	// migration compatibility contract and must remain stable once published.
+	LabelComponent                 = "gordon.component"
+	LabelComponentRole             = "gordon.component.role"
+	LabelComponentVersion          = "gordon.component.version"
+	LabelComponentGeneration       = "gordon.component.generation"
+	LabelComponentMigrationID      = "gordon.component.migration-id"
+	LabelComponentOwner            = "gordon.component.owner"
+	LabelComponentDesiredStateHash = "gordon.component.desired-state-hash"
+
 	// Standalone service labels identify Gordon-managed L4 service containers.
 	LabelService                       = "gordon.service"
 	LabelServiceName                   = "gordon.service.name"

@@ -11,9 +11,14 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/app"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -28,6 +33,36 @@ import (
 	"github.com/bnema/gordon/internal/usecase/componentauth"
 	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
+
+// TestCompatibilitySecurityComponentEnvMinimization is a deterministic,
+// Docker-compatible launch-fixture gate. It validates the exact env-file
+// contract before a role is started, so it does not require a local Podman
+// socket and cannot accidentally expose fixture values in an artifact.
+func TestCompatibilitySecurityComponentEnvMinimization(t *testing.T) {
+	cfg := app.Config{}
+	cfg.TLS.ACME.Enabled = true
+	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
+	cfg.Backups.Volumes.Enabled = true
+	cfg.Backups.Volumes.S3.Bucket = "fixture-bucket"
+	manifest, err := app.BuildComponentEnvManifest(app.ComponentEnvManifestOptions{
+		Config: cfg,
+		Environment: map[string]string{
+			"CLOUDFLARE_DNS_API_TOKEN":   "fixture-token-not-reported",
+			"AWS_ACCESS_KEY_ID":          "fixture-access",
+			"AWS_SECRET_ACCESS_KEY":      "fixture-secret-not-reported",
+			"DOCKER_HOST":                "unix:///fixture/runtime.sock",
+			"WORKLOAD_DATABASE_PASSWORD": "fixture-workload-secret-not-reported",
+		},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleRuntime), "DOCKER_HOST")
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		assert.NotContains(t, manifest.KeysForRole(role), "DOCKER_HOST")
+		assert.NotContains(t, manifest.KeysForRole(role), "WORKLOAD_DATABASE_PASSWORD")
+	}
+	assert.NotContains(t, manifest.KeysForRole(domain.ComponentRoleRuntime), "WORKLOAD_DATABASE_PASSWORD")
+	assert.NotContains(t, manifest.RedactedSummary(), "fixture-token-not-reported")
+}
 
 type securityAuthCase string
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -12,28 +13,58 @@ import (
 // does not launch components, switch listeners, delete volumes, or access a
 // runtime socket; those mutations are introduced by later migration phases.
 type MigrationService struct {
-	preflight *MigrationPreflight
-	store     *MigrationCheckpointStore
-	now       func() time.Time
+	preflight    *MigrationPreflight
+	store        *MigrationCheckpointStore
+	now          func() time.Time
+	envManifest  *ComponentEnvManifest
+	envError     error
+	envDirectory string
 }
 
-func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpointStore) (*MigrationService, error) {
+// NewMigrationService accepts an optional, already-loaded component env plan.
+// Keeping it optional preserves the Phase 2 facade for callers that have not
+// yet composed split roles, while production always provides it.
+func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpointStore, envOptions ...MigrationEnvOptions) (*MigrationService, error) {
 	if preflight == nil || store == nil {
 		return nil, fmt.Errorf("migration preflight and checkpoint store are required")
 	}
-	return &MigrationService{preflight: preflight, store: store, now: time.Now}, nil
+	if len(envOptions) > 1 {
+		return nil, fmt.Errorf("only one migration environment configuration is allowed")
+	}
+	service := &MigrationService{preflight: preflight, store: store, now: time.Now}
+	if len(envOptions) == 1 {
+		options := envOptions[0]
+		manifest, err := BuildMigrationComponentEnvManifest(options)
+		if manifest == nil {
+			return nil, err
+		}
+		service.envManifest, service.envError = manifest, err
+		service.envDirectory = options.Directory
+		if service.envDirectory == "" {
+			service.envDirectory = filepath.Join(filepath.Dir(store.Path()), "env")
+		}
+	}
+	return service, nil
 }
 
 func (s *MigrationService) Plan(ctx context.Context) (MigrationPreflightReport, error) {
 	if s == nil || s.preflight == nil {
 		return MigrationPreflightReport{}, fmt.Errorf("migration service is not configured")
 	}
-	return s.preflight.Check(ctx), nil
+	report := s.preflight.Check(ctx)
+	if s.envError != nil {
+		report.Checks = append(report.Checks, PreflightCheck{Name: "component_environment", Category: PreflightEnv, Status: PreflightFail, Remediation: s.envError.Error()})
+		report.Ready = false
+	}
+	return report, nil
 }
 
 // Prepare records an idempotent retry point after all read-only preflight
 // checks pass. Component launch is intentionally deferred to Phase 4.
 func (s *MigrationService) Prepare(ctx context.Context, checkpoint MigrationCheckpoint) (*MigrationCheckpoint, error) {
+	if s != nil && s.envError != nil {
+		return nil, s.envError
+	}
 	report, err := s.Plan(ctx)
 	if err != nil {
 		return nil, err
@@ -41,28 +72,66 @@ func (s *MigrationService) Prepare(ctx context.Context, checkpoint MigrationChec
 	if !report.Ready {
 		return nil, fmt.Errorf("migration preflight failed")
 	}
-	if checkpoint.MigrationID == "" {
-		if existing, loadErr := s.store.Load(); loadErr == nil {
-			checkpoint = *existing
-		} else if errors.Is(loadErr, os.ErrNotExist) {
-			checkpoint.MigrationID = "migration"
-		} else {
-			return nil, loadErr
-		}
+	checkpoint, err = s.prepareCheckpoint(checkpoint)
+	if err != nil {
+		return nil, err
 	}
-	if checkpoint.Phase == "" || checkpoint.Phase == MigrationPhasePlanned {
-		checkpoint.Phase = MigrationPhasePrepared
-	}
-	if checkpoint.Phase != MigrationPhasePrepared {
-		return nil, fmt.Errorf("prepare requires prepared phase")
-	}
-	if checkpoint.StartedAt.IsZero() {
-		checkpoint.StartedAt = s.now().UTC()
+	if err := s.writeComponentEnv(&checkpoint); err != nil {
+		return nil, err
 	}
 	if err := s.store.Save(checkpoint); err != nil {
 		return nil, err
 	}
 	return s.store.Load()
+}
+
+func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (MigrationCheckpoint, error) {
+	if checkpoint.MigrationID == "" {
+		existing, err := s.loadOrCreateCheckpoint()
+		if err != nil {
+			return MigrationCheckpoint{}, err
+		}
+		checkpoint = existing
+	}
+	if checkpoint.Phase == "" || checkpoint.Phase == MigrationPhasePlanned {
+		checkpoint.Phase = MigrationPhasePrepared
+	}
+	if checkpoint.Phase != MigrationPhasePrepared {
+		return MigrationCheckpoint{}, fmt.Errorf("prepare requires prepared phase")
+	}
+	if checkpoint.StartedAt.IsZero() {
+		checkpoint.StartedAt = s.now().UTC()
+	}
+	return checkpoint, nil
+}
+
+func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error) {
+	existing, err := s.store.Load()
+	if err == nil {
+		return *existing, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return MigrationCheckpoint{MigrationID: "migration"}, nil
+	}
+	return MigrationCheckpoint{}, err
+}
+
+func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) error {
+	if s.envManifest == nil {
+		return nil
+	}
+	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
+		return fmt.Errorf("invalid migration ID for component environment")
+	}
+	files, err := s.envManifest.WriteFiles(filepath.Join(s.envDirectory, checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration)))
+	if err != nil {
+		return err
+	}
+	checkpoint.EnvFileReferences = checkpoint.EnvFileReferences[:0]
+	for _, file := range files {
+		checkpoint.EnvFileReferences = append(checkpoint.EnvFileReferences, file.Path)
+	}
+	return nil
 }
 
 // Switch remains deliberately unavailable until traffic preconditions and the

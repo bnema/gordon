@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -73,7 +74,11 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create production migration preflight: %w", err)
 	}
-	svc.migrationSvc, err = NewMigrationService(preflight, checkpointStore)
+	svc.migrationSvc, err = NewMigrationService(preflight, checkpointStore, MigrationEnvOptions{
+		Config:      cfg,
+		Environment: componentEnvironmentFromEnviron(os.Environ()),
+		Directory:   filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "env"),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}

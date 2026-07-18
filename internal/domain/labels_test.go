@@ -20,6 +20,13 @@ func TestLabelConstantsValues(t *testing.T) {
 		{domain.LabelAttachment, "gordon.attachment"},
 		{domain.LabelAttachedTo, "gordon.attached-to"},
 		{domain.LabelCreated, "gordon.created"},
+		{domain.LabelComponent, "gordon.component"},
+		{domain.LabelComponentRole, "gordon.component.role"},
+		{domain.LabelComponentVersion, "gordon.component.version"},
+		{domain.LabelComponentGeneration, "gordon.component.generation"},
+		{domain.LabelComponentMigrationID, "gordon.component.migration-id"},
+		{domain.LabelComponentOwner, "gordon.component.owner"},
+		{domain.LabelComponentDesiredStateHash, "gordon.component.desired-state-hash"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.expected, func(t *testing.T) {
