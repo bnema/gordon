@@ -191,7 +191,10 @@ func controlHTTPListener(cfg Config, listen func(string, string) (net.Listener, 
 func sameListenPort(left, right string) bool {
 	_, leftPort, leftErr := net.SplitHostPort(left)
 	_, rightPort, rightErr := net.SplitHostPort(right)
-	return leftErr == nil && rightErr == nil && leftPort == rightPort
+	// Port zero asks the kernel to choose an ephemeral port for each listener;
+	// two such requests do not share a socket and must remain valid for tests
+	// and private dynamic deployments.
+	return leftErr == nil && rightErr == nil && leftPort != "0" && rightPort != "0" && leftPort == rightPort
 }
 
 func newControlHTTPServer(handler http.Handler) *http.Server {
