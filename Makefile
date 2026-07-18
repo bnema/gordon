@@ -287,7 +287,7 @@ compat-harness-security: ## Run blocking current-security compatibility gates
 build: ## Build binaries for linux (amd64 and arm64)
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
-	@rm -f $(DIST_DIR)/*
+	@rm -rf $(DIST_DIR)/*
 	@echo "Building with version $(VERSION), commit $(COMMIT), date $(BUILD_DATE)"
 	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-amd64 ./main.go
 	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
