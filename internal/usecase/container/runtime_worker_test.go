@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strconv"
 	"sync"
@@ -570,6 +571,72 @@ func TestRuntimeWorkerSnapshotUsesInstalledTargetAliasOrBackingContainerMembersh
 	assert.Equal(t, domain.RouteTargetStatusUnavailable, snapshot.Routes[0].Status)
 	assert.Empty(t, snapshot.Routes[0].EdgeTargetAlias)
 	assert.Empty(t, snapshot.EdgeAttachments)
+}
+
+func TestRuntimeWorkerSnapshotDiscoversManagedActualRouteWithoutConfiguredRoute(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{
+		containers: map[string]*domain.Container{
+			"opaque-container-id": {
+				ID: "opaque-container-id", Name: "gordon-app.example.test", Status: "running",
+				Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "APP.EXAMPLE.TEST", domain.LabelProxyPort: "8080"},
+			},
+		},
+		networks: []*domain.NetworkInfo{{Name: "gordon-app", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}}},
+	}
+
+	snapshot, err := NewRuntimeWorker(fake).Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 1)
+	assert.Equal(t, "app.example.test", snapshot.Routes[0].Domain)
+	assert.Equal(t, domain.RouteTargetStatusReady, snapshot.Routes[0].Status)
+	assert.Equal(t, "gordon-target-app-example-test", snapshot.Routes[0].EdgeTargetAlias)
+	assert.NotContains(t, snapshot.Routes[0].BackingContainerName, "opaque-container-id")
+	require.Len(t, snapshot.EdgeAttachments, 1)
+	assert.Equal(t, "gordon-app", snapshot.EdgeAttachments[0].NetworkName)
+}
+
+func TestRuntimeWorkerSnapshotManagedActualRouteFailsClosedForSpoofAndAmbiguity(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{
+		containers: map[string]*domain.Container{
+			"managed-ambiguous": {ID: "raw-managed-id", Name: "gordon-app.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "app.example.test", domain.LabelProxyPort: "8080"}},
+			"unmanaged":         {ID: "raw-unmanaged-id", Name: "spoof.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "false", domain.LabelRoute: "true", domain.LabelDomain: "spoof.example.test", domain.LabelProxyPort: "8080"}},
+			"bad-route":         {ID: "raw-bad-id", Name: "bad.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "bad.example.test", domain.LabelProxyPort: "not-a-port"}},
+		},
+		networks: []*domain.NetworkInfo{
+			{Name: "gordon-app-a", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}},
+			{Name: "gordon-app-b", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}},
+		},
+	}
+
+	snapshot, err := NewRuntimeWorker(fake).Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 1, "only a fully labeled Gordon-managed route is considered")
+	assert.Equal(t, "app.example.test", snapshot.Routes[0].Domain)
+	assert.Equal(t, domain.RouteTargetStatusUnavailable, snapshot.Routes[0].Status)
+	assert.Empty(t, snapshot.EdgeAttachments, "ambiguous route must never yield an attachable network")
+	assert.NotContains(t, fmt.Sprint(snapshot), "raw-managed-id")
+	assert.NotContains(t, fmt.Sprint(snapshot), "raw-unmanaged-id")
+}
+
+func TestRuntimeWorkerSnapshotMergesConfiguredAndActualRoutesDeterministically(t *testing.T) {
+	fake := &fakeRuntimeWorkerService{
+		containers: map[string]*domain.Container{
+			"actual": {Name: "gordon-app.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "app.example.test", domain.LabelProxyPort: "8080"}},
+		},
+		routes: []domain.RouteInfo{
+			{Domain: "z.example.test", ContainerStatus: "exited"},
+			{Domain: "app.example.test", ContainerID: "actual", ContainerStatus: "running", Network: "legacy-network"},
+		},
+		networks: []*domain.NetworkInfo{{Name: "gordon-app", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}}},
+	}
+
+	snapshot, err := NewRuntimeWorker(fake).Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 2)
+	assert.Equal(t, []string{"app.example.test", "z.example.test"}, []string{snapshot.Routes[0].Domain, snapshot.Routes[1].Domain})
+	assert.Equal(t, domain.RouteTargetStatusReady, snapshot.Routes[0].Status)
+	require.Len(t, snapshot.EdgeAttachments, 1)
+	assert.Equal(t, "gordon-app", snapshot.EdgeAttachments[0].NetworkName, "actual discovery must override stale configured network")
 }
 
 func testRuntimeCommandIdentity(id string) domain.RuntimeCommandIdentity {

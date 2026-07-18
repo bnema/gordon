@@ -15,19 +15,28 @@ import (
 func TestRuntime_ListNetworksIncludesEndpointNames(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
-		assert.Equal(t, "/v1.41/networks", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[
-			{
+		switch r.URL.Path {
+		case "/v1.41/networks":
+			// Podman-compatible network list responses omit endpoint members.
+			_, _ = w.Write([]byte(`[
+				{"Id":"net1","Name":"gordon-net","Driver":"bridge","Labels":{"gordon.managed":"true"}}
+			]`))
+		case "/v1.41/networks/net1":
+			_, _ = w.Write([]byte(`{
 				"Id":"net1",
 				"Name":"gordon-net",
 				"Driver":"bridge",
 				"Labels":{"gordon.managed":"true"},
-				"Containers":{
-					"abc123":{"Name":"gordon-app.example.com","EndpointID":"ep1"}
-				}
-			}
-		]`))
+				"Containers":{"abc123":{"Name":"gordon-app.example.com","EndpointID":"ep1"}}
+			}`))
+		case "/v1.41/containers/gordon-app.example.com/json":
+			_, _ = w.Write([]byte(`{
+				"NetworkSettings":{"Networks":{"gordon-net":{"Aliases":["gordon-target-app-example-com"]}}}
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer server.Close()
 
@@ -36,7 +45,8 @@ func TestRuntime_ListNetworksIncludesEndpointNames(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, networks, 1)
-	assert.ElementsMatch(t, []string{"abc123", "gordon-app.example.com"}, networks[0].Containers)
+	assert.Equal(t, []string{"gordon-app.example.com", "gordon-target-app-example-com"}, networks[0].Containers)
+	assert.NotContains(t, networks[0].Containers, "abc123", "engine IDs must not cross the runtime boundary")
 }
 
 func TestRuntime_GetContainerNetwork(t *testing.T) {

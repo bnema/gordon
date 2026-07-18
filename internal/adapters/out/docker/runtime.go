@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1593,20 +1594,41 @@ func (r *Runtime) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 
 	var result []*domain.NetworkInfo
 	for _, net := range networks {
-		var containers []string
-		for containerID, endpoint := range net.Containers {
-			containers = append(containers, containerID)
-			if endpoint.Name != "" && endpoint.Name != containerID {
-				containers = append(containers, endpoint.Name)
+		// Docker may include endpoint members in NetworkList, but Podman's
+		// compatible endpoint omits them. Inspect is required to produce the
+		// authoritative membership used to build a safe edge route snapshot.
+		inspected, err := r.client.NetworkInspect(ctx, net.ID, network.InspectOptions{})
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to inspect network")
+		}
+		// Endpoint names and aliases are sufficient for Gordon's alias-based
+		// route discovery. Never carry engine container IDs into actual state.
+		containers := make([]string, 0, len(inspected.Containers)*2)
+		for _, endpoint := range inspected.Containers {
+			if endpoint.Name == "" {
+				continue
+			}
+			containers = append(containers, endpoint.Name)
+			containerInfo, err := r.client.ContainerInspect(ctx, endpoint.Name)
+			if err != nil {
+				return nil, log.WrapErr(err, "failed to inspect network endpoint")
+			}
+			if containerInfo.NetworkSettings == nil {
+				continue
+			}
+			if endpointSettings := containerInfo.NetworkSettings.Networks[inspected.Name]; endpointSettings != nil {
+				containers = append(containers, endpointSettings.Aliases...)
 			}
 		}
+		sort.Strings(containers)
+		containers = slices.Compact(containers)
 
 		result = append(result, &domain.NetworkInfo{
-			ID:         net.ID,
-			Name:       net.Name,
-			Driver:     net.Driver,
+			ID:         inspected.ID,
+			Name:       inspected.Name,
+			Driver:     inspected.Driver,
 			Containers: containers,
-			Labels:     net.Labels,
+			Labels:     inspected.Labels,
 		})
 	}
 

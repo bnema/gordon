@@ -54,7 +54,14 @@ func (o *MigrationOrchestrator) WithRuntimeSnapshotAppNetworks(subscriber out.Ru
 						networks = append(networks, attachment.NetworkName)
 					}
 				}
-				return safeAppNetworks(networks), nil
+				networks = safeAppNetworks(networks)
+				// A route in authenticated actual state is managed runtime
+				// inventory. Never launch an edge that cannot be attached to any
+				// unambiguous managed backend network.
+				if len(snapshot.Routes) != 0 && len(networks) == 0 {
+					return nil, fmt.Errorf("managed runtime routes have no unambiguous app networks")
+				}
+				return networks, nil
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -102,6 +109,13 @@ func (o *MigrationOrchestrator) Prepare(ctx context.Context, checkpoint Migratio
 	if err := o.connectEdgeAppNetworks(ctx, plan, &checkpoint); err != nil {
 		return nil, err
 	}
+	// Control can persist an authenticated edge attestation concurrently while
+	// preparation completes. Preserve that monotonic fact rather than replacing
+	// it with this older local checkpoint.
+	if current, loadErr := o.store.Load(); loadErr == nil && current.MigrationID == checkpoint.MigrationID && current.ComponentGeneration == checkpoint.ComponentGeneration && current.RouteSnapshotGeneration > checkpoint.RouteSnapshotGeneration {
+		checkpoint.RouteSnapshotGeneration = current.RouteSnapshotGeneration
+		checkpoint.AppliedEdgeComponentID = current.AppliedEdgeComponentID
+	}
 	if err := o.store.Save(checkpoint); err != nil {
 		return nil, fmt.Errorf("checkpoint prepared components: %w", err)
 	}
@@ -122,6 +136,10 @@ func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint Migration
 	if checkpoint.Phase != MigrationPhasePrepared {
 		return nil, fmt.Errorf("traffic switch requires prepared phase")
 	}
+	checkpoint, err := o.waitForEdgeAppliedCheckpoint(ctx, checkpoint)
+	if err != nil {
+		return nil, err
+	}
 	plan, err := NewComponentLaunchPlan(checkpoint)
 	if err != nil {
 		return nil, err
@@ -140,6 +158,38 @@ func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint Migration
 		return nil, fmt.Errorf("checkpoint traffic switch: %w", err)
 	}
 	return o.store.Load()
+}
+
+const migrationEdgeAppliedWait = 10 * time.Second
+
+// waitForEdgeAppliedCheckpoint reloads the durable control attestation rather
+// than trusting the CLI process's stale checkpoint copy. A newly started edge
+// reports asynchronously; switch waits only for its non-zero persisted fact.
+func (o *MigrationOrchestrator) waitForEdgeAppliedCheckpoint(ctx context.Context, checkpoint MigrationCheckpoint) (MigrationCheckpoint, error) {
+	if checkpoint.RouteSnapshotGeneration != 0 {
+		return checkpoint, nil
+	}
+	deadline := time.NewTimer(migrationEdgeAppliedWait)
+	defer deadline.Stop()
+	for {
+		persisted, err := o.store.Load()
+		if err != nil {
+			return MigrationCheckpoint{}, fmt.Errorf("load edge applied checkpoint: %w", err)
+		}
+		if persisted.MigrationID != checkpoint.MigrationID || persisted.ComponentGeneration != checkpoint.ComponentGeneration || persisted.Phase != MigrationPhasePrepared {
+			return MigrationCheckpoint{}, fmt.Errorf("edge applied checkpoint no longer matches prepared migration")
+		}
+		if persisted.RouteSnapshotGeneration != 0 {
+			return *persisted, nil
+		}
+		select {
+		case <-ctx.Done():
+			return MigrationCheckpoint{}, fmt.Errorf("wait for edge applied generation: %w", ctx.Err())
+		case <-deadline.C:
+			return MigrationCheckpoint{}, fmt.Errorf("traffic switch requires an authenticated edge applied generation")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func (o *MigrationOrchestrator) normalizePrepareCheckpoint(checkpoint *MigrationCheckpoint) error {

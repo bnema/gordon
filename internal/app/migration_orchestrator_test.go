@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *testing.T) {
@@ -50,6 +52,22 @@ func TestMigrationOrchestratorDryRunAndPrepareAreOrderedIdempotent(t *testing.T)
 	assert.Equal(t, []string{"health:control", "health:runtime", "health:registry", "health:edge"}, launcher.calls, "resume must not recreate already checkpointed components")
 }
 
+func TestMigrationOrchestratorFailsClosedWhenManagedRoutesHaveNoUnambiguousNetwork(t *testing.T) {
+	launcher := &recordingComponentLauncher{}
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, launcher)
+	require.NoError(t, err)
+	orchestrator.WithRuntimeSnapshotAppNetworks(migrationRouteStateSubscriber{snapshot: domain.RuntimeActualStateSnapshot{
+		Routes: []domain.RuntimeRouteState{{Domain: "app.example.test", Status: domain.RouteTargetStatusUnavailable}},
+	}})
+
+	_, err = orchestrator.Prepare(t.Context(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "managed runtime routes have no unambiguous app networks")
+	assert.Empty(t, launcher.calls, "an ambiguous runtime route must not start an edge disconnected from its backend")
+}
+
 func TestMigrationOrchestratorConnectsEdgeOnlyAfterAllHealthChecks(t *testing.T) {
 	launcher := &recordingComponentLauncher{}
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
@@ -59,6 +77,17 @@ func TestMigrationOrchestratorConnectsEdgeOnlyAfterAllHealthChecks(t *testing.T)
 	_, err = orchestrator.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"}})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"network", "start:control", "start:runtime", "start:registry", "start:edge", "health:control", "health:runtime", "health:registry", "health:edge", "connect:gordon-app-one", "connect:gordon-app-two"}, launcher.calls)
+}
+
+type migrationRouteStateSubscriber struct {
+	snapshot domain.RuntimeActualStateSnapshot
+}
+
+func (s migrationRouteStateSubscriber) SubscribeRuntimeState(context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	updates := make(chan domain.RuntimeActualStateSnapshot, 1)
+	updates <- s.snapshot
+	close(updates)
+	return updates, nil
 }
 
 func TestMigrationOrchestratorFailureRetainsOldPathAndCleanupNeverVolumes(t *testing.T) {

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -175,6 +178,10 @@ func (w *RuntimeWorker) Snapshot(ctx context.Context, generation uint64, stateVe
 		return domain.RuntimeActualStateSnapshot{}, fmt.Errorf("list runtime networks: %w", err)
 	}
 	networkAliases := runtimeNetworkAliases(networks)
+	// A replacement runtime has intentionally minimal configuration. Discover
+	// its managed route targets from labels and observed network membership,
+	// then retain configured routes as a legacy fallback for the monolith.
+	routes = mergeRuntimeRouteInfos(routes, managedActualRouteInfos(containers, networkAliases))
 	snapshot := domain.RuntimeActualStateSnapshot{
 		Generation:        generation,
 		StateVersion:      stateVersion,
@@ -399,6 +406,10 @@ func sanitizeRuntimeErrorMessage(err error) string {
 		}
 		return "runtime policy denied"
 	}
+	var lifecycleErr componentLifecycleOperationError
+	if errors.As(err, &lifecycleErr) {
+		return lifecycleErr.Error()
+	}
 	return "runtime command failed"
 }
 
@@ -441,6 +452,99 @@ func buildRuntimeNetworkStates(generation uint64, networks []*domain.NetworkInfo
 		states = append(states, domain.RuntimeNetworkState{Name: n.Name, Driver: n.Driver, Aliases: sanitizedAliases(n.Containers), Generation: generation})
 	}
 	return states
+}
+
+// managedActualRouteInfos derives the replacement runtime's routes only from
+// Gordon-owned running containers. It intentionally retains no raw runtime ID
+// in the returned snapshot: IDs are used locally only to select the observed
+// container before route state is sanitized.
+func managedActualRouteInfos(containers map[string]*domain.Container, networkAliases map[string]map[string]struct{}) []domain.RouteInfo {
+	byDomain := make(map[string]domain.RouteInfo)
+	ambiguous := make(map[string]bool)
+	for containerID, c := range containers {
+		if !isManagedActualRoute(c) {
+			continue
+		}
+		domainName, _ := domain.CanonicalRouteDomain(c.Labels[domain.LabelDomain])
+		if _, exists := byDomain[domainName]; exists {
+			ambiguous[domainName] = true
+			continue
+		}
+		networkName, unique := uniqueRouteNetwork(networkAliases, targetAliasForDomain(domainName), c.Name)
+		if !unique {
+			networkName = ""
+		}
+		byDomain[domainName] = domain.RouteInfo{Domain: domainName, ContainerID: containerID, ContainerStatus: c.Status, Network: networkName}
+	}
+	result := make([]domain.RouteInfo, 0, len(byDomain))
+	for domainName, route := range byDomain {
+		if ambiguous[domainName] {
+			route.Network = ""
+		}
+		result = append(result, route)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Domain < result[j].Domain })
+	return result
+}
+
+func isManagedActualRoute(c *domain.Container) bool {
+	if c == nil || c.Labels[domain.LabelManaged] != "true" || c.Labels[domain.LabelRoute] != "true" {
+		return false
+	}
+	if _, ok := domain.CanonicalRouteDomain(c.Labels[domain.LabelDomain]); !ok {
+		return false
+	}
+	return routeLabelProxyPort(c) != 0 && strings.TrimSpace(c.Name) != "" && !looksLikeRuntimeEngineID(c.Name)
+}
+
+func uniqueRouteNetwork(networkAliases map[string]map[string]struct{}, targetAlias, containerName string) (string, bool) {
+	var networkName string
+	for candidate, aliases := range networkAliases {
+		if !safeRuntimeNetworkName(candidate) {
+			continue
+		}
+		if _, targetPresent := aliases[targetAlias]; !targetPresent {
+			continue
+		}
+		if _, containerPresent := aliases[containerName]; !containerPresent {
+			continue
+		}
+		if networkName != "" {
+			return "", false
+		}
+		networkName = candidate
+	}
+	return networkName, networkName != ""
+}
+
+func safeRuntimeNetworkName(name string) bool {
+	trimmed := strings.TrimSpace(name)
+	return trimmed != "" && !strings.ContainsAny(trimmed, " /\\\\") && filepath.Base(trimmed) == trimmed
+}
+
+// mergeRuntimeRouteInfos gives observed managed state precedence while keeping
+// configured monolith routes untouched. Sorting makes the wire snapshot stable.
+func mergeRuntimeRouteInfos(configured, actual []domain.RouteInfo) []domain.RouteInfo {
+	byDomain := make(map[string]domain.RouteInfo, len(configured)+len(actual))
+	for _, route := range configured {
+		canonical, ok := domain.CanonicalRouteDomain(route.Domain)
+		if !ok {
+			continue
+		}
+		route.Domain = canonical
+		if _, exists := byDomain[canonical]; !exists {
+			byDomain[canonical] = route
+		}
+	}
+	for _, route := range actual {
+		byDomain[route.Domain] = route
+	}
+	result := make([]domain.RouteInfo, 0, len(byDomain))
+	for _, route := range byDomain {
+		result = append(result, route)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Domain < result[j].Domain })
+	return result
 }
 
 func buildRuntimeRouteStates(generation uint64, routes []domain.RouteInfo, containers map[string]*domain.Container, networkAliases map[string]map[string]struct{}) []domain.RuntimeRouteState {
@@ -536,13 +640,23 @@ func unavailableRouteState(generation uint64, routeDomain, status string) domain
 }
 
 func routeTargetPort(c *domain.Container) int {
+	if port := routeLabelProxyPort(c); port != 0 {
+		return port
+	}
+	if c != nil && len(c.Ports) > 0 && c.Ports[0] > 0 && c.Ports[0] <= 65535 {
+		return c.Ports[0]
+	}
+	return 0
+}
+
+func routeLabelProxyPort(c *domain.Container) int {
+	if c == nil {
+		return 0
+	}
 	if raw := c.Labels[domain.LabelProxyPort]; raw != "" {
 		if port, err := strconv.Atoi(raw); err == nil && port > 0 && port <= 65535 {
 			return port
 		}
-	}
-	if len(c.Ports) > 0 && c.Ports[0] > 0 && c.Ports[0] <= 65535 {
-		return c.Ports[0]
 	}
 	return 0
 }
@@ -610,12 +724,26 @@ func sanitizedAliases(values []string) []string {
 	aliases := make([]string, 0, len(values))
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
-		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" || strings.ContainsAny(trimmed, `/\\`) {
+		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" || strings.ContainsAny(trimmed, `/\\`) || looksLikeRuntimeEngineID(trimmed) {
 			continue
 		}
 		aliases = append(aliases, trimmed)
 	}
-	return aliases
+	sort.Strings(aliases)
+	return slices.Compact(aliases)
+}
+
+func looksLikeRuntimeEngineID(value string) bool {
+	if len(value) != 12 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		isHex := (char >= '0' && char <= '9') || (char >= 'a' && char <= 'f') || (char >= 'A' && char <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 func safeRuntimeVolumeName(name string) bool {

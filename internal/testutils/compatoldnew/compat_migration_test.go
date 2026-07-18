@@ -2,8 +2,13 @@ package compatoldnew
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,10 +80,13 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.runMissingEnvPlan()
 	fixture.runCLI("migrate", "prepare", "--json")
 	status := fixture.runCLI("migrate", "status", "--json")
-	require.Contains(t, status, `"bootstrap_runtime_endpoint":"unix:///var/lib/gordon/migration/`, "old monolith must use the private Gordon Unix RPC socket")
+	require.Contains(t, strings.ReplaceAll(strings.ReplaceAll(status, " ", ""), "\n", ""), `"bootstrap_runtime_endpoint":"unix:///var/lib/gordon/migration/`, "old monolith must use the private Gordon Unix RPC socket")
 	fixture.assertPreparedTargets()
+	fixture.assertPreparedEdgeProbeListener()
 	fixture.assertRuntimeBootstrapTransport()
 	fixture.assertRuntimeSocketExclusive()
+	fixture.assertOldMonolithSeesPrivateRuntimeSocket()
+	fixture.assertAuthenticatedEdgeAttestation()
 
 	// A second prepare is an interruption/retry at the persisted checkpoint
 	// boundary. It must discover the same target generation instead of making a
@@ -107,8 +115,12 @@ type realMigrationFixture struct {
 
 func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFixture {
 	t.Helper()
+	cleanupMigrationCandidates(ctx)
 	runID := RunID("migration-cli")
-	root := t.TempDir()
+	// Keep a failed fixture only on explicit request so rootless Podman state can
+	// be inspected without t.TempDir removing the mounted checkpoint first.
+	root, err := os.MkdirTemp("", "gordon-compat-migration-")
+	require.NoError(t, err)
 	fixture := &realMigrationFixture{
 		t: t, ctx: ctx, runID: runID, root: root,
 		image: "localhost/gordon-compat-migration-cli-" + sanitizePart(runID),
@@ -128,19 +140,120 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	require.NoError(t, migrationPodman(ctx, volumeArgs...))
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0o700))
 	require.NoError(t, os.WriteFile(fixture.config, []byte(fixture.configTOML()), 0o600))
-	fixture.startOldMonolith(labels)
+	// Start the managed app before runtime recovery so its route is present in
+	// the old runtime snapshot, then reassert its private network attachment
+	// after the monolith's one-time startup cleanup has completed.
 	fixture.startOldApp(labels)
+	fixture.startOldMonolith(labels)
+	fixture.restoreOldAppNetwork()
 	return fixture
 }
 
 func (f *realMigrationFixture) cleanup() {
+	if f.t.Failed() {
+		f.t.Logf("migration failure diagnostics (container state and Gordon component logs only):\n%s", f.failureDiagnostics())
+	}
 	if f.service != nil && f.service.Process != nil {
 		_ = f.service.Process.Kill()
 		_, _ = f.service.Process.Wait()
 	}
+	if os.Getenv("GORDON_COMPAT_KEEP_FAILURE") == "1" && f.t.Failed() {
+		f.t.Logf("preserving failed migration fixture at %s", f.root)
+		return
+	}
 	_ = migrationPodman(context.Background(), "rm", "--force", f.old)
+	cleanupMigrationCandidates(context.Background())
 	_ = CleanupRunResources(context.Background(), f.runID)
 	_ = migrationPodman(context.Background(), "image", "rm", "--force", f.image)
+	_ = os.RemoveAll(f.root)
+}
+
+func (f *realMigrationFixture) failureDiagnostics() string {
+	containers, err := podmanOutput(f.ctx, "ps", "--all", "--format", "{{.Names}} {{.Status}}")
+	if err != nil {
+		return "list candidate containers: " + err.Error()
+	}
+	var diagnostics []string
+	for _, line := range strings.FieldsFunc(containers, func(r rune) bool { return r == '\n' }) {
+		name, _, found := strings.Cut(line, " ")
+		if !found || strings.TrimSpace(name) == "" || (name != f.old && !strings.Contains(name, "-migration-g")) {
+			continue
+		}
+		logs, logsErr := podmanOutput(f.ctx, "logs", name)
+		state, stateErr := podmanOutput(f.ctx, "inspect", "--format", "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} mounts={{range .Mounts}}{{.Source}}:{{.Destination}};{{end}}", name)
+		networks, networksErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", name)
+		identity, identityErr := podmanOutput(f.ctx, "exec", name, "sh", "-c", "for key in GORDON_COMPONENT_ID GORDON_MIGRATION_EDGE_COMPONENT_ID GORDON_COMPONENT_EDGE_TOKEN GORDON_COMPONENT_RUNTIME_TOKEN; do if printenv \"$key\" >/dev/null; then printf '%s=set\\n' \"$key\"; else printf '%s=unset\\n' \"$key\"; fi; done")
+		edgeHealth, edgeHealthErr := "", error(nil)
+		if strings.HasPrefix(name, "gordon-edge-") {
+			edgeHealth, edgeHealthErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "wget -S -O /dev/null http://127.0.0.1:18081/healthz; wget -S -O /dev/null http://gordon-control:9443")
+		}
+		role := ""
+		for _, candidateRole := range []string{"control", "runtime", "edge", "registry"} {
+			if strings.Contains(name, "gordon-"+candidateRole+"-") {
+				role = candidateRole
+				break
+			}
+		}
+		configKeys := ""
+		processes, processesErr := "", error(nil)
+		listeners, listenersErr := "", error(nil)
+		if role != "" {
+			configKeys = componentConfigKeyNames(filepath.Join(f.root, "data", "migration", "config", "migration", "1", role+".toml"))
+			processes, processesErr = podmanOutput(f.ctx, "exec", name, "ps", "-o", "pid,stat,args")
+			listeners, listenersErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6")
+		}
+		diagnostics = append(diagnostics, fmt.Sprintf("%s state=%q state_err=%v networks=%q networks_err=%v identity_and_token_presence=%q identity_err=%v config_keys=%q processes=%q processes_err=%v listeners=%q listeners_err=%v edge_health=%q edge_health_err=%v logs=%q logs_err=%v", name, state, stateErr, networks, networksErr, identity, identityErr, configKeys, processes, processesErr, listeners, listenersErr, edgeHealth, edgeHealthErr, logs, logsErr))
+	}
+	if len(diagnostics) == 0 {
+		return "no candidate containers remain; state=" + strings.TrimSpace(containers)
+	}
+	return strings.Join(diagnostics, "\n")
+}
+
+func componentConfigKeyNames(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "unavailable"
+	}
+	keys := make([]string, 0)
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			keys = append(keys, line)
+			continue
+		}
+		if key, _, found := strings.Cut(line, "="); found {
+			keys = append(keys, strings.TrimSpace(key))
+		}
+	}
+	return strings.Join(keys, ",")
+}
+
+func cleanupMigrationCandidates(ctx context.Context) {
+	for _, role := range []string{"control", "runtime", "registry", "edge"} {
+		_ = migrationPodman(ctx, "rm", "--force", "gordon-"+role+"-migration-g1")
+	}
+	_ = migrationPodman(ctx, "network", "rm", "gordon-internal-migration-g1")
+	for _, role := range []string{"control", "runtime", "registry"} {
+		_ = migrationPodman(ctx, "volume", "rm", "--force", "gordon-"+role+"-migration-g1")
+	}
+}
+
+// componentContainers intentionally selects Gordon's migration identity rather
+// than harness-only labels: component creation is production-owned by the CLI.
+func (f *realMigrationFixture) componentContainers() ([]PodmanResource, error) {
+	output, err := podmanOutput(f.ctx, "ps", "--all", "--filter", "label="+domain.LabelComponentMigrationID+"=migration", "--format", "json")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(output) == "" || strings.TrimSpace(output) == "null" {
+		return nil, nil
+	}
+	var containers []PodmanResource
+	if err := json.Unmarshal([]byte(output), &containers); err != nil {
+		return nil, fmt.Errorf("decode migration component containers: %w", err)
+	}
+	return containers, nil
 }
 
 func (f *realMigrationFixture) buildCandidateImage() {
@@ -158,16 +271,17 @@ func (f *realMigrationFixture) buildCandidateImage() {
 
 func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	labels = cloneMigrationLabels(labels)
+	// The old serving container is migration-owned but is not an application
+	// route. Only the fixture app below carries the route domain; otherwise the
+	// runtime snapshot can select the monolith itself as that route's backend.
 	labels[domain.LabelManaged] = "true"
-	labels[domain.LabelRoute] = "true"
-	labels[domain.LabelDomain] = "app.example.test"
 	// The old serving Gordon is deliberately a normal rootless container, not
 	// host-networked. It creates target components only through its own mounted
 	// engine socket; the target handoff is a private Gordon Unix RPC socket.
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
@@ -177,9 +291,25 @@ func (f *realMigrationFixture) startOldApp(labels map[string]string) {
 	labels[domain.LabelManaged] = "true"
 	labels[domain.LabelRoute] = "true"
 	labels[domain.LabelDomain] = "app.example.test"
-	args := append([]string{"run", "--detach", "--name", f.app, "--network", f.network, "--volume", f.volume + ":/data"}, migrationLabelArgs(labels)...)
+	// Match a Gordon-managed route's runtime contract: snapshots identify the
+	// backend through its deterministic network alias and declared proxy port.
+	// Without these, the real edge correctly has no route target and returns
+	// 403, which would make this fixture test only its own invalid setup.
+	labels[domain.LabelProxyPort] = "8080"
+	args := append([]string{"run", "--detach", "--name", f.app, "--network", f.network, "--network-alias", "gordon-target-app-example-test", "--expose", "8080", "--volume", f.volume + ":/data"}, migrationLabelArgs(labels)...)
 	args = append(args, "docker.io/library/alpine:3.20", "sh", "-c", "mkdir -p /srv; printf migration-app-ok >/srv/index.html; exec busybox httpd -f -p 8080 -h /srv")
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
+}
+
+func (f *realMigrationFixture) restoreOldAppNetwork() {
+	f.t.Helper()
+	// The legacy monolith's startup cleanup can detach unconfigured fixture
+	// routes. The candidate is only allowed to migrate an attached old route.
+	time.Sleep(2 * time.Second)
+	err := migrationPodman(f.ctx, "network", "connect", "--alias", "gordon-target-app-example-test", f.network, f.app)
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		require.NoError(f.t, err, "restore old app network")
+	}
 }
 
 func (f *realMigrationFixture) runCLI(args ...string) string {
@@ -187,10 +317,34 @@ func (f *realMigrationFixture) runCLI(args ...string) string {
 	args = append(args, "--config", f.config)
 	command := append([]string{"exec", "--env", "GORDON_MIGRATION_IMAGE=" + f.image, f.old, "gordon"}, args...)
 	out, err := podmanOutput(f.ctx, command...)
+	if err != nil {
+		f.t.Logf("candidate CLI %s failed; prepared runtime diagnostics:\n%s", strings.Join(args, " "), f.preparedRuntimeDiagnostics())
+	}
 	require.NoError(f.t, err, "candidate CLI %s", strings.Join(args, " "))
 	require.NotEmpty(f.t, strings.TrimSpace(out), "candidate CLI %s must return JSON", strings.Join(args, " "))
 	f.t.Logf("candidate CLI %s: %s", strings.Join(args, " "), strings.TrimSpace(out))
 	return out
+}
+
+func (f *realMigrationFixture) preparedRuntimeDiagnostics() string {
+	containers, err := f.componentContainers()
+	if err != nil {
+		return "inspect migration containers: " + err.Error()
+	}
+	var diagnostics []string
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] != "runtime" {
+			continue
+		}
+		name := container.resourceName()
+		mounts, mountErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .Mounts}}", name)
+		logs, logsErr := podmanOutput(f.ctx, "logs", name)
+		diagnostics = append(diagnostics, fmt.Sprintf("runtime=%s mounts=%q mount_err=%v logs=%q logs_err=%v", name, mounts, mountErr, logs, logsErr))
+	}
+	if len(diagnostics) == 0 {
+		return "prepared runtime was not created"
+	}
+	return strings.Join(diagnostics, "\n")
 }
 
 func (f *realMigrationFixture) runMissingEnvPlan() {
@@ -204,7 +358,7 @@ func (f *realMigrationFixture) runMissingEnvPlan() {
 
 func (f *realMigrationFixture) assertPreparedTargets() {
 	f.t.Helper()
-	containers, err := InspectContainers(f.ctx, f.runID)
+	containers, err := f.componentContainers()
 	require.NoError(f.t, err)
 	roles := map[string]PodmanResource{}
 	for _, container := range containers {
@@ -213,20 +367,94 @@ func (f *realMigrationFixture) assertPreparedTargets() {
 			require.Equal(f.t, "true", container.Labels[domain.LabelComponent])
 			require.Equal(f.t, "1", container.Labels[domain.LabelComponentGeneration])
 			require.NotEmpty(f.t, container.Labels[domain.LabelComponentMigrationID])
-			running, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", container.resourceName())
-			require.NoError(f.t, inspectErr)
-			require.Equal(f.t, "true", strings.TrimSpace(running), "%s must be healthy/running", role)
+			require.Eventually(f.t, func() bool {
+				running, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", container.resourceName())
+				return inspectErr == nil && strings.TrimSpace(running) == "true"
+			}, 3*time.Second, 50*time.Millisecond, "%s must be healthy/running", role)
 		}
 	}
 	require.Len(f.t, roles, 4, "only candidate CLI/runtime may create exactly one target role generation")
 	for _, role := range []string{"control", "runtime", "registry", "edge"} {
 		require.Contains(f.t, roles, role)
 	}
+	edgeID := roles["edge"].Labels[domain.LabelComponentRole]
+	require.Equal(f.t, "edge", edgeID)
+	identity, identityErr := podmanOutput(f.ctx, "exec", roles["edge"].resourceName(), "printenv", "GORDON_COMPONENT_ID")
+	require.NoError(f.t, identityErr)
+	require.Equal(f.t, "gordon-edge-migration-g1", strings.TrimSpace(identity))
+	controlIdentity, controlIdentityErr := podmanOutput(f.ctx, "exec", roles["control"].resourceName(), "printenv", "GORDON_MIGRATION_EDGE_COMPONENT_ID")
+	require.NoError(f.t, controlIdentityErr)
+	require.Equal(f.t, strings.TrimSpace(identity), strings.TrimSpace(controlIdentity))
+}
+
+// assertPreparedEdgeProbeListener verifies the temporary listener is the sole
+// host publish during prepare and that both application and registry requests
+// really traverse the prepared edge before public cutover.
+func (f *realMigrationFixture) assertPreparedEdgeProbeListener() {
+	f.t.Helper()
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] != "edge" {
+			continue
+		}
+		ports, portErr := podmanOutput(f.ctx, "port", container.resourceName())
+		require.NoError(f.t, portErr)
+		require.Equal(f.t, fmt.Sprintf("%d/tcp -> 127.0.0.1:18080", f.port), strings.TrimSpace(ports))
+		for _, probe := range []struct {
+			host string
+			path string
+		}{
+			{"app.example.test", "/"},
+			{"registry.example.test", "/v2/"},
+		} {
+			// Rootless port forwarding does not preserve the loopback peer address.
+			// The unauthenticated request proves the final CIDR boundary remains
+			// strict; only the migration coordinator's dedicated credential can
+			// exercise the prepared listener.
+			missing := f.preparedEdgeRequest(probe.host, probe.path, "")
+			require.Equal(f.t, http.StatusForbidden, missing.StatusCode, "prepared edge %s must reject a missing migration credential", probe.host)
+			missing.Body.Close()
+
+			require.Eventually(f.t, func() bool {
+				response := f.preparedEdgeRequest(probe.host, probe.path, fixtureMigrationProbeToken())
+				defer response.Body.Close()
+				if probe.path == "/v2/" {
+					return response.StatusCode == http.StatusOK || response.StatusCode == http.StatusUnauthorized
+				}
+				return response.StatusCode < http.StatusBadRequest
+			}, 10*time.Second, 50*time.Millisecond, "authenticated prepared edge %s probe", probe.host)
+		}
+		return
+	}
+	f.t.Fatal("prepared edge was not found")
+}
+
+func (f *realMigrationFixture) preparedEdgeRequest(host, path, token string) *http.Response {
+	f.t.Helper()
+	request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, "http://127.0.0.1:18080"+path, nil)
+	require.NoError(f.t, err)
+	request.Host = host
+	if token != "" {
+		request.Header.Set("X-Gordon-Migration-Probe", token)
+	}
+	response, err := (&http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
+	require.NoError(f.t, err, "prepared edge %s probe", host)
+	return response
+}
+
+// fixtureMigrationProbeToken mirrors the domain-separated migration protocol
+// credential without importing app internals into this black-box compatibility
+// fixture. It must never be persisted or printed.
+func fixtureMigrationProbeToken() string {
+	mac := hmac.New(sha256.New, []byte("fixture-runtime-handoff-token"))
+	_, _ = mac.Write([]byte("gordon-migration-probe-token-v1"))
+	return "gordon_migration_probe_" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func (f *realMigrationFixture) assertRuntimeBootstrapTransport() {
 	f.t.Helper()
-	containers, err := InspectContainers(f.ctx, f.runID)
+	containers, err := f.componentContainers()
 	require.NoError(f.t, err)
 	for _, container := range containers {
 		if container.Labels[domain.LabelComponentRole] != "runtime" {
@@ -240,9 +468,31 @@ func (f *realMigrationFixture) assertRuntimeBootstrapTransport() {
 	f.t.Fatal("prepared runtime was not found")
 }
 
+func (f *realMigrationFixture) assertAuthenticatedEdgeAttestation() {
+	f.t.Helper()
+	path := filepath.Join(f.root, "data", "migration", "migration", "attestation", "checkpoint.json")
+	require.Eventually(f.t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		var checkpoint struct {
+			RouteSnapshotGeneration uint64 `json:"route_snapshot_generation"`
+			AppliedEdgeComponentID  string `json:"applied_edge_component_id"`
+		}
+		return json.Unmarshal(data, &checkpoint) == nil && checkpoint.RouteSnapshotGeneration > 0 && checkpoint.AppliedEdgeComponentID == "gordon-edge-migration-g1"
+	}, 10*time.Second, 50*time.Millisecond, "authenticated edge RPC must persist its matching generation and identity in shared attestation")
+}
+
+func (f *realMigrationFixture) assertOldMonolithSeesPrivateRuntimeSocket() {
+	f.t.Helper()
+	_, err := podmanOutput(f.ctx, "exec", f.old, "test", "-S", "/var/lib/gordon/migration/migration/runtime-control.sock")
+	require.NoError(f.t, err, "old monolith must see the private Gordon socket at the same in-container path used by the handoff client")
+}
+
 func (f *realMigrationFixture) assertRuntimeSocketExclusive() {
 	f.t.Helper()
-	containers, err := InspectContainers(f.ctx, f.runID)
+	containers, err := f.componentContainers()
 	require.NoError(f.t, err)
 	for _, container := range containers {
 		role := container.Labels[domain.LabelComponentRole]
@@ -274,7 +524,7 @@ func (f *realMigrationFixture) configTOML() string {
 port = %d
 registry_port = 15000
 data_dir = %q
-gordon_domain = "gordon.example.test"
+gordon_domain = "app.example.test"
 registry_domain = "registry.example.test"
 
 [auth]
@@ -284,6 +534,10 @@ secrets_backend = "unsafe"
 [network_isolation]
 enabled = true
 network_prefix = "gordon"
+
+[control]
+listen_address = "0.0.0.0:9443"
+insecure_tls = true
 
 [runtime]
 listen_address = "127.0.0.1:19444"
