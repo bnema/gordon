@@ -23,6 +23,7 @@ import (
 	edgev1 "github.com/bnema/gordon/api/gordon/edge/v1"
 	eventsv1 "github.com/bnema/gordon/api/gordon/events/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
+	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
@@ -66,8 +67,11 @@ func TestControlRoleBringup(t *testing.T) {
 			newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
 			newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
 			newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
-			newSnapshotProducer:        edgesnapshot.NewProducer,
-			newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
+			// Config persistence is exercised below; isolate it from Viper's
+			// asynchronous file watcher, whose lifecycle has dedicated tests.
+			setupConfigHotReload:    func(context.Context, configWatcher, loadedConfigApplier) error { return nil },
+			newSnapshotProducer:     edgesnapshot.NewProducer,
+			newTrafficGraphProducer: edgesnapshot.NewTrafficGraphProducer,
 		})
 	}()
 
@@ -125,6 +129,7 @@ func TestControlRoleBringup(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, ack.GetAck().GetDuplicate())
 	assert.Equal(t, 2, runtime.worker.calls(), "duplicate image event must not repeat its production effect")
+	assertControlRemoteMethodMatrix(t, remote.NewClient(httpBase, remote.WithToken(controlRoleRemoteToken(t, configPath))), runtime.worker)
 
 	wrongScopeContext := grpctest.AuthenticatedContext(context.Background(), "edge-only-token")
 	_, err = events.PublishEvent(wrongScopeContext, controlRoleImageEvent())
@@ -371,6 +376,270 @@ func assertControlRemoteSmoke(t *testing.T, baseURL, token string, worker *contr
 	command := worker.command(0)
 	require.Equal(t, "app:v1", command.Image)
 	require.True(t, command.InternalDeploy)
+}
+
+// assertControlRemoteMethodMatrix is a concrete inventory of every exported
+// remote.Client operation. It intentionally invokes methods (including aliases)
+// through the production control listener: this catches mismatched paths, DTOs,
+// nil services, and mutations that silently do nothing.
+func assertControlRemoteMethodMatrix(t *testing.T, client *remote.Client, worker *controlRoleRuntimeWorker) {
+	t.Helper()
+	ctx := context.Background()
+	const domainName = "remote-matrix.example.com"
+	const image = "remote/matrix:v1"
+	mustOK := func(name string, call func() error) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) { require.NoError(t, call()) })
+	}
+	mustStatus := func(name string, want int, call func() error) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			var responseErr *remote.HTTPError
+			require.ErrorAs(t, err, &responseErr)
+			require.Equal(t, want, responseErr.StatusCode)
+			require.NotEmpty(t, responseErr.Body)
+		})
+	}
+	mustError := func(name, message string, call func() error) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) { require.ErrorContains(t, call(), message) })
+	}
+
+	// Read-only route/config/status methods assert their actual DTO content.
+	mustOK("ListRoutes", func() error { routes, err := client.ListRoutes(ctx); require.NotEmpty(t, routes); return err })
+	mustOK("ListRoutesWithDetails", func() error {
+		routes, err := client.ListRoutesWithDetails(ctx)
+		require.NotEmpty(t, routes)
+		return err
+	})
+	mustOK("ListNetworks", func() error { _, err := client.ListNetworks(ctx); return err })
+	mustOK("ListAttachments", func() error { _, err := client.ListAttachments(ctx, "app.example.com"); return err })
+	mustOK("GetRoute", func() error {
+		route, err := client.GetRoute(ctx, "app.example.com")
+		if err == nil {
+			require.Equal(t, "app:v1", route.Image)
+		}
+		return err
+	})
+	mustStatus("GetRouteCleanupPreview", http.StatusNotImplemented, func() error { _, err := client.GetRouteCleanupPreview(ctx, "app.example.com"); return err })
+	mustOK("FindRoutesByImage", func() error {
+		routes, err := client.FindRoutesByImage(ctx, "app")
+		if err == nil {
+			require.NotEmpty(t, routes)
+		}
+		return err
+	})
+	mustOK("GetConfig", func() error {
+		cfg, err := client.GetConfig(ctx)
+		if err == nil {
+			require.NotEmpty(t, cfg.Routes)
+		}
+		return err
+	})
+	mustOK("GetStatus", func() error {
+		status, err := client.GetStatus(ctx)
+		if err == nil {
+			require.GreaterOrEqual(t, status.Routes, 1)
+		}
+		return err
+	})
+	mustOK("GetTLSStatus", func() error {
+		status, err := client.GetTLSStatus(ctx)
+		if err == nil {
+			require.NotNil(t, status)
+		}
+		return err
+	})
+	mustOK("GetTrafficStatus", func() error {
+		status, err := client.GetTrafficStatus(ctx)
+		if err == nil {
+			require.NotNil(t, status)
+		}
+		return err
+	})
+	mustOK("GetHealth", func() error {
+		health, err := client.GetHealth(ctx)
+		if err == nil {
+			require.NotNil(t, health)
+		}
+		return err
+	})
+	mustOK("Ping", func() error { return client.Ping(ctx) })
+	mustOK("VerifyAuth", func() error {
+		result, err := client.VerifyAuth(ctx)
+		if err == nil {
+			require.True(t, result.Valid)
+		}
+		return err
+	})
+	// The control token deliberately has admin-only scope, so registry exchange
+	// must fail as an explicit authorization error rather than being accepted.
+	mustError("ExchangeRegistryToken", "forbidden: insufficient scope", func() error { _, err := client.ExchangeRegistryToken(ctx, "control-role-remote"); return err })
+
+	// Route mutations must be observable in durable config, and deploy/restart
+	// must reach the runtime command port rather than only return HTTP 200.
+	mustOK("AddRoute", func() error { return client.AddRoute(ctx, domain.Route{Domain: domainName, Image: image}) })
+	mustOK("UpdateRoute", func() error {
+		return client.UpdateRoute(ctx, domain.Route{Domain: domainName, Image: "remote/matrix:v2"})
+	})
+	mustOK("AddRoute effect", func() error {
+		route, err := client.GetRoute(ctx, domainName)
+		if err == nil {
+			require.Equal(t, "remote/matrix:v2", route.Image)
+		}
+		return err
+	})
+	mustOK("RemoveRouteWithCleanup", func() error {
+		result, err := client.RemoveRouteWithCleanup(ctx, domainName)
+		if err == nil {
+			require.NotNil(t, result)
+		}
+		return err
+	})
+	mustOK("RemoveRoute effect", func() error {
+		_, err := client.GetRoute(ctx, domainName)
+		require.ErrorIs(t, err, domain.ErrRouteNotFound)
+		return nil
+	})
+	mustOK("AddRoute for RemoveRoute", func() error { return client.AddRoute(ctx, domain.Route{Domain: domainName, Image: image}) })
+	mustOK("RemoveRoute", func() error { return client.RemoveRoute(ctx, domainName) })
+	// Bootstrap requires a registry domain, intentionally absent from this split
+	// fixture; retain its exact validation contract instead of accepting a 500.
+	mustStatus("Bootstrap", http.StatusBadRequest, func() error {
+		_, err := client.Bootstrap(ctx, dto.BootstrapRequest{Domain: domainName, Image: image})
+		return err
+	})
+	mustOK("AddRoute for config mutation", func() error { return client.AddRoute(ctx, domain.Route{Domain: domainName, Image: image}) })
+	mustOK("Reload", func() error { return client.Reload(ctx) })
+	beforeCommands := worker.calls()
+	mustOK("Deploy", func() error {
+		result, err := client.Deploy(ctx, "app.example.com")
+		if err == nil {
+			require.Equal(t, "app.example.com", result.Domain)
+		}
+		return err
+	})
+	mustOK("Deploy runtime effect", func() error {
+		require.Eventually(t, func() bool { return worker.calls() > beforeCommands }, time.Second, time.Millisecond)
+		return nil
+	})
+	mustStatus("DeployIntent", http.StatusServiceUnavailable, func() error { return client.DeployIntent(ctx, image) })
+	mustOK("Restart", func() error {
+		result, err := client.Restart(ctx, "app.example.com", false)
+		if err == nil {
+			require.Equal(t, "app.example.com", result.Domain)
+		}
+		return err
+	})
+
+	// Config mutations are read back to prove the remote client did not merely
+	// parse a successful response body.
+	mustOK("SetSecrets", func() error { return client.SetSecrets(ctx, domainName, map[string]string{"REMOTE_MATRIX": "value"}) })
+	mustOK("ListSecretsWithAttachments", func() error {
+		result, err := client.ListSecretsWithAttachments(ctx, domainName)
+		if err == nil {
+			require.Contains(t, result.Keys, "REMOTE_MATRIX")
+		}
+		return err
+	})
+	mustOK("ListSecrets", func() error {
+		keys, err := client.ListSecrets(ctx, domainName)
+		if err == nil {
+			require.Contains(t, keys, "REMOTE_MATRIX")
+		}
+		return err
+	})
+	mustOK("DeleteSecret", func() error { return client.DeleteSecret(ctx, domainName, "REMOTE_MATRIX") })
+	mustOK("AddAttachment", func() error { return client.AddAttachment(ctx, domainName, "sidecar:v1") })
+	mustOK("GetAttachmentsConfig", func() error {
+		images, err := client.GetAttachmentsConfig(ctx, domainName)
+		if err == nil {
+			require.Contains(t, images, "sidecar:v1")
+		}
+		return err
+	})
+	mustOK("GetAllAttachmentsConfig", func() error {
+		all, err := client.GetAllAttachmentsConfig(ctx)
+		if err == nil {
+			require.Contains(t, all[domainName], "sidecar:v1")
+		}
+		return err
+	})
+	mustOK("FindAttachmentTargetsByImage", func() error {
+		targets, err := client.FindAttachmentTargetsByImage(ctx, "sidecar:v1")
+		if err == nil {
+			require.Contains(t, targets, domainName)
+		}
+		return err
+	})
+	// Attachment-secret persistence needs an attachment service identity, which
+	// this config-only fixture cannot create; its public validation error is
+	// stable and ensures these client paths cannot panic in split mode.
+	mustStatus("SetAttachmentSecrets", http.StatusBadRequest, func() error {
+		return client.SetAttachmentSecrets(ctx, domainName, "sidecar:v1", map[string]string{"MATRIX": "value"})
+	})
+	mustStatus("DeleteAttachmentSecret", http.StatusBadRequest, func() error { return client.DeleteAttachmentSecret(ctx, domainName, "sidecar:v1", "MATRIX") })
+	mustOK("RemoveAttachment", func() error { return client.RemoveAttachment(ctx, domainName, "sidecar:v1") })
+	mustOK("AddAutoRouteAllowedDomain", func() error { return client.AddAutoRouteAllowedDomain(ctx, "*.remote-matrix.test") })
+	mustOK("GetAutoRouteAllowedDomains", func() error {
+		domains, err := client.GetAutoRouteAllowedDomains(ctx)
+		if err == nil {
+			require.Contains(t, domains, "*.remote-matrix.test")
+		}
+		return err
+	})
+	mustOK("RemoveAutoRouteAllowedDomain", func() error { return client.RemoveAutoRouteAllowedDomain(ctx, "*.remote-matrix.test") })
+
+	// These services are deliberately absent in the split control fixture. The
+	// public, documented capability result is 503 JSON—not a nil panic or 500.
+	mustStatus("ListImages", http.StatusServiceUnavailable, func() error { _, err := client.ListImages(ctx); return err })
+	mustStatus("PruneImages", http.StatusNotImplemented, func() error { _, err := client.PruneImages(ctx, dto.ImagePruneRequest{}); return err })
+	mustStatus("ListTags", http.StatusServiceUnavailable, func() error { _, err := client.ListTags(ctx, "app"); return err })
+	mustStatus("ListBackups", http.StatusServiceUnavailable, func() error { _, err := client.ListBackups(ctx, ""); return err })
+	mustStatus("BackupStatus", http.StatusServiceUnavailable, func() error { _, err := client.BackupStatus(ctx); return err })
+	mustStatus("RunBackup", http.StatusServiceUnavailable, func() error { _, err := client.RunBackup(ctx, domainName, "db"); return err })
+	mustStatus("DetectDatabases", http.StatusServiceUnavailable, func() error { _, err := client.DetectDatabases(ctx, domainName); return err })
+	mustStatus("ListVolumeBackups", http.StatusServiceUnavailable, func() error { _, err := client.ListVolumeBackups(ctx, ""); return err })
+	mustStatus("VolumeBackupStatus", http.StatusServiceUnavailable, func() error { _, err := client.VolumeBackupStatus(ctx); return err })
+	mustStatus("RunVolumeBackups", http.StatusServiceUnavailable, func() error { _, err := client.RunVolumeBackups(ctx, domainName, "volume"); return err })
+	mustStatus("ListVolumes", http.StatusServiceUnavailable, func() error { _, err := client.ListVolumes(ctx); return err })
+	mustStatus("PruneVolumes", http.StatusServiceUnavailable, func() error { _, err := client.PruneVolumes(ctx, dto.VolumePruneRequest{DryRun: true}); return err })
+	mustStatus("ListOrphanedAttachments", http.StatusServiceUnavailable, func() error { _, err := client.ListOrphanedAttachments(ctx); return err })
+	mustStatus("CleanupOrphanedAttachments", http.StatusServiceUnavailable, func() error { _, err := client.CleanupOrphanedAttachments(ctx, "", false); return err })
+	mustStatus("ListPreviews", http.StatusServiceUnavailable, func() error { _, err := client.ListPreviews(ctx); return err })
+	mustStatus("GetPreview", http.StatusServiceUnavailable, func() error { _, err := client.GetPreview(ctx, "preview"); return err })
+	mustStatus("DeletePreview", http.StatusServiceUnavailable, func() error { return client.DeletePreview(ctx, "preview") })
+	mustStatus("ExtendPreview", http.StatusServiceUnavailable, func() error { return client.ExtendPreview(ctx, "preview", "1h") })
+
+	mustOK("GetProcessLogs", func() error { _, err := client.GetProcessLogs(ctx, 1); return err })
+	mustOK("GetContainerLogs", func() error { _, err := client.GetContainerLogs(ctx, "app.example.com", 1); return err })
+	// The fixture's log follower has no producer. Cancellation is the defined
+	// lifecycle for both streaming methods and proves their remote paths return
+	// without a nil service panic or leaking the HTTP request.
+	mustError("StreamProcessLogs", "context deadline exceeded", func() error {
+		streamCtx, cancel := context.WithTimeout(ctx, 25*time.Millisecond)
+		defer cancel()
+		_, err := client.StreamProcessLogs(streamCtx, 1)
+		return err
+	})
+	mustOK("StreamContainerLogs", func() error {
+		streamCtx, cancel := context.WithCancel(ctx)
+		stream, err := client.StreamContainerLogs(streamCtx, "app.example.com", 1)
+		if err != nil {
+			cancel()
+			return err
+		}
+		require.NotNil(t, stream)
+		cancel()
+		select {
+		case _, ok := <-stream:
+			require.False(t, ok, "canceled stream must close")
+		case <-time.After(time.Second):
+			t.Fatal("canceled stream did not close")
+		}
+		return nil
+	})
 }
 
 // Services intentionally absent from the narrow runtime test double must

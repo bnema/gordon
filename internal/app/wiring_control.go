@@ -48,6 +48,7 @@ type controlRoleDependencies struct {
 	newTrafficGraphHub         func() *edgesnapshot.TrafficGraphHub
 	newRuntimeStateSubscriber  func(context.Context, RuntimeControlConfig) (out.RuntimeStateSubscriber, error)
 	newRuntimeDrainAckReceiver func(context.Context, RuntimeControlConfig) (out.RouteDrainAckReceiver, error)
+	setupConfigHotReload       func(context.Context, configWatcher, loadedConfigApplier) error
 	newSnapshotProducer        func(out.RuntimeStateSubscriber, *edgesnapshot.SnapshotHub, edgesnapshot.ProducerOptions) (*edgesnapshot.Producer, error)
 	newTrafficGraphProducer    func(*edgesnapshot.SnapshotHub, *edgesnapshot.TrafficGraphHub, edgesnapshot.TrafficGraphProducerOptions) (*edgesnapshot.TrafficGraphProducer, error)
 }
@@ -61,6 +62,7 @@ func productionControlRoleDependencies() controlRoleDependencies {
 		newTrafficGraphHub:         edgesnapshot.NewTrafficGraphHub,
 		newRuntimeStateSubscriber:  createRuntimeStateSubscriber,
 		newRuntimeDrainAckReceiver: createRuntimeRouteDrainAckReceiver,
+		setupConfigHotReload:       setupConfigHotReload,
 		newSnapshotProducer:        edgesnapshot.NewProducer,
 		newTrafficGraphProducer:    edgesnapshot.NewTrafficGraphProducer,
 	}
@@ -92,7 +94,11 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 	if err != nil {
 		return log.WrapErr(err, "initialize control services")
 	}
-	if err := setupConfigHotReload(ctx, controlServices.configSvc, controlServices.reloadCoordinator); err != nil {
+	setupHotReload := deps.setupConfigHotReload
+	if setupHotReload == nil {
+		setupHotReload = setupConfigHotReload
+	}
+	if err := setupHotReload(ctx, controlServices.configSvc, controlServices.reloadCoordinator); err != nil {
 		return log.WrapErr(err, "watch control configuration")
 	}
 
