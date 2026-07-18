@@ -52,6 +52,52 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, committer.commands[0].LifecycleAction)
 }
 
+func TestRuntimeComponentLifecycleActivateCompletesAfterCallerCancellation(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Run(func(context.Context, string) { cancel() }).Return(nil).Once()
+	uncanceled := mock.MatchedBy(func(value context.Context) bool { return value.Err() == nil })
+	runtime.EXPECT().StopContainer(uncanceled, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(uncanceled, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(uncanceled, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(uncanceled, "final").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(uncanceled, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(uncanceled, "final").Return("healthy", true, nil).Once()
+
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	require.NoError(t, manager.ApplyComponentLifecycle(ctx, cutoverCommand(config)))
+}
+
+func TestRuntimeComponentLifecycleActivateRetriesTransientFinalListenerRelease(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(nil, errors.New("listen tcp 0.0.0.0:8080: bind: address already in use")).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+}
+
 func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.T) {
 	config := cutoverConfig(t)
 	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}

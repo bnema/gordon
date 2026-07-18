@@ -96,6 +96,11 @@ type MigrationCheckpoint struct {
 	// allow a failed cutover to be resumed without deleting the old path.
 	SwitchAttempts uint64 `json:"switch_attempts,omitempty"`
 	LastRetryPhase string `json:"last_retry_phase,omitempty"`
+	// CutoverFailureCode is a fixed, non-engine status for an interrupted
+	// listener handoff. It intentionally excludes ports, paths, IDs and engine
+	// text so a fresh status can safely explain whether switch may be retried.
+	CutoverFailureCode      string `json:"cutover_failure_code,omitempty"`
+	CutoverFailureRetryable bool   `json:"cutover_failure_retryable,omitempty"`
 }
 
 type MigrationCheckpointStore struct {
@@ -225,11 +230,45 @@ func (s *MigrationCheckpointStore) CommitMigrationCutover(_ context.Context, com
 		}
 		checkpoint.Phase = MigrationPhaseSwitched
 		checkpoint.LastRetryPhase = ""
+		checkpoint.CutoverFailureCode = ""
+		checkpoint.CutoverFailureRetryable = false
 		if err := validateCheckpoint(*checkpoint); err != nil {
 			return err
 		}
 		return s.writeAtomic(*checkpoint)
 	})
+}
+
+// RecordMigrationCutoverFailure persists only an allowlisted failure outcome
+// after the runtime has restored the old listener. The engine error itself
+// remains process-local: status needs a retry decision, not host internals.
+func (s *MigrationCheckpointStore) RecordMigrationCutoverFailure(_ context.Context, command domain.RuntimeSelfUpdateCommand, code string, retryable bool) error {
+	if s == nil || !validCutoverFailureCode(code) {
+		return fmt.Errorf("invalid migration cutover failure")
+	}
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleActivate || command.TargetComponentRole != domain.ComponentRoleEdge || migrationID == "" {
+		return fmt.Errorf("invalid migration cutover command")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withLock(func() error {
+		checkpoint, err := s.load()
+		if err != nil {
+			return fmt.Errorf("load migration checkpoint for cutover failure: %w", err)
+		}
+		if checkpoint.Phase != MigrationPhasePrepared || !matchesRuntimeCutover(*checkpoint, command, migrationID) {
+			return fmt.Errorf("migration cutover does not match prepared checkpoint")
+		}
+		checkpoint.CutoverFailureCode = code
+		checkpoint.CutoverFailureRetryable = retryable
+		checkpoint.LastRetryPhase = "switch"
+		return s.writeAtomic(*checkpoint)
+	})
+}
+
+func validCutoverFailureCode(code string) bool {
+	return code == "listener_release_timeout" || code == "cutover_failed"
 }
 
 func matchesRuntimeCutover(checkpoint MigrationCheckpoint, command domain.RuntimeSelfUpdateCommand, migrationID string) bool {
@@ -309,7 +348,16 @@ func mergeMigrationCheckpoints(old, candidate MigrationCheckpoint) (MigrationChe
 		merged.SwitchAttempts = old.SwitchAttempts
 		merged.LastRetryPhase = old.LastRetryPhase
 	}
+	mergeCutoverFailure(old, candidate, &merged)
 	return merged, nil
+}
+
+func mergeCutoverFailure(old, candidate MigrationCheckpoint, merged *MigrationCheckpoint) {
+	if merged == nil || old.CutoverFailureCode == "" || candidate.CutoverFailureCode != "" || candidate.Phase == MigrationPhaseSwitched {
+		return
+	}
+	merged.CutoverFailureCode = old.CutoverFailureCode
+	merged.CutoverFailureRetryable = old.CutoverFailureRetryable
 }
 
 func sameMigrationCheckpointIdentity(old, candidate MigrationCheckpoint) bool {
@@ -478,7 +526,10 @@ func syncCheckpointParent(parent string) error {
 }
 
 func validateCheckpoint(checkpoint MigrationCheckpoint) error {
-	if strings.TrimSpace(checkpoint.MigrationID) == "" || phaseRank(checkpoint.Phase) < 0 || checkpoint.StartedAt.IsZero() {
+	if strings.TrimSpace(checkpoint.MigrationID) == "" || phaseRank(checkpoint.Phase) < 0 || checkpoint.StartedAt.IsZero() ||
+		(checkpoint.CutoverFailureCode != "" && !validCutoverFailureCode(checkpoint.CutoverFailureCode)) ||
+		(checkpoint.CutoverFailureRetryable && checkpoint.CutoverFailureCode == "") ||
+		(checkpoint.Phase == MigrationPhaseSwitched && (checkpoint.CutoverFailureCode != "" || checkpoint.CutoverFailureRetryable)) {
 		return fmt.Errorf("invalid migration checkpoint")
 	}
 	if !validCheckpointReferences(checkpoint.EnvFileReferences) || !validCheckpointTopology(checkpoint) || !validCheckpointAppliedEdge(checkpoint) {

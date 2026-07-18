@@ -65,6 +65,34 @@ func TestMigrationCheckpointRuntimeCutoverCommitIsDurableAndIdempotent(t *testin
 	assert.Error(t, store.CommitMigrationCutover(context.Background(), command), "a different cutover cannot rewrite durable status")
 }
 
+func TestMigrationCheckpointRecordsSanitizedRetryableCutoverFailure(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	checkpoint := testMigrationCheckpoint()
+	checkpoint.Phase = MigrationPhasePrepared
+	checkpoint.TargetImage = "example.invalid/gordon:v2"
+	checkpoint.OldServingPath = "old-monolith"
+	checkpoint.RouteSnapshotGeneration = 7
+	checkpoint.AppliedEdgeComponentID = "gordon-edge-migration-1-g1"
+	checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}}
+	require.NoError(t, store.Save(checkpoint))
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: domain.RuntimeCommandIdentity{Generation: checkpoint.ComponentGeneration}, LifecycleAction: domain.RuntimeComponentLifecycleActivate, TargetComponentRole: domain.ComponentRoleEdge, TargetComponentID: checkpoint.AppliedEdgeComponentID, PolicyDecisionID: "migration:" + checkpoint.MigrationID, OldServingComponentID: checkpoint.OldServingPath, FinalPortPublishes: []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}}}
+
+	require.NoError(t, store.RecordMigrationCutoverFailure(context.Background(), command, "listener_release_timeout", true))
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, MigrationPhasePrepared, loaded.Phase)
+	assert.Equal(t, "listener_release_timeout", loaded.CutoverFailureCode)
+	assert.True(t, loaded.CutoverFailureRetryable)
+	assert.NotContains(t, loaded.CutoverFailureCode, "8080", "status must never persist engine listener details")
+
+	require.NoError(t, store.CommitMigrationCutover(context.Background(), command))
+	loaded, err = store.Load()
+	require.NoError(t, err)
+	assert.Empty(t, loaded.CutoverFailureCode)
+	assert.False(t, loaded.CutoverFailureRetryable)
+}
+
 func TestMigrationCheckpointSaveMergesMonotonicFactsAcrossProcesses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "checkpoint.json")
 	store, err := NewMigrationCheckpointStore(path)

@@ -31,6 +31,13 @@ type MigrationCutoverCommitter interface {
 	CommitMigrationCutover(context.Context, domain.RuntimeSelfUpdateCommand) error
 }
 
+// MigrationCutoverFailureRecorder stores a fixed operational outcome after a
+// rolled-back handoff. It accepts no engine error so durable status cannot
+// expose container IDs, host paths, listener ports, or secrets.
+type MigrationCutoverFailureRecorder interface {
+	RecordMigrationCutoverFailure(context.Context, domain.RuntimeSelfUpdateCommand, string, bool) error
+}
+
 type runtimeComponentLifecycleManager struct {
 	runtime   out.ContainerRuntime
 	policy    RuntimePolicy
@@ -313,12 +320,20 @@ type edgeActivation struct {
 // The old process is a container selected by its Gordon labels, never the
 // invoking CLI/control host process. Any failure restores both the old
 // listener and the prepared probe-only edge before returning the error.
+const edgeCutoverTransactionTimeout = 15 * time.Second
+
 func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	activation, err := m.validateEdgeActivation(ctx, command)
 	if err != nil {
 		return err
 	}
-	return m.transferEdgeListener(ctx, command, activation)
+	// Stopping the old monolith terminates the CLI/gRPC caller that supplied
+	// ctx. Listener ownership is now runtime-owned, so finish its bounded
+	// transaction independently rather than letting that expected disconnect
+	// cancel final activation or compensation.
+	transactionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), edgeCutoverTransactionTimeout)
+	defer cancel()
+	return m.transferEdgeListener(transactionCtx, command, activation)
 }
 
 func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (edgeActivation, error) {
@@ -403,57 +418,115 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	rollback := func() {
 		m.rollbackEdgeActivation(ctx, command, activation, preparedPorts, final, oldStopped, preparedStopped, preparedRemoved)
 	}
+	failCutover := func(err error) error {
+		rollback()
+		if recordErr := m.recordCutoverFailure(ctx, command, cutoverFailureCode(err)); recordErr != nil {
+			return componentLifecycleError("record cutover failure", recordErr)
+		}
+		return componentLifecycleError("activate", err)
+	}
 	if err := m.runtime.StopContainer(ctx, activation.old.ID); err != nil {
-		return fmt.Errorf("stop old serving container: %w", err)
+		return componentLifecycleError("stop old serving", err)
 	}
 	oldStopped = true
 	if err := m.runtime.StopContainer(ctx, activation.prepared.ID); err != nil {
-		rollback()
-		return fmt.Errorf("stop prepared edge: %w", err)
+		return failCutover(err)
 	}
 	preparedStopped = true
 	if err := m.runtime.RemoveContainer(ctx, activation.prepared.ID, true); err != nil {
-		rollback()
-		return fmt.Errorf("remove prepared edge: %w", err)
+		return failCutover(err)
 	}
 	preparedRemoved = true
 	config, err := m.componentConfig(command, command.FinalPortPublishes)
 	if err != nil {
-		rollback()
-		return err
+		return failCutover(err)
 	}
-	final, err = m.runtime.CreateContainer(ctx, config)
+	final, err = m.startFinalEdgeListener(ctx, config)
 	if err != nil {
-		rollback()
-		return fmt.Errorf("create final edge: %w", err)
-	}
-	if err := m.runtime.StartContainer(ctx, final.ID); err != nil {
-		rollback()
-		return fmt.Errorf("start final edge: %w", err)
+		return failCutover(err)
 	}
 	if err := m.connectFinalEdgeAppNetworks(ctx, command, activation.appNetworkNames); err != nil {
-		rollback()
-		return err
+		return failCutover(err)
 	}
 	if err := m.healthContainer(ctx, final); err != nil {
-		rollback()
-		return fmt.Errorf("postcheck final edge: %w", err)
+		return failCutover(err)
 	}
 	// The replacement runtime continues this handler after stopping the old
 	// monolith, whose CLI process can consequently disappear before receiving a
 	// reply. Commit only once the final listener is healthy; a failed commit
 	// rolls back the listener transfer and leaves the old path serving.
 	if strings.TrimSpace(m.policy.MigrationStateRoot) != "" && m.committer == nil {
-		rollback()
-		return fmt.Errorf("migration cutover durability is not configured")
+		return failCutover(fmt.Errorf("migration cutover durability is not configured"))
 	}
 	if m.committer != nil {
 		if err := m.committer.CommitMigrationCutover(ctx, command); err != nil {
-			rollback()
-			return componentLifecycleError("commit migration cutover", err)
+			return failCutover(err)
 		}
 	}
 	return nil
+}
+
+func (m *runtimeComponentLifecycleManager) recordCutoverFailure(ctx context.Context, command domain.RuntimeSelfUpdateCommand, code string) error {
+	recorder, ok := m.committer.(MigrationCutoverFailureRecorder)
+	if !ok || recorder == nil {
+		return nil
+	}
+	return recorder.RecordMigrationCutoverFailure(ctx, command, code, true)
+}
+
+func cutoverFailureCode(err error) string {
+	if transientEdgeListenerReleaseError(err) {
+		return "listener_release_timeout"
+	}
+	return "cutover_failed"
+}
+
+const (
+	edgeListenerReleaseTimeout = 2 * time.Second
+	edgeListenerRetryInterval  = 50 * time.Millisecond
+)
+
+// startFinalEdgeListener retries only the rootless engine's brief port-release
+// window after the old listener has stopped. A failed start is removed before
+// another attempt, so there is never a second serving edge and rollback still
+// restores the probe-only edge and old listener on exhaustion.
+func (m *runtimeComponentLifecycleManager) startFinalEdgeListener(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error) {
+	deadline := time.NewTimer(edgeListenerReleaseTimeout)
+	defer deadline.Stop()
+	var lastErr error
+	for {
+		created, err := m.runtime.CreateContainer(ctx, config)
+		if err == nil {
+			err = m.runtime.StartContainer(ctx, created.ID)
+			if err == nil {
+				return created, nil
+			}
+			_ = m.runtime.StopContainer(ctx, created.ID)
+			_ = m.runtime.RemoveContainer(ctx, created.ID, true)
+		}
+		lastErr = err
+		if !transientEdgeListenerReleaseError(err) {
+			return nil, err
+		}
+		timer := time.NewTimer(edgeListenerRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-deadline.C:
+			timer.Stop()
+			return nil, lastErr
+		case <-timer.C:
+		}
+	}
+}
+
+func transientEdgeListenerReleaseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "address already in use") || strings.Contains(message, "port is already allocated")
 }
 
 func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand, names []string) error {
