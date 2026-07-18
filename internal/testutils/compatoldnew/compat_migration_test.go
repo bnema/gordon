@@ -59,6 +59,21 @@ func TestMigrationTrafficSwitchFailsClosed(t *testing.T) {
 	require.Contains(t, migrationScenarioOperations, "migrate switch")
 }
 
+func TestMigrationStatusPhase(t *testing.T) {
+	phase, err := migrationStatusPhase(`{
+  "phase": "switched"
+}`)
+	require.NoError(t, err)
+	require.Equal(t, "switched", phase)
+}
+
+func TestMigrationStatusDiagnosticErrorRedactsSecrets(t *testing.T) {
+	const secret = "fixture-runtime-handoff-token"
+	diagnostic := migrationStatusDiagnosticError(fmt.Errorf("status failed with token %s", secret))
+	require.NotContains(t, diagnostic, secret)
+	require.Contains(t, diagnostic, "<redacted>")
+}
+
 const migrationScenarioOperations = "migrate plan; missing-env migrate plan; migrate prepare; migrate status; migrate switch"
 
 // TestCompatibilityMigrationRootlessPodmanOldToSplit is the release gate. The
@@ -649,19 +664,50 @@ func (f *realMigrationFixture) runFreshMigrationCLI(args ...string) (string, err
 // runtime-owned transaction rather than a fixture timing assumption.
 func (f *realMigrationFixture) awaitInterruptedSwitchTerminalStatus() {
 	f.t.Helper()
-	var lastStatus string
-	var lastErr error
-	require.Eventually(f.t, func() bool {
-		lastStatus, lastErr = f.runFreshMigrationCLI("migrate", "status", "--config", f.config, "--json")
-		return lastErr == nil && strings.Contains(lastStatus, `"phase":"switched"`)
-	}, 10*time.Second, 100*time.Millisecond, "fresh status after terminated caller must read the runtime-durable switched checkpoint (last status=%q, last error=%v)", strings.TrimSpace(lastStatus), lastErr)
+	var lastPhase string
+	var lastCommandErr, lastJSONErr error
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		status, commandErr := f.runFreshMigrationCLI("migrate", "status", "--config", f.config, "--json")
+		lastCommandErr = commandErr
+		lastJSONErr = nil
+		if commandErr == nil {
+			lastPhase, lastJSONErr = migrationStatusPhase(status)
+			if lastJSONErr == nil && lastPhase == "switched" {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			require.Failf(f.t, "fresh status after terminated caller must read the runtime-durable switched checkpoint", "last phase=%q, last command error=%s, last JSON error=%s", lastPhase, migrationStatusDiagnosticError(lastCommandErr), migrationStatusDiagnosticError(lastJSONErr))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (f *realMigrationFixture) assertInterruptedSwitchRetry() {
 	f.t.Helper()
 	retry, err := f.runFreshMigrationCLI("migrate", "switch", "--config", f.config, "--json")
 	require.NoError(f.t, err, "a retry after a terminated caller must converge without a second cutover")
-	require.Contains(f.t, retry, `"phase":"switched"`)
+	phase, err := migrationStatusPhase(retry)
+	require.NoError(f.t, err, "retry must return a JSON migration status")
+	require.Equal(f.t, "switched", phase, "a retry after a terminated caller must retain the switched checkpoint")
+}
+
+func migrationStatusPhase(status string) (string, error) {
+	var result struct {
+		Phase string `json:"phase"`
+	}
+	if err := json.Unmarshal([]byte(status), &result); err != nil {
+		return "", fmt.Errorf("decode migration status JSON: %w", err)
+	}
+	return result.Phase, nil
+}
+
+func migrationStatusDiagnosticError(err error) string {
+	if err == nil {
+		return "<none>"
+	}
+	return redactCapturedOutput(err.Error(), "fixture-runtime-handoff-token", "migration-fixture-signing-secret-at-least-32-bytes")
 }
 
 func (f *realMigrationFixture) configTOML() string {
