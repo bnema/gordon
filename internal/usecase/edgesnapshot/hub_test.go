@@ -3,6 +3,7 @@ package edgesnapshot
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,6 +65,61 @@ func TestSnapshotHubSubscriptionClosesOnCancellation(t *testing.T) {
 	_, err = hub.Subscribe(context.Background())
 	require.NoError(t, err)
 	assert.False(t, errors.Is(err, context.Canceled))
+}
+
+func TestSnapshotHubSerializesPreparationWithoutBlockingStateReaders(t *testing.T) {
+	hub := NewSnapshotHub()
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var generations []domain.RouteTargetGeneration
+	var observerMu sync.Mutex
+	hub.ObserveTransitions(context.Background(), func(_ context.Context, _ *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot) {
+		observerMu.Lock()
+		generations = append(generations, current.Generation)
+		observerMu.Unlock()
+		if current.Generation == 2 {
+			close(entered)
+			<-release
+		}
+	})
+
+	require.NoError(t, hub.Publish(testSnapshot(t, 1)))
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- hub.Publish(testSnapshot(t, 2)) }()
+	require.Eventually(t, func() bool {
+		select {
+		case <-entered:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+
+	thirdDone := make(chan error, 1)
+	go func() { thirdDone <- hub.Publish(testSnapshot(t, 3)) }()
+	currentDone := make(chan domain.RouteTargetSnapshot, 1)
+	go func() {
+		current, err := hub.Current(context.Background())
+		if err == nil {
+			currentDone <- current
+		}
+	}()
+	select {
+	case current := <-currentDone:
+		assert.Equal(t, domain.RouteTargetGeneration(1), current.Generation)
+	case <-time.After(time.Second):
+		t.Fatal("Current was blocked by transition preparation")
+	}
+
+	close(release)
+	require.NoError(t, <-secondDone)
+	require.NoError(t, <-thirdDone)
+	observerMu.Lock()
+	assert.Equal(t, []domain.RouteTargetGeneration{1, 2, 3}, generations)
+	observerMu.Unlock()
+	current, err := hub.Current(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, domain.RouteTargetGeneration(3), current.Generation)
 }
 
 func testSnapshot(t *testing.T, generation domain.RouteTargetGeneration) domain.RouteTargetSnapshot {

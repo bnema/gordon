@@ -91,7 +91,10 @@ func runControlWithDependencies(ctx context.Context, configPath string, deps con
 		}
 		drainRelay = relay
 	}
-	drainCoordinator, err := edgesnapshot.NewDrainCoordinator(hub, edgesnapshot.DrainCoordinatorOptions{Runtime: drainRelay})
+	drainCoordinator, err := edgesnapshot.NewDrainCoordinator(hub, edgesnapshot.DrainCoordinatorOptions{
+		Runtime:             drainRelay,
+		RegistrationTimeout: v.GetDuration("control.drain_registration_timeout"),
+	})
 	if err != nil {
 		return log.WrapErr(err, "create route drain coordinator")
 	}

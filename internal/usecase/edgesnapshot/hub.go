@@ -19,20 +19,32 @@ type Source interface {
 	Subscribe(context.Context) (<-chan domain.RouteTargetSnapshot, error)
 }
 
+// TransitionObserver prepares control-owned transition state before a snapshot
+// becomes visible to edge subscribers. It must respect ctx cancellation.
+type TransitionObserver func(context.Context, *domain.RouteTargetSnapshot, domain.RouteTargetSnapshot)
+
+type transitionObserver struct {
+	ctx      context.Context
+	observer TransitionObserver
+}
+
 // SnapshotHub is the control-owned, in-memory route snapshot source. It has no
 // runtime dependency. Subscribers receive at most one pending snapshot; a new
 // publication replaces an older pending one.
 type SnapshotHub struct {
+	// publishMu serializes the entire prepare/commit publication flow. State is
+	// deliberately unlocked while transition observers perform external work.
+	publishMu   sync.Mutex
 	mu          sync.Mutex
 	current     *domain.RouteTargetSnapshot
 	subscribers map[uint64]chan domain.RouteTargetSnapshot
-	observers   map[uint64]func(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot)
+	observers   map[uint64]transitionObserver
 	nextID      uint64
 }
 
 // NewSnapshotHub returns an empty snapshot hub.
 func NewSnapshotHub() *SnapshotHub {
-	return &SnapshotHub{subscribers: make(map[uint64]chan domain.RouteTargetSnapshot), observers: make(map[uint64]func(*domain.RouteTargetSnapshot, domain.RouteTargetSnapshot))}
+	return &SnapshotHub{subscribers: make(map[uint64]chan domain.RouteTargetSnapshot), observers: make(map[uint64]transitionObserver)}
 }
 
 // Publish validates and atomically publishes a strictly newer split-reachable snapshot.
@@ -42,9 +54,15 @@ func (h *SnapshotHub) Publish(snapshot domain.RouteTargetSnapshot) error {
 	}
 	clone := snapshot.Clone()
 
+	h.publishMu.Lock()
+	defer h.publishMu.Unlock()
+
+	// Capture state under the state mutex, then prepare the transition without
+	// it. This keeps Current, Subscribe, and observer removal responsive while
+	// a runtime registrar is slow or unavailable.
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if h.current != nil && clone.Generation <= h.current.Generation {
+		h.mu.Unlock()
 		return fmt.Errorf("route snapshot generation %d is not newer than %d", clone.Generation, h.current.Generation)
 	}
 	var previous *domain.RouteTargetSnapshot
@@ -52,34 +70,48 @@ func (h *SnapshotHub) Publish(snapshot domain.RouteTargetSnapshot) error {
 		previousClone := h.current.Clone()
 		previous = &previousClone
 	}
-	h.current = &clone
-	// Observers run while publication is serialized, so transition ledger
-	// registration cannot miss a replacement between Current and Subscribe.
+	observers := make([]transitionObserver, 0, len(h.observers))
 	for _, observer := range h.observers {
-		observer(previous, clone)
+		observers = append(observers, observer)
 	}
+	h.mu.Unlock()
+
+	for _, observer := range observers {
+		if observer.ctx.Err() == nil {
+			observer.observer(observer.ctx, previous, clone)
+		}
+	}
+
+	// The transition observers have completed their registration attempts, so
+	// edge subscribers cannot observe this snapshot before that preparation.
+	h.mu.Lock()
+	h.current = &clone
 	for _, subscriber := range h.subscribers {
 		publishLatest(subscriber, clone)
 	}
+	h.mu.Unlock()
 	return nil
 }
 
-// Current returns an independent immutable snapshot clone.
-// ObserveTransitions registers a synchronous control-owned observer. It is
-// intentionally not a public subscription stream: observers must not block.
-func (h *SnapshotHub) ObserveTransitions(observer func(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot)) func() {
+// ObserveTransitions registers a synchronous control-owned observer. The
+// callback runs outside the hub state mutex and receives a context cancelled
+// when this registration is removed or its parent context ends.
+func (h *SnapshotHub) ObserveTransitions(ctx context.Context, observer TransitionObserver) func() {
+	observerCtx, cancel := context.WithCancel(ctx)
 	h.mu.Lock()
 	id := h.nextID
 	h.nextID++
-	h.observers[id] = observer
+	h.observers[id] = transitionObserver{ctx: observerCtx, observer: observer}
 	h.mu.Unlock()
 	return func() {
+		cancel()
 		h.mu.Lock()
 		delete(h.observers, id)
 		h.mu.Unlock()
 	}
 }
 
+// Current returns an independent immutable snapshot clone.
 func (h *SnapshotHub) Current(ctx context.Context) (domain.RouteTargetSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.RouteTargetSnapshot{}, err

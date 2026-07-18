@@ -10,7 +10,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const maxDrainLedgerEntries = 1024
+const (
+	maxDrainLedgerEntries           = 1024
+	defaultDrainRegistrationTimeout = 5 * time.Second
+)
 
 var (
 	ErrDrainUnknown     = errors.New("unknown drain")
@@ -52,20 +55,27 @@ type DrainCoordinatorOptions struct {
 	ExpectedEdgeComponentID string
 	Now                     func() time.Time
 	Runtime                 RuntimeDrainAckReceiver
+	// RegistrationTimeout bounds runtime transition preparation so a failed
+	// runtime cannot hold control snapshot publication or shutdown indefinitely.
+	RegistrationTimeout time.Duration
 }
 
 // DrainCoordinator records edge observation separately from runtime delivery:
 // a drain is terminal only after runtime has accepted its relay.
 type DrainCoordinator struct {
-	mu             sync.Mutex
-	expected       string
-	now            func() time.Time
-	runtime        RuntimeDrainAckReceiver
-	pending        map[domain.RouteTargetKey]*pendingDrain
-	completed      map[domain.RouteTargetKey]*pendingDrain
-	completedOrder []domain.RouteTargetKey
-	seen           map[domain.RouteTargetKey]domain.RouteTargetGeneration
-	stop           func()
+	mu                  sync.Mutex
+	expected            string
+	now                 func() time.Time
+	runtime             RuntimeDrainAckReceiver
+	pending             map[domain.RouteTargetKey]*pendingDrain
+	completed           map[domain.RouteTargetKey]*pendingDrain
+	completedOrder      []domain.RouteTargetKey
+	seen                map[domain.RouteTargetKey]domain.RouteTargetGeneration
+	registrationTimeout time.Duration
+	lifecycle           context.Context
+	cancel              context.CancelFunc
+	stop                func()
+	closeOnce           sync.Once
 }
 
 func NewDrainCoordinator(hub *SnapshotHub, options DrainCoordinatorOptions) (*DrainCoordinator, error) {
@@ -79,55 +89,97 @@ func NewDrainCoordinator(hub *SnapshotHub, options DrainCoordinatorOptions) (*Dr
 	if options.Now == nil {
 		options.Now = time.Now
 	}
-	coordinator := &DrainCoordinator{expected: expected, now: options.Now, runtime: options.Runtime, pending: make(map[domain.RouteTargetKey]*pendingDrain), completed: make(map[domain.RouteTargetKey]*pendingDrain), seen: make(map[domain.RouteTargetKey]domain.RouteTargetGeneration)}
-	coordinator.stop = hub.ObserveTransitions(coordinator.observeTransition)
+	if options.RegistrationTimeout <= 0 {
+		options.RegistrationTimeout = defaultDrainRegistrationTimeout
+	}
+	lifecycle, cancel := context.WithCancel(context.Background())
+	coordinator := &DrainCoordinator{
+		expected: expected, now: options.Now, runtime: options.Runtime,
+		pending: make(map[domain.RouteTargetKey]*pendingDrain), completed: make(map[domain.RouteTargetKey]*pendingDrain),
+		seen: make(map[domain.RouteTargetKey]domain.RouteTargetGeneration), registrationTimeout: options.RegistrationTimeout,
+		lifecycle: lifecycle, cancel: cancel,
+	}
+	coordinator.stop = hub.ObserveTransitions(lifecycle, coordinator.observeTransition)
 	return coordinator, nil
 }
 
+// Close cancels an in-flight runtime registration before unregistering the
+// observer. It never waits for the publication goroutine to finish.
 func (c *DrainCoordinator) Close() {
-	if c.stop != nil {
+	c.closeOnce.Do(func() {
+		c.cancel()
 		c.stop()
-		c.stop = nil
+	})
+}
+
+func (c *DrainCoordinator) observeTransition(ctx context.Context, previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot) {
+	if previous == nil || ctx.Err() != nil {
+		return
+	}
+	// A transition has one registration budget. This bounds the entire
+	// serialized preparation phase even when a snapshot retires many targets.
+	registrationCtx, cancelRegistration := context.WithTimeout(ctx, c.registrationTimeout)
+	defer cancelRegistration()
+	currentKeys := readyOrDrainingTargetKeys(current)
+	for _, old := range previous.Entries {
+		if registrationCtx.Err() != nil {
+			return
+		}
+		if !retiredTarget(old, current.Generation, currentKeys) || c.transitionSeen(old.TargetKey) {
+			continue
+		}
+		if !c.prepareTransition(registrationCtx, old, current.Generation) {
+			if registrationCtx.Err() != nil {
+				return
+			}
+			continue
+		}
+		c.admitTransition(old, current.Generation)
 	}
 }
 
-func (c *DrainCoordinator) observeTransition(previous *domain.RouteTargetSnapshot, current domain.RouteTargetSnapshot) {
-	if previous == nil {
-		return
-	}
-	currentKeys := make(map[domain.RouteTargetKey]struct{}, len(current.Entries))
-	for _, entry := range current.Entries {
+func readyOrDrainingTargetKeys(snapshot domain.RouteTargetSnapshot) map[domain.RouteTargetKey]struct{} {
+	keys := make(map[domain.RouteTargetKey]struct{}, len(snapshot.Entries))
+	for _, entry := range snapshot.Entries {
 		if entry.Ready() || entry.Draining() {
-			currentKeys[entry.TargetKey] = struct{}{}
+			keys[entry.TargetKey] = struct{}{}
 		}
 	}
-	for _, old := range previous.Entries {
-		if !old.Ready() || old.Generation >= current.Generation {
-			continue
-		}
-		if _, stillCurrent := currentKeys[old.TargetKey]; stillCurrent {
-			continue
-		}
-		c.mu.Lock()
-		_, exists := c.seen[old.TargetKey]
-		c.mu.Unlock()
-		if exists {
-			continue
-		}
+	return keys
+}
 
-		// Register first. A failed registration means runtime will use its local
-		// drain timeout rather than accepting an unbound acknowledgement.
-		if registrar, ok := c.runtime.(RuntimeDrainRegistrar); ok {
-			if err := registrar.PrepareRouteDrain(context.Background(), old.CanonicalDomain, current.Generation, old.TargetKey); err != nil {
-				continue
-			}
-		}
-		c.mu.Lock()
-		if _, exists := c.seen[old.TargetKey]; !exists && len(c.pending) < maxDrainLedgerEntries {
-			c.pending[old.TargetKey] = &pendingDrain{state: domain.RouteDrainState{CanonicalDomain: old.CanonicalDomain, TransitionGeneration: current.Generation, OldTargetKey: old.TargetKey}, status: domain.RouteDrainStatusPending}
-			c.seen[old.TargetKey] = current.Generation
-		}
-		c.mu.Unlock()
+func retiredTarget(old domain.RouteTargetEntry, generation domain.RouteTargetGeneration, currentKeys map[domain.RouteTargetKey]struct{}) bool {
+	if !old.Ready() || old.Generation >= generation {
+		return false
+	}
+	_, stillCurrent := currentKeys[old.TargetKey]
+	return !stillCurrent
+}
+
+func (c *DrainCoordinator) transitionSeen(key domain.RouteTargetKey) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, exists := c.seen[key]
+	return exists
+}
+
+// prepareTransition attempts runtime registration before the snapshot is edge-visible.
+func (c *DrainCoordinator) prepareTransition(ctx context.Context, old domain.RouteTargetEntry, generation domain.RouteTargetGeneration) bool {
+	registrar, ok := c.runtime.(RuntimeDrainRegistrar)
+	if !ok {
+		return true
+	}
+	attemptCtx, cancel := context.WithTimeout(ctx, c.registrationTimeout)
+	defer cancel()
+	return registrar.PrepareRouteDrain(attemptCtx, old.CanonicalDomain, generation, old.TargetKey) == nil && ctx.Err() == nil
+}
+
+func (c *DrainCoordinator) admitTransition(old domain.RouteTargetEntry, generation domain.RouteTargetGeneration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.seen[old.TargetKey]; !exists && len(c.pending) < maxDrainLedgerEntries {
+		c.pending[old.TargetKey] = &pendingDrain{state: domain.RouteDrainState{CanonicalDomain: old.CanonicalDomain, TransitionGeneration: generation, OldTargetKey: old.TargetKey}, status: domain.RouteDrainStatusPending}
+		c.seen[old.TargetKey] = generation
 	}
 }
 
