@@ -290,7 +290,7 @@ func (p *Producer) matchingAttachment(route domain.RuntimeRouteState, attachment
 	}
 	for _, attachment := range attachments {
 		attachmentDomain, domainOK := domain.CanonicalRouteDomain(attachment.RouteDomain)
-		if attachment.Attached && domainOK && attachmentDomain == canonicalDomain && attachment.EdgeAlias == p.edgeAlias && attachment.TargetAlias == route.EdgeTargetAlias && attachment.TargetPort == route.TargetPort {
+		if attachment.Attached && domainOK && attachmentDomain == canonicalDomain && attachment.Generation == route.Generation && attachment.EdgeAlias == p.edgeAlias && attachment.TargetAlias == route.EdgeTargetAlias && attachment.TargetPort == route.TargetPort {
 			return true
 		}
 	}
