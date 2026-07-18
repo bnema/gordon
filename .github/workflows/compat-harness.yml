@@ -53,6 +53,11 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-api
 
+      - name: Preflight Linux TLS and UDP edge traffic ownership
+        run: |
+          test "$(uname -s)" = Linux
+          make compat-harness-traffic
+
       - name: Run Docker proxy compatibility slices
         env:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat

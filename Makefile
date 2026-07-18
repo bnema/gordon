@@ -26,7 +26,10 @@ COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWith
 # The proxy gate deliberately selects its three real routes, proxy/pending policy,
 # builder, and report contract tests. Do not replace this with a broad package
 # run: the Make recipe verifies every real route itself passed rather than skipped.
-COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain|TestCompatibilityDistributedDrainProtocol
+COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain|TestCompatibilityDistributedDrainProtocol|TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
+# The traffic listener matrix is a Linux socket preflight. It deliberately runs
+# three times to catch ephemeral-port and listener/goroutine cleanup leaks.
+COMPAT_TRAFFIC_REAL_TESTS := TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
@@ -43,7 +46,7 @@ COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 	test test-short test-race test-coverage \
 	lint fmt check mocks proto proto-check clean-test help \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
-	compat-harness-proxy compat-harness-runtime compat-harness-migration compat-harness-security
+	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security
 
 # Default target
 all: build
@@ -137,6 +140,18 @@ compat-harness-registry: ## Run registry compatibility harness checks
 	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
+
+compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership preflight
+	@echo "Running TLS/UDP listener matrix three times without skips..."
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_REAL_TESTS))$$' -count=3 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_REAL_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 3) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "traffic compatibility test $$test did not pass exactly three times or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
 
 compat-harness-proxy: ## Run the blocking Docker proxy compatibility gate
 	@echo "Baseline ref: $${GORDON_COMPAT_BASELINE_REF:-origin/main}"

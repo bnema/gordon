@@ -11,6 +11,8 @@ TLS termination is explicit. There is no plaintext default. Split edges support 
 
 The edge receives a separate authenticated, sanitized traffic graph after its route snapshot. It owns the graph's `tls_mux`, `smart_tcp`, TCP, and UDP listeners; duplicate or conflicting listener addresses fail startup. Backends must be explicit aliases or non-loopback reachable addresses. The edge never reads full control configuration, runtime state, or token stores beyond its configured control token.
 
+The compatibility gate uses generated generic certificates only in test memory and verifies real HTTP, smart-TCP HTTPS fallback, `tls_mux` HTTPS termination, SNI TLS passthrough, raw TCP, and UDP sockets. It runs the listener matrix three times on Linux and uploads only protocol/status booleans—never listening ports, certificate material, or runtime IDs. This covers `mode = "files"` and `mode = "external"`; it does not imply split ACME support.
+
 ```toml
 [control]
 endpoint = "control.internal:9090"

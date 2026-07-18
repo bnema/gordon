@@ -2,6 +2,7 @@ package compatoldnew
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -52,6 +53,19 @@ func TestDistributedDrainScenarioDefinition(t *testing.T) {
 	require.Empty(t, distributed.BlockReason)
 }
 
+func TestTrafficProtocolScenarioDefinition(t *testing.T) {
+	var matrix Scenario
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == trafficProtocolScenarioName {
+			matrix = scenario
+			break
+		}
+	}
+	require.Equal(t, ScenarioStatusImplemented, matrix.Status)
+	require.False(t, matrix.PodmanRequired)
+	require.Empty(t, matrix.BlockReason)
+}
+
 func TestSplitDeploymentDrainScenarioRemainsPending(t *testing.T) {
 	var split Scenario
 	for _, scenario := range ProxyScenarios() {
@@ -97,6 +111,38 @@ func TestManagedHTTPRoutePublishedAddressRejectsNonLoopback(t *testing.T) {
 
 	_, err = managedProxyPublishedAddress("0.0.0.0:49152\n")
 	require.Error(t, err)
+}
+
+func TestCompatibilityTrafficProtocolMatrix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	matrix, err := RunTrafficProtocolMatrix(ctx)
+	require.NoError(t, err)
+	require.Len(t, matrix.Checks, 7)
+	for _, check := range matrix.Checks {
+		require.True(t, check.Passed, check.Protocol)
+		require.Equal(t, "ok", check.Status, check.Protocol)
+	}
+	artifact, err := json.Marshal(matrix)
+	require.NoError(t, err)
+	for _, forbidden := range []string{"127.0.0.1:", "CERTIFICATE", "PRIVATE KEY", "container", "token"} {
+		require.NotContains(t, string(artifact), forbidden)
+	}
+}
+
+func TestCompatibilityTrafficProtocolFailClosed(t *testing.T) {
+	require.NoError(t, ValidateTrafficProtocolFailClosed())
+}
+
+func TestSplitEdgeTLSCompatibilityExceptionIsExplicit(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(projectRoot(t), "docs", "config", "edge.md"))
+	require.NoError(t, err)
+	documentation := string(body)
+	require.Contains(t, documentation, "Gordon-managed ACME issuance and challenge handling remain monolith-only")
+	require.Contains(t, documentation, "mode = \"files\"")
+	require.Contains(t, documentation, "mode = \"external\"")
+	require.Contains(t, documentation, "never silently falls back")
 }
 
 func TestCompatibilityDistributedDrainProtocol(t *testing.T) {
