@@ -547,7 +547,7 @@ func reportAppliedEdgeGeneration(ctx context.Context, routes *edgesnapshotclient
 		log.Warn().Msg("edge applied state not reported: component identity is unavailable")
 		return
 	}
-	for attempt := range 5 {
+	for {
 		if ctx.Err() != nil {
 			return
 		}
@@ -558,14 +558,12 @@ func reportAppliedEdgeGeneration(ctx context.Context, routes *edgesnapshotclient
 		if err == nil {
 			return
 		}
-		if attempt == 4 {
-			log.Warn().Err(err).Uint64("generation", uint64(generation)).Msg("edge applied state report failed")
-			return
-		}
+		// Keep retrying through gRPC reconnects. The report is idempotent at an
+		// equal generation and tracker monotonicity rejects any later regression.
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
 }
