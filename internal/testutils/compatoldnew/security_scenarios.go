@@ -6,7 +6,7 @@ package compatoldnew
 func SecurityScenarios() []Scenario {
 	return []Scenario{
 		implementedScenario("security/edge-no-podman-socket", SurfaceSecurity, "10.2 Runtime isolation checks", false),
-		securityScenario("security/registry-no-podman-socket", true),
+		implementedScenario("security/registry-no-podman-socket", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		securityScenario("security/control-no-podman-socket-after-split", true),
 		implementedScenario("security/missing-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),
 		implementedScenario("security/wrong-component-token-rejected", SurfaceSecurity, "10.2 Runtime isolation checks", false),

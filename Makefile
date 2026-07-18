@@ -38,10 +38,14 @@ COMPAT_TRAFFIC_BINARY_TESTS := TestCompatibilityTrafficProtocolBinaries
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
+# Registry is an exact Docker-backed old/new OCI gate.  JSON inspection rejects
+# skipped or multiply-run scenarios, while the focused unit/integration checks
+# exercise durable outbox replay and control-owned exactly-once suppression.
+COMPAT_REGISTRY_REAL_TESTS := TestCompatibilityRegistryScenarios
 # Security is a current-candidate gate, not old/new baseline parity. The exact
 # tests below must each pass twice without a skip; the edge test needs Docker to
 # prove the candidate container has no runtime socket access.
-COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
+COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityRegistryNoPodmanSocket|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
@@ -140,11 +144,22 @@ compat-harness-api: ## Run API compatibility harness checks
 	@docker info
 	@GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^(TestCompatibilityAdminAPIPreflight|TestCompatibilityAdminAuthAndRouteCRUD|$(COMPAT_HARNESS_GUARDS))$$' -count=1
 
-compat-harness-registry: ## Run registry compatibility harness checks
-	@echo "Running registry compatibility harness checks..."
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+compat-harness-registry: ## Run blocking old/new OCI registry and event-sync compatibility gates
+	@echo "Running exact Docker-backed registry compatibility gate without skips..."
+	@docker info
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_REGISTRY_REAL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_REGISTRY_REAL_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "registry compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
+	@go test ./internal/adapters/out/eventoutbox -run '^TestOutboxPersistsOutageAndReplaysAfterRestart$$' -count=1
+	@go test ./internal/usecase/controlplane -run '^(TestEventDispatcherRetriesFailureAndDeduplicatesSuccess|TestEventDispatcherManualIntentSurvivesControlRestart|TestEventDispatcherManualIntentSuppressesOnlyMatchingPush)$$' -count=1
 
 compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership preflight
 	@echo "Running monolith protocol matrix once and authenticated stream matrix three times without skips..."
@@ -215,7 +230,7 @@ compat-harness-migration: ## Run migration compatibility harness checks
 	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 
 compat-harness-security: ## Run blocking current-security compatibility gates
-	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
+	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,registry,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
 	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
 	@echo "Running required Docker preflight and exact current-security gates..."
 	@docker info

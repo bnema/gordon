@@ -1,19 +1,17 @@
 package compatoldnew
 
-// RegistryScenarios returns Phase 5 registry compatibility scenario shells.
+// RegistryScenarios returns real old/new OCI distribution compatibility gates.
+// They use Docker only to provide Gordon's runtime dependency; registry traffic
+// itself is raw, specification-correct HTTP against sequential local binaries.
 func RegistryScenarios() []Scenario {
 	return []Scenario{
-		registryScenario("registry/v2-ping"),
-		registryScenario("registry/auth-challenge"),
-		registryScenario("registry/push-image"),
-		registryScenario("registry/pull-image"),
-		registryScenario("registry/tag-list"),
-		registryScenario("registry/upload-too-large"),
-		registryScenario("registry/invalid-name-reference"),
-		registryScenario("registry/image-push-event"),
+		implementedScenario("registry/v2-ping", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/auth-challenge", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/push-image", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/pull-image", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/tag-list", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/upload-too-large", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/invalid-name-reference", SurfaceRegistry, "6.4 Registry compatibility", false),
+		implementedScenario("registry/image-push-event", SurfaceRegistry, "6.4 Registry compatibility", false),
 	}
-}
-
-func registryScenario(name string) Scenario {
-	return pendingScenario(name, SurfaceRegistry, "6.4 Registry compatibility", true, "old/new registry compatibility scenario execution requires real Podman-backed Gordon instances")
 }

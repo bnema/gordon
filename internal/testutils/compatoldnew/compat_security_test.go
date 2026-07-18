@@ -27,6 +27,23 @@ func TestCompatibilitySecurityEdgeNoPodmanSocket(t *testing.T) {
 	assertSecurityArtifactsSafe(t, compatibilityArtifactDir(t, "security-edge"))
 }
 
+func TestCompatibilitySecurityRegistryNoPodmanSocket(t *testing.T) {
+	requireRealCompatibilityRun(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	if err := DockerCompatibilityPreflight(ctx); err != nil {
+		if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
+			t.Fatal(err)
+		}
+		t.Skipf("registry socket isolation requires Docker: %v", err)
+	}
+	artifactDir := compatibilityArtifactDir(t, "security-registry")
+	report, err := RunSecurityRegistryNoPodmanSocket(ctx, projectRoot(t), artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	assertSecurityArtifactsSafe(t, artifactDir)
+}
+
 func TestCompatibilitySecurityMissingComponentTokenRejected(t *testing.T) {
 	requireRealCompatibilityRun(t)
 	artifactDir := compatibilityArtifactDir(t, "security-auth-missing")

@@ -142,6 +142,14 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"api/auth-missing-invalid":                      {},
 		"api/route-list-detail":                         {},
 		"api/route-add-update-remove":                   {},
+		"registry/v2-ping":                              {},
+		"registry/auth-challenge":                       {},
+		"registry/push-image":                           {},
+		"registry/pull-image":                           {},
+		"registry/tag-list":                             {},
+		"registry/upload-too-large":                     {},
+		"registry/invalid-name-reference":               {},
+		"registry/image-push-event":                     {},
 		"proxy/managed-http-route":                      {},
 		"proxy/external-route":                          {},
 		"proxy/zero-downtime-drain":                     {},
@@ -149,6 +157,7 @@ func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 		"proxy/edge-traffic-protocol-matrix":            {},
 		"proxy/edge-traffic-graph-stream-matrix":        {},
 		"security/edge-no-podman-socket":                {},
+		"security/registry-no-podman-socket":            {},
 		"security/missing-component-token-rejected":     {},
 		"security/wrong-component-token-rejected":       {},
 		"security/wrong-scope-component-token-rejected": {},
@@ -194,7 +203,8 @@ func mustSkip(t *testing.T, scenario Scenario) bool {
 
 func TestScenarioPodmanRequirements(t *testing.T) {
 	for _, scenario := range RegistryScenarios() {
-		require.True(t, scenario.PodmanRequired, scenario.Name)
+		require.False(t, scenario.PodmanRequired, scenario.Name)
+		require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
 	}
 	for _, scenario := range ProxyScenarios() {
 		if scenario.Name == managedHTTPRouteScenarioName || scenario.Name == externalRouteScenarioName || scenario.Name == zeroDowntimeDrainScenarioName || scenario.Name == distributedDrainScenarioName || scenario.Name == trafficProtocolScenarioName || scenario.Name == trafficGraphStreamScenarioName {
@@ -214,19 +224,14 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	require.True(t, podmanByName["cli/networks-list-json"])
 	require.True(t, podmanByName["cli/logs"])
 	require.False(t, podmanByName["security/edge-no-podman-socket"])
+	require.False(t, podmanByName["security/registry-no-podman-socket"])
 	require.False(t, podmanByName["security/missing-component-token-rejected"])
 	require.False(t, podmanByName["security/wrong-component-token-rejected"])
 
-	t.Setenv(EnvCompatPodman, "")
-	podmanScenario := RegistryScenarios()[0]
-	reason, skip := podmanScenario.SkipReason()
-	require.True(t, skip)
-	require.Contains(t, reason, EnvCompatPodman)
-
-	t.Setenv(EnvCompatPodman, "1")
-	reason, skip = podmanScenario.SkipReason()
-	require.True(t, skip)
-	require.Equal(t, podmanScenario.BlockReason, reason)
+	registryScenario := RegistryScenarios()[0]
+	reason, skip := registryScenario.SkipReason()
+	require.False(t, skip)
+	require.Empty(t, reason)
 }
 
 func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {

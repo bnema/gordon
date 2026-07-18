@@ -277,6 +277,8 @@ registry_port = %d
 registry_listen_address = "127.0.0.1"
 data_dir = %q
 gordon_domain = "localhost"
+max_blob_chunk_size = "1KB"
+max_blob_size = "1KB"
 
 [entrypoints.edge]
 address = "127.0.0.1:%d"
@@ -347,7 +349,7 @@ func generateAdminToken(ctx context.Context, binaryPath string, fixture SideFixt
 	capture, err := CaptureCommand(ctx, CommandCaptureRequest{
 		BinaryPath: binaryPath,
 		Args: []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
-			"--scopes", "admin:*:*", "--expiry", "0"},
+			"--scopes", "admin:*:*,push,pull", "--expiry", "0"},
 		Dir: fixture.Root, Env: adminAPIEnvironment(fixture), Source: "gordon auth token generate", Level: LevelExact,
 	})
 	if err != nil {
