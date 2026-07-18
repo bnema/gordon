@@ -73,10 +73,15 @@ jobs:
           GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
         run: make compat-harness-security
 
-      - name: Run rootless Podman migration availability gate
+      - name: Run blocking rootless Podman old-to-split migration gate
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman uidmap
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$XDG_RUNTIME_DIR"
+          test "$(id -u)" -ne 0
+          podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
           GORDON_COMPAT_PODMAN=1 make compat-harness-migration
 
       - name: Run full test suite with real scenarios gated off

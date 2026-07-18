@@ -38,6 +38,11 @@ COMPAT_TRAFFIC_BINARY_TESTS := TestCompatibilityTrafficProtocolBinaries
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
+# Migration always runs a deterministic protocol fixture locally. Setting
+# GORDON_COMPAT_PODMAN=1 additionally selects the rootless Podman fixture;
+# JSON inspection makes that selected release gate fail rather than skip.
+COMPAT_MIGRATION_PROTOCOL_TESTS := TestCompatibilityMigrationProtocolFixture|TestMigrationInterruptedRetry|TestMigrationMissingEnvFailsPreflight|TestMigrationTrafficSwitchFailsClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
+COMPAT_MIGRATION_PODMAN_TEST := TestCompatibilityMigrationRootlessPodmanOldToSplit
 # Registry is an exact Docker-backed old/new OCI gate.  JSON inspection rejects
 # skipped or multiply-run scenarios, while the focused unit/integration checks
 # exercise durable outbox replay and control-owned exactly-once suppression.
@@ -238,14 +243,19 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
-compat-harness-migration: ## Run migration prepare and rootless-Podman availability checks
-	@echo "Running deterministic Docker-compatible migration prepare/health fixture checks..."
-	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator)' -count=1
-	@go test ./internal/testutils/compatoldnew -run '^(TestScenarioDefinitions|TestScenarioPodmanRequirements|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
+compat-harness-migration: ## Run blocking migration protocol and rootless-Podman gates
+	@echo "Running deterministic Docker-compatible migration protocol fixture checks..."
+	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator|TestTrafficSwitch)' -count=1
+	@go test ./internal/testutils/compatoldnew -run '^($(COMPAT_MIGRATION_PROTOCOL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@if [ "$${GORDON_COMPAT_PODMAN:-0}" = "1" ]; then \
-		echo "Verifying rootless Podman migration gate..."; \
-		test "$$(id -u)" -ne 0; \
-		podman info --format '{{.Host.Security.Rootless}}' | grep -qx true; \
+		echo "Running strict rootless Podman old-to-split migration gate..."; \
+		output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_MIGRATION_PODMAN_TEST)$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		if ! jq -se --arg test "$(COMPAT_MIGRATION_PODMAN_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+			echo "migration compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+		fi; \
 	fi
 
 compat-harness-security: ## Run blocking current-security compatibility gates

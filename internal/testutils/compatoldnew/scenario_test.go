@@ -138,30 +138,36 @@ func TestScenarioDefinitions(t *testing.T) {
 
 func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 	expected := map[string]struct{}{
-		"cli/config-show-json":                          {},
-		"cli/routes-list-json":                          {},
-		"api/auth-missing-invalid":                      {},
-		"api/route-list-detail":                         {},
-		"api/route-add-update-remove":                   {},
-		"registry/v2-ping":                              {},
-		"registry/auth-challenge":                       {},
-		"registry/push-image":                           {},
-		"registry/pull-image":                           {},
-		"registry/tag-list":                             {},
-		"registry/upload-too-large":                     {},
-		"registry/invalid-name-reference":               {},
-		"registry/image-push-event":                     {},
-		"proxy/managed-http-route":                      {},
-		"proxy/external-route":                          {},
-		"proxy/zero-downtime-drain":                     {},
-		"proxy/distributed-drain-protocol":              {},
-		"proxy/edge-traffic-protocol-matrix":            {},
-		"proxy/edge-traffic-graph-stream-matrix":        {},
-		"security/edge-no-podman-socket":                {},
-		"security/registry-no-podman-socket":            {},
-		"security/missing-component-token-rejected":     {},
-		"security/wrong-component-token-rejected":       {},
-		"security/wrong-scope-component-token-rejected": {},
+		"cli/config-show-json":                             {},
+		"cli/routes-list-json":                             {},
+		"api/auth-missing-invalid":                         {},
+		"api/route-list-detail":                            {},
+		"api/route-add-update-remove":                      {},
+		"registry/v2-ping":                                 {},
+		"registry/auth-challenge":                          {},
+		"registry/push-image":                              {},
+		"registry/pull-image":                              {},
+		"registry/tag-list":                                {},
+		"registry/upload-too-large":                        {},
+		"registry/invalid-name-reference":                  {},
+		"registry/image-push-event":                        {},
+		"proxy/managed-http-route":                         {},
+		"proxy/external-route":                             {},
+		"proxy/zero-downtime-drain":                        {},
+		"proxy/distributed-drain-protocol":                 {},
+		"proxy/edge-traffic-protocol-matrix":               {},
+		"proxy/edge-traffic-graph-stream-matrix":           {},
+		"security/edge-no-podman-socket":                   {},
+		"security/registry-no-podman-socket":               {},
+		"security/missing-component-token-rejected":        {},
+		"security/wrong-component-token-rejected":          {},
+		"security/wrong-scope-component-token-rejected":    {},
+		"migration/monolith-existing-deployment-inventory": {},
+		"migration/monolith-to-split-preflight":            {},
+		"migration/component-startup-health":               {},
+		"migration/no-unsafe-traffic-switch":               {},
+		"migration/env-transfer":                           {},
+		"migration/interrupted-retry":                      {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
 }
@@ -254,8 +260,8 @@ func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
 
 func TestMigrationAndSecurityScenariosDoNotSilentlyPass(t *testing.T) {
 	for _, scenario := range MigrationScenarios() {
-		require.Equal(t, ScenarioStatusPending, scenario.Status, scenario.Name)
-		require.NotEmpty(t, scenario.BlockReason, scenario.Name)
+		require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
+		require.Empty(t, scenario.BlockReason, scenario.Name)
 	}
 	for _, scenario := range SecurityScenarios() {
 		if scenario.Status == ScenarioStatusImplemented {
