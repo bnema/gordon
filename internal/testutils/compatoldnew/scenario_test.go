@@ -94,6 +94,7 @@ func TestScenarioDefinitions(t *testing.T) {
 			"runtime/startup-recovery",
 		}},
 		SurfaceMigration: {MigrationScenarios(), []string{
+			"migration/monolith-existing-deployment-inventory",
 			"migration/monolith-to-split-preflight",
 			"migration/component-startup-health",
 			"migration/no-unsafe-traffic-switch",
@@ -214,6 +215,9 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 	for _, scenario := range RuntimeScenarios() {
+		require.True(t, scenario.PodmanRequired, scenario.Name)
+	}
+	for _, scenario := range MigrationScenarios() {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
 

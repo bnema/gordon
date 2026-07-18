@@ -136,6 +136,29 @@ func TestMigrateAttachmentEnvFile(t *testing.T) {
 	assert.Equal(t, "secret123", values["POSTGRES_PASSWORD"])
 }
 
+func TestMigrateEnv_DefaultDirMissingFileAndFileProviderBehavior(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.DataDir = t.TempDir()
+	assert.Equal(t, filepath.Join(cfg.Server.DataDir, "env"), resolveEnvDir(cfg))
+
+	cfg.Env.Dir = filepath.Join(t.TempDir(), "explicit-env")
+	assert.Equal(t, cfg.Env.Dir, resolveEnvDir(cfg))
+
+	missingDir := filepath.Join(t.TempDir(), "missing")
+	assert.NoError(t, migrateEnvFilesToPass(missingDir, nil, zerowrap.Default()), "a missing env directory is an existing no-op")
+
+	store, err := domainsecrets.NewFileStore(filepath.Join(t.TempDir(), "file-provider"), zerowrap.Default())
+	require.NoError(t, err)
+	keys, err := store.ListKeys("missing.example.test")
+	require.NoError(t, err)
+	assert.Empty(t, keys, "the file provider treats an absent env file as empty")
+
+	secretValue := "fixture-value-not-for-output"
+	err = migrateEnvFile(missingDir, "missing.example.test.env", nil, zerowrap.Default())
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), secretValue)
+}
+
 func TestIsAttachmentEnvFile(t *testing.T) {
 	tests := []struct {
 		name     string
