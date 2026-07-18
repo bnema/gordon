@@ -54,7 +54,7 @@ func (r *recordingTrafficRuntime) SelfUpdateRuntime(_ context.Context, command d
 
 func fixtureSwitchPlan(t *testing.T) ComponentLaunchPlan {
 	t.Helper()
-	plan, err := NewComponentLaunchPlan(MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 7, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 7, OldServingPath: "monolith"})
+	plan, err := NewComponentLaunchPlan(MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 7, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 7, OldServingPath: "monolith", EdgeAppNetworks: []string{"gordon-app-fixture"}})
 	require.NoError(t, err)
 	return plan
 }
@@ -90,6 +90,7 @@ func TestTrafficSwitchRejectsGenerationMismatchAndSwitchesOnlyViaRuntime(t *test
 	assert.True(t, command.PreserveVolumes)
 	assert.Equal(t, "monolith", command.OldServingComponentID)
 	assert.Empty(t, command.FinalPortPublishes, "a malformed checkpoint cannot invent public ports")
+	assert.Equal(t, []string{"gordon-app-fixture"}, command.EdgeAppNetworks)
 	assert.Equal(t, uint64(7), command.Generation)
 	assert.Contains(t, command.TargetComponentID, "gordon-edge-")
 }

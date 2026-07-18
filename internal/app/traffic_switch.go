@@ -80,6 +80,7 @@ func (s *trafficSwitch) Switch(ctx context.Context, checkpoint MigrationCheckpoi
 		PortPublishes:         append([]domain.ContainerPortPublish(nil), edge.PortPublishes...),
 		OldServingComponentID: checkpoint.OldServingPath,
 		FinalPortPublishes:    componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge),
+		EdgeAppNetworks:       append([]string(nil), plan.AppNetworks...),
 		PreserveVolumes:       true,
 	})
 	if err != nil {

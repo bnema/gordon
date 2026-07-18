@@ -565,6 +565,7 @@ func (f *realMigrationFixture) assertSwitchedTraffic() {
 	oldRunning, err := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.old)
 	require.NoError(f.t, err)
 	require.Equal(f.t, "false", strings.TrimSpace(oldRunning), "runtime-owned listener cutover stops the old serving monolith")
+	f.assertFinalEdgeBindingsAndNetwork()
 
 	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	for _, probe := range []struct {
@@ -591,6 +592,32 @@ func (f *realMigrationFixture) assertSwitchedTraffic() {
 			return response.StatusCode < http.StatusBadRequest
 		}, 10*time.Second, 50*time.Millisecond, "post-cutover %s must traverse the final edge", probe.host)
 	}
+}
+
+// assertFinalEdgeBindingsAndNetwork proves activation replaced the private
+// prepared listener rather than merely declaring the old monolith stopped. It
+// also proves the final edge retained the managed app network used for routing.
+func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
+	f.t.Helper()
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] != "edge" {
+			continue
+		}
+		ports, portErr := podmanOutput(f.ctx, "port", container.resourceName())
+		require.NoError(f.t, portErr)
+		bindings := strings.FieldsFunc(strings.TrimSpace(ports), func(r rune) bool { return r == '\n' })
+		require.ElementsMatch(f.t, []string{
+			fmt.Sprintf("%d/tcp -> 0.0.0.0:%d", f.port, f.port),
+			"15000/tcp -> 0.0.0.0:15000",
+		}, bindings, "final edge must own configured public HTTP and registry listeners")
+		networks, networkErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
+		require.NoError(f.t, networkErr)
+		require.Contains(f.t, strings.FieldsFunc(networks, func(r rune) bool { return r == ';' }), f.network, "final edge must retain the managed app network")
+		return
+	}
+	f.t.Fatal("final edge was not found")
 }
 
 func (f *realMigrationFixture) assertInterruptedSwitchStatusAndRetry() {

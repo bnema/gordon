@@ -217,7 +217,12 @@ type RuntimeSelfUpdateCommand struct {
 	// They are not arbitrary runtime targets or engine options.
 	OldServingComponentID string
 	FinalPortPublishes    []ContainerPortPublish
-	PreserveVolumes       bool
+	// EdgeAppNetworks is the exact set of managed application networks that a
+	// replacement edge must retain during activation. It is accepted only by
+	// the runtime-owned edge activation transaction, which verifies both the
+	// managed-network policy and the prepared edge attachment before use.
+	EdgeAppNetworks []string
+	PreserveVolumes bool
 }
 
 // Validate checks that self-update is a Gordon component lifecycle operation, not an unmanaged mutation.

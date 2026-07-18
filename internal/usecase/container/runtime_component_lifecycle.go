@@ -304,8 +304,9 @@ func prepareMigrationSocketStateDirectory(root, path string) error {
 }
 
 type edgeActivation struct {
-	prepared *domain.Container
-	old      *domain.Container
+	prepared        *domain.Container
+	old             *domain.Container
+	appNetworkNames []string
 }
 
 // activateEdge transfers listener ownership as a compensating transaction.
@@ -344,7 +345,55 @@ func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Co
 	if !finalPortsMatchOld(command.FinalPortPublishes, old.Ports) {
 		return edgeActivation{}, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "edge activation final ports do not match old serving container", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 	}
-	return edgeActivation{prepared: prepared, old: old}, nil
+	appNetworkNames, err := m.preparedEdgeAppNetworks(ctx, command, prepared)
+	if err != nil {
+		return edgeActivation{}, err
+	}
+	return edgeActivation{prepared: prepared, old: old, appNetworkNames: appNetworkNames}, nil
+}
+
+// preparedEdgeAppNetworks verifies every requested attachment while the
+// probe-only edge is still running. This prevents a command from using
+// activation to join an arbitrary network and makes the later replacement
+// retain exactly the routing connectivity which passed the prepared probes.
+func (m *runtimeComponentLifecycleManager) preparedEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand, prepared *domain.Container) ([]string, error) {
+	if len(command.EdgeAppNetworks) == 0 {
+		return nil, nil
+	}
+	networks, err := m.runtime.ListNetworks(ctx)
+	if err != nil {
+		return nil, componentLifecycleError("list edge networks", err)
+	}
+	names := make([]string, 0, len(command.EdgeAppNetworks))
+	seen := make(map[string]struct{}, len(command.EdgeAppNetworks))
+	for _, name := range command.EdgeAppNetworks {
+		if !safeManagedAppNetworkName(name, m.policy.ManagedNetworkPrefix) {
+			return nil, m.deniedAppNetwork(command)
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, m.deniedAppNetwork(command)
+		}
+		seen[name] = struct{}{}
+		network := namedNetwork(networks, name)
+		if !validManagedAppNetwork(network, name, m.policy.ManagedNetworkPrefix) || !slices.Contains(network.Containers, prepared.Name) {
+			return nil, m.deniedAppNetwork(command)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+func namedNetwork(networks []*domain.NetworkInfo, name string) *domain.NetworkInfo {
+	var found *domain.NetworkInfo
+	for _, network := range networks {
+		if network != nil && network.Name == name {
+			if found != nil {
+				return nil
+			}
+			found = network
+		}
+	}
+	return found
 }
 
 func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation) error {
@@ -382,6 +431,10 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 		rollback()
 		return fmt.Errorf("start final edge: %w", err)
 	}
+	if err := m.connectFinalEdgeAppNetworks(ctx, command, activation.appNetworkNames); err != nil {
+		rollback()
+		return err
+	}
 	if err := m.healthContainer(ctx, final); err != nil {
 		rollback()
 		return fmt.Errorf("postcheck final edge: %w", err)
@@ -398,6 +451,15 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 		if err := m.committer.CommitMigrationCutover(ctx, command); err != nil {
 			rollback()
 			return componentLifecycleError("commit migration cutover", err)
+		}
+	}
+	return nil
+}
+
+func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand, names []string) error {
+	for _, name := range names {
+		if err := m.runtime.ConnectContainerToNetwork(ctx, command.TargetComponentID, name); err != nil && !alreadyConnectedNetworkError(err) {
+			return componentLifecycleError("restore edge network", err)
 		}
 	}
 	return nil
