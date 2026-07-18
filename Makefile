@@ -63,7 +63,7 @@ COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
 	test test-short test-race test-coverage \
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
-	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security
+	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
 
 # Default target
 all: build
@@ -242,6 +242,12 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 		done
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
+
+# count2 is intentionally a second complete invocation rather than Go's
+# package-level -count flag: the migration gate includes Make-level JSON pass
+# assertions and a rootless Podman lifecycle that must be repeated as a unit.
+count2: ## Repeat the migration compatibility gate once (for count=2 confidence)
+	@$(MAKE) compat-harness-migration
 
 compat-harness-migration: ## Run blocking migration protocol and rootless-Podman gates
 	@echo "Running deterministic Docker-compatible migration protocol fixture checks..."
