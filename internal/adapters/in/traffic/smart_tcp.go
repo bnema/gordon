@@ -35,7 +35,9 @@ func (m *Manager) SetSmartTCPHTTPServer(entryPoint string, handler http.Handler,
 	} else {
 		next[entryPoint] = SmartTCPHTTPServerConfig{Handler: handler, Protocols: cloneHTTPProtocols(protocols)}
 	}
-	m.smartHTTPServers.Store(next)
+	configs := m.loadServerConfigs()
+	configs.smartHTTP = next
+	m.serverConfigs.Store(configs)
 	runtimes := m.smartTCPRuntimesLocked(entryPoint)
 	m.mu.Unlock()
 	for _, runtime := range runtimes {
@@ -61,7 +63,9 @@ func (m *Manager) SetSmartTCPTLSServer(entryPoint string, handler http.Handler, 
 	} else {
 		next[entryPoint] = SmartTCPTLSServerConfig{Handler: handler, TLSConfig: tlsConfig.Clone()}
 	}
-	m.smartTLSServers.Store(next)
+	configs := m.loadServerConfigs()
+	configs.smartTLS = next
+	m.serverConfigs.Store(configs)
 	runtimes := m.smartTCPRuntimesLocked(entryPoint)
 	m.mu.Unlock()
 	for _, runtime := range runtimes {
@@ -91,19 +95,11 @@ func (m *Manager) smartTLSServer(entryPoint string) (SmartTCPTLSServerConfig, bo
 }
 
 func (m *Manager) loadSmartHTTPServers() smartHTTPServers {
-	value := m.smartHTTPServers.Load()
-	if value == nil {
-		return smartHTTPServers{}
-	}
-	return value.(smartHTTPServers)
+	return m.loadServerConfigs().smartHTTP
 }
 
 func (m *Manager) loadSmartTLSServers() smartTLSServers {
-	value := m.smartTLSServers.Load()
-	if value == nil {
-		return smartTLSServers{}
-	}
-	return value.(smartTLSServers)
+	return m.loadServerConfigs().smartTLS
 }
 
 func (r *entryPointRuntime) startSmartTCPHTTPServers(entryPoint domain.EntryPoint) {

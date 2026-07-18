@@ -298,11 +298,8 @@ type edgeTrafficGraphProvider interface {
 // edge apply loop. Keeping this boundary here makes the loop testable without
 // substituting its listener implementation.
 type edgeTrafficManager interface {
-	Apply(context.Context, *domain.TrafficGraph) error
+	ApplyWithServers(context.Context, *domain.TrafficGraph, trafficadapter.ServerConfigBundle) error
 	Shutdown(context.Context) error
-	SetTLSHTTPServer(string, http.Handler, *tls.Config)
-	SetSmartTCPHTTPServer(string, http.Handler, *http.Protocols)
-	SetSmartTCPTLSServer(string, http.Handler, *tls.Config)
 }
 
 // RunEdgeTrafficApplyLoop is the production split-edge traffic owner. It is
@@ -340,9 +337,9 @@ func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleD
 	if err != nil {
 		return err
 	}
-	handlers, err := configureEdgeTrafficHandlers(manager, initialGraph.Graph, cfg, handler, tlsConfig, edgeTrafficHandlers{})
+	servers, err := edgeTrafficServerConfigs(initialGraph.Graph, cfg, handler, tlsConfig)
 	if err == nil {
-		err = manager.Apply(ctx, &initialGraph.Graph)
+		err = manager.ApplyWithServers(ctx, &initialGraph.Graph, servers)
 	}
 	if err != nil {
 		return fmt.Errorf("apply initial edge traffic graph: %w", err)
@@ -351,7 +348,7 @@ func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleD
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, handlers, initialGraph.Generation, log)
+	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, initialGraph.Generation, log)
 
 	server, errCh, err := startEdgeDedicatedHTTP(cfg, deps, handler, log)
 	if err != nil {
@@ -445,54 +442,32 @@ func waitForInitialEdgeTrafficGraph(ctx context.Context, graphs edgeTrafficGraph
 	}
 }
 
-type edgeTrafficHandlers struct {
-	tlsMux map[string]struct{}
-	smart  map[string]struct{}
-}
-
-func configureEdgeTrafficHandlers(manager edgeTrafficManager, graph domain.TrafficGraph, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, previous edgeTrafficHandlers) (edgeTrafficHandlers, error) {
+func edgeTrafficServerConfigs(graph domain.TrafficGraph, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config) (trafficadapter.ServerConfigBundle, error) {
 	if err := validateEdgeTrafficTLSMode(cfg, graph); err != nil {
-		return previous, err
+		return trafficadapter.ServerConfigBundle{}, err
 	}
-	next := edgeTrafficHandlers{tlsMux: map[string]struct{}{}, smart: map[string]struct{}{}}
-	for _, entry := range graph.EntryPoints {
-		switch entry.Protocol {
-		case domain.EntryPointProtocolTLSMux:
-			next.tlsMux[entry.Name] = struct{}{}
-		case domain.EntryPointProtocolSmartTCP:
-			next.smart[entry.Name] = struct{}{}
-		}
-	}
-	for name := range previous.tlsMux {
-		if _, ok := next.tlsMux[name]; !ok {
-			manager.SetTLSHTTPServer(name, nil, nil)
-		}
-	}
-	for name := range previous.smart {
-		if _, ok := next.smart[name]; !ok {
-			manager.SetSmartTCPHTTPServer(name, nil, nil)
-			manager.SetSmartTCPTLSServer(name, nil, nil)
-		}
+	configs := trafficadapter.ServerConfigBundle{
+		TLSHTTP:   map[string]trafficadapter.TLSHTTPServerConfig{},
+		SmartHTTP: map[string]trafficadapter.SmartTCPHTTPServerConfig{},
+		SmartTLS:  map[string]trafficadapter.SmartTCPTLSServerConfig{},
 	}
 	var plainProtocols http.Protocols
 	plainProtocols.SetHTTP1(true)
 	plainProtocols.SetUnencryptedHTTP2(true)
-	for name := range next.smart {
-		manager.SetSmartTCPHTTPServer(name, handler, &plainProtocols)
-		if tlsConfig != nil {
-			manager.SetSmartTCPTLSServer(name, handler, tlsConfig)
-		} else {
-			manager.SetSmartTCPTLSServer(name, nil, nil)
+	for _, entry := range graph.EntryPoints {
+		switch entry.Protocol {
+		case domain.EntryPointProtocolTLSMux:
+			if tlsConfig != nil {
+				configs.TLSHTTP[entry.Name] = trafficadapter.TLSHTTPServerConfig{Handler: handler, TLSConfig: tlsConfig}
+			}
+		case domain.EntryPointProtocolSmartTCP:
+			configs.SmartHTTP[entry.Name] = trafficadapter.SmartTCPHTTPServerConfig{Handler: handler, Protocols: &plainProtocols}
+			if tlsConfig != nil {
+				configs.SmartTLS[entry.Name] = trafficadapter.SmartTCPTLSServerConfig{Handler: handler, TLSConfig: tlsConfig}
+			}
 		}
 	}
-	for name := range next.tlsMux {
-		if tlsConfig != nil {
-			manager.SetTLSHTTPServer(name, handler, tlsConfig)
-		} else {
-			manager.SetTLSHTTPServer(name, nil, nil)
-		}
-	}
-	return next, nil
+	return configs, nil
 }
 
 func validateEdgeTrafficTLSMode(cfg EdgeConfig, graph domain.TrafficGraph) error {
@@ -512,7 +487,7 @@ func validateEdgeTrafficTLSMode(cfg EdgeConfig, graph domain.TrafficGraph) error
 	return nil
 }
 
-func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager edgeTrafficManager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, handlers edgeTrafficHandlers, lastGeneration domain.TrafficGraphGeneration, log zerowrap.Logger) {
+func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager edgeTrafficManager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, lastGeneration domain.TrafficGraphGeneration, log zerowrap.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -525,15 +500,15 @@ func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficG
 				log.Error().Uint64("generation", uint64(snapshot.Generation)).Msg("edge traffic graph update conflicts with dedicated external HTTP listener; retaining last known-good graph")
 				continue
 			}
-			next, err := configureEdgeTrafficHandlers(manager, snapshot.Graph, cfg, handler, tlsConfig, handlers)
+			servers, err := edgeTrafficServerConfigs(snapshot.Graph, cfg, handler, tlsConfig)
 			if err == nil {
-				err = manager.Apply(ctx, &snapshot.Graph)
+				err = manager.ApplyWithServers(ctx, &snapshot.Graph, servers)
 			}
 			if err != nil {
 				log.Error().Err(err).Uint64("generation", uint64(snapshot.Generation)).Msg("edge traffic graph update rejected; retaining last known-good graph")
 				continue
 			}
-			handlers, lastGeneration = next, snapshot.Generation
+			lastGeneration = snapshot.Generation
 		}
 	}
 }

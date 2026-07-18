@@ -54,9 +54,7 @@ type Manager struct {
 
 	lastReloadStatus string
 	lastReloadError  string
-	tlsHTTPServers   atomic.Value
-	smartHTTPServers atomic.Value
-	smartTLSServers  atomic.Value
+	serverConfigs    atomic.Value
 }
 
 // NewManager creates a traffic manager.
@@ -66,14 +64,126 @@ func NewManager() *Manager {
 		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
 	}
-	manager.tlsHTTPServers.Store(tlsHTTPServers{})
-	manager.smartHTTPServers.Store(smartHTTPServers{})
-	manager.smartTLSServers.Store(smartTLSServers{})
+	manager.serverConfigs.Store(serverConfigBundle{
+		tlsHTTP:   tlsHTTPServers{},
+		smartHTTP: smartHTTPServers{},
+		smartTLS:  smartTLSServers{},
+	})
 	return manager
 }
 
-// Apply validates and applies a new traffic graph snapshot.
+// ServerConfigBundle is the complete HTTP/TLS server configuration associated
+// with a traffic graph. ApplyWithServers replaces all three maps as part of
+// the graph transaction. Empty maps intentionally remove prior servers.
+type ServerConfigBundle struct {
+	TLSHTTP   map[string]TLSHTTPServerConfig
+	SmartHTTP map[string]SmartTCPHTTPServerConfig
+	SmartTLS  map[string]SmartTCPTLSServerConfig
+}
+
+type serverConfigBundle struct {
+	tlsHTTP   tlsHTTPServers
+	smartHTTP smartHTTPServers
+	smartTLS  smartTLSServers
+}
+
+// Apply validates and applies a new traffic graph snapshot. It preserves the
+// independently configured servers used by the monolith Set APIs.
 func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
+	return m.apply(ctx, graph, nil)
+}
+
+// ApplyWithServers transactionally applies graph and its complete HTTP/TLS
+// server configuration. If validation or any listener bind fails, the prior
+// graph, servers, and listeners remain untouched.
+func (m *Manager) ApplyWithServers(ctx context.Context, graph *domain.TrafficGraph, configs ServerConfigBundle) error {
+	nextConfigs, err := validateServerConfigBundle(graph, configs)
+	if err != nil {
+		return m.recordReloadError(ctx, err)
+	}
+	return m.apply(ctx, graph, &nextConfigs)
+}
+
+func validateServerConfigBundle(graph *domain.TrafficGraph, configs ServerConfigBundle) (serverConfigBundle, error) {
+	if graph == nil {
+		return serverConfigBundle{}, fmt.Errorf("%w: traffic graph is required", domain.ErrTrafficGraphRequired)
+	}
+	entryPoints := make(map[string]domain.EntryPointProtocol, len(graph.EntryPoints))
+	for _, entryPoint := range graph.EntryPoints {
+		entryPoints[entryPoint.Name] = entryPoint.Protocol
+	}
+	next := serverConfigBundle{
+		tlsHTTP:   make(tlsHTTPServers, len(configs.TLSHTTP)),
+		smartHTTP: make(smartHTTPServers, len(configs.SmartHTTP)),
+		smartTLS:  make(smartTLSServers, len(configs.SmartTLS)),
+	}
+	for name, config := range configs.TLSHTTP {
+		if entryPoints[name] != domain.EntryPointProtocolTLSMux {
+			return serverConfigBundle{}, fmt.Errorf("tls http server %q does not target a tls_mux entrypoint", name)
+		}
+		if config.Handler == nil || config.TLSConfig == nil {
+			return serverConfigBundle{}, fmt.Errorf("tls http server %q requires handler and tls config", name)
+		}
+		next.tlsHTTP[name] = TLSHTTPServerConfig{Handler: config.Handler, TLSConfig: config.TLSConfig.Clone()}
+	}
+	for name, config := range configs.SmartHTTP {
+		if entryPoints[name] != domain.EntryPointProtocolSmartTCP {
+			return serverConfigBundle{}, fmt.Errorf("smart tcp http server %q does not target a smart_tcp entrypoint", name)
+		}
+		if config.Handler == nil {
+			return serverConfigBundle{}, fmt.Errorf("smart tcp http server %q requires handler", name)
+		}
+		next.smartHTTP[name] = SmartTCPHTTPServerConfig{Handler: config.Handler, Protocols: cloneHTTPProtocols(config.Protocols)}
+	}
+	for name, config := range configs.SmartTLS {
+		if entryPoints[name] != domain.EntryPointProtocolSmartTCP {
+			return serverConfigBundle{}, fmt.Errorf("smart tcp tls server %q does not target a smart_tcp entrypoint", name)
+		}
+		if config.Handler == nil || config.TLSConfig == nil {
+			return serverConfigBundle{}, fmt.Errorf("smart tcp tls server %q requires handler and tls config", name)
+		}
+		next.smartTLS[name] = SmartTCPTLSServerConfig{Handler: config.Handler, TLSConfig: config.TLSConfig.Clone()}
+	}
+	return next, nil
+}
+
+func (m *Manager) loadServerConfigs() serverConfigBundle {
+	value := m.serverConfigs.Load()
+	if value == nil {
+		return serverConfigBundle{tlsHTTP: tlsHTTPServers{}, smartHTTP: smartHTTPServers{}, smartTLS: smartTLSServers{}}
+	}
+	return value.(serverConfigBundle)
+}
+
+func refreshRuntimeServers(runtime *entryPointRuntime) {
+	entryPoint := runtime.entryPointSnapshot()
+	switch entryPoint.Protocol {
+	case domain.EntryPointProtocolTLSMux:
+		runtime.refreshTLSHTTPServer(entryPoint.Name)
+	case domain.EntryPointProtocolSmartTCP:
+		runtime.refreshSmartTCPHTTPServer(entryPoint.Name)
+		runtime.refreshSmartTCPTLSServer(entryPoint.Name)
+	}
+}
+
+func retainedServerRuntimes(configs *serverConfigBundle, listeners map[string]*entryPointRuntime, created []*entryPointRuntime) []*entryPointRuntime {
+	if configs == nil {
+		return nil
+	}
+	createdRuntimes := make(map[*entryPointRuntime]struct{}, len(created))
+	for _, runtime := range created {
+		createdRuntimes[runtime] = struct{}{}
+	}
+	retained := make([]*entryPointRuntime, 0, len(listeners))
+	for _, runtime := range listeners {
+		if _, ok := createdRuntimes[runtime]; !ok {
+			retained = append(retained, runtime)
+		}
+	}
+	return retained
+}
+
+func (m *Manager) apply(ctx context.Context, graph *domain.TrafficGraph, configs *serverConfigBundle) error {
 	if graph == nil {
 		return m.recordReloadError(ctx, fmt.Errorf("%w: traffic graph is required", domain.ErrTrafficGraphRequired))
 	}
@@ -113,7 +223,11 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	oldUDPListeners := m.udpListeners
 	m.listeners = newListeners
 	m.udpListeners = newUDPListeners
+	if configs != nil {
+		m.serverConfigs.Store(*configs)
+	}
 	m.snapshot.Store(&nextGraph)
+	serverRuntimes := retainedServerRuntimes(configs, newListeners, createdListeners)
 	for _, runtime := range createdListeners {
 		runtime.start()
 	}
@@ -124,7 +238,23 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 	m.lastReloadError = ""
 	m.mu.Unlock()
 
-	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
+	for _, runtime := range serverRuntimes {
+		refreshRuntimeServers(runtime)
+	}
+	stoppedTCP, stoppedUDP := stopReplacedTrafficRuntimes(ctx, &nextGraph, oldListeners, oldUDPListeners, newListeners, newUDPListeners)
+	logAppliedTrafficGraph(ctx, newListeners, newUDPListeners, createdListeners, createdUDPListeners, stoppedTCP, stoppedUDP)
+	return nil
+}
+
+func stopReplacedTrafficRuntimes(
+	ctx context.Context,
+	graph *domain.TrafficGraph,
+	oldListeners map[string]*entryPointRuntime,
+	oldUDPListeners map[string]*udpEntryPointRuntime,
+	newListeners map[string]*entryPointRuntime,
+	newUDPListeners map[string]*udpEntryPointRuntime,
+) (int, int) {
+	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(graph)).DrainTimeout
 	stoppedTCP := 0
 	for _, runtime := range oldListeners {
 		if tcpRuntimeRetained(newListeners, runtime) {
@@ -133,7 +263,7 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 		stoppedTCP++
 		runtime.stop(ctx, tcpDrainTimeout)
 	}
-	udpDrainTimeout := effectiveUDPOptions(snapshotUDPOptions(&nextGraph)).DrainTimeout
+	udpDrainTimeout := effectiveUDPOptions(snapshotUDPOptions(graph)).DrainTimeout
 	stoppedUDP := 0
 	for _, runtime := range oldUDPListeners {
 		if udpRuntimeRetained(newUDPListeners, runtime) {
@@ -147,8 +277,7 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 		stoppedUDP++
 		runtime.stop(ctx, udpDrainTimeout)
 	}
-	logAppliedTrafficGraph(ctx, newListeners, newUDPListeners, createdListeners, createdUDPListeners, stoppedTCP, stoppedUDP)
-	return nil
+	return stoppedTCP, stoppedUDP
 }
 
 func tcpRuntimeRetained(listeners map[string]*entryPointRuntime, runtime *entryPointRuntime) bool {

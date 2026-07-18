@@ -58,12 +58,12 @@ func TestEdgeTrafficFilesConfiguresSmartAndTLSMuxHTTPFallback(t *testing.T) {
 		{Name: "smart", Address: unusedEdgeAddress(t, "tcp"), Protocol: domain.EntryPointProtocolSmartTCP},
 		{Name: "mux", Address: unusedEdgeAddress(t, "tcp"), Protocol: domain.EntryPointProtocolTLSMux},
 	}}
-	_, err = configureEdgeTrafficHandlers(manager, graph, cfg, http.NotFoundHandler(), tlsConfig, edgeTrafficHandlers{})
+	servers, err := edgeTrafficServerConfigs(graph, cfg, http.NotFoundHandler(), tlsConfig)
 	require.NoError(t, err)
 
 	// Applying the graph exercises the manager's configured smart-TCP
 	// plaintext/TLS and tls_mux HTTP fallback listeners without fixed ports.
-	require.NoError(t, manager.Apply(context.Background(), &graph))
+	require.NoError(t, manager.ApplyWithServers(context.Background(), &graph, servers))
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	require.NoError(t, manager.Shutdown(shutdownCtx))

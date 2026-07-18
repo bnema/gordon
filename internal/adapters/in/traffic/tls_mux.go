@@ -38,7 +38,9 @@ func (m *Manager) SetTLSHTTPServer(entryPoint string, handler http.Handler, tlsC
 	} else {
 		next[entryPoint] = TLSHTTPServerConfig{Handler: handler, TLSConfig: tlsConfig.Clone()}
 	}
-	m.tlsHTTPServers.Store(next)
+	configs := m.loadServerConfigs()
+	configs.tlsHTTP = next
+	m.serverConfigs.Store(configs)
 	runtimes := make([]*entryPointRuntime, 0, len(m.listeners))
 	for _, runtime := range m.listeners {
 		if runtime.entryPointSnapshot().Name == entryPoint {
@@ -58,11 +60,7 @@ func (m *Manager) tlsHTTPServer(entryPoint string) (TLSHTTPServerConfig, bool) {
 }
 
 func (m *Manager) loadTLSHTTPServers() tlsHTTPServers {
-	value := m.tlsHTTPServers.Load()
-	if value == nil {
-		return tlsHTTPServers{}
-	}
-	return value.(tlsHTTPServers)
+	return m.loadServerConfigs().tlsHTTP
 }
 
 func peekClientHelloSNI(conn net.Conn) (string, net.Conn, error) {
