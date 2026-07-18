@@ -189,13 +189,11 @@ func runAttachmentsListRemote(ctx context.Context, client *remote.Client, target
 		return fmt.Errorf("failed to list attachments: %w", err)
 	}
 
-	if len(attachments) == 0 {
-		fmt.Println(styles.Theme.Muted.Render("No attachments configured"))
-		return nil
-	}
-
 	if jsonOut {
 		return writeJSON(out, map[string]any{"attachments": attachments})
+	}
+	if len(attachments) == 0 {
+		return cliWriteLine(out, styles.Theme.Muted.Render("No attachments configured"))
 	}
 
 	// Sort targets for consistent output
@@ -455,8 +453,7 @@ Examples:
 				return fmt.Errorf("failed to add attachment: %w", err)
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment added: %s -> %s", target, image)))
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Attachment added: %s -> %s", target, image)))
 		},
 	}
 
@@ -505,8 +502,7 @@ Examples:
 				return fmt.Errorf("failed to remove attachment: %w", err)
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Attachment removed: %s -> %s", target, image)))
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Attachment removed: %s -> %s", target, image)))
 		},
 	}
 

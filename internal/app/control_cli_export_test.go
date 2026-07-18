@@ -94,9 +94,23 @@ func (h *ControlCLIHarness) Close(t *testing.T) {
 // RuntimeDeployCalls reports commands accepted by the runtime gRPC port.
 func (h *ControlCLIHarness) RuntimeDeployCalls() int { return h.runtime.worker.calls() }
 
+// RuntimeRestartCalls reports restart commands accepted by the runtime gRPC port.
+func (h *ControlCLIHarness) RuntimeRestartCalls() int { return h.runtime.worker.restartCalls() }
+
 // WaitForRuntimeDeploy verifies a CLI mutation crossed the production control
 // listener and reached the runtime command port.
 func (h *ControlCLIHarness) WaitForRuntimeDeploy(t *testing.T, minimum int) {
 	t.Helper()
 	require.Eventually(t, func() bool { return h.RuntimeDeployCalls() >= minimum }, time.Second, time.Millisecond)
+}
+
+// WaitForRuntimeRestart verifies the exact attachment flag reached runtime.
+func (h *ControlCLIHarness) WaitForRuntimeRestart(t *testing.T, minimum int, withAttachments bool) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		if h.RuntimeRestartCalls() < minimum {
+			return false
+		}
+		return h.runtime.worker.restartCommand(minimum-1).WithAttachments == withAttachments
+	}, time.Second, time.Millisecond)
 }

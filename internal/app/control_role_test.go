@@ -781,8 +781,9 @@ func (controlRoleDrainReceiver) AcknowledgeRouteDrain(context.Context, domain.Ro
 }
 
 type controlRoleRuntimeWorker struct {
-	mu       sync.Mutex
-	commands []domain.DeployRouteCommand
+	mu              sync.Mutex
+	commands        []domain.DeployRouteCommand
+	restartCommands []domain.RestartRouteCommand
 }
 
 func (w *controlRoleRuntimeWorker) DeployRoute(_ context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {
@@ -792,8 +793,11 @@ func (w *controlRoleRuntimeWorker) DeployRoute(_ context.Context, command domain
 	return domain.RuntimeCommandResult{CommandID: command.ID, Status: domain.RuntimeCommandStatusSucceeded}, nil
 }
 
-func (w *controlRoleRuntimeWorker) RestartRoute(context.Context, domain.RestartRouteCommand) (domain.RuntimeCommandResult, error) {
-	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
+func (w *controlRoleRuntimeWorker) RestartRoute(_ context.Context, command domain.RestartRouteCommand) (domain.RuntimeCommandResult, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.restartCommands = append(w.restartCommands, command)
+	return domain.RuntimeCommandResult{CommandID: command.ID, Status: domain.RuntimeCommandStatusSucceeded}, nil
 }
 func (w *controlRoleRuntimeWorker) RemoveRoute(context.Context, domain.RemoveRouteCommand) (domain.RuntimeCommandResult, error) {
 	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
@@ -813,6 +817,16 @@ func (w *controlRoleRuntimeWorker) command(index int) domain.DeployRouteCommand 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.commands[index]
+}
+func (w *controlRoleRuntimeWorker) restartCalls() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.restartCommands)
+}
+func (w *controlRoleRuntimeWorker) restartCommand(index int) domain.RestartRouteCommand {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.restartCommands[index]
 }
 
 var _ out.RuntimeStateSubscriber = (*controlRoleStateSubscriber)(nil)

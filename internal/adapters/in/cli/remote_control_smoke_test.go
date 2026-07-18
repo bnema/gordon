@@ -71,11 +71,14 @@ func TestRemoteControlCobraSmoke(t *testing.T) {
 		{"routes JSON", []string{"routes", "list", "--json"}, `"app.example.com"`, ""},
 		{"routes add mutation", []string{"routes", "add", "new.example.com", "new:v1"}, "Route configured", ""},
 		{"attachments JSON", []string{"attachments", "list", "app.example.com", "--json"}, `"sidecar:v1"`, ""},
+		{"attachments add mutation", []string{"attachments", "add", "app.example.com", "redis:7"}, "Attachment added: app.example.com -> redis:7", ""},
+		{"attachments remove mutation", []string{"attachments", "remove", "app.example.com", "redis:7", "--force"}, "Attachment removed: app.example.com -> redis:7", ""},
 		{"secrets JSON", []string{"secrets", "list", "app.example.com", "--json"}, `"TOKEN"`, ""},
 		{"deploy JSON", []string{"deploy", "app.example.com", "--json"}, `"status": "queued"`, ""},
 		{"restart", []string{"restart", "app.example.com", "--with-attachments"}, "Restarted app.example.com", ""},
 		{"reload", []string{"reload"}, "Configuration reloaded successfully", ""},
 		{"container logs", []string{"logs", "app.example.com", "--lines", "7"}, "runtime line", ""},
+		{"follow container logs", []string{"logs", "app.example.com", "--lines", "3", "--follow"}, "runtime follow line", ""},
 		{"status JSON", []string{"status", "--json"}, `"container_status"`, ""},
 		{"networks JSON", []string{"networks", "list", "--json"}, `"gordon-app"`, ""},
 		{"autoroute JSON", []string{"autoroute", "allow", "list", "--json"}, `"*.example.com"`, ""},
@@ -112,7 +115,11 @@ func TestRemoteControlCobraSmoke(t *testing.T) {
 	require.True(t, listener.state.deployed)
 	require.True(t, listener.state.restartedWithAttachments)
 	require.True(t, listener.state.reloaded)
-	require.Equal(t, 7, listener.state.logLines)
+	require.Equal(t, 3, listener.state.logLines)
+	require.Equal(t, "app.example.com", listener.state.logDomain)
+	require.True(t, listener.state.logFollow)
+	require.Equal(t, []string{"redis:7"}, listener.state.addedAttachments)
+	require.Equal(t, []string{"redis:7"}, listener.state.removedAttachments)
 }
 
 const smokeLongLivedToken = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJjbGktc21va2UifQ."
@@ -123,6 +130,10 @@ type remoteControlSmokeState struct {
 	deployed, reloaded       bool
 	restartedWithAttachments bool
 	logLines                 int
+	logDomain                string
+	logFollow                bool
+	addedAttachments         []string
+	removedAttachments       []string
 }
 
 type remoteControlSmokeListener struct {
@@ -154,6 +165,14 @@ func newRemoteControlSmokeListener(t *testing.T) *remoteControlSmokeListener {
 			writeRemoteControlSmokeJSON(t, w, http.StatusCreated, map[string]string{"status": "created"})
 		case request.Method == http.MethodGet && path == "/attachments/app.example.com":
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"target": "app.example.com", "images": []string{"sidecar:v1"}})
+		case request.Method == http.MethodPost && path == "/attachments/app.example.com":
+			var attachment struct{ Image string }
+			require.NoError(t, json.NewDecoder(request.Body).Decode(&attachment))
+			state.addedAttachments = append(state.addedAttachments, attachment.Image)
+			writeRemoteControlSmokeJSON(t, w, http.StatusCreated, map[string]string{"status": "created"})
+		case request.Method == http.MethodDelete && path == "/attachments/app.example.com/redis:7":
+			state.removedAttachments = append(state.removedAttachments, "redis:7")
+			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]string{"status": "removed"})
 		case request.Method == http.MethodGet && path == "/secrets/app.example.com":
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"domain": "app.example.com", "keys": []string{"TOKEN"}})
 		case request.Method == http.MethodPost && path == "/deploy/app.example.com":
@@ -167,7 +186,15 @@ func newRemoteControlSmokeListener(t *testing.T) *remoteControlSmokeListener {
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]string{"status": "ok"})
 		case request.Method == http.MethodGet && path == "/logs/app.example.com":
 			state.logLines = mustRemoteControlSmokeInt(t, request.URL.Query().Get("lines"))
-			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"lines": []string{"runtime line"}})
+			state.logDomain = "app.example.com"
+			state.logFollow = request.URL.Query().Get("follow") == "true"
+			if state.logFollow {
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, err := fmt.Fprint(w, "data: runtime follow line\n\n")
+				require.NoError(t, err)
+				return
+			}
+			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"domain": "app.example.com", "lines": []string{"runtime line"}})
 		case request.Method == http.MethodGet && path == "/status":
 			writeRemoteControlSmokeJSON(t, w, http.StatusOK, map[string]any{"routes": 1, "container_status": map[string]string{"app.example.com": "running"}})
 		case request.Method == http.MethodGet && path == "/networks":
