@@ -1,11 +1,13 @@
 package app
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -160,17 +162,83 @@ func validateEdgeExternalTLS(cfg EdgeConfig) error {
 	return nil
 }
 
-func edgeTLSConfig(cfg EdgeConfig) (*tls.Config, error) {
-	if strings.ToLower(strings.TrimSpace(cfg.Edge.TLS.Mode)) != edgeTLSModeFiles {
-		return nil, nil
-	}
-	certificate, err := tls.LoadX509KeyPair(cfg.Edge.TLS.CertFile, cfg.Edge.TLS.KeyFile)
-	if err != nil {
+// edgeCertificateReloader serves the last complete key pair while checking
+// files on each new TLS handshake. A partial rotation never replaces a known
+// good certificate.
+type edgeCertificateReloader struct {
+	certFile string
+	keyFile  string
+
+	mu       sync.Mutex
+	cert     tls.Certificate
+	certHash [sha256.Size]byte
+	keyHash  [sha256.Size]byte
+	healthy  bool
+}
+
+func newEdgeCertificateReloader(certFile, keyFile string) (*edgeCertificateReloader, error) {
+	r := &edgeCertificateReloader{certFile: certFile, keyFile: keyFile}
+	if err := r.reload(); err != nil {
 		return nil, fmt.Errorf("load edge TLS keypair: %w", err)
 	}
+	return r, nil
+}
+
+func (r *edgeCertificateReloader) reload() error {
+	certPEM, err := os.ReadFile(r.certFile)
+	if err != nil {
+		r.healthy = false
+		return err
+	}
+	keyPEM, err := os.ReadFile(r.keyFile)
+	if err != nil {
+		r.healthy = false
+		return err
+	}
+	certHash, keyHash := sha256.Sum256(certPEM), sha256.Sum256(keyPEM)
+	if r.healthy && certHash == r.certHash && keyHash == r.keyHash {
+		return nil
+	}
+	certificate, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		r.healthy = false
+		return err
+	}
+	r.cert, r.certHash, r.keyHash, r.healthy = certificate, certHash, keyHash, true
+	return nil
+}
+
+func (r *edgeCertificateReloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// The error is intentionally not returned: callers continue to receive the
+	// last-known-good pair and health reports the failed rotation separately.
+	_ = r.reload()
+	return &r.cert, nil
+}
+
+func (r *edgeCertificateReloader) Healthy() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.healthy
+}
+
+func edgeTLSConfigWithReloader(cfg EdgeConfig) (*tls.Config, *edgeCertificateReloader, error) {
+	if strings.ToLower(strings.TrimSpace(cfg.Edge.TLS.Mode)) != edgeTLSModeFiles {
+		return nil, nil, nil
+	}
+	reloader, err := newEdgeCertificateReloader(cfg.Edge.TLS.CertFile, cfg.Edge.TLS.KeyFile)
+	if err != nil {
+		return nil, nil, err
+	}
 	return &tls.Config{
-		MinVersion:   tls.VersionTLS12,
-		Certificates: []tls.Certificate{certificate},
-		NextProtos:   []string{"h2", "http/1.1"},
-	}, nil
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: reloader.GetCertificate,
+		NextProtos:     []string{"h2", "http/1.1"},
+	}, reloader, nil
+}
+
+func edgeTLSConfig(cfg EdgeConfig) (*tls.Config, error) {
+	config, _, err := edgeTLSConfigWithReloader(cfg)
+	return config, err
 }

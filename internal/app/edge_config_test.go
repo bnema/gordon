@@ -3,12 +3,15 @@ package app
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -122,6 +125,84 @@ key_file = "missing-key.pem"
 	_, err = initEdgeConfig(invalidCertPath)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "load edge TLS keypair")
+}
+
+func TestEdgeCertificateReloadKeepsLastKnownGoodAndRecovers(t *testing.T) {
+	certPath, keyPath := writeEdgeCertificate(t)
+	cfg := defaultEdgeConfig()
+	cfg.Edge.TLS.Mode, cfg.Edge.TLS.CertFile, cfg.Edge.TLS.KeyFile = edgeTLSModeFiles, certPath, keyPath
+	config, reloader, err := edgeTLSConfigWithReloader(cfg)
+	require.NoError(t, err)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	tlsListener := tls.NewListener(listener, config)
+	go func() {
+		for {
+			connection, acceptErr := tlsListener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func() { defer connection.Close(); _ = connection.(*tls.Conn).Handshake() }()
+		}
+	}()
+
+	first := edgeHandshakeCertificate(t, listener.Addr().String())
+	assert.Equal(t, int64(1), first.SerialNumber.Int64())
+	writeEdgeCertificateAt(t, certPath, keyPath, 2, "rotated.edge.test")
+	rotated := edgeHandshakeCertificate(t, listener.Addr().String())
+	assert.Equal(t, int64(2), rotated.SerialNumber.Int64())
+	assert.Contains(t, rotated.DNSNames, "rotated.edge.test")
+
+	require.NoError(t, os.WriteFile(certPath, []byte("incomplete certificate"), 0o600))
+	stillServing := edgeHandshakeCertificate(t, listener.Addr().String())
+	assert.Equal(t, int64(2), stillServing.SerialNumber.Int64())
+	assert.False(t, reloader.Healthy())
+
+	writeEdgeCertificateAt(t, certPath, keyPath, 3, "recovered.edge.test")
+	recovered := edgeHandshakeCertificate(t, listener.Addr().String())
+	assert.Equal(t, int64(3), recovered.SerialNumber.Int64())
+	assert.True(t, reloader.Healthy())
+
+	var handshakes sync.WaitGroup
+	errs := make(chan error, 32)
+	for range 32 {
+		handshakes.Add(1)
+		go func() { defer handshakes.Done(); errs <- edgeHandshakeCertificateError(listener.Addr().String()) }()
+	}
+	handshakes.Wait()
+	close(errs)
+	for handshakeErr := range errs {
+		require.NoError(t, handshakeErr)
+	}
+}
+
+func edgeHandshakeCertificate(t *testing.T, address string) *x509.Certificate {
+	t.Helper()
+	connection, err := tls.Dial("tcp", address, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- generated test certificates.
+	require.NoError(t, err)
+	defer connection.Close()
+	return connection.ConnectionState().PeerCertificates[0]
+}
+
+func edgeHandshakeCertificateError(address string) error {
+	connection, err := tls.Dial("tcp", address, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- generated test certificates.
+	if err != nil {
+		return err
+	}
+	return connection.Close()
+}
+
+func writeEdgeCertificateAt(t *testing.T, certPath, keyPath string, serial int64, san string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: san}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), DNSNames: []string{san}}
+	certificateDER, err := x509.CreateCertificate(rand.Reader, certificate, certificate, &key.PublicKey, key)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificateDER}), 0o600))
+	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0o600))
 }
 
 func writeEdgeConfig(t *testing.T, contents string) string {
