@@ -96,12 +96,16 @@ func runRegistrySide(ctx context.Context, side, binary, parent string) (_ SideRe
 			err = closeErr
 		}
 	}()
-	setup.token, err = generateAdminToken(ctx, binary, setup.fixture, side)
+	env, sensitive, err := adminAPICommandContract(setup.fixture, side)
+	if err != nil {
+		return SideResult{}, err
+	}
+	setup.token, err = generateAdminToken(ctx, binary, setup.fixture, side, env, sensitive)
 	if err != nil {
 		return SideResult{}, err
 	}
 	address := fmt.Sprintf("127.0.0.1:%d", setup.port)
-	instance := &GordonInstance{BinaryPath: binary, ConfigPath: setup.fixture.ConfigPath, DataDir: setup.fixture.DataDir, WorkingDir: setup.fixture.Root, Env: adminAPIEnvironment(setup.fixture), ReadinessProbe: ReadinessProbe{TCPAddress: address}}
+	instance := &GordonInstance{BinaryPath: binary, ConfigPath: setup.fixture.ConfigPath, DataDir: setup.fixture.DataDir, WorkingDir: setup.fixture.Root, Env: env, SensitiveEnv: sensitive, ReadinessProbe: ReadinessProbe{TCPAddress: address}}
 	args := []string{"serve", "--config", setup.fixture.ConfigPath}
 	if side == SideNew {
 		args = []string{"serve", "--role", "monolith", "--config", setup.fixture.ConfigPath}

@@ -95,7 +95,6 @@ func executeRoutesListJSON(ctx context.Context, side, binaryPath string, fixture
 func routesListJSONEnvironment(fixture SideFixture) []string {
 	return append(append([]string{}, fixture.Env...),
 		"XDG_CONFIG_HOME="+filepath.Join(fixture.Root, "xdg-config"),
-		"XDG_DATA_HOME="+filepath.Join(fixture.Root, "xdg-data"),
 		"GORDON_REMOTE=",
 		"GORDON_TOKEN=",
 		"GORDON_INSECURE=",

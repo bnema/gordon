@@ -39,6 +39,44 @@ func TestCommandEnvironmentUsesOnlySafeScenarioContract(t *testing.T) {
 	if _, err := commandEnvironmentForScenario([]string{"UNRELATED=leak"}, nil, false); err == nil {
 		t.Fatal("expected non-contract environment key to be rejected")
 	}
+	if _, err := commandEnvironmentForScenario([]string{"XDG_DATA_HOME=/tmp/user-controlled-data"}, nil, false); err == nil {
+		t.Fatal("expected harness-owned XDG_DATA_HOME override to be rejected")
+	}
+}
+
+func TestCommandEnvironmentPermitsExplicitIsolatedRuntimeSocketOnlyForRuntime(t *testing.T) {
+	socket := filepath.Join(t.TempDir(), "docker.sock")
+	t.Setenv("GORDON_COMPAT_REQUIRE_RUNTIME", "1")
+	t.Setenv("DOCKER_HOST", "unix:///run/user/1000/docker.sock")
+	env, err := commandEnvironmentForScenario([]string{"DOCKER_HOST=unix://" + socket}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := environmentValues(t, env)["DOCKER_HOST"]; got != "unix://"+socket {
+		t.Fatalf("DOCKER_HOST=%q", got)
+	}
+	if _, err := commandEnvironmentForScenario([]string{"DOCKER_HOST=unix://" + socket}, nil, false); err == nil {
+		t.Fatal("expected non-runtime socket access to be rejected")
+	}
+}
+
+func TestCommandEnvironmentProvidesHarnessOwnedIsolatedXDGDataHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	env, err := commandEnvironmentForScenario([]string{"HOME=" + home}, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	values := environmentValues(t, env)
+	want := filepath.Join(home, ".local", "share")
+	if values["XDG_DATA_HOME"] != want {
+		t.Fatalf("XDG_DATA_HOME=%q, want %q", values["XDG_DATA_HOME"], want)
+	}
+	if !isolatedScenarioPath(values["XDG_DATA_HOME"]) {
+		t.Fatalf("XDG_DATA_HOME is not isolated: %q", values["XDG_DATA_HOME"])
+	}
+	if info, err := os.Stat(want); err != nil || !info.IsDir() {
+		t.Fatalf("harness did not create isolated XDG_DATA_HOME: info=%v err=%v", info, err)
+	}
 }
 
 func environmentValues(t *testing.T, env []string) map[string]string {

@@ -130,11 +130,8 @@ func validateScenarioEnvironment(key, value string, runtimeRequired bool) error 
 		}
 		return nil
 	}
-	if key == "DOCKER_CONFIG" && runtimeRequired {
-		if !isolatedScenarioPath(value) {
-			return fmt.Errorf("subprocess Docker config must use an isolated path")
-		}
-		return nil
+	if handled, err := validateRuntimeScenarioEnvironment(key, value, runtimeRequired); handled {
+		return err
 	}
 	if !scenarioEnvironmentKeys[key] {
 		return fmt.Errorf("subprocess environment key %q is not allowed by the scenario contract", key)
@@ -146,6 +143,26 @@ func validateScenarioEnvironment(key, value string, runtimeRequired bool) error 
 		return fmt.Errorf("subprocess %s must use an isolated path", key)
 	}
 	return nil
+}
+
+func validateRuntimeScenarioEnvironment(key, value string, runtimeRequired bool) (bool, error) {
+	if !runtimeRequired {
+		return false, nil
+	}
+	switch key {
+	case "DOCKER_CONFIG":
+		if !isolatedScenarioPath(value) {
+			return true, fmt.Errorf("subprocess Docker config must use an isolated path")
+		}
+		return true, nil
+	case "DOCKER_HOST":
+		if !strings.HasPrefix(value, "unix://") || !isolatedScenarioPath(strings.TrimPrefix(value, "unix://")) {
+			return true, fmt.Errorf("subprocess Docker host must use an isolated unix socket")
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }
 
 func isIsolatedPathKey(key string) bool {
@@ -163,7 +180,7 @@ func applySensitiveEnvironment(values map[string]string, sensitive []SensitiveEn
 }
 
 func addRuntimeDockerHost(values map[string]string, runtimeRequired bool) {
-	if runtimeRequired && os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
+	if runtimeRequired && values["DOCKER_HOST"] == "" && os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
 		if host, ok := os.LookupEnv("DOCKER_HOST"); ok && host != "" {
 			values["DOCKER_HOST"] = host
 		}
@@ -174,12 +191,12 @@ func addIsolatedEnvironmentPaths(values map[string]string) error {
 	if values["HOME"] == "" {
 		values["HOME"] = isolatedSubprocessPath("home")
 	}
-	for key, suffix := range map[string]string{"TMPDIR": "tmp", "XDG_CONFIG_HOME": ".config", "XDG_CACHE_HOME": ".cache"} {
+	for key, suffix := range map[string]string{"TMPDIR": "tmp", "XDG_CONFIG_HOME": ".config", "XDG_CACHE_HOME": ".cache", "XDG_DATA_HOME": ".local/share"} {
 		if values[key] == "" {
 			values[key] = filepath.Join(values["HOME"], suffix)
 		}
 	}
-	for _, path := range []string{values["HOME"], values["TMPDIR"], values["XDG_CONFIG_HOME"], values["XDG_CACHE_HOME"], values["XDG_RUNTIME_DIR"]} {
+	for _, path := range []string{values["HOME"], values["TMPDIR"], values["XDG_CONFIG_HOME"], values["XDG_CACHE_HOME"], values["XDG_DATA_HOME"], values["XDG_RUNTIME_DIR"]} {
 		if path != "" {
 			if err := os.MkdirAll(path, 0o700); err != nil {
 				return fmt.Errorf("create isolated subprocess path: %w", err)
@@ -190,7 +207,7 @@ func addIsolatedEnvironmentPaths(values map[string]string) error {
 }
 
 func orderedScenarioEnvironment(values map[string]string) []string {
-	keys := []string{"PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CGO_ENABLED", "GORDON_CONFIG", "GORDON_ROLE", "GORDON_REMOTE", "GORDON_TOKEN", "GORDON_INSECURE", "GORDON_AUTH_TOKEN_SECRET", "DOCKER_HOST", "DOCKER_CONFIG"}
+	keys := []string{"PATH", "HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CGO_ENABLED", "GORDON_CONFIG", "GORDON_ROLE", "GORDON_REMOTE", "GORDON_TOKEN", "GORDON_INSECURE", "GORDON_AUTH_TOKEN_SECRET", "DOCKER_HOST", "DOCKER_CONFIG"}
 	for key := range values {
 		if strings.HasPrefix(key, "GO_WANT_") {
 			keys = append(keys, key)

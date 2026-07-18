@@ -163,7 +163,7 @@ compat-harness-registry: ## Run blocking old/new OCI registry and event-sync com
 			fi; \
 		done
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_REGISTRY_SPLIT_TEST)$$' -count=2 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_REGISTRY_SPLIT_TEST)$$' -count=2 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		if ! jq -se --arg test "$(COMPAT_REGISTRY_SPLIT_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 2) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \

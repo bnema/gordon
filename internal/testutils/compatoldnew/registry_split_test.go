@@ -208,25 +208,30 @@ func (f *splitRegistryFixture) commandToken(t *testing.T, ctx context.Context, n
 		args = append(args, "--scope", value)
 	}
 	args = append(args, "--json")
-	c, err := CaptureCommand(ctx, CommandCaptureRequest{BinaryPath: f.binary, Args: args, Dir: f.root, Source: "component token", Level: LevelSecurityNegative})
+	cmd, err := newIsolatedCommand(ctx, f.binary, args, nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := c.RawValue().(map[string]any)
-	if raw["exitCode"] != 0 {
-		t.Fatalf("component token creation failed: %v", raw["stderr"])
+	cmd.Dir = f.root
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		t.Fatal("component token creation failed")
 	}
 	var v struct {
 		Token string `json:"token"`
 	}
-	if err := json.Unmarshal([]byte(raw["stdout"].(string)), &v); err != nil || v.Token == "" {
+	if err := json.Unmarshal(stdout.Bytes(), &v); err != nil || v.Token == "" {
 		t.Fatalf("decode component token: %v", err)
 	}
 	return v.Token
 }
 func (f *splitRegistryFixture) authToken(t *testing.T, ctx context.Context) string {
 	fixture := SideFixture{Root: f.root, HomeDir: filepath.Join(f.root, "home-control"), DataDir: f.data, ConfigPath: f.controlConfig, Env: []string{"HOME=" + filepath.Join(f.root, "home-control")}}
-	token, err := generateAdminToken(ctx, f.binary, fixture, "split")
+	env := adminAPIEnvironment(fixture)
+	sensitive := []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}
+	token, err := generateAdminToken(ctx, f.binary, fixture, "split", env, sensitive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +268,7 @@ func (f *splitRegistryFixture) startRuntime(t *testing.T, ctx context.Context) {
 	if f.runtime != nil {
 		return
 	}
-	f.runtime = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-runtime")}, SensitiveEnv: []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}, RuntimeRequired: true, ExcludeEnv: []string{"PODMAN_HOST", "CONTAINER_HOST", "XDG_RUNTIME_DIR"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.runtimePort)}}
+	f.runtime = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-runtime"), "DOCKER_HOST=unix://" + f.engine.socket}, SensitiveEnv: []SensitiveEnvironment{{Side: SideNew, Key: "GORDON_AUTH_TOKEN_SECRET", Value: "split-registry-test-signing-secret-0123456789"}}, RuntimeRequired: true, ExcludeEnv: []string{"PODMAN_HOST", "CONTAINER_HOST", "XDG_RUNTIME_DIR"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.runtimePort)}}
 	if err := f.runtime.Start(ctx, "serve", "--role", "runtime", "--config", f.controlConfig); err != nil {
 		t.Fatal(err)
 	}

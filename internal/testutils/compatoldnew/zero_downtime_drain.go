@@ -2,6 +2,7 @@ package compatoldnew
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -383,24 +384,20 @@ func runZeroDowntimeDrainSide(ctx context.Context, side, binaryPath, parent, dom
 }
 
 func generateZeroDowntimeDrainToken(ctx context.Context, binaryPath string, fixture SideFixture, side string) (string, error) {
-	capture, err := CaptureCommand(ctx, CommandCaptureRequest{
-		BinaryPath: binaryPath,
-		Args: []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
-			"--scopes", "push,pull,admin:*:*", "--expiry", "0"},
-		Dir: fixture.Root, Env: adminAPIEnvironment(fixture), Source: "gordon auth token generate", Level: LevelExact,
-	})
+	args := []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
+		"--scopes", "push,pull,admin:*:*", "--expiry", "0"}
+	cmd, err := newIsolatedCommand(ctx, binaryPath, args, adminAPIEnvironment(fixture), nil, false)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("prepare isolated zero downtime drain token generation: %w", err)
 	}
-	raw := capture.RawValue().(map[string]any)
-	if raw["exitCode"] != 0 {
-		return "", fmt.Errorf("token generation exited %v", raw["exitCode"])
+	cmd.Dir = fixture.Root
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("zero downtime drain token generation failed")
 	}
-	token := jwtLine.FindString(raw["stdout"].(string))
-	if token == "" {
-		return "", fmt.Errorf("token generation did not emit a JWT")
-	}
-	return token, nil
+	return parseGeneratedJWT(stdout.String())
 }
 
 func newZeroDowntimeDrainInstance(binaryPath string, fixture SideFixture, address string) *GordonInstance {

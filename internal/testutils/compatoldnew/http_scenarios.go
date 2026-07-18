@@ -1,6 +1,7 @@
 package compatoldnew
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,12 @@ const (
 	adminRouteListScenario = "api/route-list-detail"
 	adminRouteCRUDScenario = "api/route-add-update-remove"
 )
+
+// adminAPIJWTSigningFixture is generic deterministic test material, not a
+// production credential. The generated JWT is retained only in memory.
+func adminAPIJWTSigningFixture() string {
+	return strings.Repeat("compat-fixture-", 4)
+}
 
 // HTTPScenarios returns Phase 5 HTTP/admin API compatibility scenario shells.
 func HTTPScenarios() []Scenario {
@@ -203,7 +210,11 @@ func runAdminAPISideAttempt(ctx context.Context, side, binaryPath, parent string
 		}
 	}()
 
-	setup.token, err = generateAdminToken(ctx, binaryPath, setup.fixture, side)
+	env, sensitive, err := adminAPICommandContract(setup.fixture, side)
+	if err != nil {
+		return SideResult{}, err
+	}
+	setup.token, err = generateAdminToken(ctx, binaryPath, setup.fixture, side, env, sensitive)
 	if err != nil {
 		return SideResult{}, err
 	}
@@ -213,7 +224,8 @@ func runAdminAPISideAttempt(ctx context.Context, side, binaryPath, parent string
 		ConfigPath:     setup.fixture.ConfigPath,
 		DataDir:        setup.fixture.DataDir,
 		WorkingDir:     setup.fixture.Root,
-		Env:            adminAPIEnvironment(setup.fixture),
+		Env:            env,
+		SensitiveEnv:   sensitive,
 		ReadinessProbe: ReadinessProbe{TCPAddress: address},
 	}
 	serveArgs := []string{"serve", "--config", setup.fixture.ConfigPath}
@@ -270,8 +282,6 @@ func stageAdminAPISide(parent string) (adminAPISide, error) {
 	}
 	port := reservations.registry.Addr().(*net.TCPAddr).Port
 	proxyPort := reservations.proxy.Addr().(*net.TCPAddr).Port
-	// #nosec G101 -- this isolated unsafe-backend fixture deliberately needs a deterministic test secret.
-	secret := "compat-admin-api-test-only-secret-0123456789"
 	config := fmt.Sprintf(`[server]
 registry_port = %d
 registry_listen_address = "127.0.0.1"
@@ -306,16 +316,9 @@ allowed_domains = ["*.example.test"]
 [logging]
 level = "warn"
 format = "console"
-`, port, fixture.DataDir, proxyPort, secret)
+`, port, fixture.DataDir, proxyPort, adminAPIJWTSigningFixture())
 	if err := os.WriteFile(fixture.ConfigPath, []byte(config), 0o600); err != nil {
 		return cleanup(fmt.Errorf("write admin API config: %w", err))
-	}
-	secretPath := filepath.Join(fixture.DataDir, "secrets", secret)
-	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
-		return cleanup(fmt.Errorf("create unsafe test secret directory: %w", err))
-	}
-	if err := os.WriteFile(secretPath, []byte(secret), 0o600); err != nil {
-		return cleanup(fmt.Errorf("write unsafe test secret: %w", err))
 	}
 	return adminAPISide{fixture: fixture, port: port, proxyPort: proxyPort, reservations: reservations}, nil
 }
@@ -342,30 +345,101 @@ func adminAPIEnvironment(fixture SideFixture) []string {
 	return append(append([]string{}, fixture.Env...),
 		"XDG_CONFIG_HOME="+filepath.Join(fixture.Root, "xdg-config"),
 		"XDG_RUNTIME_DIR="+filepath.Join(fixture.Root, "runtime"),
-		"GORDON_AUTH_TOKEN_SECRET=",
 		"GORDON_ROLE=monolith",
 		"GORDON_REMOTE=",
 		"GORDON_TOKEN=",
 	)
 }
 
-var jwtLine = regexp.MustCompile(`(?m)^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$`)
+// adminAPICommandContract defines the complete, non-ambient API fixture input.
+// The CLI requires its generic config token_secret input while the server gets
+// the same value only through SensitiveEnv; no unsafe keyring is staged and
+// the generated JWT is never written to a compatibility artifact.
+func adminAPICommandContract(fixture SideFixture, side string) ([]string, []SensitiveEnvironment, error) {
+	env := adminAPIEnvironment(fixture)
+	sensitive := adminAPISensitiveEnvironment(side)
+	if err := validateAdminAPICommandContract(fixture, side, env, sensitive); err != nil {
+		return nil, nil, err
+	}
+	return env, sensitive, nil
+}
 
-func generateAdminToken(ctx context.Context, binaryPath string, fixture SideFixture, side string) (string, error) {
-	capture, err := CaptureCommand(ctx, CommandCaptureRequest{
-		BinaryPath: binaryPath,
-		Args: []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
-			"--scopes", "admin:*:*,push,pull", "--expiry", "0"},
-		Dir: fixture.Root, Env: adminAPIEnvironment(fixture), Source: "gordon auth token generate", Level: LevelExact,
-	})
+func adminAPISensitiveEnvironment(side string) []SensitiveEnvironment {
+	return []SensitiveEnvironment{{
+		Side:  side,
+		Key:   "GORDON_AUTH_TOKEN_SECRET",
+		Value: adminAPIJWTSigningFixture(),
+	}}
+}
+
+func validateAdminAPICommandContract(fixture SideFixture, side string, env []string, sensitive []SensitiveEnvironment) error {
+	if side != SideOld && side != SideNew {
+		return fmt.Errorf("admin API command contract has invalid side %q", side)
+	}
+	values, err := adminAPIEnvironmentValues(env)
 	if err != nil {
-		return "", err
+		return err
 	}
-	raw := capture.RawValue().(map[string]any)
-	if raw["exitCode"] != 0 {
-		return "", fmt.Errorf("token generation exited %v: %s", raw["exitCode"], raw["stderr"])
+	if err := validateAdminAPIEnvironmentValues(values); err != nil {
+		return err
 	}
-	token := jwtLine.FindString(raw["stdout"].(string))
+	if fixture.ConfigPath == "" || fixture.DataDir == "" {
+		return fmt.Errorf("admin API command contract requires isolated config and data paths")
+	}
+	if len(sensitive) != 1 || sensitive[0].Side != side || sensitive[0].Key != "GORDON_AUTH_TOKEN_SECRET" || sensitive[0].Value == "" {
+		return fmt.Errorf("admin API command contract requires one registered signing secret")
+	}
+	return nil
+}
+
+func adminAPIEnvironmentValues(env []string) (map[string]string, error) {
+	values := make(map[string]string, len(env))
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			return nil, fmt.Errorf("admin API command contract has invalid environment entry %q", entry)
+		}
+		values[key] = value
+	}
+	return values, nil
+}
+
+func validateAdminAPIEnvironmentValues(values map[string]string) error {
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "GORDON_ROLE", "GORDON_REMOTE", "GORDON_TOKEN"} {
+		if _, ok := values[key]; !ok {
+			return fmt.Errorf("admin API command contract requires %s", key)
+		}
+	}
+	if values["HOME"] == "" || values["XDG_CONFIG_HOME"] == "" || values["XDG_RUNTIME_DIR"] == "" || values["GORDON_ROLE"] != "monolith" {
+		return fmt.Errorf("admin API command contract has incomplete isolated environment")
+	}
+	return nil
+}
+
+var jwtLine = regexp.MustCompile(`(?m)^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$`)
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+
+func generateAdminToken(ctx context.Context, binaryPath string, fixture SideFixture, side string, env []string, sensitive []SensitiveEnvironment) (string, error) {
+	args := []string{"auth", "token", "generate", "--config", fixture.ConfigPath, "--subject", "compat-" + side,
+		"--scopes", "admin:*:*,push,pull", "--expiry", "0"}
+	cmd, err := newIsolatedCommand(ctx, binaryPath, args, env, sensitive, false)
+	if err != nil {
+		return "", fmt.Errorf("prepare isolated token generation: %w", err)
+	}
+	cmd.Dir = fixture.Root
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		// Do not include command output: it could contain the registered fixture
+		// secret or JWT and token generation has no artifact by design.
+		return "", fmt.Errorf("token generation failed")
+	}
+	return parseGeneratedJWT(stdout.String())
+}
+
+func parseGeneratedJWT(stdout string) (string, error) {
+	token := jwtLine.FindString(ansiEscape.ReplaceAllString(stdout, ""))
 	if token == "" {
 		return "", fmt.Errorf("token generation did not emit a JWT")
 	}

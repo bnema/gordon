@@ -150,11 +150,12 @@ func runTrafficBinarySide(ctx context.Context, side, binaryPath, parent string) 
 		return SideResult{}, fmt.Errorf("release traffic binary reservations before start: %w", err)
 	}
 	instance := &GordonInstance{
-		BinaryPath: binaryPath,
-		ConfigPath: setup.fixture.ConfigPath,
-		DataDir:    setup.fixture.DataDir,
-		WorkingDir: setup.fixture.Root,
-		Env:        trafficBinaryEnvironment(setup.fixture),
+		BinaryPath:      binaryPath,
+		ConfigPath:      setup.fixture.ConfigPath,
+		DataDir:         setup.fixture.DataDir,
+		WorkingDir:      setup.fixture.Root,
+		Env:             trafficBinaryEnvironment(setup.fixture),
+		RuntimeRequired: true, // Legacy monolith owns the runtime in this compatibility slice.
 		ReadinessProbe: ReadinessProbe{
 			TCPAddress: setup.smartAddress(),
 		},

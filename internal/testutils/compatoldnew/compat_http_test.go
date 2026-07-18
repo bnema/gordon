@@ -37,6 +37,45 @@ func TestStageAdminAPISideHoldsDistinctPortsUntilReleased(t *testing.T) {
 	}
 }
 
+func TestAdminAPICommandContractRequiresExplicitFixtureSecret(t *testing.T) {
+	root := t.TempDir()
+	fixture := SideFixture{
+		Root:       root,
+		HomeDir:    filepath.Join(root, "home"),
+		DataDir:    filepath.Join(root, "data"),
+		ConfigPath: filepath.Join(root, "gordon.toml"),
+		Env:        []string{"HOME=" + filepath.Join(root, "home")},
+	}
+	t.Setenv("GORDON_AUTH_TOKEN_SECRET", "ambient-secret-must-not-reach-command")
+
+	env, sensitive, err := adminAPICommandContract(fixture, SideOld)
+	require.NoError(t, err)
+	values := environmentValues(t, env)
+	require.NotContains(t, values, "GORDON_AUTH_TOKEN_SECRET")
+	require.NotEmpty(t, sensitive)
+	require.Equal(t, SideOld, sensitive[0].Side)
+
+	commandEnv, err := commandEnvironmentForScenario(env, sensitive, false)
+	require.NoError(t, err)
+	commandValues := environmentValues(t, commandEnv)
+	require.NotEqual(t, "ambient-secret-must-not-reach-command", commandValues["GORDON_AUTH_TOKEN_SECRET"])
+
+	err = validateAdminAPICommandContract(fixture, SideOld, env, nil)
+	require.Error(t, err, "required registered signing secret must not be optional")
+	err = validateAdminAPICommandContract(fixture, SideOld, env[1:], sensitive)
+	require.Error(t, err, "required safe HOME input must not be optional")
+}
+
+func TestParseGeneratedJWTStripsTerminalFormattingWithoutPersistingToken(t *testing.T) {
+	const token = "eyJaaaaaa.eyJbbbb.signature"
+	parsed, err := parseGeneratedJWT("Token generated successfully!\n\x1b[32m" + token + "\x1b[0m\n")
+	require.NoError(t, err)
+	require.Equal(t, token, parsed)
+
+	_, err = parseGeneratedJWT("Token generated successfully!\n")
+	require.Error(t, err)
+}
+
 func TestCompatibilityAdminAPIPreflight(t *testing.T) {
 	err := AdminAPIPreflight(context.Background())
 	if os.Getenv("GORDON_COMPAT_REQUIRE_RUNTIME") == "1" {
