@@ -128,7 +128,11 @@ func runRegistrySide(ctx context.Context, side, binary, parent string) (_ SideRe
 	if err != nil {
 		return SideResult{}, err
 	}
-	artifact, validationErr := captureRegistrySequence(ctx, "http://"+address, token)
+	adminToken, err := exchangeAdminToken(ctx, "http://"+address, setup.token, side)
+	if err != nil {
+		return SideResult{}, fmt.Errorf("registry scenario admin credential: %w", err)
+	}
+	artifact, validationErr := captureRegistrySequence(ctx, "http://"+address, token, adminToken)
 	return SideResult{Side: side, Artifact: artifact, ValidationError: validationErr}, nil
 }
 
@@ -159,7 +163,7 @@ func exchangeRegistryCompatibilityToken(ctx context.Context, baseURL, longLivedT
 	return payload.Token, nil
 }
 
-func captureRegistrySequence(ctx context.Context, baseURL, token string) (HTTPArtifact, error) {
+func captureRegistrySequence(ctx context.Context, baseURL, token, adminToken string) (HTTPArtifact, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	var ops []registryOperation
 	failures := []string{}
@@ -206,20 +210,28 @@ func captureRegistrySequence(ctx context.Context, baseURL, token string) (HTTPAr
 		failures = append(failures, "registry/v2-ping: missing distribution API version")
 	}
 
-	const repository, tag = "compat/app", "v1"
-	layer := []byte("gordon-compat-oci-layer")
-	layerDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(layer))
+	const repository, tag, eventDomain = "compat/app", "v1", "registry-event.example.test"
+	// A real config blob is essential here: image.pushed must be able to read
+	// its gordon.domain label, create the allowed route, and attempt deployment.
+	// A manifest whose config digest is not stored only proves registry PUT.
+	imageConfig := []byte(`{"architecture":"amd64","os":"linux","config":{"Labels":{"gordon.domain":"registry-event.example.test"}},"rootfs":{"type":"layers","diff_ids":[]}}`)
+	configDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(imageConfig))
 	start := request("registry/push-image/start", http.MethodPost, "/v2/"+repository+"/blobs/uploads/", auth, nil, "", http.StatusAccepted)
 	location := start.Headers["Location"]
 	if !strings.HasPrefix(location, "/v2/"+repository+"/blobs/uploads/") || start.Headers["Docker-Upload-UUID"] == "" {
 		failures = append(failures, "registry/push-image: invalid upload Location or UUID")
 	}
-	request("registry/push-image/blob", http.MethodPut, location+"?digest="+url.QueryEscape(layerDigest), auth, layer, "application/octet-stream", http.StatusCreated)
-	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.docker.container.image.v1+json","size":0,"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"},"layers":[]}`)
+	request("registry/push-image/config", http.MethodPut, location+"?digest="+url.QueryEscape(configDigest), auth, imageConfig, "application/vnd.oci.image.config.v1+json", http.StatusCreated)
+	manifest := []byte(`{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","size":146,"digest":"` + configDigest + `"},"layers":[]}`)
 	manifestDigest := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(manifest))
 	put := request("registry/image-push-event", http.MethodPut, "/v2/"+repository+"/manifests/"+tag, auth, manifest, "application/vnd.docker.distribution.manifest.v2+json", http.StatusCreated)
 	if put.Headers["Docker-Content-Digest"] != manifestDigest || put.Headers["Location"] != "/v2/"+repository+"/manifests/"+tag {
 		failures = append(failures, "registry/image-push-event: manifest response digest or Location mismatch")
+	}
+	effect := observeRegistryPushEffect(ctx, client, baseURL, adminToken, eventDomain, repository+":"+tag)
+	ops = append(ops, effect.operation)
+	if effect.err != nil {
+		failures = append(failures, effect.err.Error())
 	}
 	pull := request("registry/pull-image/tag", http.MethodGet, "/v2/"+repository+"/manifests/"+tag, auth, nil, "", http.StatusOK)
 	if pull.Headers["Content-Type"] != "application/vnd.docker.distribution.manifest.v2+json" || pull.Body != string(manifest) {
@@ -243,11 +255,58 @@ func captureRegistrySequence(ctx context.Context, baseURL, token string) (HTTPAr
 	if registryErrorCode(badName.JSON) != "NAME_INVALID" || registryErrorCode(badRef.JSON) != "TAG_INVALID" {
 		failures = append(failures, "registry/invalid-name-reference: wrong OCI error code")
 	}
-	artifact := HTTPArtifact{baseArtifact{Raw: map[string]any{"operations": ops}, Normalized: registryNormalizedOperations(ops), SourceRef: "OCI distribution registry sequence", Compare: LevelExact}}
+	artifact := HTTPArtifact{baseArtifact{Raw: map[string]any{"operations": ops}, Normalized: registryNormalizedOperations(ops), SourceRef: "OCI distribution registry sequence including image.pushed route effect", Compare: LevelExact}}
 	if len(failures) != 0 {
 		return artifact, fmt.Errorf("%s", strings.Join(failures, "; "))
 	}
 	return artifact, nil
+}
+
+type registryPushEffect struct {
+	operation registryOperation
+	err       error
+}
+
+// observeRegistryPushEffect deliberately queries the public admin API instead
+// of registry internals. It proves the eighth OCI scenario crossed the event
+// boundary into durable, CLI-visible route state in both monolith binaries.
+func observeRegistryPushEffect(ctx context.Context, client *http.Client, baseURL, adminToken, wantDomain, wantImage string) registryPushEffect {
+	deadline := time.Now().Add(10 * time.Second)
+	operation := registryOperation{Name: "registry/image-push-event/effect", Headers: map[string]string{}}
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/admin/routes/"+url.PathEscape(wantDomain), nil)
+		if err != nil {
+			return registryPushEffect{operation: operation, err: fmt.Errorf("registry/image-push-event effect request: %w", err)}
+		}
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		resp, err := client.Do(req)
+		if err != nil {
+			return registryPushEffect{operation: operation, err: fmt.Errorf("registry/image-push-event effect request: %w", err)}
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return registryPushEffect{operation: operation, err: fmt.Errorf("registry/image-push-event effect response: %w", readErr)}
+		}
+		operation.Status, operation.Body, operation.Headers = resp.StatusCode, string(data), registryHeaders(resp.Header)
+		_ = json.Unmarshal(data, &operation.JSON)
+		if resp.StatusCode == http.StatusOK && registryRouteMatches(operation.JSON, wantDomain, wantImage) {
+			return registryPushEffect{operation: operation}
+		}
+		if time.Now().After(deadline) {
+			return registryPushEffect{operation: operation, err: fmt.Errorf("registry/image-push-event: route %q for image %q was not observed (last HTTP %d)", wantDomain, wantImage, operation.Status)}
+		}
+		select {
+		case <-ctx.Done():
+			return registryPushEffect{operation: operation, err: ctx.Err()}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func registryRouteMatches(value any, wantDomain, wantImage string) bool {
+	route, ok := value.(map[string]any)
+	return ok && route["domain"] == wantDomain && route["image"] == wantImage
 }
 
 func registryHeaders(h http.Header) map[string]string {
@@ -265,6 +324,13 @@ func registryNormalizedOperations(ops []registryOperation) any {
 		}
 		if ops[i].Name == "registry/auth-challenge" {
 			ops[i].Headers["WWW-Authenticate"] = normalizeRegistryChallenge(ops[i].Headers["WWW-Authenticate"])
+		}
+		if ops[i].Name == "registry/image-push-event/effect" {
+			// Only the durable observable contract is compared. Ports, IDs and
+			// implementation-specific response bodies cannot hide a regression.
+			ops[i].Headers = map[string]string{}
+			ops[i].Body = ""
+			ops[i].JSON = map[string]any{"routeObserved": ops[i].Status == http.StatusOK}
 		}
 	}
 	return ops

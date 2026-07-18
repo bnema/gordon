@@ -100,13 +100,13 @@ func TestControlRoleBringup(t *testing.T) {
 	adminToken := controlRoleAdminToken(t, configPath)
 	assertControlAdminConfig(t, httpBase, adminToken)
 	assertControlAdminSurfaceResponses(t, httpBase, adminToken)
-	assertControlRemoteSmoke(t, httpBase, controlRoleRemoteToken(t, configPath))
+	assertControlRemoteSmoke(t, httpBase, controlRoleRemoteToken(t, configPath), runtime.worker)
 
 	deploy := controlRoleRequest(t, http.MethodPost, httpBase+"/admin/deploy/app.example.com", adminToken)
 	require.Equal(t, http.StatusOK, deploy.StatusCode)
 	deploy.Body.Close()
-	require.Eventually(t, func() bool { return runtime.worker.calls() == 1 }, time.Second, time.Millisecond)
-	command := runtime.worker.command(0)
+	require.Eventually(t, func() bool { return runtime.worker.calls() == 2 }, time.Second, time.Millisecond)
+	command := runtime.worker.command(1)
 	assert.Equal(t, "app.example.com", command.Domain)
 	assert.Equal(t, "app:v1", command.Image)
 	assert.True(t, command.InternalDeploy)
@@ -120,11 +120,11 @@ func TestControlRoleBringup(t *testing.T) {
 	// The manual deploy created a durable intent for app:v1, so the matching
 	// registry push is consumed without issuing a second runtime command.
 	time.Sleep(20 * time.Millisecond)
-	assert.Equal(t, 1, runtime.worker.calls(), "matching push must be suppressed after manual deploy")
+	assert.Equal(t, 2, runtime.worker.calls(), "matching push must be suppressed after manual deploy")
 	ack, err = events.PublishEvent(validEventContext, event)
 	require.NoError(t, err)
 	assert.True(t, ack.GetAck().GetDuplicate())
-	assert.Equal(t, 1, runtime.worker.calls(), "duplicate image event must not repeat its production effect")
+	assert.Equal(t, 2, runtime.worker.calls(), "duplicate image event must not repeat its production effect")
 
 	wrongScopeContext := grpctest.AuthenticatedContext(context.Background(), "edge-only-token")
 	_, err = events.PublishEvent(wrongScopeContext, controlRoleImageEvent())
@@ -180,6 +180,9 @@ insecure = true
 enabled = true
 secrets_backend = "unsafe"
 
+[api.rate_limit]
+enabled = false
+
 [routes]
 "app.example.com" = "app:v1"
 `
@@ -229,66 +232,156 @@ func assertControlAdminConfig(t *testing.T, baseURL, token string) {
 	}
 }
 
-// assertControlAdminSurfaceResponses is a production-listener regression test:
-// every route family must reject invalid input or report an explicit unavailable
-// capability, never panic or produce an accidental 500 in split control.
+// assertControlAdminSurfaceResponses inventories every handler.matchRoute
+// branch.  This is intentionally a listener-level auth matrix, not a handler
+// unit test: a route is required to have the same JSON auth contract in the
+// split control process as it has in a monolith.
 func assertControlAdminSurfaceResponses(t *testing.T, baseURL, token string) {
 	t.Helper()
-	tests := []struct {
-		method string
-		path   string
-	}{
-		{http.MethodGet, "/admin/networks"},
-		{http.MethodGet, "/admin/status"},
-		{http.MethodGet, "/admin/health"},
-		{http.MethodPost, "/admin/bootstrap"},
-		{http.MethodGet, "/admin/config"},
-		{http.MethodGet, "/admin/auth/verify"},
-		{http.MethodGet, "/admin/volumes"},
-		{http.MethodPost, "/admin/volumes/prune"},
-		{http.MethodGet, "/admin/attachments/orphans"},
-		{http.MethodPost, "/admin/attachments/prune"},
-		{http.MethodGet, "/admin/tls/status"},
-		{http.MethodGet, "/admin/traffic/status"},
-		{http.MethodGet, "/admin/backups"},
-		{http.MethodGet, "/admin/attachments/by-image/app"},
-		{http.MethodGet, "/admin/attachments"},
-		{http.MethodGet, "/admin/routes/by-image/app"},
-		{http.MethodGet, "/admin/routes?detailed=true"},
-		{http.MethodGet, "/admin/routes/app.example.com/attachments"},
-		{http.MethodGet, "/admin/routes/app.example.com/cleanup"},
-		{http.MethodGet, "/admin/secrets/app.example.com"},
-		{http.MethodPost, "/admin/deploy-intent/app:v1"},
-		{http.MethodGet, "/admin/tags/app"},
-		{http.MethodGet, "/admin/images"},
-		{http.MethodGet, "/admin/logs/app.example.com"},
-		{http.MethodGet, "/admin/autoroute/allowed-domains"},
-		{http.MethodGet, "/admin/previews"},
-		{http.MethodDelete, "/admin/preview/preview.example.com"},
+	tests := []adminRouteContract{
+		{http.MethodGet, "/admin/networks", "networks", http.StatusOK},
+		{http.MethodGet, "/admin/status", "routes", http.StatusOK},
+		{http.MethodGet, "/admin/health", "health", http.StatusOK},
+		{http.MethodPost, "/admin/bootstrap", "error", http.StatusBadRequest},
+		{http.MethodPost, "/admin/reload", "status", http.StatusOK},
+		{http.MethodGet, "/admin/config", "server", http.StatusOK},
+		{http.MethodGet, "/admin/auth/verify", "valid", http.StatusOK},
+		{http.MethodGet, "/admin/volumes", "error", http.StatusServiceUnavailable},
+		{http.MethodPost, "/admin/volumes/prune", "error", http.StatusBadRequest},
+		{http.MethodGet, "/admin/attachments/orphans", "error", http.StatusServiceUnavailable},
+		{http.MethodPost, "/admin/attachments/prune", "error", http.StatusServiceUnavailable},
+		{http.MethodGet, "/admin/tls/status", "acme_enabled", http.StatusOK},
+		{http.MethodGet, "/admin/traffic/status", "last_reload_status", http.StatusOK},
+		{http.MethodGet, "/admin/backups", "error", http.StatusServiceUnavailable},
+		{http.MethodGet, "/admin/attachments/by-image/app", "targets", http.StatusOK},
+		{http.MethodGet, "/admin/attachments", "attachments", http.StatusOK},
+		{http.MethodGet, "/admin/routes/by-image/app", "routes", http.StatusOK},
+		{http.MethodGet, "/admin/routes?detailed=true", "routes", http.StatusOK},
+		{http.MethodGet, "/admin/routes/app.example.com/attachments", "attachments", http.StatusOK},
+		{http.MethodGet, "/admin/routes/app.example.com/cleanup", "error", http.StatusNotImplemented},
+		{http.MethodGet, "/admin/secrets/app.example.com", "keys", http.StatusOK},
+		{http.MethodPost, "/admin/deploy-intent/app:v1", "error", http.StatusServiceUnavailable},
+		{http.MethodGet, "/admin/deploy/app.example.com", "error", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/admin/restart/app.example.com", "error", http.StatusMethodNotAllowed},
+		{http.MethodGet, "/admin/tags/app", "error", http.StatusServiceUnavailable},
+		{http.MethodGet, "/admin/images", "error", http.StatusServiceUnavailable},
+		{http.MethodGet, "/admin/logs/app.example.com", "lines", http.StatusOK},
+		{http.MethodGet, "/admin/autoroute/allowed-domains", "domains", http.StatusOK},
+		{http.MethodGet, "/admin/previews", "error", http.StatusServiceUnavailable},
+		{http.MethodDelete, "/admin/preview/preview.example.com", "error", http.StatusServiceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.method+" "+test.path, func(t *testing.T) {
+			// Missing and malformed credentials must be indistinguishable to every
+			// admin endpoint and retain the one-field error JSON shape.
+			assertControlAdminAuthResponse(t, baseURL, test, "")
+			assertControlAdminAuthResponse(t, baseURL, test, "Bearer definitely-invalid")
 			response := controlRoleRequest(t, test.method, baseURL+test.path, token)
 			defer response.Body.Close()
-			assert.NotEqual(t, http.StatusInternalServerError, response.StatusCode)
-			assert.Contains(t, response.Header.Get("Content-Type"), "application/json")
+			require.Equal(t, test.validStatus, response.StatusCode)
+			assertControlJSONShape(t, response, test.validField)
 		})
 	}
 }
 
-func assertControlRemoteSmoke(t *testing.T, baseURL, token string) {
+type adminRouteContract struct {
+	method, path, validField string
+	validStatus              int
+}
+
+func assertControlAdminAuthResponse(t *testing.T, baseURL string, test adminRouteContract, authorization string) {
 	t.Helper()
+	response := controlRoleRequest(t, test.method, baseURL+test.path, authorization)
+	defer response.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
+	assertControlJSONShape(t, response, "error")
+}
+
+func assertControlJSONShape(t *testing.T, response *http.Response, requiredField string) {
+	t.Helper()
+	require.Contains(t, response.Header.Get("Content-Type"), "application/json")
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&body))
+	value, ok := body[requiredField]
+	require.True(t, ok, "missing JSON field %q: %#v", requiredField, body)
+	if requiredField == "error" {
+		message, ok := value.(string)
+		require.True(t, ok && message != "", "invalid error JSON shape: %#v", body)
+		require.Len(t, body, 1, "error responses must not leak an alternate DTO")
+	}
+}
+
+// assertControlRemoteSmoke covers each remote.Client command family against
+// the production listener. Read methods verify their DTO shape; mutations are
+// followed by a read of the durable config/runtime command rather than merely
+// accepting a non-500 response.
+func assertControlRemoteSmoke(t *testing.T, baseURL, token string, worker *controlRoleRuntimeWorker) {
+	t.Helper()
+	ctx := context.Background()
 	client := remote.NewClient(baseURL, remote.WithToken(token))
-	_, err := client.GetStatus(context.Background())
+	status, err := client.GetStatus(ctx)
 	require.NoError(t, err)
-	_, err = client.ListRoutes(context.Background())
+	require.Equal(t, 1, status.Routes)
+	routes, err := client.ListRoutes(ctx)
 	require.NoError(t, err)
-	_, err = client.GetConfig(context.Background())
+	require.Len(t, routes, 1)
+	config, err := client.GetConfig(ctx)
 	require.NoError(t, err)
-	_, err = client.ListNetworks(context.Background())
+	require.Len(t, config.Routes, 1)
+	_, err = client.ListNetworks(ctx)
 	require.NoError(t, err)
-	_, err = client.GetTrafficStatus(context.Background())
+	_, err = client.GetTrafficStatus(ctx)
 	require.NoError(t, err)
+	_, err = client.GetTLSStatus(ctx)
+	require.NoError(t, err)
+	_, err = client.GetHealth(ctx)
+	require.NoError(t, err)
+	_, err = client.ListVolumes(ctx)
+	requireRemoteUnavailable(t, err)
+	_, err = client.ListImages(ctx)
+	requireRemoteUnavailable(t, err)
+	_, err = client.ListTags(ctx, "app")
+	requireRemoteUnavailable(t, err)
+	_, err = client.ListBackups(ctx, "")
+	requireRemoteUnavailable(t, err)
+	_, err = client.BackupStatus(ctx)
+	requireRemoteUnavailable(t, err)
+	_, err = client.ListVolumeBackups(ctx, "")
+	requireRemoteUnavailable(t, err)
+	_, err = client.VolumeBackupStatus(ctx)
+	requireRemoteUnavailable(t, err)
+	_, err = client.ListOrphanedAttachments(ctx)
+	requireRemoteUnavailable(t, err)
+	_, err = client.GetAllAttachmentsConfig(ctx)
+	require.NoError(t, err)
+	_, err = client.GetAutoRouteAllowedDomains(ctx)
+	require.NoError(t, err)
+	_, err = client.ListPreviews(ctx)
+	requireRemoteUnavailable(t, err)
+	verify, err := client.VerifyAuth(ctx)
+	require.NoError(t, err)
+	require.True(t, verify.Valid)
+
+	// Deploy is the representative remote mutation: asserting the returned DTO
+	// alone would miss a disconnected control-to-runtime bridge.
+	deploy, err := client.Deploy(ctx, "app.example.com")
+	require.NoError(t, err)
+	require.Equal(t, "app.example.com", deploy.Domain)
+	require.Eventually(t, func() bool { return worker.calls() == 1 }, time.Second, time.Millisecond)
+	command := worker.command(0)
+	require.Equal(t, "app:v1", command.Image)
+	require.True(t, command.InternalDeploy)
+}
+
+// Services intentionally absent from the narrow runtime test double must
+// advertise their capability gap at the public boundary. A 503 JSON error is
+// a supported split-mode result; a nil dereference or 500 is not.
+func requireRemoteUnavailable(t *testing.T, err error) {
+	t.Helper()
+	var responseErr *remote.HTTPError
+	require.ErrorAs(t, err, &responseErr)
+	require.Equal(t, http.StatusServiceUnavailable, responseErr.StatusCode)
+	require.NotEmpty(t, responseErr.Body)
 }
 
 func controlRoleRequest(t *testing.T, method, url, token string) *http.Response {

@@ -297,6 +297,12 @@ enabled = false
 [network_isolation]
 enabled = false
 
+# The registry compatibility sequence pushes a valid labelled OCI image and
+# observes this allowed auto-route through the public admin API.
+[auto]
+enabled = true
+allowed_domains = ["*.example.test"]
+
 [logging]
 level = "warn"
 format = "console"
