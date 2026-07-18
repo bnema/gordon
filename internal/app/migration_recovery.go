@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/bnema/gordon/internal/domain"
 	edgesnapshotusecase "github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
 
@@ -70,12 +73,18 @@ func newPostHandoffMigrationRecovery(cfg Config, store *MigrationCheckpointStore
 	if err != nil {
 		return nil, err
 	}
+	token, err := loadPostHandoffRuntimeToken(*checkpoint, cfg.Server.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	target := cfg.Runtime
 	target.Endpoint = endpoint
 	target.ListenAddress = ""
-	if runtimeControlToken(target) == "" {
-		return nil, fmt.Errorf("post-handoff runtime authentication is not configured")
-	}
+	// The generated replacement runtime owns this credential. In particular,
+	// do not reuse the source configuration's token or environment reference:
+	// after handoff those can authenticate the stopped monolith, not runtime.
+	target.Token = token
+	target.TokenEnv = ""
 	runtime, err := dial(context.Background(), target)
 	if err != nil {
 		// Transport implementations may include request metadata in their error.
@@ -144,4 +153,96 @@ func validatePostHandoffRuntimeEndpoint(checkpoint MigrationCheckpoint, dataDir 
 		return "", fmt.Errorf("invalid post-handoff runtime transport")
 	}
 	return endpoint, nil
+}
+
+const maxRecoveryRuntimeEnvBytes int64 = 64 << 10
+
+// loadPostHandoffRuntimeToken reads precisely the generated runtime role file.
+// Checkpoint references are untrusted durable input: every reference must use
+// the generated migration directory and role filename, but only runtime.env is
+// opened. This intentionally avoids loading edge or registry credentials.
+func loadPostHandoffRuntimeToken(checkpoint MigrationCheckpoint, dataDir string) (string, error) {
+	root := filepath.Clean(resolveDataDir(dataDir))
+	if !filepath.IsAbs(root) || !componentLabelValue.MatchString(checkpoint.MigrationID) || checkpoint.ComponentGeneration == 0 {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	directory := filepath.Join(root, "migration", "env", checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration))
+	var runtimePath string
+	seen := make(map[domain.ComponentRole]struct{}, len(checkpoint.EnvFileReferences))
+	for _, reference := range checkpoint.EnvFileReferences {
+		clean := filepath.Clean(reference)
+		role := domain.ComponentRole(strings.TrimSuffix(filepath.Base(reference), ".env"))
+		if !filepath.IsAbs(reference) || reference != clean || filepath.Dir(reference) != directory || !domain.IsKnownComponentRole(role) || filepath.Base(reference) != string(role)+".env" {
+			return "", fmt.Errorf("invalid post-handoff runtime environment")
+		}
+		if _, duplicate := seen[role]; duplicate {
+			return "", fmt.Errorf("invalid post-handoff runtime environment")
+		}
+		seen[role] = struct{}{}
+		if role == domain.ComponentRoleRuntime {
+			runtimePath = reference
+		}
+	}
+	if runtimePath == "" {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	return readPostHandoffRuntimeToken(runtimePath)
+}
+
+func readPostHandoffRuntimeToken(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > maxRecoveryRuntimeEnvBytes {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	file := os.NewFile(uintptr(fd), path)
+	defer file.Close()
+	info, err = file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 || info.Size() > maxRecoveryRuntimeEnvBytes {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxRecoveryRuntimeEnvBytes+1))
+	if err != nil || int64(len(data)) > maxRecoveryRuntimeEnvBytes {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	return parsePostHandoffRuntimeToken(data)
+}
+
+func parsePostHandoffRuntimeToken(data []byte) (string, error) {
+	var token string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		key, value, found := strings.Cut(line, "=")
+		if !found || !validPostHandoffRuntimeEnvKey(key) {
+			return "", fmt.Errorf("invalid post-handoff runtime environment")
+		}
+		if key != "GORDON_COMPONENT_RUNTIME_TOKEN" {
+			continue
+		}
+		if token != "" || value == "" || value != strings.TrimSpace(value) {
+			return "", fmt.Errorf("invalid post-handoff runtime environment")
+		}
+		token = value
+	}
+	if token == "" {
+		return "", fmt.Errorf("invalid post-handoff runtime environment")
+	}
+	return token, nil
+}
+
+func validPostHandoffRuntimeEnvKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for index, character := range key {
+		if character != '_' && (character < 'A' || character > 'Z') && (index == 0 || character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
 }
