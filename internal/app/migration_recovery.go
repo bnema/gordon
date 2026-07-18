@@ -43,7 +43,7 @@ func NewPostHandoffMigrationRecovery(configPath string) (*MigrationService, erro
 		return nil, fmt.Errorf("open post-handoff migration checkpoint: %w", err)
 	}
 	return newPostHandoffMigrationRecovery(cfg, store, func(ctx context.Context, target RuntimeControlConfig) (RuntimeHandoffClient, error) {
-		client, err := createRuntimeCommandClient(ctx, target)
+		client, err := createPostHandoffRuntimeCommandClient(ctx, target, cfg.Server.DataDir)
 		if err != nil {
 			return nil, err
 		}

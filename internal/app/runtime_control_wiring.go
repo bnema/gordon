@@ -71,6 +71,54 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 	return outruntime.NewClient(conn), nil
 }
 
+// createPostHandoffRuntimeCommandClient is intentionally separate from the
+// normal runtime client. Post-handoff recovery runs on the host, where the
+// checkpoint's component-visible socket has already been translated and
+// validated against this configured data directory. It will never accept a
+// generic host or engine Unix endpoint.
+func createPostHandoffRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig, dataDir string) (out.RuntimeCommandClient, error) {
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	path, ok := postHandoffRuntimeUnixSocket(endpoint, dataDir)
+	if !ok {
+		return nil, fmt.Errorf("post-handoff runtime transport is invalid")
+	}
+	token := runtimeControlToken(cfg)
+	if token == "" {
+		return nil, fmt.Errorf("post-handoff runtime authentication token is required")
+	}
+	creds, err := grpcauth.NewInsecureBearerTokenCredentials(token)
+	if err != nil {
+		return nil, fmt.Errorf("create post-handoff runtime credentials: %w", err)
+	}
+	conn, err := grpc.NewClient("passthrough:///post-handoff-runtime",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", path)
+		}),
+		grpc.WithPerRPCCredentials(creds),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create post-handoff runtime client: %w", err)
+	}
+	return outruntime.NewClient(conn), nil
+}
+
+// postHandoffRuntimeUnixSocket accepts precisely a currently-existing Gordon
+// migration socket rooted in the host's configured data directory. Lstat is
+// deliberate: recovery must not follow a replacement symlink to an engine
+// socket or an arbitrary host service after checkpoint validation.
+func postHandoffRuntimeUnixSocket(endpoint, dataDir string) (string, bool) {
+	path, ok := runtimeBootstrapSocketPath(endpoint, resolveDataDir(dataDir))
+	if !ok {
+		return "", false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+		return "", false
+	}
+	return path, true
+}
+
 // createRuntimeStateSubscriber exposes only the narrow actual-state stream to
 // control orchestration. The control role never receives a runtime socket or a
 // container adapter.
