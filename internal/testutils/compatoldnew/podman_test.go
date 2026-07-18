@@ -3,8 +3,43 @@ package compatoldnew
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 )
+
+func TestPodmanRootlessAcceptsWarningOnStderr(t *testing.T) {
+	installPodmanInfoFixture(t, `printf 'cgroup fallback warning\n' >&2
+printf '%s\n' '{"host":{"security":{"rootless":true}}}'`)
+	rootless, err := PodmanRootless(context.Background())
+	if err != nil {
+		t.Fatalf("PodmanRootless rejected successful warning output: %v", err)
+	}
+	if !rootless {
+		t.Fatal("PodmanRootless did not report JSON rootless=true")
+	}
+}
+
+func TestPodmanRootlessRejectsJSONFalse(t *testing.T) {
+	installPodmanInfoFixture(t, `printf '%s\n' '{"host":{"security":{"rootless":false}}}'`)
+	rootless, err := PodmanRootless(context.Background())
+	if err != nil {
+		t.Fatalf("PodmanRootless rejected valid JSON: %v", err)
+	}
+	if rootless {
+		t.Fatal("PodmanRootless accepted JSON rootless=false")
+	}
+}
+
+func installPodmanInfoFixture(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "podman")
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatalf("write podman fixture: %v", err)
+	}
+	t.Setenv("PATH", dir)
+}
 
 func TestPodmanAvailableReportsMissingBinaryActionably(t *testing.T) {
 	oldPath := os.Getenv("PATH")
@@ -30,6 +65,10 @@ func TestPodmanHarnessResourceRequiresLabelsAndPrefix(t *testing.T) {
 	good := PodmanResource{Name: ContainerPrefix(runID, SideOld) + "-web", Labels: ResourceLabels(runID, SideOld, "web")}
 	if !isHarnessResource(good, runID) {
 		t.Fatal("expected harness resource")
+	}
+	podmanPS := PodmanResource{Names: []string{good.Name}, Labels: good.Labels}
+	if !isHarnessResource(podmanPS, runID) {
+		t.Fatal("expected Podman ps Names resource to be cleaned")
 	}
 	badLabel := good
 	badLabel.Labels = map[string]string{LabelRun: runID, LabelSide: SideOld}

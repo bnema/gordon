@@ -1,6 +1,7 @@
 package compatoldnew
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,50 @@ import (
 type PodmanResource struct {
 	ID     string            `json:"Id"`
 	Name   string            `json:"Name"`
+	Names  []string          `json:"Names"`
 	Labels map[string]string `json:"Labels"`
+}
+
+func (r PodmanResource) resourceName() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	if len(r.Names) == 1 {
+		return r.Names[0]
+	}
+	return ""
+}
+
+type podmanInfo struct {
+	Host struct {
+		Security struct {
+			Rootless bool `json:"rootless"`
+		} `json:"security"`
+	} `json:"host"`
+}
+
+// PodmanRootless verifies the target engine from its JSON stdout. Stderr is
+// captured only for failures because Podman can emit benign cgroup warnings
+// there even when it reports a rootless engine successfully.
+func PodmanRootless(ctx context.Context) (bool, error) {
+	if _, err := exec.LookPath("podman"); err != nil {
+		return false, fmt.Errorf("podman unavailable: binary not found in PATH: %w", err)
+	}
+	cmd, err := newIsolatedCommand(ctx, "podman", []string{"info", "--format", "json"}, nil, nil, false)
+	if err != nil {
+		return false, fmt.Errorf("prepare podman info: %w", err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("podman info failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	var info podmanInfo
+	if err := json.Unmarshal(out, &info); err != nil {
+		return false, fmt.Errorf("decode podman info JSON: %w", err)
+	}
+	return info.Host.Security.Rootless, nil
 }
 
 func PodmanAvailable(ctx context.Context) error {
@@ -79,8 +123,9 @@ func CleanupRunResources(ctx context.Context, runID string) error {
 		}
 		for _, r := range resources {
 			if isHarnessResource(r, runID) {
-				if err := podman(ctx, kind.rm, "rm", r.Name); err != nil {
-					return fmt.Errorf("remove %s %s: %w", kind.name, r.Name, err)
+				name := r.resourceName()
+				if err := podman(ctx, kind.rm, "rm", name); err != nil {
+					return fmt.Errorf("remove %s %s: %w", kind.name, name, err)
 				}
 			}
 		}
@@ -111,9 +156,10 @@ func isHarnessResource(r PodmanResource, runID string) bool {
 	if labels[LabelRun] != sanitizePart(runID) || labels[LabelSide] == "" || labels[LabelFixture] == "" {
 		return false
 	}
-	return strings.HasPrefix(r.Name, ContainerPrefix(runID, labels[LabelSide])) ||
-		strings.HasPrefix(r.Name, NetworkPrefix(runID, labels[LabelSide])) ||
-		strings.HasPrefix(r.Name, VolumePrefix(runID, labels[LabelSide]))
+	name := r.resourceName()
+	return strings.HasPrefix(name, ContainerPrefix(runID, labels[LabelSide])) ||
+		strings.HasPrefix(name, NetworkPrefix(runID, labels[LabelSide])) ||
+		strings.HasPrefix(name, VolumePrefix(runID, labels[LabelSide]))
 }
 
 func podman(ctx context.Context, args ...string) error {
@@ -129,9 +175,11 @@ func podmanOutput(ctx context.Context, args ...string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("prepare podman command: %w", err)
 	}
-	out, err := cmd.CombinedOutput()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("podman %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("podman %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
 	return string(out), nil
 }

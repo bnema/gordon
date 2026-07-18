@@ -141,7 +141,9 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	defer func() { _ = podman(context.Background(), "image", "rm", "--force", image) }()
 	network := NetworkPrefix(runID, SideNew)
 	volume := VolumePrefix(runID, SideNew)
-	networkCreate := append([]string{"network", "create"}, migrationLabelArgs(newLabels)...)
+	// DNS is unnecessary for this generic fixture and disabling it keeps the
+	// isolated rootless network runnable without a user systemd bus.
+	networkCreate := append([]string{"network", "create", "--disable-dns"}, migrationLabelArgs(newLabels)...)
 	networkCreate = append(networkCreate, network)
 	require.NoError(t, migrationPodman(ctx, networkCreate...))
 	volumeCreate := append([]string{"volume", "create"}, migrationLabelArgs(newLabels)...)
@@ -315,17 +317,22 @@ func requireRootlessPodman(t *testing.T, ctx context.Context) {
 	t.Helper()
 	require.NoError(t, PodmanAvailable(ctx), "GORDON_COMPAT_PODMAN=1 requires Podman")
 	require.NotEqual(t, 0, os.Geteuid(), "GORDON_COMPAT_PODMAN=1 requires a rootless user")
-	rootless, err := podmanOutput(ctx, "info", "--format", "{{.Host.Security.Rootless}}")
+	rootless, err := PodmanRootless(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "true", strings.TrimSpace(rootless), "GORDON_COMPAT_PODMAN=1 requires rootless Podman")
+	require.True(t, rootless, "GORDON_COMPAT_PODMAN=1 requires rootless Podman")
 }
 
 func migrationFixtureImage(t *testing.T, ctx context.Context, runID string) string {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM docker.io/library/busybox:1.36\n"), 0o600))
+	// The generic fixture must be executable with a user-local rootless Podman
+	// install that has no system policy.json. This policy applies only to the
+	// disposable busybox fixture pull; it never changes the user's policy.
+	policy := filepath.Join(dir, "policy.json")
+	require.NoError(t, os.WriteFile(policy, []byte(`{"default":[{"type":"insecureAcceptAnything"}]}`), 0o600))
 	image := "localhost/gordon-compat-migration-" + sanitizePart(runID)
-	require.NoError(t, migrationPodman(ctx, "build", "--tag", image, dir))
+	require.NoError(t, migrationPodman(ctx, "build", "--signature-policy", policy, "--tag", image, dir))
 	return image
 }
 func migrationRunSleep(ctx context.Context, name, network, volume, image string, labels map[string]string) error {
