@@ -66,6 +66,19 @@ func TestTrafficProtocolScenarioDefinition(t *testing.T) {
 	require.Empty(t, matrix.BlockReason)
 }
 
+func TestTrafficGraphStreamScenarioDefinition(t *testing.T) {
+	var matrix Scenario
+	for _, scenario := range ProxyScenarios() {
+		if scenario.Name == trafficGraphStreamScenarioName {
+			matrix = scenario
+			break
+		}
+	}
+	require.Equal(t, ScenarioStatusImplemented, matrix.Status)
+	require.False(t, matrix.PodmanRequired)
+	require.Empty(t, matrix.BlockReason)
+}
+
 func TestSplitDeploymentDrainScenarioRemainsPending(t *testing.T) {
 	var split Scenario
 	for _, scenario := range ProxyScenarios() {
@@ -133,6 +146,19 @@ func TestCompatibilityTrafficProtocolMatrix(t *testing.T) {
 
 func TestCompatibilityTrafficProtocolFailClosed(t *testing.T) {
 	require.NoError(t, ValidateTrafficProtocolFailClosed())
+}
+
+func TestCompatibilityTrafficGraphStreamMatrix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	matrix, err := RunTrafficGraphStreamMatrix(ctx)
+	require.NoError(t, err)
+	require.Len(t, matrix.Checks, 7)
+	for _, check := range matrix.Checks {
+		require.True(t, check.Passed, check.Protocol)
+		require.Equal(t, "ok", check.Status, check.Protocol)
+	}
 }
 
 func TestSplitEdgeTLSCompatibilityExceptionIsExplicit(t *testing.T) {

@@ -27,9 +27,11 @@ COMPAT_HARNESS_GUARDS := TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWith
 # builder, and report contract tests. Do not replace this with a broad package
 # run: the Make recipe verifies every real route itself passed rather than skipped.
 COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityExternalRoute|TestCompatibilityZeroDowntimeDrain|TestCompatibilityDistributedDrainProtocol|TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
-# The traffic listener matrix is a Linux socket preflight. It deliberately runs
-# three times to catch ephemeral-port and listener/goroutine cleanup leaks.
-COMPAT_TRAFFIC_REAL_TESTS := TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
+# Monolith protocol ownership is a single deterministic listener pass. The
+# authenticated stream matrix runs three times to catch ephemeral-port and
+# listener/goroutine cleanup leaks; neither gate permits skips.
+COMPAT_TRAFFIC_MONOLITH_TESTS := TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
+COMPAT_TRAFFIC_STREAM_TESTS := TestCompatibilityTrafficGraphStreamMatrix
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
@@ -142,14 +144,24 @@ compat-harness-registry: ## Run registry compatibility harness checks
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
 
 compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership preflight
-	@echo "Running TLS/UDP listener matrix three times without skips..."
+	@echo "Running monolith protocol matrix once and authenticated stream matrix three times without skips..."
+	@docker info
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_REAL_TESTS))$$' -count=3 > "$$output"; status=$$?; \
+		go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_MONOLITH_TESTS))$$' -count=1 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
-		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_REAL_TESTS)' | tr '|' ' '); do \
+		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_MONOLITH_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "monolith traffic compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_STREAM_TESTS))$$' -count=3 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_STREAM_TESTS)' | tr '|' ' '); do \
 			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 3) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
-				echo "traffic compatibility test $$test did not pass exactly three times or was skipped; refusing to pass the gate"; exit 1; \
+				echo "stream traffic compatibility test $$test did not pass exactly three times or was skipped; refusing to pass the gate"; exit 1; \
 			fi; \
 		done
 

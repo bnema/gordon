@@ -16,14 +16,15 @@ import (
 )
 
 const (
-	managedHTTPRouteScenarioName  = "proxy/managed-http-route"
-	trafficProtocolScenarioName   = "proxy/edge-traffic-protocol-matrix"
-	managedHTTPRouteMarker        = "gordon-compat-managed-http-route\n"
-	managedHTTPRouteImagePort     = 8080
-	managedHTTPRouteExposedPort   = 9090
-	managedHTTPRouteAttempts      = 2
-	managedHTTPRouteImageAttempts = 3
-	managedHTTPRouteBaseImage     = "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
+	managedHTTPRouteScenarioName   = "proxy/managed-http-route"
+	trafficProtocolScenarioName    = "proxy/edge-traffic-protocol-matrix"
+	trafficGraphStreamScenarioName = "proxy/edge-traffic-graph-stream-matrix"
+	managedHTTPRouteMarker         = "gordon-compat-managed-http-route\n"
+	managedHTTPRouteImagePort      = 8080
+	managedHTTPRouteExposedPort    = 9090
+	managedHTTPRouteAttempts       = 2
+	managedHTTPRouteImageAttempts  = 3
+	managedHTTPRouteBaseImage      = "busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662"
 )
 
 var errTransientDockerNetwork = errors.New("transient Docker network error")
@@ -47,6 +48,7 @@ func ProxyScenarios() []Scenario {
 		implementedScenario(zeroDowntimeDrainScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		implementedScenario(distributedDrainScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		implementedScenario(trafficProtocolScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
+		implementedScenario(trafficGraphStreamScenarioName, SurfaceProxy, "6.5 Proxy and traffic compatibility", false),
 		pendingScenario("proxy/split-deployment-drain", SurfaceProxy, "6.5 Proxy and traffic compatibility", true, "WS07 must provide control deployment/bootstrap orchestration before Docker split-deployment drain can run"),
 		proxyScenario("proxy/access-log-emitted"),
 	}

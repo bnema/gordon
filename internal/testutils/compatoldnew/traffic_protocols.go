@@ -87,27 +87,13 @@ func RunTrafficProtocolMatrix(ctx context.Context) (TrafficProtocolMatrix, error
 	// drift without relying on fixed ports.
 	shutdownTrafficManager(monolith)
 
-	// A split edge must not get loopback backends. Its listener graph is a
-	// separate snapshot and is deliberately backend-free, because listener
-	// ownership is independent of control's route/runtime configuration.
-	splitGraph := domain.TrafficGraph{EntryPoints: graph.EntryPoints}
-	split := domain.TrafficGraphSnapshot{Generation: 1, Graph: splitGraph}.Clone()
-	if err := split.ValidateSplitReachability(); err != nil {
-		return TrafficProtocolMatrix{}, fmt.Errorf("validate split traffic snapshot: %w", err)
-	}
-	edge := trafficadapter.NewManager()
-	if err := edge.Apply(ctx, &split.Graph); err != nil {
-		return TrafficProtocolMatrix{}, fmt.Errorf("apply split edge traffic graph: %w", err)
-	}
-	if !allTrafficEntryPointsActive(edge.Status(), 4) {
-		shutdownTrafficManager(edge)
-		return TrafficProtocolMatrix{}, fmt.Errorf("split edge did not own every streamed traffic listener")
-	}
-	shutdownTrafficManager(edge)
 	if err := verifyTrafficListenerRelease(addresses); err != nil {
 		return TrafficProtocolMatrix{}, err
 	}
-	checks = append(checks, TrafficProtocolArtifact{Protocol: "split_edge_listener_ownership", Passed: true, Status: "ok"})
+	// Split listener ownership is exercised separately through an authenticated
+	// TrafficGraphClient in RunTrafficGraphStreamMatrix. Do not bypass that
+	// stream by directly applying a graph to an edge manager here.
+	checks = append(checks, TrafficProtocolArtifact{Protocol: "listener_cleanup", Passed: true, Status: "ok"})
 	return TrafficProtocolMatrix{Checks: checks}, nil
 }
 
@@ -412,18 +398,6 @@ func verifyTrafficListenerRelease(addresses trafficProtocolAddresses) error {
 		return fmt.Errorf("traffic UDP listener leaked: %w", err)
 	}
 	return packet.Close()
-}
-
-func allTrafficEntryPointsActive(status domain.TrafficStatus, want int) bool {
-	if len(status.EntryPoints) != want {
-		return false
-	}
-	for _, entry := range status.EntryPoints {
-		if !entry.Active {
-			return false
-		}
-	}
-	return true
 }
 
 func shutdownTrafficManager(manager *trafficadapter.Manager) {
