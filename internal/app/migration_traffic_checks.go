@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,13 +20,15 @@ import (
 // authenticated runtime lifecycle commands, sanitized runtime state, and edge
 // reports; it never creates a Docker-compatible client or opens a socket.
 type migrationTrafficChecks struct {
-	runtime    out.RuntimeSelfUpdater
-	state      out.RuntimeStateSubscriber
-	store      *MigrationCheckpointStore
-	applied    *edgesnapshotusecase.AppliedStateTracker
-	cfg        Config
-	http       *http.Client
-	probeToken string
+	runtime              out.RuntimeSelfUpdater
+	state                out.RuntimeStateSubscriber
+	store                *MigrationCheckpointStore
+	applied              *edgesnapshotusecase.AppliedStateTracker
+	cfg                  Config
+	http                 *http.Client
+	probeToken           string
+	privateProbeResolver func(context.Context, string) (net.IP, error)
+	privateProbeClient   func(string, net.IP) *http.Client
 }
 
 func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.RuntimeStateSubscriber, store *MigrationCheckpointStore, applied *edgesnapshotusecase.AppliedStateTracker, cfg Config) (TrafficSwitchChecks, error) {
@@ -33,7 +36,7 @@ func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.Runtime
 		return nil, fmt.Errorf("runtime lifecycle, runtime state, checkpoint store, and edge applied-state tracker are required")
 	}
 	return &migrationTrafficChecks{
-		runtime: runtime, state: state, store: store, applied: applied, cfg: cfg, http: newMigrationProbeHTTPClient(), probeToken: migrationProbeToken(migrationRuntimeSeed(cfg)),
+		runtime: runtime, state: state, store: store, applied: applied, cfg: cfg, http: newMigrationProbeHTTPClient(), probeToken: migrationProbeToken(migrationRuntimeSeed(cfg)), privateProbeResolver: resolveMigrationPrivateProbeAddress, privateProbeClient: newMigrationPrivateProbeHTTPClient,
 	}, nil
 }
 
@@ -123,7 +126,7 @@ func (c *migrationTrafficChecks) TestApplicationThroughEdge(ctx context.Context)
 	if err != nil {
 		return err
 	}
-	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.GordonDomain, "/", false, true)
+	return c.probePreparedEdge(ctx, *checkpoint, c.cfg.Server.GordonDomain, "/", false)
 }
 
 func (c *migrationTrafficChecks) TestRegistryV2ThroughEdge(ctx context.Context) error {
@@ -131,7 +134,7 @@ func (c *migrationTrafficChecks) TestRegistryV2ThroughEdge(ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.RegistryDomain, "/v2/", true, true)
+	return c.probePreparedEdge(ctx, *checkpoint, c.cfg.Server.RegistryDomain, "/v2/", true)
 }
 
 // OldServingPathHealthy deliberately checks both the old managed container and
@@ -199,6 +202,37 @@ func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path
 	if err := validLoopbackProbeEndpoint(endpoint); err != nil {
 		return err
 	}
+	return c.probeWithClient(ctx, c.http, endpoint, host, path, registry, migrationProbe)
+}
+
+// probePreparedEdge reaches the prepared edge on its deterministic container
+// identity over an already checkpointed managed app network. The old monolith
+// (which runs the candidate CLI) is on that network; its loopback cannot reach
+// a rootless host publish. The host-loopback listener remains only a bootstrap
+// diagnostic surface and is never used to authorize switch.
+func (c *migrationTrafficChecks) probePreparedEdge(ctx context.Context, checkpoint MigrationCheckpoint, host, path string, registry bool) error {
+	endpoint, err := migrationPrivateEdgeProbeEndpoint(checkpoint, c.cfg.Server.Port)
+	if err != nil {
+		return err
+	}
+	name, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid prepared edge endpoint")
+	}
+	if c.privateProbeResolver == nil || c.privateProbeClient == nil {
+		return fmt.Errorf("prepared edge probe is unavailable")
+	}
+	address, err := c.privateProbeResolver(ctx, name)
+	if err != nil {
+		return fmt.Errorf("resolve prepared edge endpoint: %w", err)
+	}
+	return c.probeWithClient(ctx, c.privateProbeClient(endpoint, address), endpoint, host, path, registry, true)
+}
+
+func (c *migrationTrafficChecks) probeWithClient(ctx context.Context, client *http.Client, endpoint, host, path string, registry, migrationProbe bool) error {
+	if client == nil {
+		return fmt.Errorf("migration probe client is unavailable")
+	}
 	if !domain.IsValidRouteDomain(host) {
 		return fmt.Errorf("invalid probe host")
 	}
@@ -217,7 +251,7 @@ func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path
 		// cannot become a general outbound HTTP capability.
 		request.Header.Set(migrationProbeHeader, c.probeToken)
 	}
-	response, err := c.http.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("edge probe request failed: %w", err)
 	}
@@ -253,6 +287,58 @@ func newMigrationProbeHTTPClient() *http.Client {
 				return nil, err
 			}
 			return dialer.DialContext(ctx, network, address)
+		}},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// migrationPrivateEdgeProbeEndpoint derives the only DNS name the switch may
+// contact. It intentionally does not trust an address from checkpoint data:
+// the component identity is stable across retries and restarts, while the port
+// comes from the active local configuration.
+func migrationPrivateEdgeProbeEndpoint(checkpoint MigrationCheckpoint, port int) (string, error) {
+	if !componentLabelValue.MatchString(checkpoint.MigrationID) || checkpoint.ComponentGeneration == 0 || port < 1 || port > 65535 {
+		return "", fmt.Errorf("invalid prepared edge identity")
+	}
+	return net.JoinHostPort("gordon-edge-"+checkpoint.MigrationID+"-g"+strconv.FormatUint(checkpoint.ComponentGeneration, 10), strconv.Itoa(port)), nil
+}
+
+// resolveMigrationPrivateProbeAddress resolves once and accepts exactly one
+// RFC1918/ULA address. Dialing that literal address prevents a DNS rebinding
+// response between validation and connection from redirecting the authenticated
+// probe outside the old monolith's managed network.
+func resolveMigrationPrivateProbeAddress(ctx context.Context, name string) (net.IP, error) {
+	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", name)
+	if err != nil || len(addresses) != 1 {
+		return nil, fmt.Errorf("prepared edge name did not resolve uniquely")
+	}
+	address := net.IP(addresses[0].AsSlice())
+	if err := validMigrationPrivateProbeAddress(address); err != nil {
+		return nil, err
+	}
+	return address, nil
+}
+
+func validMigrationPrivateProbeAddress(address net.IP) error {
+	if address == nil || address.IsLoopback() || !address.IsPrivate() {
+		return fmt.Errorf("prepared edge address is not private")
+	}
+	return nil
+}
+
+func newMigrationPrivateProbeHTTPClient(endpoint string, address net.IP) *http.Client {
+	_, port, err := net.SplitHostPort(endpoint)
+	if err != nil || validMigrationPrivateProbeAddress(address) != nil {
+		return nil
+	}
+	dialer := &net.Dialer{Timeout: 2 * time.Second}
+	return &http.Client{
+		Timeout: 3 * time.Second,
+		Transport: &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, requested string) (net.Conn, error) {
+			if requested != endpoint {
+				return nil, fmt.Errorf("unexpected prepared edge dial target")
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(address.String(), port))
 		}},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

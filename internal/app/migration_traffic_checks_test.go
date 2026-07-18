@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -38,7 +40,7 @@ func (s trafficCheckState) SubscribeRuntimeState(context.Context) (<-chan domain
 
 var _ out.RuntimeStateSubscriber = trafficCheckState{}
 
-func TestMigrationTrafficChecksUseLifecycleAndLoopbackProbes(t *testing.T) {
+func TestMigrationTrafficChecksUseLifecycleAndPrivatePreparedEdgeProbes(t *testing.T) {
 	seed := "private-runtime-handoff-token"
 	oldRegistryCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +63,8 @@ func TestMigrationTrafficChecksUseLifecycleAndLoopbackProbes(t *testing.T) {
 	}))
 	defer server.Close()
 	endpoint := server.Listener.Addr().String()
+	_, port, err := net.SplitHostPort(endpoint)
+	require.NoError(t, err)
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)
 	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, RouteSnapshotGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared, OldServingPath: "old-monolith", BootstrapEdgeProbeEndpoint: endpoint, OldServingProbeEndpoint: endpoint}
@@ -76,8 +80,20 @@ func TestMigrationTrafficChecksUseLifecycleAndLoopbackProbes(t *testing.T) {
 	var cfg Config
 	cfg.Runtime.Token = seed
 	cfg.Server.GordonDomain, cfg.Server.RegistryDomain = "app.example.test", "registry.example.test"
+	_, err = fmt.Sscan(port, &cfg.Server.Port)
+	require.NoError(t, err)
 	checks, err := newMigrationTrafficChecks(runtime, state, store, tracker, cfg)
 	require.NoError(t, err)
+	privateChecks := checks.(*migrationTrafficChecks)
+	privateChecks.privateProbeResolver = func(context.Context, string) (net.IP, error) { return net.ParseIP("10.88.0.9"), nil }
+	privateChecks.privateProbeClient = func(expected string, _ net.IP) *http.Client {
+		return &http.Client{Transport: &http.Transport{Proxy: nil, DialContext: func(ctx context.Context, network, requested string) (net.Conn, error) {
+			if requested != expected {
+				return nil, fmt.Errorf("unexpected dial target %s", requested)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, endpoint)
+		}}}
+	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		require.NoError(t, checks.ComponentHealthy(context.Background(), role))
 		require.NoError(t, checks.ComponentAuthenticationHealthy(context.Background(), role))
@@ -147,4 +163,15 @@ func TestMigrationTrafficChecksRejectNonLoopbackProbeEndpoint(t *testing.T) {
 	assert.Error(t, validLoopbackProbeEndpoint("example.invalid:8080"))
 	assert.Error(t, validLoopbackProbeEndpoint("127.0.0.1"))
 	assert.NoError(t, validLoopbackProbeEndpoint("127.0.0.1:8080"))
+}
+
+func TestMigrationPrivateEdgeProbeUsesDeterministicContainerAliasAndPrivateAddress(t *testing.T) {
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 2}
+	endpoint, err := migrationPrivateEdgeProbeEndpoint(checkpoint, 8081)
+	require.NoError(t, err)
+	assert.Equal(t, "gordon-edge-fixture-g2:8081", endpoint)
+
+	assert.Error(t, validMigrationPrivateProbeAddress(net.ParseIP("127.0.0.1")))
+	assert.Error(t, validMigrationPrivateProbeAddress(net.ParseIP("203.0.113.1")))
+	assert.NoError(t, validMigrationPrivateProbeAddress(net.ParseIP("10.88.0.9")))
 }
