@@ -46,8 +46,8 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCKER_HOST", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
-	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_EDGE_TOKEN", "GORDON_MIGRATION_PROBE_TOKEN"}, manifest.KeysForRole(domain.ComponentRoleEdge))
-	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_REGISTRY_TOKEN"}, manifest.KeysForRole(domain.ComponentRoleRegistry))
+	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_EDGE_TOKEN", "GORDON_MIGRATION_PROBE_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleEdge))
+	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_REGISTRY_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleRegistry))
 	assert.NotContains(t, strings.Join(manifest.KeysForRole(domain.ComponentRoleEdge), ","), "DOCKER_HOST")
 	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleEdge), "GORDON_COMPONENT_EDGE_TOKEN")
 	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleRegistry), "GORDON_COMPONENT_REGISTRY_TOKEN")
@@ -66,6 +66,27 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 		require.NoError(t, readErr)
 		assert.NotContains(t, body, "WORKLOAD_DATABASE_PASSWORD")
 	}
+}
+
+func TestRegistryForwardCredentialIsDomainSeparatedAndRoleMinimized(t *testing.T) {
+	seed := "private-runtime-handoff-token"
+	cfg := Config{}
+	cfg.Runtime.Token = seed
+	manifest, err := BuildComponentEnvManifest(ComponentEnvManifestOptions{Config: cfg})
+	require.NoError(t, err)
+
+	credential := migrationRegistryForwardToken(seed)
+	assert.NotEmpty(t, credential)
+	assert.NotEqual(t, seed, credential)
+	assert.NotEqual(t, migrationComponentToken(seed, domain.ComponentRoleEdge), credential)
+	assert.NotEqual(t, migrationComponentToken(seed, domain.ComponentRoleRegistry), credential)
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		assert.Contains(t, manifest.KeysForRole(role), registryForwardTokenEnvVar)
+	}
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime} {
+		assert.NotContains(t, manifest.KeysForRole(role), registryForwardTokenEnvVar)
+	}
+	assert.NotContains(t, manifest.RedactedSummary(), credential)
 }
 
 func TestMigrationProbeCredentialIsDomainSeparatedAndEdgeOnly(t *testing.T) {

@@ -117,6 +117,18 @@ func TestWriteComponentConfigManifestsRejectsUnsafeExternalRoutes(t *testing.T) 
 	require.ErrorIs(t, err, domain.ErrSSRFBlocked)
 }
 
+func TestComponentConfigUsesEnvReferencesForRegistryForwardCredential(t *testing.T) {
+	files, err := WriteComponentConfigManifests(Config{}, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	byRole := componentConfigReferences(componentConfigPaths(files))
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		contents, readErr := os.ReadFile(byRole[role])
+		require.NoError(t, readErr)
+		assert.Contains(t, string(contents), "token_env = '"+registryForwardTokenEnvVar+"'")
+		assert.NotContains(t, string(contents), migrationRegistryForwardToken("private-runtime-handoff-token"))
+	}
+}
+
 func TestComponentConfigSeparatesPreparedProbeAndFinalPublicEdge(t *testing.T) {
 	cfg := Config{}
 	cfg.Server.Port, cfg.Server.RegistryPort = 18080, 15000

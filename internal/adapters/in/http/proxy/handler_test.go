@@ -47,10 +47,13 @@ func TestHandler_ConcurrentConnectionLimit_503WhenFull(t *testing.T) {
 }
 
 func TestHandler_RoutesToRegistrySnapshotTarget(t *testing.T) {
+	const edgeCredential = "edge-registry-forward-credential"
 	var upstreamPort string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/v2/", r.URL.Path)
 		assert.Equal(t, "registry.internal:"+upstreamPort, r.Host)
+		assert.Equal(t, edgeCredential, r.Header.Get(registryForwardAuthHeader), "edge must overwrite any client-supplied forwarding credential")
+		assert.Equal(t, "Bearer client-token", r.Header.Get("Authorization"), "Docker authorization must remain intact")
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer upstream.Close()
@@ -68,9 +71,11 @@ func TestHandler_RoutesToRegistrySnapshotTarget(t *testing.T) {
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
 
-	handler := NewHandler(proxySvc, nil, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger(), edgeCredential)
 	req := httptest.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
 	req.Host = "registry.example.com"
+	req.Header.Set(registryForwardAuthHeader, "client-supplied-value")
+	req.Header.Set("Authorization", "Bearer client-token")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNoContent, w.Code)

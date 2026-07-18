@@ -172,14 +172,15 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 		}
 	case domain.ComponentRoleRegistry:
 		return map[string]any{
-			"storage": map[string]any{"data_dir": "/var/lib/gordon"},
-			"auth":    map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username},
-			"limits":  map[string]any{"max_blob_chunk_size": cfg.Server.MaxBlobChunkSize, "max_blob_size": cfg.Server.MaxBlobSize, "allowed_ips": cfg.Server.RegistryAllowedIPs},
-			"listen":  map[string]any{"address": "0.0.0.0:" + fmt.Sprint(cfg.Server.RegistryPort), "tls": map[string]any{"mode": registryTLSDisabled}},
-			"control": map[string]any{"event_endpoint": controlEndpoint, "event_token_env": "GORDON_COMPONENT_REGISTRY_TOKEN", "insecure_tls": true, "outbox_max_entries": 10000, "outbox_max_bytes": "64MB"},
+			"storage":    map[string]any{"data_dir": "/var/lib/gordon"},
+			"auth":       map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username},
+			"limits":     map[string]any{"max_blob_chunk_size": cfg.Server.MaxBlobChunkSize, "max_blob_size": cfg.Server.MaxBlobSize},
+			"listen":     map[string]any{"address": "0.0.0.0:" + fmt.Sprint(cfg.Server.RegistryPort), "tls": map[string]any{"mode": registryTLSDisabled}},
+			"forwarding": map[string]any{"token_env": registryForwardTokenEnvVar},
+			"control":    map[string]any{"event_endpoint": controlEndpoint, "event_token_env": "GORDON_COMPONENT_REGISTRY_TOKEN", "insecure_tls": true, "outbox_max_entries": 10000, "outbox_max_bytes": "64MB"},
 		}
 	case domain.ComponentRoleEdge:
-		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "tls": map[string]any{"mode": edgeTLSModeExternal}}
+		edge := map[string]any{"listen_address": "0.0.0.0:" + fmt.Sprint(cfg.Server.Port), "registry_domain": cfg.Server.RegistryDomain, "max_proxy_body_size": cfg.Server.MaxProxyBodySize, "max_proxy_response_size": cfg.Server.MaxProxyResponseSize, "max_concurrent_connections": cfg.Server.MaxConcurrentConns, "trusted_proxy_cidrs": []string{"127.0.0.1/32"}, "migration_probe_enabled": migrationProbeEnabled, "registry_forward_token_env": registryForwardTokenEnvVar, "tls": map[string]any{"mode": edgeTLSModeExternal}}
 		if migrationProbeEnabled {
 			edge["migration_probe_token_env"] = "GORDON_MIGRATION_PROBE_TOKEN"
 		}

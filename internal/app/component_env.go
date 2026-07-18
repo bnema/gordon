@@ -84,7 +84,12 @@ type MigrationEnvOptions struct {
 	ExternalRoutes any
 }
 
-const maxExplicitComponentEnvBytes int64 = 64 << 10
+const (
+	maxExplicitComponentEnvBytes int64 = 64 << 10
+	// registryForwardTokenEnvVar is injected only into the split edge and
+	// registry role environment files. It is never a control/runtime credential.
+	registryForwardTokenEnvVar = "GORDON_REGISTRY_FORWARD_TOKEN"
+)
 
 // BuildMigrationComponentEnvManifest extends config-derived host detection
 // with the explicit migration env file mechanism. The parser accepts only
@@ -298,6 +303,12 @@ func addRuntimeBootstrapToken(cfg Config, environment map[string]string, manifes
 	// rootless-NAT loopback request originated from the migration coordinator.
 	manifest.values[domain.ComponentRoleEdge]["GORDON_MIGRATION_PROBE_TOKEN"] = migrationProbeToken(token)
 	manifest.values[domain.ComponentRoleRegistry]["GORDON_COMPONENT_REGISTRY_TOKEN"] = migrationComponentToken(token, domain.ComponentRoleRegistry)
+	// Edge-to-registry forwarding has a separate purpose and credential from
+	// either component's control credential. Both values remain in 0600 role
+	// environment files and are regenerated when the component token rotates.
+	forwardToken := migrationRegistryForwardToken(token)
+	manifest.values[domain.ComponentRoleEdge][registryForwardTokenEnvVar] = forwardToken
+	manifest.values[domain.ComponentRoleRegistry][registryForwardTokenEnvVar] = forwardToken
 }
 
 func addRuntimeSocketEnv(add componentEnvAdd) {

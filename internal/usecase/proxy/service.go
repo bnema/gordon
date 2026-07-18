@@ -28,11 +28,12 @@ const maxPendingEdgeDrains = 1024
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
-	RegistryDomain     string
-	RegistryPort       int
-	MaxBodySize        int64 // Maximum request body size in bytes (0 = no limit)
-	MaxResponseSize    int64 // Maximum response body size in bytes (0 = no limit)
-	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
+	RegistryDomain       string
+	RegistryForwardToken string
+	RegistryPort         int
+	MaxBodySize          int64 // Maximum request body size in bytes (0 = no limit)
+	MaxResponseSize      int64 // Maximum response body size in bytes (0 = no limit)
+	MaxConcurrentConns   int   // Maximum concurrent proxy connections (0 = no limit)
 
 	// EdgeDrainTimeout optionally bounds an edge's wait for retired application
 	// traffic. Zero disables edge-side timeout reporting.

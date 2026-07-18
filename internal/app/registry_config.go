@@ -21,11 +21,12 @@ const (
 // registry process from receiving control-plane, runtime, proxy, or admin
 // configuration and their credentials.
 type RegistryConfig struct {
-	Storage RegistryStorageConfig `toml:"storage"`
-	Auth    RegistryAuthConfig    `toml:"auth"`
-	Limits  RegistryLimitsConfig  `toml:"limits"`
-	Listen  RegistryListenConfig  `toml:"listen"`
-	Control RegistryControlConfig `toml:"control"`
+	Storage    RegistryStorageConfig    `toml:"storage"`
+	Auth       RegistryAuthConfig       `toml:"auth"`
+	Limits     RegistryLimitsConfig     `toml:"limits"`
+	Listen     RegistryListenConfig     `toml:"listen"`
+	Control    RegistryControlConfig    `toml:"control"`
+	Forwarding RegistryForwardingConfig `toml:"forwarding"`
 }
 type RegistryStorageConfig struct {
 	DataDir string `toml:"data_dir"`
@@ -53,6 +54,10 @@ type RegistryTLSConfig struct {
 	CertFile string `toml:"cert_file"`
 	KeyFile  string `toml:"key_file"`
 }
+type RegistryForwardingConfig struct {
+	TokenEnv string `toml:"token_env"`
+}
+
 type RegistryControlConfig struct {
 	EventEndpoint    string `toml:"event_endpoint"`
 	EventToken       string `toml:"event_token"`
@@ -120,10 +125,10 @@ func validateRegistryLimits(cfg RegistryConfig) error {
 	if cfg.Control.OutboxMaxEntries <= 0 {
 		return fmt.Errorf("control.outbox_max_entries must be positive")
 	}
-	for _, cidr := range cfg.Limits.AllowedIPs {
-		if _, _, err := net.ParseCIDR(strings.TrimSpace(cidr)); err != nil {
-			return fmt.Errorf("invalid limits.allowed_ips entry %q: %w", cidr, err)
-		}
+	if len(cfg.Limits.AllowedIPs) > 0 {
+		// A private component network address is not an identity. In particular,
+		// do not turn a broad RFC1918 range into registry authorization.
+		return fmt.Errorf("limits.allowed_ips is not supported; registry access requires authenticated edge forwarding")
 	}
 	return nil
 }

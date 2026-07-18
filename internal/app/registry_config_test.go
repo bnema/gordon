@@ -47,6 +47,23 @@ event_token = "token"
 	require.Contains(t, err.Error(), "listen.tls.mode")
 }
 
+func TestRegistryConfigRejectsCIDRRegistryAuthority(t *testing.T) {
+	path := writeRegistryConfig(t, `[storage]
+data_dir = "/tmp/data"
+[limits]
+allowed_ips = ["10.0.0.0/8"]
+[listen]
+address = "127.0.0.1:5000"
+[listen.tls]
+mode = "disabled"
+[control]
+event_endpoint = "127.0.0.1:9092"
+event_token = "token"
+`)
+	_, err := initRegistryConfig(path)
+	require.ErrorContains(t, err, "authenticated edge forwarding")
+}
+
 func TestRegistryConfigRejectsTotalBlobLimitBelowChunkLimit(t *testing.T) {
 	path := writeRegistryConfig(t, `[storage]
 data_dir = "/tmp/data"

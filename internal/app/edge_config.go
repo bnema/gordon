@@ -49,9 +49,10 @@ type EdgeServingConfig struct {
 	// for rootless NAT, whose direct peer is not the loopback address selected
 	// for the host-only bootstrap listener. It is never enabled in final edge
 	// configuration.
-	MigrationProbeEnabled  bool          `toml:"migration_probe_enabled"`
-	MigrationProbeTokenEnv string        `toml:"migration_probe_token_env"`
-	TLS                    EdgeTLSConfig `toml:"tls"`
+	MigrationProbeEnabled   bool          `toml:"migration_probe_enabled"`
+	MigrationProbeTokenEnv  string        `toml:"migration_probe_token_env"`
+	RegistryForwardTokenEnv string        `toml:"registry_forward_token_env"`
+	TLS                     EdgeTLSConfig `toml:"tls"`
 }
 
 type EdgeTLSConfig struct {

@@ -19,24 +19,33 @@ import (
 // transport selection, and reverse proxy execution.
 // Routing decisions are delegated to the ProxyService usecase.
 type Handler struct {
-	proxySvc          in.ProxyService
-	log               zerowrap.Logger
-	trustedNets       []*net.IPNet
-	appTransport      http.RoundTripper
-	h2cTransport      http.RoundTripper
-	registryTransport http.RoundTripper
-	activeConns       atomic.Int64
+	proxySvc                 in.ProxyService
+	log                      zerowrap.Logger
+	trustedNets              []*net.IPNet
+	appTransport             http.RoundTripper
+	h2cTransport             http.RoundTripper
+	registryTransport        http.RoundTripper
+	registryForwardAuthToken string
+	activeConns              atomic.Int64
 }
 
 // NewHandler creates a new proxy HTTP handler.
-func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap.Logger) *Handler {
+// registryForwardAuthToken is optional only to preserve the monolith handler
+// constructor. Split edge wiring supplies it from the role-scoped environment;
+// an empty value safely causes standalone registry forwarding to be denied.
+func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap.Logger, registryForwardAuthToken ...string) *Handler {
+	token := ""
+	if len(registryForwardAuthToken) > 0 {
+		token = registryForwardAuthToken[0]
+	}
 	return &Handler{
-		proxySvc:          proxySvc,
-		log:               log,
-		trustedNets:       trustedNets,
-		appTransport:      newAppTransport(),
-		h2cTransport:      newH2CTransport(),
-		registryTransport: newRegistryTransport(),
+		proxySvc:                 proxySvc,
+		log:                      log,
+		trustedNets:              trustedNets,
+		appTransport:             newAppTransport(),
+		h2cTransport:             newH2CTransport(),
+		registryTransport:        newRegistryTransport(),
+		registryForwardAuthToken: token,
 	}
 }
 

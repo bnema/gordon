@@ -169,10 +169,11 @@ func buildEdgeProxyConfig(cfg EdgeConfig) (proxy.Config, error) {
 		maxConnections = 10000
 	}
 	return proxy.Config{
-		RegistryDomain:     cfg.Edge.RegistryDomain,
-		MaxBodySize:        bodySize,
-		MaxResponseSize:    responseSize,
-		MaxConcurrentConns: maxConnections,
+		RegistryDomain:       cfg.Edge.RegistryDomain,
+		RegistryForwardToken: strings.TrimSpace(os.Getenv(cfg.Edge.RegistryForwardTokenEnv)),
+		MaxBodySize:          bodySize,
+		MaxResponseSize:      responseSize,
+		MaxConcurrentConns:   maxConnections,
 	}, nil
 }
 
@@ -416,7 +417,7 @@ func newEdgeTrafficProxy(cfg EdgeConfig, log zerowrap.Logger, accessWriter out.A
 	}
 	proxyService := proxy.NewSnapshotService(routes, proxyCfg, routes)
 	routes.SetSnapshotAcceptanceObserver(proxyService)
-	handler := edgeHTTPHandlerWithMiddlewareAndHealth(httpproxy.NewHandler(proxyService, nil, log), routes, health, cfg, log, accessWriter)
+	handler := edgeHTTPHandlerWithMiddlewareAndHealth(httpproxy.NewHandler(proxyService, nil, log, proxyCfg.RegistryForwardToken), routes, health, cfg, log, accessWriter)
 	return handler, proxyService.Close, nil
 }
 

@@ -56,9 +56,12 @@ func newH2CTransport() *http.Transport {
 	}
 }
 
+// registryForwardAuthHeader authenticates requests from the split edge to the
+// split registry. It is deliberately not a client-facing credential.
+const registryForwardAuthHeader = "X-Gordon-Registry-Forward-Auth"
+
 // newRegistryTransport creates the transport for the snapshot-selected registry reverse proxy.
-// It needs a longer ResponseHeaderTimeout because admin endpoints like /admin/deploy
-// perform blocking operations (image pull, container start, readiness checks).
+// It needs a longer ResponseHeaderTimeout because registry uploads can take time.
 func newRegistryTransport() *http.Transport {
 	return &http.Transport{
 		DialContext: (&net.Dialer{
@@ -152,6 +155,9 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, targ
 			pr.SetURL(targetURL)
 			pr.SetXForwarded()
 			pr.Out.Host = targetHostHeader(target, targetURL)
+			// Overwrite rather than append: an untrusted client header must
+			// never become component authorization.
+			pr.Out.Header.Set(registryForwardAuthHeader, h.registryForwardAuthToken)
 		},
 		Transport: h.registryTransport,
 		ErrorHandler: newProxyErrorHandler(
@@ -243,6 +249,9 @@ func newReverseProxy(opts reverseProxyOptions) *httputil.ReverseProxy {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			existingProto := pr.In.Header.Get("X-Forwarded-Proto")
 			pr.SetURL(opts.targetURL)
+			// A client must never replay the registry-only forwarding credential
+			// to an application target.
+			pr.Out.Header.Del(registryForwardAuthHeader)
 			pr.SetXForwarded()
 			if opts.hostHeader != "" {
 				pr.Out.Host = opts.hostHeader

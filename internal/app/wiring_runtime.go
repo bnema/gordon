@@ -151,6 +151,17 @@ func migrationComponentToken(seed string, role domain.ComponentRole) string {
 // migrationProbeToken is deliberately domain-separated from both the runtime
 // handoff seed and component control credentials. It is only ever materialized
 // in the prepared edge's private environment and the coordinator process.
+// migrationRegistryForwardToken derives the edge-to-registry-only credential.
+// It cannot authenticate to control, runtime, or any other component role.
+func migrationRegistryForwardToken(seed string) string {
+	if strings.TrimSpace(seed) == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(seed))
+	_, _ = mac.Write([]byte("gordon-migration-edge-registry-forward-token-v1"))
+	return "gordon_migration_registry_forward_" + hex.EncodeToString(mac.Sum(nil))
+}
+
 func migrationProbeToken(seed string) string {
 	if strings.TrimSpace(seed) == "" {
 		return ""

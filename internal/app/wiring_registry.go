@@ -173,14 +173,6 @@ func newRegistryRoleHandler(ctx context.Context, cfg RegistryConfig, service *re
 		return nil, err
 	}
 	base := http.Handler(registryhttp.NewHandler(service, log, chunk, total))
-	if len(cfg.Limits.AllowedIPs) > 0 {
-		nets := make([]*net.IPNet, 0, len(cfg.Limits.AllowedIPs))
-		for _, raw := range cfg.Limits.AllowedIPs {
-			_, network, _ := net.ParseCIDR(raw)
-			nets = append(nets, network)
-		}
-		base = middleware.RegistryCIDRAllowlist(nets, nil, log)(base)
-	}
 	if cfg.Auth.Enabled {
 		authSvc, authHandler, err := registryRoleAuth(ctx, cfg, log)
 		if err != nil {
@@ -191,10 +183,6 @@ func newRegistryRoleHandler(ctx context.Context, cfg RegistryConfig, service *re
 		mux.Handle("/v2/", base)
 		mux.Handle("/auth/", authHandler)
 		base = mux
-	} else {
-		// Auth-disabled registry mode remains loopback-only, matching the
-		// monolith safety contract without registering any admin surface.
-		base = loopbackOnly(base, log)
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/v2/", base)
@@ -206,7 +194,11 @@ func newRegistryRoleHandler(ctx context.Context, cfg RegistryConfig, service *re
 		}
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return middleware.Chain(middleware.PanicRecovery(log), middleware.SecurityHeaders)(mux), nil
+	// The forwarding boundary is outside OCI and Docker auth routes so the
+	// credential is stripped before either can observe it. It is deliberately
+	// independent of CIDRs: a component-network IP alone is not authority.
+	forwardToken := strings.TrimSpace(os.Getenv(cfg.Forwarding.TokenEnv))
+	return middleware.Chain(middleware.PanicRecovery(log), middleware.SecurityHeaders, registryhttp.EdgeForwardAuth(forwardToken, log))(mux), nil
 }
 func registryRoleAuth(ctx context.Context, cfg RegistryConfig, log zerowrap.Logger) (in.AuthService, http.Handler, error) {
 	compat := Config{}

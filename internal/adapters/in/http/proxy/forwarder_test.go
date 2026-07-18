@@ -80,6 +80,7 @@ func TestForwardToTarget_H2CEndToEnd(t *testing.T) {
 
 func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get(registryForwardAuthHeader), "registry forwarding credential must not be replayed to an application")
 		_, _ = fmt.Fprintf(w, "proto=%s", r.Proto)
 	}))
 	defer backend.Close()
@@ -100,6 +101,7 @@ func TestForwardToTarget_HTTP1StillWorks(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "http://web.example.com/", nil)
 	req.Host = "web.example.com"
+	req.Header.Set(registryForwardAuthHeader, "replayed-client-credential")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
