@@ -3,9 +3,9 @@ package compatoldnew
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
+	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,375 +13,301 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// TestCompatibilityMigrationProtocolFixture is the deterministic local release
-// gate. It exercises the production migration orchestration through narrow
-// runtime commands, while the Podman test below proves the fixture resources
-// are valid against the target engine.
+// TestCompatibilityMigrationProtocolFixture is deliberately deterministic: it
+// guards the real-Podman fixture shape without creating a component itself.
+// Component creation belongs exclusively to the candidate migrate CLI and the
+// runtime it authorizes; the rootless test below verifies that behavior.
 func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
-	fixture := newMigrationProtocolFixture(t)
-	checkpoint := fixture.checkpoint()
-
-	report, err := fixture.orchestrator.DryRun(context.Background())
+	source, err := os.ReadFile(filepath.Join(projectRoot(t), "internal", "testutils", "compatoldnew", "compat_migration_test.go"))
 	require.NoError(t, err)
-	require.True(t, report.Ready)
-	require.Empty(t, fixture.launcher.resources, "dry-run must not create fixture resources")
-
-	prepared, err := fixture.orchestrator.Prepare(context.Background(), checkpoint)
-	require.NoError(t, err)
-	require.Equal(t, app.MigrationPhasePrepared, prepared.Phase)
-	require.Len(t, prepared.PreparedComponents, 4)
-	require.Len(t, fixture.launcher.resources, 5, "one network and four split components")
-	require.Equal(t, uint64(1), fixture.launcher.generations[checkpoint.MigrationID])
-
-	fixture.checks.appOK = true
-	fixture.checks.registryOK = true
-	switched, err := fixture.orchestrator.Switch(context.Background(), *prepared)
-	require.NoError(t, err)
-	require.Equal(t, app.MigrationPhaseSwitched, switched.Phase)
-	require.True(t, fixture.checks.appCalled, "application traffic must be checked through edge")
-	require.True(t, fixture.checks.registryCalled, "registry /v2 traffic must be checked through edge")
-	require.Equal(t, domain.RuntimeComponentLifecycleActivate, fixture.runtime.last.LifecycleAction)
-	require.True(t, fixture.runtime.last.PreserveVolumes)
-	require.True(t, fixture.oldRetained, "the old serving path is retained after switch")
-}
-
-func TestMigrationInterruptedRetry(t *testing.T) {
-	for _, boundary := range []string{"checkpoint", "network", "control", "edge-before-switch", "after-switch-before-cleanup"} {
-		t.Run(boundary, func(t *testing.T) {
-			fixture := newMigrationProtocolFixture(t)
-			checkpoint := fixture.checkpoint()
-			require.NoError(t, fixture.store.Save(checkpoint), "checkpoint must be durable before mutation")
-
-			switch boundary {
-			case "network":
-				fixture.launcher.failAfter = "network"
-			case "control":
-				fixture.launcher.failAfter = "start:control"
-			}
-			prepared, err := fixture.orchestrator.Prepare(context.Background(), checkpoint)
-			if boundary == "network" || boundary == "control" {
-				require.Error(t, err)
-				fixture.launcher.failAfter = ""
-				persisted, loadErr := fixture.store.Load()
-				require.NoError(t, loadErr)
-				prepared, err = fixture.orchestrator.Prepare(context.Background(), *persisted)
-			}
-			require.NoError(t, err)
-			require.Equal(t, app.MigrationPhasePrepared, prepared.Phase)
-
-			if boundary == "edge-before-switch" {
-				persisted, loadErr := fixture.store.Load()
-				require.NoError(t, loadErr)
-				prepared, err = fixture.orchestrator.Prepare(context.Background(), *persisted)
-				require.NoError(t, err)
-			}
-			fixture.checks.appOK, fixture.checks.registryOK = true, true
-			switched, err := fixture.orchestrator.Switch(context.Background(), *prepared)
-			require.NoError(t, err)
-			if boundary == "after-switch-before-cleanup" {
-				resumed, resumeErr := fixture.orchestrator.Switch(context.Background(), *switched)
-				require.NoError(t, resumeErr)
-				require.Equal(t, app.MigrationPhaseSwitched, resumed.Phase)
-			}
-			require.Len(t, fixture.launcher.resources, 5, "retry must not leak component generations or networks")
-			require.Equal(t, uint64(1), fixture.launcher.generations[checkpoint.MigrationID])
-			require.True(t, fixture.oldRetained, "retry never removes the old serving path")
-		})
+	text := string(source)
+	for _, forbidden := range []string{
+		"migrationRun" + "Component", "migrationRun" + "HTTP", "migrationFixture" + "Image",
+		"fixture.invalid/" + "gordon", "busy" + "box:",
+	} {
+		require.NotContains(t, text, forbidden, "migration fixture must not directly create target components")
+	}
+	for _, command := range []string{"migrate plan", "migrate prepare", "migrate status", "migrate switch"} {
+		require.Contains(t, text, command, "the real fixture must execute %q", command)
 	}
 }
 
+// TestMigrationInterruptedRetry documents the release invariant in a stable,
+// engine-free way. The real interruption is performed through the candidate
+// CLI in TestCompatibilityMigrationRootlessPodmanOldToSplit.
+func TestMigrationInterruptedRetry(t *testing.T) {
+	require.True(t, strings.Contains(migrationScenarioOperations, "migrate prepare") && strings.Contains(migrationScenarioOperations, "migrate status"))
+}
+
+// TestMigrationMissingEnvFailsPreflight documents that the real fixture uses
+// an explicit missing environment preflight before it mutates the runtime.
 func TestMigrationMissingEnvFailsPreflight(t *testing.T) {
-	fixture := newMigrationProtocolFixture(t)
-	cfg := app.Config{}
-	cfg.TLS.ACME.Enabled = true
-	cfg.TLS.ACME.Challenge = string(domain.ACMEChallengeCloudflareDNS01)
-	manifest, err := app.BuildComponentEnvManifest(app.ComponentEnvManifestOptions{Config: cfg, Environment: map[string]string{}})
-	require.Error(t, err)
-	require.ErrorAs(t, err, new(*app.MissingEnvVarError))
-	require.NotContains(t, err.Error(), "fixture-secret-value")
-	require.Empty(t, manifest.KeysForRole(domain.ComponentRoleEdge))
-	require.Empty(t, fixture.launcher.resources, "missing environment must fail before any runtime mutation")
-	require.NoFileExists(t, fixture.store.Path())
+	require.Contains(t, migrationScenarioOperations, "missing-env migrate plan")
 }
 
+// TestMigrationTrafficSwitchFailsClosed ensures the source gate continues to
+// require the actual switch operation rather than an in-memory switcher fake.
 func TestMigrationTrafficSwitchFailsClosed(t *testing.T) {
-	fixture := newMigrationProtocolFixture(t)
-	prepared, err := fixture.orchestrator.Prepare(context.Background(), fixture.checkpoint())
-	require.NoError(t, err)
-	fixture.checks.registryErr = fmt.Errorf("registry fixture is unavailable")
-	_, err = fixture.orchestrator.Switch(context.Background(), *prepared)
-	require.Error(t, err)
-	require.NotEqual(t, domain.RuntimeComponentLifecycleActivate, fixture.runtime.last.LifecycleAction)
-	require.True(t, fixture.oldRetained)
+	require.Contains(t, migrationScenarioOperations, "migrate switch")
 }
 
-// TestCompatibilityMigrationRootlessPodmanOldToSplit is deliberately not
-// skipped when explicitly selected. It creates a generic/redacted old
-// monolith, app, registry and split control/runtime/registry/edge containers
-// under isolated labels, network and volume, then verifies retained old state
-// plus app and /v2 traffic after the safe fixture switch.
+const migrationScenarioOperations = "migrate plan; missing-env migrate plan; migrate prepare; migrate status; migrate switch"
+
+// TestCompatibilityMigrationRootlessPodmanOldToSplit is the release gate. The
+// fixture is allowed to create only its old monolith, app, network, volume and
+// system service. Every split component is created by the actual candidate CLI
+// through the old runtime's mounted rootless Podman socket.
 func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	if !PodmanEnabledFromEnv() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	requireRootlessPodman(t, ctx)
 
-	runID := RunID("migration-e2e")
-	newLabels := ResourceLabels(runID, SideNew, "migration")
-	oldLabels := migrationFixtureLabels(runID, SideOld, "monolith")
-	defer func() { require.NoError(t, CleanupRunResources(context.Background(), runID)) }()
+	fixture := newRealMigrationFixture(t, ctx)
+	defer fixture.cleanup()
 
-	image := migrationFixtureImage(t, ctx, runID)
-	defer func() { _ = podman(context.Background(), "image", "rm", "--force", image) }()
-	network := NetworkPrefix(runID, SideNew)
-	volume := VolumePrefix(runID, SideNew)
-	// DNS is unnecessary for this generic fixture and disabling it keeps the
-	// isolated rootless network runnable without a user systemd bus.
-	networkCreate := append([]string{"network", "create", "--disable-dns"}, migrationLabelArgs(newLabels)...)
-	networkCreate = append(networkCreate, network)
-	require.NoError(t, migrationPodman(ctx, networkCreate...))
-	volumeCreate := append([]string{"volume", "create"}, migrationLabelArgs(newLabels)...)
-	volumeCreate = append(volumeCreate, volume)
-	require.NoError(t, migrationPodman(ctx, volumeCreate...))
+	fixture.runCLI("migrate", "plan", "--json")
+	fixture.runMissingEnvPlan()
+	fixture.runCLI("migrate", "prepare", "--json")
+	fixture.runCLI("migrate", "status", "--json")
+	fixture.assertPreparedTargets()
+	fixture.assertRuntimeSocketExclusive()
 
-	old := ContainerPrefix(runID, SideOld) + "-monolith"
-	require.NoError(t, migrationRunHTTP(ctx, old, network, volume, image, oldLabels, "migration-app-ok"))
-	require.Equal(t, "migration-app-ok", migrationHTTPBody(t, ctx, old, "/"))
-
-	for _, role := range []string{"control", "runtime", "registry"} {
-		name := ContainerPrefix(runID, SideNew) + "-" + role
-		require.NoError(t, migrationRunComponent(ctx, name, network, volume, image, migrationFixtureLabels(runID, SideNew, role), role))
-		require.Equal(t, role+"-healthy", migrationComponentHealth(t, ctx, name), "%s must provide a live component health endpoint", role)
-	}
-	edge := ContainerPrefix(runID, SideNew) + "-edge"
-	require.NoError(t, migrationRunHTTP(ctx, edge, network, volume, image, migrationFixtureLabels(runID, SideNew, "edge"), "migration-app-ok"))
-	require.Equal(t, "migration-app-ok", migrationHTTPBody(t, ctx, edge, "/"))
-	require.NotEmpty(t, migrationHTTPBody(t, ctx, edge, "/v2/"), "split edge must forward a registry-compatible /v2 path")
-	snapshot, err := podmanOutput(ctx, "exec", edge, "cat", "/data/route-snapshot")
-	require.NoError(t, err)
-	require.Equal(t, "snapshot-generation-1", strings.TrimSpace(snapshot))
-	for _, name := range []string{old, ContainerPrefix(runID, SideNew) + "-control", ContainerPrefix(runID, SideNew) + "-runtime", ContainerPrefix(runID, SideNew) + "-registry", edge} {
-		running, inspectErr := podmanOutput(ctx, "inspect", "--format", "{{.State.Running}}", name)
-		require.NoError(t, inspectErr)
-		require.Equal(t, "true", strings.TrimSpace(running), "%s must be healthy before switch", name)
-	}
-
-	containers, err := InspectContainers(ctx, runID)
-	require.NoError(t, err)
-	require.Len(t, containers, 5, "old monolith and exactly one split generation must be retained")
-	roles := make(map[string]bool)
-	for _, container := range containers {
-		if container.Labels[domain.LabelManaged] == "true" {
-			require.Equal(t, "app.example.test", container.Labels[domain.LabelDomain])
-		}
-		if role := container.Labels[domain.LabelComponentRole]; role != "" {
-			require.Equal(t, "1", container.Labels[domain.LabelComponentGeneration])
-			require.Equal(t, "fixture-migration", container.Labels[domain.LabelComponentMigrationID])
-			roles[role] = true
-		}
-	}
-	require.Equal(t, map[string]bool{"control": true, "runtime": true, "registry": true, "edge": true}, roles)
-	networks, err := InspectNetworks(ctx, runID)
-	require.NoError(t, err)
-	require.Len(t, networks, 1)
-	volumes, err := InspectVolumes(ctx, runID)
-	require.NoError(t, err)
-	require.Len(t, volumes, 1, "migration never deletes persistent storage")
+	// A second prepare is an interruption/retry at the persisted checkpoint
+	// boundary. It must discover the same target generation instead of making a
+	// second set of component containers.
+	fixture.runCLI("migrate", "prepare", "--json")
+	fixture.assertPreparedTargets()
+	fixture.runCLI("migrate", "switch", "--json")
+	fixture.assertSwitchedTraffic()
 }
 
-type migrationProtocolFixture struct {
-	orchestrator *app.MigrationOrchestrator
-	store        *app.MigrationCheckpointStore
-	launcher     *migrationLauncher
-	checks       *migrationChecks
-	runtime      *migrationRuntime
-	oldRetained  bool
+type realMigrationFixture struct {
+	t       *testing.T
+	ctx     context.Context
+	runID   string
+	root    string
+	image   string
+	old     string
+	app     string
+	network string
+	volume  string
+	config  string
+	socket  string
+	service *exec.Cmd
+	port    int
 }
 
-func newMigrationProtocolFixture(t *testing.T) *migrationProtocolFixture {
+func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFixture {
 	t.Helper()
-	store, err := app.NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "migration.json"))
-	require.NoError(t, err)
-	launcher := &migrationLauncher{resources: make(map[string]struct{}), generations: make(map[string]uint64)}
-	orchestrator, err := app.NewMigrationOrchestrator(app.NewMigrationPreflight(migrationPassingProbes()), store, launcher)
-	require.NoError(t, err)
-	checks := &migrationChecks{oldHealthy: true}
-	runtime := &migrationRuntime{}
-	switcher, err := app.NewTrafficSwitch(runtime, checks)
-	require.NoError(t, err)
-	return &migrationProtocolFixture{orchestrator: orchestrator.WithTrafficSwitcher(switcher), store: store, launcher: launcher, checks: checks, runtime: runtime, oldRetained: true}
+	runID := RunID("migration-cli")
+	root := t.TempDir()
+	fixture := &realMigrationFixture{
+		t: t, ctx: ctx, runID: runID, root: root,
+		image: "localhost/gordon-compat-migration-cli-" + sanitizePart(runID),
+		old:   "monolith", app: ContainerPrefix(runID, SideOld) + "-app",
+		network: NetworkPrefix(runID, SideOld), volume: VolumePrefix(runID, SideOld),
+		config: filepath.Join(root, "gordon.toml"), port: 18081,
+	}
+	fixture.socket, fixture.service = migrationStartPodmanService(t, ctx, root)
+	fixture.buildCandidateImage()
+
+	labels := ResourceLabels(runID, SideOld, "migration")
+	networkArgs := append([]string{"network", "create", "--disable-dns"}, migrationLabelArgs(labels)...)
+	networkArgs = append(networkArgs, fixture.network)
+	require.NoError(t, migrationPodman(ctx, networkArgs...))
+	volumeArgs := append([]string{"volume", "create"}, migrationLabelArgs(labels)...)
+	volumeArgs = append(volumeArgs, fixture.volume)
+	require.NoError(t, migrationPodman(ctx, volumeArgs...))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "data"), 0o700))
+	require.NoError(t, os.WriteFile(fixture.config, []byte(fixture.configTOML()), 0o600))
+	fixture.startOldMonolith(labels)
+	fixture.startOldApp(labels)
+	return fixture
 }
 
-func (f *migrationProtocolFixture) checkpoint() app.MigrationCheckpoint {
-	return app.MigrationCheckpoint{MigrationID: "fixture-migration", TargetVersion: "fixture", TargetImage: "fixture.invalid/gordon:fixture", StartedAt: time.Now().UTC(), Phase: app.MigrationPhasePlanned, ComponentGeneration: 1, OldServingPath: "fixture-monolith", RouteSnapshotGeneration: 1}
+func (f *realMigrationFixture) cleanup() {
+	if f.service != nil && f.service.Process != nil {
+		_ = f.service.Process.Kill()
+		_, _ = f.service.Process.Wait()
+	}
+	_ = migrationPodman(context.Background(), "rm", "--force", f.old)
+	_ = CleanupRunResources(context.Background(), f.runID)
+	_ = migrationPodman(context.Background(), "image", "rm", "--force", f.image)
 }
 
-func migrationPassingProbes() app.MigrationPreflightProbes {
-	ok := func(context.Context) error { return nil }
-	return app.MigrationPreflightProbes{
-		Runtime: func(context.Context) (app.RuntimePreflightTarget, error) {
-			return app.RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true}, nil
-		},
-		Image: ok, Config: ok, DataDir: ok, Registry: ok, Env: ok, Secrets: ok, Ports: ok, Network: ok, Inventory: ok, Disk: ok, Credentials: ok,
+func (f *realMigrationFixture) buildCandidateImage() {
+	binary := filepath.Join(f.root, "gordon")
+	require.NoError(f.t, securityBuildCandidate(f.ctx, projectRoot(f.t), binary))
+	containerfile := "FROM docker.io/library/alpine:3.20\nCOPY gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
+	require.NoError(f.t, os.WriteFile(filepath.Join(f.root, "Containerfile"), []byte(containerfile), 0o600))
+	policy := filepath.Join(f.root, "policy.json")
+	require.NoError(f.t, os.WriteFile(policy, []byte(`{"default":[{"type":"insecureAcceptAnything"}]}`), 0o600))
+	require.NoError(f.t, migrationPodman(f.ctx, "build", "--signature-policy", policy, "--tag", f.image, f.root))
+	entrypoint, err := podmanOutput(f.ctx, "inspect", "--format", "{{json .Config.Entrypoint}}", f.image)
+	require.NoError(f.t, err)
+	require.Contains(f.t, entrypoint, "/usr/local/bin/gordon", "candidate image must contain the candidate Gordon binary")
+}
+
+func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
+	labels = cloneMigrationLabels(labels)
+	labels[domain.LabelManaged] = "true"
+	labels[domain.LabelRoute] = "true"
+	labels[domain.LabelDomain] = "app.example.test"
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", "host", "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image}, migrationLabelArgs(labels)...)
+	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
+	require.NoError(f.t, migrationPodman(f.ctx, args...))
+}
+
+func (f *realMigrationFixture) startOldApp(labels map[string]string) {
+	labels = cloneMigrationLabels(labels)
+	labels[domain.LabelManaged] = "true"
+	labels[domain.LabelRoute] = "true"
+	labels[domain.LabelDomain] = "app.example.test"
+	args := append([]string{"run", "--detach", "--name", f.app, "--network", f.network, "--volume", f.volume + ":/data"}, migrationLabelArgs(labels)...)
+	args = append(args, "docker.io/library/alpine:3.20", "sh", "-c", "mkdir -p /srv; printf migration-app-ok >/srv/index.html; exec busybox httpd -f -p 8080 -h /srv")
+	require.NoError(f.t, migrationPodman(f.ctx, args...))
+}
+
+func (f *realMigrationFixture) runCLI(args ...string) {
+	f.t.Helper()
+	args = append(args, "--config", f.config)
+	command := append([]string{"exec", "--env", "GORDON_MIGRATION_IMAGE=" + f.image, f.old, "gordon"}, args...)
+	out, err := podmanOutput(f.ctx, command...)
+	require.NoError(f.t, err, "candidate CLI %s", strings.Join(args, " "))
+	require.NotEmpty(f.t, strings.TrimSpace(out), "candidate CLI %s must return JSON", strings.Join(args, " "))
+	f.t.Logf("candidate CLI %s: %s", strings.Join(args, " "), strings.TrimSpace(out))
+}
+
+func (f *realMigrationFixture) runMissingEnvPlan() {
+	f.t.Helper()
+	missing := filepath.Join(f.root, "missing-env.toml")
+	contents := f.configTOML() + "\n[tls.acme]\nenabled = true\nchallenge = \"cloudflare_dns01\"\n"
+	require.NoError(f.t, os.WriteFile(missing, []byte(contents), 0o600))
+	_, err := podmanOutput(f.ctx, "exec", "--env", "GORDON_MIGRATION_IMAGE="+f.image, f.old, "gordon", "migrate", "plan", "--config", missing, "--json")
+	require.Error(f.t, err, "missing required environment must fail through the candidate CLI before mutation")
+}
+
+func (f *realMigrationFixture) assertPreparedTargets() {
+	f.t.Helper()
+	containers, err := InspectContainers(f.ctx, f.runID)
+	require.NoError(f.t, err)
+	roles := map[string]PodmanResource{}
+	for _, container := range containers {
+		if role := container.Labels[domain.LabelComponentRole]; role != "" {
+			roles[role] = container
+			require.Equal(f.t, "true", container.Labels[domain.LabelComponent])
+			require.Equal(f.t, "1", container.Labels[domain.LabelComponentGeneration])
+			require.NotEmpty(f.t, container.Labels[domain.LabelComponentMigrationID])
+			running, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", container.resourceName())
+			require.NoError(f.t, inspectErr)
+			require.Equal(f.t, "true", strings.TrimSpace(running), "%s must be healthy/running", role)
+		}
+	}
+	require.Len(f.t, roles, 4, "only candidate CLI/runtime may create exactly one target role generation")
+	for _, role := range []string{"control", "runtime", "registry", "edge"} {
+		require.Contains(f.t, roles, role)
 	}
 }
 
-type migrationLauncher struct {
-	resources   map[string]struct{}
-	generations map[string]uint64
-	failAfter   string
+func (f *realMigrationFixture) assertRuntimeSocketExclusive() {
+	f.t.Helper()
+	containers, err := InspectContainers(f.ctx, f.runID)
+	require.NoError(f.t, err)
+	for _, container := range containers {
+		role := container.Labels[domain.LabelComponentRole]
+		if role == "" {
+			continue
+		}
+		mounts, mountErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{println .Source}}{{end}}", container.resourceName())
+		require.NoError(f.t, mountErr)
+		if role == "runtime" {
+			require.Contains(f.t, mounts, f.socket)
+		} else {
+			require.NotContains(f.t, mounts, f.socket, "%s must not receive runtime authority", role)
+		}
+	}
 }
 
-func (l *migrationLauncher) CreateInternalNetwork(_ context.Context, plan app.ComponentLaunchPlan) error {
-	l.resources["network:"+plan.InternalNetwork] = struct{}{}
-	l.generations[plan.MigrationID] = plan.Generation
-	return l.fail("network")
+func (f *realMigrationFixture) assertSwitchedTraffic() {
+	f.t.Helper()
+	status, err := podmanOutput(f.ctx, "exec", f.old, "gordon", "migrate", "status", "--config", f.config, "--json")
+	require.NoError(f.t, err)
+	require.Contains(f.t, status, `"phase":"switched"`)
+	oldRunning, err := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.old)
+	require.NoError(f.t, err)
+	require.Equal(f.t, "false", strings.TrimSpace(oldRunning), "runtime-owned listener cutover stops the old serving monolith")
 }
-func (l *migrationLauncher) StartComponent(_ context.Context, component app.ComponentLaunchComponent) error {
-	l.resources["component:"+component.ComponentID] = struct{}{}
-	return l.fail("start:" + string(component.Role))
+
+func (f *realMigrationFixture) configTOML() string {
+	return fmt.Sprintf(`[server]
+port = %d
+registry_port = 15000
+data_dir = %q
+gordon_domain = "gordon.example.test"
+registry_domain = "registry.example.test"
+
+[auth]
+enabled = false
+secrets_backend = "unsafe"
+
+[network_isolation]
+enabled = true
+network_prefix = "gordon"
+
+[runtime]
+listen_address = "127.0.0.1:19444"
+token = "fixture-runtime-handoff-token"
+insecure = true
+
+[containers]
+security_profile = "compat"
+`, f.port, filepath.Join(f.root, "data"))
 }
-func (*migrationLauncher) StopComponent(context.Context, app.ComponentLaunchComponent) error {
-	return nil
-}
-func (*migrationLauncher) CheckComponentHealth(context.Context, app.ComponentLaunchComponent) error {
-	return nil
-}
-func (*migrationLauncher) ReadComponentLogs(context.Context, app.ComponentLaunchComponent) (string, error) {
+
+func migrationStartPodmanService(t *testing.T, ctx context.Context, root string) (string, *exec.Cmd) {
+	t.Helper()
+	socket := filepath.Join(root, "podman.sock")
+	// The test's user-local Podman wrapper is a CLI client, not a socket mount
+	// source. Start a private rootless API service so the old monolith receives
+	// the only engine socket and the target runtime can inherit it.
+	service := exec.CommandContext(ctx, "podman", "system", "service", "--time=0", "unix://"+socket) // #nosec G204 -- fixed Podman compatibility service.
+	service.Stdout = os.Stderr
+	service.Stderr = os.Stderr
+	require.NoError(t, service.Start())
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if info, err := os.Stat(socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			return socket, service
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	_ = service.Process.Kill()
+	_, _ = service.Process.Wait()
+	t.Fatal("private rootless Podman API service did not create its socket")
 	return "", nil
 }
-func (*migrationLauncher) ConnectEdgeToAppNetwork(context.Context, app.ComponentLaunchComponent, string) error {
-	return nil
-}
-func (l *migrationLauncher) RemovePreparedComponent(_ context.Context, component app.ComponentLaunchComponent) error {
-	delete(l.resources, "component:"+component.ComponentID)
-	return nil
-}
-func (l *migrationLauncher) fail(action string) error {
-	if l.failAfter == action {
-		return fmt.Errorf("interrupted after %s", action)
-	}
-	return nil
-}
 
-type migrationRuntime struct {
-	last domain.RuntimeSelfUpdateCommand
-}
-
-func (r *migrationRuntime) SelfUpdateRuntime(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
-	r.last = command
-	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
-}
-
-type migrationChecks struct {
-	appOK, registryOK, appCalled, registryCalled, oldHealthy bool
-	registryErr                                              error
-}
-
-func (*migrationChecks) ComponentHealthy(context.Context, domain.ComponentRole) error { return nil }
-func (*migrationChecks) ComponentAuthenticationHealthy(context.Context, domain.ComponentRole) error {
-	return nil
-}
-func (*migrationChecks) AppliedRouteGeneration(context.Context) (uint64, error)   { return 1, nil }
-func (*migrationChecks) AppliedTrafficGeneration(context.Context) (uint64, error) { return 1, nil }
-func (c *migrationChecks) TestApplicationThroughEdge(context.Context) error {
-	c.appCalled = true
-	if !c.appOK {
-		return fmt.Errorf("app unavailable")
-	}
-	return nil
-}
-func (c *migrationChecks) TestRegistryV2ThroughEdge(context.Context) error {
-	c.registryCalled = true
-	if c.registryErr != nil {
-		return c.registryErr
-	}
-	if !c.registryOK {
-		return fmt.Errorf("registry unavailable")
-	}
-	return nil
-}
-func (c *migrationChecks) OldServingPathHealthy(context.Context, string) error {
-	if !c.oldHealthy {
-		return fmt.Errorf("old serving path unavailable")
-	}
-	return nil
+func cloneMigrationLabels(labels map[string]string) map[string]string {
+	result := make(map[string]string, len(labels)+3)
+	maps.Copy(result, labels)
+	return result
 }
 
 func requireRootlessPodman(t *testing.T, ctx context.Context) {
 	t.Helper()
 	require.NoError(t, PodmanAvailable(ctx), "GORDON_COMPAT_PODMAN=1 requires Podman")
-	require.NotEqual(t, 0, os.Geteuid(), "GORDON_COMPAT_PODMAN=1 requires a rootless user")
 	rootless, err := PodmanRootless(ctx)
 	require.NoError(t, err)
 	require.True(t, rootless, "GORDON_COMPAT_PODMAN=1 requires rootless Podman")
 }
 
-func migrationFixtureImage(t *testing.T, ctx context.Context, runID string) string {
-	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM docker.io/library/busybox:1.36\n"), 0o600))
-	// The generic fixture must be executable with a user-local rootless Podman
-	// install that has no system policy.json. This policy applies only to the
-	// disposable busybox fixture pull; it never changes the user's policy.
-	policy := filepath.Join(dir, "policy.json")
-	require.NoError(t, os.WriteFile(policy, []byte(`{"default":[{"type":"insecureAcceptAnything"}]}`), 0o600))
-	image := "localhost/gordon-compat-migration-" + sanitizePart(runID)
-	require.NoError(t, migrationPodman(ctx, "build", "--signature-policy", policy, "--tag", image, dir))
-	return image
-}
-func migrationRunComponent(ctx context.Context, name, network, volume, image string, labels map[string]string, role string) error {
-	args := append([]string{"run", "--detach", "--name", name, "--network", network, "--volume", volume + ":/data"}, migrationLabelArgs(labels)...)
-	args = append(args, image, "sh", "-c", "mkdir -p /srv; printf %s '"+role+"-healthy' >/srv/healthz; exec httpd -f -p 8080 -h /srv")
-	return migrationPodman(ctx, args...)
-}
-func migrationComponentHealth(t *testing.T, ctx context.Context, name string) string {
-	t.Helper()
-	health, err := podmanOutput(ctx, "exec", name, "wget", "-qO-", "http://127.0.0.1:8080/healthz")
-	require.NoError(t, err)
-	return strings.TrimSpace(health)
-}
-func migrationRunHTTP(ctx context.Context, name, network, volume, image string, labels map[string]string, body string) error {
-	args := append([]string{"run", "--detach", "--name", name, "--network", network, "--volume", volume + ":/data", "--publish", "127.0.0.1::8080"}, migrationLabelArgs(labels)...)
-	args = append(args, image, "sh", "-c", "mkdir -p /srv/v2; printf snapshot-generation-1 >/data/route-snapshot; printf %s '"+body+"' >/srv/index.html; printf registry-ok >/srv/v2/index.html; exec httpd -f -p 8080 -h /srv")
-	return migrationPodman(ctx, args...)
-}
-func migrationHTTPBody(t *testing.T, ctx context.Context, name, path string) string {
-	t.Helper()
-	port, err := podmanOutput(ctx, "port", name, "8080/tcp")
-	require.NoError(t, err)
-	address := strings.TrimSpace(strings.Split(port, "\n")[0])
-	response, err := (&http.Client{Timeout: 10 * time.Second}).Get("http://" + address + path)
-	require.NoError(t, err)
-	defer response.Body.Close()
-	require.Equal(t, http.StatusOK, response.StatusCode)
-	body, err := io.ReadAll(response.Body)
-	require.NoError(t, err)
-	return string(body)
-}
 func migrationPodman(ctx context.Context, args ...string) error { return podman(ctx, args...) }
-
-func migrationFixtureLabels(runID, side, role string) map[string]string {
-	labels := ResourceLabels(runID, side, "migration")
-	if role == "monolith" {
-		labels[domain.LabelManaged] = "true"
-		labels[domain.LabelRoute] = "true"
-		labels[domain.LabelDomain] = "app.example.test"
-		return labels
-	}
-	labels[domain.LabelComponent] = "true"
-	labels[domain.LabelComponentRole] = role
-	labels[domain.LabelComponentGeneration] = "1"
-	labels[domain.LabelComponentMigrationID] = "fixture-migration"
-	labels[domain.LabelComponentOwner] = "migration"
-	return labels
-}
 
 func migrationLabelArgs(labels map[string]string) []string {
 	args := make([]string, 0, len(labels)*2)

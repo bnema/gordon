@@ -192,7 +192,8 @@ func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, h
 }
 
 func (l *RuntimeComponentLauncher) CreateInternalNetwork(ctx context.Context, plan ComponentLaunchPlan) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: "gordon-network-" + plan.MigrationID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.Generation, plan.MigrationID, "network")
+	componentID := fmt.Sprintf("gordon-network-%s-g%d", plan.MigrationID, plan.Generation)
+	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: componentID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.Generation, plan.MigrationID, "network")
 }
 func (l *RuntimeComponentLauncher) StartComponent(ctx context.Context, component ComponentLaunchComponent) error {
 	return l.send(ctx, domain.RuntimeComponentLifecycleStart, component, componentGeneration(component), componentMigrationID(component), "start")
@@ -300,6 +301,9 @@ func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.Runti
 		return fmt.Errorf("send component %s command: %w", operation, err)
 	}
 	if result.Status != domain.RuntimeCommandStatusSucceeded {
+		if result.Error != nil && strings.TrimSpace(result.Error.Message) != "" {
+			return fmt.Errorf("component %s command was not accepted: %s", operation, result.Error.Message)
+		}
 		return fmt.Errorf("component %s command was not accepted", operation)
 	}
 	return nil

@@ -102,6 +102,15 @@ func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicLi
 	}
 	owner := publicListenerOwner{}
 	for _, candidate := range containers {
+		// A legacy monolith may own its listener through host networking rather
+		// than a published-port record. It is still an unambiguous Gordon owner
+		// when its managed identity is present; rejecting it would make the
+		// required in-place migration impossible before any mutation occurs.
+		if candidate.HostConfig.NetworkMode == "host" && runningManagedMonolith(candidate) {
+			owner.occupied = true
+			owner.managedMonolith = true
+			continue
+		}
 		for _, binding := range candidate.Ports {
 			if int(binding.PublicPort) != wanted {
 				continue
@@ -122,7 +131,7 @@ func runningManagedMonolith(candidate container.Summary) bool {
 	}
 	for _, name := range candidate.Names {
 		switch strings.TrimPrefix(name, "/") {
-		case "gordon", "gordon-monolith":
+		case "gordon", "gordon-monolith", "monolith":
 			return true
 		}
 	}
