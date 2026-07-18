@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,10 @@ func TestMigrationStatusDiagnosticErrorRedactsSecrets(t *testing.T) {
 	diagnostic := migrationStatusDiagnosticError(fmt.Errorf("status failed with token %s", secret))
 	require.NotContains(t, diagnostic, secret)
 	require.Contains(t, diagnostic, "<redacted>")
+}
+
+func TestNormalizeNetworkSet(t *testing.T) {
+	require.Equal(t, []string{"app", "internal"}, normalizeNetworkSet(" internal; app;\n"))
 }
 
 const migrationScenarioOperations = "migrate plan; missing-env migrate plan; migrate prepare; migrate status; migrate switch"
@@ -640,7 +645,7 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 		}, bindings, "final edge must own configured public HTTP and registry listeners")
 		networks, networkErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
 		require.NoError(f.t, networkErr)
-		require.ElementsMatch(f.t, []string{f.network, "gordon-internal-migration-g1"}, strings.FieldsFunc(networks, func(r rune) bool { return r == ';' }), "final edge must retain exactly the managed app and internal networks")
+		require.Equal(f.t, []string{f.network, "gordon-internal-migration-g1"}, normalizeNetworkSet(networks), "final edge must retain exactly the managed app and internal networks")
 		return
 	}
 	f.t.Fatal("final edge was not found")
@@ -691,6 +696,18 @@ func (f *realMigrationFixture) assertInterruptedSwitchRetry() {
 	phase, err := migrationStatusPhase(retry)
 	require.NoError(f.t, err, "retry must return a JSON migration status")
 	require.Equal(f.t, "switched", phase, "a retry after a terminated caller must retain the switched checkpoint")
+}
+
+func normalizeNetworkSet(networks string) []string {
+	parts := strings.Split(networks, ";")
+	normalized := make([]string, 0, len(parts))
+	for _, network := range parts {
+		if network = strings.TrimSpace(network); network != "" {
+			normalized = append(normalized, network)
+		}
+	}
+	sort.Strings(normalized)
+	return normalized
 }
 
 func migrationStatusPhase(status string) (string, error) {
