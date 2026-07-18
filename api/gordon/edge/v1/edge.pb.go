@@ -148,10 +148,10 @@ func (*WatchTrafficGraphsRequest) Descriptor() ([]byte, []int) {
 	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{1}
 }
 
-// TrafficGraphSnapshot carries traffic options, entry points, routers, and
-// backends only. Certificates, keys, ACME state, and control configuration are
-// intentionally absent.
-type TrafficGraphSnapshot struct {
+// WatchTrafficGraphsResponse carries traffic options, entry points, routers,
+// and backends only. Certificates, keys, ACME state, and control configuration
+// are intentionally absent.
+type WatchTrafficGraphsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Generation    uint64                 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
 	Options       *TrafficOptions        `protobuf:"bytes,2,opt,name=options,proto3" json:"options,omitempty"`
@@ -162,20 +162,20 @@ type TrafficGraphSnapshot struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *TrafficGraphSnapshot) Reset() {
-	*x = TrafficGraphSnapshot{}
+func (x *WatchTrafficGraphsResponse) Reset() {
+	*x = WatchTrafficGraphsResponse{}
 	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TrafficGraphSnapshot) String() string {
+func (x *WatchTrafficGraphsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TrafficGraphSnapshot) ProtoMessage() {}
+func (*WatchTrafficGraphsResponse) ProtoMessage() {}
 
-func (x *TrafficGraphSnapshot) ProtoReflect() protoreflect.Message {
+func (x *WatchTrafficGraphsResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_gordon_edge_v1_edge_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -187,40 +187,40 @@ func (x *TrafficGraphSnapshot) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TrafficGraphSnapshot.ProtoReflect.Descriptor instead.
-func (*TrafficGraphSnapshot) Descriptor() ([]byte, []int) {
+// Deprecated: Use WatchTrafficGraphsResponse.ProtoReflect.Descriptor instead.
+func (*WatchTrafficGraphsResponse) Descriptor() ([]byte, []int) {
 	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *TrafficGraphSnapshot) GetGeneration() uint64 {
+func (x *WatchTrafficGraphsResponse) GetGeneration() uint64 {
 	if x != nil {
 		return x.Generation
 	}
 	return 0
 }
 
-func (x *TrafficGraphSnapshot) GetOptions() *TrafficOptions {
+func (x *WatchTrafficGraphsResponse) GetOptions() *TrafficOptions {
 	if x != nil {
 		return x.Options
 	}
 	return nil
 }
 
-func (x *TrafficGraphSnapshot) GetEntryPoints() []*TrafficEntryPoint {
+func (x *WatchTrafficGraphsResponse) GetEntryPoints() []*TrafficEntryPoint {
 	if x != nil {
 		return x.EntryPoints
 	}
 	return nil
 }
 
-func (x *TrafficGraphSnapshot) GetRouters() []*TrafficRouter {
+func (x *WatchTrafficGraphsResponse) GetRouters() []*TrafficRouter {
 	if x != nil {
 		return x.Routers
 	}
 	return nil
 }
 
-func (x *TrafficGraphSnapshot) GetServices() []*TrafficService {
+func (x *WatchTrafficGraphsResponse) GetServices() []*TrafficService {
 	if x != nil {
 		return x.Services
 	}
@@ -747,8 +747,9 @@ func (x *TrafficBackend) GetProtocol() string {
 	return ""
 }
 
-// RouteTargetSnapshot is the complete sanitized routing view for an edge.
-type RouteTargetSnapshot struct {
+// WatchRouteSnapshotsResponse is the complete sanitized routing view for an
+// edge.
+type WatchRouteSnapshotsResponse struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
 	Generation               uint64                 `protobuf:"varint,1,opt,name=generation,proto3" json:"generation,omitempty"`
 	Entries                  []*RouteTargetEntry    `protobuf:"bytes,2,rep,name=entries,proto3" json:"entries,omitempty"`
@@ -757,20 +758,20 @@ type RouteTargetSnapshot struct {
 	sizeCache                protoimpl.SizeCache
 }
 
-func (x *RouteTargetSnapshot) Reset() {
-	*x = RouteTargetSnapshot{}
+func (x *WatchRouteSnapshotsResponse) Reset() {
+	*x = WatchRouteSnapshotsResponse{}
 	mi := &file_gordon_edge_v1_edge_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RouteTargetSnapshot) String() string {
+func (x *WatchRouteSnapshotsResponse) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RouteTargetSnapshot) ProtoMessage() {}
+func (*WatchRouteSnapshotsResponse) ProtoMessage() {}
 
-func (x *RouteTargetSnapshot) ProtoReflect() protoreflect.Message {
+func (x *WatchRouteSnapshotsResponse) ProtoReflect() protoreflect.Message {
 	mi := &file_gordon_edge_v1_edge_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -782,26 +783,26 @@ func (x *RouteTargetSnapshot) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RouteTargetSnapshot.ProtoReflect.Descriptor instead.
-func (*RouteTargetSnapshot) Descriptor() ([]byte, []int) {
+// Deprecated: Use WatchRouteSnapshotsResponse.ProtoReflect.Descriptor instead.
+func (*WatchRouteSnapshotsResponse) Descriptor() ([]byte, []int) {
 	return file_gordon_edge_v1_edge_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *RouteTargetSnapshot) GetGeneration() uint64 {
+func (x *WatchRouteSnapshotsResponse) GetGeneration() uint64 {
 	if x != nil {
 		return x.Generation
 	}
 	return 0
 }
 
-func (x *RouteTargetSnapshot) GetEntries() []*RouteTargetEntry {
+func (x *WatchRouteSnapshotsResponse) GetEntries() []*RouteTargetEntry {
 	if x != nil {
 		return x.Entries
 	}
 	return nil
 }
 
-func (x *RouteTargetSnapshot) GetRegistryForwardingTarget() *RouteTargetEntry {
+func (x *WatchRouteSnapshotsResponse) GetRegistryForwardingTarget() *RouteTargetEntry {
 	if x != nil {
 		return x.RegistryForwardingTarget
 	}
@@ -1169,8 +1170,8 @@ const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	"\n" +
 	"\x19gordon/edge/v1/edge.proto\x12\x0egordon.edge.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x1c\n" +
 	"\x1aWatchRouteSnapshotsRequest\"\x1b\n" +
-	"\x19WatchTrafficGraphsRequest\"\xab\x02\n" +
-	"\x14TrafficGraphSnapshot\x12\x1e\n" +
+	"\x19WatchTrafficGraphsRequest\"\xb1\x02\n" +
+	"\x1aWatchTrafficGraphsResponse\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x04R\n" +
 	"generation\x128\n" +
@@ -1215,8 +1216,8 @@ const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
 	"\x04host\x18\x02 \x01(\tR\x04host\x12\x12\n" +
 	"\x04port\x18\x03 \x01(\x05R\x04port\x12\x1a\n" +
-	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"\xd1\x01\n" +
-	"\x13RouteTargetSnapshot\x12\x1e\n" +
+	"\bprotocol\x18\x04 \x01(\tR\bprotocol\"\xd9\x01\n" +
+	"\x1bWatchRouteSnapshotsResponse\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x01 \x01(\x04R\n" +
 	"generation\x12:\n" +
@@ -1259,10 +1260,10 @@ const file_gordon_edge_v1_edge_proto_rawDesc = "" +
 	"\x12DrainTimeoutReason\x12$\n" +
 	" DRAIN_TIMEOUT_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19DRAIN_TIMEOUT_REASON_EDGE\x10\x01\x12 \n" +
-	"\x1cDRAIN_TIMEOUT_REASON_CONTROL\x10\x022\xb4\x03\n" +
-	"\vEdgeService\x12h\n" +
-	"\x13WatchRouteSnapshots\x12*.gordon.edge.v1.WatchRouteSnapshotsRequest\x1a#.gordon.edge.v1.RouteTargetSnapshot0\x01\x12g\n" +
-	"\x12WatchTrafficGraphs\x12).gordon.edge.v1.WatchTrafficGraphsRequest\x1a$.gordon.edge.v1.TrafficGraphSnapshot0\x01\x12e\n" +
+	"\x1cDRAIN_TIMEOUT_REASON_CONTROL\x10\x022\xc2\x03\n" +
+	"\vEdgeService\x12p\n" +
+	"\x13WatchRouteSnapshots\x12*.gordon.edge.v1.WatchRouteSnapshotsRequest\x1a+.gordon.edge.v1.WatchRouteSnapshotsResponse0\x01\x12m\n" +
+	"\x12WatchTrafficGraphs\x12).gordon.edge.v1.WatchTrafficGraphsRequest\x1a*.gordon.edge.v1.WatchTrafficGraphsResponse0\x01\x12e\n" +
 	"\x10ReportDrainState\x12'.gordon.edge.v1.ReportDrainStateRequest\x1a(.gordon.edge.v1.ReportDrainStateResponse\x12k\n" +
 	"\x12ReportAppliedState\x12).gordon.edge.v1.ReportAppliedStateRequest\x1a*.gordon.edge.v1.ReportAppliedStateResponseB3Z1github.com/bnema/gordon/api/gordon/edge/v1;edgev1b\x06proto3"
 
@@ -1281,45 +1282,45 @@ func file_gordon_edge_v1_edge_proto_rawDescGZIP() []byte {
 var file_gordon_edge_v1_edge_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_gordon_edge_v1_edge_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_gordon_edge_v1_edge_proto_goTypes = []any{
-	(DrainTimeoutReason)(0),            // 0: gordon.edge.v1.DrainTimeoutReason
-	(*WatchRouteSnapshotsRequest)(nil), // 1: gordon.edge.v1.WatchRouteSnapshotsRequest
-	(*WatchTrafficGraphsRequest)(nil),  // 2: gordon.edge.v1.WatchTrafficGraphsRequest
-	(*TrafficGraphSnapshot)(nil),       // 3: gordon.edge.v1.TrafficGraphSnapshot
-	(*TrafficOptions)(nil),             // 4: gordon.edge.v1.TrafficOptions
-	(*TrafficTCPOptions)(nil),          // 5: gordon.edge.v1.TrafficTCPOptions
-	(*TrafficUDPOptions)(nil),          // 6: gordon.edge.v1.TrafficUDPOptions
-	(*TrafficEntryPoint)(nil),          // 7: gordon.edge.v1.TrafficEntryPoint
-	(*TrafficRouter)(nil),              // 8: gordon.edge.v1.TrafficRouter
-	(*TrafficRule)(nil),                // 9: gordon.edge.v1.TrafficRule
-	(*TrafficService)(nil),             // 10: gordon.edge.v1.TrafficService
-	(*TrafficBackend)(nil),             // 11: gordon.edge.v1.TrafficBackend
-	(*RouteTargetSnapshot)(nil),        // 12: gordon.edge.v1.RouteTargetSnapshot
-	(*RouteTargetEntry)(nil),           // 13: gordon.edge.v1.RouteTargetEntry
-	(*ReportDrainStateRequest)(nil),    // 14: gordon.edge.v1.ReportDrainStateRequest
-	(*ReportDrainStateResponse)(nil),   // 15: gordon.edge.v1.ReportDrainStateResponse
-	(*ReportAppliedStateRequest)(nil),  // 16: gordon.edge.v1.ReportAppliedStateRequest
-	(*ReportAppliedStateResponse)(nil), // 17: gordon.edge.v1.ReportAppliedStateResponse
-	(*timestamppb.Timestamp)(nil),      // 18: google.protobuf.Timestamp
+	(DrainTimeoutReason)(0),             // 0: gordon.edge.v1.DrainTimeoutReason
+	(*WatchRouteSnapshotsRequest)(nil),  // 1: gordon.edge.v1.WatchRouteSnapshotsRequest
+	(*WatchTrafficGraphsRequest)(nil),   // 2: gordon.edge.v1.WatchTrafficGraphsRequest
+	(*WatchTrafficGraphsResponse)(nil),  // 3: gordon.edge.v1.WatchTrafficGraphsResponse
+	(*TrafficOptions)(nil),              // 4: gordon.edge.v1.TrafficOptions
+	(*TrafficTCPOptions)(nil),           // 5: gordon.edge.v1.TrafficTCPOptions
+	(*TrafficUDPOptions)(nil),           // 6: gordon.edge.v1.TrafficUDPOptions
+	(*TrafficEntryPoint)(nil),           // 7: gordon.edge.v1.TrafficEntryPoint
+	(*TrafficRouter)(nil),               // 8: gordon.edge.v1.TrafficRouter
+	(*TrafficRule)(nil),                 // 9: gordon.edge.v1.TrafficRule
+	(*TrafficService)(nil),              // 10: gordon.edge.v1.TrafficService
+	(*TrafficBackend)(nil),              // 11: gordon.edge.v1.TrafficBackend
+	(*WatchRouteSnapshotsResponse)(nil), // 12: gordon.edge.v1.WatchRouteSnapshotsResponse
+	(*RouteTargetEntry)(nil),            // 13: gordon.edge.v1.RouteTargetEntry
+	(*ReportDrainStateRequest)(nil),     // 14: gordon.edge.v1.ReportDrainStateRequest
+	(*ReportDrainStateResponse)(nil),    // 15: gordon.edge.v1.ReportDrainStateResponse
+	(*ReportAppliedStateRequest)(nil),   // 16: gordon.edge.v1.ReportAppliedStateRequest
+	(*ReportAppliedStateResponse)(nil),  // 17: gordon.edge.v1.ReportAppliedStateResponse
+	(*timestamppb.Timestamp)(nil),       // 18: google.protobuf.Timestamp
 }
 var file_gordon_edge_v1_edge_proto_depIdxs = []int32{
-	4,  // 0: gordon.edge.v1.TrafficGraphSnapshot.options:type_name -> gordon.edge.v1.TrafficOptions
-	7,  // 1: gordon.edge.v1.TrafficGraphSnapshot.entry_points:type_name -> gordon.edge.v1.TrafficEntryPoint
-	8,  // 2: gordon.edge.v1.TrafficGraphSnapshot.routers:type_name -> gordon.edge.v1.TrafficRouter
-	10, // 3: gordon.edge.v1.TrafficGraphSnapshot.services:type_name -> gordon.edge.v1.TrafficService
+	4,  // 0: gordon.edge.v1.WatchTrafficGraphsResponse.options:type_name -> gordon.edge.v1.TrafficOptions
+	7,  // 1: gordon.edge.v1.WatchTrafficGraphsResponse.entry_points:type_name -> gordon.edge.v1.TrafficEntryPoint
+	8,  // 2: gordon.edge.v1.WatchTrafficGraphsResponse.routers:type_name -> gordon.edge.v1.TrafficRouter
+	10, // 3: gordon.edge.v1.WatchTrafficGraphsResponse.services:type_name -> gordon.edge.v1.TrafficService
 	5,  // 4: gordon.edge.v1.TrafficOptions.tcp:type_name -> gordon.edge.v1.TrafficTCPOptions
 	6,  // 5: gordon.edge.v1.TrafficOptions.udp:type_name -> gordon.edge.v1.TrafficUDPOptions
 	9,  // 6: gordon.edge.v1.TrafficRouter.rule:type_name -> gordon.edge.v1.TrafficRule
 	11, // 7: gordon.edge.v1.TrafficService.backends:type_name -> gordon.edge.v1.TrafficBackend
-	13, // 8: gordon.edge.v1.RouteTargetSnapshot.entries:type_name -> gordon.edge.v1.RouteTargetEntry
-	13, // 9: gordon.edge.v1.RouteTargetSnapshot.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
+	13, // 8: gordon.edge.v1.WatchRouteSnapshotsResponse.entries:type_name -> gordon.edge.v1.RouteTargetEntry
+	13, // 9: gordon.edge.v1.WatchRouteSnapshotsResponse.registry_forwarding_target:type_name -> gordon.edge.v1.RouteTargetEntry
 	18, // 10: gordon.edge.v1.ReportDrainStateRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
 	0,  // 11: gordon.edge.v1.ReportDrainStateRequest.timeout_reason:type_name -> gordon.edge.v1.DrainTimeoutReason
 	1,  // 12: gordon.edge.v1.EdgeService.WatchRouteSnapshots:input_type -> gordon.edge.v1.WatchRouteSnapshotsRequest
 	2,  // 13: gordon.edge.v1.EdgeService.WatchTrafficGraphs:input_type -> gordon.edge.v1.WatchTrafficGraphsRequest
 	14, // 14: gordon.edge.v1.EdgeService.ReportDrainState:input_type -> gordon.edge.v1.ReportDrainStateRequest
 	16, // 15: gordon.edge.v1.EdgeService.ReportAppliedState:input_type -> gordon.edge.v1.ReportAppliedStateRequest
-	12, // 16: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.RouteTargetSnapshot
-	3,  // 17: gordon.edge.v1.EdgeService.WatchTrafficGraphs:output_type -> gordon.edge.v1.TrafficGraphSnapshot
+	12, // 16: gordon.edge.v1.EdgeService.WatchRouteSnapshots:output_type -> gordon.edge.v1.WatchRouteSnapshotsResponse
+	3,  // 17: gordon.edge.v1.EdgeService.WatchTrafficGraphs:output_type -> gordon.edge.v1.WatchTrafficGraphsResponse
 	15, // 18: gordon.edge.v1.EdgeService.ReportDrainState:output_type -> gordon.edge.v1.ReportDrainStateResponse
 	17, // 19: gordon.edge.v1.EdgeService.ReportAppliedState:output_type -> gordon.edge.v1.ReportAppliedStateResponse
 	16, // [16:20] is the sub-list for method output_type

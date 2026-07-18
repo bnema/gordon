@@ -699,12 +699,12 @@ func TestServerStandaloneServiceHandlersReturnGenericManagerErrors(t *testing.T)
 type fakeActualStateStream struct {
 	runtimev1.RuntimeService_WatchActualStateServer
 	ctx       context.Context
-	snapshots []*runtimev1.ActualStateSnapshot
+	snapshots []*runtimev1.WatchActualStateResponse
 }
 
 func (f *fakeActualStateStream) Context() context.Context { return f.ctx }
 
-func (f *fakeActualStateStream) Send(snapshot *runtimev1.ActualStateSnapshot) error {
+func (f *fakeActualStateStream) Send(snapshot *runtimev1.WatchActualStateResponse) error {
 	f.snapshots = append(f.snapshots, snapshot)
 	return nil
 }
@@ -767,14 +767,14 @@ func testActualStateSnapshot() domain.RuntimeActualStateSnapshot {
 type fakeLogStream struct {
 	runtimev1.RuntimeService_StreamLogsServer
 	ctx    context.Context
-	chunks []*runtimev1.LogChunk
+	chunks []*runtimev1.StreamLogsResponse
 }
 
 func (f *fakeLogStream) Context() context.Context { return f.ctx }
 
 func (f *fakeLogStream) SendHeader(metadata.MD) error { return nil }
 
-func (f *fakeLogStream) Send(chunk *runtimev1.LogChunk) error {
+func (f *fakeLogStream) Send(chunk *runtimev1.StreamLogsResponse) error {
 	f.chunks = append(f.chunks, chunk)
 	return nil
 }

@@ -258,12 +258,12 @@ type fakeActualStateStream struct {
 	grpc.ServerStream
 	ctx       context.Context
 	cancel    context.CancelFunc
-	snapshots []*runtimev1.ActualStateSnapshot
+	snapshots []*runtimev1.WatchActualStateResponse
 }
 
 func (f *fakeActualStateStream) Context() context.Context { return f.ctx }
 
-func (f *fakeActualStateStream) Send(snapshot *runtimev1.ActualStateSnapshot) error {
+func (f *fakeActualStateStream) Send(snapshot *runtimev1.WatchActualStateResponse) error {
 	f.snapshots = append(f.snapshots, snapshot)
 	f.cancel()
 	return nil

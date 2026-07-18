@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	commonv1 "github.com/bnema/gordon/api/gordon/common/v1"
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	boundaries "github.com/bnema/gordon/internal/boundaries/in"
@@ -233,7 +232,7 @@ func (s *Server) ListStandaloneServiceState(ctx context.Context, _ *runtimev1.Li
 	return &runtimev1.ListStandaloneServiceStateResponse{Services: services}, nil
 }
 
-func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSelfUpdateRequest) (*runtimev1.ApplyCommandResponse, error) {
+func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSelfUpdateRequest) (*runtimev1.RuntimeSelfUpdateResponse, error) {
 	if s.worker == nil {
 		return nil, status.Error(codes.FailedPrecondition, "runtime worker not configured")
 	}
@@ -248,7 +247,7 @@ func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSe
 	if err != nil {
 		return nil, err
 	}
-	return &runtimev1.ApplyCommandResponse{Result: protoRuntimeCommandResult(result)}, nil
+	return &runtimev1.RuntimeSelfUpdateResponse{Result: protoRuntimeCommandResult(result)}, nil
 }
 
 func (s *Server) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runtimev1.GetHealthResponse, error) {
@@ -335,7 +334,7 @@ func (s *Server) StreamLogs(req *runtimev1.StreamLogsRequest, stream runtimev1.R
 	for {
 		n, readErr := reader.Read(buf)
 		if n > 0 {
-			if err := stream.Send(&runtimev1.LogChunk{Data: append([]byte(nil), buf[:n]...)}); err != nil {
+			if err := stream.Send(&runtimev1.StreamLogsResponse{Data: append([]byte(nil), buf[:n]...)}); err != nil {
 				return err
 			}
 		}
@@ -364,7 +363,7 @@ func (s *Server) ListVolumes(ctx context.Context, _ *runtimev1.ListVolumesReques
 	return &runtimev1.ListVolumesResponse{Volumes: out}, nil
 }
 
-func (s *Server) RemoveVolume(ctx context.Context, req *runtimev1.RemoveVolumeRequest) (*commonv1.Ack, error) {
+func (s *Server) RemoveVolume(ctx context.Context, req *runtimev1.RemoveVolumeRequest) (*runtimev1.RemoveVolumeResponse, error) {
 	if s.volumeManager == nil {
 		return nil, status.Error(codes.FailedPrecondition, "runtime volume manager not configured")
 	}
@@ -374,7 +373,7 @@ func (s *Server) RemoveVolume(ctx context.Context, req *runtimev1.RemoveVolumeRe
 	if err := s.volumeManager.RemoveRuntimeVolume(ctx, req.Name, req.Force); err != nil {
 		return nil, status.Error(codes.Internal, "failed to remove runtime volume")
 	}
-	return &commonv1.Ack{Ok: true, Message: "runtime volume removed"}, nil
+	return &runtimev1.RemoveVolumeResponse{Ok: true, Message: "runtime volume removed"}, nil
 }
 
 func (s *Server) ListImages(ctx context.Context, _ *runtimev1.ListImagesRequest) (*runtimev1.ListImagesResponse, error) {
@@ -411,7 +410,7 @@ func (s *Server) PruneImages(ctx context.Context, req *runtimev1.PruneImagesRequ
 	return &runtimev1.PruneImagesResponse{DeletedCount: deletedCount, SpaceReclaimed: report.SpaceReclaimed}, nil
 }
 
-func (s *Server) PrepareEdgeDrain(ctx context.Context, req *runtimev1.PrepareEdgeDrainRequest) (*commonv1.Ack, error) {
+func (s *Server) PrepareEdgeDrain(ctx context.Context, req *runtimev1.PrepareEdgeDrainRequest) (*runtimev1.PrepareEdgeDrainResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -424,10 +423,10 @@ func (s *Server) PrepareEdgeDrain(ctx context.Context, req *runtimev1.PrepareEdg
 	if err := s.routeDrainRegistrar.PrepareRouteDrain(ctx, req.CanonicalDomain, domain.RouteTargetGeneration(req.TransitionGeneration), domain.RouteTargetKey(req.OldTargetKey)); err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "failed to register route drain")
 	}
-	return &commonv1.Ack{Ok: true, Message: "route drain registered"}, nil
+	return &runtimev1.PrepareEdgeDrainResponse{Ok: true, Message: "route drain registered"}, nil
 }
 
-func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeDrainRequest) (*commonv1.Ack, error) {
+func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeDrainRequest) (*runtimev1.ReportEdgeDrainResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -461,7 +460,7 @@ func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeD
 	if err := s.routeDrainAckReceiver.AcknowledgeRouteDrain(ctx, ack); err != nil {
 		return nil, status.Error(codes.Internal, "failed to record route drain acknowledgement")
 	}
-	return &commonv1.Ack{Ok: true, Message: "route drain acknowledgement recorded"}, nil
+	return &runtimev1.ReportEdgeDrainResponse{Ok: true, Message: "route drain acknowledgement recorded"}, nil
 }
 
 func safeInt32(value int) (int32, error) {
@@ -471,8 +470,8 @@ func safeInt32(value int) (int32, error) {
 	return int32(value), nil
 }
 
-func protoActualStateSnapshot(snapshot domain.RuntimeActualStateSnapshot) *runtimev1.ActualStateSnapshot {
-	out := &runtimev1.ActualStateSnapshot{Generation: snapshot.Generation, StateVersion: snapshot.StateVersion, SourceComponentId: snapshot.SourceComponentID, ObservedAt: timestamppb.New(snapshot.ObservedAt)}
+func protoActualStateSnapshot(snapshot domain.RuntimeActualStateSnapshot) *runtimev1.WatchActualStateResponse {
+	out := &runtimev1.WatchActualStateResponse{Generation: snapshot.Generation, StateVersion: snapshot.StateVersion, SourceComponentId: snapshot.SourceComponentID, ObservedAt: timestamppb.New(snapshot.ObservedAt)}
 	for _, route := range snapshot.Routes {
 		targetPort, _ := safeInt32(route.TargetPort)
 		out.Routes = append(out.Routes, &runtimev1.RuntimeRouteState{Domain: route.Domain, Generation: route.Generation, RouteVersion: route.RouteVersion, ContainerAlias: route.ContainerAlias, EdgeTargetAlias: route.EdgeTargetAlias, TargetPort: targetPort, Scheme: route.Scheme, Protocol: string(route.Protocol), Status: string(route.Status), UnavailableReason: string(route.UnavailableReason), BackingContainerName: route.BackingContainerName})

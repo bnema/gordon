@@ -9,9 +9,9 @@ option go_package = "github.com/bnema/gordon/api/gordon/edge/v1;edgev1";
 // EdgeService exposes the control-owned routing view to authenticated edges.
 service EdgeService {
   // WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
-  rpc WatchRouteSnapshots(WatchRouteSnapshotsRequest) returns (stream RouteTargetSnapshot);
+  rpc WatchRouteSnapshots(WatchRouteSnapshotsRequest) returns (stream WatchRouteSnapshotsResponse);
   // WatchTrafficGraphs sends the complete sanitized traffic graph for an edge.
-  rpc WatchTrafficGraphs(WatchTrafficGraphsRequest) returns (stream TrafficGraphSnapshot);
+  rpc WatchTrafficGraphs(WatchTrafficGraphsRequest) returns (stream WatchTrafficGraphsResponse);
   // ReportDrainState accepts the narrow, opaque drain state produced by an edge.
   rpc ReportDrainState(ReportDrainStateRequest) returns (ReportDrainStateResponse);
   // ReportAppliedState confirms the exact route and traffic generations that an
@@ -27,10 +27,10 @@ message WatchRouteSnapshotsRequest {}
 // edge receives exactly its control-owned sanitized graph.
 message WatchTrafficGraphsRequest {}
 
-// TrafficGraphSnapshot carries traffic options, entry points, routers, and
-// backends only. Certificates, keys, ACME state, and control configuration are
-// intentionally absent.
-message TrafficGraphSnapshot {
+// WatchTrafficGraphsResponse carries traffic options, entry points, routers,
+// and backends only. Certificates, keys, ACME state, and control configuration
+// are intentionally absent.
+message WatchTrafficGraphsResponse {
   uint64 generation = 1;
   TrafficOptions options = 2;
   repeated TrafficEntryPoint entry_points = 3;
@@ -91,8 +91,9 @@ message TrafficBackend {
   string protocol = 4;
 }
 
-// RouteTargetSnapshot is the complete sanitized routing view for an edge.
-message RouteTargetSnapshot {
+// WatchRouteSnapshotsResponse is the complete sanitized routing view for an
+// edge.
+message WatchRouteSnapshotsResponse {
   uint64 generation = 1;
   repeated RouteTargetEntry entries = 2;
   RouteTargetEntry registry_forwarding_target = 3;

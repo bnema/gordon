@@ -3,7 +3,6 @@ syntax = "proto3";
 package gordon.runtime.v1;
 
 import "google/protobuf/timestamp.proto";
-import "gordon/common/v1/common.proto";
 
 option go_package = "github.com/bnema/gordon/api/gordon/runtime/v1;runtimev1";
 
@@ -11,17 +10,17 @@ option go_package = "github.com/bnema/gordon/api/gordon/runtime/v1;runtimev1";
 // It must not expose raw Docker/Podman socket operations or full inspect data.
 service RuntimeService {
   rpc ApplyCommand(ApplyCommandRequest) returns (ApplyCommandResponse);
-  rpc WatchActualState(WatchActualStateRequest) returns (stream ActualStateSnapshot);
+  rpc WatchActualState(WatchActualStateRequest) returns (stream WatchActualStateResponse);
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
   // ProbeEnvironment returns only migration-safe facts. It never exposes a
   // socket path, engine configuration, raw daemon payload, or error details.
   rpc ProbeEnvironment(ProbeEnvironmentRequest) returns (ProbeEnvironmentResponse);
-  rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
+  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
   rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
-  rpc RemoveVolume(RemoveVolumeRequest) returns (gordon.common.v1.Ack);
+  rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
   rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
   rpc PruneImages(PruneImagesRequest) returns (PruneImagesResponse);
-  rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (ApplyCommandResponse);
+  rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (RuntimeSelfUpdateResponse);
 
   // ApplyStandaloneService realizes one sanitized standalone-service spec.
   // Resolved environment values are accepted only as apply input and are never
@@ -35,10 +34,10 @@ service RuntimeService {
   // reports drain state to control, control validates generation and target,
   // then relays this acknowledgement to runtime. Runtime waits for this ack or
   // its configured drain timeout before stopping the old route container.
-  rpc ReportEdgeDrain(ReportEdgeDrainRequest) returns (gordon.common.v1.Ack);
+  rpc ReportEdgeDrain(ReportEdgeDrainRequest) returns (ReportEdgeDrainResponse);
   // PrepareEdgeDrain registers the exact control transition before edge
   // acknowledgement delivery. It is control-only and carries opaque data.
-  rpc PrepareEdgeDrain(PrepareEdgeDrainRequest) returns (gordon.common.v1.Ack);
+  rpc PrepareEdgeDrain(PrepareEdgeDrainRequest) returns (PrepareEdgeDrainResponse);
 }
 
 message RuntimeCommandIdentity {
@@ -157,6 +156,10 @@ message RuntimeCommandResult {
 }
 
 message ApplyCommandResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message RuntimeSelfUpdateResponse {
   RuntimeCommandResult result = 1;
 }
 
@@ -305,7 +308,7 @@ message RuntimeEdgeNetworkAttachmentState {
   string source_component = 9;
 }
 
-message ActualStateSnapshot {
+message WatchActualStateResponse {
   uint64 generation = 1;
   string state_version = 2;
   string source_component_id = 3;
@@ -350,7 +353,7 @@ message StreamLogsRequest {
   bool follow = 3;
 }
 
-message LogChunk {
+message StreamLogsResponse {
   bytes data = 1;
   google.protobuf.Timestamp observed_at = 2;
 }
@@ -375,6 +378,11 @@ message ListVolumesResponse {
 message RemoveVolumeRequest {
   string name = 1;
   bool force = 2;
+}
+
+message RemoveVolumeResponse {
+  bool ok = 1;
+  string message = 2;
 }
 
 message ListImagesRequest {}
@@ -410,9 +418,19 @@ message ReportEdgeDrainRequest {
   string timeout_reason = 5;
 }
 
+message ReportEdgeDrainResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
 // PrepareEdgeDrainRequest intentionally omits all backing/container identity.
 message PrepareEdgeDrainRequest {
   string canonical_domain = 1;
   uint64 transition_generation = 2;
   string old_target_key = 3;
+}
+
+message PrepareEdgeDrainResponse {
+  bool ok = 1;
+  string message = 2;
 }

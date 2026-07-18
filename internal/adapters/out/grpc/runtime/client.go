@@ -348,7 +348,7 @@ func (r runtimeLogReadCloser) Close() error {
 	return r.reader.Close()
 }
 
-func protoActualStateSnapshot(snapshot *runtimev1.ActualStateSnapshot) domain.RuntimeActualStateSnapshot {
+func protoActualStateSnapshot(snapshot *runtimev1.WatchActualStateResponse) domain.RuntimeActualStateSnapshot {
 	if snapshot == nil {
 		return domain.RuntimeActualStateSnapshot{}
 	}
@@ -514,14 +514,18 @@ func validProtoComponentPort(port domain.ContainerPortPublish) bool {
 	return port.HostPort >= 0 && port.HostPort <= maxInt32 && port.ContainerPort >= 0 && port.ContainerPort <= maxInt32
 }
 
-func responseResult(resp *runtimev1.ApplyCommandResponse, err error) (domain.RuntimeCommandResult, error) {
+type commandResultResponse interface {
+	GetResult() *runtimev1.RuntimeCommandResult
+}
+
+func responseResult(resp commandResultResponse, err error) (domain.RuntimeCommandResult, error) {
 	if err != nil {
 		return domain.RuntimeCommandResult{}, err
 	}
-	if resp == nil || resp.Result == nil {
+	if resp == nil || resp.GetResult() == nil {
 		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime response missing result")
 	}
-	return protoResult(resp.Result), nil
+	return protoResult(resp.GetResult()), nil
 }
 
 func protoResult(result *runtimev1.RuntimeCommandResult) domain.RuntimeCommandResult {

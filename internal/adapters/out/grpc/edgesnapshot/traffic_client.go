@@ -191,7 +191,7 @@ func (c *TrafficGraphClient) setError(category ErrorCategory, connected bool) {
 	c.health.Connected, c.health.Healthy, c.health.ErrorCategory = connected, false, category
 }
 
-func (c *TrafficGraphClient) accept(message *edgev1.TrafficGraphSnapshot) (bool, error) {
+func (c *TrafficGraphClient) accept(message *edgev1.WatchTrafficGraphsResponse) (bool, error) {
 	snapshot, err := edgeTrafficGraphFromProto(message)
 	if err != nil {
 		return false, err
@@ -223,7 +223,7 @@ func (c *TrafficGraphClient) accept(message *edgev1.TrafficGraphSnapshot) (bool,
 	return true, nil
 }
 
-func edgeTrafficGraphFromProto(message *edgev1.TrafficGraphSnapshot) (domain.TrafficGraphSnapshot, error) {
+func edgeTrafficGraphFromProto(message *edgev1.WatchTrafficGraphsResponse) (domain.TrafficGraphSnapshot, error) {
 	// Keep the edge conversion independent of the server adapter; this adapter
 	// must not import an inbound transport package.
 	if message == nil || message.Options == nil || message.Options.Tcp == nil || message.Options.Udp == nil {
@@ -243,7 +243,7 @@ func edgeTrafficGraphFromProto(message *edgev1.TrafficGraphSnapshot) (domain.Tra
 	return snapshot, nil
 }
 
-func edgeTrafficGraphFields(message *edgev1.TrafficGraphSnapshot) (domain.TrafficGraph, error) {
+func edgeTrafficGraphFields(message *edgev1.WatchTrafficGraphsResponse) (domain.TrafficGraph, error) {
 	graph := domain.TrafficGraph{Options: domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Duration(message.Options.Tcp.DialTimeoutNanos), IdleTimeout: time.Duration(message.Options.Tcp.IdleTimeoutNanos), DrainTimeout: time.Duration(message.Options.Tcp.DrainTimeoutNanos), MaxConnections: int(message.Options.Tcp.MaxConnections)}, UDP: domain.UDPOptions{IdleTimeout: time.Duration(message.Options.Udp.IdleTimeoutNanos), DrainTimeout: time.Duration(message.Options.Udp.DrainTimeoutNanos), MaxSessions: int(message.Options.Udp.MaxSessions)}}}
 	var err error
 	if graph.EntryPoints, err = edgeTrafficEntryPoints(message.EntryPoints); err != nil {

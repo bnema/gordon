@@ -10,12 +10,12 @@ import (
 )
 
 // TrafficGraphSnapshotToProto converts only the complete sanitized graph model.
-func TrafficGraphSnapshotToProto(snapshot domain.TrafficGraphSnapshot) (*edgev1.TrafficGraphSnapshot, error) {
+func TrafficGraphSnapshotToProto(snapshot domain.TrafficGraphSnapshot) (*edgev1.WatchTrafficGraphsResponse, error) {
 	if err := snapshot.ValidateSplitReachability(); err != nil {
 		return nil, fmt.Errorf("validate traffic graph snapshot: %w", err)
 	}
 	graph := snapshot.Graph
-	message := &edgev1.TrafficGraphSnapshot{
+	message := &edgev1.WatchTrafficGraphsResponse{
 		Generation: uint64(snapshot.Generation),
 		Options: &edgev1.TrafficOptions{Tcp: &edgev1.TrafficTCPOptions{
 			DialTimeoutNanos: int64(graph.Options.TCP.DialTimeout), IdleTimeoutNanos: int64(graph.Options.TCP.IdleTimeout),
@@ -51,7 +51,7 @@ func TrafficGraphSnapshotToProto(snapshot domain.TrafficGraphSnapshot) (*edgev1.
 
 // TrafficGraphSnapshotFromProto validates every received graph field and its
 // split reachability before exposing it to an edge.
-func TrafficGraphSnapshotFromProto(message *edgev1.TrafficGraphSnapshot) (domain.TrafficGraphSnapshot, error) {
+func TrafficGraphSnapshotFromProto(message *edgev1.WatchTrafficGraphsResponse) (domain.TrafficGraphSnapshot, error) {
 	if message == nil || message.Options == nil || message.Options.Tcp == nil || message.Options.Udp == nil {
 		return domain.TrafficGraphSnapshot{}, fmt.Errorf("traffic graph snapshot options are required")
 	}
@@ -69,7 +69,7 @@ func TrafficGraphSnapshotFromProto(message *edgev1.TrafficGraphSnapshot) (domain
 	return snapshot, nil
 }
 
-func trafficGraphFromProtoFields(message *edgev1.TrafficGraphSnapshot) (domain.TrafficGraph, error) {
+func trafficGraphFromProtoFields(message *edgev1.WatchTrafficGraphsResponse) (domain.TrafficGraph, error) {
 	graph := domain.TrafficGraph{Options: domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: time.Duration(message.Options.Tcp.DialTimeoutNanos), IdleTimeout: time.Duration(message.Options.Tcp.IdleTimeoutNanos), DrainTimeout: time.Duration(message.Options.Tcp.DrainTimeoutNanos), MaxConnections: int(message.Options.Tcp.MaxConnections)}, UDP: domain.UDPOptions{IdleTimeout: time.Duration(message.Options.Udp.IdleTimeoutNanos), DrainTimeout: time.Duration(message.Options.Udp.DrainTimeoutNanos), MaxSessions: int(message.Options.Udp.MaxSessions)}}}
 	var err error
 	if graph.EntryPoints, err = trafficEntryPointsFromProto(message.EntryPoints); err != nil {

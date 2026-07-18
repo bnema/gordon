@@ -253,11 +253,11 @@ func relayError(err error) error {
 }
 
 // RouteSnapshotToProto explicitly converts a validated sanitized snapshot.
-func RouteSnapshotToProto(snapshot domain.RouteTargetSnapshot) (*edgev1.RouteTargetSnapshot, error) {
+func RouteSnapshotToProto(snapshot domain.RouteTargetSnapshot) (*edgev1.WatchRouteSnapshotsResponse, error) {
 	if err := snapshot.ValidateSplitReachability(); err != nil {
 		return nil, fmt.Errorf("validate route snapshot: %w", err)
 	}
-	message := &edgev1.RouteTargetSnapshot{Generation: uint64(snapshot.Generation)}
+	message := &edgev1.WatchRouteSnapshotsResponse{Generation: uint64(snapshot.Generation)}
 	message.Entries = make([]*edgev1.RouteTargetEntry, 0, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
 		converted, err := routeTargetEntryToProto(entry)
@@ -277,7 +277,7 @@ func RouteSnapshotToProto(snapshot domain.RouteTargetSnapshot) (*edgev1.RouteTar
 }
 
 // RouteSnapshotFromProto explicitly validates every transported snapshot field.
-func RouteSnapshotFromProto(message *edgev1.RouteTargetSnapshot) (domain.RouteTargetSnapshot, error) {
+func RouteSnapshotFromProto(message *edgev1.WatchRouteSnapshotsResponse) (domain.RouteTargetSnapshot, error) {
 	if message == nil {
 		return domain.RouteTargetSnapshot{}, fmt.Errorf("route snapshot is required")
 	}

@@ -27,7 +27,7 @@ func TestClientInitialCurrentIsUnavailable(t *testing.T) {
 }
 
 func TestClientAcceptsNewerIgnoresStaleAndClones(t *testing.T) {
-	messages := make(chan *edgev1.RouteTargetSnapshot, 3)
+	messages := make(chan *edgev1.WatchRouteSnapshotsResponse, 3)
 	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, _ int) error {
 		for {
 			select {
@@ -62,7 +62,7 @@ func TestClientAcceptsNewerIgnoresStaleAndClones(t *testing.T) {
 func TestClientReconnectLowerSnapshotStaysUnhealthyAndIdenticalGenerationConfirmsSync(t *testing.T) {
 	finishFirstStream := make(chan struct{})
 	reconnected := make(chan struct{})
-	messages := make(chan *edgev1.RouteTargetSnapshot, 2)
+	messages := make(chan *edgev1.WatchRouteSnapshotsResponse, 2)
 	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, call int) error {
 		if call == 0 {
 			if err := stream.Send(testSnapshotMessage(t, 2)); err != nil {
@@ -119,7 +119,7 @@ func TestClientReconnectLowerSnapshotStaysUnhealthyAndIdenticalGenerationConfirm
 }
 
 func TestClientConflictingEqualGenerationIsUnhealthy(t *testing.T) {
-	messages := make(chan *edgev1.RouteTargetSnapshot, 1)
+	messages := make(chan *edgev1.WatchRouteSnapshotsResponse, 1)
 	server := &scriptedServer{watch: func(stream edgev1.EdgeService_WatchRouteSnapshotsServer, _ int) error {
 		if err := stream.Send(testSnapshotMessage(t, 1)); err != nil {
 			return err
@@ -249,11 +249,11 @@ func testHarness(t *testing.T, server edgev1.EdgeServiceServer) *grpctest.Harnes
 	})
 }
 
-func testSnapshotMessage(t *testing.T, generation domain.RouteTargetGeneration) *edgev1.RouteTargetSnapshot {
+func testSnapshotMessage(t *testing.T, generation domain.RouteTargetGeneration) *edgev1.WatchRouteSnapshotsResponse {
 	t.Helper()
 	entry, err := domain.NewReadyRouteTargetEntry("app.example.com", "target.example", 8080, "http", domain.RouteTargetProtocolHTTP1, generation)
 	require.NoError(t, err)
-	return &edgev1.RouteTargetSnapshot{Generation: uint64(generation), Entries: []*edgev1.RouteTargetEntry{{
+	return &edgev1.WatchRouteSnapshotsResponse{Generation: uint64(generation), Entries: []*edgev1.RouteTargetEntry{{
 		CanonicalDomain: entry.CanonicalDomain, TargetHost: entry.TargetHost, TargetPort: int32(entry.TargetPort), Scheme: entry.Scheme,
 		Protocol: string(entry.Protocol), Status: string(entry.Status), UnavailableReason: string(entry.UnavailableReason),
 		Generation: uint64(entry.Generation), UpstreamHost: entry.UpstreamHost, Attachment: string(entry.Attachment), TargetKey: string(entry.TargetKey),

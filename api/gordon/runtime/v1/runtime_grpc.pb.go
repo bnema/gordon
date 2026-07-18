@@ -8,7 +8,6 @@ package runtimev1
 
 import (
 	context "context"
-	v1 "github.com/bnema/gordon/api/gordon/common/v1"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -45,17 +44,17 @@ const (
 // It must not expose raw Docker/Podman socket operations or full inspect data.
 type RuntimeServiceClient interface {
 	ApplyCommand(ctx context.Context, in *ApplyCommandRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error)
-	WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ActualStateSnapshot], error)
+	WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchActualStateResponse], error)
 	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
 	// ProbeEnvironment returns only migration-safe facts. It never exposes a
 	// socket path, engine configuration, raw daemon payload, or error details.
 	ProbeEnvironment(ctx context.Context, in *ProbeEnvironmentRequest, opts ...grpc.CallOption) (*ProbeEnvironmentResponse, error)
-	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
+	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLogsResponse], error)
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
-	RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*v1.Ack, error)
+	RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*RemoveVolumeResponse, error)
 	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
 	PruneImages(ctx context.Context, in *PruneImagesRequest, opts ...grpc.CallOption) (*PruneImagesResponse, error)
-	RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error)
+	RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*RuntimeSelfUpdateResponse, error)
 	// ApplyStandaloneService realizes one sanitized standalone-service spec.
 	// Resolved environment values are accepted only as apply input and are never
 	// returned by this service.
@@ -67,10 +66,10 @@ type RuntimeServiceClient interface {
 	// reports drain state to control, control validates generation and target,
 	// then relays this acknowledgement to runtime. Runtime waits for this ack or
 	// its configured drain timeout before stopping the old route container.
-	ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error)
+	ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*ReportEdgeDrainResponse, error)
 	// PrepareEdgeDrain registers the exact control transition before edge
 	// acknowledgement delivery. It is control-only and carries opaque data.
-	PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error)
+	PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*PrepareEdgeDrainResponse, error)
 }
 
 type runtimeServiceClient struct {
@@ -91,13 +90,13 @@ func (c *runtimeServiceClient) ApplyCommand(ctx context.Context, in *ApplyComman
 	return out, nil
 }
 
-func (c *runtimeServiceClient) WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ActualStateSnapshot], error) {
+func (c *runtimeServiceClient) WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[WatchActualStateResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &RuntimeService_ServiceDesc.Streams[0], RuntimeService_WatchActualState_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[WatchActualStateRequest, ActualStateSnapshot]{ClientStream: stream}
+	x := &grpc.GenericClientStream[WatchActualStateRequest, WatchActualStateResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -108,7 +107,7 @@ func (c *runtimeServiceClient) WatchActualState(ctx context.Context, in *WatchAc
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RuntimeService_WatchActualStateClient = grpc.ServerStreamingClient[ActualStateSnapshot]
+type RuntimeService_WatchActualStateClient = grpc.ServerStreamingClient[WatchActualStateResponse]
 
 func (c *runtimeServiceClient) GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -130,13 +129,13 @@ func (c *runtimeServiceClient) ProbeEnvironment(ctx context.Context, in *ProbeEn
 	return out, nil
 }
 
-func (c *runtimeServiceClient) StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error) {
+func (c *runtimeServiceClient) StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamLogsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &RuntimeService_ServiceDesc.Streams[1], RuntimeService_StreamLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[StreamLogsRequest, LogChunk]{ClientStream: stream}
+	x := &grpc.GenericClientStream[StreamLogsRequest, StreamLogsResponse]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -147,7 +146,7 @@ func (c *runtimeServiceClient) StreamLogs(ctx context.Context, in *StreamLogsReq
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RuntimeService_StreamLogsClient = grpc.ServerStreamingClient[LogChunk]
+type RuntimeService_StreamLogsClient = grpc.ServerStreamingClient[StreamLogsResponse]
 
 func (c *runtimeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -159,9 +158,9 @@ func (c *runtimeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesR
 	return out, nil
 }
 
-func (c *runtimeServiceClient) RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
+func (c *runtimeServiceClient) RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*RemoveVolumeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(v1.Ack)
+	out := new(RemoveVolumeResponse)
 	err := c.cc.Invoke(ctx, RuntimeService_RemoveVolume_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -189,9 +188,9 @@ func (c *runtimeServiceClient) PruneImages(ctx context.Context, in *PruneImagesR
 	return out, nil
 }
 
-func (c *runtimeServiceClient) RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error) {
+func (c *runtimeServiceClient) RuntimeSelfUpdate(ctx context.Context, in *RuntimeSelfUpdateRequest, opts ...grpc.CallOption) (*RuntimeSelfUpdateResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ApplyCommandResponse)
+	out := new(RuntimeSelfUpdateResponse)
 	err := c.cc.Invoke(ctx, RuntimeService_RuntimeSelfUpdate_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -229,9 +228,9 @@ func (c *runtimeServiceClient) ListStandaloneServiceState(ctx context.Context, i
 	return out, nil
 }
 
-func (c *runtimeServiceClient) ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
+func (c *runtimeServiceClient) ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*ReportEdgeDrainResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(v1.Ack)
+	out := new(ReportEdgeDrainResponse)
 	err := c.cc.Invoke(ctx, RuntimeService_ReportEdgeDrain_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -239,9 +238,9 @@ func (c *runtimeServiceClient) ReportEdgeDrain(ctx context.Context, in *ReportEd
 	return out, nil
 }
 
-func (c *runtimeServiceClient) PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
+func (c *runtimeServiceClient) PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*PrepareEdgeDrainResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(v1.Ack)
+	out := new(PrepareEdgeDrainResponse)
 	err := c.cc.Invoke(ctx, RuntimeService_PrepareEdgeDrain_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -257,17 +256,17 @@ func (c *runtimeServiceClient) PrepareEdgeDrain(ctx context.Context, in *Prepare
 // It must not expose raw Docker/Podman socket operations or full inspect data.
 type RuntimeServiceServer interface {
 	ApplyCommand(context.Context, *ApplyCommandRequest) (*ApplyCommandResponse, error)
-	WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[ActualStateSnapshot]) error
+	WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[WatchActualStateResponse]) error
 	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
 	// ProbeEnvironment returns only migration-safe facts. It never exposes a
 	// socket path, engine configuration, raw daemon payload, or error details.
 	ProbeEnvironment(context.Context, *ProbeEnvironmentRequest) (*ProbeEnvironmentResponse, error)
-	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error
+	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[StreamLogsResponse]) error
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
-	RemoveVolume(context.Context, *RemoveVolumeRequest) (*v1.Ack, error)
+	RemoveVolume(context.Context, *RemoveVolumeRequest) (*RemoveVolumeResponse, error)
 	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
 	PruneImages(context.Context, *PruneImagesRequest) (*PruneImagesResponse, error)
-	RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error)
+	RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*RuntimeSelfUpdateResponse, error)
 	// ApplyStandaloneService realizes one sanitized standalone-service spec.
 	// Resolved environment values are accepted only as apply input and are never
 	// returned by this service.
@@ -279,10 +278,10 @@ type RuntimeServiceServer interface {
 	// reports drain state to control, control validates generation and target,
 	// then relays this acknowledgement to runtime. Runtime waits for this ack or
 	// its configured drain timeout before stopping the old route container.
-	ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*v1.Ack, error)
+	ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*ReportEdgeDrainResponse, error)
 	// PrepareEdgeDrain registers the exact control transition before edge
 	// acknowledgement delivery. It is control-only and carries opaque data.
-	PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*v1.Ack, error)
+	PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*PrepareEdgeDrainResponse, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -296,7 +295,7 @@ type UnimplementedRuntimeServiceServer struct{}
 func (UnimplementedRuntimeServiceServer) ApplyCommand(context.Context, *ApplyCommandRequest) (*ApplyCommandResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyCommand not implemented")
 }
-func (UnimplementedRuntimeServiceServer) WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[ActualStateSnapshot]) error {
+func (UnimplementedRuntimeServiceServer) WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[WatchActualStateResponse]) error {
 	return status.Error(codes.Unimplemented, "method WatchActualState not implemented")
 }
 func (UnimplementedRuntimeServiceServer) GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error) {
@@ -305,13 +304,13 @@ func (UnimplementedRuntimeServiceServer) GetHealth(context.Context, *GetHealthRe
 func (UnimplementedRuntimeServiceServer) ProbeEnvironment(context.Context, *ProbeEnvironmentRequest) (*ProbeEnvironmentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProbeEnvironment not implemented")
 }
-func (UnimplementedRuntimeServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
+func (UnimplementedRuntimeServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[StreamLogsResponse]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
 }
 func (UnimplementedRuntimeServiceServer) ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListVolumes not implemented")
 }
-func (UnimplementedRuntimeServiceServer) RemoveVolume(context.Context, *RemoveVolumeRequest) (*v1.Ack, error) {
+func (UnimplementedRuntimeServiceServer) RemoveVolume(context.Context, *RemoveVolumeRequest) (*RemoveVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveVolume not implemented")
 }
 func (UnimplementedRuntimeServiceServer) ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error) {
@@ -320,7 +319,7 @@ func (UnimplementedRuntimeServiceServer) ListImages(context.Context, *ListImages
 func (UnimplementedRuntimeServiceServer) PruneImages(context.Context, *PruneImagesRequest) (*PruneImagesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PruneImages not implemented")
 }
-func (UnimplementedRuntimeServiceServer) RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*ApplyCommandResponse, error) {
+func (UnimplementedRuntimeServiceServer) RuntimeSelfUpdate(context.Context, *RuntimeSelfUpdateRequest) (*RuntimeSelfUpdateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RuntimeSelfUpdate not implemented")
 }
 func (UnimplementedRuntimeServiceServer) ApplyStandaloneService(context.Context, *ApplyStandaloneServiceRequest) (*ApplyStandaloneServiceResponse, error) {
@@ -332,10 +331,10 @@ func (UnimplementedRuntimeServiceServer) RemoveStandaloneService(context.Context
 func (UnimplementedRuntimeServiceServer) ListStandaloneServiceState(context.Context, *ListStandaloneServiceStateRequest) (*ListStandaloneServiceStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListStandaloneServiceState not implemented")
 }
-func (UnimplementedRuntimeServiceServer) ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*v1.Ack, error) {
+func (UnimplementedRuntimeServiceServer) ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*ReportEdgeDrainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportEdgeDrain not implemented")
 }
-func (UnimplementedRuntimeServiceServer) PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*v1.Ack, error) {
+func (UnimplementedRuntimeServiceServer) PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*PrepareEdgeDrainResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareEdgeDrain not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
@@ -382,11 +381,11 @@ func _RuntimeService_WatchActualState_Handler(srv interface{}, stream grpc.Serve
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RuntimeServiceServer).WatchActualState(m, &grpc.GenericServerStream[WatchActualStateRequest, ActualStateSnapshot]{ServerStream: stream})
+	return srv.(RuntimeServiceServer).WatchActualState(m, &grpc.GenericServerStream[WatchActualStateRequest, WatchActualStateResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RuntimeService_WatchActualStateServer = grpc.ServerStreamingServer[ActualStateSnapshot]
+type RuntimeService_WatchActualStateServer = grpc.ServerStreamingServer[WatchActualStateResponse]
 
 func _RuntimeService_GetHealth_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetHealthRequest)
@@ -429,11 +428,11 @@ func _RuntimeService_StreamLogs_Handler(srv interface{}, stream grpc.ServerStrea
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RuntimeServiceServer).StreamLogs(m, &grpc.GenericServerStream[StreamLogsRequest, LogChunk]{ServerStream: stream})
+	return srv.(RuntimeServiceServer).StreamLogs(m, &grpc.GenericServerStream[StreamLogsRequest, StreamLogsResponse]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type RuntimeService_StreamLogsServer = grpc.ServerStreamingServer[LogChunk]
+type RuntimeService_StreamLogsServer = grpc.ServerStreamingServer[StreamLogsResponse]
 
 func _RuntimeService_ListVolumes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListVolumesRequest)

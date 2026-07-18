@@ -323,7 +323,7 @@ func (c *Client) setError(category ErrorCategory, connected bool) {
 	c.health.ErrorCategory = category
 }
 
-func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
+func (c *Client) accept(message *edgev1.WatchRouteSnapshotsResponse) (bool, error) {
 	snapshot, err := routeSnapshotFromProto(message)
 	if err != nil {
 		return false, err
@@ -371,7 +371,7 @@ func (c *Client) accept(message *edgev1.RouteTargetSnapshot) (bool, error) {
 	return true, nil
 }
 
-func routeSnapshotFromProto(message *edgev1.RouteTargetSnapshot) (domain.RouteTargetSnapshot, error) {
+func routeSnapshotFromProto(message *edgev1.WatchRouteSnapshotsResponse) (domain.RouteTargetSnapshot, error) {
 	if message == nil {
 		return domain.RouteTargetSnapshot{}, errors.New("route snapshot is required")
 	}

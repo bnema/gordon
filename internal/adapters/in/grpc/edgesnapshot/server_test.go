@@ -30,7 +30,7 @@ func TestRouteSnapshotTransportRoundTripAndPrivacy(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, snapshot, got)
 
-	assertProtoFields(t, (&edgev1.RouteTargetSnapshot{}).ProtoReflect().Descriptor(), "generation", "entries", "registry_forwarding_target")
+	assertProtoFields(t, (&edgev1.WatchRouteSnapshotsResponse{}).ProtoReflect().Descriptor(), "generation", "entries", "registry_forwarding_target")
 	assertProtoFields(t, (&edgev1.RouteTargetEntry{}).ProtoReflect().Descriptor(), "canonical_domain", "target_host", "target_port", "scheme", "protocol", "status", "unavailable_reason", "generation", "upstream_host", "attachment", "target_key")
 	assertProtoFields(t, (&edgev1.ReportDrainStateRequest{}).ProtoReflect().Descriptor(), "canonical_domain", "transition_generation", "old_target_key", "in_flight", "acknowledged_at", "timeout_reason")
 }

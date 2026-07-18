@@ -247,7 +247,7 @@ type initialStateErrorServer struct {
 	waitForCancellation bool
 }
 
-func (s initialStateErrorServer) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream grpc.ServerStreamingServer[runtimev1.ActualStateSnapshot]) error {
+func (s initialStateErrorServer) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream grpc.ServerStreamingServer[runtimev1.WatchActualStateResponse]) error {
 	if s.waitForCancellation {
 		<-stream.Context().Done()
 		return stream.Context().Err()
