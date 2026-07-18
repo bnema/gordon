@@ -32,6 +32,9 @@ COMPAT_PROXY_REAL_TESTS := TestCompatibilityManagedHTTPRoute|TestCompatibilityEx
 # listener/goroutine cleanup leaks; neither gate permits skips.
 COMPAT_TRAFFIC_MONOLITH_TESTS := TestCompatibilityTrafficProtocolMatrix|TestCompatibilityTrafficProtocolFailClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
 COMPAT_TRAFFIC_STREAM_TESTS := TestCompatibilityTrafficGraphStreamMatrix
+# This is intentionally a separate, exact real-binary invocation. It builds
+# origin/main and HEAD, then starts each binary sequentially with fresh state.
+COMPAT_TRAFFIC_BINARY_TESTS := TestCompatibilityTrafficProtocolBinaries
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
@@ -162,6 +165,15 @@ compat-harness-traffic: ## Run Linux TLS/UDP traffic listener ownership prefligh
 		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_STREAM_TESTS)' | tr '|' ' '); do \
 			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 3) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
 				echo "stream traffic compatibility test $$test did not pass exactly three times or was skipped; refusing to pass the gate"; exit 1; \
+			fi; \
+		done
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_TRAFFIC_BINARY_TESTS))$$' -count=1 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		for test in $$(printf '%s' '$(COMPAT_TRAFFIC_BINARY_TESTS)' | tr '|' ' '); do \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "traffic binary compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
 			fi; \
 		done
 

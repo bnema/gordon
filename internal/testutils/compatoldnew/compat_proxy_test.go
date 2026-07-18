@@ -148,6 +148,30 @@ func TestCompatibilityTrafficProtocolFailClosed(t *testing.T) {
 	require.NoError(t, ValidateTrafficProtocolFailClosed())
 }
 
+func TestCompatibilityTrafficProtocolBinaries(t *testing.T) {
+	requireRealCompatibilityRun(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	require.NoError(t, DockerCompatibilityPreflight(ctx), "traffic binary compatibility runtime required")
+
+	artifactDir := compatibilityArtifactDir(t, "proxy-traffic-binaries")
+	report, err := RunCompatibilityTrafficProtocolBinaries(ctx, projectRoot(t), artifactDir)
+	require.NoError(t, err)
+	require.Zero(t, report.Failed, report.ConsoleSummary())
+	require.NotEmpty(t, report.BaselineCommit)
+	require.NotEmpty(t, report.CandidateCommit)
+	require.Contains(t, report.RerunCommand, "GORDON_COMPAT_RUN_REAL=1")
+	require.Contains(t, report.RerunCommand, "TestCompatibilityTrafficProtocolBinaries")
+	for _, name := range []string{"old.raw.json", "new.raw.json", "old.normalized.json", "new.normalized.json", "compat-report.json"} {
+		body, readErr := os.ReadFile(filepath.Join(artifactDir, name))
+		require.NoError(t, readErr)
+		for _, forbidden := range []string{"127.0.0.1:", "CERTIFICATE", "PRIVATE KEY", "token", "secret", "docker.sock"} {
+			require.NotContains(t, string(body), forbidden)
+		}
+	}
+}
+
 func TestCompatibilityTrafficGraphStreamMatrix(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
