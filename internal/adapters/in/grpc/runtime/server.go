@@ -251,7 +251,7 @@ func (s *Server) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runti
 	return &runtimev1.GetHealthResponse{Ok: s.worker != nil, ComponentId: s.componentID, Message: "runtime service ready"}, nil
 }
 
-func (s *Server) ProbeEnvironment(ctx context.Context, _ *runtimev1.ProbeEnvironmentRequest) (*runtimev1.ProbeEnvironmentResponse, error) {
+func (s *Server) ProbeEnvironment(ctx context.Context, req *runtimev1.ProbeEnvironmentRequest) (*runtimev1.ProbeEnvironmentResponse, error) {
 	if s.environmentProbe == nil {
 		return nil, status.Error(codes.FailedPrecondition, "runtime environment probe not configured")
 	}
@@ -259,7 +259,30 @@ func (s *Server) ProbeEnvironment(ctx context.Context, _ *runtimev1.ProbeEnviron
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "runtime environment unavailable")
 	}
-	return &runtimev1.ProbeEnvironmentResponse{Engine: report.Engine, Rootless: report.Rootless, ApiReachable: report.APIReachable, ImageAvailable: report.ImageAvailable, ImagePullable: report.ImagePullable, NetworkFeasible: report.NetworkFeasible, DiskAvailableBytes: report.DiskAvailable, DiskSufficient: report.DiskSufficient}, nil
+	response := &runtimev1.ProbeEnvironmentResponse{Engine: report.Engine, Rootless: report.Rootless, ApiReachable: report.APIReachable, ImageAvailable: report.ImageAvailable, ImagePullable: report.ImagePullable, NetworkFeasible: report.NetworkFeasible, DiskAvailableBytes: report.DiskAvailable, DiskSufficient: report.DiskSufficient}
+	if req == nil || len(req.GetRequiredPublicPorts()) == 0 {
+		return response, nil
+	}
+	if len(req.GetRequiredPublicPorts()) > 16 {
+		return nil, status.Error(codes.InvalidArgument, "too many public listeners")
+	}
+	ports := make([]int, len(req.GetRequiredPublicPorts()))
+	for i, port := range req.GetRequiredPublicPorts() {
+		if port < 1 || port > 65535 {
+			return nil, status.Error(codes.InvalidArgument, "invalid public listener")
+		}
+		ports[i] = int(port)
+	}
+	probe, ok := s.environmentProbe.(out.RuntimePublicListenerProbe)
+	if !ok {
+		return nil, status.Error(codes.FailedPrecondition, "runtime listener probe not configured")
+	}
+	available, err := probe.ProbePublicListeners(ctx, ports)
+	if err != nil || len(available) != len(ports) {
+		return nil, status.Error(codes.Unavailable, "runtime listener availability unavailable")
+	}
+	response.PublicListenersAvailable = available
+	return response, nil
 }
 
 func (s *Server) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream runtimev1.RuntimeService_WatchActualStateServer) error {

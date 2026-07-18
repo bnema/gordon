@@ -15,6 +15,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/testutils/grpctest"
@@ -28,6 +29,33 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+type listenerEnvironmentProbe struct {
+	report    out.RuntimeEnvironment
+	available []bool
+}
+
+func (p listenerEnvironmentProbe) ProbeRuntimeEnvironment(context.Context) (out.RuntimeEnvironment, error) {
+	return p.report, nil
+}
+
+func (p listenerEnvironmentProbe) ProbePublicListeners(_ context.Context, ports []int) ([]bool, error) {
+	if len(ports) != len(p.available) {
+		return nil, errors.New("unexpected listener request")
+	}
+	return p.available, nil
+}
+
+func TestServerProbeEnvironmentReturnsOnlyListenerAvailability(t *testing.T) {
+	probe := listenerEnvironmentProbe{report: out.RuntimeEnvironment{Engine: "podman", Rootless: true, APIReachable: true}, available: []bool{true, false}}
+	server := NewServerWithEnvironmentProbe(nil, nil, nil, nil, nil, nil, nil, probe, "runtime-fixture")
+
+	response, err := server.ProbeEnvironment(context.Background(), &runtimev1.ProbeEnvironmentRequest{RequiredPublicPorts: []int32{18443, 15000}})
+	require.NoError(t, err)
+	assert.Equal(t, "podman", response.GetEngine())
+	assert.Equal(t, []bool{true, false}, response.GetPublicListenersAvailable())
+	assert.Empty(t, response.ProtoReflect().GetUnknown(), "listener owners must not cross the control RPC")
+}
 
 func TestServerApplyCommandTranslatesDeploy(t *testing.T) {
 	worker := &fakeRuntimeWorker{}

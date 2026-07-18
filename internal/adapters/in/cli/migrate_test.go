@@ -50,3 +50,26 @@ func TestMigratePlanJSON(t *testing.T) {
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"checks":null,"ready":true}`, out.String())
 }
+
+func TestMigrateSubcommandsAcceptExplicitConfigBeforeAndAfterOperation(t *testing.T) {
+	originalResolver, originalConfigPath := resolveMigrationControlPlane, configPath
+	t.Cleanup(func() {
+		resolveMigrationControlPlane, configPath = originalResolver, originalConfigPath
+	})
+	const explicitConfig = "/tmp/gordon-migration-fixture.toml"
+	resolveMigrationControlPlane = func(path string) (migrationControlPlane, func(), error) {
+		assert.Equal(t, explicitConfig, path)
+		return migrationCLIFake{}, func() {}, nil
+	}
+
+	for _, operation := range []string{"plan", "prepare", "switch", "status", "resume"} {
+		for _, args := range [][]string{{"--config", explicitConfig, operation}, {operation, "--config", explicitConfig}} {
+			t.Run(operation+"/"+args[0], func(t *testing.T) {
+				configPath = ""
+				cmd := newMigrateCmd()
+				cmd.SetArgs(args)
+				require.NoError(t, cmd.ExecuteContext(context.Background()))
+			})
+		}
+	}
+}

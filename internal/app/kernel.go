@@ -190,8 +190,9 @@ func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }
 // It is backed by the monolith's existing worker/lifecycle manager; it does
 // not expose the runtime adapter or socket to the CLI or migration service.
 type monolithMigrationRuntime struct {
-	worker *container.RuntimeWorker
-	probe  out.RuntimeEnvironmentProbe
+	worker        *container.RuntimeWorker
+	probe         out.RuntimeEnvironmentProbe
+	listenerProbe out.RuntimePublicListenerProbe
 }
 
 func (r *monolithMigrationRuntime) SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
@@ -203,6 +204,13 @@ func (r *monolithMigrationRuntime) ProbeRuntimeEnvironment(ctx context.Context) 
 		return out.RuntimeEnvironment{}, fmt.Errorf("runtime environment probe unavailable")
 	}
 	return r.probe.ProbeRuntimeEnvironment(ctx)
+}
+
+func (r *monolithMigrationRuntime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error) {
+	if r == nil || r.listenerProbe == nil {
+		return nil, fmt.Errorf("runtime listener ownership probe unavailable")
+	}
+	return r.listenerProbe.ProbePublicListeners(ctx, ports)
 }
 
 func (r *monolithMigrationRuntime) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
@@ -232,7 +240,7 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	policy.ManagedNetworkPrefix = "gordon-internal"
 	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy).
 		WithComponentLifecycleManager(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy))
-	bridge := &monolithMigrationRuntime{worker: worker, probe: svc.runtime}
+	bridge := &monolithMigrationRuntime{worker: worker, probe: svc.runtime, listenerProbe: svc.runtime}
 	store, err := NewMigrationCheckpointStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "checkpoint.json"))
 	if err != nil {
 		return nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)

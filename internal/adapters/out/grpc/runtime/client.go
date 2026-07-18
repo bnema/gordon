@@ -142,6 +142,27 @@ func (c *Client) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnviro
 	}, nil
 }
 
+func (c *Client) ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error) {
+	if len(ports) > 16 {
+		return nil, fmt.Errorf("too many public listeners")
+	}
+	required := make([]int32, len(ports))
+	for i, port := range ports {
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid public listener")
+		}
+		required[i] = int32(port)
+	}
+	resp, err := c.client.ProbeEnvironment(ctx, &runtimev1.ProbeEnvironmentRequest{RequiredPublicPorts: required})
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil || len(resp.GetPublicListenersAvailable()) != len(ports) {
+		return nil, fmt.Errorf("runtime response missing listener availability")
+	}
+	return append([]bool(nil), resp.GetPublicListenersAvailable()...), nil
+}
+
 func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
 	stream, err := c.client.WatchActualState(ctx, &runtimev1.WatchActualStateRequest{})
 	if err != nil {

@@ -21,8 +21,24 @@ type migrationControlPlane interface {
 	MigrationResume(context.Context) (*app.MigrationCheckpoint, error)
 }
 
+// resolveMigrationControlPlane keeps migration's config-selected local/remote
+// dispatch behind its narrow control surface and makes command parsing testable.
+var resolveMigrationControlPlane = func(path string) (migrationControlPlane, func(), error) {
+	handle, err := resolveControlPlane(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	service, ok := handle.plane.(migrationControlPlane)
+	if !ok {
+		handle.close()
+		return nil, nil, fmt.Errorf("migration is unavailable from this control plane")
+	}
+	return service, handle.close, nil
+}
+
 func newMigrateCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "migrate", Short: "Plan and safely resume Gordon component migration"}
+	cmd.PersistentFlags().StringVarP(&configPath, "config", "c", "", "Path to config file")
 	cmd.AddCommand(newMigratePlanCmd(), newMigratePrepareCmd(), newMigrateSwitchCmd(), newMigrateStatusCmd(), newMigrateResumeCmd())
 	return cmd
 }
@@ -56,15 +72,11 @@ func newMigrateResumeCmd() *cobra.Command {
 func newMigrateOperationCmd(name string, operation func(context.Context, migrationControlPlane) (any, error)) *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{Use: name, RunE: func(cmd *cobra.Command, _ []string) error {
-		handle, err := resolveControlPlane(configPath)
+		service, closeFn, err := resolveMigrationControlPlane(configPath)
 		if err != nil {
 			return err
 		}
-		defer handle.close()
-		service, ok := handle.plane.(migrationControlPlane)
-		if !ok {
-			return fmt.Errorf("migration is unavailable from this control plane")
-		}
+		defer closeFn()
 		return runMigrateOperation(cmd.Context(), service, cmd.OutOrStdout(), jsonOut, operation)
 	}}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")

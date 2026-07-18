@@ -1,12 +1,10 @@
 package app
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -133,7 +131,7 @@ func newControlMigrationPreflight(configPath string, cfg Config, runtime out.Run
 		Registry:    directoryAccessProbe(filepath.Join(dataDir, "registry"), unix.R_OK|unix.W_OK),
 		Env:         environmentDirectoryProbe(resolveEnvDir(cfg)),
 		Secrets:     secretBackendHealthProbe(cfg),
-		Ports:       publicListenerProbe(cfg),
+		Ports:       publicListenerProbe(runtime, cfg),
 		Network:     facts.network,
 		Inventory:   managedRuntimeInventoryProbe(inventory),
 		Disk:        diskSpaceProbe(dataDir),
@@ -333,20 +331,23 @@ func secretBackendHealthProbe(cfg Config) func(context.Context) error {
 	}
 }
 
-// publicListenerProbe reads Linux listener state rather than bind-and-close;
-// the latter races a cutover and would itself mutate host networking. An
-// occupied port passes only when its socket is demonstrably held by this
-// Gordon process; all other occupied ports fail closed.
-func publicListenerProbe(cfg Config) func(context.Context) error {
+// publicListenerProbe delegates listener ownership to runtime. Control never
+// reads /proc or a container socket: every configured port must be free or be
+// confirmed by runtime as held by a running Gordon-managed monolith.
+func publicListenerProbe(runtime out.RuntimeEnvironmentProbe, cfg Config) func(context.Context) error {
 	ports := configuredPublicPorts(cfg)
-	return func(context.Context) error {
-		for _, port := range ports {
-			occupied, owned, err := linuxTCPListenerState(port)
-			if err != nil {
-				return err
-			}
-			if occupied && !owned {
-				return fmt.Errorf("configured public listener is occupied")
+	return func(ctx context.Context) error {
+		probe, ok := runtime.(out.RuntimePublicListenerProbe)
+		if !ok {
+			return fmt.Errorf("runtime listener ownership probe unavailable")
+		}
+		available, err := probe.ProbePublicListeners(ctx, ports)
+		if err != nil || len(available) != len(ports) {
+			return fmt.Errorf("runtime listener ownership unavailable")
+		}
+		for _, accepted := range available {
+			if !accepted {
+				return fmt.Errorf("configured public listener is unavailable")
 			}
 		}
 		return nil
@@ -371,61 +372,6 @@ func configuredPublicPorts(cfg Config) []int {
 		ports = append(ports, port)
 	}
 	return ports
-}
-
-func linuxTCPListenerState(port int) (bool, bool, error) {
-	for _, procPath := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
-		file, err := os.Open(procPath)
-		if err != nil {
-			return false, false, err
-		}
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			fields := strings.Fields(scanner.Text())
-			if len(fields) < 10 || fields[3] != "0A" {
-				continue
-			}
-			address := strings.Split(fields[1], ":")
-			if len(address) != 2 {
-				continue
-			}
-			parsed, parseErr := strconv.ParseUint(address[1], 16, 16)
-			if parseErr == nil && int(parsed) == port {
-				owned, ownErr := currentProcessOwnsSocket(fields[9])
-				closeErr := file.Close()
-				if ownErr != nil {
-					return true, false, ownErr
-				}
-				if closeErr != nil {
-					return true, false, closeErr
-				}
-				return true, owned, nil
-			}
-		}
-		err = scanner.Err()
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			return false, false, err
-		}
-	}
-	return false, false, nil
-}
-
-func currentProcessOwnsSocket(inode string) (bool, error) {
-	entries, err := os.ReadDir("/proc/self/fd")
-	if err != nil {
-		return false, err
-	}
-	want := "socket:[" + inode + "]"
-	for _, entry := range entries {
-		target, readErr := os.Readlink(filepath.Join("/proc/self/fd", entry.Name()))
-		if readErr == nil && target == want {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // managedRuntimeInventoryProbe consumes the existing sanitized actual-state

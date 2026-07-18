@@ -51,6 +51,13 @@ type RuntimeEnvironmentProbe interface {
 	ProbeRuntimeEnvironment(ctx context.Context) (RuntimeEnvironment, error)
 }
 
+// RuntimePublicListenerProbe answers one boolean for each requested public
+// port. The runtime owns engine/socket inspection; callers receive neither
+// process nor container identities.
+type RuntimePublicListenerProbe interface {
+	ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error)
+}
+
 // RuntimeEnvironment is deliberately a small, sanitized preflight result.
 type RuntimeEnvironment struct {
 	Engine          string

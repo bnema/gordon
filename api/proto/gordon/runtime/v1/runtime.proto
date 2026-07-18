@@ -321,7 +321,11 @@ message GetHealthResponse {
   string message = 3;
 }
 
-message ProbeEnvironmentRequest {}
+message ProbeEnvironmentRequest {
+  // Runtime returns only positional availability booleans, never host PIDs,
+  // container IDs, or listener-owner identities.
+  repeated int32 required_public_ports = 1;
+}
 
 message ProbeEnvironmentResponse {
   string engine = 1;
@@ -332,6 +336,7 @@ message ProbeEnvironmentResponse {
   bool network_feasible = 6;
   uint64 disk_available_bytes = 7;
   bool disk_sufficient = 8;
+  repeated bool public_listeners_available = 9;
 }
 
 message StreamLogsRequest {

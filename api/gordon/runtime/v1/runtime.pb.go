@@ -2621,9 +2621,12 @@ func (x *GetHealthResponse) GetMessage() string {
 }
 
 type ProbeEnvironmentRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Runtime returns only positional availability booleans, never host PIDs,
+	// container IDs, or listener-owner identities.
+	RequiredPublicPorts []int32 `protobuf:"varint,1,rep,packed,name=required_public_ports,json=requiredPublicPorts,proto3" json:"required_public_ports,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ProbeEnvironmentRequest) Reset() {
@@ -2656,18 +2659,26 @@ func (*ProbeEnvironmentRequest) Descriptor() ([]byte, []int) {
 	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{36}
 }
 
+func (x *ProbeEnvironmentRequest) GetRequiredPublicPorts() []int32 {
+	if x != nil {
+		return x.RequiredPublicPorts
+	}
+	return nil
+}
+
 type ProbeEnvironmentResponse struct {
-	state              protoimpl.MessageState `protogen:"open.v1"`
-	Engine             string                 `protobuf:"bytes,1,opt,name=engine,proto3" json:"engine,omitempty"`
-	Rootless           bool                   `protobuf:"varint,2,opt,name=rootless,proto3" json:"rootless,omitempty"`
-	ApiReachable       bool                   `protobuf:"varint,3,opt,name=api_reachable,json=apiReachable,proto3" json:"api_reachable,omitempty"`
-	ImageAvailable     bool                   `protobuf:"varint,4,opt,name=image_available,json=imageAvailable,proto3" json:"image_available,omitempty"`
-	ImagePullable      bool                   `protobuf:"varint,5,opt,name=image_pullable,json=imagePullable,proto3" json:"image_pullable,omitempty"`
-	NetworkFeasible    bool                   `protobuf:"varint,6,opt,name=network_feasible,json=networkFeasible,proto3" json:"network_feasible,omitempty"`
-	DiskAvailableBytes uint64                 `protobuf:"varint,7,opt,name=disk_available_bytes,json=diskAvailableBytes,proto3" json:"disk_available_bytes,omitempty"`
-	DiskSufficient     bool                   `protobuf:"varint,8,opt,name=disk_sufficient,json=diskSufficient,proto3" json:"disk_sufficient,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	Engine                   string                 `protobuf:"bytes,1,opt,name=engine,proto3" json:"engine,omitempty"`
+	Rootless                 bool                   `protobuf:"varint,2,opt,name=rootless,proto3" json:"rootless,omitempty"`
+	ApiReachable             bool                   `protobuf:"varint,3,opt,name=api_reachable,json=apiReachable,proto3" json:"api_reachable,omitempty"`
+	ImageAvailable           bool                   `protobuf:"varint,4,opt,name=image_available,json=imageAvailable,proto3" json:"image_available,omitempty"`
+	ImagePullable            bool                   `protobuf:"varint,5,opt,name=image_pullable,json=imagePullable,proto3" json:"image_pullable,omitempty"`
+	NetworkFeasible          bool                   `protobuf:"varint,6,opt,name=network_feasible,json=networkFeasible,proto3" json:"network_feasible,omitempty"`
+	DiskAvailableBytes       uint64                 `protobuf:"varint,7,opt,name=disk_available_bytes,json=diskAvailableBytes,proto3" json:"disk_available_bytes,omitempty"`
+	DiskSufficient           bool                   `protobuf:"varint,8,opt,name=disk_sufficient,json=diskSufficient,proto3" json:"disk_sufficient,omitempty"`
+	PublicListenersAvailable []bool                 `protobuf:"varint,9,rep,packed,name=public_listeners_available,json=publicListenersAvailable,proto3" json:"public_listeners_available,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *ProbeEnvironmentResponse) Reset() {
@@ -2754,6 +2765,13 @@ func (x *ProbeEnvironmentResponse) GetDiskSufficient() bool {
 		return x.DiskSufficient
 	}
 	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetPublicListenersAvailable() []bool {
+	if x != nil {
+		return x.PublicListenersAvailable
+	}
+	return nil
 }
 
 type StreamLogsRequest struct {
@@ -3709,8 +3727,9 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x11GetHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12!\n" +
 	"\fcomponent_id\x18\x02 \x01(\tR\vcomponentId\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"\x19\n" +
-	"\x17ProbeEnvironmentRequest\"\xc9\x02\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"M\n" +
+	"\x17ProbeEnvironmentRequest\x122\n" +
+	"\x15required_public_ports\x18\x01 \x03(\x05R\x13requiredPublicPorts\"\x87\x03\n" +
 	"\x18ProbeEnvironmentResponse\x12\x16\n" +
 	"\x06engine\x18\x01 \x01(\tR\x06engine\x12\x1a\n" +
 	"\brootless\x18\x02 \x01(\bR\brootless\x12#\n" +
@@ -3719,7 +3738,8 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x0eimage_pullable\x18\x05 \x01(\bR\rimagePullable\x12)\n" +
 	"\x10network_feasible\x18\x06 \x01(\bR\x0fnetworkFeasible\x120\n" +
 	"\x14disk_available_bytes\x18\a \x01(\x04R\x12diskAvailableBytes\x12'\n" +
-	"\x0fdisk_sufficient\x18\b \x01(\bR\x0ediskSufficient\"Z\n" +
+	"\x0fdisk_sufficient\x18\b \x01(\bR\x0ediskSufficient\x12<\n" +
+	"\x1apublic_listeners_available\x18\t \x03(\bR\x18publicListenersAvailable\"Z\n" +
 	"\x11StreamLogsRequest\x12!\n" +
 	"\froute_domain\x18\x01 \x01(\tR\vrouteDomain\x12\x16\n" +
 	"\x06follow\x18\x03 \x01(\bR\x06followJ\x04\b\x02\x10\x03R\x04tail\"[\n" +

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,10 +24,17 @@ func (s productionPreflightState) SubscribeRuntimeState(context.Context) (<-chan
 	return updates, nil
 }
 
-type productionPreflightRuntime struct{ report out.RuntimeEnvironment }
+type productionPreflightRuntime struct {
+	report    out.RuntimeEnvironment
+	listeners []bool
+}
 
 func (r productionPreflightRuntime) ProbeRuntimeEnvironment(context.Context) (out.RuntimeEnvironment, error) {
 	return r.report, nil
+}
+
+func (r productionPreflightRuntime) ProbePublicListeners(context.Context, []int) ([]bool, error) {
+	return r.listeners, nil
 }
 
 func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
@@ -43,7 +49,7 @@ func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
 	runtime := productionPreflightRuntime{report: out.RuntimeEnvironment{
 		Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true,
 		ImagePullable: true, NetworkFeasible: true, DiskSufficient: true,
-	}}
+	}, listeners: []bool{true}}
 	state := productionPreflightState{snapshot: domain.RuntimeActualStateSnapshot{
 		Generation: 1, StateVersion: "fixture-state", SourceComponentID: "fixture-runtime",
 	}}
@@ -82,13 +88,17 @@ func TestProductionPreflightProbesFailClosed(t *testing.T) {
 		assert.Error(t, environmentDirectoryProbe(envDir)(context.Background()))
 		require.NoError(t, os.Remove(link))
 	})
-	t.Run("accepts only current Gordon listener ownership without binding", func(t *testing.T) {
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		require.NoError(t, err)
-		defer listener.Close()
+	t.Run("accepts only runtime-confirmed managed monolith listener", func(t *testing.T) {
 		cfg := Config{}
-		cfg.Server.Port = listener.Addr().(*net.TCPAddr).Port
-		assert.NoError(t, publicListenerProbe(cfg)(context.Background()))
+		cfg.Server.Port = 18443
+		runtime := productionPreflightRuntime{listeners: []bool{true}}
+		assert.NoError(t, publicListenerProbe(runtime, cfg)(context.Background()))
+	})
+	t.Run("rejects unrelated owner and incomplete runtime response", func(t *testing.T) {
+		cfg := Config{}
+		cfg.Server.Port = 18443
+		assert.Error(t, publicListenerProbe(productionPreflightRuntime{listeners: []bool{false}}, cfg)(context.Background()))
+		assert.Error(t, publicListenerProbe(productionPreflightRuntime{}, cfg)(context.Background()))
 	})
 	t.Run("requires sanitized runtime inventory", func(t *testing.T) {
 		state := productionPreflightState{}
