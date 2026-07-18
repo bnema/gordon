@@ -160,7 +160,12 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 			return fmt.Errorf("failed to apply container config on reload: %w", err)
 		}
 	}
-	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+	// Control-only processes deliberately do not own a proxy. Hot reload still
+	// updates their config/event state, but must not dereference monolith-only
+	// proxy wiring.
+	if c.proxySvc != nil {
+		c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
+	}
 	if c.registryLimits != nil {
 		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
 	}

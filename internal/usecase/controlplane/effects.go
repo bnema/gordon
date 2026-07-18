@@ -35,9 +35,10 @@ type ProductionEffects struct {
 	audit       AuditSink
 }
 
-// ImagePushedHandlers preserves monolith fan-out ordering: label/tag automation
-// classifies the event first, then configured routes receive the same push.
-// Neither action is reimplemented in control-plane code.
+// ImagePushedHandlers runs configured routes before label/tag automation. A
+// newly auto-created route must not be rediscovered by the configured handler
+// in the same event, which would issue a second runtime deployment. Neither
+// action is reimplemented in control-plane code.
 type ImagePushedHandlers struct {
 	automation out.EventHandler
 	configured out.EventHandler
@@ -55,10 +56,10 @@ func (h *ImagePushedHandlers) CanHandle(eventType domain.EventType) bool {
 }
 
 func (h *ImagePushedHandlers) Handle(ctx context.Context, event domain.Event) error {
-	if err := h.automation.Handle(ctx, event); err != nil {
+	if err := h.configured.Handle(ctx, event); err != nil {
 		return err
 	}
-	return h.configured.Handle(ctx, event)
+	return h.automation.Handle(ctx, event)
 }
 
 // NewProductionEffects requires existing image and manual handlers from

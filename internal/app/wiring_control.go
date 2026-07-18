@@ -212,7 +212,9 @@ func initializeControlDrainRelay(ctx context.Context, cfg Config, deps controlRo
 // auto dispatcher remains the sole image classification decision point.
 func newControlProductionEffects(ctx context.Context, cfg Config, config *configusecase.Service, runtime controlplaneusecase.RouteCommander, log zerowrap.Logger) (*controlplaneusecase.ProductionEffects, error) {
 	containerFacade := controlplaneusecase.NewRuntimeCommandContainerService(runtime)
-	blobStorage, err := filesystem.NewBlobStorage(resolveDataDir(cfg.Server.DataDir), log)
+	// Registry owns blobs beneath data_dir/registry; control reads only this
+	// shared durable registry store to inspect pushed image labels.
+	blobStorage, err := filesystem.NewBlobStorage(filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry"), log)
 	if err != nil {
 		return nil, fmt.Errorf("open image label blob storage: %w", err)
 	}

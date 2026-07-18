@@ -42,6 +42,9 @@ COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
 # skipped or multiply-run scenarios, while the focused unit/integration checks
 # exercise durable outbox replay and control-owned exactly-once suppression.
 COMPAT_REGISTRY_REAL_TESTS := TestCompatibilityRegistryScenarios
+# Current-only split roles are intentionally not compared to origin/main: the
+# gate starts production registry/control processes and verifies delivery.
+COMPAT_REGISTRY_SPLIT_TEST := TestCompatibilitySplitRegistryEventFlow
 # Security is a current-candidate gate, not old/new baseline parity. The exact
 # tests below must each pass twice without a skip; the edge test needs Docker to
 # prove the candidate container has no runtime socket access.
@@ -156,6 +159,13 @@ compat-harness-registry: ## Run blocking old/new OCI registry and event-sync com
 				echo "registry compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
 			fi; \
 		done
+	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_REGISTRY_SPLIT_TEST)$$' -count=2 > "$$output"; status=$$?; \
+		cat "$$output"; \
+		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+		if ! jq -se --arg test "$(COMPAT_REGISTRY_SPLIT_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 2) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+			echo "split registry compatibility test did not pass exactly twice or was skipped; refusing to pass the gate"; exit 1; \
+		fi
 	@go test ./internal/usecase/registry -run 'TestRegistryImagePushedEventContract' -count=1
 	@go test ./internal/adapters/in/http/registry -run 'TestRegistryHTTPCompatibilityContract' -count=1
 	@go test ./internal/adapters/out/eventoutbox -run '^TestOutboxPersistsOutageAndReplaysAfterRestart$$' -count=1
