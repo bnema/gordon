@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,9 @@ func (r *remoteControlPlane) MigrationResume(ctx context.Context) (*app.Migratio
 func decodeMigrationCheckpoint(body []byte, err error) (*app.MigrationCheckpoint, error) {
 	if err != nil {
 		return nil, err
+	}
+	if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+		return nil, nil
 	}
 	var result app.MigrationCheckpoint
 	if err := json.Unmarshal(body, &result); err != nil {
