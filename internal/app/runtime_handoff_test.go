@@ -55,6 +55,11 @@ func TestRuntimeComponentLauncherHandoffProvesAndSwapsRuntime(t *testing.T) {
 	assert.Equal(t, domain.RuntimeComponentLifecycleTransferChannel, old.commands[0].LifecycleAction)
 	require.NoError(t, launcher.StartComponent(context.Background(), ComponentLaunchComponent{Role: domain.ComponentRoleRegistry, ComponentID: "gordon-registry-fixture-g1", Image: "example.invalid/gordon:v2", InternalNetwork: component.InternalNetwork, Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"}}))
 	assert.Len(t, newRuntime.commands, 1, "post-proof component operations must use the new runtime")
+
+	_, err = launcher.SelfUpdateRuntime(context.Background(), domain.RuntimeSelfUpdateCommand{LifecycleAction: domain.RuntimeComponentLifecycleActivate})
+	require.NoError(t, err)
+	require.Len(t, newRuntime.commands, 2)
+	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, newRuntime.commands[1].LifecycleAction, "cutover must be owned by the proven replacement runtime")
 }
 
 func TestProveRuntimeHandoffRetriesTransientRuntimeStartup(t *testing.T) {

@@ -96,8 +96,12 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	// second set of component containers.
 	fixture.runCLI("migrate", "prepare", "--json")
 	fixture.assertPreparedTargets()
-	fixture.runCLI("migrate", "switch", "--json")
+	// The runtime handler survives its caller's monolith termination. The
+	// original exec must not claim success; a fresh CLI observes and retries the
+	// durably committed result after the old container has gone away.
+	fixture.runSwitchExpectCallerTermination()
 	fixture.assertSwitchedTraffic()
+	fixture.assertInterruptedSwitchStatusAndRetry()
 }
 
 type realMigrationFixture struct {
@@ -356,6 +360,12 @@ func (f *realMigrationFixture) preparedRuntimeDiagnostics() string {
 	return strings.Join(diagnostics, "\n")
 }
 
+func (f *realMigrationFixture) runSwitchExpectCallerTermination() {
+	f.t.Helper()
+	_, err := podmanOutput(f.ctx, "exec", "--env", "GORDON_MIGRATION_IMAGE="+f.image, f.old, "gordon", "migrate", "switch", "--config", f.config, "--json")
+	require.Error(f.t, err, "stopping the old monolith must terminate its in-container CLI before it can report success")
+}
+
 func (f *realMigrationFixture) runMissingEnvPlan() {
 	f.t.Helper()
 	missing := filepath.Join(f.root, "missing-env.toml")
@@ -552,12 +562,52 @@ func (f *realMigrationFixture) assertRuntimeSocketExclusive() {
 
 func (f *realMigrationFixture) assertSwitchedTraffic() {
 	f.t.Helper()
-	status, err := podmanOutput(f.ctx, "exec", f.old, "gordon", "migrate", "status", "--config", f.config, "--json")
-	require.NoError(f.t, err)
-	require.Contains(f.t, status, `"phase":"switched"`)
 	oldRunning, err := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", f.old)
 	require.NoError(f.t, err)
 	require.Equal(f.t, "false", strings.TrimSpace(oldRunning), "runtime-owned listener cutover stops the old serving monolith")
+
+	client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	for _, probe := range []struct {
+		host string
+		path string
+	}{
+		{"app.example.test", "/"},
+		{"registry.example.test", "/v2/"},
+	} {
+		require.Eventually(f.t, func() bool {
+			request, requestErr := http.NewRequestWithContext(f.ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d%s", f.port, probe.path), nil)
+			if requestErr != nil {
+				return false
+			}
+			request.Host = probe.host
+			response, responseErr := client.Do(request)
+			if responseErr != nil {
+				return false
+			}
+			defer response.Body.Close()
+			if probe.path == "/v2/" {
+				return response.StatusCode == http.StatusOK || response.StatusCode == http.StatusUnauthorized
+			}
+			return response.StatusCode < http.StatusBadRequest
+		}, 10*time.Second, 50*time.Millisecond, "post-cutover %s must traverse the final edge", probe.host)
+	}
+}
+
+func (f *realMigrationFixture) assertInterruptedSwitchStatusAndRetry() {
+	f.t.Helper()
+	run := func(args ...string) (string, error) {
+		command := exec.CommandContext(f.ctx, filepath.Join(f.root, "gordon"), args...) // #nosec G204 -- candidate binary and arguments are fixture-owned.
+		command.Env = append(os.Environ(), "DOCKER_HOST=unix://"+f.socket, "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
+		output, err := command.CombinedOutput()
+		return string(output), err
+	}
+	require.Eventually(f.t, func() bool {
+		status, err := run("migrate", "status", "--config", f.config, "--json")
+		return err == nil && strings.Contains(status, `"phase":"switched"`)
+	}, 10*time.Second, 100*time.Millisecond, "fresh status after terminated caller must read the runtime-durable switched checkpoint")
+	retry, err := run("migrate", "switch", "--config", f.config, "--json")
+	require.NoError(f.t, err, "a retry after a terminated caller must converge without a second cutover")
+	require.Contains(f.t, retry, `"phase":"switched"`)
 }
 
 func (f *realMigrationFixture) configTOML() string {

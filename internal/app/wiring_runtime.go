@@ -592,8 +592,14 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 		return nil, nil, fmt.Errorf("runtime command result store unhealthy: %w", err)
 	}
 	policy := runtimeRolePolicy(cfg, v)
+	cutoverStore, err := NewMigrationCheckpointStore(migrationCheckpointPath(cfg.Server.DataDir))
+	if err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("open runtime migration cutover store: %w", err)
+	}
+	lifecycle := container.WithMigrationCutoverCommitter(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy), cutoverStore)
 	worker := container.NewRuntimeWorkerWithPolicyAndResultStore(svc.containerSvc, policy, resultStore).
-		WithComponentLifecycleManager(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy))
+		WithComponentLifecycleManager(lifecycle)
 	drainRegistry = container.NewRuntimeDrainRegistry(svc.containerSvc.RuntimeDrainRouteState)
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func testMigrationCheckpoint() MigrationCheckpoint {
@@ -36,6 +39,30 @@ func TestMigrationCheckpointAtomicMonotonicAndSafe(t *testing.T) {
 	checkpoint.Phase = MigrationPhasePlanned
 	assert.Error(t, store.Save(checkpoint))
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(path), "data-volume"))
+}
+
+func TestMigrationCheckpointRuntimeCutoverCommitIsDurableAndIdempotent(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	checkpoint := testMigrationCheckpoint()
+	checkpoint.Phase = MigrationPhasePrepared
+	checkpoint.TargetImage = "example.invalid/gordon:v2"
+	checkpoint.OldServingPath = "old-monolith"
+	checkpoint.RouteSnapshotGeneration = 7
+	checkpoint.AppliedEdgeComponentID = "gordon-edge-migration-1-g1"
+	checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}}
+	require.NoError(t, store.Save(checkpoint))
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: domain.RuntimeCommandIdentity{Generation: checkpoint.ComponentGeneration}, LifecycleAction: domain.RuntimeComponentLifecycleActivate, TargetComponentRole: domain.ComponentRoleEdge, TargetComponentID: checkpoint.AppliedEdgeComponentID, PolicyDecisionID: "migration:" + checkpoint.MigrationID, OldServingComponentID: checkpoint.OldServingPath, FinalPortPublishes: []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}}}
+
+	require.NoError(t, store.CommitMigrationCutover(context.Background(), command))
+	require.NoError(t, store.CommitMigrationCutover(context.Background(), command), "a retry after caller termination must converge")
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, MigrationPhaseSwitched, loaded.Phase)
+	assert.Empty(t, loaded.LastRetryPhase)
+
+	command.OldServingComponentID = "other"
+	assert.Error(t, store.CommitMigrationCutover(context.Background(), command), "a different cutover cannot rewrite durable status")
 }
 
 func TestMigrationCheckpointSaveMergesMonotonicFactsAcrossProcesses(t *testing.T) {

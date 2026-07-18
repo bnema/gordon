@@ -276,7 +276,9 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	if checkErr != nil {
 		return nil, fmt.Errorf("create monolith migration traffic checks: %w", checkErr)
 	}
-	switcher, switchErr := NewTrafficSwitch(bridge, checks)
+	// The launcher now forwards to the proven replacement runtime, so its
+	// cutover handler survives stopping this monolith/CLI container.
+	switcher, switchErr := NewTrafficSwitch(launcher, checks)
 	if switchErr != nil {
 		return nil, fmt.Errorf("create monolith migration traffic switch: %w", switchErr)
 	}

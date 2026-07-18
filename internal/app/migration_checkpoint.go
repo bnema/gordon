@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const (
@@ -184,6 +187,55 @@ func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 		}
 		return s.writeAtomic(merged)
 	})
+}
+
+// CommitMigrationCutover is called by the replacement runtime after it has
+// made the final edge listener healthy. It validates the exact authenticated
+// lifecycle identity while holding the same cross-process checkpoint lock, so
+// a killed old CLI cannot lose or forge the switched result.
+func (s *MigrationCheckpointStore) CommitMigrationCutover(_ context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	if s == nil {
+		return fmt.Errorf("migration checkpoint store is required")
+	}
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleActivate || command.TargetComponentRole != domain.ComponentRoleEdge {
+		return fmt.Errorf("invalid migration cutover command")
+	}
+	if !strings.HasPrefix(command.PolicyDecisionID, "migration:") {
+		return fmt.Errorf("invalid migration cutover identity")
+	}
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if migrationID == "" || command.Generation == 0 {
+		return fmt.Errorf("invalid migration cutover identity")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withLock(func() error {
+		checkpoint, err := s.load()
+		if err != nil {
+			return fmt.Errorf("load migration checkpoint for cutover: %w", err)
+		}
+		if checkpoint.Phase == MigrationPhaseSwitched {
+			if matchesRuntimeCutover(*checkpoint, command, migrationID) {
+				return nil
+			}
+			return fmt.Errorf("migration cutover does not match switched checkpoint")
+		}
+		if checkpoint.Phase != MigrationPhasePrepared || !matchesRuntimeCutover(*checkpoint, command, migrationID) {
+			return fmt.Errorf("migration cutover does not match prepared checkpoint")
+		}
+		checkpoint.Phase = MigrationPhaseSwitched
+		checkpoint.LastRetryPhase = ""
+		if err := validateCheckpoint(*checkpoint); err != nil {
+			return err
+		}
+		return s.writeAtomic(*checkpoint)
+	})
+}
+
+func matchesRuntimeCutover(checkpoint MigrationCheckpoint, command domain.RuntimeSelfUpdateCommand, migrationID string) bool {
+	return checkpoint.MigrationID == migrationID && checkpoint.ComponentGeneration == command.Generation && checkpoint.RouteSnapshotGeneration != 0 &&
+		checkpoint.AppliedEdgeComponentID == command.TargetComponentID && checkpoint.OldServingPath == command.OldServingComponentID &&
+		slices.Equal(componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge), command.FinalPortPublishes)
 }
 
 // withLock uses a persistent, owner-only lock file rather than the checkpoint

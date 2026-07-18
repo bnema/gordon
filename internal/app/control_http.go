@@ -236,7 +236,9 @@ func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, c
 	if checkErr != nil {
 		return fmt.Errorf("create migration traffic checks: %w", checkErr)
 	}
-	switcher, switchErr := NewTrafficSwitch(updater, checks)
+	// Cutover follows the launcher authority after its authenticated runtime
+	// handoff; it must not be executed by the old control-plane client.
+	switcher, switchErr := NewTrafficSwitch(launcher, checks)
 	if switchErr != nil {
 		return fmt.Errorf("create migration traffic switch: %w", switchErr)
 	}

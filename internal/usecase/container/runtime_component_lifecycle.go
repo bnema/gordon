@@ -24,9 +24,17 @@ type RuntimeComponentLifecycleManager interface {
 	ApplyComponentLifecycle(context.Context, domain.RuntimeSelfUpdateCommand) error
 }
 
+// MigrationCutoverCommitter durably records a completed runtime-owned edge
+// handoff. Its implementation lives outside this use case so the runtime never
+// imports control/app code or gains any extra socket capability.
+type MigrationCutoverCommitter interface {
+	CommitMigrationCutover(context.Context, domain.RuntimeSelfUpdateCommand) error
+}
+
 type runtimeComponentLifecycleManager struct {
-	runtime out.ContainerRuntime
-	policy  RuntimePolicy
+	runtime   out.ContainerRuntime
+	policy    RuntimePolicy
+	committer MigrationCutoverCommitter
 }
 
 // componentLifecycleOperationError exposes only a fixed operation name to the
@@ -54,6 +62,18 @@ func NewRuntimeComponentLifecycleManager(runtime out.ContainerRuntime, policy Ru
 		return nil
 	}
 	return &runtimeComponentLifecycleManager{runtime: runtime, policy: policy.normalize()}
+}
+
+// WithMigrationCutoverCommitter requires the runtime that owns final listener
+// activation to persist its result before returning. This makes a client that
+// is terminated with the old monolith recoverable through durable status.
+func WithMigrationCutoverCommitter(manager RuntimeComponentLifecycleManager, committer MigrationCutoverCommitter) RuntimeComponentLifecycleManager {
+	concrete, ok := manager.(*runtimeComponentLifecycleManager)
+	if !ok || concrete == nil {
+		return manager
+	}
+	concrete.committer = committer
+	return concrete
 }
 
 func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
@@ -365,6 +385,20 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	if err := m.healthContainer(ctx, final); err != nil {
 		rollback()
 		return fmt.Errorf("postcheck final edge: %w", err)
+	}
+	// The replacement runtime continues this handler after stopping the old
+	// monolith, whose CLI process can consequently disappear before receiving a
+	// reply. Commit only once the final listener is healthy; a failed commit
+	// rolls back the listener transfer and leaves the old path serving.
+	if strings.TrimSpace(m.policy.MigrationStateRoot) != "" && m.committer == nil {
+		rollback()
+		return fmt.Errorf("migration cutover durability is not configured")
+	}
+	if m.committer != nil {
+		if err := m.committer.CommitMigrationCutover(ctx, command); err != nil {
+			rollback()
+			return componentLifecycleError("commit migration cutover", err)
+		}
 	}
 	return nil
 }

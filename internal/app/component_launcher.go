@@ -210,6 +210,23 @@ func (l *RuntimeComponentLauncher) StartComponent(ctx context.Context, component
 func (l *RuntimeComponentLauncher) StopComponent(ctx context.Context, component ComponentLaunchComponent) error {
 	return l.send(ctx, domain.RuntimeComponentLifecycleStop, component, componentGeneration(component), componentMigrationID(component), "stop")
 }
+
+// SelfUpdateRuntime forwards a cutover command to the currently proven runtime
+// authority. The launcher swaps that authority only after the replacement
+// runtime's authenticated health and actual-state proof, so a self-hosted CLI
+// never asks the monolith it will stop to own the cutover transaction.
+func (l *RuntimeComponentLauncher) SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
+	if l == nil {
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime component launcher is not configured")
+	}
+	l.mu.RLock()
+	runtime := l.runtime
+	l.mu.RUnlock()
+	if runtime == nil {
+		return domain.RuntimeCommandResult{}, fmt.Errorf("runtime self-update client is required")
+	}
+	return runtime.SelfUpdateRuntime(ctx, command)
+}
 func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Context, component ComponentLaunchComponent) error {
 	if component.Role != domain.ComponentRoleRuntime {
 		return fmt.Errorf("runtime command channel can only transfer to runtime")
