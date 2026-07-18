@@ -51,6 +51,7 @@ func TestCompatibilitySplitRegistryEventFlow(t *testing.T) {
 	// interrupting that in-flight delivery; an interrupted RPC can persist a
 	// route before its runtime command and is deliberately retried instead.
 	f.wait(t, func() bool { return f.runtime.count() == 1 }, "replayed runtime deploy")
+	f.wait(t, f.routeUpdated, "safe auto-route snapshot")
 	f.wait(t, func() bool { return !splitDirHasFile(filepath.Join(f.data, "registry", "event-outbox")) }, "outbox acknowledgement")
 	// A process restart after acknowledgement must not turn the replay into a
 	// second runtime mutation.
@@ -63,14 +64,25 @@ func TestCompatibilitySplitRegistryEventFlow(t *testing.T) {
 		t.Fatal("runtime did not receive exact desired deployment")
 	}
 
+	// A preview-tagged OCI manifest is classified by the production dispatcher,
+	// not auto-route. Its durable preview route and exact runtime deployment
+	// prove the preview annotation/tag path remains connected to control.
+	f.push(t, ctx, "split/app", "preview-ci", "split.example.test")
+	f.wait(t, func() bool { return f.runtime.has("split--ci.example.test", "split/app:preview-ci") }, "preview runtime deploy")
+
 	// Exercise the production HTTP admin -> dispatcher manual intent path. The
-	// matching push is consumed; an unrelated image still reaches automation.
+	// matching push must be consumed; an unrelated image still reaches automation.
+	beforeManual := f.runtime.count()
 	f.manualDeploy(t, ctx, "split.example.test")
+	f.wait(t, func() bool { return f.runtime.count() == beforeManual+1 }, "manual runtime deploy")
+	manualCount := f.runtime.count()
 	f.push(t, ctx, "split/app", "v1", "split.example.test")
-	time.Sleep(250 * time.Millisecond)
-	before := f.runtime.count()
+	time.Sleep(300 * time.Millisecond)
+	if got := f.runtime.count(); got != manualCount {
+		t.Fatalf("manual matching push was not suppressed: got %d runtime mutations, want %d", got, manualCount)
+	}
 	f.push(t, ctx, "split/other", "manual", "other.example.test")
-	f.wait(t, func() bool { return f.runtime.count() > before }, "unrelated image automation")
+	f.wait(t, func() bool { return f.runtime.count() > manualCount }, "unrelated image automation")
 	f.assertWrongScopeDenied(t, ctx)
 	f.assertIsolation(t)
 }
@@ -199,7 +211,7 @@ func (f *splitRegistryFixture) startRegistry(t *testing.T, ctx context.Context) 
 	if f.registry != nil {
 		return
 	}
-	f.registry = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.registryConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-registry"), "DOCKER_HOST=", "PODMAN_HOST=", "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.registryPort)}}
+	f.registry = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.registryConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-registry"), "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ExcludeEnv: splitRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.registryPort)}}
 	if err := f.registry.Start(ctx, "serve", "--role", "registry", "--config", f.registryConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +237,7 @@ func (f *splitRegistryFixture) startControl(t *testing.T, ctx context.Context) {
 	if f.control != nil {
 		return
 	}
-	f.control = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-control"), "DOCKER_HOST=", "PODMAN_HOST=", "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.controlPort)}}
+	f.control = &GordonInstance{BinaryPath: f.binary, ConfigPath: f.controlConfig, DataDir: f.data, WorkingDir: f.root, Env: []string{"HOME=" + filepath.Join(f.root, "home-control"), "GORDON_AUTH_TOKEN_SECRET=split-registry-test-signing-secret-0123456789"}, ExcludeEnv: splitRuntimeEnvironment, ReadinessProbe: ReadinessProbe{TCPAddress: fmt.Sprintf("127.0.0.1:%d", f.controlPort)}}
 	if err := f.control.Start(ctx, "serve", "--role", "control", "--config", f.controlConfig); err != nil {
 		t.Fatal(err)
 	}
@@ -347,14 +359,23 @@ func (f *splitRegistryFixture) assertWrongScopeDenied(t *testing.T, ctx context.
 	}
 }
 
+var splitRuntimeEnvironment = []string{"DOCKER_HOST", "PODMAN_HOST", "CONTAINER_HOST"}
+
 func (f *splitRegistryFixture) assertIsolation(t *testing.T) {
 	for _, p := range []*GordonInstance{f.registry, f.control} {
 		if p == nil || p.cmd == nil {
 			t.Fatal("process unexpectedly absent")
 		}
 		env, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", p.cmd.Process.Pid))
-		if err == nil && strings.Contains(strings.ToLower(string(env)), "docker.sock") {
-			t.Fatal("split process inherited docker socket environment")
+		if err == nil {
+			for _, key := range splitRuntimeEnvironment {
+				if strings.Contains(string(env), key+"=") {
+					t.Fatalf("split process inherited runtime environment %s", key)
+				}
+			}
+			if strings.Contains(strings.ToLower(string(env)), "docker.sock") {
+				t.Fatal("split process inherited docker socket environment")
+			}
 		}
 		fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", p.cmd.Process.Pid))
 		if err == nil {
@@ -370,13 +391,22 @@ func (f *splitRegistryFixture) assertIsolation(t *testing.T) {
 func (f *splitRegistryFixture) close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if f.registry != nil {
-		_ = f.registry.Stop(ctx)
-	}
-	if f.control != nil {
-		_ = f.control.Stop(ctx)
+	for _, instance := range []*GordonInstance{f.registry, f.control} {
+		if instance != nil {
+			if err := instance.Stop(ctx); err != nil {
+				f.t.Errorf("stop split process: %v", err)
+			}
+		}
 	}
 	f.runtime.close()
+	for _, port := range []int{f.registryPort, f.controlPort, f.adminPort, f.runtime.port} {
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			f.t.Errorf("split listener leaked on port %d", port)
+			continue
+		}
+		_ = listener.Close()
+	}
 }
 func splitPort(t *testing.T) int {
 	l, err := net.Listen("tcp", "127.0.0.1:0")

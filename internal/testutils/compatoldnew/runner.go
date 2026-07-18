@@ -23,11 +23,14 @@ type ReadinessProbe struct {
 }
 
 type GordonInstance struct {
-	BinaryPath     string
-	ConfigPath     string
-	DataDir        string
-	WorkingDir     string
-	Env            []string
+	BinaryPath string
+	ConfigPath string
+	DataDir    string
+	WorkingDir string
+	Env        []string
+	// ExcludeEnv removes ambient variables for roles that must prove they do
+	// not inherit runtime transport configuration (for example, split control).
+	ExcludeEnv     []string
 	HealthProbeURL string
 	ReadinessProbe ReadinessProbe
 
@@ -115,7 +118,7 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 	if g.ConfigPath != "" {
 		env = append(env, "GORDON_CONFIG="+g.ConfigPath)
 	}
-	cmd.Env = commandEnvironment(env)
+	cmd.Env = excludeCommandEnvironment(commandEnvironment(env), g.ExcludeEnv)
 	cmd.Stdout = &g.stdout
 	cmd.Stderr = &g.stderr
 	if err := cmd.Start(); err != nil {
@@ -127,6 +130,24 @@ func (g *GordonInstance) Start(ctx context.Context, args ...string) error {
 	g.processExited = false
 	go g.watchProcess(cmd, g.waitDone)
 	return nil
+}
+
+func excludeCommandEnvironment(env, excluded []string) []string {
+	if len(excluded) == 0 {
+		return env
+	}
+	blocked := make(map[string]struct{}, len(excluded))
+	for _, key := range excluded {
+		blocked[key] = struct{}{}
+	}
+	filtered := env[:0]
+	for _, entry := range env {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, found := blocked[key]; !found {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
 }
 
 func (g *GordonInstance) watchProcess(cmd *exec.Cmd, done chan struct{}) {
