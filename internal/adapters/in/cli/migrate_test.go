@@ -47,11 +47,14 @@ func mustMigrationStore(t *testing.T) *app.MigrationCheckpointStore {
 	return store
 }
 
-func TestResolveMigrationControlPlanePrefersLocalDurableSourceOverComponentEndpoint(t *testing.T) {
+func TestResolveMigrationControlPlaneReadsDurableStatusWithoutLocalKernel(t *testing.T) {
 	resetControlPlaneResolutionTestState(t)
 
 	originalNewLocalKernelQuiet := newLocalKernelQuiet
-	newLocalKernelQuiet = func(string) (*app.Kernel, error) { return &app.Kernel{}, nil }
+	newLocalKernelQuiet = func(string) (*app.Kernel, error) {
+		t.Fatal("status resolver must not initialize a local monolith kernel")
+		return nil, nil
+	}
 	t.Cleanup(func() { newLocalKernelQuiet = originalNewLocalKernelQuiet })
 
 	service, closeFn, err := resolveMigrationControlPlane(writeCLIConfig(t, `[control]
@@ -59,8 +62,11 @@ listen_address = "0.0.0.0:9443"
 endpoint = "https://component-grpc.example.test:9443"
 `))
 	require.NoError(t, err)
-	require.IsType(t, &localControlPlane{}, service, "component gRPC endpoint is not an Admin HTTP target")
-	closeFn()
+	defer closeFn()
+	require.IsType(t, &durableMigrationControlPlane{}, service, "component gRPC endpoint is not an Admin HTTP target")
+	checkpoint, err := service.MigrationStatus(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, checkpoint)
 }
 
 func TestResolveMigrationControlPlaneKeepsExplicitRemote(t *testing.T) {

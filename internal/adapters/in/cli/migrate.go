@@ -34,8 +34,7 @@ func resolveMigrationControlPlaneFromSource(path string) (migrationControlPlane,
 		return migrationControlPlaneFromHandle(handle, err)
 	}
 
-	handle, err := resolveLocalControlPlane(path)
-	return migrationControlPlaneFromHandle(handle, err)
+	return newDurableMigrationControlPlane(path)
 }
 
 func migrationControlPlaneFromHandle(handle *controlPlaneHandle, err error) (migrationControlPlane, func(), error) {

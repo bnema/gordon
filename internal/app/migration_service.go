@@ -289,12 +289,20 @@ func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) er
 // Switch delegates public cutover to the configured orchestrator. A service
 // without the runtime-owned switch channel fails closed.
 func (s *MigrationService) Switch(ctx context.Context) (*MigrationCheckpoint, error) {
-	if s == nil || s.orchestrator == nil {
+	if s == nil || s.store == nil {
 		return nil, fmt.Errorf("safe traffic switch is not available: %w", ErrMigrationNotReady)
 	}
 	checkpoint, err := s.store.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load migration checkpoint for switch: %w", err)
+	}
+	// A fresh post-handoff retry must converge from the durable terminal fact;
+	// it neither needs the dead monolith nor a new runtime connection.
+	if checkpoint.Phase == MigrationPhaseSwitched {
+		return checkpoint, nil
+	}
+	if s.orchestrator == nil {
+		return nil, fmt.Errorf("safe traffic switch is not available: %w", ErrMigrationNotReady)
 	}
 	return s.orchestrator.Switch(ctx, *checkpoint)
 }

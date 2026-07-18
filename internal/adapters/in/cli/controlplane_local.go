@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
@@ -67,6 +69,131 @@ func (l *localControlPlane) migrationService() (*app.MigrationService, error) {
 		return nil, fmt.Errorf("local monolith migration is unavailable")
 	}
 	return l.migration()
+}
+
+// durableMigrationControlPlane keeps the post-handoff path intentionally
+// separate from the local Kernel. A status read opens only the checkpoint; a
+// recovered switch opens only the authenticated replacement Gordon RPC. This
+// prevents a fresh CLI from reacquiring any Docker/Podman socket authority.
+type durableMigrationControlPlane struct {
+	configPath string
+	store      *app.MigrationCheckpointStore
+
+	mu    sync.Mutex
+	local *controlPlaneHandle
+}
+
+func newDurableMigrationControlPlane(configPath string) (migrationControlPlane, func(), error) {
+	store, err := app.OpenMigrationCheckpointStore(configPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	plane := &durableMigrationControlPlane{configPath: configPath, store: store}
+	return plane, plane.close, nil
+}
+
+func (p *durableMigrationControlPlane) close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.local != nil {
+		p.local.close()
+		p.local = nil
+	}
+}
+
+func (p *durableMigrationControlPlane) MigrationStatus(context.Context) (*app.MigrationCheckpoint, error) {
+	checkpoint, err := p.store.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return checkpoint, err
+}
+
+func (p *durableMigrationControlPlane) localMigration() (migrationControlPlane, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.local == nil {
+		handle, err := resolveLocalControlPlane(p.configPath)
+		if err != nil {
+			return nil, err
+		}
+		p.local = handle
+	}
+	migration, ok := p.local.plane.(migrationControlPlane)
+	if !ok {
+		return nil, fmt.Errorf("migration is unavailable from this control plane")
+	}
+	return migration, nil
+}
+
+func (p *durableMigrationControlPlane) postHandoffMigration() (*app.MigrationService, bool, error) {
+	checkpoint, err := p.MigrationStatus(context.Background())
+	if err != nil || checkpoint == nil || !checkpoint.RuntimeChannelTransferred {
+		return nil, false, err
+	}
+	service, err := app.NewPostHandoffMigrationRecovery(p.configPath)
+	if err != nil {
+		return nil, true, err
+	}
+	return service, true, nil
+}
+
+func (p *durableMigrationControlPlane) MigrationPlan(ctx context.Context) (app.MigrationPreflightReport, error) {
+	local, err := p.localMigration()
+	if err != nil {
+		return app.MigrationPreflightReport{}, err
+	}
+	return local.MigrationPlan(ctx)
+}
+
+func (p *durableMigrationControlPlane) MigrationPrepare(ctx context.Context, checkpoint app.MigrationCheckpoint) (*app.MigrationCheckpoint, error) {
+	local, err := p.localMigration()
+	if err != nil {
+		return nil, err
+	}
+	return local.MigrationPrepare(ctx, checkpoint)
+}
+
+func (p *durableMigrationControlPlane) MigrationSwitch(ctx context.Context) (*app.MigrationCheckpoint, error) {
+	checkpoint, err := p.MigrationStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if checkpoint != nil && checkpoint.RuntimeChannelTransferred && checkpoint.Phase == app.MigrationPhaseSwitched {
+		return checkpoint, nil
+	}
+	if recovery, recovered, err := p.postHandoffMigration(); err != nil || recovered {
+		if err != nil {
+			return nil, err
+		}
+		return recovery.Switch(ctx)
+	}
+	local, err := p.localMigration()
+	if err != nil {
+		return nil, err
+	}
+	return local.MigrationSwitch(ctx)
+}
+
+func (p *durableMigrationControlPlane) MigrationResume(ctx context.Context) (*app.MigrationCheckpoint, error) {
+	checkpoint, err := p.MigrationStatus(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if checkpoint != nil && checkpoint.RuntimeChannelTransferred && checkpoint.Phase == app.MigrationPhaseSwitched {
+		return checkpoint, nil
+	}
+	if recovery, recovered, err := p.postHandoffMigration(); err != nil || recovered {
+		if err != nil {
+			return nil, err
+		}
+		return recovery.ResumePostHandoff(ctx)
+	}
+	local, err := p.localMigration()
+	if err != nil {
+		return nil, err
+	}
+	return local.MigrationResume(ctx)
 }
 func (l *localControlPlane) MigrationPlan(ctx context.Context) (app.MigrationPreflightReport, error) {
 	svc, err := l.migrationService()
