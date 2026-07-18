@@ -28,6 +28,19 @@ type RuntimeStatePublisher interface {
 	PublishRuntimeState(ctx context.Context, snapshot domain.RuntimeActualStateSnapshot) error
 }
 
+// RuntimeStateSubscriptionError classifies an initial runtime-state source
+// failure without exposing transport details to control orchestration.
+type RuntimeStateSubscriptionError struct {
+	Retryable bool
+	Err       error
+}
+
+func (e *RuntimeStateSubscriptionError) Error() string {
+	return "runtime state subscription unavailable"
+}
+
+func (e *RuntimeStateSubscriptionError) Unwrap() error { return e.Err }
+
 // RuntimeStateSubscriber subscribes to sanitized runtime actual-state snapshots.
 type RuntimeStateSubscriber interface {
 	SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error)

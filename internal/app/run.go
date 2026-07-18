@@ -308,6 +308,7 @@ type services struct {
 	runtimeControl        *runtimecontrol.Service
 	migrationSvc          *MigrationService
 	appliedStateTracker   *edgesnapshot.AppliedStateTracker
+	appliedStateReceiver  edgesnapshot.AppliedStateReceiver
 	trafficManager        *trafficadapter.Manager
 	tlsHTTPEntryPoints    map[string]struct{}
 	smartHTTPEntryPoints  map[string]struct{}

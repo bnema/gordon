@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,6 +131,52 @@ func closedRuntimeStateChannel() <-chan domain.RuntimeActualStateSnapshot {
 	channel := make(chan domain.RuntimeActualStateSnapshot)
 	close(channel)
 	return channel
+}
+
+type producerSubscriptionFunc func(context.Context) (<-chan domain.RuntimeActualStateSnapshot, error)
+
+func (f producerSubscriptionFunc) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+	return f(ctx)
+}
+
+func TestProducerReturnsNonRetryableInitialSourceError(t *testing.T) {
+	sourceErr := &out.RuntimeStateSubscriptionError{Err: fmt.Errorf("secret transport detail")}
+	producer, err := NewProducer(producerSubscriptionFunc(func(context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+		return nil, sourceErr
+	}), NewSnapshotHub(), ProducerOptions{EdgeAlias: "gordon-edge"})
+	require.NoError(t, err)
+	producer.retryWait = func(context.Context, time.Duration) error {
+		t.Fatal("non-retryable initial source error must not wait")
+		return nil
+	}
+
+	err = producer.Start(t.Context())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sourceErr)
+	assert.NotContains(t, err.Error(), "secret transport detail")
+}
+
+func TestProducerRetriesTransientInitialSourceError(t *testing.T) {
+	valid := make(chan domain.RuntimeActualStateSnapshot, 1)
+	valid <- producerRuntimeSnapshot(1, "app.example.com", "gordon-target-app-example-com")
+	calls := 0
+	producer, err := NewProducer(producerSubscriptionFunc(func(context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
+		calls++
+		if calls == 1 {
+			return nil, &out.RuntimeStateSubscriptionError{Retryable: true}
+		}
+		return valid, nil
+	}), NewSnapshotHub(), ProducerOptions{EdgeAlias: "gordon-edge"})
+	require.NoError(t, err)
+	var delays []time.Duration
+	producer.retryWait = func(context.Context, time.Duration) error {
+		delays = append(delays, producerRetryBackoff)
+		return nil
+	}
+
+	require.NoError(t, producer.Start(t.Context()))
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, []time.Duration{producerRetryBackoff}, delays)
 }
 
 func TestProducerClosedSubscriptionsBackOffUntilValidUpdate(t *testing.T) {

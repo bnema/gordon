@@ -134,6 +134,9 @@ func (s *MigrationService) prepareCheckpoint(checkpoint MigrationCheckpoint) (Mi
 	if checkpoint.ComponentGeneration == 0 {
 		checkpoint.ComponentGeneration = 1
 	}
+	// RouteSnapshotGeneration remains zero until the generated edge reports a
+	// completed application of authoritative route and traffic snapshots over
+	// its authenticated control stream. Never invent a bootstrap generation.
 	if checkpoint.TargetImage == "" && s.orchestrator != nil {
 		checkpoint.TargetImage = s.candidateImage
 	}
@@ -158,14 +161,17 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 	if checkpoint == nil {
 		return fmt.Errorf("migration checkpoint is required")
 	}
-	if len(checkpoint.PreparedPortBindings) != 0 {
-		return fmt.Errorf("runtime bootstrap must not publish TCP ports")
-	}
 	if checkpoint.BootstrapRuntimeEndpoint == "" {
 		checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("unix://%s", filepath.Join(componentDataDirectory, "migration", checkpoint.MigrationID, bootstrapRuntimeSocketName))
 	}
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
+	}
+	// Only edge receives a bootstrap listener. It is deliberately a fixed
+	// loopback probe that differs from the edge's configured in-container
+	// listener, so runtime/control/registry never acquire a host TCP surface.
+	if err := s.setPreparedEdgeProbeBinding(checkpoint); err != nil {
+		return err
 	}
 	if checkpoint.OldServingProbeEndpoint == "" && s.config.Server.Port > 0 {
 		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.Port)
@@ -175,6 +181,30 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 	}
 	if !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
 		return fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	return nil
+}
+
+func (s *MigrationService) setPreparedEdgeProbeBinding(checkpoint *MigrationCheckpoint) error {
+	if s.config.Server.Port <= 0 {
+		if len(checkpoint.PreparedPortBindings) != 0 {
+			return fmt.Errorf("configured edge listener port is required")
+		}
+		return nil
+	}
+	binding, err := preparedEdgeProbeBinding(checkpoint.BootstrapEdgeProbeEndpoint, s.config.Server.Port)
+	if err != nil {
+		return err
+	}
+	if err := privateEdgeProbePortAvailable(checkpoint.BootstrapEdgeProbeEndpoint); err != nil {
+		return err
+	}
+	if len(checkpoint.PreparedPortBindings) == 0 {
+		checkpoint.PreparedPortBindings = []MigrationPortBinding{binding}
+		return nil
+	}
+	if len(checkpoint.PreparedPortBindings) != 1 || checkpoint.PreparedPortBindings[0] != binding {
+		return fmt.Errorf("invalid edge bootstrap port binding")
 	}
 	return nil
 }
@@ -232,7 +262,12 @@ func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) er
 	if s.envManifest.values[domain.ComponentRoleEdge] == nil {
 		s.envManifest.values[domain.ComponentRoleEdge] = make(map[string]string)
 	}
-	s.envManifest.values[domain.ComponentRoleEdge]["GORDON_COMPONENT_ID"] = fmt.Sprintf("gordon-edge-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration)
+	edgeID := fmt.Sprintf("gordon-edge-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration)
+	s.envManifest.values[domain.ComponentRoleEdge]["GORDON_COMPONENT_ID"] = edgeID
+	// The control token validator binds the migration-scoped edge credential
+	// to this deterministic, non-secret identity. This lets it reject a
+	// wrong-source acknowledgement without giving control socket authority.
+	s.envManifest.values[domain.ComponentRoleControl]["GORDON_MIGRATION_EDGE_COMPONENT_ID"] = edgeID
 	files, err := s.envManifest.WriteFiles(filepath.Join(s.envDirectory, checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration)))
 	if err != nil {
 		return err

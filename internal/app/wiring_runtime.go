@@ -2,6 +2,10 @@ package app
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -63,7 +67,97 @@ func newRuntimeRoleComponentTokenValidator(cfg Config, log zerowrap.Logger) (int
 	if err != nil {
 		return nil, fmt.Errorf("create component token store: %w", err)
 	}
-	return componentauth.NewService(store, log, componentauth.Config{}), nil
+	validator := interceptors.ComponentTokenValidator(componentauth.NewService(store, log, componentauth.Config{}))
+	// A prepared replacement has an empty, private state volume, so its
+	// component-token store cannot yet contain the control credential. Accept
+	// the checkpointed handoff token only on the generated Unix migration
+	// listener, and map it to the narrow control role scopes. Normal listeners
+	// continue to require a persisted/revocable component token.
+	if migrationRuntimeBootstrapConfigured(cfg.Runtime) {
+		if token := runtimeControlToken(cfg.Runtime); token != "" {
+			validator = migrationBootstrapTokenValidator{primary: validator, token: token}
+		}
+	}
+	return validator, nil
+}
+
+type migrationBootstrapTokenValidator struct {
+	primary interceptors.ComponentTokenValidator
+	token   string
+}
+
+func migrationRuntimeBootstrapConfigured(cfg RuntimeControlConfig) bool {
+	return validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.ListenAddress), nil) || validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.Endpoint), nil)
+}
+
+func (v migrationBootstrapTokenValidator) ValidateToken(ctx context.Context, token string, required domain.ComponentScope) (*domain.ComponentIdentity, error) {
+	if v.primary != nil {
+		identity, err := v.primary.ValidateToken(ctx, token, required)
+		if err == nil {
+			return identity, nil
+		}
+		if identity := v.bootstrapIdentity(token); identity != nil {
+			if !domain.ComponentRoleAllowsScope(identity.Role, required) {
+				return nil, domain.ErrUnauthorized
+			}
+			return identity, nil
+		}
+		return nil, err
+	}
+	identity := v.bootstrapIdentity(token)
+	if identity == nil {
+		return nil, domain.ErrInvalidToken
+	}
+	if !domain.ComponentRoleAllowsScope(identity.Role, required) {
+		return nil, domain.ErrUnauthorized
+	}
+	return identity, nil
+}
+
+func (v migrationBootstrapTokenValidator) bootstrapIdentity(token string) *domain.ComponentIdentity {
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		expected := v.token
+		if role != domain.ComponentRoleControl {
+			expected = migrationComponentToken(v.token, role)
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1 {
+			return &domain.ComponentIdentity{Name: migrationBootstrapIdentityName(role), Role: role, Scopes: domain.DefaultComponentScopesForRole(role)}
+		}
+	}
+	return nil
+}
+
+func migrationBootstrapIdentityName(role domain.ComponentRole) string {
+	if role == domain.ComponentRoleEdge {
+		if edgeID := strings.TrimSpace(os.Getenv("GORDON_MIGRATION_EDGE_COMPONENT_ID")); strings.HasPrefix(edgeID, "gordon-edge-") && componentLabelValue.MatchString(edgeID) {
+			return edgeID
+		}
+	}
+	return "migration-bootstrap-" + string(role)
+}
+
+// migrationComponentToken derives independent, role-limited credentials from
+// the private runtime handoff token. The seed remains only in control/runtime;
+// edge and registry receive their own 0600 env-file credential.
+func migrationComponentToken(seed string, role domain.ComponentRole) string {
+	if strings.TrimSpace(seed) == "" || (role != domain.ComponentRoleEdge && role != domain.ComponentRoleRegistry) {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(seed))
+	_, _ = mac.Write([]byte("gordon-migration-component-token-v1:" + string(role)))
+	return "gordon_migration_" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// migrationProbeToken is deliberately domain-separated from both the runtime
+// handoff seed and component control credentials. It is only ever materialized
+// in the prepared edge's private environment and the coordinator process.
+func migrationProbeToken(seed string) string {
+	if strings.TrimSpace(seed) == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(seed))
+	_, _ = mac.Write([]byte("gordon-migration-probe-token-v1"))
+	return "gordon_migration_probe_" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func runRuntimeWithDependencies(ctx context.Context, configPath string, deps runtimeRoleDependencies) error {
@@ -133,6 +227,7 @@ func runRuntimeWithDependencies(ctx context.Context, configPath string, deps run
 
 type runtimeRoleWorkerBundle struct {
 	in.RuntimeWorker
+	runtime                  out.ContainerRuntime
 	logReader                out.RuntimeLogReader
 	volumeManager            out.RuntimeVolumeManager
 	imageManager             out.RuntimeImageManager
@@ -174,7 +269,44 @@ func (w runtimeRoleWorkerBundle) Snapshot(ctx context.Context, generation uint64
 	if !ok {
 		return domain.RuntimeActualStateSnapshot{}, fmt.Errorf("runtime worker snapshotter not configured")
 	}
-	return snapshotter.Snapshot(ctx, generation, stateVersion, sourceComponentID)
+	snapshot, err := snapshotter.Snapshot(ctx, generation, stateVersion, sourceComponentID)
+	if err != nil {
+		return domain.RuntimeActualStateSnapshot{}, err
+	}
+	return w.includeRuntimeSelf(ctx, snapshot, generation, sourceComponentID)
+}
+
+// includeRuntimeSelf makes the first authenticated handoff restart-safe. The
+// container service cache is intentionally route-focused and may not have
+// observed the runtime container that started it; append only that labelled
+// self container from the local runtime, never arbitrary engine inventory.
+func (w runtimeRoleWorkerBundle) includeRuntimeSelf(ctx context.Context, snapshot domain.RuntimeActualStateSnapshot, generation uint64, sourceComponentID string) (domain.RuntimeActualStateSnapshot, error) {
+	if w.runtime == nil || sourceComponentID == "" {
+		return snapshot, nil
+	}
+	for _, state := range snapshot.Containers {
+		if state.Name == sourceComponentID {
+			return snapshot, nil
+		}
+	}
+	containers, err := w.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return domain.RuntimeActualStateSnapshot{}, fmt.Errorf("list runtime self container: %w", err)
+	}
+	for _, candidate := range containers {
+		if candidate == nil || candidate.Name != sourceComponentID || candidate.Labels[domain.LabelComponent] != "true" || candidate.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) {
+			continue
+		}
+		status := domain.ContainerStatus(strings.ToLower(candidate.Status))
+		switch status {
+		case domain.ContainerStatusRunning, domain.ContainerStatusStopped, domain.ContainerStatusCreated, domain.ContainerStatusExited, domain.ContainerStatusPaused:
+		default:
+			status = domain.ContainerStatusUnknown
+		}
+		snapshot.Containers = append(snapshot.Containers, domain.RuntimeContainerState{Name: candidate.Name, Image: candidate.Image, ImageID: candidate.ImageID, Status: status, StartedAt: candidate.Created, Labels: domain.SanitizeRuntimeStateLabels(candidate.Labels), Generation: generation})
+		break
+	}
+	return snapshot, nil
 }
 
 func runtimeRoleLogReader(worker in.RuntimeWorker) out.RuntimeLogReader {
@@ -455,7 +587,7 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)
 	var environmentProbe out.RuntimeEnvironmentProbe = svc.runtime
-	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), routeDrainAckReceiver: drainRegistry, standaloneServiceManager: standaloneServiceManager, environmentProbe: environmentProbe}, cleanup, nil
+	return runtimeRoleWorkerBundle{RuntimeWorker: worker, runtime: svc.runtime, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), routeDrainAckReceiver: drainRegistry, standaloneServiceManager: standaloneServiceManager, environmentProbe: environmentProbe}, cleanup, nil
 }
 
 func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Config, v *viper.Viper) out.RuntimeStandaloneServiceManager {

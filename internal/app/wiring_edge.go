@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
@@ -216,13 +218,39 @@ func edgeHTTPHandlerWithMiddlewareAndHealth(proxyHandler http.Handler, snapshots
 	// Unlike registry access, loopback is not implicitly trusted: operators must
 	// explicitly list it when their terminating proxy connects from localhost.
 	if strings.EqualFold(cfg.Edge.TLS.Mode, edgeTLSModeExternal) {
-		middlewares = append(middlewares, middleware.StrictDirectPeerCIDRAllowlist(trustedNets, log))
+		middlewares = append(middlewares, migrationProbeOrStrictDirectPeerCIDRAllowlist(cfg, trustedNets, log))
 	}
 	handler := otelhttp.NewHandler(middleware.Chain(middlewares...)(edgeHTTPHandlerWithHealth(proxyHandler, snapshots, health)), "gordon.edge")
 	if accessWriter != nil {
 		handler = middleware.AccessLogger(accessWriter, cfg.Logging.AccessLog.ExcludeHealthChecks, log, trustedNets)(handler)
 	}
 	return handler
+}
+
+const migrationProbeHeader = "X-Gordon-Migration-Probe"
+
+// migrationProbeOrStrictDirectPeerCIDRAllowlist keeps the normal external-TLS
+// direct-peer boundary intact. A prepared edge may bypass it only for a
+// constant-time validated, dedicated migration credential; it still traverses
+// all later security and proxy routing middleware. Every missing or invalid
+// credential is handled by the existing strict middleware and remains 403.
+func migrationProbeOrStrictDirectPeerCIDRAllowlist(cfg EdgeConfig, trustedNets []*net.IPNet, log zerowrap.Logger) func(http.Handler) http.Handler {
+	strict := middleware.StrictDirectPeerCIDRAllowlist(trustedNets, log)
+	if !cfg.Edge.MigrationProbeEnabled {
+		return strict
+	}
+	token := strings.TrimSpace(os.Getenv(cfg.Edge.MigrationProbeTokenEnv))
+	return func(next http.Handler) http.Handler {
+		strictNext := strict(next)
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			provided := request.Header.Get(migrationProbeHeader)
+			if token != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(token)) == 1 {
+				next.ServeHTTP(writer, request)
+				return
+			}
+			strictNext.ServeHTTP(writer, request)
+		})
+	}
 }
 
 // newEdgeSnapshotClient dials control using TLS with normal hostname
@@ -547,6 +575,8 @@ func reportAppliedEdgeGeneration(ctx context.Context, routes *edgesnapshotclient
 		log.Warn().Msg("edge applied state not reported: component identity is unavailable")
 		return
 	}
+	var lastLoggedCode string
+	var lastLoggedAt time.Time
 	for {
 		if ctx.Err() != nil {
 			return
@@ -557,6 +587,13 @@ func reportAppliedEdgeGeneration(ctx context.Context, routes *edgesnapshotclient
 		}
 		if err == nil {
 			return
+		}
+		// Logs are deliberately bounded and disclose only the gRPC status code:
+		// request identity, endpoint, and credentials must not leak from a retry.
+		code := status.Code(err).String()
+		if code != lastLoggedCode || time.Since(lastLoggedAt) >= 5*time.Second {
+			log.Warn().Str("grpc_code", code).Msg("edge applied state report rejected")
+			lastLoggedCode, lastLoggedAt = code, time.Now()
 		}
 		// Keep retrying through gRPC reconnects. The report is idempotent at an
 		// equal generation and tracker monotonicity rejects any later regression.

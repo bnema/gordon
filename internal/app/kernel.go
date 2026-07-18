@@ -241,7 +241,7 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	worker := container.NewRuntimeWorkerWithPolicy(svc.containerSvc, policy).
 		WithComponentLifecycleManager(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy))
 	bridge := &monolithMigrationRuntime{worker: worker, probe: svc.runtime, listenerProbe: svc.runtime}
-	store, err := NewMigrationCheckpointStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "checkpoint.json"))
+	store, err := NewMigrationCheckpointStore(migrationCheckpointPath(cfg.Server.DataDir))
 	if err != nil {
 		return nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)
 	}

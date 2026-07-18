@@ -24,6 +24,27 @@ import (
 	"github.com/bnema/gordon/internal/usecase/container"
 )
 
+func TestMigrationBootstrapTokenValidatorIsControlScoped(t *testing.T) {
+	validator := migrationBootstrapTokenValidator{token: "bootstrap-token"}
+	identity, err := validator.ValidateToken(context.Background(), "bootstrap-token", domain.ComponentScopeRuntimeStatus)
+	require.NoError(t, err)
+	require.Equal(t, domain.ComponentRoleControl, identity.Role)
+	_, err = validator.ValidateToken(context.Background(), "wrong-token", domain.ComponentScopeRuntimeStatus)
+	require.ErrorIs(t, err, domain.ErrInvalidToken)
+	_, err = validator.ValidateToken(context.Background(), "bootstrap-token", domain.ComponentScopeRegistryStatus)
+	require.ErrorIs(t, err, domain.ErrUnauthorized)
+}
+
+func TestMigrationBootstrapTokenValidatorScopesDerivedComponentTokens(t *testing.T) {
+	validator := migrationBootstrapTokenValidator{token: "bootstrap-token"}
+	edgeToken := migrationComponentToken("bootstrap-token", domain.ComponentRoleEdge)
+	identity, err := validator.ValidateToken(context.Background(), edgeToken, domain.ComponentScopeRoutesWatch)
+	require.NoError(t, err)
+	require.Equal(t, domain.ComponentRoleEdge, identity.Role)
+	_, err = validator.ValidateToken(context.Background(), edgeToken, domain.ComponentScopeRegistryStatus)
+	require.ErrorIs(t, err, domain.ErrUnauthorized)
+}
+
 func TestStandaloneServiceManagerUsesCommandClientForControlRole(t *testing.T) {
 	client := fakeRuntimeCommandClientForApp{}
 

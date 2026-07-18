@@ -491,6 +491,14 @@ func (p *controlRoleMigrationProbe) ProbeRuntimeEnvironment(context.Context) (ou
 	return p.report, p.err
 }
 
+func (p *controlRoleMigrationProbe) ProbePublicListeners(_ context.Context, ports []int) ([]bool, error) {
+	available := make([]bool, len(ports))
+	for index := range available {
+		available[index] = true
+	}
+	return available, nil
+}
+
 func (p *controlRoleMigrationProbe) calls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()

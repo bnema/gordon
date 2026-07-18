@@ -155,7 +155,11 @@ func runControlServers(ctx context.Context, v *viper.Viper, cfg Config, deps con
 	}
 	defer listener.Close()
 
-	server, err := newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, controlServices.appliedStateTracker, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
+	appliedReceiver := controlServices.appliedStateReceiver
+	if appliedReceiver == nil {
+		appliedReceiver = controlServices.appliedStateTracker
+	}
+	server, err := newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, appliedReceiver, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
 	if err != nil {
 		return err
 	}

@@ -22,12 +22,14 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	cfg.Backups.Volumes.Enabled = true
 	cfg.Backups.Volumes.S3.Bucket = "fixtures"
 	cfg.Telemetry.Enabled = true
+	cfg.Runtime.Token = "private-runtime-handoff-token"
 
 	secret := "fixture-value-not-for-reports"
 	manifest, err := BuildComponentEnvManifest(ComponentEnvManifestOptions{
 		Config: cfg,
 		Environment: map[string]string{
 			"GORDON_SERVER_PORT":         "8080",
+			TokenSecretEnvVar:            "fixture-token-secret-at-least-32-characters",
 			"GORDON_MIGRATION_IMAGE":     "fixture.invalid/gordon:next",
 			"PASSWORD_STORE_DIR":         "/redacted/pass",
 			"CLOUDFLARE_DNS_API_TOKEN":   secret,
@@ -42,11 +44,14 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	})
 	require.NoError(t, err)
 
-	assert.ElementsMatch(t, []string{"GORDON_SERVER_PORT", "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
-	assert.ElementsMatch(t, []string{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCKER_HOST", "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
-	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleEdge))
-	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRegistry))
+	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
+	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCKER_HOST", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
+	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_EDGE_TOKEN", "GORDON_MIGRATION_PROBE_TOKEN"}, manifest.KeysForRole(domain.ComponentRoleEdge))
+	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_REGISTRY_TOKEN"}, manifest.KeysForRole(domain.ComponentRoleRegistry))
 	assert.NotContains(t, strings.Join(manifest.KeysForRole(domain.ComponentRoleEdge), ","), "DOCKER_HOST")
+	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleEdge), "GORDON_COMPONENT_EDGE_TOKEN")
+	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleRegistry), "GORDON_COMPONENT_REGISTRY_TOKEN")
+	assert.NotContains(t, manifest.KeysForRole(domain.ComponentRoleEdge), "GORDON_COMPONENT_RUNTIME_TOKEN")
 	assert.NotContains(t, strings.Join(manifest.KeysForRole(domain.ComponentRoleRegistry), ","), "WORKLOAD_DATABASE_PASSWORD")
 	assert.NotContains(t, manifest.RedactedSummary(), secret)
 
@@ -61,6 +66,21 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 		require.NoError(t, readErr)
 		assert.NotContains(t, body, "WORKLOAD_DATABASE_PASSWORD")
 	}
+}
+
+func TestMigrationProbeCredentialIsDomainSeparatedAndEdgeOnly(t *testing.T) {
+	seed := "private-runtime-handoff-token"
+	cfg := Config{}
+	cfg.Runtime.Token = seed
+	manifest, err := BuildComponentEnvManifest(ComponentEnvManifestOptions{Config: cfg})
+	require.NoError(t, err)
+	assert.NotEqual(t, seed, migrationProbeToken(seed))
+	assert.NotEqual(t, migrationComponentToken(seed, domain.ComponentRoleEdge), migrationProbeToken(seed))
+	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleEdge), "GORDON_MIGRATION_PROBE_TOKEN")
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry} {
+		assert.NotContains(t, manifest.KeysForRole(role), "GORDON_MIGRATION_PROBE_TOKEN")
+	}
+	assert.NotContains(t, manifest.RedactedSummary(), migrationProbeToken(seed))
 }
 
 func TestComponentEnvManifestMissingAndExplicitVariableErrorsAreKeyOnly(t *testing.T) {

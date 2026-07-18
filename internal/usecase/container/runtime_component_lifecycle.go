@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -24,6 +26,26 @@ type RuntimeComponentLifecycleManager interface {
 type runtimeComponentLifecycleManager struct {
 	runtime out.ContainerRuntime
 	policy  RuntimePolicy
+}
+
+// componentLifecycleOperationError exposes only a fixed operation name to the
+// remote caller; the wrapped runtime error remains local because engine errors
+// can include host paths or command arguments.
+type componentLifecycleOperationError struct {
+	operation string
+	err       error
+}
+
+func (e componentLifecycleOperationError) Error() string {
+	return "component lifecycle " + e.operation + " failed"
+}
+func (e componentLifecycleOperationError) Unwrap() error { return e.err }
+
+func componentLifecycleError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return componentLifecycleOperationError{operation: operation, err: err}
 }
 
 func NewRuntimeComponentLifecycleManager(runtime out.ContainerRuntime, policy RuntimePolicy) RuntimeComponentLifecycleManager {
@@ -96,31 +118,31 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 		return fmt.Errorf("invalid component bootstrap port binding")
 	}
 	if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
-		return err
+		return componentLifecycleError("validate config", err)
 	}
-	container, err := m.find(ctx, command)
+	component, err := m.find(ctx, command)
 	if err != nil {
-		return err
+		return componentLifecycleError("find", err)
 	}
-	if container != nil {
-		running, runErr := m.runtime.IsContainerRunning(ctx, container.ID)
+	if component != nil {
+		running, runErr := m.runtime.IsContainerRunning(ctx, component.ID)
 		if runErr != nil {
-			return runErr
+			return componentLifecycleError("inspect", runErr)
 		}
 		if running {
 			return nil
 		}
-		return m.runtime.StartContainer(ctx, container.ID)
+		return componentLifecycleError("start", m.runtime.StartContainer(ctx, component.ID))
 	}
 	config, err := m.componentConfig(command, command.PortPublishes)
 	if err != nil {
-		return err
+		return componentLifecycleError("build config", err)
 	}
 	created, err := m.runtime.CreateContainer(ctx, config)
 	if err != nil {
-		return err
+		return componentLifecycleError("create", err)
 	}
-	return m.runtime.StartContainer(ctx, created.ID)
+	return componentLifecycleError("start", m.runtime.StartContainer(ctx, created.ID))
 }
 
 // componentConfig produces the only component container shape that lifecycle
@@ -131,12 +153,16 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if err != nil {
 		return nil, err
 	}
+	configFile, err := componentLifecycleConfigFile(command, ports)
+	if err != nil {
+		return nil, err
+	}
 	config := &domain.ContainerConfig{
 		Image: command.DesiredImage, Name: command.TargetComponentID, Env: env,
 		Labels: componentLifecycleLabels(command), NetworkMode: command.InternalNetwork,
 		PortPublishes: append([]domain.ContainerPortPublish(nil), ports...), RestartPolicy: domain.RestartPolicyAlways,
 		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
-		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": command.ConfigFile},
+		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": configFile},
 		Volumes:         componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
@@ -147,6 +173,9 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		}
 	}
 	if err := m.mountMigrationRuntimeSocketState(command, config); err != nil {
+		return nil, err
+	}
+	if err := m.mountMigrationComponentConfigState(command, config); err != nil {
 		return nil, err
 	}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
@@ -183,8 +212,39 @@ func (m *runtimeComponentLifecycleManager) mountMigrationRuntimeSocketState(comm
 	destination := filepath.Join("/var/lib/gordon/migration", id)
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
 		config.Volumes[destination] = source
-	} else {
-		config.ReadOnlyVolumes[destination] = source
+		return nil
+	}
+	// Control can connect to the private Gordon runtime socket but cannot
+	// modify its parent directory. It receives a separate writable child only
+	// for atomically checkpointing authenticated edge attestation.
+	config.ReadOnlyVolumes[destination] = source
+	config.Volumes[filepath.Join(destination, "attestation")] = filepath.Join(source, "attestation")
+	return nil
+}
+
+// mountMigrationComponentConfigState gives only the replacement runtime a
+// read-only view of generated role manifests at their host paths. The runtime
+// validates these paths before asking the engine to bind them into registry or
+// edge; without this view it cannot safely continue after handoff. No other
+// role receives the directory and it contains no runtime or engine socket.
+func (m *runtimeComponentLifecycleManager) mountMigrationComponentConfigState(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
+	if command.TargetComponentRole != domain.ComponentRoleRuntime || strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
+		return nil
+	}
+	root := filepath.Clean(m.policy.MigrationStateRoot)
+	if !filepath.IsAbs(root) {
+		return fmt.Errorf("migration component configuration root is not configured")
+	}
+	for _, name := range []string{"config", "env"} {
+		path := filepath.Join(root, name)
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("invalid migration component %s root", name)
+		}
+		if err := os.Chmod(path, 0o700); err != nil { // #nosec G302 -- private migration component directory.
+			return fmt.Errorf("restrict migration component %s root: %w", name, err)
+		}
+		config.ReadOnlyVolumes[path] = path
 	}
 	return nil
 }
@@ -207,6 +267,17 @@ func prepareMigrationSocketStateDirectory(root, path string) error {
 	}
 	if err := os.Chmod(path, 0o700); err != nil { // #nosec G302 -- private socket directory requires owner execute.
 		return fmt.Errorf("restrict migration runtime socket directory: %w", err)
+	}
+	attestation := filepath.Join(path, "attestation")
+	if err := os.MkdirAll(attestation, 0o700); err != nil {
+		return fmt.Errorf("create migration attestation directory: %w", err)
+	}
+	info, err := os.Lstat(attestation)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("invalid migration attestation directory")
+	}
+	if err := os.Chmod(attestation, 0o700); err != nil { // #nosec G302 -- private migration attestation directory.
+		return fmt.Errorf("restrict migration attestation directory: %w", err)
 	}
 	return nil
 }
@@ -400,12 +471,39 @@ func (m *runtimeComponentLifecycleManager) stop(ctx context.Context, command dom
 	}
 	return m.runtime.StopContainer(ctx, container.ID)
 }
+
+const (
+	componentHealthStartupTimeout = 2 * time.Second
+	componentHealthRetryInterval  = 25 * time.Millisecond
+)
+
+// health tolerates the short eventual-consistency window between a rootless
+// Podman start acknowledgement and its container-list API. It remains bounded
+// by the command context and never treats a missing container as healthy.
 func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command)
-	if err != nil {
-		return err
+	deadline := time.NewTimer(componentHealthStartupTimeout)
+	defer deadline.Stop()
+	var lastErr error
+	for {
+		container, err := m.find(ctx, command)
+		if err == nil {
+			err = m.healthContainer(ctx, container)
+		}
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		timer := time.NewTimer(componentHealthRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return componentLifecycleError("health", ctx.Err())
+		case <-deadline.C:
+			timer.Stop()
+			return componentLifecycleError("health", lastErr)
+		case <-timer.C:
+		}
 	}
-	return m.healthContainer(ctx, container)
 }
 func (m *runtimeComponentLifecycleManager) logs(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	container, err := m.find(ctx, command)
@@ -509,6 +607,20 @@ func componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[str
 	return map[string]string{"/var/lib/gordon": name}
 }
 
+// componentLifecycleConfigFile permits the dedicated final edge manifest only
+// for an activation's validated public bindings. All prepare and rollback paths
+// retain edge.toml, preserving the authenticated probe configuration.
+func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (string, error) {
+	path := command.ConfigFile
+	if command.TargetComponentRole == domain.ComponentRoleEdge && command.LifecycleAction == domain.RuntimeComponentLifecycleActivate && approvedFinalPortPublishes(ports) && filepath.Base(path) == "edge.toml" {
+		path = filepath.Join(filepath.Dir(path), "edge-final.toml")
+	}
+	if err := approvedComponentConfigFile(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func approvedComponentConfigFile(path string) error {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	if !filepath.IsAbs(clean) || !strings.Contains(clean, "/migration/config/") {
@@ -558,10 +670,18 @@ func runtimeComponentSocketMount(environment []string) (string, []string) {
 	return "", copyOf
 }
 
-func approvedPreparedPortPublishes(_ domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
-	// Runtime bootstrap is Unix-only. Any prepare-time TCP publish would expose
-	// an unnecessary host surface and is rejected before reaching the engine.
-	return len(ports) == 0
+func approvedPreparedPortPublishes(role domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
+	// The prepared edge alone may expose one temporary probe listener. It must
+	// be literal loopback TCP and cannot reuse its in-container serving port;
+	// every other role remains host-TCP-free until the activate transaction.
+	if len(ports) == 0 {
+		return role != domain.ComponentRoleEdge
+	}
+	if role != domain.ComponentRoleEdge || len(ports) != 1 {
+		return false
+	}
+	port := ports[0]
+	return port.Protocol == domain.NetworkProtocolTCP && port.HostPort >= 1 && port.HostPort <= 65535 && port.ContainerPort >= 1 && port.ContainerPort <= 65535 && port.HostPort != port.ContainerPort && port.HostIP == "127.0.0.1" && net.ParseIP(port.HostIP).IsLoopback()
 }
 
 func safeComponentNetwork(network string) bool {

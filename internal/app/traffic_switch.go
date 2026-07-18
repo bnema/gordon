@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	edgesnapshotusecase "github.com/bnema/gordon/internal/usecase/edgesnapshot"
 )
 
 // TrafficSwitchChecks exposes only affirmative, split-deployment readiness
@@ -102,13 +104,8 @@ func (s *trafficSwitch) verify(ctx context.Context, checkpoint MigrationCheckpoi
 			return fmt.Errorf("traffic switch %s authentication prerequisite: %w", role, err)
 		}
 	}
-	routeGeneration, err := s.checks.AppliedRouteGeneration(ctx)
-	if err != nil || routeGeneration != checkpoint.RouteSnapshotGeneration {
-		return generationPrerequisiteError("route", err)
-	}
-	trafficGeneration, err := s.checks.AppliedTrafficGeneration(ctx)
-	if err != nil || trafficGeneration != routeGeneration {
-		return generationPrerequisiteError("traffic", err)
+	if err := s.waitForAppliedGeneration(ctx, checkpoint.RouteSnapshotGeneration); err != nil {
+		return err
 	}
 	if err := s.checks.TestApplicationThroughEdge(ctx); err != nil {
 		return fmt.Errorf("traffic switch application edge prerequisite: %w", err)
@@ -120,6 +117,43 @@ func (s *trafficSwitch) verify(ctx context.Context, checkpoint MigrationCheckpoi
 		return fmt.Errorf("traffic switch old serving path prerequisite: %w", err)
 	}
 	return nil
+}
+
+const trafficSwitchAppliedGenerationWait = 10 * time.Second
+
+// waitForAppliedGeneration gives an asynchronously started edge a bounded
+// opportunity to report an actual matching snapshot application. Only the
+// explicit stale acknowledgement state is retried; malformed, mismatched, and
+// transport errors still fail immediately and preserve the old serving path.
+func (s *trafficSwitch) waitForAppliedGeneration(ctx context.Context, expected uint64) error {
+	deadline := time.NewTimer(trafficSwitchAppliedGenerationWait)
+	defer deadline.Stop()
+	for {
+		routeGeneration, routeErr := s.checks.AppliedRouteGeneration(ctx)
+		if routeErr == nil && routeGeneration == expected {
+			trafficGeneration, trafficErr := s.checks.AppliedTrafficGeneration(ctx)
+			if trafficErr == nil && trafficGeneration == routeGeneration {
+				return nil
+			}
+			if trafficErr == nil {
+				return generationPrerequisiteError("traffic", nil)
+			}
+			if !errors.Is(trafficErr, edgesnapshotusecase.ErrAppliedStateStale) {
+				return generationPrerequisiteError("traffic", trafficErr)
+			}
+		} else if routeErr == nil {
+			return generationPrerequisiteError("route", nil)
+		} else if !errors.Is(routeErr, edgesnapshotusecase.ErrAppliedStateStale) {
+			return generationPrerequisiteError("route", routeErr)
+		}
+		select {
+		case <-ctx.Done():
+			return generationPrerequisiteError("route", ctx.Err())
+		case <-deadline.C:
+			return generationPrerequisiteError("route", edgesnapshotusecase.ErrAppliedStateStale)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func generationPrerequisiteError(name string, err error) error {

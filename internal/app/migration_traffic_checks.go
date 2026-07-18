@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -18,12 +19,13 @@ import (
 // authenticated runtime lifecycle commands, sanitized runtime state, and edge
 // reports; it never creates a Docker-compatible client or opens a socket.
 type migrationTrafficChecks struct {
-	runtime out.RuntimeSelfUpdater
-	state   out.RuntimeStateSubscriber
-	store   *MigrationCheckpointStore
-	applied *edgesnapshotusecase.AppliedStateTracker
-	cfg     Config
-	http    *http.Client
+	runtime    out.RuntimeSelfUpdater
+	state      out.RuntimeStateSubscriber
+	store      *MigrationCheckpointStore
+	applied    *edgesnapshotusecase.AppliedStateTracker
+	cfg        Config
+	http       *http.Client
+	probeToken string
 }
 
 func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.RuntimeStateSubscriber, store *MigrationCheckpointStore, applied *edgesnapshotusecase.AppliedStateTracker, cfg Config) (TrafficSwitchChecks, error) {
@@ -31,7 +33,7 @@ func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.Runtime
 		return nil, fmt.Errorf("runtime lifecycle, runtime state, checkpoint store, and edge applied-state tracker are required")
 	}
 	return &migrationTrafficChecks{
-		runtime: runtime, state: state, store: store, applied: applied, cfg: cfg, http: newMigrationProbeHTTPClient(),
+		runtime: runtime, state: state, store: store, applied: applied, cfg: cfg, http: newMigrationProbeHTTPClient(), probeToken: migrationProbeToken(migrationRuntimeSeed(cfg)),
 	}, nil
 }
 
@@ -71,7 +73,7 @@ func (c *migrationTrafficChecks) ComponentAuthenticationHealthy(ctx context.Cont
 	if err != nil {
 		return err
 	}
-	if err := c.applied.AppliedFor(ctx, edge.ComponentID, checkpoint.RouteSnapshotGeneration, checkpoint.RouteSnapshotGeneration); err != nil {
+	if _, err := c.appliedGenerationFor(*checkpoint, edge.ComponentID, ctx); err != nil {
 		return fmt.Errorf("authenticated edge applied readiness: %w", err)
 	}
 	return nil
@@ -93,8 +95,25 @@ func (c *migrationTrafficChecks) appliedGeneration(ctx context.Context) (uint64,
 	if err != nil {
 		return 0, err
 	}
-	if err := c.applied.AppliedFor(ctx, edge.ComponentID, checkpoint.RouteSnapshotGeneration, checkpoint.RouteSnapshotGeneration); err != nil {
-		return 0, err
+	return c.appliedGenerationFor(*checkpoint, edge.ComponentID, ctx)
+}
+
+// appliedGenerationFor accepts an in-memory report when available, then falls
+// back to the checkpointed attestation written by the authenticated control
+// receiver. The latter is required when the monolith CLI retries a switch
+// after the replacement control process has restarted.
+func (c *migrationTrafficChecks) appliedGenerationFor(checkpoint MigrationCheckpoint, edgeID string, ctx context.Context) (uint64, error) {
+	if checkpoint.RouteSnapshotGeneration == 0 || checkpoint.AppliedEdgeComponentID != "" && checkpoint.AppliedEdgeComponentID != edgeID {
+		return 0, edgesnapshotusecase.ErrAppliedStateStale
+	}
+	if err := c.applied.AppliedFor(ctx, edgeID, checkpoint.RouteSnapshotGeneration, checkpoint.RouteSnapshotGeneration); err == nil {
+		return checkpoint.RouteSnapshotGeneration, nil
+	}
+	// New checkpoints always carry the authenticated reporter identity. An
+	// empty field is retained only for old checkpoint compatibility and still
+	// requires a live tracker report, never a synthetic generation.
+	if checkpoint.AppliedEdgeComponentID == "" {
+		return 0, edgesnapshotusecase.ErrAppliedStateStale
 	}
 	return checkpoint.RouteSnapshotGeneration, nil
 }
@@ -104,7 +123,7 @@ func (c *migrationTrafficChecks) TestApplicationThroughEdge(ctx context.Context)
 	if err != nil {
 		return err
 	}
-	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.GordonDomain, "/", false)
+	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.GordonDomain, "/", false, true)
 }
 
 func (c *migrationTrafficChecks) TestRegistryV2ThroughEdge(ctx context.Context) error {
@@ -112,7 +131,7 @@ func (c *migrationTrafficChecks) TestRegistryV2ThroughEdge(ctx context.Context) 
 	if err != nil {
 		return err
 	}
-	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.RegistryDomain, "/v2/", true)
+	return c.probe(ctx, checkpoint.BootstrapEdgeProbeEndpoint, c.cfg.Server.RegistryDomain, "/v2/", true, true)
 }
 
 // OldServingPathHealthy deliberately checks both the old managed container and
@@ -139,7 +158,7 @@ func (c *migrationTrafficChecks) OldServingPathHealthy(ctx context.Context, old 
 		}
 		for _, container := range snapshot.Containers {
 			if container.Name == old && container.Status == domain.ContainerStatusRunning && container.Labels[domain.LabelManaged] == "true" {
-				return c.probe(ctx, checkpoint.OldServingProbeEndpoint, c.cfg.Server.GordonDomain, "/", false)
+				return c.probe(ctx, checkpoint.OldServingProbeEndpoint, c.cfg.Server.GordonDomain, "/", false, false)
 			}
 		}
 		return fmt.Errorf("old managed serving path is not running")
@@ -170,7 +189,7 @@ func componentFromCheckpoint(checkpoint MigrationCheckpoint, role domain.Compone
 // the Host header from validated configuration, never from checkpoint data,
 // and follows no redirects, preventing a migration checkpoint from becoming an
 // SSRF primitive.
-func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path string, registry bool) error {
+func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path string, registry, migrationProbe bool) error {
 	if err := validLoopbackProbeEndpoint(endpoint); err != nil {
 		return err
 	}
@@ -183,6 +202,15 @@ func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path
 		return fmt.Errorf("create probe request: %w", err)
 	}
 	request.Host = host
+	if migrationProbe {
+		if c.probeToken == "" {
+			return fmt.Errorf("migration probe credential is unavailable")
+		}
+		// Only the checkpointed bootstrap endpoint receives this header. The old
+		// serving-path check remains a normal public request, so this credential
+		// cannot become a general outbound HTTP capability.
+		request.Header.Set(migrationProbeHeader, c.probeToken)
+	}
 	response, err := c.http.Do(request)
 	if err != nil {
 		return fmt.Errorf("edge probe request failed: %w", err)
@@ -196,6 +224,16 @@ func (c *migrationTrafficChecks) probe(ctx context.Context, endpoint, host, path
 		return nil
 	}
 	return fmt.Errorf("edge probe returned status %d", response.StatusCode)
+}
+
+func migrationRuntimeSeed(cfg Config) string {
+	if token := strings.TrimSpace(cfg.Runtime.Token); token != "" {
+		return token
+	}
+	if envKey := strings.TrimSpace(cfg.Runtime.TokenEnv); envKey != "" {
+		return strings.TrimSpace(os.Getenv(envKey))
+	}
+	return ""
 }
 
 func newMigrationProbeHTTPClient() *http.Client {

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +23,15 @@ const (
 	// socket or a host-published TCP listener.
 	bootstrapRuntimeSocketName = "runtime-control.sock"
 	componentDataDirectory     = "/var/lib/gordon"
+	migrationAttestationDir    = "attestation"
 )
+
+// migrationCheckpointPath places the durable cutover attestation beneath the
+// generated migration state directory. Candidate control receives only this
+// writable child; it never receives write access to the runtime Unix socket.
+func migrationCheckpointPath(dataDir string) string {
+	return filepath.Join(resolveDataDir(dataDir), "migration", "migration", migrationAttestationDir, "checkpoint.json")
+}
 
 type MigrationPhase string
 
@@ -66,11 +76,17 @@ type MigrationCheckpoint struct {
 	PublicPortBindings      []MigrationPortBinding `json:"public_port_bindings,omitempty"`
 	// EdgeAppNetworks records only managed network names selected from the
 	// runtime snapshot; it never contains container IDs or socket details.
-	EdgeAppNetworks         []string `json:"edge_app_networks,omitempty"`
-	ConnectedEdgeNetworks   []string `json:"connected_edge_networks,omitempty"`
-	EnvFileReferences       []string `json:"env_file_references,omitempty"`
-	ConfigFileReferences    []string `json:"config_file_references,omitempty"`
-	RouteSnapshotGeneration uint64   `json:"route_snapshot_generation,omitempty"`
+	EdgeAppNetworks       []string `json:"edge_app_networks,omitempty"`
+	ConnectedEdgeNetworks []string `json:"connected_edge_networks,omitempty"`
+	EnvFileReferences     []string `json:"env_file_references,omitempty"`
+	ConfigFileReferences  []string `json:"config_file_references,omitempty"`
+	// RouteSnapshotGeneration is written only after the expected edge has
+	// authenticated a completed application of the matching route and traffic
+	// snapshots. Prepare deliberately leaves it zero.
+	RouteSnapshotGeneration uint64 `json:"route_snapshot_generation,omitempty"`
+	// AppliedEdgeComponentID binds the persisted generation to the generated
+	// edge identity that reported it. It contains no runtime/container ID.
+	AppliedEdgeComponentID string `json:"applied_edge_component_id,omitempty"`
 	// SwitchAttempts and LastRetryPhase are deliberately metadata only; they
 	// allow a failed cutover to be resumed without deleting the old path.
 	SwitchAttempts uint64 `json:"switch_attempts,omitempty"`
@@ -150,7 +166,7 @@ func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if old, err := s.load(); err == nil {
-		if old.MigrationID != checkpoint.MigrationID || phaseRank(checkpoint.Phase) < phaseRank(old.Phase) || checkpoint.ComponentGeneration < old.ComponentGeneration {
+		if old.MigrationID != checkpoint.MigrationID || phaseRank(checkpoint.Phase) < phaseRank(old.Phase) || checkpoint.ComponentGeneration < old.ComponentGeneration || checkpoint.RouteSnapshotGeneration < old.RouteSnapshotGeneration {
 			return fmt.Errorf("migration checkpoint regression rejected")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -254,34 +270,84 @@ func syncCheckpointParent(parent string) error {
 }
 
 func validateCheckpoint(checkpoint MigrationCheckpoint) error {
-	if strings.TrimSpace(checkpoint.MigrationID) == "" || phaseRank(checkpoint.Phase) < 0 {
+	if strings.TrimSpace(checkpoint.MigrationID) == "" || phaseRank(checkpoint.Phase) < 0 || checkpoint.StartedAt.IsZero() {
 		return fmt.Errorf("invalid migration checkpoint")
 	}
-	if checkpoint.StartedAt.IsZero() {
+	if !validCheckpointReferences(checkpoint.EnvFileReferences) || !validCheckpointTopology(checkpoint) || !validCheckpointAppliedEdge(checkpoint) {
 		return fmt.Errorf("invalid migration checkpoint")
 	}
-	for _, ref := range checkpoint.EnvFileReferences {
-		if strings.TrimSpace(ref) == "" {
-			return fmt.Errorf("invalid migration checkpoint")
+	return nil
+}
+
+func validCheckpointReferences(references []string) bool {
+	for _, reference := range references {
+		if strings.TrimSpace(reference) == "" {
+			return false
 		}
 	}
+	return true
+}
+
+func validCheckpointTopology(checkpoint MigrationCheckpoint) bool {
 	for _, endpoint := range []string{checkpoint.BootstrapEdgeProbeEndpoint, checkpoint.OldServingProbeEndpoint} {
 		if endpoint != "" && validLoopbackProbeEndpoint(endpoint) != nil {
-			return fmt.Errorf("invalid migration checkpoint")
+			return false
 		}
 	}
-	// Bootstrap uses no TCP publication. Retain the field only so old
-	// checkpoints fail closed instead of silently acquiring a host gateway.
-	if len(checkpoint.PreparedPortBindings) != 0 {
-		return fmt.Errorf("invalid migration checkpoint")
+	if len(checkpoint.PreparedPortBindings) != 0 && !validPreparedEdgeProbeBindings(checkpoint.BootstrapEdgeProbeEndpoint, checkpoint.PreparedPortBindings) {
+		return false
 	}
 	for _, binding := range checkpoint.PublicPortBindings {
 		if !validMigrationPortBinding(binding) {
-			return fmt.Errorf("invalid migration checkpoint")
+			return false
 		}
 	}
-	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
-		return fmt.Errorf("invalid migration checkpoint")
+	return checkpoint.BootstrapRuntimeEndpoint == "" || validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings)
+}
+
+func validCheckpointAppliedEdge(checkpoint MigrationCheckpoint) bool {
+	return checkpoint.AppliedEdgeComponentID == "" || checkpoint.RouteSnapshotGeneration != 0 && componentLabelValue.MatchString(checkpoint.AppliedEdgeComponentID)
+}
+
+// preparedEdgeProbeBinding turns the checkpointed literal loopback endpoint
+// into the sole allowed prepare-time host publish. Keeping this conversion in
+// one place prevents a checkpoint from smuggling another role or listener into
+// the runtime lifecycle command.
+func preparedEdgeProbeBinding(endpoint string, containerPort int) (MigrationPortBinding, error) {
+	host, rawPort, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil || host != "127.0.0.1" || net.ParseIP(host) == nil || containerPort < 1 || containerPort > 65535 {
+		return MigrationPortBinding{}, fmt.Errorf("invalid edge bootstrap probe endpoint")
+	}
+	hostPort, err := strconv.Atoi(rawPort)
+	if err != nil || hostPort < 1 || hostPort > 65535 || hostPort == containerPort {
+		return MigrationPortBinding{}, fmt.Errorf("invalid edge bootstrap probe endpoint")
+	}
+	return MigrationPortBinding{Role: "edge", HostIP: host, HostPort: hostPort, ContainerPort: containerPort, Protocol: "tcp"}, nil
+}
+
+func validPreparedEdgeProbeBindings(endpoint string, bindings []MigrationPortBinding) bool {
+	if len(bindings) != 1 {
+		return false
+	}
+	expected, err := preparedEdgeProbeBinding(endpoint, bindings[0].ContainerPort)
+	return err == nil && bindings[0] == expected
+}
+
+// privateEdgeProbePortAvailable holds the exact literal-loopback address long
+// enough to prove that the bootstrap publish can be claimed before preparation
+// writes state or asks runtime to create any component. Runtime's eventual
+// engine bind remains authoritative against races after this read-only check.
+func privateEdgeProbePortAvailable(endpoint string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil || host != "127.0.0.1" || net.ParseIP(host) == nil {
+		return fmt.Errorf("invalid edge bootstrap probe endpoint")
+	}
+	listener, err := net.Listen("tcp4", net.JoinHostPort(host, port))
+	if err != nil {
+		return fmt.Errorf("edge bootstrap probe port is unavailable")
+	}
+	if err := listener.Close(); err != nil {
+		return fmt.Errorf("edge bootstrap probe port is unavailable")
 	}
 	return nil
 }

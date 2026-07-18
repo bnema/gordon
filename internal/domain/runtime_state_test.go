@@ -6,6 +6,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSanitizeRuntimeStateLabelsRetainsComponentGenerationIdentity(t *testing.T) {
+	labels := SanitizeRuntimeStateLabels(map[string]string{
+		LabelComponent:            "true",
+		LabelComponentRole:        "runtime",
+		LabelComponentGeneration:  "1",
+		LabelComponentMigrationID: "migration",
+		"private.token":           "must-not-leak",
+	})
+	require.Equal(t, "true", labels[LabelComponent])
+	require.Equal(t, "runtime", labels[LabelComponentRole])
+	require.Equal(t, "1", labels[LabelComponentGeneration])
+	require.Equal(t, "migration", labels[LabelComponentMigrationID])
+	require.NotContains(t, labels, "private.token")
+}
+
 func TestRuntimeActualStateSnapshotValidateRequiresSourceAndVersion(t *testing.T) {
 	snapshot := RuntimeActualStateSnapshot{
 		Generation:        1,

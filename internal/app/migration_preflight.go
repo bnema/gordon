@@ -121,7 +121,7 @@ func (d PreflightProductionDependencies) build(configPath string, cfg Config, ru
 // It deliberately receives no runtime adapter or socket path.
 func newControlMigrationPreflight(configPath string, cfg Config, runtime out.RuntimeEnvironmentProbe, inventory out.RuntimeStateSubscriber) *MigrationPreflight {
 	dataDir := resolveDataDir(cfg.Server.DataDir)
-	facts := &runtimePreflightFacts{probe: runtime}
+	facts := &runtimePreflightFacts{probe: runtime, publicPorts: configuredPublicPorts(cfg)}
 	probes := MigrationPreflightProbes{
 		Reset:       facts.reset,
 		Runtime:     facts.runtime,
@@ -131,7 +131,7 @@ func newControlMigrationPreflight(configPath string, cfg Config, runtime out.Run
 		Registry:    directoryAccessProbe(filepath.Join(dataDir, "registry"), unix.R_OK|unix.W_OK),
 		Env:         environmentDirectoryProbe(resolveEnvDir(cfg)),
 		Secrets:     secretBackendHealthProbe(cfg),
-		Ports:       publicListenerProbe(runtime, cfg),
+		Ports:       facts.publicListeners,
 		Network:     facts.network,
 		Inventory:   managedRuntimeInventoryProbe(inventory),
 		Disk:        diskSpaceProbe(dataDir),
@@ -197,18 +197,27 @@ func (p *MigrationPreflight) probeCheck(ctx context.Context, name string, catego
 // runtimePreflightFacts shares one authenticated runtime probe across the
 // runtime, image, and network checks of a single report. It exposes no raw
 // runtime errors or endpoints to callers.
+// runtimeEnvironmentAndPublicListenerProbe is implemented by the authenticated
+// gRPC runtime client. It keeps all migration facts in one snapshot RPC; the
+// fallback maintains compatibility with runtime probes that predate it.
+type runtimeEnvironmentAndPublicListenerProbe interface {
+	ProbeRuntimeEnvironmentWithPublicListeners(context.Context, []int) (out.RuntimeEnvironment, []bool, error)
+}
+
 type runtimePreflightFacts struct {
-	mu     sync.Mutex
-	probe  out.RuntimeEnvironmentProbe
-	loaded bool
-	target RuntimePreflightTarget
-	err    error
+	mu          sync.Mutex
+	probe       out.RuntimeEnvironmentProbe
+	publicPorts []int
+	listeners   []bool
+	loaded      bool
+	target      RuntimePreflightTarget
+	err         error
 }
 
 func (f *runtimePreflightFacts) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.loaded, f.target, f.err = false, RuntimePreflightTarget{}, nil
+	f.loaded, f.target, f.listeners, f.err = false, RuntimePreflightTarget{}, nil, nil
 }
 
 func (f *runtimePreflightFacts) load(ctx context.Context) (RuntimePreflightTarget, error) {
@@ -218,9 +227,16 @@ func (f *runtimePreflightFacts) load(ctx context.Context) (RuntimePreflightTarge
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if !f.loaded {
-		report, err := f.probe.ProbeRuntimeEnvironment(ctx)
+		var report out.RuntimeEnvironment
+		var listeners []bool
+		var err error
+		if combined, ok := f.probe.(runtimeEnvironmentAndPublicListenerProbe); ok {
+			report, listeners, err = combined.ProbeRuntimeEnvironmentWithPublicListeners(ctx, f.publicPorts)
+		} else {
+			report, err = f.probe.ProbeRuntimeEnvironment(ctx)
+		}
 		f.target = RuntimePreflightTarget{Engine: report.Engine, Rootless: report.Rootless, APIReachable: report.APIReachable, ImageAvailable: report.ImageAvailable, ImagePullable: report.ImagePullable, NetworkFeasible: report.NetworkFeasible, DiskAvailable: report.DiskAvailable, DiskSufficient: report.DiskSufficient}
-		f.err, f.loaded = err, true
+		f.listeners, f.err, f.loaded = listeners, err, true
 	}
 	return f.target, f.err
 }
@@ -239,6 +255,39 @@ func (f *runtimePreflightFacts) network(ctx context.Context) error {
 	target, err := f.load(ctx)
 	if err != nil || !target.NetworkFeasible {
 		return fmt.Errorf("component network unavailable")
+	}
+	return nil
+}
+
+func (f *runtimePreflightFacts) publicListeners(ctx context.Context) error {
+	if _, err := f.load(ctx); err != nil {
+		return fmt.Errorf("runtime listener ownership unavailable")
+	}
+	f.mu.Lock()
+	listeners := append([]bool(nil), f.listeners...)
+	ports := append([]int(nil), f.publicPorts...)
+	f.mu.Unlock()
+	if len(ports) == 0 {
+		return nil
+	}
+	if listeners == nil {
+		probe, ok := f.probe.(out.RuntimePublicListenerProbe)
+		if !ok {
+			return fmt.Errorf("runtime listener ownership probe unavailable")
+		}
+		available, err := probe.ProbePublicListeners(ctx, ports)
+		if err != nil {
+			return fmt.Errorf("runtime listener ownership unavailable")
+		}
+		listeners = available
+	}
+	if len(listeners) != len(ports) {
+		return fmt.Errorf("runtime listener ownership unavailable")
+	}
+	for _, accepted := range listeners {
+		if !accepted {
+			return fmt.Errorf("configured public listener is unavailable")
+		}
 	}
 	return nil
 }

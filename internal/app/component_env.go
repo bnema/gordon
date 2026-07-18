@@ -181,6 +181,7 @@ func BuildComponentEnvManifest(options ComponentEnvManifestOptions) (*ComponentE
 	addS3BackupEnv(options.Config, add)
 	addTelemetryEnv(options.Config, add)
 	addRuntimeSocketEnv(add)
+	addRuntimeBootstrapToken(options.Config, options.Environment, manifest)
 	if err := addExplicitComponentEnv(options.ExplicitAllowlist, add); err != nil {
 		return nil, err
 	}
@@ -223,7 +224,14 @@ func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
 	for _, key := range sortedEnvironmentKeys(environment, func(key string) bool {
 		return strings.HasPrefix(key, "GORDON_") && key != "GORDON_ROLE" && key != "GORDON_MIGRATION_IMAGE"
 	}) {
-		add(key, []domain.ComponentRole{domain.ComponentRoleControl}, true)
+		roles := []domain.ComponentRole{domain.ComponentRoleControl}
+		// Runtime must initialize the token issuer used by its local worker.
+		// Keep the signing secret scoped to the control/runtime bootstrap pair;
+		// edge and registry must never receive it.
+		if key == TokenSecretEnvVar {
+			roles = append(roles, domain.ComponentRoleRuntime)
+		}
+		add(key, roles, true)
 	}
 }
 
@@ -259,6 +267,34 @@ func addTelemetryEnv(cfg Config, add componentEnvAdd) {
 	if cfg.Telemetry.Enabled {
 		add("OTEL_EXPORTER_OTLP_HEADERS", componentRoles, false)
 	}
+}
+
+// addRuntimeBootstrapToken places the configured migration handoff credential
+// only in the control/runtime pair. Its value remains private to 0600 role
+// environment files and never appears in manifest status or diagnostics.
+func addRuntimeBootstrapToken(cfg Config, environment map[string]string, manifest *ComponentEnvManifest) {
+	if manifest == nil {
+		return
+	}
+	token := strings.TrimSpace(cfg.Runtime.Token)
+	if token == "" && strings.TrimSpace(cfg.Runtime.TokenEnv) != "" {
+		token = strings.TrimSpace(environment[cfg.Runtime.TokenEnv])
+	}
+	if token == "" {
+		return
+	}
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime} {
+		manifest.values[role]["GORDON_COMPONENT_RUNTIME_TOKEN"] = token
+	}
+	// Edge and registry are authenticated to control before receiving snapshots
+	// or emitting events. They get distinct derived credentials, never the
+	// control/runtime seed that can operate the Unix runtime handoff.
+	manifest.values[domain.ComponentRoleEdge]["GORDON_COMPONENT_EDGE_TOKEN"] = migrationComponentToken(token, domain.ComponentRoleEdge)
+	// This is intentionally neither a control credential nor an edge snapshot
+	// credential. It exists only while a prepared edge must prove that a
+	// rootless-NAT loopback request originated from the migration coordinator.
+	manifest.values[domain.ComponentRoleEdge]["GORDON_MIGRATION_PROBE_TOKEN"] = migrationProbeToken(token)
+	manifest.values[domain.ComponentRoleRegistry]["GORDON_COMPONENT_REGISTRY_TOKEN"] = migrationComponentToken(token, domain.ComponentRoleRegistry)
 }
 
 func addRuntimeSocketEnv(add componentEnvAdd) {

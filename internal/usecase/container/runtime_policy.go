@@ -166,7 +166,7 @@ func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdenti
 		// Gordon role manifests are the sole host-file exception. They are
 		// generated with restrictive permissions under migration/config and may
 		// only be mounted read-only by a labeled component container.
-		if !isRuntimeSocketMount(source) && !isApprovedComponentConfigBind(cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && isUnsafeHostBind(source) {
+		if !isRuntimeSocketMount(source) && !isApprovedComponentConfigBind(cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && !isApprovedMigrationEnvironmentBind(p, cfg, source) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
@@ -224,26 +224,38 @@ func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool
 }
 
 func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string, readOnly bool) bool {
-	if cfg.Labels[domain.LabelComponent] != "true" || (cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) && cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleControl)) {
-		return false
-	}
-	if policy.MigrationStateRoot == "" || !filepath.IsAbs(source) {
+	if !isMigrationStateComponent(cfg) || policy.MigrationStateRoot == "" || !filepath.IsAbs(source) {
 		return false
 	}
 	root := filepath.Clean(policy.MigrationStateRoot)
 	clean := filepath.Clean(source)
-	if filepath.Dir(clean) != root || filepath.Base(clean) == "." {
+	state := clean
+	if filepath.Base(clean) == "attestation" {
+		state = filepath.Dir(clean)
+	}
+	if filepath.Dir(state) != root || filepath.Base(state) == "." {
 		return false
 	}
-	id := filepath.Base(clean)
-	if !componentMigrationID(id) || filepath.Base(clean) != id {
+	id := filepath.Base(state)
+	if !componentMigrationID(id) {
 		return false
 	}
 	destination := filepath.Join("/var/lib/gordon/migration", id)
 	if cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) {
-		return !readOnly && cfg.Volumes[destination] == source
+		return !readOnly && clean == state && cfg.Volumes[destination] == source
 	}
-	return readOnly && cfg.ReadOnlyVolumes[destination] == source
+	if readOnly {
+		return clean == state && cfg.ReadOnlyVolumes[destination] == source
+	}
+	// Control may write only its checkpoint attestation child. The runtime
+	// socket parent remains read-only, so this mount cannot grant socket
+	// deletion or replacement authority.
+	return clean == filepath.Join(state, "attestation") && cfg.Volumes[filepath.Join(destination, "attestation")] == source
+}
+
+func isMigrationStateComponent(cfg domain.ContainerConfig) bool {
+	role := cfg.Labels[domain.LabelComponentRole]
+	return cfg.Labels[domain.LabelComponent] == "true" && (role == string(domain.ComponentRoleRuntime) || role == string(domain.ComponentRoleControl))
 }
 
 func componentMigrationID(id string) bool {
@@ -258,12 +270,21 @@ func componentMigrationID(id string) bool {
 	return true
 }
 
+func isApprovedMigrationEnvironmentBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string) bool {
+	if cfg.Labels[domain.LabelComponent] != "true" || cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) || strings.TrimSpace(policy.MigrationStateRoot) == "" {
+		return false
+	}
+	root := filepath.Clean(policy.MigrationStateRoot)
+	expected := filepath.Join(root, "env")
+	return filepath.IsAbs(source) && filepath.Clean(source) == expected && cfg.ReadOnlyVolumes[source] == source
+}
+
 func isApprovedComponentConfigBind(cfg domain.ContainerConfig, source string) bool {
 	if cfg.Labels[domain.LabelComponent] != "true" {
 		return false
 	}
 	clean := filepath.Clean(strings.TrimSpace(source))
-	return filepath.IsAbs(clean) && strings.Contains(clean, "/migration/config/")
+	return filepath.IsAbs(clean) && (strings.Contains(clean, "/migration/config/") || strings.HasSuffix(clean, "/migration/config"))
 }
 
 func isUnsafeHostBind(source string) bool {

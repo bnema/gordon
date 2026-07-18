@@ -106,8 +106,11 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
-	if len(checkpoint.PreparedPortBindings) != 0 || (checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, nil)) {
+	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, nil) {
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	if len(checkpoint.PreparedPortBindings) != 0 && !validPreparedEdgeProbeBindings(checkpoint.BootstrapEdgeProbeEndpoint, checkpoint.PreparedPortBindings) {
+		return ComponentLaunchPlan{}, fmt.Errorf("invalid edge bootstrap port binding")
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
@@ -119,6 +122,9 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		component := ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash}
 		if role == domain.ComponentRoleRuntime {
 			component.BootstrapEndpoint = checkpoint.BootstrapRuntimeEndpoint
+		}
+		if role == domain.ComponentRoleEdge {
+			component.PortPublishes = componentPreparedPorts(checkpoint.PreparedPortBindings, role)
 		}
 		plan.Components = append(plan.Components, component)
 	}
@@ -294,11 +300,22 @@ func verifyRuntimeHandoffSnapshot(component ComponentLaunchComponent, snapshot d
 	}
 	generation := componentGeneration(component)
 	for _, container := range snapshot.Containers {
-		if container.Name == component.ComponentID && container.Status == domain.ContainerStatusRunning && container.Generation == generation && container.Labels[domain.LabelComponent] == "true" && container.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) && container.Labels[domain.LabelComponentGeneration] == fmt.Sprintf("%d", generation) {
+		// RuntimeContainerState.Generation is the monotonically increasing
+		// snapshot sequence, not the immutable component generation. Bind the
+		// proof to the signed component label instead.
+		if container.Name == component.ComponentID && container.Status == domain.ContainerStatusRunning && container.Labels[domain.LabelComponent] == "true" && container.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) && container.Labels[domain.LabelComponentGeneration] == fmt.Sprintf("%d", generation) {
 			return nil
 		}
 	}
-	return fmt.Errorf("replacement runtime component generation is not live")
+	return fmt.Errorf("replacement runtime component generation is not live: expected=%s generation=%d observed=%s", component.ComponentID, generation, runtimeHandoffContainerSummary(snapshot.Containers))
+}
+
+func runtimeHandoffContainerSummary(containers []domain.RuntimeContainerState) string {
+	states := make([]string, 0, len(containers))
+	for _, container := range containers {
+		states = append(states, fmt.Sprintf("%s:%s:g%d:%s", container.Name, container.Status, container.Generation, container.Labels[domain.LabelComponentRole]))
+	}
+	return strings.Join(states, ",")
 }
 func (l *RuntimeComponentLauncher) CheckComponentHealth(ctx context.Context, component ComponentLaunchComponent) error {
 	return l.send(ctx, domain.RuntimeComponentLifecycleHealth, component, componentGeneration(component), componentMigrationID(component), "health")

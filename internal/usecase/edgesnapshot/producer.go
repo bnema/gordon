@@ -2,6 +2,7 @@ package edgesnapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -125,6 +126,9 @@ func (p *Producer) waitForInitial(ctx context.Context) (<-chan domain.RuntimeAct
 	backoff := producerRetryBackoff
 	for {
 		updates, err := p.subscriber.SubscribeRuntimeState(ctx)
+		if err != nil && !retryableInitialRuntimeStateError(err) {
+			return nil, fmt.Errorf("subscribe initial runtime state: %w", err)
+		}
 		if err == nil && updates != nil {
 		subscription:
 			for {
@@ -155,6 +159,11 @@ func (p *Producer) waitForInitial(ctx context.Context) (<-chan domain.RuntimeAct
 		}
 		backoff = nextProducerBackoff(backoff)
 	}
+}
+
+func retryableInitialRuntimeStateError(err error) bool {
+	var subscriptionErr *out.RuntimeStateSubscriptionError
+	return errors.As(err, &subscriptionErr) && subscriptionErr.Retryable
 }
 
 func (p *Producer) run(ctx context.Context, updates <-chan domain.RuntimeActualStateSnapshot) {

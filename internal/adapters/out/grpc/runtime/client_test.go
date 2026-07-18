@@ -10,6 +10,7 @@ import (
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	inruntime "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/testutils/grpctest"
@@ -55,6 +56,56 @@ func TestClientSubscribeRuntimeStateRoundTripAndCancel(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runtime state subscription did not close after cancellation")
 	}
+}
+
+func TestClientSubscribeRuntimeStateClassifiesInitialSourceErrors(t *testing.T) {
+	for _, tc := range []struct {
+		code      codes.Code
+		retryable bool
+	}{
+		{codes.Unavailable, true}, {codes.ResourceExhausted, true}, {codes.DeadlineExceeded, true},
+		{codes.Unauthenticated, false}, {codes.PermissionDenied, false}, {codes.FailedPrecondition, false},
+		{codes.InvalidArgument, false}, {codes.Internal, false}, {codes.Unknown, false},
+	} {
+		t.Run(tc.code.String(), func(t *testing.T) {
+			conn := newRuntimeTestConn(t, initialStateErrorServer{err: status.Error(tc.code, "credential=super-secret")})
+
+			_, err := NewClient(conn).SubscribeRuntimeState(context.Background())
+
+			require.Error(t, err)
+			var sourceErr *out.RuntimeStateSubscriptionError
+			require.ErrorAs(t, err, &sourceErr)
+			assert.Equal(t, tc.retryable, sourceErr.Retryable)
+			assert.Equal(t, "runtime state subscription unavailable", err.Error())
+			assert.NotContains(t, err.Error(), "super-secret")
+		})
+	}
+}
+
+func TestClientSubscribeRuntimeStateReturnsClosedBeforeInitialSnapshot(t *testing.T) {
+	conn := newRuntimeTestConn(t, initialStateErrorServer{})
+	client := NewClient(conn)
+
+	_, err := client.SubscribeRuntimeState(context.Background())
+
+	require.Error(t, err)
+	var sourceErr *out.RuntimeStateSubscriptionError
+	require.ErrorAs(t, err, &sourceErr)
+	assert.False(t, sourceErr.Retryable)
+	assert.Equal(t, "runtime state subscription unavailable", err.Error())
+}
+
+func TestClientSubscribeRuntimeStateReturnsCancellationBeforeInitialSnapshot(t *testing.T) {
+	conn := newRuntimeTestConn(t, initialStateErrorServer{waitForCancellation: true})
+	client := NewClient(conn)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := client.SubscribeRuntimeState(ctx)
+
+	require.Error(t, err)
+	assert.Equal(t, codes.Canceled, status.Code(err))
+	assert.Equal(t, "context canceled", status.Convert(err).Message())
 }
 
 func TestClientMapsPolicyDeniedResult(t *testing.T) {
@@ -183,6 +234,20 @@ func newRuntimeTestConn(t *testing.T, server runtimev1.RuntimeServiceServer) *gr
 		runtimev1.RegisterRuntimeServiceServer(registrar, server)
 	})
 	return harness.Conn(t)
+}
+
+type initialStateErrorServer struct {
+	runtimev1.UnimplementedRuntimeServiceServer
+	err                 error
+	waitForCancellation bool
+}
+
+func (s initialStateErrorServer) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream grpc.ServerStreamingServer[runtimev1.ActualStateSnapshot]) error {
+	if s.waitForCancellation {
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	}
+	return s.err
 }
 
 type fakeRuntimeStateSubscriber struct {

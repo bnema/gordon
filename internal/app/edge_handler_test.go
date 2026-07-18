@@ -3,6 +3,7 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 
@@ -79,6 +80,52 @@ func TestEdgeHandlerExternalTLSRequiresExplicitLoopbackTrust(t *testing.T) {
 			assert.Equal(t, tt.wantStatus, rr.Code)
 		})
 	}
+}
+
+func TestEdgeHandlerMigrationProbeBypassesOnlyStrictDirectPeerCheck(t *testing.T) {
+	t.Setenv("GORDON_MIGRATION_PROBE_TOKEN", "dedicated-probe-token")
+	cfg := defaultEdgeConfig()
+	cfg.Edge.TLS.Mode = edgeTLSModeExternal
+	cfg.Edge.TrustedProxyCIDRs = []string{"10.0.0.0/8"}
+	cfg.Edge.MigrationProbeEnabled = true
+	cfg.Edge.MigrationProbeTokenEnv = "GORDON_MIGRATION_PROBE_TOKEN"
+	log := zerowrap.New(zerowrap.Config{Level: "disabled"})
+	handler := edgeHTTPHandlerWithMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }), nil, cfg, log, nil)
+
+	for _, probe := range []struct {
+		name, token string
+		status      int
+	}{{"missing", "", http.StatusForbidden}, {"wrong", "wrong", http.StatusForbidden}, {"dedicated", "dedicated-probe-token", http.StatusNoContent}} {
+		t.Run(probe.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "http://edge.test/", nil)
+			req.RemoteAddr = "127.0.0.1:1234" // rootless loopback NAT peer, not a trusted terminator
+			if probe.token != "" {
+				req.Header.Set(migrationProbeHeader, probe.token)
+			}
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			assert.Equal(t, probe.status, rr.Code)
+		})
+	}
+
+	// The same credential is inert after final activation.
+	cfg.Edge.MigrationProbeEnabled = false
+	finalHandler := edgeHTTPHandlerWithMiddleware(http.NotFoundHandler(), nil, cfg, log, nil)
+	finalRequest := httptest.NewRequest(http.MethodGet, "http://edge.test/", nil)
+	finalRequest.RemoteAddr = "127.0.0.1:1234"
+	finalRequest.Header.Set(migrationProbeHeader, os.Getenv("GORDON_MIGRATION_PROBE_TOKEN"))
+	finalResponse := httptest.NewRecorder()
+	finalHandler.ServeHTTP(finalResponse, finalRequest)
+	assert.Equal(t, http.StatusForbidden, finalResponse.Code)
+
+	// A real configured terminator continues through normal edge handling after
+	// activation; the migration credential contributes no authority.
+	trustedFinalRequest := httptest.NewRequest(http.MethodGet, "http://edge.test/", nil)
+	trustedFinalRequest.RemoteAddr = "10.1.2.3:1234"
+	trustedFinalRequest.Header.Set(migrationProbeHeader, os.Getenv("GORDON_MIGRATION_PROBE_TOKEN"))
+	trustedFinalResponse := httptest.NewRecorder()
+	finalHandler.ServeHTTP(trustedFinalResponse, trustedFinalRequest)
+	assert.Equal(t, http.StatusNotFound, trustedFinalResponse.Code)
 }
 
 func TestEdgeHandlerExternalTLSRestrictsPlaintextAndLogsTrustedForwardedAddress(t *testing.T) {

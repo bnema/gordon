@@ -1,6 +1,7 @@
 package app
 
 import (
+	"net"
 	"path/filepath"
 	"testing"
 	"time"
@@ -11,14 +12,34 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestMigrationBootstrapRuntimeTransportUsesPrivateUnixSocketWithoutPublish(t *testing.T) {
+func TestMigrationBootstrapTransportUsesPrivateRuntimeSocketAndLoopbackEdgeProbe(t *testing.T) {
 	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared}
 	service := &MigrationService{}
+	service.config.Server.Port = 8081
 	require.NoError(t, service.setBootstrapListeners(&checkpoint))
 
 	assert.Equal(t, "unix:///var/lib/gordon/migration/fixture/runtime-control.sock", checkpoint.BootstrapRuntimeEndpoint)
-	assert.Empty(t, checkpoint.PreparedPortBindings)
+	assert.Equal(t, "127.0.0.1:18080", checkpoint.BootstrapEdgeProbeEndpoint)
+	require.Equal(t, []MigrationPortBinding{{Role: "edge", HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 8081, Protocol: "tcp"}}, checkpoint.PreparedPortBindings)
 	require.NoError(t, validateCheckpoint(checkpoint))
+
+	plan, err := NewComponentLaunchPlan(checkpoint)
+	require.NoError(t, err)
+	for _, component := range plan.Components {
+		if component.Role == domain.ComponentRoleEdge {
+			assert.Len(t, component.PortPublishes, 1)
+			continue
+		}
+		assert.Empty(t, component.PortPublishes)
+	}
+}
+
+func TestPrivateEdgeProbePortAvailabilityRejectsCollision(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+
+	assert.Error(t, privateEdgeProbePortAvailable(listener.Addr().String()))
 }
 
 func TestMigrationBootstrapRuntimeTransportRejectsTraversalTCPAndOtherSockets(t *testing.T) {
@@ -33,15 +54,23 @@ func TestMigrationBootstrapRuntimeTransportRejectsTraversalTCPAndOtherSockets(t 
 	}
 }
 
-func TestComponentLaunchPlanRejectsTCPBootstrapAndPublish(t *testing.T) {
+func TestComponentLaunchPlanRejectsTCPBootstrapAndUnsafePreparedPublish(t *testing.T) {
 	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared, BootstrapRuntimeEndpoint: "127.0.0.1:23456"}
 	_, err := NewComponentLaunchPlan(checkpoint)
 	require.Error(t, err)
 
 	checkpoint.BootstrapRuntimeEndpoint = "unix:///var/lib/gordon/migration/fixture/runtime-control.sock"
-	checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: 23456, ContainerPort: 9444, Protocol: "tcp"}}
-	_, err = NewComponentLaunchPlan(checkpoint)
-	require.Error(t, err)
+	checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:23456"
+	for _, binding := range []MigrationPortBinding{
+		{Role: "runtime", HostIP: "127.0.0.1", HostPort: 23456, ContainerPort: 9444, Protocol: "tcp"},
+		{Role: "edge", HostIP: "0.0.0.0", HostPort: 23456, ContainerPort: 9444, Protocol: "tcp"},
+		{Role: "edge", HostIP: "127.0.0.1", HostPort: 23456, ContainerPort: 9444, Protocol: "udp"},
+		{Role: "edge", HostIP: "127.0.0.1", HostPort: 23456, ContainerPort: 23456, Protocol: "tcp"},
+	} {
+		checkpoint.PreparedPortBindings = []MigrationPortBinding{binding}
+		_, err = NewComponentLaunchPlan(checkpoint)
+		require.Error(t, err, "%+v", binding)
+	}
 }
 
 func TestRuntimeHandoffDialerRejectsWrongRoleTokenAndNonUnixEndpoint(t *testing.T) {

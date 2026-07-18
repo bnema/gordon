@@ -59,6 +59,23 @@ mode = "external"
 	assert.Equal(t, edgeTLSModeExternal, cfg.Edge.TLS.Mode)
 }
 
+func TestInitEdgeConfigRequiresProbeTokenEnvironmentWhenEnabled(t *testing.T) {
+	path := writeEdgeConfig(t, `
+[control]
+endpoint = "control.internal:9090"
+token_env = "EDGE_TOKEN"
+insecure_tls = true
+[edge]
+listen_address = "127.0.0.1:8080"
+trusted_proxy_cidrs = ["10.0.0.0/8"]
+migration_probe_enabled = true
+[edge.tls]
+mode = "external"
+`)
+	_, err := initEdgeConfig(path)
+	require.ErrorContains(t, err, "migration_probe_token_env")
+}
+
 func TestInitEdgeConfigTLSModes(t *testing.T) {
 	certPath, keyPath := writeEdgeCertificate(t)
 	filesPath := writeEdgeConfig(t, `

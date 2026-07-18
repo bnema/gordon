@@ -39,13 +39,19 @@ type EdgeControlConfig struct {
 // inferred: files terminates TLS locally; external accepts cleartext only from
 // the configured terminating proxy CIDRs.
 type EdgeServingConfig struct {
-	ListenAddress        string        `toml:"listen_address"`
-	RegistryDomain       string        `toml:"registry_domain"`
-	MaxProxyBodySize     string        `toml:"max_proxy_body_size"`
-	MaxProxyResponseSize string        `toml:"max_proxy_response_size"`
-	MaxConcurrentConns   int           `toml:"max_concurrent_connections"`
-	TrustedProxyCIDRs    []string      `toml:"trusted_proxy_cidrs"`
-	TLS                  EdgeTLSConfig `toml:"tls"`
+	ListenAddress        string   `toml:"listen_address"`
+	RegistryDomain       string   `toml:"registry_domain"`
+	MaxProxyBodySize     string   `toml:"max_proxy_body_size"`
+	MaxProxyResponseSize string   `toml:"max_proxy_response_size"`
+	MaxConcurrentConns   int      `toml:"max_concurrent_connections"`
+	TrustedProxyCIDRs    []string `toml:"trusted_proxy_cidrs"`
+	// MigrationProbeEnabled is a narrowly scoped, prepare-only escape hatch
+	// for rootless NAT, whose direct peer is not the loopback address selected
+	// for the host-only bootstrap listener. It is never enabled in final edge
+	// configuration.
+	MigrationProbeEnabled  bool          `toml:"migration_probe_enabled"`
+	MigrationProbeTokenEnv string        `toml:"migration_probe_token_env"`
+	TLS                    EdgeTLSConfig `toml:"tls"`
 }
 
 type EdgeTLSConfig struct {
@@ -120,6 +126,9 @@ func validateEdgeConfig(cfg EdgeConfig) error {
 
 	if err := validateEdgeTrustedProxyCIDRs(cfg.Edge.TrustedProxyCIDRs); err != nil {
 		return err
+	}
+	if cfg.Edge.MigrationProbeEnabled && strings.TrimSpace(cfg.Edge.MigrationProbeTokenEnv) == "" {
+		return fmt.Errorf("edge.migration_probe_token_env is required when edge.migration_probe_enabled is true")
 	}
 	return validateEdgeTLSContract(cfg)
 }

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -10,6 +11,8 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -143,24 +146,42 @@ func (c *Client) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnviro
 }
 
 func (c *Client) ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error) {
+	_, available, err := c.ProbeRuntimeEnvironmentWithPublicListeners(ctx, ports)
+	return available, err
+}
+
+// ProbeRuntimeEnvironmentWithPublicListeners obtains the complete read-only
+// migration fact set in one authenticated RPC. Keeping environment and
+// listener ownership together prevents preflight from observing different
+// runtime states between separate calls.
+func (c *Client) ProbeRuntimeEnvironmentWithPublicListeners(ctx context.Context, ports []int) (out.RuntimeEnvironment, []bool, error) {
 	if len(ports) > 16 {
-		return nil, fmt.Errorf("too many public listeners")
+		return out.RuntimeEnvironment{}, nil, fmt.Errorf("too many public listeners")
 	}
 	required := make([]int32, len(ports))
 	for i, port := range ports {
 		if port < 1 || port > 65535 {
-			return nil, fmt.Errorf("invalid public listener")
+			return out.RuntimeEnvironment{}, nil, fmt.Errorf("invalid public listener")
 		}
 		required[i] = int32(port)
 	}
 	resp, err := c.client.ProbeEnvironment(ctx, &runtimev1.ProbeEnvironmentRequest{RequiredPublicPorts: required})
 	if err != nil {
-		return nil, err
+		return out.RuntimeEnvironment{}, nil, err
 	}
 	if resp == nil || len(resp.GetPublicListenersAvailable()) != len(ports) {
-		return nil, fmt.Errorf("runtime response missing listener availability")
+		return out.RuntimeEnvironment{}, nil, fmt.Errorf("runtime response missing listener availability")
 	}
-	return append([]bool(nil), resp.GetPublicListenersAvailable()...), nil
+	return out.RuntimeEnvironment{
+		Engine:          resp.GetEngine(),
+		Rootless:        resp.GetRootless(),
+		APIReachable:    resp.GetApiReachable(),
+		ImageAvailable:  resp.GetImageAvailable(),
+		ImagePullable:   resp.GetImagePullable(),
+		NetworkFeasible: resp.GetNetworkFeasible(),
+		DiskAvailable:   resp.GetDiskAvailableBytes(),
+		DiskSufficient:  resp.GetDiskSufficient(),
+	}, append([]bool(nil), resp.GetPublicListenersAvailable()...), nil
 }
 
 func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {
@@ -168,9 +189,29 @@ func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.Runti
 	if err != nil {
 		return nil, err
 	}
-	out := make(chan domain.RuntimeActualStateSnapshot)
+	// A stream is not a usable subscription until its source has published a
+	// snapshot. Receiving it here makes authorization, source startup, and an
+	// immediately closed stream visible to the caller instead of silently
+	// turning them into a closed channel in the background pump.
+	first, err := stream.Recv()
+	if err != nil {
+		return nil, sanitizedInitialRuntimeStateError(err)
+	}
+	out := make(chan domain.RuntimeActualStateSnapshot, 1)
+	out <- protoActualStateSnapshot(first)
 	go pumpActualStateStream(ctx, stream, out)
 	return out, nil
+}
+
+func sanitizedInitialRuntimeStateError(err error) error {
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	code := status.Code(err)
+	return &out.RuntimeStateSubscriptionError{
+		Retryable: code == codes.Unavailable || code == codes.ResourceExhausted || code == codes.DeadlineExceeded,
+		Err:       status.Error(code, "receive initial runtime state"),
+	}
 }
 
 // AcknowledgeRuntimeDrain is retained for the monolith compatibility boundary.

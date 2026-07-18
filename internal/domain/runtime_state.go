@@ -355,7 +355,17 @@ func isAllowedRuntimeStateLabel(label string) bool {
 		LabelBackupType,
 		LabelBackupVersion,
 		LabelBackupSchedule,
-		LabelBackupSidecar:
+		LabelBackupSidecar,
+		// Component identity labels are non-secret lifecycle metadata. Control
+		// needs them in the authenticated actual-state stream to prove that the
+		// replacement runtime is the exact prepared generation.
+		LabelComponent,
+		LabelComponentRole,
+		LabelComponentVersion,
+		LabelComponentGeneration,
+		LabelComponentMigrationID,
+		LabelComponentOwner,
+		LabelComponentDesiredStateHash:
 		return true
 	default:
 		return false

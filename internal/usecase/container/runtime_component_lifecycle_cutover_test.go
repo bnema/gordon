@@ -28,7 +28,7 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(c *domain.ContainerConfig) bool {
-		return c.Name == prepared.Name && len(c.PortPublishes) == 2 && c.PortPublishes[0].HostPort == 8080 && c.PortPublishes[1].HostPort == 5000
+		return c.Name == prepared.Name && len(c.PortPublishes) == 2 && c.PortPublishes[0].HostPort == 8080 && c.PortPublishes[1].HostPort == 5000 && filepath.Base(c.ReadOnlyVolumes["/etc/gordon/role.toml"]) == "edge-final.toml"
 	})).Return(&domain.Container{ID: "final"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
@@ -125,7 +125,8 @@ func cutoverConfig(t *testing.T) string {
 	directory := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(directory, 0o700))
 	path := filepath.Join(directory, "edge.toml")
-	require.NoError(t, os.WriteFile(path, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(path, []byte("[edge]\nmigration_probe_enabled = true\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "edge-final.toml"), []byte("[edge]\nmigration_probe_enabled = false\n"), 0o600))
 	return path
 }
 

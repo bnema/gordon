@@ -63,9 +63,15 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err := wireControlManagementFacades(cfg, svc, log); err != nil {
 		return nil, err
 	}
-	checkpointStore, err := NewMigrationCheckpointStore(filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "checkpoint.json"))
+	checkpointStore, err := NewMigrationCheckpointStore(migrationCheckpointPath(cfg.Server.DataDir))
 	if err != nil {
 		return nil, fmt.Errorf("create migration checkpoint store: %w", err)
+	}
+	// Persist only the authenticated edge's completed snapshot application.
+	// The receiver also makes the cutover fact survive a control reconnect.
+	svc.appliedStateReceiver, err = newMigrationAppliedStateReceiver(checkpointStore, svc.appliedStateTracker)
+	if err != nil {
+		return nil, fmt.Errorf("create migration edge applied-state receiver: %w", err)
 	}
 	// Control receives only the sanitized runtime RPC probe. It never opens a
 	// Docker-compatible socket or constructs a local runtime adapter.
