@@ -135,6 +135,7 @@ type runtimeRoleWorkerBundle struct {
 	imageManager             out.RuntimeImageManager
 	routeDrainAckReceiver    out.RouteDrainAckReceiver
 	standaloneServiceManager out.RuntimeStandaloneServiceManager
+	environmentProbe         out.RuntimeEnvironmentProbe
 }
 
 func (w runtimeRoleWorkerBundle) RuntimeLogReader() out.RuntimeLogReader { return w.logReader }
@@ -149,6 +150,10 @@ func (w runtimeRoleWorkerBundle) RuntimeImageManager() out.RuntimeImageManager {
 
 func (w runtimeRoleWorkerBundle) RuntimeStandaloneServiceManager() out.RuntimeStandaloneServiceManager {
 	return w.standaloneServiceManager
+}
+
+func (w runtimeRoleWorkerBundle) RuntimeEnvironmentProbe() out.RuntimeEnvironmentProbe {
+	return w.environmentProbe
 }
 
 func (w runtimeRoleWorkerBundle) RouteDrainAckReceiver() out.RouteDrainAckReceiver {
@@ -213,7 +218,7 @@ func runtimeRoleRouteDrainAckReceiver(worker in.RuntimeWorker) out.RouteDrainAck
 }
 
 func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServer {
-	return runtimegrpc.NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager(
+	return runtimegrpc.NewServerWithEnvironmentProbe(
 		worker,
 		runtimeRoleLogReader(worker),
 		runtimeRoleVolumeManager(worker),
@@ -221,8 +226,18 @@ func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServ
 		runtimeRoleStateSubscriber(worker),
 		runtimeRoleRouteDrainAckReceiver(worker),
 		runtimeRoleStandaloneServiceManager(worker),
+		runtimeRoleEnvironmentProbe(worker),
 		"gordon-runtime",
 	)
+}
+
+func runtimeRoleEnvironmentProbe(worker in.RuntimeWorker) out.RuntimeEnvironmentProbe {
+	if w, ok := worker.(interface {
+		RuntimeEnvironmentProbe() out.RuntimeEnvironmentProbe
+	}); ok {
+		return w.RuntimeEnvironmentProbe()
+	}
+	return nil
 }
 
 func runtimeRoleStateSubscriber(worker in.RuntimeWorker) out.RuntimeStateSubscriber {
@@ -352,7 +367,8 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 	drainRegistry = container.NewRuntimeDrainRegistry(svc.containerSvc.RuntimeDrainRouteState)
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)
-	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), routeDrainAckReceiver: drainRegistry, standaloneServiceManager: standaloneServiceManager}, cleanup, nil
+	var environmentProbe out.RuntimeEnvironmentProbe = svc.runtime
+	return runtimeRoleWorkerBundle{RuntimeWorker: worker, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), routeDrainAckReceiver: drainRegistry, standaloneServiceManager: standaloneServiceManager, environmentProbe: environmentProbe}, cleanup, nil
 }
 
 func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Config, v *viper.Viper) out.RuntimeStandaloneServiceManager {

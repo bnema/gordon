@@ -36,6 +36,28 @@ func TestMigrationPreflightPassFailMatrixIsReadOnlyAndRedacted(t *testing.T) {
 	}
 }
 
+func TestMigrationPreflightRejectsNonRootlessOrUnavailableRuntime(t *testing.T) {
+	cases := []struct {
+		name   string
+		target RuntimePreflightTarget
+		err    error
+	}{
+		{name: "docker", target: RuntimePreflightTarget{Engine: "docker", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}},
+		{name: "rootful podman", target: RuntimePreflightTarget{Engine: "podman", APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}},
+		{name: "runtime unavailable", err: errors.New("runtime endpoint unavailable")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			probes := passingMigrationProbes(nil)
+			probes.Runtime = func(context.Context) (RuntimePreflightTarget, error) { return tc.target, tc.err }
+			report := NewMigrationPreflight(probes).Check(context.Background())
+			assert.False(t, report.Ready)
+			assert.Equal(t, PreflightFail, report.Checks[0].Status)
+			assert.NotContains(t, report.Checks[0].Remediation, "endpoint")
+		})
+	}
+}
+
 func passingMigrationProbes(calls *int) MigrationPreflightProbes {
 	probe := func(context.Context) error {
 		if calls != nil {
@@ -47,7 +69,7 @@ func passingMigrationProbes(calls *int) MigrationPreflightProbes {
 		if calls != nil {
 			*calls++
 		}
-		return RuntimePreflightTarget{Engine: "podman", Rootless: true}, nil
+		return RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskAvailable: 1 << 30, DiskSufficient: true}, nil
 	}, Image: probe, Config: probe, DataDir: probe, Registry: probe, Env: probe, Secrets: probe, Ports: probe, Network: probe, Inventory: probe, Disk: probe, Credentials: probe}
 }
 func setFailingMigrationProbe(probes *MigrationPreflightProbes, name string) {

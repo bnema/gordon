@@ -19,6 +19,7 @@ type Client struct {
 }
 
 var _ out.RuntimeStandaloneServiceManager = (*Client)(nil)
+var _ out.RuntimeEnvironmentProbe = (*Client)(nil)
 
 func NewClient(conn grpc.ClientConnInterface) *Client {
 	return &Client{client: runtimev1.NewRuntimeServiceClient(conn)}
@@ -119,6 +120,26 @@ func (c *Client) RuntimeVersion(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return resp.Message, nil
+}
+
+func (c *Client) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnvironment, error) {
+	resp, err := c.client.ProbeEnvironment(ctx, &runtimev1.ProbeEnvironmentRequest{})
+	if err != nil {
+		return out.RuntimeEnvironment{}, err
+	}
+	if resp == nil {
+		return out.RuntimeEnvironment{}, fmt.Errorf("runtime response missing environment probe")
+	}
+	return out.RuntimeEnvironment{
+		Engine:          resp.GetEngine(),
+		Rootless:        resp.GetRootless(),
+		APIReachable:    resp.GetApiReachable(),
+		ImageAvailable:  resp.GetImageAvailable(),
+		ImagePullable:   resp.GetImagePullable(),
+		NetworkFeasible: resp.GetNetworkFeasible(),
+		DiskAvailable:   resp.GetDiskAvailableBytes(),
+		DiskSufficient:  resp.GetDiskSufficient(),
+	}, nil
 }
 
 func (c *Client) SubscribeRuntimeState(ctx context.Context) (<-chan domain.RuntimeActualStateSnapshot, error) {

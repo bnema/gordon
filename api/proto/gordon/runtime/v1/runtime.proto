@@ -13,6 +13,9 @@ service RuntimeService {
   rpc ApplyCommand(ApplyCommandRequest) returns (ApplyCommandResponse);
   rpc WatchActualState(WatchActualStateRequest) returns (stream ActualStateSnapshot);
   rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  // ProbeEnvironment returns only migration-safe facts. It never exposes a
+  // socket path, engine configuration, raw daemon payload, or error details.
+  rpc ProbeEnvironment(ProbeEnvironmentRequest) returns (ProbeEnvironmentResponse);
   rpc StreamLogs(StreamLogsRequest) returns (stream LogChunk);
   rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
   rpc RemoveVolume(RemoveVolumeRequest) returns (gordon.common.v1.Ack);
@@ -289,6 +292,19 @@ message GetHealthResponse {
   bool ok = 1;
   string component_id = 2;
   string message = 3;
+}
+
+message ProbeEnvironmentRequest {}
+
+message ProbeEnvironmentResponse {
+  string engine = 1;
+  bool rootless = 2;
+  bool api_reachable = 3;
+  bool image_available = 4;
+  bool image_pullable = 5;
+  bool network_feasible = 6;
+  uint64 disk_available_bytes = 7;
+  bool disk_sufficient = 8;
 }
 
 message StreamLogsRequest {

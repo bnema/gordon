@@ -320,7 +320,20 @@ func parseResponse(resp *http.Response, target any) error {
 // Migration methods intentionally use raw JSON to keep the remote transport
 // independent of app wiring (and therefore free of app/adapter import cycles).
 func (c *Client) MigrationPlan(ctx context.Context) (json.RawMessage, error) {
-	return c.migration(ctx, http.MethodGet, "/migration/plan", nil)
+	resp, err := c.doRequest(ctx, http.MethodGet, "/migration/plan", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusUnprocessableEntity {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
+		return nil, parseErrorResponse(resp, body)
+	}
+	var result json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode migration preflight: %w", err)
+	}
+	return result, nil
 }
 func (c *Client) MigrationPrepare(ctx context.Context, checkpoint any) (json.RawMessage, error) {
 	return c.migration(ctx, http.MethodPost, "/migration/prepare", checkpoint)

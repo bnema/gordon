@@ -23,6 +23,7 @@ const (
 	RuntimeService_ApplyCommand_FullMethodName               = "/gordon.runtime.v1.RuntimeService/ApplyCommand"
 	RuntimeService_WatchActualState_FullMethodName           = "/gordon.runtime.v1.RuntimeService/WatchActualState"
 	RuntimeService_GetHealth_FullMethodName                  = "/gordon.runtime.v1.RuntimeService/GetHealth"
+	RuntimeService_ProbeEnvironment_FullMethodName           = "/gordon.runtime.v1.RuntimeService/ProbeEnvironment"
 	RuntimeService_StreamLogs_FullMethodName                 = "/gordon.runtime.v1.RuntimeService/StreamLogs"
 	RuntimeService_ListVolumes_FullMethodName                = "/gordon.runtime.v1.RuntimeService/ListVolumes"
 	RuntimeService_RemoveVolume_FullMethodName               = "/gordon.runtime.v1.RuntimeService/RemoveVolume"
@@ -46,6 +47,9 @@ type RuntimeServiceClient interface {
 	ApplyCommand(ctx context.Context, in *ApplyCommandRequest, opts ...grpc.CallOption) (*ApplyCommandResponse, error)
 	WatchActualState(ctx context.Context, in *WatchActualStateRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ActualStateSnapshot], error)
 	GetHealth(ctx context.Context, in *GetHealthRequest, opts ...grpc.CallOption) (*GetHealthResponse, error)
+	// ProbeEnvironment returns only migration-safe facts. It never exposes a
+	// socket path, engine configuration, raw daemon payload, or error details.
+	ProbeEnvironment(ctx context.Context, in *ProbeEnvironmentRequest, opts ...grpc.CallOption) (*ProbeEnvironmentResponse, error)
 	StreamLogs(ctx context.Context, in *StreamLogsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LogChunk], error)
 	ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error)
 	RemoveVolume(ctx context.Context, in *RemoveVolumeRequest, opts ...grpc.CallOption) (*v1.Ack, error)
@@ -110,6 +114,16 @@ func (c *runtimeServiceClient) GetHealth(ctx context.Context, in *GetHealthReque
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetHealthResponse)
 	err := c.cc.Invoke(ctx, RuntimeService_GetHealth_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runtimeServiceClient) ProbeEnvironment(ctx context.Context, in *ProbeEnvironmentRequest, opts ...grpc.CallOption) (*ProbeEnvironmentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeEnvironmentResponse)
+	err := c.cc.Invoke(ctx, RuntimeService_ProbeEnvironment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -245,6 +259,9 @@ type RuntimeServiceServer interface {
 	ApplyCommand(context.Context, *ApplyCommandRequest) (*ApplyCommandResponse, error)
 	WatchActualState(*WatchActualStateRequest, grpc.ServerStreamingServer[ActualStateSnapshot]) error
 	GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error)
+	// ProbeEnvironment returns only migration-safe facts. It never exposes a
+	// socket path, engine configuration, raw daemon payload, or error details.
+	ProbeEnvironment(context.Context, *ProbeEnvironmentRequest) (*ProbeEnvironmentResponse, error)
 	StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error
 	ListVolumes(context.Context, *ListVolumesRequest) (*ListVolumesResponse, error)
 	RemoveVolume(context.Context, *RemoveVolumeRequest) (*v1.Ack, error)
@@ -284,6 +301,9 @@ func (UnimplementedRuntimeServiceServer) WatchActualState(*WatchActualStateReque
 }
 func (UnimplementedRuntimeServiceServer) GetHealth(context.Context, *GetHealthRequest) (*GetHealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHealth not implemented")
+}
+func (UnimplementedRuntimeServiceServer) ProbeEnvironment(context.Context, *ProbeEnvironmentRequest) (*ProbeEnvironmentResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeEnvironment not implemented")
 }
 func (UnimplementedRuntimeServiceServer) StreamLogs(*StreamLogsRequest, grpc.ServerStreamingServer[LogChunk]) error {
 	return status.Error(codes.Unimplemented, "method StreamLogs not implemented")
@@ -382,6 +402,24 @@ func _RuntimeService_GetHealth_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RuntimeServiceServer).GetHealth(ctx, req.(*GetHealthRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RuntimeService_ProbeEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).ProbeEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_ProbeEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).ProbeEnvironment(ctx, req.(*ProbeEnvironmentRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -591,6 +629,10 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetHealth",
 			Handler:    _RuntimeService_GetHealth_Handler,
+		},
+		{
+			MethodName: "ProbeEnvironment",
+			Handler:    _RuntimeService_ProbeEnvironment_Handler,
 		},
 		{
 			MethodName: "ListVolumes",

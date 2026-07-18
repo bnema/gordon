@@ -65,26 +65,30 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration checkpoint store: %w", err)
 	}
-	// Runtime discovery is intentionally absent here: only gordon-runtime may
-	// own the Docker-compatible socket. Until its narrow probe is wired, plan
-	// safely fails instead of accepting Docker or mutating deployment state.
-	svc.migrationSvc, err = NewMigrationService(NewMigrationPreflight(MigrationPreflightProbes{}), checkpointStore)
+	// Control receives only the sanitized runtime RPC probe. It never opens a
+	// Docker-compatible socket or constructs a local runtime adapter.
+	runtimeProbe, _ := svc.runtimeCommandClient.(out.RuntimeEnvironmentProbe)
+	svc.migrationSvc, err = NewMigrationService(newControlMigrationPreflight(cfg, runtimeProbe), checkpointStore)
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
-		ConfigSvc:        svc.configSvc,
-		AuthSvc:          svc.authSvc,
-		SecretSvc:        svc.secretSvc,
-		HealthSvc:        svc.healthSvc,
-		LogSvc:           svc.logSvc,
-		ImageSvc:         svc.imageSvc,
-		VolumeSvc:        svc.volumeSvc,
-		ReloadTrigger:    svc.reloadCoordinator,
-		RuntimeControl:   svc.runtimeControl,
-		NetworkSvc:       controlNetworkService{runtime: controlRuntimeStateSubscriber(svc.runtimeCommandClient)},
-		TrafficSvc:       nil,
-		MigrationPlan:    func(ctx context.Context) (any, error) { return svc.migrationSvc.Plan(ctx) },
+		ConfigSvc:      svc.configSvc,
+		AuthSvc:        svc.authSvc,
+		SecretSvc:      svc.secretSvc,
+		HealthSvc:      svc.healthSvc,
+		LogSvc:         svc.logSvc,
+		ImageSvc:       svc.imageSvc,
+		VolumeSvc:      svc.volumeSvc,
+		ReloadTrigger:  svc.reloadCoordinator,
+		RuntimeControl: svc.runtimeControl,
+		NetworkSvc:     controlNetworkService{runtime: controlRuntimeStateSubscriber(svc.runtimeCommandClient)},
+		TrafficSvc:     nil,
+		MigrationPlan:  func(ctx context.Context) (any, error) { return svc.migrationSvc.Plan(ctx) },
+		MigrationPlanFailed: func(result any) bool {
+			report, ok := result.(MigrationPreflightReport)
+			return ok && !report.Ready
+		},
 		MigrationPrepare: func(ctx context.Context) (any, error) { return svc.migrationSvc.Prepare(ctx, MigrationCheckpoint{}) },
 		MigrationSwitch:  func(ctx context.Context) (any, error) { return svc.migrationSvc.Switch(ctx) },
 		MigrationStatus:  func(context.Context) (any, error) { return svc.migrationSvc.Status() },

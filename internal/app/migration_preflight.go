@@ -2,7 +2,12 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // PreflightStatus is deliberately small so reports remain stable for CLI and API clients.
@@ -46,8 +51,14 @@ type MigrationPreflightReport struct {
 // A Docker-compatible API is acceptable only when it positively identifies
 // rootless Podman; control code never opens a runtime socket itself.
 type RuntimePreflightTarget struct {
-	Engine   string
-	Rootless bool
+	Engine          string
+	Rootless        bool
+	APIReachable    bool
+	ImageAvailable  bool
+	ImagePullable   bool
+	NetworkFeasible bool
+	DiskAvailable   uint64
+	DiskSufficient  bool
 }
 
 // MigrationPreflightProbes are narrow, read-only capabilities.  Implementations
@@ -71,6 +82,41 @@ type MigrationPreflight struct{ probes MigrationPreflightProbes }
 
 func NewMigrationPreflight(probes MigrationPreflightProbes) *MigrationPreflight {
 	return &MigrationPreflight{probes: probes}
+}
+
+// newControlMigrationPreflight keeps host filesystem/config checks in control
+// while delegating every runtime fact to the authenticated runtime RPC client.
+func newControlMigrationPreflight(cfg Config, runtime out.RuntimeEnvironmentProbe) *MigrationPreflight {
+	dataDir := resolveDataDir(cfg.Server.DataDir)
+	readDirectory := func(path string) func(context.Context) error {
+		return func(context.Context) error {
+			info, err := os.Stat(path)
+			if err != nil || !info.IsDir() {
+				return fmt.Errorf("directory unavailable")
+			}
+			return nil
+		}
+	}
+	runtimeProbe := func(ctx context.Context) (RuntimePreflightTarget, error) {
+		if runtime == nil {
+			return RuntimePreflightTarget{}, fmt.Errorf("runtime probe unavailable")
+		}
+		report, err := runtime.ProbeRuntimeEnvironment(ctx)
+		if err != nil {
+			return RuntimePreflightTarget{}, err
+		}
+		return RuntimePreflightTarget{Engine: report.Engine, Rootless: report.Rootless, APIReachable: report.APIReachable, ImageAvailable: report.ImageAvailable, ImagePullable: report.ImagePullable, NetworkFeasible: report.NetworkFeasible, DiskAvailable: report.DiskAvailable, DiskSufficient: report.DiskSufficient}, nil
+	}
+	noError := func(context.Context) error { return nil }
+	probes := MigrationPreflightProbes{
+		Runtime: runtimeProbe, Image: noError, Config: noError, DataDir: readDirectory(dataDir),
+		Registry: readDirectory(filepath.Join(dataDir, "registry")), Env: noError, Secrets: noError,
+		Ports: noError, Network: noError, Inventory: noError, Disk: noError, Credentials: noError,
+	}
+	if strings.TrimSpace(cfg.Env.Dir) != "" {
+		probes.Env = readDirectory(cfg.Env.Dir)
+	}
+	return NewMigrationPreflight(probes)
 }
 
 // Check performs a dry-run only.  Probe failures are intentionally not copied
@@ -106,7 +152,7 @@ func (p *MigrationPreflight) runtimeCheck(ctx context.Context) PreflightCheck {
 		return check
 	}
 	target, err := p.probes.Runtime(ctx)
-	if err != nil || !strings.EqualFold(strings.TrimSpace(target.Engine), "podman") || !target.Rootless {
+	if err != nil || !strings.EqualFold(strings.TrimSpace(target.Engine), "podman") || !target.Rootless || !target.APIReachable || !target.ImageAvailable || !target.ImagePullable || !target.NetworkFeasible || !target.DiskSufficient {
 		check.Status = PreflightFail
 		return check
 	}

@@ -38,6 +38,7 @@ type Server struct {
 	routeDrainAckReceiver    out.RouteDrainAckReceiver
 	routeDrainRegistrar      out.RouteDrainRegistrar
 	standaloneServiceManager out.RuntimeStandaloneServiceManager
+	environmentProbe         out.RuntimeEnvironmentProbe
 	componentID              string
 }
 
@@ -104,7 +105,12 @@ func NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager(
 
 // NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager configures the split opaque drain relay.
 func NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, routeDrainAckReceiver out.RouteDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
-	server := &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, routeDrainAckReceiver: routeDrainAckReceiver, standaloneServiceManager: standaloneServiceManager, componentID: componentID}
+	return NewServerWithEnvironmentProbe(worker, logReader, volumeManager, imageManager, stateSubscriber, routeDrainAckReceiver, standaloneServiceManager, nil, componentID)
+}
+
+// NewServerWithEnvironmentProbe adds the read-only migration preflight port.
+func NewServerWithEnvironmentProbe(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, routeDrainAckReceiver out.RouteDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, environmentProbe out.RuntimeEnvironmentProbe, componentID string) *Server {
+	server := &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, routeDrainAckReceiver: routeDrainAckReceiver, standaloneServiceManager: standaloneServiceManager, environmentProbe: environmentProbe, componentID: componentID}
 	if registrar, ok := routeDrainAckReceiver.(out.RouteDrainRegistrar); ok {
 		server.routeDrainRegistrar = registrar
 	}
@@ -116,6 +122,7 @@ func MethodScopes() map[string]domain.ComponentScope {
 		runtimev1.RuntimeService_ApplyCommand_FullMethodName:               domain.ComponentScopeRuntimeDeploy,
 		runtimev1.RuntimeService_WatchActualState_FullMethodName:           domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_GetHealth_FullMethodName:                  domain.ComponentScopeRuntimeStatus,
+		runtimev1.RuntimeService_ProbeEnvironment_FullMethodName:           domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_StreamLogs_FullMethodName:                 domain.ComponentScopeRuntimeLogs,
 		runtimev1.RuntimeService_ListVolumes_FullMethodName:                domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_RemoveVolume_FullMethodName:               domain.ComponentScopeRuntimeDeploy,
@@ -136,6 +143,7 @@ func MethodRoles() map[string]domain.ComponentRole {
 		runtimev1.RuntimeService_ApplyCommand_FullMethodName:               domain.ComponentRoleControl,
 		runtimev1.RuntimeService_WatchActualState_FullMethodName:           domain.ComponentRoleControl,
 		runtimev1.RuntimeService_GetHealth_FullMethodName:                  domain.ComponentRoleControl,
+		runtimev1.RuntimeService_ProbeEnvironment_FullMethodName:           domain.ComponentRoleControl,
 		runtimev1.RuntimeService_StreamLogs_FullMethodName:                 domain.ComponentRoleControl,
 		runtimev1.RuntimeService_ListVolumes_FullMethodName:                domain.ComponentRoleControl,
 		runtimev1.RuntimeService_RemoveVolume_FullMethodName:               domain.ComponentRoleControl,
@@ -241,6 +249,17 @@ func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSe
 
 func (s *Server) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runtimev1.GetHealthResponse, error) {
 	return &runtimev1.GetHealthResponse{Ok: s.worker != nil, ComponentId: s.componentID, Message: "runtime service ready"}, nil
+}
+
+func (s *Server) ProbeEnvironment(ctx context.Context, _ *runtimev1.ProbeEnvironmentRequest) (*runtimev1.ProbeEnvironmentResponse, error) {
+	if s.environmentProbe == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime environment probe not configured")
+	}
+	report, err := s.environmentProbe.ProbeRuntimeEnvironment(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "runtime environment unavailable")
+	}
+	return &runtimev1.ProbeEnvironmentResponse{Engine: report.Engine, Rootless: report.Rootless, ApiReachable: report.APIReachable, ImageAvailable: report.ImageAvailable, ImagePullable: report.ImagePullable, NetworkFeasible: report.NetworkFeasible, DiskAvailableBytes: report.DiskAvailable, DiskSufficient: report.DiskSufficient}, nil
 }
 
 func (s *Server) WatchActualState(_ *runtimev1.WatchActualStateRequest, stream runtimev1.RuntimeService_WatchActualStateServer) error {

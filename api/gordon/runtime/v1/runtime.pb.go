@@ -2462,6 +2462,142 @@ func (x *GetHealthResponse) GetMessage() string {
 	return ""
 }
 
+type ProbeEnvironmentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeEnvironmentRequest) Reset() {
+	*x = ProbeEnvironmentRequest{}
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeEnvironmentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeEnvironmentRequest) ProtoMessage() {}
+
+func (x *ProbeEnvironmentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeEnvironmentRequest.ProtoReflect.Descriptor instead.
+func (*ProbeEnvironmentRequest) Descriptor() ([]byte, []int) {
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{35}
+}
+
+type ProbeEnvironmentResponse struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	Engine             string                 `protobuf:"bytes,1,opt,name=engine,proto3" json:"engine,omitempty"`
+	Rootless           bool                   `protobuf:"varint,2,opt,name=rootless,proto3" json:"rootless,omitempty"`
+	ApiReachable       bool                   `protobuf:"varint,3,opt,name=api_reachable,json=apiReachable,proto3" json:"api_reachable,omitempty"`
+	ImageAvailable     bool                   `protobuf:"varint,4,opt,name=image_available,json=imageAvailable,proto3" json:"image_available,omitempty"`
+	ImagePullable      bool                   `protobuf:"varint,5,opt,name=image_pullable,json=imagePullable,proto3" json:"image_pullable,omitempty"`
+	NetworkFeasible    bool                   `protobuf:"varint,6,opt,name=network_feasible,json=networkFeasible,proto3" json:"network_feasible,omitempty"`
+	DiskAvailableBytes uint64                 `protobuf:"varint,7,opt,name=disk_available_bytes,json=diskAvailableBytes,proto3" json:"disk_available_bytes,omitempty"`
+	DiskSufficient     bool                   `protobuf:"varint,8,opt,name=disk_sufficient,json=diskSufficient,proto3" json:"disk_sufficient,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ProbeEnvironmentResponse) Reset() {
+	*x = ProbeEnvironmentResponse{}
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeEnvironmentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeEnvironmentResponse) ProtoMessage() {}
+
+func (x *ProbeEnvironmentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeEnvironmentResponse.ProtoReflect.Descriptor instead.
+func (*ProbeEnvironmentResponse) Descriptor() ([]byte, []int) {
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ProbeEnvironmentResponse) GetEngine() string {
+	if x != nil {
+		return x.Engine
+	}
+	return ""
+}
+
+func (x *ProbeEnvironmentResponse) GetRootless() bool {
+	if x != nil {
+		return x.Rootless
+	}
+	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetApiReachable() bool {
+	if x != nil {
+		return x.ApiReachable
+	}
+	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetImageAvailable() bool {
+	if x != nil {
+		return x.ImageAvailable
+	}
+	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetImagePullable() bool {
+	if x != nil {
+		return x.ImagePullable
+	}
+	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetNetworkFeasible() bool {
+	if x != nil {
+		return x.NetworkFeasible
+	}
+	return false
+}
+
+func (x *ProbeEnvironmentResponse) GetDiskAvailableBytes() uint64 {
+	if x != nil {
+		return x.DiskAvailableBytes
+	}
+	return 0
+}
+
+func (x *ProbeEnvironmentResponse) GetDiskSufficient() bool {
+	if x != nil {
+		return x.DiskSufficient
+	}
+	return false
+}
+
 type StreamLogsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RouteDomain   string                 `protobuf:"bytes,1,opt,name=route_domain,json=routeDomain,proto3" json:"route_domain,omitempty"`
@@ -2472,7 +2608,7 @@ type StreamLogsRequest struct {
 
 func (x *StreamLogsRequest) Reset() {
 	*x = StreamLogsRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[35]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2484,7 +2620,7 @@ func (x *StreamLogsRequest) String() string {
 func (*StreamLogsRequest) ProtoMessage() {}
 
 func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[35]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2497,7 +2633,7 @@ func (x *StreamLogsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamLogsRequest.ProtoReflect.Descriptor instead.
 func (*StreamLogsRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{35}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *StreamLogsRequest) GetRouteDomain() string {
@@ -2524,7 +2660,7 @@ type LogChunk struct {
 
 func (x *LogChunk) Reset() {
 	*x = LogChunk{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[36]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2536,7 +2672,7 @@ func (x *LogChunk) String() string {
 func (*LogChunk) ProtoMessage() {}
 
 func (x *LogChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[36]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2549,7 +2685,7 @@ func (x *LogChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LogChunk.ProtoReflect.Descriptor instead.
 func (*LogChunk) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{36}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *LogChunk) GetData() []byte {
@@ -2574,7 +2710,7 @@ type ListVolumesRequest struct {
 
 func (x *ListVolumesRequest) Reset() {
 	*x = ListVolumesRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[37]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2586,7 +2722,7 @@ func (x *ListVolumesRequest) String() string {
 func (*ListVolumesRequest) ProtoMessage() {}
 
 func (x *ListVolumesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[37]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2599,7 +2735,7 @@ func (x *ListVolumesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVolumesRequest.ProtoReflect.Descriptor instead.
 func (*ListVolumesRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{37}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{39}
 }
 
 type RuntimeVolumeInfo struct {
@@ -2618,7 +2754,7 @@ type RuntimeVolumeInfo struct {
 
 func (x *RuntimeVolumeInfo) Reset() {
 	*x = RuntimeVolumeInfo{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[38]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2630,7 +2766,7 @@ func (x *RuntimeVolumeInfo) String() string {
 func (*RuntimeVolumeInfo) ProtoMessage() {}
 
 func (x *RuntimeVolumeInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[38]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2643,7 +2779,7 @@ func (x *RuntimeVolumeInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeVolumeInfo.ProtoReflect.Descriptor instead.
 func (*RuntimeVolumeInfo) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{38}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *RuntimeVolumeInfo) GetName() string {
@@ -2711,7 +2847,7 @@ type ListVolumesResponse struct {
 
 func (x *ListVolumesResponse) Reset() {
 	*x = ListVolumesResponse{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[39]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2723,7 +2859,7 @@ func (x *ListVolumesResponse) String() string {
 func (*ListVolumesResponse) ProtoMessage() {}
 
 func (x *ListVolumesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[39]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2736,7 +2872,7 @@ func (x *ListVolumesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListVolumesResponse.ProtoReflect.Descriptor instead.
 func (*ListVolumesResponse) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{39}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListVolumesResponse) GetVolumes() []*RuntimeVolumeInfo {
@@ -2756,7 +2892,7 @@ type RemoveVolumeRequest struct {
 
 func (x *RemoveVolumeRequest) Reset() {
 	*x = RemoveVolumeRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[40]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2768,7 +2904,7 @@ func (x *RemoveVolumeRequest) String() string {
 func (*RemoveVolumeRequest) ProtoMessage() {}
 
 func (x *RemoveVolumeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[40]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2781,7 +2917,7 @@ func (x *RemoveVolumeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveVolumeRequest.ProtoReflect.Descriptor instead.
 func (*RemoveVolumeRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{40}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *RemoveVolumeRequest) GetName() string {
@@ -2806,7 +2942,7 @@ type ListImagesRequest struct {
 
 func (x *ListImagesRequest) Reset() {
 	*x = ListImagesRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[41]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2818,7 +2954,7 @@ func (x *ListImagesRequest) String() string {
 func (*ListImagesRequest) ProtoMessage() {}
 
 func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[41]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2831,7 +2967,7 @@ func (x *ListImagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesRequest.ProtoReflect.Descriptor instead.
 func (*ListImagesRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{41}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{43}
 }
 
 type RuntimeImageInfo struct {
@@ -2846,7 +2982,7 @@ type RuntimeImageInfo struct {
 
 func (x *RuntimeImageInfo) Reset() {
 	*x = RuntimeImageInfo{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[42]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2858,7 +2994,7 @@ func (x *RuntimeImageInfo) String() string {
 func (*RuntimeImageInfo) ProtoMessage() {}
 
 func (x *RuntimeImageInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[42]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2871,7 +3007,7 @@ func (x *RuntimeImageInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeImageInfo.ProtoReflect.Descriptor instead.
 func (*RuntimeImageInfo) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{42}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *RuntimeImageInfo) GetId() string {
@@ -2911,7 +3047,7 @@ type ListImagesResponse struct {
 
 func (x *ListImagesResponse) Reset() {
 	*x = ListImagesResponse{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[43]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2923,7 +3059,7 @@ func (x *ListImagesResponse) String() string {
 func (*ListImagesResponse) ProtoMessage() {}
 
 func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[43]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2936,7 +3072,7 @@ func (x *ListImagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListImagesResponse.ProtoReflect.Descriptor instead.
 func (*ListImagesResponse) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{43}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *ListImagesResponse) GetImages() []*RuntimeImageInfo {
@@ -2955,7 +3091,7 @@ type PruneImagesRequest struct {
 
 func (x *PruneImagesRequest) Reset() {
 	*x = PruneImagesRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[44]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2967,7 +3103,7 @@ func (x *PruneImagesRequest) String() string {
 func (*PruneImagesRequest) ProtoMessage() {}
 
 func (x *PruneImagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[44]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2980,7 +3116,7 @@ func (x *PruneImagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PruneImagesRequest.ProtoReflect.Descriptor instead.
 func (*PruneImagesRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{44}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *PruneImagesRequest) GetDanglingOnly() bool {
@@ -3000,7 +3136,7 @@ type PruneImagesResponse struct {
 
 func (x *PruneImagesResponse) Reset() {
 	*x = PruneImagesResponse{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[45]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3012,7 +3148,7 @@ func (x *PruneImagesResponse) String() string {
 func (*PruneImagesResponse) ProtoMessage() {}
 
 func (x *PruneImagesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[45]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3025,7 +3161,7 @@ func (x *PruneImagesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PruneImagesResponse.ProtoReflect.Descriptor instead.
 func (*PruneImagesResponse) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{45}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *PruneImagesResponse) GetDeletedCount() int32 {
@@ -3058,7 +3194,7 @@ type ReportEdgeDrainRequest struct {
 
 func (x *ReportEdgeDrainRequest) Reset() {
 	*x = ReportEdgeDrainRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[46]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3070,7 +3206,7 @@ func (x *ReportEdgeDrainRequest) String() string {
 func (*ReportEdgeDrainRequest) ProtoMessage() {}
 
 func (x *ReportEdgeDrainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[46]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3083,7 +3219,7 @@ func (x *ReportEdgeDrainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReportEdgeDrainRequest.ProtoReflect.Descriptor instead.
 func (*ReportEdgeDrainRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{46}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ReportEdgeDrainRequest) GetCanonicalDomain() string {
@@ -3133,7 +3269,7 @@ type PrepareEdgeDrainRequest struct {
 
 func (x *PrepareEdgeDrainRequest) Reset() {
 	*x = PrepareEdgeDrainRequest{}
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[47]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3145,7 +3281,7 @@ func (x *PrepareEdgeDrainRequest) String() string {
 func (*PrepareEdgeDrainRequest) ProtoMessage() {}
 
 func (x *PrepareEdgeDrainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[47]
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3158,7 +3294,7 @@ func (x *PrepareEdgeDrainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrepareEdgeDrainRequest.ProtoReflect.Descriptor instead.
 func (*PrepareEdgeDrainRequest) Descriptor() ([]byte, []int) {
-	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{47}
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *PrepareEdgeDrainRequest) GetCanonicalDomain() string {
@@ -3398,7 +3534,17 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x11GetHealthResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12!\n" +
 	"\fcomponent_id\x18\x02 \x01(\tR\vcomponentId\x12\x18\n" +
-	"\amessage\x18\x03 \x01(\tR\amessage\"Z\n" +
+	"\amessage\x18\x03 \x01(\tR\amessage\"\x19\n" +
+	"\x17ProbeEnvironmentRequest\"\xc9\x02\n" +
+	"\x18ProbeEnvironmentResponse\x12\x16\n" +
+	"\x06engine\x18\x01 \x01(\tR\x06engine\x12\x1a\n" +
+	"\brootless\x18\x02 \x01(\bR\brootless\x12#\n" +
+	"\rapi_reachable\x18\x03 \x01(\bR\fapiReachable\x12'\n" +
+	"\x0fimage_available\x18\x04 \x01(\bR\x0eimageAvailable\x12%\n" +
+	"\x0eimage_pullable\x18\x05 \x01(\bR\rimagePullable\x12)\n" +
+	"\x10network_feasible\x18\x06 \x01(\bR\x0fnetworkFeasible\x120\n" +
+	"\x14disk_available_bytes\x18\a \x01(\x04R\x12diskAvailableBytes\x12'\n" +
+	"\x0fdisk_sufficient\x18\b \x01(\bR\x0ediskSufficient\"Z\n" +
 	"\x11StreamLogsRequest\x12!\n" +
 	"\froute_domain\x18\x01 \x01(\tR\vrouteDomain\x12\x16\n" +
 	"\x06follow\x18\x03 \x01(\bR\x06followJ\x04\b\x02\x10\x03R\x04tail\"[\n" +
@@ -3450,11 +3596,12 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x17PrepareEdgeDrainRequest\x12)\n" +
 	"\x10canonical_domain\x18\x01 \x01(\tR\x0fcanonicalDomain\x123\n" +
 	"\x15transition_generation\x18\x02 \x01(\x04R\x14transitionGeneration\x12$\n" +
-	"\x0eold_target_key\x18\x03 \x01(\tR\foldTargetKey2\x91\v\n" +
+	"\x0eold_target_key\x18\x03 \x01(\tR\foldTargetKey2\xfe\v\n" +
 	"\x0eRuntimeService\x12_\n" +
 	"\fApplyCommand\x12&.gordon.runtime.v1.ApplyCommandRequest\x1a'.gordon.runtime.v1.ApplyCommandResponse\x12h\n" +
 	"\x10WatchActualState\x12*.gordon.runtime.v1.WatchActualStateRequest\x1a&.gordon.runtime.v1.ActualStateSnapshot0\x01\x12V\n" +
-	"\tGetHealth\x12#.gordon.runtime.v1.GetHealthRequest\x1a$.gordon.runtime.v1.GetHealthResponse\x12Q\n" +
+	"\tGetHealth\x12#.gordon.runtime.v1.GetHealthRequest\x1a$.gordon.runtime.v1.GetHealthResponse\x12k\n" +
+	"\x10ProbeEnvironment\x12*.gordon.runtime.v1.ProbeEnvironmentRequest\x1a+.gordon.runtime.v1.ProbeEnvironmentResponse\x12Q\n" +
 	"\n" +
 	"StreamLogs\x12$.gordon.runtime.v1.StreamLogsRequest\x1a\x1b.gordon.runtime.v1.LogChunk0\x01\x12\\\n" +
 	"\vListVolumes\x12%.gordon.runtime.v1.ListVolumesRequest\x1a&.gordon.runtime.v1.ListVolumesResponse\x12M\n" +
@@ -3481,7 +3628,7 @@ func file_gordon_runtime_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_gordon_runtime_v1_runtime_proto_rawDescData
 }
 
-var file_gordon_runtime_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 50)
+var file_gordon_runtime_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_gordon_runtime_v1_runtime_proto_goTypes = []any{
 	(*RuntimeCommandIdentity)(nil),             // 0: gordon.runtime.v1.RuntimeCommandIdentity
 	(*DeployRouteCommand)(nil),                 // 1: gordon.runtime.v1.DeployRouteCommand
@@ -3518,26 +3665,28 @@ var file_gordon_runtime_v1_runtime_proto_goTypes = []any{
 	(*ActualStateSnapshot)(nil),                // 32: gordon.runtime.v1.ActualStateSnapshot
 	(*GetHealthRequest)(nil),                   // 33: gordon.runtime.v1.GetHealthRequest
 	(*GetHealthResponse)(nil),                  // 34: gordon.runtime.v1.GetHealthResponse
-	(*StreamLogsRequest)(nil),                  // 35: gordon.runtime.v1.StreamLogsRequest
-	(*LogChunk)(nil),                           // 36: gordon.runtime.v1.LogChunk
-	(*ListVolumesRequest)(nil),                 // 37: gordon.runtime.v1.ListVolumesRequest
-	(*RuntimeVolumeInfo)(nil),                  // 38: gordon.runtime.v1.RuntimeVolumeInfo
-	(*ListVolumesResponse)(nil),                // 39: gordon.runtime.v1.ListVolumesResponse
-	(*RemoveVolumeRequest)(nil),                // 40: gordon.runtime.v1.RemoveVolumeRequest
-	(*ListImagesRequest)(nil),                  // 41: gordon.runtime.v1.ListImagesRequest
-	(*RuntimeImageInfo)(nil),                   // 42: gordon.runtime.v1.RuntimeImageInfo
-	(*ListImagesResponse)(nil),                 // 43: gordon.runtime.v1.ListImagesResponse
-	(*PruneImagesRequest)(nil),                 // 44: gordon.runtime.v1.PruneImagesRequest
-	(*PruneImagesResponse)(nil),                // 45: gordon.runtime.v1.PruneImagesResponse
-	(*ReportEdgeDrainRequest)(nil),             // 46: gordon.runtime.v1.ReportEdgeDrainRequest
-	(*PrepareEdgeDrainRequest)(nil),            // 47: gordon.runtime.v1.PrepareEdgeDrainRequest
-	nil,                                        // 48: gordon.runtime.v1.RuntimeContainerState.LabelsEntry
-	nil,                                        // 49: gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
-	(*timestamppb.Timestamp)(nil),              // 50: google.protobuf.Timestamp
-	(*v1.Ack)(nil),                             // 51: gordon.common.v1.Ack
+	(*ProbeEnvironmentRequest)(nil),            // 35: gordon.runtime.v1.ProbeEnvironmentRequest
+	(*ProbeEnvironmentResponse)(nil),           // 36: gordon.runtime.v1.ProbeEnvironmentResponse
+	(*StreamLogsRequest)(nil),                  // 37: gordon.runtime.v1.StreamLogsRequest
+	(*LogChunk)(nil),                           // 38: gordon.runtime.v1.LogChunk
+	(*ListVolumesRequest)(nil),                 // 39: gordon.runtime.v1.ListVolumesRequest
+	(*RuntimeVolumeInfo)(nil),                  // 40: gordon.runtime.v1.RuntimeVolumeInfo
+	(*ListVolumesResponse)(nil),                // 41: gordon.runtime.v1.ListVolumesResponse
+	(*RemoveVolumeRequest)(nil),                // 42: gordon.runtime.v1.RemoveVolumeRequest
+	(*ListImagesRequest)(nil),                  // 43: gordon.runtime.v1.ListImagesRequest
+	(*RuntimeImageInfo)(nil),                   // 44: gordon.runtime.v1.RuntimeImageInfo
+	(*ListImagesResponse)(nil),                 // 45: gordon.runtime.v1.ListImagesResponse
+	(*PruneImagesRequest)(nil),                 // 46: gordon.runtime.v1.PruneImagesRequest
+	(*PruneImagesResponse)(nil),                // 47: gordon.runtime.v1.PruneImagesResponse
+	(*ReportEdgeDrainRequest)(nil),             // 48: gordon.runtime.v1.ReportEdgeDrainRequest
+	(*PrepareEdgeDrainRequest)(nil),            // 49: gordon.runtime.v1.PrepareEdgeDrainRequest
+	nil,                                        // 50: gordon.runtime.v1.RuntimeContainerState.LabelsEntry
+	nil,                                        // 51: gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
+	(*timestamppb.Timestamp)(nil),              // 52: google.protobuf.Timestamp
+	(*v1.Ack)(nil),                             // 53: gordon.common.v1.Ack
 }
 var file_gordon_runtime_v1_runtime_proto_depIdxs = []int32{
-	50, // 0: gordon.runtime.v1.RuntimeCommandIdentity.requested_at:type_name -> google.protobuf.Timestamp
+	52, // 0: gordon.runtime.v1.RuntimeCommandIdentity.requested_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: gordon.runtime.v1.DeployRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
 	0,  // 2: gordon.runtime.v1.RestartRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
 	0,  // 3: gordon.runtime.v1.RemoveRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
@@ -3549,8 +3698,8 @@ var file_gordon_runtime_v1_runtime_proto_depIdxs = []int32{
 	3,  // 9: gordon.runtime.v1.ApplyCommandRequest.remove_route:type_name -> gordon.runtime.v1.RemoveRouteCommand
 	5,  // 10: gordon.runtime.v1.ApplyCommandRequest.reconcile:type_name -> gordon.runtime.v1.ReconcileRuntimeCommand
 	6,  // 11: gordon.runtime.v1.RuntimeSelfUpdateRequest.command:type_name -> gordon.runtime.v1.RuntimeSelfUpdateCommand
-	50, // 12: gordon.runtime.v1.RuntimeCommandResult.started_at:type_name -> google.protobuf.Timestamp
-	50, // 13: gordon.runtime.v1.RuntimeCommandResult.completed_at:type_name -> google.protobuf.Timestamp
+	52, // 12: gordon.runtime.v1.RuntimeCommandResult.started_at:type_name -> google.protobuf.Timestamp
+	52, // 13: gordon.runtime.v1.RuntimeCommandResult.completed_at:type_name -> google.protobuf.Timestamp
 	9,  // 14: gordon.runtime.v1.RuntimeCommandResult.error:type_name -> gordon.runtime.v1.RuntimeCommandError
 	10, // 15: gordon.runtime.v1.ApplyCommandResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
 	13, // 16: gordon.runtime.v1.StandaloneServiceSpec.ports:type_name -> gordon.runtime.v1.StandaloneServicePortSpec
@@ -3567,51 +3716,53 @@ var file_gordon_runtime_v1_runtime_proto_depIdxs = []int32{
 	10, // 27: gordon.runtime.v1.RemoveStandaloneServiceResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
 	16, // 28: gordon.runtime.v1.RuntimeStandaloneServiceState.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
 	24, // 29: gordon.runtime.v1.ListStandaloneServiceStateResponse.services:type_name -> gordon.runtime.v1.RuntimeStandaloneServiceState
-	50, // 30: gordon.runtime.v1.RuntimeContainerState.started_at:type_name -> google.protobuf.Timestamp
-	48, // 31: gordon.runtime.v1.RuntimeContainerState.labels:type_name -> gordon.runtime.v1.RuntimeContainerState.LabelsEntry
-	50, // 32: gordon.runtime.v1.ActualStateSnapshot.observed_at:type_name -> google.protobuf.Timestamp
+	52, // 30: gordon.runtime.v1.RuntimeContainerState.started_at:type_name -> google.protobuf.Timestamp
+	50, // 31: gordon.runtime.v1.RuntimeContainerState.labels:type_name -> gordon.runtime.v1.RuntimeContainerState.LabelsEntry
+	52, // 32: gordon.runtime.v1.ActualStateSnapshot.observed_at:type_name -> google.protobuf.Timestamp
 	27, // 33: gordon.runtime.v1.ActualStateSnapshot.routes:type_name -> gordon.runtime.v1.RuntimeRouteState
 	28, // 34: gordon.runtime.v1.ActualStateSnapshot.containers:type_name -> gordon.runtime.v1.RuntimeContainerState
 	29, // 35: gordon.runtime.v1.ActualStateSnapshot.networks:type_name -> gordon.runtime.v1.RuntimeNetworkState
 	30, // 36: gordon.runtime.v1.ActualStateSnapshot.volumes:type_name -> gordon.runtime.v1.RuntimeActualVolumeState
 	31, // 37: gordon.runtime.v1.ActualStateSnapshot.edge_attachments:type_name -> gordon.runtime.v1.RuntimeEdgeNetworkAttachmentState
-	50, // 38: gordon.runtime.v1.LogChunk.observed_at:type_name -> google.protobuf.Timestamp
-	50, // 39: gordon.runtime.v1.RuntimeVolumeInfo.created_at:type_name -> google.protobuf.Timestamp
-	49, // 40: gordon.runtime.v1.RuntimeVolumeInfo.labels:type_name -> gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
-	38, // 41: gordon.runtime.v1.ListVolumesResponse.volumes:type_name -> gordon.runtime.v1.RuntimeVolumeInfo
-	50, // 42: gordon.runtime.v1.RuntimeImageInfo.created:type_name -> google.protobuf.Timestamp
-	42, // 43: gordon.runtime.v1.ListImagesResponse.images:type_name -> gordon.runtime.v1.RuntimeImageInfo
-	50, // 44: gordon.runtime.v1.ReportEdgeDrainRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
+	52, // 38: gordon.runtime.v1.LogChunk.observed_at:type_name -> google.protobuf.Timestamp
+	52, // 39: gordon.runtime.v1.RuntimeVolumeInfo.created_at:type_name -> google.protobuf.Timestamp
+	51, // 40: gordon.runtime.v1.RuntimeVolumeInfo.labels:type_name -> gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
+	40, // 41: gordon.runtime.v1.ListVolumesResponse.volumes:type_name -> gordon.runtime.v1.RuntimeVolumeInfo
+	52, // 42: gordon.runtime.v1.RuntimeImageInfo.created:type_name -> google.protobuf.Timestamp
+	44, // 43: gordon.runtime.v1.ListImagesResponse.images:type_name -> gordon.runtime.v1.RuntimeImageInfo
+	52, // 44: gordon.runtime.v1.ReportEdgeDrainRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
 	7,  // 45: gordon.runtime.v1.RuntimeService.ApplyCommand:input_type -> gordon.runtime.v1.ApplyCommandRequest
 	26, // 46: gordon.runtime.v1.RuntimeService.WatchActualState:input_type -> gordon.runtime.v1.WatchActualStateRequest
 	33, // 47: gordon.runtime.v1.RuntimeService.GetHealth:input_type -> gordon.runtime.v1.GetHealthRequest
-	35, // 48: gordon.runtime.v1.RuntimeService.StreamLogs:input_type -> gordon.runtime.v1.StreamLogsRequest
-	37, // 49: gordon.runtime.v1.RuntimeService.ListVolumes:input_type -> gordon.runtime.v1.ListVolumesRequest
-	40, // 50: gordon.runtime.v1.RuntimeService.RemoveVolume:input_type -> gordon.runtime.v1.RemoveVolumeRequest
-	41, // 51: gordon.runtime.v1.RuntimeService.ListImages:input_type -> gordon.runtime.v1.ListImagesRequest
-	44, // 52: gordon.runtime.v1.RuntimeService.PruneImages:input_type -> gordon.runtime.v1.PruneImagesRequest
-	8,  // 53: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:input_type -> gordon.runtime.v1.RuntimeSelfUpdateRequest
-	18, // 54: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:input_type -> gordon.runtime.v1.ApplyStandaloneServiceRequest
-	21, // 55: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:input_type -> gordon.runtime.v1.RemoveStandaloneServiceRequest
-	23, // 56: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:input_type -> gordon.runtime.v1.ListStandaloneServiceStateRequest
-	46, // 57: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:input_type -> gordon.runtime.v1.ReportEdgeDrainRequest
-	47, // 58: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:input_type -> gordon.runtime.v1.PrepareEdgeDrainRequest
-	11, // 59: gordon.runtime.v1.RuntimeService.ApplyCommand:output_type -> gordon.runtime.v1.ApplyCommandResponse
-	32, // 60: gordon.runtime.v1.RuntimeService.WatchActualState:output_type -> gordon.runtime.v1.ActualStateSnapshot
-	34, // 61: gordon.runtime.v1.RuntimeService.GetHealth:output_type -> gordon.runtime.v1.GetHealthResponse
-	36, // 62: gordon.runtime.v1.RuntimeService.StreamLogs:output_type -> gordon.runtime.v1.LogChunk
-	39, // 63: gordon.runtime.v1.RuntimeService.ListVolumes:output_type -> gordon.runtime.v1.ListVolumesResponse
-	51, // 64: gordon.runtime.v1.RuntimeService.RemoveVolume:output_type -> gordon.common.v1.Ack
-	43, // 65: gordon.runtime.v1.RuntimeService.ListImages:output_type -> gordon.runtime.v1.ListImagesResponse
-	45, // 66: gordon.runtime.v1.RuntimeService.PruneImages:output_type -> gordon.runtime.v1.PruneImagesResponse
-	11, // 67: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:output_type -> gordon.runtime.v1.ApplyCommandResponse
-	19, // 68: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:output_type -> gordon.runtime.v1.ApplyStandaloneServiceResponse
-	22, // 69: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:output_type -> gordon.runtime.v1.RemoveStandaloneServiceResponse
-	25, // 70: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:output_type -> gordon.runtime.v1.ListStandaloneServiceStateResponse
-	51, // 71: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:output_type -> gordon.common.v1.Ack
-	51, // 72: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:output_type -> gordon.common.v1.Ack
-	59, // [59:73] is the sub-list for method output_type
-	45, // [45:59] is the sub-list for method input_type
+	35, // 48: gordon.runtime.v1.RuntimeService.ProbeEnvironment:input_type -> gordon.runtime.v1.ProbeEnvironmentRequest
+	37, // 49: gordon.runtime.v1.RuntimeService.StreamLogs:input_type -> gordon.runtime.v1.StreamLogsRequest
+	39, // 50: gordon.runtime.v1.RuntimeService.ListVolumes:input_type -> gordon.runtime.v1.ListVolumesRequest
+	42, // 51: gordon.runtime.v1.RuntimeService.RemoveVolume:input_type -> gordon.runtime.v1.RemoveVolumeRequest
+	43, // 52: gordon.runtime.v1.RuntimeService.ListImages:input_type -> gordon.runtime.v1.ListImagesRequest
+	46, // 53: gordon.runtime.v1.RuntimeService.PruneImages:input_type -> gordon.runtime.v1.PruneImagesRequest
+	8,  // 54: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:input_type -> gordon.runtime.v1.RuntimeSelfUpdateRequest
+	18, // 55: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:input_type -> gordon.runtime.v1.ApplyStandaloneServiceRequest
+	21, // 56: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:input_type -> gordon.runtime.v1.RemoveStandaloneServiceRequest
+	23, // 57: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:input_type -> gordon.runtime.v1.ListStandaloneServiceStateRequest
+	48, // 58: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:input_type -> gordon.runtime.v1.ReportEdgeDrainRequest
+	49, // 59: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:input_type -> gordon.runtime.v1.PrepareEdgeDrainRequest
+	11, // 60: gordon.runtime.v1.RuntimeService.ApplyCommand:output_type -> gordon.runtime.v1.ApplyCommandResponse
+	32, // 61: gordon.runtime.v1.RuntimeService.WatchActualState:output_type -> gordon.runtime.v1.ActualStateSnapshot
+	34, // 62: gordon.runtime.v1.RuntimeService.GetHealth:output_type -> gordon.runtime.v1.GetHealthResponse
+	36, // 63: gordon.runtime.v1.RuntimeService.ProbeEnvironment:output_type -> gordon.runtime.v1.ProbeEnvironmentResponse
+	38, // 64: gordon.runtime.v1.RuntimeService.StreamLogs:output_type -> gordon.runtime.v1.LogChunk
+	41, // 65: gordon.runtime.v1.RuntimeService.ListVolumes:output_type -> gordon.runtime.v1.ListVolumesResponse
+	53, // 66: gordon.runtime.v1.RuntimeService.RemoveVolume:output_type -> gordon.common.v1.Ack
+	45, // 67: gordon.runtime.v1.RuntimeService.ListImages:output_type -> gordon.runtime.v1.ListImagesResponse
+	47, // 68: gordon.runtime.v1.RuntimeService.PruneImages:output_type -> gordon.runtime.v1.PruneImagesResponse
+	11, // 69: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:output_type -> gordon.runtime.v1.ApplyCommandResponse
+	19, // 70: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:output_type -> gordon.runtime.v1.ApplyStandaloneServiceResponse
+	22, // 71: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:output_type -> gordon.runtime.v1.RemoveStandaloneServiceResponse
+	25, // 72: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:output_type -> gordon.runtime.v1.ListStandaloneServiceStateResponse
+	53, // 73: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:output_type -> gordon.common.v1.Ack
+	53, // 74: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:output_type -> gordon.common.v1.Ack
+	60, // [60:75] is the sub-list for method output_type
+	45, // [45:60] is the sub-list for method input_type
 	45, // [45:45] is the sub-list for extension type_name
 	45, // [45:45] is the sub-list for extension extendee
 	0,  // [0:45] is the sub-list for field type_name
@@ -3634,7 +3785,7 @@ func file_gordon_runtime_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gordon_runtime_v1_runtime_proto_rawDesc), len(file_gordon_runtime_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   50,
+			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

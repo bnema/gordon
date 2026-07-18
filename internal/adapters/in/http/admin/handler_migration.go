@@ -28,5 +28,9 @@ func (h *Handler) handleMigration(w http.ResponseWriter, r *http.Request, method
 		h.sendError(w, http.StatusConflict, "migration operation cannot proceed")
 		return
 	}
+	if h.migrationPlanFailed != nil && h.migrationPlanFailed(result) {
+		h.sendJSON(w, http.StatusUnprocessableEntity, result)
+		return
+	}
 	h.sendJSON(w, http.StatusOK, result)
 }

@@ -67,6 +67,19 @@ jobs:
         with:
           version: v2.12.2
 
+  podman-rootless:
+    name: Rootless Podman migration gate
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify rootless Podman is available
+        run: |
+          podman info --format '{{.Host.Security.Rootless}}' | grep -x true
+      - name: Run migration compatibility gate with Podman opt-in
+        run: GORDON_COMPAT_PODMAN=1 make compat-harness-migration
+
   test:
     name: Test
     needs: changes

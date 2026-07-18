@@ -44,6 +44,25 @@ type RuntimeHealthClient interface {
 	RuntimeVersion(ctx context.Context) (string, error)
 }
 
+// RuntimeEnvironmentProbe exposes only migration-safe runtime facts. It never
+// returns a socket address, daemon configuration, inspect payload, or errors
+// suitable for disclosure to an admin API client.
+type RuntimeEnvironmentProbe interface {
+	ProbeRuntimeEnvironment(ctx context.Context) (RuntimeEnvironment, error)
+}
+
+// RuntimeEnvironment is deliberately a small, sanitized preflight result.
+type RuntimeEnvironment struct {
+	Engine          string
+	Rootless        bool
+	APIReachable    bool
+	ImageAvailable  bool
+	ImagePullable   bool
+	NetworkFeasible bool
+	DiskAvailable   uint64
+	DiskSufficient  bool
+}
+
 // RuntimeSelfUpdater sends policy-aware Gordon component self-update commands.
 type RuntimeSelfUpdater interface {
 	SelfUpdateRuntime(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error)
