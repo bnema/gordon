@@ -60,6 +60,26 @@ func TestRuntimeDrainRegistryWaitBeforeAckRejectsWrongAndStale(t *testing.T) {
 	assert.Error(t, registry.AcknowledgeRouteDrain(context.Background(), stale), "older transition cannot be replayed")
 }
 
+func TestRuntimeDrainRegistryRejectsOldAckAfterCancelSameKeyReprepare(t *testing.T) {
+	state, key := testRuntimeDrainState(t)
+	registry := testRuntimeDrainRegistry(state)
+	require.True(t, registry.PrepareDrain("old-id"))
+	require.NoError(t, registry.PrepareRouteDrain(context.Background(), "app.example.com", 7, key))
+	registry.CancelDrain("old-id")
+	require.True(t, registry.PrepareDrain("old-id"))
+	require.NoError(t, registry.PrepareRouteDrain(context.Background(), "app.example.com", 8, key))
+	assert.ErrorIs(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, key, 7)), ErrRuntimeDrainStale)
+	result := make(chan bool, 1)
+	go func() { result <- registry.WaitForNoInFlight(context.Background(), "old-id", time.Second) }()
+	select {
+	case <-result:
+		t.Fatal("stale acknowledgement released replacement")
+	case <-time.After(20 * time.Millisecond):
+	}
+	require.NoError(t, registry.AcknowledgeRouteDrain(context.Background(), cleanRuntimeDrainAck(t, key, 8)))
+	assert.True(t, <-result)
+}
+
 func TestRuntimeDrainRegistryTimeoutRollbackAndShutdownFallBack(t *testing.T) {
 	state, key := testRuntimeDrainState(t)
 

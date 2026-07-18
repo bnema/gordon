@@ -53,6 +53,13 @@ type RouteDrainAckReceiver interface {
 	AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error
 }
 
+// RouteDrainRegistrar records the canonical control transition before edge
+// acknowledgement delivery, preventing a reused opaque key from accepting an
+// acknowledgement from an earlier generation.
+type RouteDrainRegistrar interface {
+	PrepareRouteDrain(ctx context.Context, canonicalDomain string, generation domain.RouteTargetGeneration, oldTargetKey domain.RouteTargetKey) error
+}
+
 // RuntimeStandaloneServiceManager manages standalone services through narrow runtime commands and state.
 type RuntimeStandaloneServiceManager interface {
 	ApplyStandaloneService(ctx context.Context, command domain.ApplyStandaloneServiceCommand) (domain.RuntimeCommandResult, error)

@@ -22,6 +22,10 @@ import (
 
 var proxyTracer = otel.Tracer("gordon.proxy")
 
+// Terminal reporters are removed after control accepts them. The cap bounds
+// outstanding transport failures without evicting an active drain silently.
+const maxPendingEdgeDrains = 1024
+
 // Config holds configuration needed by the proxy service.
 type Config struct {
 	RegistryDomain     string
@@ -61,11 +65,13 @@ type Service struct {
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 
-	drainReporter out.EdgeDrainReporter
-	drainCtx      context.Context
-	drainCancel   context.CancelFunc
-	drainMu       sync.Mutex
-	pendingDrains map[edgeDrainIdentity]*edgeDrain
+	drainReporter       out.EdgeDrainReporter
+	drainCtx            context.Context
+	drainCancel         context.CancelFunc
+	drainMu             sync.Mutex
+	pendingDrains       map[edgeDrainIdentity]*edgeDrain
+	completedDrains     map[edgeDrainIdentity]struct{}
+	completedDrainOrder []edgeDrainIdentity
 
 	// Wait-path callbacks are package-private synchronization hooks for drain
 	// contract tests. Production leaves them nil.
@@ -101,6 +107,7 @@ func NewSnapshotService(provider out.RouteSnapshotProvider, config Config, repor
 		drainCtx:          drainCtx,
 		drainCancel:       drainCancel,
 		pendingDrains:     make(map[edgeDrainIdentity]*edgeDrain),
+		completedDrains:   make(map[edgeDrainIdentity]struct{}),
 	}
 }
 
@@ -337,6 +344,14 @@ func (s *Service) startEdgeDrain(routeDomain string, generation domain.RouteTarg
 		s.drainMu.Unlock()
 		return
 	}
+	if _, completed := s.completedDrains[identity]; completed {
+		s.drainMu.Unlock()
+		return
+	}
+	if len(s.pendingDrains) >= maxPendingEdgeDrains {
+		s.drainMu.Unlock()
+		return
+	}
 	drain := &edgeDrain{state: domain.RouteDrainState{
 		CanonicalDomain: routeDomain, TransitionGeneration: generation, OldTargetKey: key,
 	}}
@@ -388,10 +403,10 @@ func (s *Service) completeEdgeDrain(identity edgeDrainIdentity, inFlight int, re
 	drain.state.AcknowledgedAt = time.Now().UTC()
 	state := drain.state
 	s.drainMu.Unlock()
-	go s.reportEdgeDrain(state)
+	go s.reportEdgeDrain(identity, state)
 }
 
-func (s *Service) reportEdgeDrain(state domain.RouteDrainState) {
+func (s *Service) reportEdgeDrain(identity edgeDrainIdentity, state domain.RouteDrainState) {
 	// Control's ledger makes retries idempotent. Keep retry work bounded and
 	// detached from request completion paths; each call has a deadline so Close
 	// reliably releases any blocked transport call.
@@ -399,7 +414,22 @@ func (s *Service) reportEdgeDrain(state domain.RouteDrainState) {
 		ctx, cancel := context.WithTimeout(s.drainCtx, 5*time.Second)
 		err := s.drainReporter.ReportDrainState(ctx, state)
 		cancel()
-		if err == nil || s.drainCtx.Err() != nil {
+		if err == nil {
+			s.drainMu.Lock()
+			if drain := s.pendingDrains[identity]; drain != nil && drain.reported {
+				delete(s.pendingDrains, identity)
+				s.completedDrains[identity] = struct{}{}
+				s.completedDrainOrder = append(s.completedDrainOrder, identity)
+				for len(s.completedDrainOrder) > maxPendingEdgeDrains {
+					old := s.completedDrainOrder[0]
+					s.completedDrainOrder = s.completedDrainOrder[1:]
+					delete(s.completedDrains, old)
+				}
+			}
+			s.drainMu.Unlock()
+			return
+		}
+		if s.drainCtx.Err() != nil {
 			return
 		}
 		timer := time.NewTimer(time.Duration(attempt+1) * 100 * time.Millisecond)
@@ -410,6 +440,13 @@ func (s *Service) reportEdgeDrain(state domain.RouteDrainState) {
 		case <-timer.C:
 		}
 	}
+	// Keep the reporter active after bounded transport retries. A later
+	// transition/retry can retry it; it is never falsely considered terminal.
+	s.drainMu.Lock()
+	if drain := s.pendingDrains[identity]; drain != nil {
+		drain.reported = false
+	}
+	s.drainMu.Unlock()
 }
 
 func (s *Service) cacheSnapshotTarget(domainName string, target *domain.ProxyTarget, generation domain.RouteTargetGeneration, lookupInvalidationVersion uint64) {

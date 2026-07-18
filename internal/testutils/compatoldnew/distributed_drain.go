@@ -381,6 +381,14 @@ type distributedDrainAckReceiver struct {
 	acks []domain.RouteDrainAck
 }
 
+func (r *distributedDrainAckReceiver) PrepareRouteDrain(ctx context.Context, canonicalDomain string, generation domain.RouteTargetGeneration, key domain.RouteTargetKey) error {
+	registrar, ok := r.next.(out.RouteDrainRegistrar)
+	if !ok {
+		return fmt.Errorf("route drain registrar not configured")
+	}
+	return registrar.PrepareRouteDrain(ctx, canonicalDomain, generation, key)
+}
+
 func (r *distributedDrainAckReceiver) AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error {
 	r.mu.Lock()
 	r.acks = append(r.acks, acknowledgement)

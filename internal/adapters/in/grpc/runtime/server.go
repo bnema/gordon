@@ -36,6 +36,7 @@ type Server struct {
 	imageManager             out.RuntimeImageManager
 	drainAckReceiver         out.RuntimeDrainAckReceiver
 	routeDrainAckReceiver    out.RouteDrainAckReceiver
+	routeDrainRegistrar      out.RouteDrainRegistrar
 	standaloneServiceManager out.RuntimeStandaloneServiceManager
 	componentID              string
 }
@@ -70,7 +71,11 @@ func NewServerWithDrainAckReceiver(worker boundaries.RuntimeWorker, drainAckRece
 
 // NewServerWithRouteDrainAckReceiver configures the opaque split-edge drain protocol.
 func NewServerWithRouteDrainAckReceiver(worker boundaries.RuntimeWorker, receiver out.RouteDrainAckReceiver, componentID string) *Server {
-	return &Server{worker: worker, routeDrainAckReceiver: receiver, componentID: componentID}
+	server := &Server{worker: worker, routeDrainAckReceiver: receiver, componentID: componentID}
+	if registrar, ok := receiver.(out.RouteDrainRegistrar); ok {
+		server.routeDrainRegistrar = registrar
+	}
+	return server
 }
 
 // NewServerWithStandaloneServiceManager configures the optional narrow standalone-service runtime port.
@@ -99,7 +104,11 @@ func NewServerWithAllRuntimePortsAndDrainAckReceiverAndStandaloneServiceManager(
 
 // NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager configures the split opaque drain relay.
 func NewServerWithAllRuntimePortsAndRouteDrainAckReceiverAndStandaloneServiceManager(worker boundaries.RuntimeWorker, logReader out.RuntimeLogReader, volumeManager out.RuntimeVolumeManager, imageManager out.RuntimeImageManager, stateSubscriber out.RuntimeStateSubscriber, routeDrainAckReceiver out.RouteDrainAckReceiver, standaloneServiceManager out.RuntimeStandaloneServiceManager, componentID string) *Server {
-	return &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, routeDrainAckReceiver: routeDrainAckReceiver, standaloneServiceManager: standaloneServiceManager, componentID: componentID}
+	server := &Server{worker: worker, logReader: logReader, volumeManager: volumeManager, imageManager: imageManager, stateSubscriber: stateSubscriber, routeDrainAckReceiver: routeDrainAckReceiver, standaloneServiceManager: standaloneServiceManager, componentID: componentID}
+	if registrar, ok := routeDrainAckReceiver.(out.RouteDrainRegistrar); ok {
+		server.routeDrainRegistrar = registrar
+	}
+	return server
 }
 
 func MethodScopes() map[string]domain.ComponentScope {
@@ -117,6 +126,7 @@ func MethodScopes() map[string]domain.ComponentScope {
 		runtimev1.RuntimeService_RemoveStandaloneService_FullMethodName:    domain.ComponentScopeRuntimeDeploy,
 		runtimev1.RuntimeService_ListStandaloneServiceState_FullMethodName: domain.ComponentScopeRuntimeStatus,
 		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:            domain.ComponentScopeRuntimeDrainAck,
+		runtimev1.RuntimeService_PrepareEdgeDrain_FullMethodName:           domain.ComponentScopeRuntimeDrainAck,
 	}
 }
 
@@ -136,6 +146,7 @@ func MethodRoles() map[string]domain.ComponentRole {
 		runtimev1.RuntimeService_RemoveStandaloneService_FullMethodName:    domain.ComponentRoleControl,
 		runtimev1.RuntimeService_ListStandaloneServiceState_FullMethodName: domain.ComponentRoleControl,
 		runtimev1.RuntimeService_ReportEdgeDrain_FullMethodName:            domain.ComponentRoleControl,
+		runtimev1.RuntimeService_PrepareEdgeDrain_FullMethodName:           domain.ComponentRoleControl,
 	}
 }
 
@@ -352,6 +363,22 @@ func (s *Server) PruneImages(ctx context.Context, req *runtimev1.PruneImagesRequ
 		return nil, status.Error(codes.Internal, "runtime image prune deleted count overflows int32")
 	}
 	return &runtimev1.PruneImagesResponse{DeletedCount: deletedCount, SpaceReclaimed: report.SpaceReclaimed}, nil
+}
+
+func (s *Server) PrepareEdgeDrain(ctx context.Context, req *runtimev1.PrepareEdgeDrainRequest) (*commonv1.Ack, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req == nil || req.CanonicalDomain == "" || req.TransitionGeneration == 0 || req.OldTargetKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "route drain registration is required")
+	}
+	if s.routeDrainRegistrar == nil {
+		return nil, status.Error(codes.FailedPrecondition, "runtime route drain registrar not configured")
+	}
+	if err := s.routeDrainRegistrar.PrepareRouteDrain(ctx, req.CanonicalDomain, domain.RouteTargetGeneration(req.TransitionGeneration), domain.RouteTargetKey(req.OldTargetKey)); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, "failed to register route drain")
+	}
+	return &commonv1.Ack{Ok: true, Message: "route drain registered"}, nil
 }
 
 func (s *Server) ReportEdgeDrain(ctx context.Context, req *runtimev1.ReportEdgeDrainRequest) (*commonv1.Ack, error) {

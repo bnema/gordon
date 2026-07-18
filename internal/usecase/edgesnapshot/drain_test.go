@@ -2,6 +2,7 @@ package edgesnapshot
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -44,6 +45,32 @@ func TestDrainCoordinatorRegistersTransitionAndRelaysOnce(t *testing.T) {
 	assert.Equal(t, domain.RouteDrainStatusAcknowledged, relay.acks[0].Status)
 	assert.Equal(t, time.Unix(50, 0).UTC(), relay.acks[0].AcknowledgedAt)
 	assert.NotEqual(t, "private-old", string(relay.acks[0].OldTargetKey))
+}
+
+func TestDrainCoordinatorRetriesFailedRelayBeforeTerminal(t *testing.T) {
+	hub := NewSnapshotHub()
+	relay := &failOnceDrainRelay{}
+	coordinator, err := NewDrainCoordinator(hub, DrainCoordinatorOptions{Runtime: relay})
+	require.NoError(t, err)
+	defer coordinator.Close()
+	old, next := managedDrainEntry(t, 1, "relay-old"), managedDrainEntry(t, 2, "relay-new")
+	require.NoError(t, hub.Publish(domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{old}}))
+	require.NoError(t, hub.Publish(domain.RouteTargetSnapshot{Generation: 2, Entries: []domain.RouteTargetEntry{next}}))
+	report := domain.RouteDrainState{CanonicalDomain: old.CanonicalDomain, TransitionGeneration: 2, OldTargetKey: old.TargetKey}
+	require.Error(t, coordinator.ReportAuthenticatedDrainState(context.Background(), "gordon-edge", report))
+	require.NoError(t, coordinator.ReportAuthenticatedDrainState(context.Background(), "gordon-edge", report))
+	assert.Equal(t, 2, relay.calls)
+	assert.Equal(t, domain.RouteDrainStatusAcknowledged, coordinator.completed[old.TargetKey].status)
+}
+
+type failOnceDrainRelay struct{ calls int }
+
+func (r *failOnceDrainRelay) AcknowledgeRouteDrain(context.Context, domain.RouteDrainAck) error {
+	r.calls++
+	if r.calls == 1 {
+		return errors.New("temporary")
+	}
+	return nil
 }
 
 func TestDrainCoordinatorRejectsUnexpectedStaleAndUnknownReports(t *testing.T) {

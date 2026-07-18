@@ -11,33 +11,24 @@ import (
 )
 
 var (
-	// ErrRuntimeDrainUnknown means control relayed an acknowledgement for a target
-	// that runtime has not prepared for retirement.
-	ErrRuntimeDrainUnknown = errors.New("unknown runtime drain")
-	// ErrRuntimeDrainStale means an acknowledgement cannot advance the recorded
-	// control transition for its opaque target.
-	ErrRuntimeDrainStale = errors.New("stale runtime drain")
-	// ErrRuntimeDrainConflicting means a duplicate acknowledgement changed its outcome.
+	ErrRuntimeDrainUnknown     = errors.New("unknown runtime drain")
+	ErrRuntimeDrainStale       = errors.New("stale runtime drain")
 	ErrRuntimeDrainConflicting = errors.New("conflicting runtime drain acknowledgement")
 )
 
-// RuntimeDrainTargetResolver obtains the sanitized route state used by runtime
-// snapshot production. It deliberately returns no raw identity to the edge
-// protocol; RuntimeDrainRegistry immediately hashes it into a TargetKey.
-type RuntimeDrainTargetResolver func(containerID string) (domain.RuntimeRouteState, bool)
+const runtimeDrainLedgerLimit = 1024
 
+type RuntimeDrainTargetResolver func(containerID string) (domain.RuntimeRouteState, bool)
 type runtimeDrainIdentity struct {
 	domain string
 	key    domain.RouteTargetKey
 }
-
 type runtimeDrainPending struct {
-	containerID string
-	done        chan struct{}
-	result      bool
-	completed   bool
+	containerID       string
+	done              chan struct{}
+	result, completed bool
+	generation        domain.RouteTargetGeneration
 }
-
 type runtimeDrainOutcome struct {
 	generation domain.RouteTargetGeneration
 	result     bool
@@ -45,46 +36,34 @@ type runtimeDrainOutcome struct {
 	timeout    domain.RouteDrainTimeoutReason
 }
 
-// RuntimeDrainRegistry is the runtime-side endpoint of the split drain
-// protocol. Lifecycle callers use private container IDs only locally; control
-// acknowledgements are matched solely by canonical domain and opaque TargetKey.
+// RuntimeDrainRegistry joins local lifecycle preparation with control's exact
+// transition registration. An acknowledgement is never allowed to infer a
+// generation: it must match the latest control registration for its key.
 type RuntimeDrainRegistry struct {
-	resolve RuntimeDrainTargetResolver
-
+	resolve            RuntimeDrainTargetResolver
 	mu                 sync.Mutex
 	pending            map[runtimeDrainIdentity]*runtimeDrainPending
 	pendingByContainer map[string]runtimeDrainIdentity
 	completed          map[runtimeDrainIdentity]runtimeDrainOutcome
 	lastGeneration     map[runtimeDrainIdentity]domain.RouteTargetGeneration
-	closed             bool
+	// after cancellation a same-key local reprepare must not inherit the old
+	// registration while waiting for its replacement generation.
+	awaitingNewRegistration map[runtimeDrainIdentity]bool
+	completedOrder          []runtimeDrainIdentity
+	closed                  bool
 }
 
 var _ out.ProxyDrainWaiter = (*RuntimeDrainRegistry)(nil)
 var _ out.RouteDrainAckReceiver = (*RuntimeDrainRegistry)(nil)
 
-// runtimeRemoteDrainWaiter marks the split-only waiter so Service can retain
-// monolith cache-invalidation semantics while allowing runtime snapshots to
-// perform the remote traffic switch.
-type runtimeRemoteDrainWaiter interface {
-	runtimeRemoteDrainWaiter()
-}
+type runtimeRemoteDrainWaiter interface{ runtimeRemoteDrainWaiter() }
 
 func (*RuntimeDrainRegistry) runtimeRemoteDrainWaiter() {}
 
-// NewRuntimeDrainRegistry creates a runtime-local drain waiter. The resolver
-// must use the same route-state construction as the runtime snapshot producer.
 func NewRuntimeDrainRegistry(resolve RuntimeDrainTargetResolver) *RuntimeDrainRegistry {
-	return &RuntimeDrainRegistry{
-		resolve:            resolve,
-		pending:            make(map[runtimeDrainIdentity]*runtimeDrainPending),
-		pendingByContainer: make(map[string]runtimeDrainIdentity),
-		completed:          make(map[runtimeDrainIdentity]runtimeDrainOutcome),
-		lastGeneration:     make(map[runtimeDrainIdentity]domain.RouteTargetGeneration),
-	}
+	return &RuntimeDrainRegistry{resolve: resolve, pending: make(map[runtimeDrainIdentity]*runtimeDrainPending), pendingByContainer: make(map[string]runtimeDrainIdentity), completed: make(map[runtimeDrainIdentity]runtimeDrainOutcome), lastGeneration: make(map[runtimeDrainIdentity]domain.RouteTargetGeneration), awaitingNewRegistration: make(map[runtimeDrainIdentity]bool)}
 }
 
-// PrepareDrain resolves and pins the old target before the traffic switch. A
-// later control acknowledgement may therefore safely arrive before WaitForNoInFlight.
 func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 	if r == nil || containerID == "" || r.resolve == nil {
 		return false
@@ -102,7 +81,6 @@ func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 		return false
 	}
 	identity := runtimeDrainIdentity{domain: canonicalDomain, key: key}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -114,25 +92,81 @@ func (r *RuntimeDrainRegistry) PrepareDrain(containerID string) bool {
 	if _, exists := r.pending[identity]; exists {
 		return false
 	}
-	r.pending[identity] = &runtimeDrainPending{containerID: containerID, done: make(chan struct{})}
-	r.pendingByContainer[containerID] = identity
+	pending := &runtimeDrainPending{containerID: containerID, done: make(chan struct{})}
+	// Registration may arrive before lifecycle preparation. Do not reuse a
+	// registration left behind by a cancelled generation.
+	if !r.awaitingNewRegistration[identity] {
+		pending.generation = r.lastGeneration[identity]
+	}
+	if outcome, exists := r.completed[identity]; exists && outcome.generation == pending.generation && pending.generation != 0 {
+		pending.completed, pending.result = true, outcome.result
+		close(pending.done)
+	}
+	r.pending[identity], r.pendingByContainer[containerID] = pending, identity
 	return true
 }
 
-// CancelDrain releases a registration on rollback. Any later acknowledgement is
-// unknown or stale and cannot affect a subsequent replacement.
+// PrepareRouteDrain is the authenticated control-to-runtime registration RPC
+// target. It is idempotent and may arrive before or after PrepareDrain.
+func (r *RuntimeDrainRegistry) PrepareRouteDrain(ctx context.Context, canonicalDomain string, generation domain.RouteTargetGeneration, key domain.RouteTargetKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if r == nil {
+		return ErrRuntimeDrainUnknown
+	}
+	canonicalDomain, ok := domain.CanonicalRouteDomain(canonicalDomain)
+	if !ok || generation == 0 || key == "" {
+		return ErrRuntimeDrainUnknown
+	}
+	identity := runtimeDrainIdentity{domain: canonicalDomain, key: key}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		return ErrRuntimeDrainUnknown
+	}
+	previous := r.lastGeneration[identity]
+	if previous > generation {
+		return ErrRuntimeDrainStale
+	}
+	if previous == generation {
+		return nil
+	}
+	r.lastGeneration[identity] = generation
+	// A newer registration supersedes any terminal outcome for the old
+	// generation, while lastGeneration remains its stale-ack tombstone.
+	if previous != 0 {
+		delete(r.completed, identity)
+	}
+	delete(r.awaitingNewRegistration, identity)
+	if pending := r.pending[identity]; pending != nil {
+		// A lifecycle waiter can only bind to a newer registration; changing an
+		// already-bound waiter would make a late old acknowledgement ambiguous.
+		if pending.generation != 0 && pending.generation != generation {
+			return ErrRuntimeDrainStale
+		}
+		pending.generation = generation
+		if outcome, exists := r.completed[identity]; exists && outcome.generation == generation {
+			pending.completed, pending.result = true, outcome.result
+			close(pending.done)
+		}
+	}
+	return nil
+}
+
 func (r *RuntimeDrainRegistry) CancelDrain(containerID string) {
 	if r == nil || containerID == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	identity, exists := r.pendingByContainer[containerID]
+	if exists {
+		r.awaitingNewRegistration[identity] = true
+	}
 	r.releaseContainerLocked(containerID)
 }
 
-// WaitForNoInFlight waits for a matching control-relayed zero-in-flight ack.
-// Timeout reports, local timeout, cancellation, and shutdown all return false
-// so container cleanup retains its existing warning/fallback behavior.
 func (r *RuntimeDrainRegistry) WaitForNoInFlight(ctx context.Context, containerID string, timeout time.Duration) bool {
 	if r == nil || containerID == "" {
 		return false
@@ -158,7 +192,6 @@ func (r *RuntimeDrainRegistry) WaitForNoInFlight(ctx context.Context, containerI
 		timeout = 30 * time.Second
 	}
 	r.mu.Unlock()
-
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
@@ -181,9 +214,6 @@ func (r *RuntimeDrainRegistry) WaitForNoInFlight(ctx context.Context, containerI
 	}
 }
 
-// AcknowledgeRouteDrain receives only the control-validated opaque result.
-// The transition generation is monotonic per domain/key, independent of the
-// runtime polling generation, and duplicate delivery is idempotent.
 func (r *RuntimeDrainRegistry) AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -197,39 +227,79 @@ func (r *RuntimeDrainRegistry) AcknowledgeRouteDrain(ctx context.Context, acknow
 	identity := runtimeDrainIdentity{domain: acknowledgement.CanonicalDomain, key: acknowledgement.OldTargetKey}
 	result := acknowledgement.Status == domain.RouteDrainStatusAcknowledged
 	outcome := runtimeDrainOutcome{generation: acknowledgement.TransitionGeneration, result: result, inFlight: acknowledgement.InFlight, timeout: acknowledgement.TimeoutReason}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	pending, pendingExists := r.pending[identity]
-	generation := r.lastGeneration[identity]
-	if !pendingExists {
-		if previous, completed := r.completed[identity]; completed && previous == outcome {
+	registered, err := r.matchAcknowledgementLocked(identity, acknowledgement.TransitionGeneration)
+	if err != nil {
+		return err
+	}
+	return r.completeAcknowledgementLocked(identity, registered, outcome)
+}
+
+func (r *RuntimeDrainRegistry) matchAcknowledgementLocked(identity runtimeDrainIdentity, generation domain.RouteTargetGeneration) (domain.RouteTargetGeneration, error) {
+	registered := r.lastGeneration[identity]
+	if registered == 0 {
+		// Legacy in-process deployments have no control registration transport.
+		if pending := r.pending[identity]; pending == nil || r.awaitingNewRegistration[identity] {
+			return 0, ErrRuntimeDrainUnknown
+		}
+		r.lastGeneration[identity], registered = generation, generation
+	}
+	if generation == registered {
+		return registered, nil
+	}
+	if generation < registered {
+		return 0, ErrRuntimeDrainStale
+	}
+	return 0, ErrRuntimeDrainUnknown
+}
+
+func (r *RuntimeDrainRegistry) completeAcknowledgementLocked(identity runtimeDrainIdentity, generation domain.RouteTargetGeneration, outcome runtimeDrainOutcome) error {
+	if previous, exists := r.completed[identity]; exists {
+		if previous == outcome {
 			return nil
 		}
-		if generation >= acknowledgement.TransitionGeneration {
-			return ErrRuntimeDrainStale
-		}
+		return ErrRuntimeDrainConflicting
+	}
+	pending := r.pending[identity]
+	if pending != nil && pending.generation != 0 && pending.generation != generation {
 		return ErrRuntimeDrainUnknown
 	}
-	if generation >= acknowledgement.TransitionGeneration {
-		if previous, completed := r.completed[identity]; completed && previous == outcome {
-			return nil
-		}
-		if generation == acknowledgement.TransitionGeneration {
-			return ErrRuntimeDrainConflicting
-		}
-		return ErrRuntimeDrainStale
+	if pending != nil && pending.generation == 0 {
+		pending.generation = generation
 	}
-	r.lastGeneration[identity] = acknowledgement.TransitionGeneration
 	r.completed[identity] = outcome
-	pending.result = result
-	pending.completed = true
-	close(pending.done)
+	r.completedOrder = append(r.completedOrder, identity)
+	r.trimCompletedLocked()
+	if pending != nil {
+		pending.result, pending.completed = outcome.result, true
+		close(pending.done)
+	}
 	return nil
 }
 
-// Close releases all waiters during runtime shutdown without treating shutdown
-// as a clean drain acknowledgement.
+func (r *RuntimeDrainRegistry) trimCompletedLocked() {
+	for len(r.completedOrder) > runtimeDrainLedgerLimit {
+		identity := r.completedOrder[0]
+		r.completedOrder = r.completedOrder[1:]
+		// Do not evict a terminal result that an active waiter still needs.
+		if r.pending[identity] == nil {
+			delete(r.completed, identity)
+		}
+	}
+	// Generation tombstones are replay protection; retain the newest bounded
+	// history, while active identities are never removed.
+	if len(r.lastGeneration) > runtimeDrainLedgerLimit*2 {
+		for identity := range r.lastGeneration {
+			if r.pending[identity] == nil {
+				delete(r.lastGeneration, identity)
+				delete(r.awaitingNewRegistration, identity)
+				break
+			}
+		}
+	}
+}
+
 func (r *RuntimeDrainRegistry) Close() {
 	if r == nil {
 		return
@@ -242,15 +312,12 @@ func (r *RuntimeDrainRegistry) Close() {
 	r.closed = true
 	for _, pending := range r.pending {
 		if !pending.completed {
-			pending.result = false
-			pending.completed = true
+			pending.result, pending.completed = false, true
 			close(pending.done)
 		}
 	}
-	r.pending = make(map[runtimeDrainIdentity]*runtimeDrainPending)
-	r.pendingByContainer = make(map[string]runtimeDrainIdentity)
+	r.pending, r.pendingByContainer = make(map[runtimeDrainIdentity]*runtimeDrainPending), make(map[string]runtimeDrainIdentity)
 }
-
 func (r *RuntimeDrainRegistry) releaseContainerLocked(containerID string) {
 	identity, exists := r.pendingByContainer[containerID]
 	if !exists {
@@ -258,10 +325,10 @@ func (r *RuntimeDrainRegistry) releaseContainerLocked(containerID string) {
 	}
 	pending := r.pending[identity]
 	if pending != nil && !pending.completed {
-		pending.result = false
-		pending.completed = true
+		pending.result, pending.completed = false, true
 		close(pending.done)
 	}
 	delete(r.pendingByContainer, containerID)
 	delete(r.pending, identity)
+	r.trimCompletedLocked()
 }

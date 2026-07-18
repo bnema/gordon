@@ -33,6 +33,7 @@ const (
 	RuntimeService_RemoveStandaloneService_FullMethodName    = "/gordon.runtime.v1.RuntimeService/RemoveStandaloneService"
 	RuntimeService_ListStandaloneServiceState_FullMethodName = "/gordon.runtime.v1.RuntimeService/ListStandaloneServiceState"
 	RuntimeService_ReportEdgeDrain_FullMethodName            = "/gordon.runtime.v1.RuntimeService/ReportEdgeDrain"
+	RuntimeService_PrepareEdgeDrain_FullMethodName           = "/gordon.runtime.v1.RuntimeService/PrepareEdgeDrain"
 )
 
 // RuntimeServiceClient is the client API for RuntimeService service.
@@ -63,6 +64,9 @@ type RuntimeServiceClient interface {
 	// then relays this acknowledgement to runtime. Runtime waits for this ack or
 	// its configured drain timeout before stopping the old route container.
 	ReportEdgeDrain(ctx context.Context, in *ReportEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error)
+	// PrepareEdgeDrain registers the exact control transition before edge
+	// acknowledgement delivery. It is control-only and carries opaque data.
+	PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error)
 }
 
 type runtimeServiceClient struct {
@@ -221,6 +225,16 @@ func (c *runtimeServiceClient) ReportEdgeDrain(ctx context.Context, in *ReportEd
 	return out, nil
 }
 
+func (c *runtimeServiceClient) PrepareEdgeDrain(ctx context.Context, in *PrepareEdgeDrainRequest, opts ...grpc.CallOption) (*v1.Ack, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(v1.Ack)
+	err := c.cc.Invoke(ctx, RuntimeService_PrepareEdgeDrain_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RuntimeServiceServer is the server API for RuntimeService service.
 // All implementations must embed UnimplementedRuntimeServiceServer
 // for forward compatibility.
@@ -249,6 +263,9 @@ type RuntimeServiceServer interface {
 	// then relays this acknowledgement to runtime. Runtime waits for this ack or
 	// its configured drain timeout before stopping the old route container.
 	ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*v1.Ack, error)
+	// PrepareEdgeDrain registers the exact control transition before edge
+	// acknowledgement delivery. It is control-only and carries opaque data.
+	PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*v1.Ack, error)
 	mustEmbedUnimplementedRuntimeServiceServer()
 }
 
@@ -297,6 +314,9 @@ func (UnimplementedRuntimeServiceServer) ListStandaloneServiceState(context.Cont
 }
 func (UnimplementedRuntimeServiceServer) ReportEdgeDrain(context.Context, *ReportEdgeDrainRequest) (*v1.Ack, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportEdgeDrain not implemented")
+}
+func (UnimplementedRuntimeServiceServer) PrepareEdgeDrain(context.Context, *PrepareEdgeDrainRequest) (*v1.Ack, error) {
+	return nil, status.Error(codes.Unimplemented, "method PrepareEdgeDrain not implemented")
 }
 func (UnimplementedRuntimeServiceServer) mustEmbedUnimplementedRuntimeServiceServer() {}
 func (UnimplementedRuntimeServiceServer) testEmbeddedByValue()                        {}
@@ -539,6 +559,24 @@ func _RuntimeService_ReportEdgeDrain_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RuntimeService_PrepareEdgeDrain_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareEdgeDrainRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServiceServer).PrepareEdgeDrain(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RuntimeService_PrepareEdgeDrain_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServiceServer).PrepareEdgeDrain(ctx, req.(*PrepareEdgeDrainRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RuntimeService_ServiceDesc is the grpc.ServiceDesc for RuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -589,6 +627,10 @@ var RuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportEdgeDrain",
 			Handler:    _RuntimeService_ReportEdgeDrain_Handler,
+		},
+		{
+			MethodName: "PrepareEdgeDrain",
+			Handler:    _RuntimeService_PrepareEdgeDrain_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -33,6 +33,9 @@ service RuntimeService {
   // then relays this acknowledgement to runtime. Runtime waits for this ack or
   // its configured drain timeout before stopping the old route container.
   rpc ReportEdgeDrain(ReportEdgeDrainRequest) returns (gordon.common.v1.Ack);
+  // PrepareEdgeDrain registers the exact control transition before edge
+  // acknowledgement delivery. It is control-only and carries opaque data.
+  rpc PrepareEdgeDrain(PrepareEdgeDrainRequest) returns (gordon.common.v1.Ack);
 }
 
 message RuntimeCommandIdentity {
@@ -353,4 +356,11 @@ message ReportEdgeDrainRequest {
   string old_target_key = 3;
   google.protobuf.Timestamp acknowledged_at = 4;
   string timeout_reason = 5;
+}
+
+// PrepareEdgeDrainRequest intentionally omits all backing/container identity.
+message PrepareEdgeDrainRequest {
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
 }

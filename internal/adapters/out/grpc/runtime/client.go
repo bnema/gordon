@@ -138,6 +138,15 @@ func (c *Client) AcknowledgeRuntimeDrain(context.Context, string, uint64, string
 }
 
 // AcknowledgeRouteDrain relays the validated opaque control acknowledgement.
+// PrepareRouteDrain registers the exact control transition before edge reports
+// can be relayed. It is idempotent at runtime.
+func (c *Client) PrepareRouteDrain(ctx context.Context, canonicalDomain string, generation domain.RouteTargetGeneration, oldTargetKey domain.RouteTargetKey) error {
+	_, err := c.client.PrepareEdgeDrain(ctx, &runtimev1.PrepareEdgeDrainRequest{
+		CanonicalDomain: canonicalDomain, TransitionGeneration: uint64(generation), OldTargetKey: string(oldTargetKey),
+	})
+	return err
+}
+
 func (c *Client) AcknowledgeRouteDrain(ctx context.Context, acknowledgement domain.RouteDrainAck) error {
 	if err := acknowledgement.Validate(); err != nil {
 		return fmt.Errorf("validate route drain acknowledgement: %w", err)
