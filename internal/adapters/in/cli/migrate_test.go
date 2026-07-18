@@ -3,6 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,6 +45,52 @@ func mustMigrationStore(t *testing.T) *app.MigrationCheckpointStore {
 	store, err := app.NewMigrationCheckpointStore(t.TempDir() + "/migration.json")
 	require.NoError(t, err)
 	return store
+}
+
+func TestResolveMigrationControlPlanePrefersLocalDurableSourceOverComponentEndpoint(t *testing.T) {
+	resetControlPlaneResolutionTestState(t)
+
+	originalNewLocalKernelQuiet := newLocalKernelQuiet
+	newLocalKernelQuiet = func(string) (*app.Kernel, error) { return &app.Kernel{}, nil }
+	t.Cleanup(func() { newLocalKernelQuiet = originalNewLocalKernelQuiet })
+
+	service, closeFn, err := resolveMigrationControlPlane(writeCLIConfig(t, `[control]
+listen_address = "0.0.0.0:9443"
+endpoint = "https://component-grpc.example.test:9443"
+`))
+	require.NoError(t, err)
+	require.IsType(t, &localControlPlane{}, service, "component gRPC endpoint is not an Admin HTTP target")
+	closeFn()
+}
+
+func TestResolveMigrationControlPlaneKeepsExplicitRemote(t *testing.T) {
+	resetControlPlaneResolutionTestState(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/admin/migration/status", r.URL.Path)
+		_, _ = w.Write([]byte(`{"phase":"switched"}`))
+	}))
+	defer server.Close()
+	remoteFlag = server.URL
+
+	originalNewLocalKernelQuiet := newLocalKernelQuiet
+	newLocalKernelQuiet = func(string) (*app.Kernel, error) {
+		return nil, errors.New("local checkpoint must not be opened for explicit remote")
+	}
+	t.Cleanup(func() { newLocalKernelQuiet = originalNewLocalKernelQuiet })
+
+	service, closeFn, err := resolveMigrationControlPlane(writeCLIConfig(t, `[control]
+listen_address = "0.0.0.0:9443"
+endpoint = "https://component-grpc.example.test:9443"
+`))
+	require.NoError(t, err)
+	defer closeFn()
+	require.IsType(t, &remoteControlPlane{}, service)
+
+	checkpoint, err := service.MigrationStatus(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, app.MigrationPhaseSwitched, checkpoint.Phase)
 }
 
 func TestMigratePlanJSON(t *testing.T) {

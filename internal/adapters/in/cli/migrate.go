@@ -23,8 +23,22 @@ type migrationControlPlane interface {
 
 // resolveMigrationControlPlane keeps migration's config-selected local/remote
 // dispatch behind its narrow control surface and makes command parsing testable.
-var resolveMigrationControlPlane = func(path string) (migrationControlPlane, func(), error) {
-	handle, err := resolveControlPlane(path)
+// A source configuration describes component topology: control.endpoint and
+// control.listen_address are gRPC addresses, not Admin HTTP targets. A fresh
+// migration observer must therefore open its local durable checkpoint unless
+// the operator explicitly selected an HTTP remote with --remote/GORDON_REMOTE.
+var resolveMigrationControlPlane = resolveMigrationControlPlaneFromSource
+
+func resolveMigrationControlPlaneFromSource(path string) (migrationControlPlane, func(), error) {
+	if handle, ok, err := resolveExplicitRemoteControlPlane(); err != nil || ok {
+		return migrationControlPlaneFromHandle(handle, err)
+	}
+
+	handle, err := resolveLocalControlPlane(path)
+	return migrationControlPlaneFromHandle(handle, err)
+}
+
+func migrationControlPlaneFromHandle(handle *controlPlaneHandle, err error) (migrationControlPlane, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
