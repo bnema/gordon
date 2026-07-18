@@ -60,12 +60,13 @@ func RunSecurityComponentAuth(ctx context.Context, artifactDir string, authCase 
 }
 
 type securityControlFixture struct {
-	root     string
-	listener net.Listener
-	server   *grpc.Server
-	hub      *edgesnapshot.SnapshotHub
-	valid    string
-	limited  string
+	root       string
+	listener   net.Listener
+	server     *grpc.Server
+	hub        *edgesnapshot.SnapshotHub
+	trafficHub *edgesnapshot.TrafficGraphHub
+	valid      string
+	limited    string
 }
 
 func newSecurityControlFixture(ctx context.Context) (*securityControlFixture, error) {
@@ -79,7 +80,11 @@ func newSecurityControlFixture(ctx context.Context) (*securityControlFixture, er
 		return nil, fmt.Errorf("security control token store: %w", err)
 	}
 	service := componentauth.NewService(store, securityLog(), componentauth.Config{})
-	valid, err := service.CreateToken(ctx, componentauth.CreateRequest{Name: "edge", Role: domain.ComponentRoleEdge, Scopes: []domain.ComponentScope{domain.ComponentScopeRoutesWatch}})
+	valid, err := service.CreateToken(ctx, componentauth.CreateRequest{Name: "edge", Role: domain.ComponentRoleEdge, Scopes: []domain.ComponentScope{
+		domain.ComponentScopeRoutesWatch,
+		domain.ComponentScopeTrafficWatch,
+		domain.ComponentScopeEdgeDrain,
+	}})
 	if err != nil {
 		return nil, fmt.Errorf("security control valid token: %w", err)
 	}
@@ -95,17 +100,21 @@ func newSecurityControlFixture(ctx context.Context) (*securityControlFixture, er
 	if err := hub.Publish(domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{entry}}); err != nil {
 		return nil, err
 	}
+	trafficHub := edgesnapshot.NewTrafficGraphHub()
+	if err := trafficHub.Publish(domain.TrafficGraphSnapshot{Generation: 1}); err != nil {
+		return nil, fmt.Errorf("security control initial traffic graph: %w", err)
+	}
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(service, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(service, edgesnapshotgrpc.MethodScopes(), edgesnapshotgrpc.MethodRoles())),
 	)
-	edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
+	edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithTrafficGraphSource(hub, trafficHub))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
 	go func() { _ = server.Serve(listener) }()
-	return &securityControlFixture{root: root, listener: listener, server: server, hub: hub, valid: valid.Token, limited: limited.Token}, nil
+	return &securityControlFixture{root: root, listener: listener, server: server, hub: hub, trafficHub: trafficHub, valid: valid.Token, limited: limited.Token}, nil
 }
 
 func securityLog() zerowrap.Logger {
@@ -193,9 +202,9 @@ func (f *securityControlFixture) exercise(ctx context.Context, authCase security
 }
 
 // RunSecurityEdgeNoPodmanSocket starts the candidate edge in an isolated Docker
-// container with only its edge config mounted. A real authenticated snapshot
-// stream drives a request through the public proxy before the container's
-// mounts, environment, and named file descriptors are checked.
+// container with only its edge config mounted. Real authenticated route and
+// traffic streams drive its public proxy and health endpoint before the
+// container's mounts, environment, and named file descriptors are checked.
 func RunSecurityEdgeNoPodmanSocket(ctx context.Context, repoRoot, artifactDir string) (Report, error) {
 	if runtime.GOOS != "linux" {
 		return Report{}, fmt.Errorf("security edge isolation requires Linux /proc inspection")
@@ -266,6 +275,10 @@ func RunSecurityEdgeNoPodmanSocket(ctx context.Context, repoRoot, artifactDir st
 	if err != nil {
 		return Report{}, err
 	}
+	healthWorks, err := securityHealthWorks(ctx, port)
+	if err != nil {
+		return Report{}, err
+	}
 	noSocketMount, noSocketEnv, noSocketFD, err := securityContainerIsolation(ctx, repoRoot, name)
 	if err != nil {
 		return Report{}, err
@@ -275,6 +288,7 @@ func RunSecurityEdgeNoPodmanSocket(ctx context.Context, repoRoot, artifactDir st
 		"noSocketFileDescriptor": noSocketFD,
 		"noSocketMount":          noSocketMount,
 		"proxyWorksFromSnapshot": proxyWorks,
+		"healthWorksFromStreams": healthWorks,
 	})
 }
 
@@ -352,6 +366,30 @@ func securityProxyWorks(ctx context.Context, port int) (bool, error) {
 		}
 		if ctx.Err() != nil {
 			return false, fmt.Errorf("candidate edge did not proxy a snapshot route before timeout (last HTTP status %d)", lastStatus)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func securityHealthWorks(ctx context.Context, port int) (bool, error) {
+	client := &http.Client{Timeout: time.Second}
+	address := "http://127.0.0.1:" + strconv.Itoa(port) + "/healthz"
+	lastStatus := 0
+	for {
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+		if err != nil {
+			return false, err
+		}
+		response, err := client.Do(request)
+		if err == nil {
+			lastStatus = response.StatusCode
+			_ = response.Body.Close()
+			if response.StatusCode == http.StatusNoContent {
+				return true, nil
+			}
+		}
+		if ctx.Err() != nil {
+			return false, fmt.Errorf("candidate edge did not become healthy from authenticated streams before timeout (last HTTP status %d)", lastStatus)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

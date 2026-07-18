@@ -39,7 +39,7 @@ COMPAT_TRAFFIC_BINARY_TESTS := TestCompatibilityTrafficProtocolBinaries
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
 # Security is a current-candidate gate, not old/new baseline parity. The exact
-# tests below must each pass once without a skip; the edge test needs Docker to
+# tests below must each pass twice without a skip; the edge test needs Docker to
 # prove the candidate container has no runtime socket access.
 COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCompatibilitySecurityMissingComponentTokenRejected|TestCompatibilitySecurityWrongComponentTokenRejected|TestCompatibilitySecurityWrongScopeComponentTokenRejected
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
@@ -216,16 +216,16 @@ compat-harness-migration: ## Run migration compatibility harness checks
 
 compat-harness-security: ## Run blocking current-security compatibility gates
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
-	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=1"
+	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
 	@echo "Running required Docker preflight and exact current-security gates..."
 	@docker info
 	@output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS)|$(COMPAT_SECURITY_HARNESS_GUARDS))$$' -count=1 > "$$output"; status=$$?; \
+		GORDON_COMPAT_ARTIFACT_DIR="$(COMPAT_ARTIFACT_DIR)" GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 go test -json ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS)|$(COMPAT_SECURITY_HARNESS_GUARDS))$$' -count=2 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		for test in $$(printf '%s' '$(COMPAT_SECURITY_REAL_TESTS)' | tr '|' ' '); do \
-			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
-				echo "security compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
+			if ! jq -se --arg test "$$test" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 2) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
+				echo "security compatibility test $$test did not pass exactly twice or was skipped; refusing to pass the gate"; exit 1; \
 			fi; \
 		done
 
