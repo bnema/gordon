@@ -48,11 +48,15 @@ type MigrationCheckpoint struct {
 	// Bootstrap endpoints are fixed loopback endpoints used only while the
 	// monolith proves the replacement runtime. They are persisted so resume
 	// never discovers or records an engine-assigned address.
-	BootstrapControlEndpoint   string                 `json:"bootstrap_control_endpoint,omitempty"`
-	BootstrapRuntimeEndpoint   string                 `json:"bootstrap_runtime_endpoint,omitempty"`
-	BootstrapEdgeProbeEndpoint string                 `json:"bootstrap_edge_probe_endpoint,omitempty"`
-	PreparedPortBindings       []MigrationPortBinding `json:"prepared_port_bindings,omitempty"`
-	PublicPortBindings         []MigrationPortBinding `json:"public_port_bindings,omitempty"`
+	BootstrapControlEndpoint   string `json:"bootstrap_control_endpoint,omitempty"`
+	BootstrapRuntimeEndpoint   string `json:"bootstrap_runtime_endpoint,omitempty"`
+	BootstrapEdgeProbeEndpoint string `json:"bootstrap_edge_probe_endpoint,omitempty"`
+	// OldServingProbeEndpoint is a fixed literal-loopback endpoint for proving
+	// the retained monolith path. It is metadata only; no dynamic runtime
+	// address or credential is persisted.
+	OldServingProbeEndpoint string                 `json:"old_serving_probe_endpoint,omitempty"`
+	PreparedPortBindings    []MigrationPortBinding `json:"prepared_port_bindings,omitempty"`
+	PublicPortBindings      []MigrationPortBinding `json:"public_port_bindings,omitempty"`
 	// EdgeAppNetworks records only managed network names selected from the
 	// runtime snapshot; it never contains container IDs or socket details.
 	EdgeAppNetworks         []string `json:"edge_app_networks,omitempty"`
@@ -251,6 +255,11 @@ func validateCheckpoint(checkpoint MigrationCheckpoint) error {
 	}
 	for _, ref := range checkpoint.EnvFileReferences {
 		if strings.TrimSpace(ref) == "" {
+			return fmt.Errorf("invalid migration checkpoint")
+		}
+	}
+	for _, endpoint := range []string{checkpoint.BootstrapEdgeProbeEndpoint, checkpoint.OldServingProbeEndpoint} {
+		if endpoint != "" && validLoopbackProbeEndpoint(endpoint) != nil {
 			return fmt.Errorf("invalid migration checkpoint")
 		}
 	}

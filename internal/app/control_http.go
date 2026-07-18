@@ -83,7 +83,7 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
-	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime); err != nil {
+	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime, cfg); err != nil {
 		return nil, err
 	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
@@ -202,10 +202,10 @@ func controlHTTPHandler(svc *services, cfg Config, log zerowrap.Logger) http.Han
 // wireControlMigrationRuntime composes only authenticated runtime clients. A
 // missing endpoint or WS05 split deploy/drain checker leaves cutover disabled;
 // this function never falls back to a local Docker-compatible adapter/socket.
-func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber, runtimeConfig RuntimeControlConfig) error {
+func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber, runtimeConfig RuntimeControlConfig, cfg Config) error {
 	updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater)
 	if !ok {
-		return nil
+		return fmt.Errorf("runtime command client does not provide authenticated self-update lifecycle")
 	}
 	launcher, err := NewRuntimeComponentLauncherWithHandoff(updater, newRuntimeHandoffDialer(runtimeConfig))
 	if err != nil {
@@ -219,7 +219,7 @@ func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, c
 	// Compose the switcher from authenticated role state rather than relying on
 	// an optional client type assertion. Missing readiness/probe capabilities
 	// remain explicit failed prerequisites and therefore cannot move traffic.
-	checks, checkErr := newMigrationTrafficChecks(runtimeInventory, checkpointStore, svc.appliedStateTracker)
+	checks, checkErr := newMigrationTrafficChecks(updater, runtimeInventory, checkpointStore, svc.appliedStateTracker, cfg)
 	if checkErr != nil {
 		return fmt.Errorf("create migration traffic checks: %w", checkErr)
 	}

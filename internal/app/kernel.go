@@ -258,7 +258,7 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	// but the same concrete fail-closed switcher is installed as split control.
 	// Until the candidate edge reports authenticated applied state and probes
 	// are available, it cannot activate the replacement listener.
-	checks, checkErr := newMigrationTrafficChecks(bridge, store, edgesnapshotusecase.NewAppliedStateTrackerAny())
+	checks, checkErr := newMigrationTrafficChecks(bridge, bridge, store, edgesnapshotusecase.NewAppliedStateTrackerAny(), cfg)
 	if checkErr != nil {
 		return nil, fmt.Errorf("create monolith migration traffic checks: %w", checkErr)
 	}

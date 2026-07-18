@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // MigrationService is the sole Phase 2 orchestration facade.  It deliberately
@@ -160,6 +162,12 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
 	}
+	// The old monolith remains bound to its configured listener while the
+	// prepared edge uses a separate fixed loopback port. Keep this endpoint
+	// deterministic so cutover never persists a runtime-discovered address.
+	if checkpoint.OldServingProbeEndpoint == "" && s.config.Server.Port > 0 {
+		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.Port)
+	}
 	if checkpoint.PreparedPortBindings == nil {
 		checkpoint.PreparedPortBindings = []MigrationPortBinding{{Role: "runtime", HostIP: "127.0.0.1", HostPort: 19444, ContainerPort: 9444, Protocol: "tcp"}}
 		if s.config.Server.Port > 0 {
@@ -207,6 +215,16 @@ func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) er
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component environment")
 	}
+	// This non-secret, deterministic identity is the only identity the edge is
+	// allowed to put in an applied-state acknowledgement. Control compares it
+	// to the mTLS/token-established identity and never trusts a discovered name.
+	if s.envManifest.values == nil {
+		s.envManifest.values = make(map[domain.ComponentRole]map[string]string)
+	}
+	if s.envManifest.values[domain.ComponentRoleEdge] == nil {
+		s.envManifest.values[domain.ComponentRoleEdge] = make(map[string]string)
+	}
+	s.envManifest.values[domain.ComponentRoleEdge]["GORDON_COMPONENT_ID"] = fmt.Sprintf("gordon-edge-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration)
 	files, err := s.envManifest.WriteFiles(filepath.Join(s.envDirectory, checkpoint.MigrationID, fmt.Sprintf("%d", checkpoint.ComponentGeneration)))
 	if err != nil {
 		return err

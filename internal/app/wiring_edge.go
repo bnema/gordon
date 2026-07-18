@@ -292,7 +292,7 @@ func runEdgeTraffic(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependenci
 		return err
 	}
 	defer closeProxy()
-	return runEdgeTrafficApplyLoop(ctx, cfg, deps, log, handler, graphs, manager, tlsConfig, health)
+	return runEdgeTrafficApplyLoop(ctx, cfg, deps, log, handler, routes, graphs, manager, tlsConfig, health)
 }
 
 // edgeTrafficGraphProvider is deliberately limited to the sanitized graph
@@ -320,13 +320,13 @@ func RunEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, handler http.H
 	if err != nil {
 		return err
 	}
-	return runEdgeTrafficApplyLoop(ctx, cfg, productionEdgeRoleDependencies(), zerowrap.FromCtx(ctx), handler, graphs, manager, tlsConfig, newEdgeAggregateHealth(nil, graphs, manager, certificateHealth))
+	return runEdgeTrafficApplyLoop(ctx, cfg, productionEdgeRoleDependencies(), zerowrap.FromCtx(ctx), handler, nil, graphs, manager, tlsConfig, newEdgeAggregateHealth(nil, graphs, manager, certificateHealth))
 }
 
 // runEdgeTrafficApplyLoop waits for the authenticated initial graph, installs
 // smart/TLS HTTP fallbacks, applies subsequent accepted graphs, and drains
 // listeners on shutdown.
-func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, log zerowrap.Logger, handler http.Handler, graphs edgeTrafficGraphProvider, manager edgeTrafficManager, tlsConfig *tls.Config, health *edgeAggregateHealth) error {
+func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, log zerowrap.Logger, handler http.Handler, routes *edgesnapshotclient.Client, graphs edgeTrafficGraphProvider, manager edgeTrafficManager, tlsConfig *tls.Config, health *edgeAggregateHealth) error {
 	if graphs == nil || manager == nil {
 		return fmt.Errorf("edge traffic graph provider and manager are required")
 	}
@@ -358,10 +358,13 @@ func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleD
 		return fmt.Errorf("apply initial edge traffic graph: %w", err)
 	}
 	log.Info().Uint64("generation", uint64(initialGraph.Generation)).Bool("healthy", graphs.TrafficGraphHealth().Healthy).Msg("edge traffic graph applied")
+	if routes != nil {
+		go reportAppliedEdgeGeneration(ctx, routes, initialGraph.Generation, log)
+	}
 
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, initialGraph.Generation, health, log)
+	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, initialGraph.Generation, health, routes, log)
 
 	server, errCh, err := startEdgeDedicatedHTTP(cfg, deps, handler, log)
 	if err != nil {
@@ -500,7 +503,7 @@ func validateEdgeTrafficTLSMode(cfg EdgeConfig, graph domain.TrafficGraph) error
 	return nil
 }
 
-func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager edgeTrafficManager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, lastGeneration domain.TrafficGraphGeneration, health *edgeAggregateHealth, log zerowrap.Logger) {
+func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager edgeTrafficManager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, lastGeneration domain.TrafficGraphGeneration, health *edgeAggregateHealth, routes *edgesnapshotclient.Client, log zerowrap.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -526,6 +529,43 @@ func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficG
 				continue
 			}
 			lastGeneration = snapshot.Generation
+			if routes != nil {
+				go reportAppliedEdgeGeneration(ctx, routes, snapshot.Generation, log)
+			}
+		}
+	}
+}
+
+// reportAppliedEdgeGeneration sends a readiness acknowledgement only after the
+// listener manager has accepted a graph and the independently received route
+// snapshot has the identical generation. Component identity is injected by the
+// runtime into the immutable role environment; a missing identity deliberately
+// leaves control's cutover tracker unsatisfied.
+func reportAppliedEdgeGeneration(ctx context.Context, routes *edgesnapshotclient.Client, generation domain.TrafficGraphGeneration, log zerowrap.Logger) {
+	componentID := strings.TrimSpace(os.Getenv("GORDON_COMPONENT_ID"))
+	if componentID == "" {
+		log.Warn().Msg("edge applied state not reported: component identity is unavailable")
+		return
+	}
+	for attempt := range 5 {
+		if ctx.Err() != nil {
+			return
+		}
+		snapshot, err := routes.CurrentSnapshot(ctx)
+		if err == nil && snapshot.Generation == domain.RouteTargetGeneration(generation) {
+			err = routes.ReportAppliedState(ctx, componentID, uint64(snapshot.Generation), uint64(generation), true)
+		}
+		if err == nil {
+			return
+		}
+		if attempt == 4 {
+			log.Warn().Err(err).Uint64("generation", uint64(generation)).Msg("edge applied state report failed")
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }
