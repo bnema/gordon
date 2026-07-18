@@ -639,6 +639,75 @@ func TestRuntimeWorkerSnapshotMergesConfiguredAndActualRoutesDeterministically(t
 	assert.Equal(t, "gordon-app", snapshot.EdgeAttachments[0].NetworkName, "actual discovery must override stale configured network")
 }
 
+func TestRuntimeWorkerSnapshotUsesFreshInventoryForPreExistingManagedRouteAndRemoval(t *testing.T) {
+	fresh := &freshInventoryRuntimeWorkerService{
+		fakeRuntimeWorkerService: &fakeRuntimeWorkerService{
+			// The actual replacement cache starts empty. A stale cache is added
+			// before the second snapshot to prove it cannot resurrect removals.
+			containers: map[string]*domain.Container{},
+			networks:   []*domain.NetworkInfo{{Name: "gordon-app", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}}},
+		},
+		inventory: map[string]*domain.Container{
+			"raw-pre-existing-id": {ID: "raw-pre-existing-id", Name: "gordon-app.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "app.example.test", domain.LabelProxyPort: "8080"}},
+		},
+	}
+	worker := NewRuntimeWorker(fresh)
+
+	snapshot, err := worker.Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 1, "a replacement must discover a pre-existing managed route without a warm service cache")
+	assert.Equal(t, domain.RouteTargetStatusReady, snapshot.Routes[0].Status)
+	require.Len(t, snapshot.EdgeAttachments, 1)
+	assert.NotContains(t, fmt.Sprint(snapshot), "raw-pre-existing-id", "runtime IDs are inventory-local only")
+
+	fresh.inventory = map[string]*domain.Container{}
+	fresh.containers = map[string]*domain.Container{
+		"stale": {ID: "raw-stale-id", Name: "gordon-app.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "app.example.test", domain.LabelProxyPort: "8080"}},
+	}
+	snapshot, err = worker.Snapshot(t.Context(), 2, "state-v2", "runtime-1")
+	require.NoError(t, err)
+	assert.Empty(t, snapshot.Routes, "removed runtime containers must not survive in a stale snapshot")
+	assert.Empty(t, snapshot.EdgeAttachments)
+}
+
+func TestRuntimeWorkerSnapshotFailsWhenFreshInventoryCannotBeRead(t *testing.T) {
+	fresh := &freshInventoryRuntimeWorkerService{
+		fakeRuntimeWorkerService: &fakeRuntimeWorkerService{
+			containers: map[string]*domain.Container{
+				"stale": {ID: "stale", Name: "gordon-stale.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "stale.example.test", domain.LabelProxyPort: "8080"}},
+			},
+			networks: []*domain.NetworkInfo{{Name: "gordon-stale", Containers: []string{"gordon-target-stale-example-test", "gordon-stale.example.test"}}},
+		},
+		inventoryErr: errors.New("runtime unavailable"),
+	}
+
+	_, err := NewRuntimeWorker(fresh).Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "fresh runtime containers")
+}
+
+func TestRuntimeWorkerSnapshotFreshInventoryRejectsUnmanagedAndSpoofedRoutes(t *testing.T) {
+	fresh := &freshInventoryRuntimeWorkerService{
+		fakeRuntimeWorkerService: &fakeRuntimeWorkerService{
+			networks: []*domain.NetworkInfo{{Name: "gordon-app", Containers: []string{"gordon-target-app-example-test", "gordon-app.example.test"}}},
+		},
+		inventory: map[string]*domain.Container{
+			"managed":   {ID: "raw-managed-id", Name: "gordon-app.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "app.example.test", domain.LabelProxyPort: "8080"}},
+			"unmanaged": {ID: "raw-unmanaged-id", Name: "spoof.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "false", domain.LabelRoute: "true", domain.LabelDomain: "spoof.example.test", domain.LabelProxyPort: "8080"}},
+			"spoofed":   {ID: "raw-spoofed-id", Name: "spoof.example.test", Status: "running", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "true", domain.LabelDomain: "not a domain", domain.LabelProxyPort: "8080"}},
+			"raw-name":  {ID: "raw-name-id", Name: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Status: "running"},
+		},
+	}
+
+	snapshot, err := NewRuntimeWorker(fresh).Snapshot(t.Context(), 1, "state-v1", "runtime-1")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Routes, 1)
+	assert.Equal(t, "app.example.test", snapshot.Routes[0].Domain)
+	assert.NotContains(t, fmt.Sprint(snapshot), "raw-unmanaged-id")
+	assert.NotContains(t, fmt.Sprint(snapshot), "raw-spoofed-id")
+	assert.NotContains(t, fmt.Sprint(snapshot), "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+}
+
 func testRuntimeCommandIdentity(id string) domain.RuntimeCommandIdentity {
 	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID(id), IdempotencyKey: id + "-key", Generation: 1, SourceComponentID: "control-plane", RequestedAt: time.Unix(1, 0)}
 }
@@ -722,6 +791,16 @@ func (f *blockingPolicyDeniedPublisherService) PublishRuntimePolicyDeniedEvent(c
 	f.publishEntered <- struct{}{}
 	<-f.release
 	return nil
+}
+
+type freshInventoryRuntimeWorkerService struct {
+	*fakeRuntimeWorkerService
+	inventory    map[string]*domain.Container
+	inventoryErr error
+}
+
+func (f *freshInventoryRuntimeWorkerService) freshRuntimeContainerInventory(context.Context) (map[string]*domain.Container, error) {
+	return f.inventory, f.inventoryErr
 }
 
 type fakeRuntimeWorkerService struct {

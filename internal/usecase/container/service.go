@@ -1673,6 +1673,24 @@ func (s *Service) List(_ context.Context) map[string]*domain.Container {
 	return result
 }
 
+// freshRuntimeContainerInventory is the RuntimeWorker-only authoritative
+// actual-state source. Runtime IDs are map keys strictly within this package;
+// snapshot builders convert them to aliases before crossing a component boundary.
+func (s *Service) freshRuntimeContainerInventory(ctx context.Context) (map[string]*domain.Container, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("list all runtime containers: %w", err)
+	}
+	inventory := make(map[string]*domain.Container, len(containers))
+	for _, container := range containers {
+		if container == nil || container.ID == "" {
+			continue
+		}
+		inventory[container.ID] = container
+	}
+	return inventory, nil
+}
+
 // RuntimeDrainRouteState resolves a private lifecycle ID to the same sanitized
 // managed route state emitted by RuntimeWorker snapshots. The caller derives an
 // opaque TargetKey locally; no backing identity is sent to the edge protocol.

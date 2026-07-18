@@ -36,6 +36,14 @@ type runtimeWorkerService interface {
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 }
 
+// runtimeContainerInventoryProvider is deliberately private to the local
+// runtime worker. It supplies an authoritative all-container inventory without
+// widening the public container-service boundary or making cache reads an
+// actual-state source.
+type runtimeContainerInventoryProvider interface {
+	freshRuntimeContainerInventory(context.Context) (map[string]*domain.Container, error)
+}
+
 type runtimePolicySetter interface {
 	SetRuntimePolicy(RuntimePolicy)
 }
@@ -169,19 +177,28 @@ func (w *RuntimeWorker) SelfUpdate(ctx context.Context, command domain.RuntimeSe
 	})
 }
 
-// Snapshot returns a sanitized actual runtime state snapshot from the existing service views.
+// Snapshot returns a sanitized actual runtime state snapshot. Production
+// workers read a fresh all-container inventory; the legacy service views are
+// retained only for fakes that cannot provide that private capability.
 func (w *RuntimeWorker) Snapshot(ctx context.Context, generation uint64, stateVersion, sourceComponentID string) (domain.RuntimeActualStateSnapshot, error) {
-	containers := w.service.List(ctx)
-	routes := w.service.ListRoutesWithDetails(ctx)
+	containers, freshInventory, err := w.snapshotContainers(ctx)
+	if err != nil {
+		return domain.RuntimeActualStateSnapshot{}, err
+	}
 	networks, err := w.service.ListNetworks(ctx)
 	if err != nil {
 		return domain.RuntimeActualStateSnapshot{}, fmt.Errorf("list runtime networks: %w", err)
 	}
 	networkAliases := runtimeNetworkAliases(networks)
-	// A replacement runtime has intentionally minimal configuration. Discover
-	// its managed route targets from labels and observed network membership,
-	// then retain configured routes as a legacy fallback for the monolith.
-	routes = mergeRuntimeRouteInfos(routes, managedActualRouteInfos(containers, networkAliases))
+	actualRoutes := managedActualRouteInfos(containers, networkAliases)
+	routes := actualRoutes
+	if !freshInventory {
+		// Test and embedded legacy workers which cannot expose a runtime
+		// inventory retain the old configured view for compatibility. A
+		// production Service always implements the private inventory provider,
+		// so it can never fall back to this stale cache.
+		routes = mergeRuntimeRouteInfos(w.service.ListRoutesWithDetails(ctx), actualRoutes)
+	}
 	snapshot := domain.RuntimeActualStateSnapshot{
 		Generation:        generation,
 		StateVersion:      stateVersion,
@@ -197,6 +214,18 @@ func (w *RuntimeWorker) Snapshot(ctx context.Context, generation uint64, stateVe
 		return domain.RuntimeActualStateSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func (w *RuntimeWorker) snapshotContainers(ctx context.Context) (map[string]*domain.Container, bool, error) {
+	inventory, ok := w.service.(runtimeContainerInventoryProvider)
+	if !ok {
+		return w.service.List(ctx), false, nil
+	}
+	containers, err := inventory.freshRuntimeContainerInventory(ctx)
+	if err != nil {
+		return nil, true, fmt.Errorf("fresh runtime containers: %w", err)
+	}
+	return containers, true, nil
 }
 
 func (w *RuntimeWorker) runWithPolicy(ctx context.Context, identity domain.RuntimeCommandIdentity, kind string, checkPolicy func() error, decisionID string, op func() error) (domain.RuntimeCommandResult, error) {
@@ -416,12 +445,29 @@ func sanitizeRuntimeErrorMessage(err error) string {
 func buildRuntimeContainerStates(generation uint64, containers map[string]*domain.Container) []domain.RuntimeContainerState {
 	states := make([]domain.RuntimeContainerState, 0, len(containers))
 	for _, c := range containers {
-		if c == nil {
+		if c == nil || strings.TrimSpace(c.Name) == "" || looksLikeRuntimeEngineID(c.Name) {
 			continue
 		}
-		states = append(states, domain.RuntimeContainerState{Name: c.Name, Alias: targetAliasForDomain(c.Labels[domain.LabelDomain]), Image: c.Image, ImageID: c.ImageID, Status: normalizeContainerStatus(c.Status), StartedAt: c.Created, Labels: domain.SanitizeRuntimeStateLabels(c.Labels), Generation: generation})
+		states = append(states, domain.RuntimeContainerState{Name: c.Name, Alias: runtimeContainerAlias(c), Image: c.Image, ImageID: c.ImageID, Status: normalizeContainerStatus(c.Status), StartedAt: c.Created, Labels: domain.SanitizeRuntimeStateLabels(c.Labels), Generation: generation})
 	}
+	sort.Slice(states, func(i, j int) bool {
+		if states[i].Name == states[j].Name {
+			return states[i].Alias < states[j].Alias
+		}
+		return states[i].Name < states[j].Name
+	})
 	return states
+}
+
+func runtimeContainerAlias(c *domain.Container) string {
+	if c == nil {
+		return ""
+	}
+	domainName, ok := domain.CanonicalRouteDomain(c.Labels[domain.LabelDomain])
+	if !ok {
+		return ""
+	}
+	return targetAliasForDomain(domainName)
 }
 
 func (w *RuntimeWorker) buildRuntimeVolumeStates(ctx context.Context, generation uint64) []domain.RuntimeVolumeState {
@@ -440,6 +486,7 @@ func (w *RuntimeWorker) buildRuntimeVolumeStates(ctx context.Context, generation
 		}
 		states = append(states, domain.RuntimeVolumeState{Name: volume.Name, AttachedTo: sanitizedAliases(volume.Containers), Generation: generation})
 	}
+	sort.Slice(states, func(i, j int) bool { return states[i].Name < states[j].Name })
 	return states
 }
 
@@ -451,6 +498,7 @@ func buildRuntimeNetworkStates(generation uint64, networks []*domain.NetworkInfo
 		}
 		states = append(states, domain.RuntimeNetworkState{Name: n.Name, Driver: n.Driver, Aliases: sanitizedAliases(n.Containers), Generation: generation})
 	}
+	sort.Slice(states, func(i, j int) bool { return states[i].Name < states[j].Name })
 	return states
 }
 

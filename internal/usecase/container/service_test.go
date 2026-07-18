@@ -31,6 +31,29 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+func TestServiceFreshRuntimeContainerInventoryListsAllAndKeepsIDsPrivate(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, mocks.NewMockEnvLoader(t), mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{ID: "runtime-id", Name: "gordon-app.example.test"},
+		{ID: "", Name: "invalid-without-runtime-id"},
+	}, nil).Once()
+
+	inventory, err := svc.freshRuntimeContainerInventory(testContext())
+	require.NoError(t, err)
+	require.Equal(t, map[string]*domain.Container{"runtime-id": {ID: "runtime-id", Name: "gordon-app.example.test"}}, inventory)
+}
+
+func TestServiceFreshRuntimeContainerInventoryReturnsRuntimeFailure(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, mocks.NewMockEnvLoader(t), mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, errors.New("runtime unavailable")).Once()
+
+	_, err := svc.freshRuntimeContainerInventory(testContext())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "list all runtime containers")
+}
+
 type drainDelayGate struct {
 	entered chan time.Duration
 	release chan struct{}

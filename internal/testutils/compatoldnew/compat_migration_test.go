@@ -82,6 +82,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	status := fixture.runCLI("migrate", "status", "--json")
 	require.Contains(t, strings.ReplaceAll(strings.ReplaceAll(status, " ", ""), "\n", ""), `"bootstrap_runtime_endpoint":"unix:///var/lib/gordon/migration/`, "old monolith must use the private Gordon Unix RPC socket")
 	fixture.assertPreparedTargets()
+	fixture.assertPreparedAppNetworkHandoff()
 	fixture.assertPreparedEdgeProbeListener()
 	fixture.assertRuntimeBootstrapTransport()
 	fixture.assertRuntimeSocketExclusive()
@@ -390,6 +391,38 @@ func (f *realMigrationFixture) assertPreparedTargets() {
 // assertPreparedEdgeProbeListener verifies the temporary listener is the sole
 // host publish during prepare and that both application and registry requests
 // really traverse the prepared edge before public cutover.
+// assertPreparedAppNetworkHandoff proves that runtime discovery checkpointed
+// the legacy app network and connected only the prepared edge to it. The
+// checkpoint stores names, never container IDs or engine socket details.
+func (f *realMigrationFixture) assertPreparedAppNetworkHandoff() {
+	f.t.Helper()
+	path := filepath.Join(f.root, "data", "migration", "migration", "attestation", "checkpoint.json")
+	var checkpoint struct {
+		EdgeAppNetworks       []string `json:"edge_app_networks"`
+		ConnectedEdgeNetworks []string `json:"connected_edge_networks"`
+	}
+	require.Eventually(f.t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil || json.Unmarshal(data, &checkpoint) != nil {
+			return false
+		}
+		return len(checkpoint.EdgeAppNetworks) == 1 && checkpoint.EdgeAppNetworks[0] == f.network && len(checkpoint.ConnectedEdgeNetworks) == 1 && checkpoint.ConnectedEdgeNetworks[0] == f.network
+	}, 10*time.Second, 50*time.Millisecond, "checkpoint must record the discovered old app network and the edge connection")
+
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] != "edge" {
+			continue
+		}
+		networks, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
+		require.NoError(f.t, inspectErr)
+		require.Contains(f.t, strings.FieldsFunc(networks, func(r rune) bool { return r == ';' }), f.network, "prepared edge must be attached to the checkpointed app network")
+		return
+	}
+	f.t.Fatal("prepared edge was not found")
+}
+
 func (f *realMigrationFixture) assertPreparedEdgeProbeListener() {
 	f.t.Helper()
 	containers, err := f.componentContainers()
