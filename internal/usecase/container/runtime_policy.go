@@ -154,6 +154,9 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 	}
 	for _, source := range cfg.ReadOnlyVolumes {
 		if isRuntimeSocketMount(source) {
+			if isApprovedRuntimeSocketBind(cfg, source) {
+				continue
+			}
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
 		// Gordon role manifests are the sole host-file exception. They are
@@ -207,6 +210,16 @@ func runtimePolicyImageRegistry(image string) string {
 func isRuntimeSocketMount(source string) bool {
 	clean := filepath.Clean(strings.TrimSpace(source))
 	return strings.HasSuffix(clean, ".sock") && (strings.Contains(clean, "/podman/") || strings.Contains(clean, "podman.sock") || strings.Contains(clean, "docker.sock"))
+}
+
+func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool {
+	if cfg.Labels[domain.LabelComponent] != "true" || cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) || !strings.HasPrefix(cfg.Name, "gordon-runtime-") || cfg.ReadOnlyVolumes["/run/gordon/runtime.sock"] != source {
+		return false
+	}
+	// A lifecycle-generated runtime container may receive exactly the engine
+	// socket source discovered from its own scoped env file. The destination is
+	// fixed by the lifecycle manager; no other role reaches this exception.
+	return isRuntimeSocketMount(source)
 }
 
 func isApprovedComponentConfigBind(cfg domain.ContainerConfig, source string) bool {

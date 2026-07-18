@@ -90,6 +90,9 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	if strings.TrimSpace(command.DesiredImage) == "" || !safeComponentNetwork(command.InternalNetwork) {
 		return fmt.Errorf("invalid component desired state")
 	}
+	if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
+		return err
+	}
 	container, err := m.find(ctx, command)
 	if err != nil {
 		return err
@@ -109,15 +112,28 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 		return err
 	}
 	labels := componentLifecycleLabels(command)
-	config := &domain.ContainerConfig{Image: command.DesiredImage, Name: command.TargetComponentID, Env: env, Labels: labels, NetworkMode: command.InternalNetwork, RestartPolicy: domain.RestartPolicyAlways}
-	if command.ConfigFile != "" {
-		if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
-			return err
+	// A component must always execute the candidate Gordon role binary with a
+	// generated, role-scoped config. Accepting an empty config here would turn
+	// a migration lifecycle command into an arbitrary image launcher.
+	config := &domain.ContainerConfig{
+		Image:           command.DesiredImage,
+		Name:            command.TargetComponentID,
+		Env:             env,
+		Labels:          labels,
+		NetworkMode:     command.InternalNetwork,
+		RestartPolicy:   domain.RestartPolicyAlways,
+		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
+		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": command.ConfigFile},
+		Volumes:         componentPersistentVolumes(command),
+		Aliases:         []string{"gordon-" + string(command.TargetComponentRole)},
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		if source, rewritten := runtimeComponentSocketMount(config.Env); source != "" {
+			// The runtime process is the sole post-cutover socket authority. The
+			// source socket is never mounted into control, edge, or registry.
+			config.Env = rewritten
+			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
 		}
-		config.Cmd = []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.yaml"}
-		config.ReadOnlyVolumes = map[string]string{"/etc/gordon/role.yaml": command.ConfigFile}
-		config.Volumes = componentPersistentVolumes(command)
-		config.Aliases = []string{"gordon-" + string(command.TargetComponentRole)}
 	}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return err
@@ -291,6 +307,23 @@ func componentLifecycleEnvironment(path string) ([]string, error) {
 	}
 	return values, nil
 }
+func runtimeComponentSocketMount(environment []string) (string, []string) {
+	copyOf := append([]string(nil), environment...)
+	for index, entry := range copyOf {
+		key, value, found := strings.Cut(entry, "=")
+		if !found || (key != "CONTAINER_HOST" && key != "DOCKER_HOST" && key != "PODMAN_HOST") {
+			continue
+		}
+		path := strings.TrimPrefix(strings.TrimSpace(value), "unix://")
+		if !isRuntimeSocketMount(path) {
+			continue
+		}
+		copyOf[index] = key + "=unix:///run/gordon/runtime.sock"
+		return path, copyOf
+	}
+	return "", copyOf
+}
+
 func safeComponentNetwork(network string) bool {
 	return strings.HasPrefix(network, "gordon-internal-") && filepath.Base(network) == network && !strings.ContainsAny(network, " /\\")
 }

@@ -10,6 +10,14 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestRuntimePolicyAllowsSocketOnlyForRuntimeComponent(t *testing.T) {
+	identity := testRuntimeCommandIdentity("runtime-socket")
+	config := domain.ContainerConfig{Name: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRuntime)}, ReadOnlyVolumes: map[string]string{"/run/gordon/runtime.sock": "/run/user/1000/podman/podman.sock"}}
+	require.NoError(t, (RuntimePolicy{Mode: RuntimePolicyModeEnforce}).CheckContainerConfig(identity, "", config))
+	config.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleEdge)
+	require.ErrorIs(t, (RuntimePolicy{Mode: RuntimePolicyModeEnforce}).CheckContainerConfig(identity, "", config), ErrRuntimePolicyDenied)
+}
+
 func TestRuntimePolicy(t *testing.T) {
 	identity := testRuntimeCommandIdentity("cmd-policy")
 
