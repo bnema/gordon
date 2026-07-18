@@ -34,6 +34,16 @@ func TestMigrationBootstrapTransportUsesPrivateRuntimeSocketAndLoopbackEdgeProbe
 	}
 }
 
+func TestMigrationBootstrapUsesMonolithRegistryForOldServingProbe(t *testing.T) {
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared}
+	service := &MigrationService{}
+	service.config.Server.Port = 8081
+	service.config.Server.RegistryPort = 15000
+
+	require.NoError(t, service.setBootstrapListeners(&checkpoint))
+	assert.Equal(t, "127.0.0.1:15000", checkpoint.OldServingProbeEndpoint)
+}
+
 func TestPrivateEdgeProbePortAvailabilityRejectsCollision(t *testing.T) {
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	require.NoError(t, err)

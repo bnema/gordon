@@ -135,8 +135,11 @@ func (c *migrationTrafficChecks) TestRegistryV2ThroughEdge(ctx context.Context) 
 }
 
 // OldServingPathHealthy deliberately checks both the old managed container and
-// the old loopback HTTP listener before activating edge. A live TCP listener on
-// an unrelated process can therefore never satisfy the prerequisite.
+// its in-namespace registry /v2 listener before activating edge. The candidate
+// CLI shares the old monolith namespace, while rootless host port forwarding
+// does not; probing the monolith listener avoids treating NAT as serving health.
+// A live listener on an unrelated process can therefore never satisfy the
+// prerequisite.
 func (c *migrationTrafficChecks) OldServingPathHealthy(ctx context.Context, old string) error {
 	checkpoint, err := c.store.Load()
 	if err != nil {
@@ -158,7 +161,10 @@ func (c *migrationTrafficChecks) OldServingPathHealthy(ctx context.Context, old 
 		}
 		for _, container := range snapshot.Containers {
 			if container.Name == old && container.Status == domain.ContainerStatusRunning && container.Labels[domain.LabelManaged] == "true" {
-				return c.probe(ctx, checkpoint.OldServingProbeEndpoint, c.cfg.Server.GordonDomain, "/", false, false)
+				// This is intentionally a public, credential-free registry request.
+				// The private migration credential remains scoped to the prepared
+				// edge probe and cannot turn the old-path check into an authority.
+				return c.probe(ctx, checkpoint.OldServingProbeEndpoint, c.cfg.Server.RegistryDomain, "/v2/", true, false)
 			}
 		}
 		return fmt.Errorf("old managed serving path is not running")

@@ -40,21 +40,20 @@ var _ out.RuntimeStateSubscriber = trafficCheckState{}
 
 func TestMigrationTrafficChecksUseLifecycleAndLoopbackProbes(t *testing.T) {
 	seed := "private-runtime-handoff-token"
-	appCalls := 0
+	oldRegistryCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Host {
 		case "app.example.test":
 			assert.Equal(t, "/", r.URL.Path)
-			if appCalls == 0 {
-				assert.Equal(t, migrationProbeToken(seed), r.Header.Get(migrationProbeHeader))
-			} else {
-				assert.Empty(t, r.Header.Get(migrationProbeHeader), "the old serving-path probe must not send the migration credential")
-			}
-			appCalls++
+			assert.Equal(t, migrationProbeToken(seed), r.Header.Get(migrationProbeHeader))
 			w.WriteHeader(http.StatusNoContent)
 		case "registry.example.test":
 			assert.Equal(t, "/v2/", r.URL.Path)
-			assert.Equal(t, migrationProbeToken(seed), r.Header.Get(migrationProbeHeader))
+			if r.Header.Get(migrationProbeHeader) == "" {
+				oldRegistryCalls++
+			} else {
+				assert.Equal(t, migrationProbeToken(seed), r.Header.Get(migrationProbeHeader))
+			}
 			w.WriteHeader(http.StatusUnauthorized)
 		default:
 			http.Error(w, "unexpected host", http.StatusBadRequest)
@@ -86,10 +85,25 @@ func TestMigrationTrafficChecksUseLifecycleAndLoopbackProbes(t *testing.T) {
 	require.NoError(t, checks.TestApplicationThroughEdge(context.Background()))
 	require.NoError(t, checks.TestRegistryV2ThroughEdge(context.Background()))
 	require.NoError(t, checks.OldServingPathHealthy(context.Background(), "old-monolith"))
+	assert.Equal(t, 1, oldRegistryCalls, "old serving path must be a normal monolith registry request, not a prepared-edge credential probe")
 	assert.NotEmpty(t, runtime.commands)
 	for _, command := range runtime.commands {
 		assert.Equal(t, domain.RuntimeComponentLifecycleHealth, command.LifecycleAction)
 	}
+}
+
+func TestMigrationTrafficChecksOldServingFailsClosedWithoutMonolithRegistryEndpoint(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, RouteSnapshotGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared, OldServingPath: "old-monolith"}
+	require.NoError(t, store.Save(checkpoint))
+	runtime := &trafficCheckRuntime{}
+	state := trafficCheckState{snapshot: domain.RuntimeActualStateSnapshot{Generation: 1, StateVersion: "fixture", SourceComponentID: "runtime", ObservedAt: time.Now(), Containers: []domain.RuntimeContainerState{{Name: "old-monolith", Status: domain.ContainerStatusRunning, Labels: map[string]string{domain.LabelManaged: "true"}}}}}
+	checks, err := newMigrationTrafficChecks(runtime, state, store, edgesnapshotusecase.NewAppliedStateTrackerAny(), Config{})
+	require.NoError(t, err)
+
+	require.Error(t, checks.OldServingPathHealthy(context.Background(), "old-monolith"))
+	assert.Empty(t, runtime.commands, "an unproven old serving path must not send lifecycle commands")
 }
 
 func TestMigrationAppliedStatePersistsOnlyAuthenticatedCurrentEdgeGeneration(t *testing.T) {

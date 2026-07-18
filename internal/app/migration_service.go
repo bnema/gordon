@@ -175,8 +175,13 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 	if err := s.setPreparedEdgeProbeBinding(checkpoint); err != nil {
 		return err
 	}
-	if checkpoint.OldServingProbeEndpoint == "" && s.config.Server.Port > 0 {
-		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.Port)
+	// The candidate CLI runs in the old monolith's network namespace. Probe the
+	// monolith registry listener directly there instead of its host-published
+	// proxy port: rootless port forwarding is not a loopback path from that
+	// namespace. Registry /v2 is an actual old-monolith serving path and remains
+	// available even when legacy HTTP traffic uses a smart-TCP entrypoint.
+	if checkpoint.OldServingProbeEndpoint == "" && s.config.Server.RegistryPort > 0 {
+		checkpoint.OldServingProbeEndpoint = fmt.Sprintf("127.0.0.1:%d", s.config.Server.RegistryPort)
 	}
 	if checkpoint.PublicPortBindings == nil && s.config.Server.Port > 0 && s.config.Server.RegistryPort > 0 {
 		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "0.0.0.0", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
