@@ -155,6 +155,20 @@ func (w runtimeRoleWorkerBundle) RouteDrainAckReceiver() out.RouteDrainAckReceiv
 	return w.routeDrainAckReceiver
 }
 
+// Snapshot preserves the concrete worker capability through the role bundle.
+// Without this forwarding method the production runtime gRPC service cannot
+// publish actual state, because embedding the RuntimeWorker interface hides
+// optional methods implemented by the concrete container worker.
+func (w runtimeRoleWorkerBundle) Snapshot(ctx context.Context, generation uint64, stateVersion, sourceComponentID string) (domain.RuntimeActualStateSnapshot, error) {
+	snapshotter, ok := w.RuntimeWorker.(interface {
+		Snapshot(context.Context, uint64, string, string) (domain.RuntimeActualStateSnapshot, error)
+	})
+	if !ok {
+		return domain.RuntimeActualStateSnapshot{}, fmt.Errorf("runtime worker snapshotter not configured")
+	}
+	return snapshotter.Snapshot(ctx, generation, stateVersion, sourceComponentID)
+}
+
 func runtimeRoleLogReader(worker in.RuntimeWorker) out.RuntimeLogReader {
 	if w, ok := worker.(interface{ RuntimeLogReader() out.RuntimeLogReader }); ok {
 		return w.RuntimeLogReader()
