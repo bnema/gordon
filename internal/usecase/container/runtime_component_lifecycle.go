@@ -63,9 +63,11 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 		// control client reconnects using its configured authenticated endpoint;
 		// no socket capability is transferred across component boundaries.
 		return nil
-	case domain.RuntimeComponentLifecycleActivate, domain.RuntimeComponentLifecycleDrain:
-		// Readiness/drain transitions are constrained to an already managed edge
-		// component. The runtime never receives an arbitrary listener address.
+	case domain.RuntimeComponentLifecycleActivate:
+		return m.activateEdge(ctx, command)
+	case domain.RuntimeComponentLifecycleDrain:
+		// Drain is a readiness transition only; listener ownership changes only
+		// in the activate transaction below.
 		return m.health(ctx, command)
 	default:
 		return fmt.Errorf("unsupported component lifecycle action")
@@ -110,40 +112,8 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 		}
 		return m.runtime.StartContainer(ctx, container.ID)
 	}
-	env, err := componentLifecycleEnvironment(command.EnvironmentFile)
+	config, err := m.componentConfig(command, command.PortPublishes)
 	if err != nil {
-		return err
-	}
-	labels := componentLifecycleLabels(command)
-	// A component must always execute the candidate Gordon role binary with a
-	// generated, role-scoped config. Accepting an empty config here would turn
-	// a migration lifecycle command into an arbitrary image launcher.
-	config := &domain.ContainerConfig{
-		Image:           command.DesiredImage,
-		Name:            command.TargetComponentID,
-		Env:             env,
-		Labels:          labels,
-		NetworkMode:     command.InternalNetwork,
-		PortPublishes:   append([]domain.ContainerPortPublish(nil), command.PortPublishes...),
-		RestartPolicy:   domain.RestartPolicyAlways,
-		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
-		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": command.ConfigFile},
-		Volumes:         componentPersistentVolumes(command),
-		Aliases:         []string{"gordon-" + string(command.TargetComponentRole)},
-	}
-	if command.TargetComponentRole == domain.ComponentRoleRuntime {
-		// This identity is derived from the validated lifecycle target and is
-		// consumed only by gordon-runtime when publishing its authenticated
-		// health/state identity.
-		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
-		if source, rewritten := runtimeComponentSocketMount(config.Env); source != "" {
-			// The runtime process is the sole post-cutover socket authority. The
-			// source socket is never mounted into control, edge, or registry.
-			config.Env = rewritten
-			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
-		}
-	}
-	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return err
 	}
 	created, err := m.runtime.CreateContainer(ctx, config)
@@ -153,18 +123,164 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	return m.runtime.StartContainer(ctx, created.ID)
 }
 
-func (m *runtimeComponentLifecycleManager) stop(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command)
-	if err != nil || container == nil {
-		return err
+// componentConfig produces the only component container shape that lifecycle
+// commands may create. It is shared by prepare and cutover rollback so a
+// failed listener transfer always restores the identical probe-only edge.
+func (m *runtimeComponentLifecycleManager) componentConfig(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (*domain.ContainerConfig, error) {
+	env, err := componentLifecycleEnvironment(command.EnvironmentFile)
+	if err != nil {
+		return nil, err
 	}
-	return m.runtime.StopContainer(ctx, container.ID)
+	config := &domain.ContainerConfig{
+		Image: command.DesiredImage, Name: command.TargetComponentID, Env: env,
+		Labels: componentLifecycleLabels(command), NetworkMode: command.InternalNetwork,
+		PortPublishes: append([]domain.ContainerPortPublish(nil), ports...), RestartPolicy: domain.RestartPolicyAlways,
+		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
+		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": command.ConfigFile},
+		Volumes:         componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
+		if source, rewritten := runtimeComponentSocketMount(config.Env); source != "" {
+			config.Env = rewritten
+			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
+		}
+	}
+	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
+		return nil, err
+	}
+	return config, nil
 }
-func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command)
+
+type edgeActivation struct {
+	prepared *domain.Container
+	old      *domain.Container
+}
+
+// activateEdge transfers listener ownership as a compensating transaction.
+// The old process is a container selected by its Gordon labels, never the
+// invoking CLI/control host process. Any failure restores both the old
+// listener and the prepared probe-only edge before returning the error.
+func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	activation, err := m.validateEdgeActivation(ctx, command)
 	if err != nil {
 		return err
 	}
+	return m.transferEdgeListener(ctx, command, activation)
+}
+
+func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (edgeActivation, error) {
+	if command.TargetComponentRole != domain.ComponentRoleEdge || strings.TrimSpace(command.OldServingComponentID) == "" {
+		return edgeActivation{}, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "edge activation requires a managed old serving container", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+	}
+	if !approvedFinalPortPublishes(command.FinalPortPublishes) {
+		return edgeActivation{}, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "edge activation final port bindings are not allowed", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+	}
+	prepared, err := m.find(ctx, command)
+	if err != nil {
+		return edgeActivation{}, err
+	}
+	if prepared == nil {
+		return edgeActivation{}, fmt.Errorf("prepared edge component not found")
+	}
+	if err := m.healthContainer(ctx, prepared); err != nil {
+		return edgeActivation{}, fmt.Errorf("prepared edge health before listener transfer: %w", err)
+	}
+	old, err := m.managedOldServingContainer(ctx, command)
+	if err != nil {
+		return edgeActivation{}, err
+	}
+	if !finalPortsMatchOld(command.FinalPortPublishes, old.Ports) {
+		return edgeActivation{}, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "edge activation final ports do not match old serving container", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+	}
+	return edgeActivation{prepared: prepared, old: old}, nil
+}
+
+func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation) error {
+	preparedPorts := append([]domain.ContainerPortPublish(nil), command.PortPublishes...)
+	oldStopped, preparedStopped, preparedRemoved := false, false, false
+	var final *domain.Container
+	rollback := func() {
+		m.rollbackEdgeActivation(ctx, command, activation, preparedPorts, final, oldStopped, preparedStopped, preparedRemoved)
+	}
+	if err := m.runtime.StopContainer(ctx, activation.old.ID); err != nil {
+		return fmt.Errorf("stop old serving container: %w", err)
+	}
+	oldStopped = true
+	if err := m.runtime.StopContainer(ctx, activation.prepared.ID); err != nil {
+		rollback()
+		return fmt.Errorf("stop prepared edge: %w", err)
+	}
+	preparedStopped = true
+	if err := m.runtime.RemoveContainer(ctx, activation.prepared.ID, true); err != nil {
+		rollback()
+		return fmt.Errorf("remove prepared edge: %w", err)
+	}
+	preparedRemoved = true
+	config, err := m.componentConfig(command, command.FinalPortPublishes)
+	if err != nil {
+		rollback()
+		return err
+	}
+	final, err = m.runtime.CreateContainer(ctx, config)
+	if err != nil {
+		rollback()
+		return fmt.Errorf("create final edge: %w", err)
+	}
+	if err := m.runtime.StartContainer(ctx, final.ID); err != nil {
+		rollback()
+		return fmt.Errorf("start final edge: %w", err)
+	}
+	if err := m.healthContainer(ctx, final); err != nil {
+		rollback()
+		return fmt.Errorf("postcheck final edge: %w", err)
+	}
+	return nil
+}
+
+func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation, preparedPorts []domain.ContainerPortPublish, final *domain.Container, oldStopped, preparedStopped, preparedRemoved bool) {
+	if final != nil {
+		_ = m.runtime.StopContainer(ctx, final.ID)
+		_ = m.runtime.RemoveContainer(ctx, final.ID, true)
+	}
+	if preparedRemoved {
+		m.restorePreparedEdge(ctx, command, preparedPorts)
+	} else if preparedStopped {
+		_ = m.runtime.StartContainer(ctx, activation.prepared.ID)
+	}
+	if oldStopped {
+		_ = m.runtime.StartContainer(ctx, activation.old.ID)
+	}
+}
+
+func (m *runtimeComponentLifecycleManager) restorePreparedEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) {
+	config, err := m.componentConfig(command, ports)
+	if err != nil {
+		return
+	}
+	restored, err := m.runtime.CreateContainer(ctx, config)
+	if err == nil {
+		_ = m.runtime.StartContainer(ctx, restored.ID)
+	}
+}
+
+func (m *runtimeComponentLifecycleManager) managedOldServingContainer(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (*domain.Container, error) {
+	containers, err := m.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, container := range containers {
+		if container != nil && container.Name == command.OldServingComponentID {
+			if container.Labels[domain.LabelManaged] != "true" || container.Labels[domain.LabelComponent] == "true" {
+				return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not Gordon-managed", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
+			}
+			return container, nil
+		}
+	}
+	return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not available", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
+}
+
+func (m *runtimeComponentLifecycleManager) healthContainer(ctx context.Context, container *domain.Container) error {
 	if container == nil {
 		return fmt.Errorf("component not found")
 	}
@@ -180,6 +296,57 @@ func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command d
 		return fmt.Errorf("component is unhealthy")
 	}
 	return nil
+}
+
+func approvedFinalPortPublishes(ports []domain.ContainerPortPublish) bool {
+	if len(ports) == 0 {
+		return false
+	}
+	seen := make(map[int]struct{}, len(ports))
+	for _, port := range ports {
+		if port.Protocol != domain.NetworkProtocolTCP || port.HostIP != "0.0.0.0" || port.HostPort < 1 || port.HostPort > 65535 || port.ContainerPort < 1 || port.ContainerPort > 65535 {
+			return false
+		}
+		if _, exists := seen[port.HostPort]; exists {
+			return false
+		}
+		seen[port.HostPort] = struct{}{}
+	}
+	return true
+}
+
+func finalPortsMatchOld(final []domain.ContainerPortPublish, old []int) bool {
+	if len(final) != len(old) {
+		return false
+	}
+	allowed := make(map[int]struct{}, len(old))
+	for _, port := range old {
+		allowed[port] = struct{}{}
+	}
+	if len(allowed) != len(old) {
+		return false
+	}
+	for _, port := range final {
+		if _, exists := allowed[port.HostPort]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func (m *runtimeComponentLifecycleManager) stop(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	container, err := m.find(ctx, command)
+	if err != nil || container == nil {
+		return err
+	}
+	return m.runtime.StopContainer(ctx, container.ID)
+}
+func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	container, err := m.find(ctx, command)
+	if err != nil {
+		return err
+	}
+	return m.healthContainer(ctx, container)
 }
 func (m *runtimeComponentLifecycleManager) logs(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	container, err := m.find(ctx, command)

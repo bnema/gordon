@@ -88,6 +88,8 @@ func TestTrafficSwitchRejectsGenerationMismatchAndSwitchesOnlyViaRuntime(t *test
 	assert.Equal(t, domain.ComponentRoleEdge, command.TargetComponentRole)
 	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, command.LifecycleAction)
 	assert.True(t, command.PreserveVolumes)
+	assert.Equal(t, "monolith", command.OldServingComponentID)
+	assert.Empty(t, command.FinalPortPublishes, "a malformed checkpoint cannot invent public ports")
 	assert.Equal(t, uint64(7), command.Generation)
 	assert.Contains(t, command.TargetComponentID, "gordon-edge-")
 }

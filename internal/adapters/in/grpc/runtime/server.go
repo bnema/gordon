@@ -602,10 +602,15 @@ func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.Runtime
 	if command == nil {
 		return domain.RuntimeSelfUpdateCommand{}
 	}
-	result := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy, LifecycleAction: domain.RuntimeComponentLifecycleAction(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, PreserveVolumes: command.PreserveVolumes}
+	result := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy, LifecycleAction: domain.RuntimeComponentLifecycleAction(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentID: command.OldServingComponentId, PreserveVolumes: command.PreserveVolumes}
 	for _, port := range command.PortPublishes {
 		if port != nil {
 			result.PortPublishes = append(result.PortPublishes, domain.ContainerPortPublish{HostIP: port.HostIp, HostPort: int(port.HostPort), ContainerPort: int(port.ContainerPort), Protocol: domain.NetworkProtocol(port.Protocol)})
+		}
+	}
+	for _, port := range command.FinalPortPublishes {
+		if port != nil {
+			result.FinalPortPublishes = append(result.FinalPortPublishes, domain.ContainerPortPublish{HostIP: port.HostIp, HostPort: int(port.HostPort), ContainerPort: int(port.ContainerPort), Protocol: domain.NetworkProtocol(port.Protocol)})
 		}
 	}
 	return result

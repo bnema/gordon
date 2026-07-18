@@ -210,8 +210,14 @@ type RuntimeSelfUpdateCommand struct {
 	// PortPublishes are explicit checkpointed listener bindings. Lifecycle
 	// policy validates their role, address, and phase; raw engine port options
 	// are never accepted from control.
-	PortPublishes   []ContainerPortPublish
-	PreserveVolumes bool
+	PortPublishes []ContainerPortPublish
+	// OldServingComponentID and FinalPortPublishes are accepted only for edge
+	// activation. The runtime verifies that the old target is an existing
+	// Gordon-managed container and that final host ports exactly match it.
+	// They are not arbitrary runtime targets or engine options.
+	OldServingComponentID string
+	FinalPortPublishes    []ContainerPortPublish
+	PreserveVolumes       bool
 }
 
 // Validate checks that self-update is a Gordon component lifecycle operation, not an unmanaged mutation.

@@ -74,7 +74,11 @@ func (s *trafficSwitch) Switch(ctx context.Context, checkpoint MigrationCheckpoi
 		PolicyDecisionID: "migration:" + checkpoint.MigrationID,
 		LifecycleAction:  domain.RuntimeComponentLifecycleActivate,
 		DesiredImage:     edge.Image, DesiredStateHash: edge.DesiredStateHash, InternalNetwork: edge.InternalNetwork,
-		EnvironmentFile: edge.EnvironmentFile, PreserveVolumes: true,
+		EnvironmentFile: edge.EnvironmentFile, ConfigFile: edge.ConfigFile,
+		PortPublishes:         append([]domain.ContainerPortPublish(nil), edge.PortPublishes...),
+		OldServingComponentID: checkpoint.OldServingPath,
+		FinalPortPublishes:    componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge),
+		PreserveVolumes:       true,
 	})
 	if err != nil {
 		return fmt.Errorf("activate split edge through runtime: %w", err)

@@ -153,6 +153,10 @@ func componentPreparedPorts(bindings []MigrationPortBinding, role domain.Compone
 	return ports
 }
 
+func componentPublicPorts(bindings []MigrationPortBinding, role domain.ComponentRole) []domain.ContainerPortPublish {
+	return componentPreparedPorts(bindings, role)
+}
+
 func componentEnvReferences(references []string) map[domain.ComponentRole]string {
 	byRole := make(map[domain.ComponentRole]string)
 	for _, reference := range references {
