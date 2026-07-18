@@ -148,10 +148,17 @@ func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) er
 	return nil
 }
 
-// Switch remains deliberately unavailable until traffic preconditions and the
-// runtime-owned mutation channel exist. It cannot accidentally cut traffic.
-func (s *MigrationService) Switch(context.Context) (*MigrationCheckpoint, error) {
-	return nil, fmt.Errorf("safe traffic switch is not available: %w", ErrMigrationNotReady)
+// Switch delegates public cutover to the configured orchestrator. A service
+// without the runtime-owned switch channel fails closed.
+func (s *MigrationService) Switch(ctx context.Context) (*MigrationCheckpoint, error) {
+	if s == nil || s.orchestrator == nil {
+		return nil, fmt.Errorf("safe traffic switch is not available: %w", ErrMigrationNotReady)
+	}
+	checkpoint, err := s.store.Load()
+	if err != nil {
+		return nil, fmt.Errorf("load migration checkpoint for switch: %w", err)
+	}
+	return s.orchestrator.Switch(ctx, *checkpoint)
 }
 
 func (s *MigrationService) Status() (*MigrationCheckpoint, error) {

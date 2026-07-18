@@ -40,6 +40,10 @@ type MigrationCheckpoint struct {
 	ConnectedEdgeNetworks   []string `json:"connected_edge_networks,omitempty"`
 	EnvFileReferences       []string `json:"env_file_references,omitempty"`
 	RouteSnapshotGeneration uint64   `json:"route_snapshot_generation,omitempty"`
+	// SwitchAttempts and LastRetryPhase are deliberately metadata only; they
+	// allow a failed cutover to be resumed without deleting the old path.
+	SwitchAttempts uint64 `json:"switch_attempts,omitempty"`
+	LastRetryPhase string `json:"last_retry_phase,omitempty"`
 }
 
 type MigrationCheckpointStore struct {

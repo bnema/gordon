@@ -82,20 +82,8 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration service: %w", err)
 	}
-	// Control composes migration through the authenticated runtime client only.
-	// A missing endpoint remains a preflight failure rather than falling back to
-	// a local Docker-compatible adapter or socket.
-	if updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater); ok {
-		launcher, launcherErr := NewRuntimeComponentLauncher(updater)
-		if launcherErr != nil {
-			return nil, fmt.Errorf("create runtime component launcher: %w", launcherErr)
-		}
-		orchestrator, orchestratorErr := NewMigrationOrchestrator(preflight, checkpointStore, launcher)
-		if orchestratorErr != nil {
-			return nil, fmt.Errorf("create migration orchestrator: %w", orchestratorErr)
-		}
-		orchestrator.WithRuntimeSnapshotAppNetworks(runtimeInventory)
-		svc.migrationSvc.WithMigrationOrchestrator(orchestrator)
+	if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory); err != nil {
+		return nil, err
 	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:      svc.configSvc,
@@ -208,6 +196,37 @@ func controlHTTPHandler(svc *services, cfg Config, log zerowrap.Logger) http.Han
 	)(svc.adminHandler)
 	mux.Handle("/admin/", otelhttp.NewHandler(adminChain, "gordon.control.admin"))
 	return mux
+}
+
+// wireControlMigrationRuntime composes only authenticated runtime clients. A
+// missing endpoint or WS05 split deploy/drain checker leaves cutover disabled;
+// this function never falls back to a local Docker-compatible adapter/socket.
+func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber) error {
+	updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater)
+	if !ok {
+		return nil
+	}
+	launcher, err := NewRuntimeComponentLauncher(updater)
+	if err != nil {
+		return fmt.Errorf("create runtime component launcher: %w", err)
+	}
+	orchestrator, err := NewMigrationOrchestrator(preflight, checkpointStore, launcher)
+	if err != nil {
+		return fmt.Errorf("create migration orchestrator: %w", err)
+	}
+	orchestrator.WithRuntimeSnapshotAppNetworks(runtimeInventory)
+	// Cutover stays disabled until the authenticated control/runtime client
+	// also exposes the real split edge checks. This is the WS05 deploy/drain
+	// gate; control never substitutes local socket probes.
+	if checks, ok := svc.runtimeCommandClient.(TrafficSwitchChecks); ok {
+		switcher, switchErr := NewTrafficSwitch(updater, checks)
+		if switchErr != nil {
+			return fmt.Errorf("create migration traffic switch: %w", switchErr)
+		}
+		orchestrator.WithTrafficSwitcher(switcher)
+	}
+	svc.migrationSvc.WithMigrationOrchestrator(orchestrator)
+	return nil
 }
 
 // controlHealthService translates the runtime status facade into the existing

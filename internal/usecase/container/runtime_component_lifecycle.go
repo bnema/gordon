@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -39,10 +40,13 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 	if err := m.policy.CheckSelfUpdate(command); err != nil {
 		return err
 	}
+	if !validComponentLifecycleTarget(command) {
+		return RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target is not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+	}
 	switch command.LifecycleAction {
 	case domain.RuntimeComponentLifecycleEnsureNetwork:
 		return m.ensureNetwork(ctx, command)
-	case domain.RuntimeComponentLifecycleStart:
+	case domain.RuntimeComponentLifecycleStart, domain.RuntimeComponentLifecycleReplace:
 		return m.start(ctx, command)
 	case domain.RuntimeComponentLifecycleStop:
 		return m.stop(ctx, command)
@@ -59,6 +63,10 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 		// control client reconnects using its configured authenticated endpoint;
 		// no socket capability is transferred across component boundaries.
 		return nil
+	case domain.RuntimeComponentLifecycleActivate, domain.RuntimeComponentLifecycleDrain:
+		// Readiness/drain transitions are constrained to an already managed edge
+		// component. The runtime never receives an arbitrary listener address.
+		return m.health(ctx, command)
 	default:
 		return fmt.Errorf("unsupported component lifecycle action")
 	}
@@ -75,14 +83,14 @@ func (m *runtimeComponentLifecycleManager) ensureNetwork(ctx context.Context, co
 	if exists {
 		return nil
 	}
-	return m.runtime.CreateNetwork(ctx, command.InternalNetwork, domain.NetworkConfig{Driver: "bridge", Internal: true, Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentMigrationID: command.PolicyDecisionID}})
+	return m.runtime.CreateNetwork(ctx, command.InternalNetwork, domain.NetworkConfig{Driver: "bridge", Internal: true, Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentMigrationID: strings.TrimPrefix(command.PolicyDecisionID, "migration:")}})
 }
 
 func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	if strings.TrimSpace(command.DesiredImage) == "" || !safeComponentNetwork(command.InternalNetwork) {
 		return fmt.Errorf("invalid component desired state")
 	}
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil {
 		return err
 	}
@@ -100,7 +108,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	if err != nil {
 		return err
 	}
-	labels := map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(command.TargetComponentRole), domain.LabelComponentDesiredStateHash: command.DesiredStateHash}
+	labels := componentLifecycleLabels(command)
 	config := &domain.ContainerConfig{Image: command.DesiredImage, Name: command.TargetComponentID, Env: env, Labels: labels, NetworkMode: command.InternalNetwork, RestartPolicy: domain.RestartPolicyAlways}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return err
@@ -113,14 +121,14 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 }
 
 func (m *runtimeComponentLifecycleManager) stop(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil || container == nil {
 		return err
 	}
 	return m.runtime.StopContainer(ctx, container.ID)
 }
 func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil {
 		return err
 	}
@@ -141,7 +149,7 @@ func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command d
 	return nil
 }
 func (m *runtimeComponentLifecycleManager) logs(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil || container == nil {
 		return err
 	}
@@ -156,7 +164,7 @@ func (m *runtimeComponentLifecycleManager) connect(ctx context.Context, command 
 	if !safeComponentNetwork(command.InternalNetwork) {
 		return fmt.Errorf("invalid component network")
 	}
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil || container == nil {
 		return err
 	}
@@ -166,23 +174,65 @@ func (m *runtimeComponentLifecycleManager) remove(ctx context.Context, command d
 	if !command.PreserveVolumes {
 		return fmt.Errorf("component lifecycle cleanup must preserve volumes")
 	}
-	container, err := m.find(ctx, command.TargetComponentID)
+	container, err := m.find(ctx, command)
 	if err != nil || container == nil {
 		return err
 	}
 	return m.runtime.RemoveContainer(ctx, container.ID, true)
 }
-func (m *runtimeComponentLifecycleManager) find(ctx context.Context, name string) (*domain.Container, error) {
+func (m *runtimeComponentLifecycleManager) find(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (*domain.Container, error) {
 	containers, err := m.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return nil, err
 	}
 	for _, container := range containers {
-		if container != nil && container.Name == name {
+		if container != nil && container.Name == command.TargetComponentID {
+			if !isManagedLifecycleComponent(container, command) {
+				return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+			}
 			return container, nil
 		}
 	}
 	return nil, nil
+}
+
+func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
+	generation := "-g" + strconv.FormatUint(command.Generation, 10)
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if migrationID == "" || command.Generation == 0 {
+		return false
+	}
+	if command.LifecycleAction == domain.RuntimeComponentLifecycleEnsureNetwork {
+		prefix := "gordon-network-"
+		return command.TargetComponentRole == domain.ComponentRoleRuntime && strings.HasPrefix(command.TargetComponentID, prefix) && strings.TrimSuffix(strings.TrimPrefix(command.TargetComponentID, prefix), generation) == migrationID && strings.HasSuffix(command.TargetComponentID, generation)
+	}
+	if (command.LifecycleAction == domain.RuntimeComponentLifecycleActivate || command.LifecycleAction == domain.RuntimeComponentLifecycleDrain) && command.TargetComponentRole != domain.ComponentRoleEdge {
+		return false
+	}
+	prefix := "gordon-" + string(command.TargetComponentRole) + "-"
+	return strings.HasPrefix(command.TargetComponentID, prefix) && strings.TrimSuffix(strings.TrimPrefix(command.TargetComponentID, prefix), generation) == migrationID && strings.HasSuffix(command.TargetComponentID, generation)
+}
+
+func componentLifecycleLabels(command domain.RuntimeSelfUpdateCommand) map[string]string {
+	return map[string]string{
+		domain.LabelComponent:                 "true",
+		domain.LabelComponentRole:             string(command.TargetComponentRole),
+		domain.LabelComponentVersion:          command.TargetVersion,
+		domain.LabelComponentGeneration:       strconv.FormatUint(command.Generation, 10),
+		domain.LabelComponentMigrationID:      strings.TrimPrefix(command.PolicyDecisionID, "migration:"),
+		domain.LabelComponentOwner:            "runtime",
+		domain.LabelComponentDesiredStateHash: command.DesiredStateHash,
+	}
+}
+
+func isManagedLifecycleComponent(container *domain.Container, command domain.RuntimeSelfUpdateCommand) bool {
+	if container == nil || container.Labels == nil || container.Labels[domain.LabelComponent] != "true" || container.Labels[domain.LabelComponentRole] != string(command.TargetComponentRole) {
+		return false
+	}
+	if container.Labels[domain.LabelComponentGeneration] != strconv.FormatUint(command.Generation, 10) || container.Labels[domain.LabelComponentMigrationID] != strings.TrimPrefix(command.PolicyDecisionID, "migration:") {
+		return false
+	}
+	return container.Labels[domain.LabelComponentOwner] == "runtime" || container.Labels[domain.LabelComponentOwner] == "migration"
 }
 
 // componentLifecycleEnvironment reads only a runtime-owned generated env file.

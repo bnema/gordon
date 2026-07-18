@@ -366,7 +366,10 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
+	// Component migration cleanup must never ask the compatible engine to
+	// remove volumes. State retention is explicit even though false is the API
+	// default, preventing an accidental future default change from deleting data.
+	err := r.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force, RemoveVolumes: false})
 	if err != nil {
 		return log.WrapErr(err, "failed to remove container")
 	}

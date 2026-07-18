@@ -112,8 +112,13 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 	// control intents for Gordon-owned component names. They are executed only
 	// by gordon-runtime and cannot carry raw engine flags or a socket path.
 	if command.LifecycleAction != "" {
-		if !strings.HasPrefix(command.TargetComponentID, "gordon-") {
+		if !validComponentLifecycleTarget(command) {
 			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
+		}
+		if strings.TrimSpace(command.DesiredImage) != "" {
+			if err := p.checkImage(command.DesiredImage, command.RuntimeCommandIdentity, ""); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

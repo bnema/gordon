@@ -47,6 +47,11 @@ const (
 	RuntimeComponentLifecycleConnect         RuntimeComponentLifecycleAction = "connect"
 	RuntimeComponentLifecycleRemove          RuntimeComponentLifecycleAction = "remove"
 	RuntimeComponentLifecycleTransferChannel RuntimeComponentLifecycleAction = "transfer_channel"
+	// Activate exposes the prepared edge generation only after the control
+	// plane's switch prerequisites are satisfied.
+	RuntimeComponentLifecycleActivate RuntimeComponentLifecycleAction = "activate"
+	// Drain keeps the previous edge generation usable while it finishes work.
+	RuntimeComponentLifecycleDrain RuntimeComponentLifecycleAction = "drain"
 )
 
 var (
@@ -252,7 +257,8 @@ func isKnownRuntimeComponentLifecycleAction(action RuntimeComponentLifecycleActi
 		RuntimeComponentLifecycleStart, RuntimeComponentLifecycleStop,
 		RuntimeComponentLifecycleHealth, RuntimeComponentLifecycleLogs,
 		RuntimeComponentLifecycleConnect, RuntimeComponentLifecycleRemove,
-		RuntimeComponentLifecycleTransferChannel:
+		RuntimeComponentLifecycleTransferChannel, RuntimeComponentLifecycleActivate,
+		RuntimeComponentLifecycleDrain:
 		return true
 	default:
 		return false

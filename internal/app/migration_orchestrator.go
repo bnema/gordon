@@ -18,6 +18,7 @@ type MigrationOrchestrator struct {
 	preflight   *MigrationPreflight
 	store       *MigrationCheckpointStore
 	launcher    ComponentLauncher
+	switcher    TrafficSwitcher
 	now         func() time.Time
 	appNetworks func(context.Context) ([]string, error)
 }
@@ -61,6 +62,15 @@ func (o *MigrationOrchestrator) WithRuntimeSnapshotAppNetworks(subscriber out.Ru
 	return o
 }
 
+// WithTrafficSwitcher enables the separately gated public cutover operation.
+// Without it, Switch fails closed rather than making a best-effort change.
+func (o *MigrationOrchestrator) WithTrafficSwitcher(switcher TrafficSwitcher) *MigrationOrchestrator {
+	if o != nil {
+		o.switcher = switcher
+	}
+	return o
+}
+
 func (o *MigrationOrchestrator) DryRun(ctx context.Context) (MigrationPreflightReport, error) {
 	if o == nil || o.preflight == nil {
 		return MigrationPreflightReport{}, fmt.Errorf("migration orchestrator is not configured")
@@ -93,6 +103,40 @@ func (o *MigrationOrchestrator) Prepare(ctx context.Context, checkpoint Migratio
 	}
 	if err := o.store.Save(checkpoint); err != nil {
 		return nil, fmt.Errorf("checkpoint prepared components: %w", err)
+	}
+	return o.store.Load()
+}
+
+// Switch advances only a prepared checkpoint after TrafficSwitcher has
+// verified every prerequisite and activated the edge through RuntimeSelfUpdate.
+// A failed switch persists retry metadata but never deletes or stops the old
+// serving path.
+func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint MigrationCheckpoint) (*MigrationCheckpoint, error) {
+	if o == nil || o.store == nil || o.switcher == nil {
+		return nil, fmt.Errorf("migration traffic switch is not configured")
+	}
+	if checkpoint.Phase == MigrationPhaseSwitched {
+		return &checkpoint, nil
+	}
+	if checkpoint.Phase != MigrationPhasePrepared {
+		return nil, fmt.Errorf("traffic switch requires prepared phase")
+	}
+	plan, err := NewComponentLaunchPlan(checkpoint)
+	if err != nil {
+		return nil, err
+	}
+	if err := o.switcher.Switch(ctx, checkpoint, plan); err != nil {
+		checkpoint.SwitchAttempts++
+		checkpoint.LastRetryPhase = "switch"
+		if saveErr := o.store.Save(checkpoint); saveErr != nil {
+			return nil, fmt.Errorf("checkpoint failed traffic switch: %w", saveErr)
+		}
+		return nil, fmt.Errorf("traffic switch retained old serving path: %w", err)
+	}
+	checkpoint.Phase = MigrationPhaseSwitched
+	checkpoint.LastRetryPhase = ""
+	if err := o.store.Save(checkpoint); err != nil {
+		return nil, fmt.Errorf("checkpoint traffic switch: %w", err)
 	}
 	return o.store.Load()
 }
