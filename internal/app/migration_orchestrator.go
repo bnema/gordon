@@ -109,13 +109,8 @@ func (o *MigrationOrchestrator) Prepare(ctx context.Context, checkpoint Migratio
 	if err := o.connectEdgeAppNetworks(ctx, plan, &checkpoint); err != nil {
 		return nil, err
 	}
-	// Control can persist an authenticated edge attestation concurrently while
-	// preparation completes. Preserve that monotonic fact rather than replacing
-	// it with this older local checkpoint.
-	if current, loadErr := o.store.Load(); loadErr == nil && current.MigrationID == checkpoint.MigrationID && current.ComponentGeneration == checkpoint.ComponentGeneration && current.RouteSnapshotGeneration > checkpoint.RouteSnapshotGeneration {
-		checkpoint.RouteSnapshotGeneration = current.RouteSnapshotGeneration
-		checkpoint.AppliedEdgeComponentID = current.AppliedEdgeComponentID
-	}
+	// Save atomically merges an authenticated edge attestation that may have
+	// arrived while preparation was completing.
 	if err := o.store.Save(checkpoint); err != nil {
 		return nil, fmt.Errorf("checkpoint prepared components: %w", err)
 	}

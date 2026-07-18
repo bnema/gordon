@@ -10,9 +10,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -124,15 +126,15 @@ func (s *MigrationCheckpointStore) load() (*MigrationCheckpoint, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lstat migration checkpoint: %w", err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+	if !safeCheckpointFileInfo(info) {
 		return nil, fmt.Errorf("invalid migration checkpoint file")
 	}
 	if info.Size() > maxMigrationCheckpointBytes {
 		return nil, fmt.Errorf("migration checkpoint exceeds size limit")
 	}
-	file, err := os.Open(s.path)
+	file, err := openRegularCheckpoint(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("open migration checkpoint: %w", err)
+		return nil, err
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxMigrationCheckpointBytes+1))
@@ -154,8 +156,10 @@ func (s *MigrationCheckpointStore) load() (*MigrationCheckpoint, error) {
 	return &checkpoint, nil
 }
 
-// Save atomically replaces the checkpoint only with a monotonic retry state.
-// It neither inspects nor removes volumes or other runtime resources.
+// Save serializes all writers, including separate control and monolith
+// processes. A writer always merges its stale view with the current durable
+// checkpoint while holding the adjacent advisory lock, so an authenticated
+// edge acknowledgement cannot be overwritten by preparation progress.
 func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 	if s == nil {
 		return fmt.Errorf("migration checkpoint store is required")
@@ -165,14 +169,142 @@ func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if old, err := s.load(); err == nil {
-		if old.MigrationID != checkpoint.MigrationID || phaseRank(checkpoint.Phase) < phaseRank(old.Phase) || checkpoint.ComponentGeneration < old.ComponentGeneration || checkpoint.RouteSnapshotGeneration < old.RouteSnapshotGeneration {
-			return fmt.Errorf("migration checkpoint regression rejected")
+	return s.withLock(func() error {
+		merged := checkpoint
+		if old, err := s.load(); err == nil {
+			merged, err = mergeMigrationCheckpoints(*old, checkpoint)
+			if err != nil {
+				return err
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+		if err := validateCheckpoint(merged); err != nil {
+			return err
+		}
+		return s.writeAtomic(merged)
+	})
+}
+
+// withLock uses a persistent, owner-only lock file rather than the checkpoint
+// inode itself: atomic rename changes that inode, while this adjacent inode is
+// stable across every durable replacement. flock is released by the kernel if
+// a writer crashes.
+func (s *MigrationCheckpointStore) withLock(fn func() error) (result error) {
+	parent := filepath.Dir(s.path)
+	if err := prepareCheckpointParent(parent); err != nil {
 		return err
 	}
-	return s.writeAtomic(checkpoint)
+	lock, err := openCheckpointLock(s.path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil && result == nil {
+			result = fmt.Errorf("unlock migration checkpoint: %w", err)
+		}
+		if err := lock.Close(); err != nil && result == nil {
+			result = fmt.Errorf("close migration checkpoint lock: %w", err)
+		}
+	}()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock migration checkpoint: %w", err)
+	}
+	return fn()
+}
+
+func openCheckpointLock(path string) (*os.File, error) {
+	if info, err := os.Lstat(path); err == nil {
+		if !safeCheckpointFileInfo(info) {
+			return nil, fmt.Errorf("invalid migration checkpoint lock")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("lstat migration checkpoint lock: %w", err)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open migration checkpoint lock: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	info, err := file.Stat()
+	if err != nil || !safeCheckpointFileInfo(info) {
+		_ = file.Close()
+		return nil, fmt.Errorf("invalid migration checkpoint lock")
+	}
+	return file, nil
+}
+
+func mergeMigrationCheckpoints(old, candidate MigrationCheckpoint) (MigrationCheckpoint, error) {
+	if !sameMigrationCheckpointIdentity(old, candidate) || phaseRank(candidate.Phase) < phaseRank(old.Phase) {
+		return MigrationCheckpoint{}, fmt.Errorf("migration checkpoint regression rejected")
+	}
+	if old.AppliedEdgeComponentID != "" && candidate.AppliedEdgeComponentID != "" && old.AppliedEdgeComponentID != candidate.AppliedEdgeComponentID {
+		return MigrationCheckpoint{}, fmt.Errorf("migration checkpoint edge attestation conflict")
+	}
+	merged := candidate
+	merged.PreparedComponents = stableStringUnion(old.PreparedComponents, candidate.PreparedComponents)
+	merged.ConnectedEdgeNetworks = stableStringUnion(old.ConnectedEdgeNetworks, candidate.ConnectedEdgeNetworks)
+	merged.RuntimeChannelTransferred = old.RuntimeChannelTransferred || candidate.RuntimeChannelTransferred
+	if old.RouteSnapshotGeneration > candidate.RouteSnapshotGeneration {
+		merged.RouteSnapshotGeneration = old.RouteSnapshotGeneration
+		merged.AppliedEdgeComponentID = old.AppliedEdgeComponentID
+	} else if old.RouteSnapshotGeneration == candidate.RouteSnapshotGeneration && merged.AppliedEdgeComponentID == "" {
+		merged.AppliedEdgeComponentID = old.AppliedEdgeComponentID
+	} else if old.AppliedEdgeComponentID != "" && candidate.AppliedEdgeComponentID == "" {
+		return MigrationCheckpoint{}, fmt.Errorf("migration checkpoint edge attestation conflict")
+	}
+	if old.SwitchAttempts > candidate.SwitchAttempts {
+		merged.SwitchAttempts = old.SwitchAttempts
+		merged.LastRetryPhase = old.LastRetryPhase
+	}
+	return merged, nil
+}
+
+func sameMigrationCheckpointIdentity(old, candidate MigrationCheckpoint) bool {
+	return old.MigrationID == candidate.MigrationID && old.StartedAt.Equal(candidate.StartedAt) && old.ComponentGeneration == candidate.ComponentGeneration &&
+		sameMigrationVersions(old, candidate) && sameMigrationEndpoints(old, candidate) && sameMigrationReferences(old, candidate)
+}
+
+func sameMigrationVersions(old, candidate MigrationCheckpoint) bool {
+	return immutableCheckpointString(old.SourceVersion, candidate.SourceVersion) &&
+		immutableCheckpointString(old.TargetVersion, candidate.TargetVersion) &&
+		immutableCheckpointString(old.TargetImage, candidate.TargetImage) &&
+		immutableCheckpointString(old.OldServingPath, candidate.OldServingPath)
+}
+
+func sameMigrationEndpoints(old, candidate MigrationCheckpoint) bool {
+	return immutableCheckpointString(old.BootstrapControlEndpoint, candidate.BootstrapControlEndpoint) &&
+		immutableCheckpointString(old.BootstrapRuntimeEndpoint, candidate.BootstrapRuntimeEndpoint) &&
+		immutableCheckpointString(old.BootstrapEdgeProbeEndpoint, candidate.BootstrapEdgeProbeEndpoint) &&
+		immutableCheckpointString(old.OldServingProbeEndpoint, candidate.OldServingProbeEndpoint) &&
+		immutableCheckpointSlice(old.PreparedPortBindings, candidate.PreparedPortBindings) &&
+		immutableCheckpointSlice(old.PublicPortBindings, candidate.PublicPortBindings)
+}
+
+func sameMigrationReferences(old, candidate MigrationCheckpoint) bool {
+	return immutableCheckpointSlice(old.EdgeAppNetworks, candidate.EdgeAppNetworks) &&
+		immutableCheckpointSlice(old.EnvFileReferences, candidate.EnvFileReferences) &&
+		immutableCheckpointSlice(old.ConfigFileReferences, candidate.ConfigFileReferences)
+}
+
+func immutableCheckpointString(old, candidate string) bool {
+	return old == "" || old == candidate
+}
+
+func immutableCheckpointSlice[T comparable](old, candidate []T) bool {
+	return len(old) == 0 || slices.Equal(old, candidate)
+}
+
+func stableStringUnion(first, second []string) []string {
+	result := make([]string, 0, len(first)+len(second))
+	for _, values := range [][]string{first, second} {
+		for _, value := range values {
+			if !slices.Contains(result, value) {
+				result = append(result, value)
+			}
+		}
+	}
+	return result
 }
 
 func (s *MigrationCheckpointStore) writeAtomic(checkpoint MigrationCheckpoint) error {
@@ -224,22 +356,25 @@ func encodeCheckpoint(checkpoint MigrationCheckpoint) ([]byte, error) {
 	}
 	return data, nil
 }
-func writeTemporaryCheckpoint(parent string, data []byte) (string, error) {
+func writeTemporaryCheckpoint(parent string, data []byte) (name string, result error) {
 	file, err := os.CreateTemp(parent, ".migration-checkpoint-*")
 	if err != nil {
 		return "", fmt.Errorf("create migration checkpoint: %w", err)
 	}
-	name := file.Name()
+	name = file.Name()
+	defer func() {
+		if result != nil {
+			_ = file.Close()
+			_ = os.Remove(file.Name())
+		}
+	}()
 	if err := file.Chmod(0o600); err != nil {
-		file.Close()
 		return "", fmt.Errorf("restrict migration checkpoint: %w", err)
 	}
 	if _, err := file.Write(data); err != nil {
-		file.Close()
 		return "", fmt.Errorf("write migration checkpoint: %w", err)
 	}
 	if err := file.Sync(); err != nil {
-		file.Close()
 		return "", fmt.Errorf("sync migration checkpoint: %w", err)
 	}
 	if err := file.Close(); err != nil {
@@ -249,13 +384,34 @@ func writeTemporaryCheckpoint(parent string, data []byte) (string, error) {
 }
 func safeCheckpointDestination(path string) error {
 	info, err := os.Lstat(path)
-	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+	if err == nil && !safeCheckpointFileInfo(info) {
 		return fmt.Errorf("invalid migration checkpoint file")
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("lstat migration checkpoint: %w", err)
 	}
 	return nil
+}
+
+func safeCheckpointFileInfo(info os.FileInfo) bool {
+	return info.Mode().IsRegular() && info.Mode().Perm() == 0o600
+}
+
+func openRegularCheckpoint(path string) (*os.File, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, os.ErrNotExist
+		}
+		return nil, fmt.Errorf("open migration checkpoint: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	info, err := file.Stat()
+	if err != nil || !safeCheckpointFileInfo(info) {
+		_ = file.Close()
+		return nil, fmt.Errorf("invalid migration checkpoint file")
+	}
+	return file, nil
 }
 func syncCheckpointParent(parent string) error {
 	dir, err := os.Open(parent)
