@@ -37,14 +37,14 @@ type edgeRoleDependencies struct {
 	listen            func(network, address string) (net.Listener, error)
 	dialSnapshot      func(context.Context, EdgeControlConfig) (*edgesnapshotclient.Client, *grpc.ClientConn, error)
 	newHTTPServer     func(string, http.Handler) *http.Server
-	newTrafficManager func() *trafficadapter.Manager
+	newTrafficManager func() edgeTrafficManager
 }
 
 func productionEdgeRoleDependencies() edgeRoleDependencies {
 	return edgeRoleDependencies{
 		listen:            net.Listen,
 		dialSnapshot:      newEdgeSnapshotClient,
-		newTrafficManager: trafficadapter.NewManager,
+		newTrafficManager: func() edgeTrafficManager { return trafficadapter.NewManager() },
 		newHTTPServer: func(address string, handler http.Handler) *http.Server {
 			return &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 		},
@@ -272,39 +272,88 @@ func runEdgeTraffic(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependenci
 		return err
 	}
 	defer closeProxy()
-
-	updates := edgeTrafficUpdateChannel(graphs)
-	_, initialGraph, err := waitForInitialEdgeSnapshots(ctx, routes, graphs)
-	if err != nil {
+	if _, err := waitForInitialEdgeRouteSnapshot(ctx, routes); err != nil {
 		return err
 	}
-	manager, tlsConfig, handlers, shutdownManager, err := initializeEdgeTrafficManager(ctx, cfg, deps, handler, initialGraph.Graph, log)
-	if err != nil {
-		return err
+	newManager := deps.newTrafficManager
+	if newManager == nil {
+		newManager = func() edgeTrafficManager { return trafficadapter.NewManager() }
+	}
+	manager := newManager()
+	if manager == nil {
+		return fmt.Errorf("edge traffic manager is required")
+	}
+	return runEdgeTrafficApplyLoop(ctx, cfg, deps, log, handler, graphs, manager)
+}
+
+// edgeTrafficGraphProvider is deliberately limited to the sanitized graph
+// stream. The edge apply loop cannot obtain control configuration through it.
+type edgeTrafficGraphProvider interface {
+	CurrentTrafficGraph(context.Context) (domain.TrafficGraphSnapshot, error)
+	SetTrafficGraphAcceptanceObserver(func(domain.TrafficGraphSnapshot))
+	TrafficGraphHealth() edgesnapshotclient.TrafficGraphHealth
+}
+
+// edgeTrafficManager is the production listener manager surface used by the
+// edge apply loop. Keeping this boundary here makes the loop testable without
+// substituting its listener implementation.
+type edgeTrafficManager interface {
+	Apply(context.Context, *domain.TrafficGraph) error
+	Shutdown(context.Context) error
+	SetTLSHTTPServer(string, http.Handler, *tls.Config)
+	SetSmartTCPHTTPServer(string, http.Handler, *http.Protocols)
+	SetSmartTCPTLSServer(string, http.Handler, *tls.Config)
+}
+
+// runEdgeTrafficApplyLoop is the production split-edge traffic owner. It
+// waits for the authenticated initial graph, installs smart/TLS HTTP fallbacks,
+// applies subsequent accepted graphs, and drains listeners on shutdown.
+func runEdgeTrafficApplyLoop(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, log zerowrap.Logger, handler http.Handler, graphs edgeTrafficGraphProvider, manager edgeTrafficManager) error {
+	if graphs == nil || manager == nil {
+		return fmt.Errorf("edge traffic graph provider and manager are required")
+	}
+	shutdownManager := func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := manager.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("edge traffic manager shutdown error")
+		}
 	}
 	defer shutdownManager()
 
+	updates := edgeTrafficUpdateChannel(graphs)
+	initialGraph, err := waitForInitialEdgeTrafficGraph(ctx, graphs)
+	if err != nil {
+		return err
+	}
+	if edgeDedicatedHTTPEnabled(cfg) && edgeGraphAddressConflict(cfg.Edge.ListenAddress, initialGraph.Graph.EntryPoints) {
+		return fmt.Errorf("edge.listen_address conflicts with a streamed traffic entrypoint")
+	}
+	tlsConfig, err := edgeTLSConfig(cfg)
+	if err != nil {
+		return err
+	}
+	handlers, err := configureEdgeTrafficHandlers(manager, initialGraph.Graph, cfg, handler, tlsConfig, edgeTrafficHandlers{})
+	if err == nil {
+		err = manager.Apply(ctx, &initialGraph.Graph)
+	}
+	if err != nil {
+		return fmt.Errorf("apply initial edge traffic graph: %w", err)
+	}
+	log.Info().Uint64("generation", uint64(initialGraph.Generation)).Bool("healthy", graphs.TrafficGraphHealth().Healthy).Msg("edge traffic graph applied")
+
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
-	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, handlers, log)
+	go applyEdgeTrafficUpdates(runCtx, updates, manager, cfg, handler, tlsConfig, handlers, initialGraph.Generation, log)
 
 	server, errCh, err := startEdgeDedicatedHTTP(cfg, deps, handler, log)
 	if err != nil {
 		return err
 	}
-
 	select {
 	case <-ctx.Done():
-		// Stop receives before draining listeners so no new graph can create a
-		// listener while shutdown is in progress.
-		graphs.Stop()
-		routes.Stop()
-		shutdownManager()
 		return shutdownEdgeHTTP(server)
 	case serveErr := <-errCh:
-		graphs.Stop()
-		routes.Stop()
-		shutdownManager()
 		if serveErr == nil || serveErr == http.ErrServerClosed {
 			return nil
 		}
@@ -323,7 +372,7 @@ func newEdgeTrafficProxy(cfg EdgeConfig, log zerowrap.Logger, accessWriter out.A
 	return handler, proxyService.Close, nil
 }
 
-func edgeTrafficUpdateChannel(graphs *edgesnapshotclient.TrafficGraphClient) <-chan domain.TrafficGraphSnapshot {
+func edgeTrafficUpdateChannel(graphs edgeTrafficGraphProvider) <-chan domain.TrafficGraphSnapshot {
 	updates := make(chan domain.TrafficGraphSnapshot, 1)
 	graphs.SetTrafficGraphAcceptanceObserver(func(snapshot domain.TrafficGraphSnapshot) {
 		select {
@@ -342,44 +391,6 @@ func edgeTrafficUpdateChannel(graphs *edgesnapshotclient.TrafficGraphClient) <-c
 	return updates
 }
 
-func initializeEdgeTrafficManager(ctx context.Context, cfg EdgeConfig, deps edgeRoleDependencies, handler http.Handler, graph domain.TrafficGraph, log zerowrap.Logger) (*trafficadapter.Manager, *tls.Config, edgeTrafficHandlers, func(), error) {
-	if err := validateEdgeTrafficTLSMode(cfg, graph); err != nil {
-		return nil, nil, edgeTrafficHandlers{}, nil, err
-	}
-	if edgeDedicatedHTTPEnabled(cfg) && edgeGraphAddressConflict(cfg.Edge.ListenAddress, graph.EntryPoints) {
-		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("edge.listen_address conflicts with a streamed traffic entrypoint")
-	}
-	newManager := deps.newTrafficManager
-	if newManager == nil {
-		newManager = trafficadapter.NewManager
-	}
-	manager := newManager()
-	if manager == nil {
-		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("edge traffic manager is required")
-	}
-	shutdown := func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := manager.Shutdown(shutdownCtx); err != nil {
-			log.Warn().Err(err).Msg("edge traffic manager shutdown error")
-		}
-	}
-	tlsConfig, err := edgeTLSConfig(cfg)
-	if err != nil {
-		shutdown()
-		return nil, nil, edgeTrafficHandlers{}, nil, err
-	}
-	handlers, err := configureEdgeTrafficHandlers(manager, graph, cfg, handler, tlsConfig, edgeTrafficHandlers{})
-	if err == nil {
-		err = manager.Apply(ctx, &graph)
-	}
-	if err != nil {
-		shutdown()
-		return nil, nil, edgeTrafficHandlers{}, nil, fmt.Errorf("apply initial edge traffic graph: %w", err)
-	}
-	return manager, tlsConfig, handlers, shutdown, nil
-}
-
 func startEdgeDedicatedHTTP(cfg EdgeConfig, deps edgeRoleDependencies, handler http.Handler, log zerowrap.Logger) (*http.Server, <-chan error, error) {
 	if !edgeDedicatedHTTPEnabled(cfg) {
 		return nil, nil, nil
@@ -395,18 +406,33 @@ func startEdgeDedicatedHTTP(cfg EdgeConfig, deps edgeRoleDependencies, handler h
 	return server, errs, nil
 }
 
-func waitForInitialEdgeSnapshots(ctx context.Context, routes *edgesnapshotclient.Client, graphs *edgesnapshotclient.TrafficGraphClient) (domain.RouteTargetSnapshot, domain.TrafficGraphSnapshot, error) {
+func waitForInitialEdgeRouteSnapshot(ctx context.Context, routes *edgesnapshotclient.Client) (domain.RouteTargetSnapshot, error) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		routeSnapshot, routeErr := routes.CurrentSnapshot(ctx)
-		graphSnapshot, graphErr := graphs.CurrentTrafficGraph(ctx)
-		if routeErr == nil && graphErr == nil {
-			return routeSnapshot, graphSnapshot, nil
+		snapshot, err := routes.CurrentSnapshot(ctx)
+		if err == nil {
+			return snapshot, nil
 		}
 		select {
 		case <-ctx.Done():
-			return domain.RouteTargetSnapshot{}, domain.TrafficGraphSnapshot{}, ctx.Err()
+			return domain.RouteTargetSnapshot{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForInitialEdgeTrafficGraph(ctx context.Context, graphs edgeTrafficGraphProvider) (domain.TrafficGraphSnapshot, error) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		snapshot, err := graphs.CurrentTrafficGraph(ctx)
+		if err == nil {
+			return snapshot, nil
+		}
+		select {
+		case <-ctx.Done():
+			return domain.TrafficGraphSnapshot{}, ctx.Err()
 		case <-ticker.C:
 		}
 	}
@@ -417,7 +443,7 @@ type edgeTrafficHandlers struct {
 	smart  map[string]struct{}
 }
 
-func configureEdgeTrafficHandlers(manager *trafficadapter.Manager, graph domain.TrafficGraph, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, previous edgeTrafficHandlers) (edgeTrafficHandlers, error) {
+func configureEdgeTrafficHandlers(manager edgeTrafficManager, graph domain.TrafficGraph, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, previous edgeTrafficHandlers) (edgeTrafficHandlers, error) {
 	if err := validateEdgeTrafficTLSMode(cfg, graph); err != nil {
 		return previous, err
 	}
@@ -479,8 +505,7 @@ func validateEdgeTrafficTLSMode(cfg EdgeConfig, graph domain.TrafficGraph) error
 	return nil
 }
 
-func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager *trafficadapter.Manager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, handlers edgeTrafficHandlers, log zerowrap.Logger) {
-	lastGeneration := domain.TrafficGraphGeneration(0)
+func applyEdgeTrafficUpdates(ctx context.Context, updates <-chan domain.TrafficGraphSnapshot, manager edgeTrafficManager, cfg EdgeConfig, handler http.Handler, tlsConfig *tls.Config, handlers edgeTrafficHandlers, lastGeneration domain.TrafficGraphGeneration, log zerowrap.Logger) {
 	for {
 		select {
 		case <-ctx.Done():
