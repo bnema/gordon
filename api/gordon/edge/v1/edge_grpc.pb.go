@@ -22,6 +22,7 @@ const (
 	EdgeService_WatchRouteSnapshots_FullMethodName = "/gordon.edge.v1.EdgeService/WatchRouteSnapshots"
 	EdgeService_WatchTrafficGraphs_FullMethodName  = "/gordon.edge.v1.EdgeService/WatchTrafficGraphs"
 	EdgeService_ReportDrainState_FullMethodName    = "/gordon.edge.v1.EdgeService/ReportDrainState"
+	EdgeService_ReportAppliedState_FullMethodName  = "/gordon.edge.v1.EdgeService/ReportAppliedState"
 )
 
 // EdgeServiceClient is the client API for EdgeService service.
@@ -36,6 +37,10 @@ type EdgeServiceClient interface {
 	WatchTrafficGraphs(ctx context.Context, in *WatchTrafficGraphsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TrafficGraphSnapshot], error)
 	// ReportDrainState accepts the narrow, opaque drain state produced by an edge.
 	ReportDrainState(ctx context.Context, in *ReportDrainStateRequest, opts ...grpc.CallOption) (*ReportDrainStateResponse, error)
+	// ReportAppliedState confirms the exact route and traffic generations that an
+	// authenticated edge has transactionally applied. It contains no topology,
+	// credentials, route targets, or runtime state.
+	ReportAppliedState(ctx context.Context, in *ReportAppliedStateRequest, opts ...grpc.CallOption) (*ReportAppliedStateResponse, error)
 }
 
 type edgeServiceClient struct {
@@ -94,6 +99,16 @@ func (c *edgeServiceClient) ReportDrainState(ctx context.Context, in *ReportDrai
 	return out, nil
 }
 
+func (c *edgeServiceClient) ReportAppliedState(ctx context.Context, in *ReportAppliedStateRequest, opts ...grpc.CallOption) (*ReportAppliedStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportAppliedStateResponse)
+	err := c.cc.Invoke(ctx, EdgeService_ReportAppliedState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EdgeServiceServer is the server API for EdgeService service.
 // All implementations must embed UnimplementedEdgeServiceServer
 // for forward compatibility.
@@ -106,6 +121,10 @@ type EdgeServiceServer interface {
 	WatchTrafficGraphs(*WatchTrafficGraphsRequest, grpc.ServerStreamingServer[TrafficGraphSnapshot]) error
 	// ReportDrainState accepts the narrow, opaque drain state produced by an edge.
 	ReportDrainState(context.Context, *ReportDrainStateRequest) (*ReportDrainStateResponse, error)
+	// ReportAppliedState confirms the exact route and traffic generations that an
+	// authenticated edge has transactionally applied. It contains no topology,
+	// credentials, route targets, or runtime state.
+	ReportAppliedState(context.Context, *ReportAppliedStateRequest) (*ReportAppliedStateResponse, error)
 	mustEmbedUnimplementedEdgeServiceServer()
 }
 
@@ -124,6 +143,9 @@ func (UnimplementedEdgeServiceServer) WatchTrafficGraphs(*WatchTrafficGraphsRequ
 }
 func (UnimplementedEdgeServiceServer) ReportDrainState(context.Context, *ReportDrainStateRequest) (*ReportDrainStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportDrainState not implemented")
+}
+func (UnimplementedEdgeServiceServer) ReportAppliedState(context.Context, *ReportAppliedStateRequest) (*ReportAppliedStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportAppliedState not implemented")
 }
 func (UnimplementedEdgeServiceServer) mustEmbedUnimplementedEdgeServiceServer() {}
 func (UnimplementedEdgeServiceServer) testEmbeddedByValue()                     {}
@@ -186,6 +208,24 @@ func _EdgeService_ReportDrainState_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EdgeService_ReportAppliedState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportAppliedStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EdgeServiceServer).ReportAppliedState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EdgeService_ReportAppliedState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EdgeServiceServer).ReportAppliedState(ctx, req.(*ReportAppliedStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EdgeService_ServiceDesc is the grpc.ServiceDesc for EdgeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -196,6 +236,10 @@ var EdgeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportDrainState",
 			Handler:    _EdgeService_ReportDrainState_Handler,
+		},
+		{
+			MethodName: "ReportAppliedState",
+			Handler:    _EdgeService_ReportAppliedState_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

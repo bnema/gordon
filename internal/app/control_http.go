@@ -25,6 +25,7 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
+	edgesnapshotusecase "github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	imagesusecase "github.com/bnema/gordon/internal/usecase/images"
 	logsusecase "github.com/bnema/gordon/internal/usecase/logs"
 	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
@@ -39,7 +40,7 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err := configSvc.Load(ctx); err != nil {
 		return nil, fmt.Errorf("load control configuration: %w", err)
 	}
-	svc := &services{role: RoleControl, configSvc: configSvc}
+	svc := &services{role: RoleControl, configSvc: configSvc, appliedStateTracker: edgesnapshotusecase.NewAppliedStateTrackerAny()}
 	var err error
 	// Existing gRPC-only control installations do not need user token storage.
 	// Enabling the management listener makes auth mandatory and initializes the
@@ -215,16 +216,18 @@ func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, c
 		return fmt.Errorf("create migration orchestrator: %w", err)
 	}
 	orchestrator.WithRuntimeSnapshotAppNetworks(runtimeInventory)
-	// Cutover stays disabled until the authenticated control/runtime client
-	// also exposes the real split edge checks. This is the WS05 deploy/drain
-	// gate; control never substitutes local socket probes.
-	if checks, ok := svc.runtimeCommandClient.(TrafficSwitchChecks); ok {
-		switcher, switchErr := NewTrafficSwitch(updater, checks)
-		if switchErr != nil {
-			return fmt.Errorf("create migration traffic switch: %w", switchErr)
-		}
-		orchestrator.WithTrafficSwitcher(switcher)
+	// Compose the switcher from authenticated role state rather than relying on
+	// an optional client type assertion. Missing readiness/probe capabilities
+	// remain explicit failed prerequisites and therefore cannot move traffic.
+	checks, checkErr := newMigrationTrafficChecks(runtimeInventory, checkpointStore, svc.appliedStateTracker)
+	if checkErr != nil {
+		return fmt.Errorf("create migration traffic checks: %w", checkErr)
 	}
+	switcher, switchErr := NewTrafficSwitch(updater, checks)
+	if switchErr != nil {
+		return fmt.Errorf("create migration traffic switch: %w", switchErr)
+	}
+	orchestrator.WithTrafficSwitcher(switcher)
 	svc.migrationSvc.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE"))
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
+	edgesnapshotusecase "github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
@@ -253,5 +254,18 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 		return nil, err
 	}
 	orchestrator.WithRuntimeSnapshotAppNetworks(bridge)
+	// Bootstrap uses the embedded runtime worker as the sole socket authority,
+	// but the same concrete fail-closed switcher is installed as split control.
+	// Until the candidate edge reports authenticated applied state and probes
+	// are available, it cannot activate the replacement listener.
+	checks, checkErr := newMigrationTrafficChecks(bridge, store, edgesnapshotusecase.NewAppliedStateTrackerAny())
+	if checkErr != nil {
+		return nil, fmt.Errorf("create monolith migration traffic checks: %w", checkErr)
+	}
+	switcher, switchErr := NewTrafficSwitch(bridge, checks)
+	if switchErr != nil {
+		return nil, fmt.Errorf("create monolith migration traffic switch: %w", switchErr)
+	}
+	orchestrator.WithTrafficSwitcher(switcher)
 	return migration.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE")), nil
 }

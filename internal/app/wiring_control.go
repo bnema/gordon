@@ -155,7 +155,7 @@ func runControlServers(ctx context.Context, v *viper.Viper, cfg Config, deps con
 	}
 	defer listener.Close()
 
-	server, err := newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
+	server, err := newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, controlServices.appliedStateTracker, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
 	if err != nil {
 		return err
 	}
@@ -437,6 +437,10 @@ func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator inte
 // event intake with the existing sanitized edge streams. Event transport is
 // authenticated with its own method scopes; it never receives runtime sockets.
 func newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver, eventServer eventsv1.EventServiceServer) (*grpc.Server, error) {
+	return newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainReceiver, nil, eventServer)
+}
+
+func newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver, appliedReceiver edgesnapshot.AppliedStateReceiver, eventServer eventsv1.EventServiceServer) (*grpc.Server, error) {
 	if validator == nil {
 		return nil, fmt.Errorf("control component token validator is required")
 	}
@@ -466,6 +470,9 @@ func newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg Config, validato
 		serverAdapter := edgesnapshotgrpc.NewServerWithTrafficGraphSource(hub, trafficHub)
 		if drainReceiver != nil {
 			serverAdapter = edgesnapshotgrpc.NewServerWithDrainStateReceiverAndTrafficGraphSource(hub, drainReceiver, trafficHub)
+		}
+		if appliedReceiver != nil {
+			serverAdapter = edgesnapshotgrpc.NewServerWithTrafficGraphDrainAndAppliedStateReceiver(hub, drainReceiver, trafficHub, appliedReceiver)
 		}
 		edgev1.RegisterEdgeServiceServer(server, serverAdapter)
 	} else if drainReceiver != nil {

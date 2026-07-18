@@ -22,6 +22,7 @@ const (
 	ComponentScopeRoutesWatch          ComponentScope = "routes:watch"
 	ComponentScopeTrafficWatch         ComponentScope = "traffic:watch"
 	ComponentScopeEdgeDrain            ComponentScope = "edge:drain"
+	ComponentScopeEdgeAppliedState     ComponentScope = "edge:applied-state"
 	ComponentScopeRuntimeDeploy        ComponentScope = "runtime:deploy"
 	ComponentScopeRuntimeReconcile     ComponentScope = "runtime:reconcile"
 	ComponentScopeRuntimeLogs          ComponentScope = "runtime:logs"
@@ -50,6 +51,7 @@ func AllComponentScopes() []ComponentScope {
 		ComponentScopeRoutesWatch,
 		ComponentScopeTrafficWatch,
 		ComponentScopeEdgeDrain,
+		ComponentScopeEdgeAppliedState,
 		ComponentScopeRuntimeDeploy,
 		ComponentScopeRuntimeReconcile,
 		ComponentScopeRuntimeLogs,
@@ -106,6 +108,7 @@ func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
 			ComponentScopeRoutesWatch,
 			ComponentScopeTrafficWatch,
 			ComponentScopeEdgeDrain,
+			ComponentScopeEdgeAppliedState,
 		}
 	case ComponentRoleRegistry:
 		return []ComponentScope{

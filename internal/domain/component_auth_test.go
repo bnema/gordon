@@ -11,6 +11,7 @@ func TestComponentAuthScopes(t *testing.T) {
 		"routes:watch",
 		"traffic:watch",
 		"edge:drain",
+		"edge:applied-state",
 		"runtime:deploy",
 		"runtime:reconcile",
 		"runtime:logs",
@@ -47,6 +48,7 @@ func TestComponentAuthScopes(t *testing.T) {
 		ComponentScopeRoutesWatch,
 		ComponentScopeTrafficWatch,
 		ComponentScopeEdgeDrain,
+		ComponentScopeEdgeAppliedState,
 	}, DefaultComponentScopesForRole(ComponentRoleEdge))
 
 	assert.Equal(t, []ComponentScope{

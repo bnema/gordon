@@ -14,6 +14,10 @@ service EdgeService {
   rpc WatchTrafficGraphs(WatchTrafficGraphsRequest) returns (stream TrafficGraphSnapshot);
   // ReportDrainState accepts the narrow, opaque drain state produced by an edge.
   rpc ReportDrainState(ReportDrainStateRequest) returns (ReportDrainStateResponse);
+  // ReportAppliedState confirms the exact route and traffic generations that an
+  // authenticated edge has transactionally applied. It contains no topology,
+  // credentials, route targets, or runtime state.
+  rpc ReportAppliedState(ReportAppliedStateRequest) returns (ReportAppliedStateResponse);
 }
 
 // WatchRouteSnapshotsRequest deliberately has no routing selectors.
@@ -131,3 +135,14 @@ message ReportDrainStateRequest {
 
 // ReportDrainStateResponse intentionally has no drain orchestration semantics.
 message ReportDrainStateResponse {}
+
+// ReportAppliedStateRequest is deliberately small. component_id must equal the
+// authenticated edge identity; it is not an authority chosen by the caller.
+message ReportAppliedStateRequest {
+  string component_id = 1;
+  uint64 route_generation = 2;
+  uint64 traffic_generation = 3;
+  bool healthy = 4;
+}
+
+message ReportAppliedStateResponse {}

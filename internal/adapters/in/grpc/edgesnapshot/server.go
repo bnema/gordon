@@ -20,9 +20,10 @@ const maxProtoInt32 = 1<<31 - 1
 // Server exposes a control-owned snapshot Source. It never reads runtime state.
 type Server struct {
 	edgev1.UnimplementedEdgeServiceServer
-	source        edgesnapshot.Source
-	trafficSource edgesnapshot.TrafficGraphSource
-	drainReceiver edgesnapshot.DrainStateReceiver
+	source          edgesnapshot.Source
+	trafficSource   edgesnapshot.TrafficGraphSource
+	drainReceiver   edgesnapshot.DrainStateReceiver
+	appliedReceiver edgesnapshot.AppliedStateReceiver
 }
 
 // NewServer constructs an edge snapshot server from a control-owned source.
@@ -46,12 +47,19 @@ func NewServerWithDrainStateReceiverAndTrafficGraphSource(source edgesnapshot.So
 	return &Server{source: source, drainReceiver: receiver, trafficSource: trafficSource}
 }
 
+// NewServerWithTrafficGraphDrainAndAppliedStateReceiver exposes the only
+// cutover acknowledgement accepted from an authenticated edge.
+func NewServerWithTrafficGraphDrainAndAppliedStateReceiver(source edgesnapshot.Source, drainReceiver edgesnapshot.DrainStateReceiver, trafficSource edgesnapshot.TrafficGraphSource, appliedReceiver edgesnapshot.AppliedStateReceiver) *Server {
+	return &Server{source: source, drainReceiver: drainReceiver, trafficSource: trafficSource, appliedReceiver: appliedReceiver}
+}
+
 // MethodScopes declares the narrow permissions needed by each EdgeService RPC.
 func MethodScopes() map[string]domain.ComponentScope {
 	return map[string]domain.ComponentScope{
 		edgev1.EdgeService_WatchRouteSnapshots_FullMethodName: domain.ComponentScopeRoutesWatch,
 		edgev1.EdgeService_WatchTrafficGraphs_FullMethodName:  domain.ComponentScopeTrafficWatch,
 		edgev1.EdgeService_ReportDrainState_FullMethodName:    domain.ComponentScopeEdgeDrain,
+		edgev1.EdgeService_ReportAppliedState_FullMethodName:  domain.ComponentScopeEdgeAppliedState,
 	}
 }
 
@@ -61,6 +69,7 @@ func MethodRoles() map[string]domain.ComponentRole {
 		edgev1.EdgeService_WatchRouteSnapshots_FullMethodName: domain.ComponentRoleEdge,
 		edgev1.EdgeService_WatchTrafficGraphs_FullMethodName:  domain.ComponentRoleEdge,
 		edgev1.EdgeService_ReportDrainState_FullMethodName:    domain.ComponentRoleEdge,
+		edgev1.EdgeService_ReportAppliedState_FullMethodName:  domain.ComponentRoleEdge,
 	}
 }
 
@@ -188,6 +197,33 @@ func (s *Server) ReportDrainState(ctx context.Context, request *edgev1.ReportDra
 		return nil, relayError(err)
 	}
 	return &edgev1.ReportDrainStateResponse{}, nil
+}
+
+// ReportAppliedState accepts only the identity established by the component
+// interceptor. The request component_id is checked for equality so a valid edge
+// token cannot publish readiness for another edge.
+func (s *Server) ReportAppliedState(ctx context.Context, request *edgev1.ReportAppliedStateRequest) (*edgev1.ReportAppliedStateResponse, error) {
+	if request == nil || request.ComponentId == "" || request.RouteGeneration == 0 || request.TrafficGeneration == 0 {
+		return nil, status.Error(codes.InvalidArgument, "invalid applied state")
+	}
+	if s.appliedReceiver == nil {
+		return nil, status.Error(codes.FailedPrecondition, "applied state receiver not configured")
+	}
+	identity, authenticated := interceptors.ComponentIdentityFromContext(ctx)
+	if !authenticated {
+		return nil, status.Error(codes.Unauthenticated, "component identity required")
+	}
+	state := edgesnapshot.AppliedState{ComponentID: request.ComponentId, RouteGeneration: request.RouteGeneration, TrafficGeneration: request.TrafficGeneration, Healthy: request.Healthy}
+	if err := s.appliedReceiver.ReportAuthenticatedAppliedState(ctx, identity.Name, state); err != nil {
+		if errors.Is(err, edgesnapshot.ErrAppliedStateUnexpected) {
+			return nil, status.Error(codes.PermissionDenied, "edge is not expected to report applied state")
+		}
+		if errors.Is(err, edgesnapshot.ErrAppliedStateStale) || errors.Is(err, edgesnapshot.ErrAppliedStateInvalid) {
+			return nil, status.Error(codes.FailedPrecondition, "applied state is stale")
+		}
+		return nil, status.Error(codes.Internal, "failed to relay applied state")
+	}
+	return &edgev1.ReportAppliedStateResponse{}, nil
 }
 
 func sourceError(err error) error {

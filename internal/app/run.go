@@ -49,6 +49,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	cronSvc "github.com/bnema/gordon/internal/usecase/cron"
+	"github.com/bnema/gordon/internal/usecase/edgesnapshot"
 	"github.com/bnema/gordon/internal/usecase/health"
 	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
@@ -306,6 +307,7 @@ type services struct {
 	runtimeCommandClient  out.RuntimeCommandClient
 	runtimeControl        *runtimecontrol.Service
 	migrationSvc          *MigrationService
+	appliedStateTracker   *edgesnapshot.AppliedStateTracker
 	trafficManager        *trafficadapter.Manager
 	tlsHTTPEntryPoints    map[string]struct{}
 	smartHTTPEntryPoints  map[string]struct{}

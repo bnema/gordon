@@ -187,6 +187,22 @@ func (c *Client) SetSnapshotAcceptanceObserver(observer out.RouteSnapshotAccepta
 
 // ReportDrainState sends the narrow opaque drain state over the same
 // authenticated gRPC connection that receives snapshots.
+// ReportAppliedState reports only a completed, matched edge application. The
+// caller supplies the component ID from its immutable container environment;
+// control verifies it against the authenticated token identity.
+func (c *Client) ReportAppliedState(ctx context.Context, componentID string, routeGeneration, trafficGeneration uint64, healthy bool) error {
+	if c == nil || c.client == nil {
+		return errors.New("edge snapshot service is required")
+	}
+	if componentID == "" || routeGeneration == 0 || trafficGeneration == 0 || routeGeneration != trafficGeneration {
+		return errors.New("invalid edge applied state")
+	}
+	if _, err := c.client.ReportAppliedState(ctx, &edgev1.ReportAppliedStateRequest{ComponentId: componentID, RouteGeneration: routeGeneration, TrafficGeneration: trafficGeneration, Healthy: healthy}); err != nil {
+		return fmt.Errorf("report edge applied state: %w", err)
+	}
+	return nil
+}
+
 func (c *Client) ReportDrainState(ctx context.Context, state domain.RouteDrainState) error {
 	if err := state.Validate(); err != nil {
 		return fmt.Errorf("validate edge drain state: %w", err)
