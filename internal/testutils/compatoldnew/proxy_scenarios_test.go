@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -139,10 +140,52 @@ func TestZeroDowntimeDrainArtifactOrderingFieldsAreSafeAndStable(t *testing.T) {
 		"deploy_blocked_until_response_release": false,
 		"deploy_returned_before_response_release": false,
 		"old_target_continuously_running": false,
-		"drain_duration_bucket": ""
+		"drain_duration": "",
+		"drain_completed_within_timeout": false
 	}`, string(encoded))
 	require.NotContains(t, string(encoded), "container_id")
 	require.NotContains(t, string(encoded), "proxy_port")
+}
+
+func TestZeroDowntimeDrainNormalizesSafetyNotWallClockDuration(t *testing.T) {
+	withinTimeout := []time.Duration{
+		0,
+		time.Second - time.Nanosecond,
+		time.Second,
+		5*time.Second - time.Nanosecond,
+		5 * time.Second,
+		zeroDowntimeDrainTimeout,
+	}
+	baseline := zeroDowntimeDrainSafeObservation(withinTimeout[0])
+	for _, duration := range withinTimeout[1:] {
+		candidate := zeroDowntimeDrainSafeObservation(duration)
+		require.Empty(t, Compare(zeroDowntimeDrainArtifact(baseline), zeroDowntimeDrainArtifact(candidate), nil), "duration %s must be diagnostic only", duration)
+		require.NotEqual(t, baseline.DrainDuration, candidate.DrainDuration, "raw duration must remain useful for diagnostics")
+	}
+}
+
+func TestZeroDowntimeDrainTimeoutViolationFailsSafetyComparison(t *testing.T) {
+	withinTimeout := zeroDowntimeDrainSafeObservation(zeroDowntimeDrainTimeout)
+	timedOut := zeroDowntimeDrainSafeObservation(zeroDowntimeDrainTimeout + time.Nanosecond)
+
+	require.True(t, withinTimeout.satisfiesOrderingContract())
+	require.False(t, timedOut.satisfiesOrderingContract())
+	require.Len(t, Compare(zeroDowntimeDrainArtifact(withinTimeout), zeroDowntimeDrainArtifact(timedOut), nil), 1)
+}
+
+func zeroDowntimeDrainSafeObservation(duration time.Duration) zeroDowntimeDrainObservation {
+	return zeroDowntimeDrainObservation{
+		MarkerObserved:                       true,
+		OldResponseFromOld:                   true,
+		FreshResponseFromReplacement:         true,
+		ReplacementRoutedDuringStabilization: true,
+		OldSurvivedRefreshUntilRelease:       true,
+		TargetChanged:                        true,
+		DeploySucceeded:                      true,
+		DeployBlockedUntilResponseRelease:    true,
+		DrainDuration:                        duration.String(),
+		DrainCompletedWithinTimeout:          zeroDowntimeDrainCompletedWithinTimeout(duration),
+	}
 }
 
 func TestZeroDowntimeDrainOrderingContract(t *testing.T) {
@@ -155,6 +198,7 @@ func TestZeroDowntimeDrainOrderingContract(t *testing.T) {
 		TargetChanged:                        true,
 		DeploySucceeded:                      true,
 		DeployBlockedUntilResponseRelease:    true,
+		DrainCompletedWithinTimeout:          true,
 	}
 	require.True(t, base.satisfiesOrderingContract())
 

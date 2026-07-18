@@ -20,6 +20,7 @@ import (
 const (
 	zeroDowntimeDrainScenarioName        = "proxy/zero-downtime-drain"
 	zeroDowntimeDrainPort                = 8080
+	zeroDowntimeDrainTimeout             = 10 * time.Second
 	zeroDowntimeDrainStart               = "SLOW-START\n"
 	zeroDowntimeDrainDone                = "SLOW-DONE\n"
 	zeroDowntimeDrainStateMarker         = "/state/request-started"
@@ -308,8 +309,8 @@ allowed_registries = ["localhost:%d"]
 readiness_delay = "100ms"
 stabilization_delay = "2s"
 drain_mode = "inflight"
-drain_timeout = "10s"
-%s`, registryPort, fixture.DataDir, registryPort, mustDrainRuntimeSocket(), proxyPort, secret, registryPort, routes)
+drain_timeout = %q
+%s`, registryPort, fixture.DataDir, registryPort, mustDrainRuntimeSocket(), proxyPort, secret, registryPort, zeroDowntimeDrainTimeout.String(), routes)
 }
 
 func mustDrainRuntimeSocket() string {
@@ -478,7 +479,41 @@ type zeroDowntimeDrainObservation struct {
 	DeployBlockedUntilResponseRelease    bool   `json:"deploy_blocked_until_response_release"`
 	DeployReturnedBeforeResponseRelease  bool   `json:"deploy_returned_before_response_release"`
 	OldTargetContinuouslyRunning         bool   `json:"old_target_continuously_running"`
-	DrainDurationBucket                  string `json:"drain_duration_bucket"`
+	DrainDuration                        string `json:"drain_duration"`
+	DrainCompletedWithinTimeout          bool   `json:"drain_completed_within_timeout"`
+}
+
+// zeroDowntimeDrainSafetyObservation contains only the semantic outcomes that
+// must remain compatible. Wall-clock duration is retained in the raw artifact
+// for diagnostics, but cannot cause old/new parity failures.
+type zeroDowntimeDrainSafetyObservation struct {
+	MarkerObserved                       bool `json:"marker_observed"`
+	OldResponseFromOld                   bool `json:"old_response_from_old"`
+	FreshResponseFromReplacement         bool `json:"fresh_response_from_replacement"`
+	ReplacementRoutedDuringStabilization bool `json:"replacement_routed_during_stabilization"`
+	OldSurvivedRefreshUntilRelease       bool `json:"old_survived_refresh_until_release"`
+	TargetChanged                        bool `json:"target_changed"`
+	DeploySucceeded                      bool `json:"deploy_succeeded"`
+	DeployBlockedUntilResponseRelease    bool `json:"deploy_blocked_until_response_release"`
+	DeployReturnedBeforeResponseRelease  bool `json:"deploy_returned_before_response_release"`
+	OldTargetContinuouslyRunning         bool `json:"old_target_continuously_running"`
+	DrainCompletedWithinTimeout          bool `json:"drain_completed_within_timeout"`
+}
+
+func (o zeroDowntimeDrainObservation) safetyObservation() zeroDowntimeDrainSafetyObservation {
+	return zeroDowntimeDrainSafetyObservation{
+		MarkerObserved:                       o.MarkerObserved,
+		OldResponseFromOld:                   o.OldResponseFromOld,
+		FreshResponseFromReplacement:         o.FreshResponseFromReplacement,
+		ReplacementRoutedDuringStabilization: o.ReplacementRoutedDuringStabilization,
+		OldSurvivedRefreshUntilRelease:       o.OldSurvivedRefreshUntilRelease,
+		TargetChanged:                        o.TargetChanged,
+		DeploySucceeded:                      o.DeploySucceeded,
+		DeployBlockedUntilResponseRelease:    o.DeployBlockedUntilResponseRelease,
+		DeployReturnedBeforeResponseRelease:  o.DeployReturnedBeforeResponseRelease,
+		OldTargetContinuouslyRunning:         o.OldTargetContinuouslyRunning,
+		DrainCompletedWithinTimeout:          o.DrainCompletedWithinTimeout,
+	}
 }
 
 func (o zeroDowntimeDrainObservation) satisfiesOrderingContract() bool {
@@ -486,7 +521,7 @@ func (o zeroDowntimeDrainObservation) satisfiesOrderingContract() bool {
 		(o.DeployReturnedBeforeResponseRelease && o.OldTargetContinuouslyRunning)
 	return o.MarkerObserved && o.OldResponseFromOld && o.FreshResponseFromReplacement &&
 		o.ReplacementRoutedDuringStabilization && o.OldSurvivedRefreshUntilRelease &&
-		o.TargetChanged && o.DeploySucceeded && deploymentOrderingProved
+		o.TargetChanged && o.DeploySucceeded && o.DrainCompletedWithinTimeout && deploymentOrderingProved
 }
 
 type zeroDowntimeDrainDeployResult struct {
@@ -510,7 +545,7 @@ type zeroDowntimeDrainRaceObservation struct {
 	deployBlockedUntilResponseRelease    bool
 	deployReturnedBeforeResponseRelease  bool
 	oldTargetContinuouslyRunning         bool
-	drainDurationBucket                  string
+	drainDuration                        time.Duration
 }
 
 func captureZeroDowntimeDrain(ctx context.Context, proxyAddress, adminURL, domain, token string) (ProxyArtifact, error) {
@@ -562,7 +597,8 @@ func captureZeroDowntimeDrain(ctx context.Context, proxyAddress, adminURL, domai
 	observation.DeployBlockedUntilResponseRelease = race.deployBlockedUntilResponseRelease
 	observation.DeployReturnedBeforeResponseRelease = race.deployReturnedBeforeResponseRelease
 	observation.OldTargetContinuouslyRunning = race.oldTargetContinuouslyRunning
-	observation.DrainDurationBucket = race.drainDurationBucket
+	observation.DrainDuration = race.drainDuration.String()
+	observation.DrainCompletedWithinTimeout = zeroDowntimeDrainCompletedWithinTimeout(race.drainDuration)
 	artifact := zeroDowntimeDrainArtifact(observation)
 	if raceErr != nil {
 		return artifact, raceErr
@@ -594,7 +630,7 @@ func observeZeroDowntimeDrainRace(ctx context.Context, proxyAddress, domain, old
 	slowCompletion := zeroDowntimeDrainSlowCompletion{rest: slowRest, err: slowErr, completedAt: time.Now()}
 	close(monitorDone)
 	observation.oldTargetContinuouslyRunning = <-monitorCh
-	observation.drainDurationBucket = zeroDowntimeDrainDurationBucket(slowCompletion.completedAt.Sub(startedAt))
+	observation.drainDuration = slowCompletion.completedAt.Sub(startedAt)
 
 	deploy := awaitZeroDowntimeDrainDeploy(deployCh, earlyDeploy)
 	observation.deploySucceeded = deploy.err == nil
@@ -736,17 +772,8 @@ func parseZeroDowntimeDrainFastResponse(body string) (string, bool) {
 	return instance, instance == zeroDowntimeDrainReplacementInstance
 }
 
-func zeroDowntimeDrainDurationBucket(duration time.Duration) string {
-	switch {
-	case duration < time.Second:
-		return "under_1s"
-	case duration < 5*time.Second:
-		return "1s_to_5s"
-	case duration < 10*time.Second:
-		return "5s_to_10s"
-	default:
-		return "10s_or_more"
-	}
+func zeroDowntimeDrainCompletedWithinTimeout(duration time.Duration) bool {
+	return duration >= 0 && duration <= zeroDowntimeDrainTimeout
 }
 
 func deployZeroDowntimeDrain(ctx context.Context, adminURL, domain, token string) (int, error) {
@@ -883,7 +910,9 @@ func waitZeroDowntimeDrainReplacementCanonical(ctx context.Context, domain, oldT
 }
 
 func zeroDowntimeDrainArtifact(observation zeroDowntimeDrainObservation) ProxyArtifact {
-	return NewProxyArtifact("zero downtime drain", observation, LevelExact)
+	artifact := NewProxyArtifact("zero downtime drain", observation, LevelExact)
+	artifact.Normalized = observation.safetyObservation()
+	return artifact
 }
 func zeroDowntimeDrainFailure(side string, validationErr error) SideResult {
 	return SideResult{Side: side, Artifact: zeroDowntimeDrainArtifact(zeroDowntimeDrainObservation{}), ValidationError: validationErr}
