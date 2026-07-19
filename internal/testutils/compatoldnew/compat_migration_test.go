@@ -126,6 +126,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	// running for a brief interval after StopContainer returns.
 	fixture.awaitInterruptedSwitchTerminalStatus()
 	fixture.assertSwitchedTraffic()
+	fixture.assertRegistryArtifact()
 	fixture.assertInterruptedSwitchRetry()
 }
 
@@ -180,6 +181,7 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	fixture.startOldMonolith(labels)
 	fixture.startOldApp(labels)
 	fixture.waitOldAppReady()
+	fixture.pushRegistryArtifact()
 	return fixture
 }
 
@@ -336,6 +338,20 @@ func (f *realMigrationFixture) startOldApp(labels map[string]string) {
 	appImage := "docker.io/library/" + "busy" + "box:1.36"
 	args = append(args, appImage, "sh", "-c", "mkdir -p /srv; printf migration-app-ok >/srv/index.html; exec httpd -f -p 8080 -h /srv")
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
+}
+
+// pushRegistryArtifact stores a real OCI manifest and blobs in the old
+// monolith registry before prepare. The post-cutover assertion below fetches
+// that exact manifest through the final edge, preventing a new empty registry
+// volume from passing this compatibility fixture.
+func (f *realMigrationFixture) pushRegistryArtifact() {
+	f.t.Helper()
+	image := "docker.io/library/" + "busy" + "box:1.36"
+	target := "127.0.0.1:15000/gordon-migration-artifact-" + sanitizePart(f.runID) + ":fixture"
+	require.NoError(f.t, migrationPodman(f.ctx, "tag", image, target))
+	require.Eventually(f.t, func() bool {
+		return migrationPodman(f.ctx, "push", "--tls-verify=false", target) == nil
+	}, 15*time.Second, 250*time.Millisecond, "old monolith registry must accept the pre-cutover artifact")
 }
 
 func (f *realMigrationFixture) waitOldAppReady() {
@@ -628,6 +644,18 @@ func (f *realMigrationFixture) assertSwitchedTraffic() {
 // assertFinalEdgeBindingsAndNetwork proves activation replaced the private
 // prepared listener rather than merely declaring the old monolith stopped. It
 // also proves the final edge retained the managed app network used for routing.
+func (f *realMigrationFixture) assertRegistryArtifact() {
+	f.t.Helper()
+	target := "gordon-migration-artifact-" + sanitizePart(f.runID)
+	request, err := http.NewRequestWithContext(f.ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/v2/%s/manifests/fixture", f.port, target), nil)
+	require.NoError(f.t, err)
+	request.Host = "registry.example.test"
+	response, err := (&http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}}).Do(request)
+	require.NoError(f.t, err)
+	defer response.Body.Close()
+	require.Equal(f.t, http.StatusOK, response.StatusCode, "pre-cutover registry manifest must remain retrievable through the final edge")
+}
+
 func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 	f.t.Helper()
 	containers, err := f.componentContainers()

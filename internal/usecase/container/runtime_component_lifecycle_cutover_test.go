@@ -16,13 +16,19 @@ import (
 )
 
 type recordingMigrationCutoverCommitter struct {
-	commands []domain.RuntimeSelfUpdateCommand
-	err      error
+	commands       []domain.RuntimeSelfUpdateCommand
+	failureRetries []bool
+	err            error
 }
 
 func (c *recordingMigrationCutoverCommitter) CommitMigrationCutover(_ context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	c.commands = append(c.commands, command)
 	return c.err
+}
+
+func (c *recordingMigrationCutoverCommitter) RecordMigrationCutoverFailure(_ context.Context, _ domain.RuntimeSelfUpdateCommand, _ string, retryable bool) error {
+	c.failureRetries = append(c.failureRetries, retryable)
+	return nil
 }
 
 func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionally(t *testing.T) {
@@ -180,7 +186,29 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenDurableCutoverCommitFails
 	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
 	require.Error(t, err)
 	require.Len(t, committer.commands, 1)
+	assert.Equal(t, []bool{true}, committer.failureRetries, "retryability is recorded only after every compensation succeeds")
 	assert.NotContains(t, err.Error(), "injected durable write failure", "runtime errors must remain local")
+}
+
+func TestRuntimeComponentLifecycleActivateMarksRollbackNonretryableWhenRestoreFails(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(errors.New("injected prepared stop failure")).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(errors.New("injected old restore failure")).Once()
+
+	committer := &recordingMigrationCutoverCommitter{}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	require.Error(t, err)
+	assert.Equal(t, []bool{false}, committer.failureRetries)
+	assert.NotContains(t, err.Error(), "injected old restore failure")
 }
 
 func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testing.T) {
@@ -273,6 +301,22 @@ func cutoverConfig(t *testing.T) string {
 	require.NoError(t, os.WriteFile(path, []byte("[edge]\nmigration_probe_enabled = true\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(directory, "edge-final.toml"), []byte("[edge]\nmigration_probe_enabled = false\n"), 0o600))
 	return path
+}
+
+func TestRuntimeComponentLifecycleRegistryReusesCanonicalStorage(t *testing.T) {
+	storage := filepath.Join(t.TempDir(), "registry")
+	require.NoError(t, os.Mkdir(storage, 0o700))
+	config := cutoverConfig(t)
+	command := cutoverCommand(config)
+	command.LifecycleAction = domain.RuntimeComponentLifecycleStart
+	command.TargetComponentRole = domain.ComponentRoleRegistry
+	command.TargetComponentID = "gordon-registry-fixture-g1"
+
+	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, RegistryStorageRoot: storage}).(*runtimeComponentLifecycleManager)
+	component, err := manager.componentConfig(command, nil)
+	require.NoError(t, err)
+	assert.Equal(t, storage, component.Volumes["/var/lib/gordon/registry"])
+	assert.Len(t, component.Volumes, 1, "registry must not receive an empty generation volume")
 }
 
 func componentLabels(role string) map[string]string {

@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -200,6 +201,9 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
 		}
 	}
+	if err := m.mountCanonicalRegistryStorage(command, config); err != nil {
+		return nil, err
+	}
 	if err := m.mountMigrationRuntimeSocketState(command, config); err != nil {
 		return nil, err
 	}
@@ -216,6 +220,23 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 // directory and control a read-only view for Unix socket connect. Other roles
 // receive neither. The directory is a generated immediate child of the
 // configured migration root and contains no engine socket.
+// mountCanonicalRegistryStorage reuses the old monolith's configured registry
+// directory. It is deliberately not a generation-named volume: registry blobs
+// and manifests survive cutover and are writable only by the runtime-created
+// registry role. The policy allowlists the exact configured host directory.
+func (m *runtimeComponentLifecycleManager) mountCanonicalRegistryStorage(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
+	if command.TargetComponentRole != domain.ComponentRoleRegistry || strings.TrimSpace(m.policy.RegistryStorageRoot) == "" {
+		return nil
+	}
+	root := filepath.Clean(m.policy.RegistryStorageRoot)
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !filepath.IsAbs(root) {
+		return fmt.Errorf("canonical registry storage is not configured")
+	}
+	config.Volumes = map[string]string{"/var/lib/gordon/registry": root}
+	return nil
+}
+
 func (m *runtimeComponentLifecycleManager) mountMigrationRuntimeSocketState(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
 	if command.TargetComponentRole != domain.ComponentRoleRuntime && command.TargetComponentRole != domain.ComponentRoleControl {
 		return nil
@@ -418,13 +439,19 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	preparedPorts := append([]domain.ContainerPortPublish(nil), command.PortPublishes...)
 	oldStopped, preparedStopped, preparedRemoved := false, false, false
 	var final *domain.Container
-	rollback := func() {
-		m.rollbackEdgeActivation(ctx, command, activation, preparedPorts, final, oldStopped, preparedStopped, preparedRemoved)
+	rollback := func() error {
+		return m.rollbackEdgeActivation(ctx, command, activation, preparedPorts, final, oldStopped, preparedStopped, preparedRemoved)
 	}
 	failCutover := func(err error) error {
-		rollback()
-		if recordErr := m.recordCutoverFailure(ctx, command, cutoverFailureCode(err)); recordErr != nil {
+		rollbackErr := rollback()
+		// A retry is safe only if every compensating command succeeded. Never
+		// advertise retryability after a partial restore: the durable recovery
+		// path must then inspect and repair the managed inventory first.
+		if recordErr := m.recordCutoverFailure(ctx, command, cutoverFailureCode(err), rollbackErr == nil); recordErr != nil {
 			return componentLifecycleError("record cutover failure", recordErr)
+		}
+		if rollbackErr != nil {
+			return componentLifecycleError("restore", errors.Join(err, rollbackErr))
 		}
 		return componentLifecycleError("activate", err)
 	}
@@ -469,12 +496,12 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	return nil
 }
 
-func (m *runtimeComponentLifecycleManager) recordCutoverFailure(ctx context.Context, command domain.RuntimeSelfUpdateCommand, code string) error {
+func (m *runtimeComponentLifecycleManager) recordCutoverFailure(ctx context.Context, command domain.RuntimeSelfUpdateCommand, code string, retryable bool) error {
 	recorder, ok := m.committer.(MigrationCutoverFailureRecorder)
 	if !ok || recorder == nil {
 		return nil
 	}
-	return recorder.RecordMigrationCutoverFailure(ctx, command, code, true)
+	return recorder.RecordMigrationCutoverFailure(ctx, command, code, retryable)
 }
 
 func cutoverFailureCode(err error) string {
@@ -541,30 +568,33 @@ func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx conte
 	return nil
 }
 
-func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation, preparedPorts []domain.ContainerPortPublish, final *domain.Container, oldStopped, preparedStopped, preparedRemoved bool) {
+func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation, preparedPorts []domain.ContainerPortPublish, final *domain.Container, oldStopped, preparedStopped, preparedRemoved bool) error {
+	var restoreErr error
 	if final != nil {
-		_ = m.runtime.StopContainer(ctx, final.ID)
-		_ = m.runtime.RemoveContainer(ctx, final.ID, true)
+		restoreErr = errors.Join(restoreErr, m.runtime.StopContainer(ctx, final.ID))
+		restoreErr = errors.Join(restoreErr, m.runtime.RemoveContainer(ctx, final.ID, true))
 	}
 	if preparedRemoved {
-		m.restorePreparedEdge(ctx, command, preparedPorts)
+		restoreErr = errors.Join(restoreErr, m.restorePreparedEdge(ctx, command, preparedPorts))
 	} else if preparedStopped {
-		_ = m.runtime.StartContainer(ctx, activation.prepared.ID)
+		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, activation.prepared.ID))
 	}
 	if oldStopped {
-		_ = m.runtime.StartContainer(ctx, activation.old.ID)
+		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, activation.old.ID))
 	}
+	return restoreErr
 }
 
-func (m *runtimeComponentLifecycleManager) restorePreparedEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) {
+func (m *runtimeComponentLifecycleManager) restorePreparedEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) error {
 	config, err := m.componentConfig(command, ports)
 	if err != nil {
-		return
+		return err
 	}
 	restored, err := m.runtime.CreateContainer(ctx, config)
-	if err == nil {
-		_ = m.runtime.StartContainer(ctx, restored.ID)
+	if err != nil {
+		return err
 	}
+	return m.runtime.StartContainer(ctx, restored.ID)
 }
 
 func (m *runtimeComponentLifecycleManager) managedOldServingContainer(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (*domain.Container, error) {

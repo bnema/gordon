@@ -20,13 +20,27 @@ func (s *fixtureTrafficSwitcher) Switch(context.Context, MigrationCheckpoint, Co
 	return s.err
 }
 
+func TestMigrationOrchestratorSwitchRequiresDurablePrepareBarrier(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	switcher := &fixtureTrafficSwitcher{}
+	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, &recordingComponentLauncher{})
+	require.NoError(t, err)
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", StartedAt: orchestrator.now(), Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 1, OldServingPath: "monolith"}
+
+	_, err = orchestrator.WithTrafficSwitcher(switcher).Switch(context.Background(), checkpoint)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "completed prepare")
+	assert.Zero(t, switcher.calls)
+}
+
 func TestMigrationOrchestratorSwitchCheckpointsRetryAndRetainsOldPath(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)
 	switcher := &fixtureTrafficSwitcher{err: errors.New("edge test failed")}
 	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, &recordingComponentLauncher{})
 	require.NoError(t, err)
-	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", StartedAt: orchestrator.now(), Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 1, OldServingPath: "monolith"}
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", StartedAt: orchestrator.now(), Phase: MigrationPhasePrepared, PrepareComplete: true, RouteSnapshotGeneration: 1, OldServingPath: "monolith"}
 	_, err = orchestrator.WithTrafficSwitcher(switcher).Switch(context.Background(), checkpoint)
 	require.Error(t, err)
 	persisted, err := store.Load()

@@ -109,6 +109,10 @@ func (o *MigrationOrchestrator) Prepare(ctx context.Context, checkpoint Migratio
 	if err := o.connectEdgeAppNetworks(ctx, plan, &checkpoint); err != nil {
 		return nil, err
 	}
+	// This is the durable prepare barrier. In particular, recovery after a
+	// runtime-channel handoff must finish registry/edge creation and health
+	// before it may offer public listener activation.
+	checkpoint.PrepareComplete = true
 	// Save atomically merges an authenticated edge attestation that may have
 	// arrived while preparation was completing.
 	if err := o.store.Save(checkpoint); err != nil {
@@ -128,8 +132,8 @@ func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint Migration
 	if checkpoint.Phase == MigrationPhaseSwitched {
 		return &checkpoint, nil
 	}
-	if checkpoint.Phase != MigrationPhasePrepared {
-		return nil, fmt.Errorf("traffic switch requires prepared phase")
+	if checkpoint.Phase != MigrationPhasePrepared || !checkpoint.PrepareComplete {
+		return nil, fmt.Errorf("traffic switch requires completed prepare phase")
 	}
 	checkpoint, err := o.waitForEdgeAppliedCheckpoint(ctx, checkpoint)
 	if err != nil {

@@ -58,16 +58,20 @@ type MigrationPortBinding struct {
 }
 
 type MigrationCheckpoint struct {
-	MigrationID               string         `json:"migration_id"`
-	SourceVersion             string         `json:"source_version,omitempty"`
-	TargetVersion             string         `json:"target_version,omitempty"`
-	TargetImage               string         `json:"target_image,omitempty"`
-	StartedAt                 time.Time      `json:"started_at"`
-	Phase                     MigrationPhase `json:"phase"`
-	ComponentGeneration       uint64         `json:"component_generation"`
-	OldServingPath            string         `json:"old_serving_path,omitempty"`
-	PreparedComponents        []string       `json:"prepared_components,omitempty"`
-	RuntimeChannelTransferred bool           `json:"runtime_channel_transferred,omitempty"`
+	MigrationID         string         `json:"migration_id"`
+	SourceVersion       string         `json:"source_version,omitempty"`
+	TargetVersion       string         `json:"target_version,omitempty"`
+	TargetImage         string         `json:"target_image,omitempty"`
+	StartedAt           time.Time      `json:"started_at"`
+	Phase               MigrationPhase `json:"phase"`
+	ComponentGeneration uint64         `json:"component_generation"`
+	OldServingPath      string         `json:"old_serving_path,omitempty"`
+	PreparedComponents  []string       `json:"prepared_components,omitempty"`
+	// PrepareComplete is set only after every role has passed runtime-owned
+	// health checks and the edge has its managed app-network attachments. A
+	// transferred runtime channel alone is never sufficient to switch traffic.
+	PrepareComplete           bool `json:"prepare_complete,omitempty"`
+	RuntimeChannelTransferred bool `json:"runtime_channel_transferred,omitempty"`
 	// BootstrapRuntimeEndpoint is the component-visible private Unix endpoint.
 	// It is always beneath the runtime data directory's migration state.
 	BootstrapControlEndpoint   string `json:"bootstrap_control_endpoint,omitempty"`
@@ -336,6 +340,7 @@ func mergeMigrationCheckpoints(old, candidate MigrationCheckpoint) (MigrationChe
 	merged.PreparedComponents = stableStringUnion(old.PreparedComponents, candidate.PreparedComponents)
 	merged.ConnectedEdgeNetworks = stableStringUnion(old.ConnectedEdgeNetworks, candidate.ConnectedEdgeNetworks)
 	merged.RuntimeChannelTransferred = old.RuntimeChannelTransferred || candidate.RuntimeChannelTransferred
+	merged.PrepareComplete = old.PrepareComplete || candidate.PrepareComplete
 	if old.RouteSnapshotGeneration > candidate.RouteSnapshotGeneration {
 		merged.RouteSnapshotGeneration = old.RouteSnapshotGeneration
 		merged.AppliedEdgeComponentID = old.AppliedEdgeComponentID

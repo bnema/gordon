@@ -63,6 +63,10 @@ type RuntimePolicy struct {
 	// MigrationStateRoot is the host data-dir migration root. Only generated
 	// Gordon component lifecycle commands may bind one immediate child of it.
 	MigrationStateRoot string
+	// RegistryStorageRoot is the canonical existing registry blob store. The
+	// replacement registry may bind only this exact directory, preserving blobs
+	// and manifests instead of creating a generation-local empty volume.
+	RegistryStorageRoot string
 }
 
 func NewRuntimePolicy(mode RuntimePolicyMode) RuntimePolicy {
@@ -155,7 +159,7 @@ func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdenti
 		if isRuntimeSocketMount(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
-		if !isApprovedMigrationRuntimeStateBind(p, cfg, source, false) && isUnsafeHostBind(source) {
+		if !isApprovedMigrationRuntimeStateBind(p, cfg, source, false) && !isApprovedRegistryStorageBind(p, cfg, source) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
@@ -251,6 +255,13 @@ func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.Contai
 	// socket parent remains read-only, so this mount cannot grant socket
 	// deletion or replacement authority.
 	return clean == filepath.Join(state, "attestation") && cfg.Volumes[filepath.Join(destination, "attestation")] == source
+}
+
+func isApprovedRegistryStorageBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string) bool {
+	root := filepath.Clean(strings.TrimSpace(policy.RegistryStorageRoot))
+	return root != "." && filepath.IsAbs(root) && cfg.Labels[domain.LabelComponent] == "true" &&
+		cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRegistry) &&
+		filepath.Clean(source) == root && cfg.Volumes["/var/lib/gordon/registry"] == source
 }
 
 func isMigrationStateComponent(cfg domain.ContainerConfig) bool {

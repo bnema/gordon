@@ -623,5 +623,6 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 		RequireImageDigest:     cfg.Images.RequireDigest,
 		RuntimeComponentID:     "gordon-runtime",
 		MigrationStateRoot:     filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration"),
+		RegistryStorageRoot:    filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry"),
 	}
 }

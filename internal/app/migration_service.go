@@ -330,6 +330,15 @@ func (s *MigrationService) Switch(ctx context.Context) (*MigrationCheckpoint, er
 	if s.orchestrator == nil {
 		return nil, fmt.Errorf("safe traffic switch is not available: %w", ErrMigrationNotReady)
 	}
+	// Handoff can occur immediately after the runtime becomes healthy. A
+	// replacement CLI must therefore complete the persisted prepare plan through
+	// the replacement runtime before it attempts any public listener change.
+	if checkpoint.RuntimeChannelTransferred && !checkpoint.PrepareComplete {
+		checkpoint, err = s.orchestrator.Prepare(ctx, *checkpoint)
+		if err != nil {
+			return nil, fmt.Errorf("complete post-handoff prepare: %w", err)
+		}
+	}
 	return s.orchestrator.Switch(ctx, *checkpoint)
 }
 
