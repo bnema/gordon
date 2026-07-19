@@ -88,6 +88,22 @@ func TestOutboxRejectsSymlinkEntriesWithoutFollowingThem(t *testing.T) {
 	require.Equal(t, []byte("private"), contents)
 }
 
+func TestOutboxSnapshotProvidesSortedLivePathsAndValidatedCapacity(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/b.json", []byte("bb"), 0600))
+	require.NoError(t, os.WriteFile(dir+"/a.json", []byte("a"), 0600))
+	require.NoError(t, os.WriteFile(dir+"/broken.json.corrupt", []byte("bad"), 0600))
+	outbox := &Outbox{dir: dir}
+
+	outbox.mu.Lock()
+	snapshot, err := outbox.snapshotLocked()
+	outbox.mu.Unlock()
+	require.NoError(t, err)
+	require.Equal(t, []string{dir + "/a.json", dir + "/b.json"}, snapshot.livePaths)
+	require.Len(t, snapshot.corrupt, 1)
+	require.Equal(t, int64(6), snapshot.totalBytes)
+}
+
 func TestOutboxQuarantinesCorruptEntry(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(dir+"/000.json", []byte("not json"), 0600))

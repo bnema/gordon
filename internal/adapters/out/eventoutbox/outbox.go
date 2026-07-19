@@ -64,6 +64,20 @@ type Outbox struct {
 	wg        sync.WaitGroup
 }
 
+type corruptEntry struct {
+	path string
+	info fs.FileInfo
+}
+
+// outboxSnapshot is a single, locked view of every outbox entry. It keeps all
+// capacity and safety decisions for an operation consistent with one scan.
+type outboxSnapshot struct {
+	livePaths  []string
+	liveInfo   map[string]fs.FileInfo
+	corrupt    []corruptEntry
+	totalBytes int64
+}
+
 var _ out.ComponentEventPublisher = (*Outbox)(nil)
 
 func New(cfg Config, publisher out.ComponentEventPublisher) (*Outbox, error) {
@@ -98,10 +112,7 @@ func New(cfg Config, publisher out.ComponentEventPublisher) (*Outbox, error) {
 		return nil, fmt.Errorf("secure event outbox: %w", err)
 	}
 	o := &Outbox{dir: cfg.Dir, publisher: publisher, maxEntries: cfg.MaxEntries, maxBytes: cfg.MaxBytes, maxCorruptEntries: cfg.MaxCorruptEntries, maxCorruptBytes: cfg.MaxCorruptBytes, initialRetry: cfg.InitialRetry, maxRetry: cfg.MaxRetry}
-	if err := o.pruneCorrupt(); err != nil {
-		o.healthErr = err
-	}
-	if err := o.checkCorrupt(); err != nil {
+	if err := o.initialize(); err != nil {
 		o.healthErr = err
 	}
 	return o, nil
@@ -159,18 +170,14 @@ func (o *Outbox) PublishComponentEvent(ctx context.Context, event domain.Compone
 func (o *Outbox) persist(event domain.ComponentEventEnvelope) (string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if err := o.pruneCorruptLocked(); err != nil {
-		return "", err
-	}
-	entries, bytes, err := o.entriesLocked()
+	snapshot, err := o.snapshotLocked()
 	if err != nil {
 		return "", err
 	}
-	corruptCount, err := o.corruptCountLocked()
-	if err != nil {
+	if err := o.pruneSnapshotLocked(&snapshot); err != nil {
 		return "", err
 	}
-	if len(entries)+corruptCount >= o.maxEntries || bytes >= o.maxBytes {
+	if len(snapshot.livePaths)+len(snapshot.corrupt) >= o.maxEntries || snapshot.totalBytes >= o.maxBytes {
 		return "", errors.New("event outbox is full")
 	}
 	p := event.Payload.(domain.RegistryImagePushedPayload)
@@ -179,7 +186,7 @@ func (o *Outbox) persist(event domain.ComponentEventEnvelope) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("marshal event outbox record: %w", err)
 	}
-	if bytes+int64(len(data)) > o.maxBytes {
+	if snapshot.totalBytes+int64(len(data)) > o.maxBytes {
 		return "", errors.New("event outbox is full")
 	}
 	// Its hash makes duplicate invocation idempotent. The timestamp prefix sorts
@@ -302,113 +309,91 @@ func readRecord(path string) (domain.ComponentEventEnvelope, error) {
 	}
 	return e, nil
 }
+func (o *Outbox) initialize() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	snapshot, err := o.snapshotLocked()
+	if err != nil {
+		return err
+	}
+	if err := o.pruneSnapshotLocked(&snapshot); err != nil {
+		return err
+	}
+	return o.checkCorruptSnapshotLocked(&snapshot)
+}
+
 func (o *Outbox) quarantine(path string, cause error) error {
 	rel, err := filepath.Rel(o.dir, path)
 	if err != nil || filepath.Base(rel) != rel || filepath.Ext(rel) != ".json" {
 		return errors.New("refusing to quarantine unsafe outbox path")
 	}
 	o.mu.Lock()
-	q := path + ".corrupt"
-	if err := os.Rename(path, q); err != nil {
-		o.mu.Unlock()
-		return fmt.Errorf("quarantine corrupt outbox entry: %w", err)
-	}
-	if err := o.pruneCorruptLocked(); err != nil {
-		o.mu.Unlock()
-		return err
+	snapshot, err := o.snapshotLocked()
+	if err == nil {
+		err = o.quarantineSnapshotLocked(&snapshot, path)
 	}
 	o.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	err = fmt.Errorf("corrupt event outbox entry %s: %w", filepath.Base(path), cause)
 	o.setHealth(err)
 	return err
 }
-func (o *Outbox) checkCorrupt() error {
-	paths, err := o.entries()
-	if err != nil {
-		return err
-	}
-	for _, path := range paths {
+
+func (o *Outbox) checkCorruptSnapshotLocked(snapshot *outboxSnapshot) error {
+	for _, path := range snapshot.livePaths {
 		if _, err := readRecord(path); err != nil {
-			return o.quarantine(path, err)
+			if err := o.quarantineSnapshotLocked(snapshot, path); err != nil {
+				return err
+			}
+			return fmt.Errorf("corrupt event outbox entry %s: %w", filepath.Base(path), err)
 		}
 	}
 	return nil
 }
-func (o *Outbox) pruneCorrupt() error {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	return o.pruneCorruptLocked()
+
+func (o *Outbox) quarantineSnapshotLocked(snapshot *outboxSnapshot, path string) error {
+	info, ok := snapshot.liveInfo[path]
+	if !ok {
+		return fmt.Errorf("quarantine corrupt outbox entry: %w", fs.ErrNotExist)
+	}
+	quarantined := path + ".corrupt"
+	if err := os.Rename(path, quarantined); err != nil {
+		return fmt.Errorf("quarantine corrupt outbox entry: %w", err)
+	}
+	delete(snapshot.liveInfo, path)
+	for index, livePath := range snapshot.livePaths {
+		if livePath == path {
+			snapshot.livePaths = append(snapshot.livePaths[:index], snapshot.livePaths[index+1:]...)
+			break
+		}
+	}
+	snapshot.corrupt = append(snapshot.corrupt, corruptEntry{path: quarantined, info: info})
+	return o.pruneSnapshotLocked(snapshot)
 }
 
-func (o *Outbox) corruptCountLocked() (int, error) {
-	entries, err := os.ReadDir(o.dir)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".corrupt") {
-			if entry.Type()&fs.ModeSymlink != 0 {
-				return 0, fmt.Errorf("unsafe symlink in event outbox: %s", entry.Name())
-			}
-			info, infoErr := entry.Info()
-			if infoErr != nil || !info.Mode().IsRegular() {
-				return 0, fmt.Errorf("unsafe corrupt event outbox entry: %s", entry.Name())
-			}
-			count++
+func (o *Outbox) pruneSnapshotLocked(snapshot *outboxSnapshot) error {
+	sort.Slice(snapshot.corrupt, func(i, j int) bool {
+		if snapshot.corrupt[i].info.ModTime().Equal(snapshot.corrupt[j].info.ModTime()) {
+			return snapshot.corrupt[i].path < snapshot.corrupt[j].path
 		}
-	}
-	return count, nil
-}
-
-func (o *Outbox) pruneCorruptLocked() error {
-	entries, err := os.ReadDir(o.dir)
-	if err != nil {
-		return err
-	}
-	type corruptEntry struct {
-		path string
-		info fs.FileInfo
-	}
-	corrupt := make([]corruptEntry, 0)
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".corrupt") {
-			continue
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			return fmt.Errorf("unsafe symlink in event outbox: %s", entry.Name())
-		}
-		info, infoErr := entry.Info()
-		if infoErr != nil || !info.Mode().IsRegular() {
-			return fmt.Errorf("unsafe corrupt event outbox entry: %s", entry.Name())
-		}
-		corrupt = append(corrupt, corruptEntry{path: filepath.Join(o.dir, entry.Name()), info: info})
-	}
-	sort.Slice(corrupt, func(i, j int) bool {
-		if corrupt[i].info.ModTime().Equal(corrupt[j].info.ModTime()) {
-			return corrupt[i].path < corrupt[j].path
-		}
-		return corrupt[i].info.ModTime().Before(corrupt[j].info.ModTime())
+		return snapshot.corrupt[i].info.ModTime().Before(snapshot.corrupt[j].info.ModTime())
 	})
-	maxEntries := o.maxCorruptEntries
-	if maxEntries > o.maxEntries {
-		maxEntries = o.maxEntries
+	maxEntries := min(o.maxCorruptEntries, o.maxEntries)
+	maxBytes := min(o.maxCorruptBytes, o.maxBytes)
+	var corruptBytes int64
+	for _, entry := range snapshot.corrupt {
+		corruptBytes += entry.info.Size()
 	}
-	maxBytes := o.maxCorruptBytes
-	if maxBytes > o.maxBytes {
-		maxBytes = o.maxBytes
-	}
-	var bytes int64
-	for _, entry := range corrupt {
-		bytes += entry.info.Size()
-	}
-	for len(corrupt) > maxEntries || bytes > maxBytes {
-		oldest := corrupt[0]
+	for len(snapshot.corrupt) > maxEntries || corruptBytes > maxBytes {
+		oldest := snapshot.corrupt[0]
 		if err := os.Remove(oldest.path); err != nil {
 			return fmt.Errorf("remove old corrupt event outbox entry: %w", err)
 		}
-		bytes -= oldest.info.Size()
-		corrupt = corrupt[1:]
+		corruptBytes -= oldest.info.Size()
+		snapshot.totalBytes -= oldest.info.Size()
+		snapshot.corrupt = snapshot.corrupt[1:]
 	}
 	return nil
 }
@@ -416,52 +401,61 @@ func (o *Outbox) pruneCorruptLocked() error {
 func (o *Outbox) entries() ([]string, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	entries, _, err := o.entriesLocked()
-	return entries, err
+	snapshot, err := o.snapshotLocked()
+	return snapshot.livePaths, err
 }
-func (o *Outbox) entriesLocked() ([]string, int64, error) {
-	ds, err := os.ReadDir(o.dir)
+
+func (o *Outbox) snapshotLocked() (outboxSnapshot, error) {
+	directoryEntries, err := os.ReadDir(o.dir)
 	if err != nil {
-		return nil, 0, err
+		return outboxSnapshot{}, err
 	}
-	paths := make([]string, 0, len(ds))
-	var total int64
-	for _, d := range ds {
-		name := d.Name()
-		if d.IsDir() || (filepath.Ext(name) != ".json" && !strings.HasSuffix(name, ".corrupt")) {
+	snapshot := outboxSnapshot{
+		livePaths: make([]string, 0, len(directoryEntries)),
+		liveInfo:  make(map[string]fs.FileInfo),
+		corrupt:   make([]corruptEntry, 0),
+	}
+	for _, entry := range directoryEntries {
+		name := entry.Name()
+		if entry.IsDir() || (filepath.Ext(name) != ".json" && !strings.HasSuffix(name, ".corrupt")) {
 			continue
 		}
-		if d.Type()&fs.ModeSymlink != 0 {
-			return nil, 0, fmt.Errorf("unsafe symlink in event outbox: %s", name)
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return outboxSnapshot{}, fmt.Errorf("unsafe symlink in event outbox: %s", name)
 		}
-		info, e := d.Info()
-		if e != nil {
-			return nil, 0, e
+		info, err := entry.Info()
+		if err != nil {
+			return outboxSnapshot{}, err
 		}
 		if !info.Mode().IsRegular() {
-			return nil, 0, fmt.Errorf("unsafe non-regular event outbox entry: %s", name)
+			return outboxSnapshot{}, fmt.Errorf("unsafe non-regular event outbox entry: %s", name)
 		}
-		total += info.Size()
-		if filepath.Ext(name) == ".json" {
-			paths = append(paths, filepath.Join(o.dir, name))
+		path := filepath.Join(o.dir, name)
+		snapshot.totalBytes += info.Size()
+		if strings.HasSuffix(name, ".corrupt") {
+			snapshot.corrupt = append(snapshot.corrupt, corruptEntry{path: path, info: info})
+			continue
 		}
+		snapshot.livePaths = append(snapshot.livePaths, path)
+		snapshot.liveInfo[path] = info
 	}
-	sort.Strings(paths)
-	return paths, total, nil
+	sort.Strings(snapshot.livePaths)
+	return snapshot, nil
 }
+
 func (o *Outbox) setHealth(err error) { o.mu.Lock(); o.healthErr = err; o.mu.Unlock() }
+
 func (o *Outbox) clearDeliveryHealth() {
-	entries, err := os.ReadDir(o.dir)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	snapshot, err := o.snapshotLocked()
 	if err != nil {
-		o.setHealth(err)
+		o.healthErr = err
 		return
 	}
-	for _, entry := range entries {
-		if strings.HasSuffix(entry.Name(), ".corrupt") {
-			return
-		}
+	if len(snapshot.corrupt) == 0 {
+		o.healthErr = nil
 	}
-	o.setHealth(nil)
 }
 func sleep(ctx context.Context, d time.Duration) bool {
 	timer := time.NewTimer(d)
