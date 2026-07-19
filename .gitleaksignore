@@ -1,0 +1,4 @@
+# Deterministic test-only JWT emitted by an in-process fake auth server.
+8193b84387b80d23ea9415431fe8551a1764b15a:internal/adapters/in/cli/remote_control_smoke_test.go:jwt:115
+# SHA-256 digest derived from fixed test identifiers, never an API credential.
+ef7e6af08a459a4bd70eb7765d329eb9b326c7cb:internal/adapters/out/tokenstore/component_store_test.go:generic-api-key:33

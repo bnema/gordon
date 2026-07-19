@@ -10,6 +10,7 @@ GORELEASER ?= goreleaser
 RELEASE_SMOKE_IMAGE ?= ghcr.io/bnema/gordon:v0.0.0-$(shell go env GOARCH)
 # Local runs may override this with COMPAT_BASELINE_REF=<immutable commit>.
 COMPAT_BASELINE_REF ?= $(or $(GORDON_COMPAT_BASELINE_REF),8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842)
+GITLEAKS_BASE_REF ?= $(or $(GORDON_GITLEAKS_BASE_REF),$(COMPAT_BASELINE_REF))
 
 # Version information
 VERSION := $(shell git describe --tags --always --dirty)
@@ -91,8 +92,13 @@ lint: ## Run golangci-lint
 	@echo "Running linter..."
 	@golangci-lint run ./...
 
-gitleaks: ## Block on secrets in the current working tree
+gitleaks: ## Block on secrets in the working tree and branch history
 	@gitleaks detect --source . --config .gitleaks.toml --no-git --redact
+	@set -eu; \
+		git cat-file -e "$(GITLEAKS_BASE_REF)^{commit}"; \
+		base=$$(git merge-base "$(GITLEAKS_BASE_REF)" HEAD); \
+		test -n "$$base"; \
+		gitleaks git --config .gitleaks.toml --redact --log-opts="$$base..HEAD" .
 
 mocks: ## Generate mocks using mockery
 	@echo "Generating mocks..."
