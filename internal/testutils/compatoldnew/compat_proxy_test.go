@@ -232,9 +232,14 @@ func TestCompatibilityExternalRoute(t *testing.T) {
 	// a green skip. CI invokes it with both explicit gates from the rerun command.
 	require.NoError(t, DockerCompatibilityPreflight(ctx), "external route compatibility runtime required")
 
+	beforeFixtureDirs, err := filepath.Glob(filepath.Join(os.TempDir(), "gordon-compat-external-route-*"))
+	require.NoError(t, err)
 	artifactDir := compatibilityArtifactDir(t, "proxy-external")
 	report, err := RunCompatibilityExternalRoute(ctx, projectRoot(t), artifactDir)
 	require.NoError(t, err)
+	afterFixtureDirs, err := filepath.Glob(filepath.Join(os.TempDir(), "gordon-compat-external-route-*"))
+	require.NoError(t, err)
+	require.ElementsMatch(t, beforeFixtureDirs, afterFixtureDirs, "external route fixture directories must not leak")
 	require.Zero(t, report.Failed, report.ConsoleSummary())
 	require.NotEmpty(t, report.BaselineCommit)
 	require.NotEmpty(t, report.CandidateCommit)

@@ -290,12 +290,21 @@ func RunCompatibilityExternalRoute(ctx context.Context, repoRoot, artifactDir st
 	})
 }
 
+func cleanupExternalRouteFixture(root, image string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	chmodErr := dockerCompatibilityCommand(ctx, "run", "--rm", "--volume", root+":/fixture", image, "sh", "-c", "chmod -R a+rwX /fixture")
+	return errors.Join(chmodErr, os.RemoveAll(root))
+}
+
 func runExternalRouteSide(ctx context.Context, side, binaryPath, parent, domain string, resources *externalRouteResources) (_ SideResult, err error) {
 	setup, err := stageExternalRouteSide(parent, domain, resources.targetAddress)
 	if err != nil {
 		return SideResult{}, err
 	}
-	defer os.RemoveAll(setup.fixture.Root)
+	defer func() {
+		err = errors.Join(err, cleanupExternalRouteFixture(setup.fixture.Root, resources.imageTag))
+	}()
 	defer func() {
 		if releaseErr := setup.releaseReservations(); releaseErr != nil && err == nil {
 			err = fmt.Errorf("release external route port reservations: %w", releaseErr)
