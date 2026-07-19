@@ -62,12 +62,16 @@ COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCo
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
+MIGRATION_REPORT_DIR := $(COMPAT_ARTIFACT_DIR)/migration-rootless
+MIGRATION_REPORT_ONE := $(MIGRATION_REPORT_DIR)/invocation-1.json
+MIGRATION_REPORT_TWO := $(MIGRATION_REPORT_DIR)/invocation-2.json
+MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 
 # Phony targets
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
-	release-check release-smoke release-image-smoke \
+	release-check pre-release-acceptance release-smoke release-image-smoke \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
 	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
 
@@ -250,24 +254,39 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
 # count2 is intentionally a second complete invocation rather than Go's
-# package-level -count flag: the migration gate includes Make-level JSON pass
-# assertions and a rootless Podman lifecycle that must be repeated as a unit.
-count2: ## Repeat the migration compatibility gate once (for count=2 confidence)
-	@$(MAKE) compat-harness-migration
+# package-level -count flag: each invocation must produce its own authentic,
+# sanitized report. A manifest names exactly those two paths; no directory glob
+# can make stale output look like a passing release gate.
+count2: ## Repeat the rootless migration gate and require exactly two reports
+	@if [ "$${GORDON_COMPAT_PODMAN:-0}" != "1" ]; then echo "GORDON_COMPAT_PODMAN=1 is required for count2"; exit 1; fi
+	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_TWO)" GORDON_COMPAT_MIGRATION_SECOND=1
+	@set -eu; \
+		jq -n --arg one "$(MIGRATION_REPORT_ONE)" --arg two "$(MIGRATION_REPORT_TWO)" '{reports:[$$one,$$two]}' > "$(MIGRATION_REPORT_MANIFEST)"; \
+		chmod 600 "$(MIGRATION_REPORT_MANIFEST)"; \
+		test "$$(jq '.reports | length' "$(MIGRATION_REPORT_MANIFEST)")" -eq 2; \
+		for report in "$$(jq -r '.reports[]' "$(MIGRATION_REPORT_MANIFEST)")"; do \
+			test -f "$$report"; \
+			jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report" >/dev/null; \
+		done; \
+		test "$$(find "$(MIGRATION_REPORT_DIR)" -maxdepth 1 -type f -name 'invocation-*.json' | wc -l)" -eq 2
 
 compat-harness-migration: ## Run blocking migration protocol and rootless-Podman gates
 	@echo "Running deterministic Docker-compatible migration protocol fixture checks..."
 	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator|TestTrafficSwitch)' -count=1
 	@go test ./internal/testutils/compatoldnew -run '^($(COMPAT_MIGRATION_PROTOCOL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
 	@if [ "$${GORDON_COMPAT_PODMAN:-0}" = "1" ]; then \
-		echo "Running strict rootless Podman old-to-split migration gate..."; \
+		report_path="$${GORDON_COMPAT_MIGRATION_REPORT_PATH:-$(MIGRATION_REPORT_ONE)}"; \
+		if [ "$${GORDON_COMPAT_MIGRATION_SECOND:-0}" != "1" ]; then rm -rf "$(MIGRATION_REPORT_DIR)"; fi; \
+		mkdir -p "$(MIGRATION_REPORT_DIR)"; rm -f "$$report_path"; \
+		echo "Running strict rootless Podman old-to-split migration gate; report: $$report_path"; \
 		output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_MIGRATION_PODMAN_TEST)$$' -count=1 > "$$output"; status=$$?; \
+		GORDON_COMPAT_MIGRATION_REPORT_PATH="$$report_path" go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_MIGRATION_PODMAN_TEST)$$' -count=1 > "$$output"; status=$$?; \
 		cat "$$output"; \
 		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 		if ! jq -se --arg test "$(COMPAT_MIGRATION_PODMAN_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
 			echo "migration compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
 		fi; \
+		jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report_path" >/dev/null; \
 	fi
 
 compat-harness-security: ## Run blocking current-security compatibility gates
@@ -305,39 +324,71 @@ build-local: ## Build binary for current platform
 
 release-check: ## Validate release and workflow configuration
 	@$(GORELEASER) check
-	@if command -v actionlint >/dev/null 2>&1; then actionlint; else echo "actionlint not installed; workflow syntax is validated in CI"; fi
+	@command -v actionlint >/dev/null 2>&1
+	@actionlint
+
+pre-release-acceptance: ## Fail closed on every documented pre-release acceptance check
+	@set -eu; test -z "$$(git status --porcelain)"
+	@go test ./...
+	@golangci-lint run ./...
+	@$(MAKE) proto-check
+	@$(MAKE) gitleaks
+	@$(MAKE) release-check
+	@go test ./internal/testutils/compatoldnew -run '^TestReleaseGateExampleConfigTOML$$' -count=1
+	@for operation in plan prepare resume status switch; do go run . migrate "$$operation" --help >/dev/null; done
+	@go run . --help >/dev/null
+	@go run . serve --help >/dev/null
+	@# This focused source gate creates all generated role manifests and proves role/env minimization.
+	@go test ./internal/app -run '^(TestWriteComponentConfigManifestsScopesRolesAndPermissions|TestComponentConfigUsesEnvReferencesForRegistryForwardCredential|TestComponentConfigManifestsUseStrictRoleSchemas|TestComponentConfigUsesPrivateControlBindAndInternalAlias|TestComponentConfigUsesInternalRuntimeAliasInsteadOfHostBootstrap)$$' -count=1
+	@# Documentation must retain the explicit ownership and loopback prohibitions; generated manifests are covered above.
+	@grep -F 'Only runtime receives `DOCKER_HOST`, `PODMAN_HOST`, or `CONTAINER_HOST` and the engine socket.' docs/operations/split-mode.md >/dev/null
+	@grep -F 'Edge forwards registry requests to the `gordon-registry` network alias, never `localhost` or `127.0.0.1`.' docs/operations/split-mode.md >/dev/null
+	@$(MAKE) compat-harness-config
+	@$(MAKE) compat-harness-cli
+	@$(MAKE) compat-harness-api
+	@$(MAKE) compat-harness-proxy
+	@$(MAKE) compat-harness-traffic
+	@$(MAKE) compat-harness-runtime
+	@$(MAKE) compat-harness-registry
+	@$(MAKE) compat-harness-security
+	@GORDON_COMPAT_PODMAN=1 $(MAKE) compat-harness-migration
+	@GORDON_COMPAT_PODMAN=1 $(MAKE) count2
+	@$(MAKE) release-smoke
+	@set -eu; test -z "$$(git status --porcelain)"
 
 release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts and release image
 	@docker info >/dev/null
 	@$(GORELEASER) release --snapshot --clean
 	@set -eu; \
-		archives=$$(find $(DIST_DIR) -maxdepth 1 -type f -name 'gordon_linux_*.tar.gz' | sort); \
+		test -s "$(DIST_DIR)/artifacts.json"; \
+		archives=$$(jq -r '.[] | select(.type == "Archive" and .goos == "linux") | .path' "$(DIST_DIR)/artifacts.json" | sort); \
 		test "$$(printf '%s\n' "$$archives" | sed '/^$$/d' | wc -l)" -eq 2; \
 		for archive in $$archives; do \
 			tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT HUP INT TERM; \
 			tar -xzf "$$archive" -C "$$tmp"; \
-			test -x "$$tmp/gordon"; \
-			test -f "$$tmp/LICENSE"; \
-			test -f "$$tmp/README.md"; \
-			test -f "$$tmp/gordon.toml.example"; \
-			go version -m "$$tmp/gordon" >/dev/null; \
-			case "$$archive" in \
-				*_"$$(go env GOARCH)".tar.gz) \
-					"$$tmp/gordon" --help >/dev/null; \
-					"$$tmp/gordon" serve --help >/dev/null; \
-					"$$tmp/gordon" migrate --help >/dev/null ;; \
-			esac; \
-			rm -rf "$$tmp"; trap - EXIT HUP INT TERM; \
+			test -x "$$tmp/gordon"; test -f "$$tmp/LICENSE"; test -f "$$tmp/README.md"; test -f "$$tmp/gordon.toml.example"; \
+			go version -m "$$tmp/gordon" >/dev/null; rm -rf "$$tmp"; trap - EXIT HUP INT TERM; \
 		done
 	@$(MAKE) release-image-smoke
 
-release-image-smoke: ## Verify the exact GoReleaser release-target image and all five roles
-	@docker image inspect "$(RELEASE_SMOKE_IMAGE)" >/dev/null
+release-image-smoke: ## Verify artifact-derived amd64/arm64 images under QEMU and real role probes
 	@set -eu; \
-		entrypoint=$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$(RELEASE_SMOKE_IMAGE)"); \
-		test "$$entrypoint" = '["/app/gordon"]'; \
-		for role in monolith control runtime edge registry; do \
-			docker run --rm "$(RELEASE_SMOKE_IMAGE)" serve --role "$$role" --help >/dev/null; \
+		for arch in amd64 arm64; do \
+			image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
+			test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
+			docker image inspect "$$image" >/dev/null; \
+			test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
+			test "$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$$image")" = '["/app/gordon"]'; \
+			docker run --rm --platform "linux/$$arch" "$$image" --help >/dev/null; \
+			for role in monolith control runtime edge registry; do \
+				name="gordon-release-smoke-$$arch-$$role-$$$$"; \
+				docker run --detach --rm --name "$$name" --platform "linux/$$arch" "$$image" serve --role "$$role" >/dev/null; \
+				trap 'docker rm -f "$$name" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+				for attempt in 1 2 3 4 5; do docker inspect --format '{{.State.Running}}' "$$name" | grep -qx true && break; sleep 1; done; \
+				docker inspect --format '{{.State.Running}}' "$$name" | grep -qx true; \
+				docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:8088/healthz || docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/healthz; \
+				docker rm -f "$$name" >/dev/null; trap - EXIT HUP INT TERM; \
+			done; \
 		done
 
 build-push: build ## Build and push Docker images

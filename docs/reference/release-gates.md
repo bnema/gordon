@@ -1,30 +1,17 @@
 # Split release gates
 
-Run from a clean checkout. Runtime-backed gates intentionally fail when their required engine is unavailable.
+Run the single fail-closed acceptance target from a clean checkout:
 
 ```bash
-go test ./...
-golangci-lint run ./...
-make proto-check
-make gitleaks
-make release-check
-make compat-harness-config
-make compat-harness-cli
-make compat-harness-api
-make compat-harness-proxy
-make compat-harness-traffic
-make compat-harness-runtime
-make compat-harness-registry
-make compat-harness-security
-GORDON_COMPAT_PODMAN=1 make compat-harness-migration
-GORDON_COMPAT_PODMAN=1 make count2
-make release-smoke
+make pre-release-acceptance
 ```
 
-Old/new release gates use immutable baseline `8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842`; local diagnosis may explicitly override it with `COMPAT_BASELINE_REF=<commit> make compat-harness-config`. Reports record the resolved baseline and candidate commits and reject self-comparison.
+It executes and enforces every release check: full tests and lint, generated protobuf cleanliness, secret scanning, immutable workflow/action validation, operation-level migration help (`plan`, `prepare`, `resume`, `status`, `switch`), example TOML parsing, generated role-manifest/environment minimization, documented engine-socket and registry-loopback ownership assertions, every Docker compatibility gate, two separate rootless-Podman migration invocations, and the exact non-publishing GoReleaser smoke.
 
-`make release-smoke` is non-publishing and must build the exact GoReleaser archives and release-target image, then run all five roles before the write-capable publishing job.
+The acceptance target checks a clean working tree before and after the gate. Runtime-backed checks intentionally fail when Docker, rootless Podman, QEMU, `actionlint`, or their required capabilities are unavailable.
 
-Before release, verify `gordon --help`, `gordon serve --help`, and every `gordon migrate <operation> --help`; parse `gordon.toml.example`; scan docs for engine sockets outside runtime and split registry targets using loopback; inspect generated role manifests/environment permissions; and require a clean `git status --short`.
+`make release-smoke` builds fresh GoReleaser snapshot artifacts and reads both architecture-specific image references only from `dist/artifacts.json`. It verifies `linux/amd64` and `linux/arm64` under Docker/QEMU, then starts and probes monolith, control, runtime, edge, and registry; command help alone is never accepted as role verification.
 
-Rootless migration acceptance requires a real old-to-split Podman run, application and OCI probes, final listener ownership, preserved volumes/networks, and a successful resume check from a fresh process.
+Old/new compatibility uses immutable baseline `8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842`; local diagnosis may explicitly override it with `COMPAT_BASELINE_REF=<commit>` for an individual harness command. Release acceptance does not override that baseline.
+
+Rootless migration acceptance emits one sanitized report per invocation at `artifacts/compat/migration-rootless/invocation-{1,2}.json`. `manifest.json` names exactly those two reports; each must be non-skipped and contain passing application, registry, listener, and fresh-process resume probes. CI uploads only these explicit files, never a broad artifact directory.

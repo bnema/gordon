@@ -89,6 +89,22 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	if !PodmanEnabledFromEnv() {
 		return
 	}
+	var probes migrationProbeAssertions
+	reportPath := os.Getenv("GORDON_COMPAT_MIGRATION_REPORT_PATH")
+	t.Cleanup(func() {
+		if reportPath == "" {
+			return
+		}
+		report := migrationInvocationReport{
+			Scenario: "rootless-podman-old-to-split",
+			Skipped:  false,
+			Passed:   !t.Failed() && probes.passed(),
+			Probes:   probes,
+		}
+		if err := writeMigrationInvocationReport(reportPath, report); err != nil {
+			t.Errorf("write sanitized migration invocation report: %v", err)
+		}
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	requireRootlessPodman(t, ctx)
@@ -126,8 +142,12 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	// running for a brief interval after StopContainer returns.
 	fixture.awaitInterruptedSwitchTerminalStatus()
 	fixture.assertSwitchedTraffic()
+	probes.Application = true
+	probes.Listeners = true
 	fixture.assertRegistryArtifact()
+	probes.Registry = true
 	fixture.assertInterruptedSwitchRetry()
+	probes.Resume = true
 }
 
 type realMigrationFixture struct {
