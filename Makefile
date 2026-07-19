@@ -340,9 +340,10 @@ pre-release-acceptance: ## Fail closed on every documented pre-release acceptanc
 	@go run . serve --help >/dev/null
 	@# This focused source gate creates all generated role manifests and proves role/env minimization.
 	@go test ./internal/app -run '^(TestWriteComponentConfigManifestsScopesRolesAndPermissions|TestComponentConfigUsesEnvReferencesForRegistryForwardCredential|TestComponentConfigManifestsUseStrictRoleSchemas|TestComponentConfigUsesPrivateControlBindAndInternalAlias|TestComponentConfigUsesInternalRuntimeAliasInsteadOfHostBootstrap)$$' -count=1
-	@# Documentation must retain the explicit ownership and loopback prohibitions; generated manifests are covered above.
-	@grep -F 'Only runtime receives `DOCKER_HOST`, `PODMAN_HOST`, or `CONTAINER_HOST` and the engine socket.' docs/operations/split-mode.md >/dev/null
-	@grep -F 'Edge forwards registry requests to the `gordon-registry` network alias, never `localhost` or `127.0.0.1`.' docs/operations/split-mode.md >/dev/null
+	@# Fail on a stale split-mode engine socket claim outside the single runtime-owner declaration.
+	@awk '/DOCKER_HOST|PODMAN_HOST|CONTAINER_HOST/ && $$0 !~ /^Only runtime receives/ { print FILENAME ":" FNR ": stale engine socket ownership"; exit 1 }' docs/operations/split-mode.md
+	@# A registry alias may mention loopback only in the explicit prohibition, never as a target.
+	@! grep -E 'gordon-registry.*(localhost|127\.0\.0\.1)' docs/operations/split-mode.md | grep -Fv 'never `localhost` or `127.0.0.1`.'
 	@$(MAKE) compat-harness-config
 	@$(MAKE) compat-harness-cli
 	@$(MAKE) compat-harness-api
