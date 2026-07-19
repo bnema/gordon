@@ -544,6 +544,10 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 	if v != nil {
 		managedNetworkPrefix = v.GetString("network_isolation.network_prefix")
 	}
+	registryStorageRoot := strings.TrimSpace(cfg.Runtime.RegistryStorageRoot)
+	if registryStorageRoot == "" {
+		registryStorageRoot = filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry")
+	}
 	return container.RuntimePolicy{
 		Mode:                   container.RuntimePolicyModeEnforce,
 		ManagedNetworkPrefix:   managedNetworkPrefix,
@@ -551,6 +555,6 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 		RequireImageDigest:     cfg.Images.RequireDigest,
 		RuntimeComponentID:     "gordon-runtime",
 		MigrationStateRoot:     filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration"),
-		RegistryStorageRoot:    filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry"),
+		RegistryStorageRoot:    registryStorageRoot,
 	}
 }

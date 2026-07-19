@@ -259,12 +259,14 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 # can make stale output look like a passing release gate.
 count2: ## Repeat the rootless migration gate and require exactly two reports
 	@if [ "$${GORDON_COMPAT_PODMAN:-0}" != "1" ]; then echo "GORDON_COMPAT_PODMAN=1 is required for count2"; exit 1; fi
+	@rm -rf "$(MIGRATION_REPORT_DIR)"
+	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_ONE)"
 	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_TWO)" GORDON_COMPAT_MIGRATION_SECOND=1
 	@set -eu; \
 		jq -n --arg one "$(MIGRATION_REPORT_ONE)" --arg two "$(MIGRATION_REPORT_TWO)" '{reports:[$$one,$$two]}' > "$(MIGRATION_REPORT_MANIFEST)"; \
 		chmod 600 "$(MIGRATION_REPORT_MANIFEST)"; \
 		test "$$(jq '.reports | length' "$(MIGRATION_REPORT_MANIFEST)")" -eq 2; \
-		for report in "$$(jq -r '.reports[]' "$(MIGRATION_REPORT_MANIFEST)")"; do \
+		for report in $$(jq -r '.reports[]' "$(MIGRATION_REPORT_MANIFEST)"); do \
 			test -f "$$report"; \
 			jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report" >/dev/null; \
 		done; \

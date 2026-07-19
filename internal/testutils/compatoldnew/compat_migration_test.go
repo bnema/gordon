@@ -1,6 +1,8 @@
 package compatoldnew
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,6 +11,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +94,9 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	}
 	var probes migrationProbeAssertions
 	reportPath := os.Getenv("GORDON_COMPAT_MIGRATION_REPORT_PATH")
+	if reportPath != "" && !filepath.IsAbs(reportPath) {
+		reportPath = filepath.Join(projectRoot(t), reportPath)
+	}
 	t.Cleanup(func() {
 		if reportPath == "" {
 			return
@@ -201,6 +207,7 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	fixture.startOldMonolith(labels)
 	fixture.startOldApp(labels)
 	fixture.waitOldAppReady()
+	fixture.waitOldRegistryReady()
 	fixture.pushRegistryArtifact()
 	return fixture
 }
@@ -364,14 +371,57 @@ func (f *realMigrationFixture) startOldApp(labels map[string]string) {
 // monolith registry before prepare. The post-cutover assertion below fetches
 // that exact manifest through the final edge, preventing a new empty registry
 // volume from passing this compatibility fixture.
+func (f *realMigrationFixture) waitOldRegistryReady() {
+	f.t.Helper()
+	require.Eventually(f.t, func() bool {
+		return migrationPodman(f.ctx, "exec", f.old, "busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:15000/v2/") == nil
+	}, 15*time.Second, 100*time.Millisecond, "old monolith registry must be ready before seeding its store")
+}
+
 func (f *realMigrationFixture) pushRegistryArtifact() {
 	f.t.Helper()
-	image := "docker.io/library/" + "busy" + "box:1.36"
-	target := "127.0.0.1:15000/gordon-migration-artifact-" + sanitizePart(f.runID) + ":fixture"
-	require.NoError(f.t, migrationPodman(f.ctx, "tag", image, target))
-	require.Eventually(f.t, func() bool {
-		return migrationPodman(f.ctx, "push", "--tls-verify=false", target) == nil
-	}, 15*time.Second, 250*time.Millisecond, "old monolith registry must accept the pre-cutover artifact")
+	repository := "gordon-migration-artifact-" + sanitizePart(f.runID)
+	config := []byte("{}")
+	configDigest := sha256.Sum256(config)
+	digest := "sha256:" + hex.EncodeToString(configDigest[:])
+
+	start := f.rawOldRegistryRequest(http.MethodPost, "/v2/"+repository+"/blobs/uploads/", "", nil)
+	require.Equal(f.t, http.StatusAccepted, start.StatusCode, "old monolith registry must start the artifact upload")
+	location := start.Header.Get("Location")
+	require.NoError(f.t, start.Body.Close())
+	require.NotEmpty(f.t, location)
+	uploadURL, err := url.Parse(location)
+	require.NoError(f.t, err)
+	query := uploadURL.Query()
+	query.Set("digest", digest)
+	uploadURL.RawQuery = query.Encode()
+	finish := f.rawOldRegistryRequest(http.MethodPut, uploadURL.RequestURI(), "application/octet-stream", config)
+	require.Equal(f.t, http.StatusCreated, finish.StatusCode, "old monolith registry must store the artifact config")
+	require.NoError(f.t, finish.Body.Close())
+
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},"layers":[]}`, digest, len(config)))
+	stored := f.rawOldRegistryRequest(http.MethodPut, "/v2/"+repository+"/manifests/fixture", "application/vnd.oci.image.manifest.v1+json", manifest)
+	require.Equal(f.t, http.StatusCreated, stored.StatusCode, "old monolith registry must accept the pre-cutover artifact")
+	require.NoError(f.t, stored.Body.Close())
+}
+
+func (f *realMigrationFixture) rawOldRegistryRequest(method, target, contentType string, body []byte) *http.Response {
+	f.t.Helper()
+	var request bytes.Buffer
+	fmt.Fprintf(&request, "%s %s HTTP/1.1\r\nHost: registry.example.test\r\nConnection: close\r\nContent-Length: %d\r\n", method, target, len(body))
+	if contentType != "" {
+		fmt.Fprintf(&request, "Content-Type: %s\r\n", contentType)
+	}
+	request.WriteString("\r\n")
+	request.Write(body)
+
+	command := exec.CommandContext(f.ctx, "podman", "exec", "--interactive", f.old, "busybox", "nc", "127.0.0.1", "15000") // #nosec G204 -- fixture-owned container and fixed registry endpoint.
+	command.Stdin = &request
+	output, err := command.CombinedOutput()
+	require.NoError(f.t, err, "old monolith registry request must complete: %s", redactCapturedOutput(string(output), "migration-fixture-signing-secret-at-least-32-bytes"))
+	response, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(output)), &http.Request{Method: method})
+	require.NoError(f.t, err, "old monolith registry response must be valid HTTP")
+	return response
 }
 
 func (f *realMigrationFixture) waitOldAppReady() {

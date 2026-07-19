@@ -241,8 +241,11 @@ func (m *runtimeComponentLifecycleManager) mountCanonicalRegistryStorage(command
 		return nil
 	}
 	root := filepath.Clean(m.policy.RegistryStorageRoot)
-	info, err := os.Lstat(root)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || !filepath.IsAbs(root) {
+	// The replacement runtime runs in a container and cannot stat arbitrary
+	// host paths. The old monolith preflight already validates this configured
+	// directory; runtime policy then permits only this exact absolute source
+	// when asking the engine to bind it into the registry component.
+	if !filepath.IsAbs(root) || root == string(filepath.Separator) {
 		return fmt.Errorf("canonical registry storage is not configured")
 	}
 	config.Volumes = map[string]string{"/var/lib/gordon/registry": root}

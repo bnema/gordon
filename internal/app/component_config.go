@@ -187,7 +187,7 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 	case domain.ComponentRoleRuntime:
 		return map[string]any{
 			"server":  map[string]any{"data_dir": componentDataDirectory, "runtime": "unix:///run/gordon/runtime.sock"},
-			"runtime": map[string]any{"listen_address": migrationRuntimeSocketEndpoint(migrationID), "token_env": "GORDON_COMPONENT_RUNTIME_TOKEN"},
+			"runtime": map[string]any{"listen_address": migrationRuntimeSocketEndpoint(migrationID), "token_env": "GORDON_COMPONENT_RUNTIME_TOKEN", "registry_storage_root": filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry")},
 			// Runtime validates scoped component credentials before it binds the
 			// private Unix listener. It needs the backend selection, but never a
 			// control-plane token reference or credential value in this manifest.
