@@ -7,7 +7,7 @@ DIST_DIR := ./dist
 ENGINE := podman
 GORELEASER ?= goreleaser
 # GoReleaser's deterministic snapshot image; override only to inspect a known snapshot tag.
-RELEASE_SMOKE_IMAGE ?= ghcr.io/bnema/gordon:v0.0.0-SNAPSHOT
+RELEASE_SMOKE_IMAGE ?= ghcr.io/bnema/gordon:v0.0.0-$(shell go env GOARCH)
 # Local runs may override this with COMPAT_BASELINE_REF=<immutable commit>.
 COMPAT_BASELINE_REF ?= $(or $(GORDON_COMPAT_BASELINE_REF),8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842)
 
