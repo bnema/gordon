@@ -10,6 +10,18 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestApprovedFinalPortPublishesRestrictsHostBindings(t *testing.T) {
+	validPort := domain.ContainerPortPublish{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}
+	loopbackPort := validPort
+	loopbackPort.HostIP = "127.0.0.1"
+	arbitraryPort := validPort
+	arbitraryPort.HostIP = "192.0.2.1"
+
+	require.True(t, approvedFinalPortPublishes([]domain.ContainerPortPublish{validPort}))
+	require.True(t, approvedFinalPortPublishes([]domain.ContainerPortPublish{loopbackPort}))
+	require.False(t, approvedFinalPortPublishes([]domain.ContainerPortPublish{arbitraryPort}))
+}
+
 func TestRuntimeComponentLifecycleRejectsArbitraryPreparedPortBinding(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})

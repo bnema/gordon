@@ -607,7 +607,7 @@ func approvedFinalPortPublishes(ports []domain.ContainerPortPublish) bool {
 	}
 	seen := make(map[int]struct{}, len(ports))
 	for _, port := range ports {
-		if port.Protocol != domain.NetworkProtocolTCP || port.HostIP != "0.0.0.0" || port.HostPort < 1 || port.HostPort > 65535 || port.ContainerPort < 1 || port.ContainerPort > 65535 {
+		if port.Protocol != domain.NetworkProtocolTCP || !approvedFinalHostIP(port.HostIP) || port.HostPort < 1 || port.HostPort > 65535 || port.ContainerPort < 1 || port.ContainerPort > 65535 {
 			return false
 		}
 		if _, exists := seen[port.HostPort]; exists {
@@ -616,6 +616,10 @@ func approvedFinalPortPublishes(ports []domain.ContainerPortPublish) bool {
 		seen[port.HostPort] = struct{}{}
 	}
 	return true
+}
+
+func approvedFinalHostIP(hostIP string) bool {
+	return hostIP == "0.0.0.0" || hostIP == "127.0.0.1"
 }
 
 func finalPortsMatchOld(final []domain.ContainerPortPublish, old []int) bool {
