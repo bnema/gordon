@@ -65,6 +65,32 @@ func TestMigrationCheckpointRuntimeCutoverCommitIsDurableAndIdempotent(t *testin
 	assert.Error(t, store.CommitMigrationCutover(context.Background(), command), "a different cutover cannot rewrite durable status")
 }
 
+func TestMigrationCheckpointPersistsOnlyAllowlistedCutoverIntent(t *testing.T) {
+	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	checkpoint := testMigrationCheckpoint()
+	checkpoint.Phase = MigrationPhasePrepared
+	checkpoint.TargetImage = "example.invalid/gordon:v2"
+	checkpoint.OldServingPath = "old-monolith"
+	checkpoint.RouteSnapshotGeneration = 7
+	checkpoint.AppliedEdgeComponentID = "gordon-edge-migration-1-g1"
+	checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}}
+	require.NoError(t, store.Save(checkpoint))
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: domain.RuntimeCommandIdentity{Generation: checkpoint.ComponentGeneration}, LifecycleAction: domain.RuntimeComponentLifecycleActivate, TargetComponentRole: domain.ComponentRoleEdge, TargetComponentID: checkpoint.AppliedEdgeComponentID, PolicyDecisionID: "migration:" + checkpoint.MigrationID, OldServingComponentID: checkpoint.OldServingPath, FinalPortPublishes: []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}}}
+
+	require.NoError(t, store.RecordMigrationCutoverSubphase(context.Background(), command, domain.MigrationCutoverSubphaseBeforePreparedRemove))
+	loaded, err := store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, domain.MigrationCutoverSubphaseBeforePreparedRemove, loaded.CutoverSubphase)
+	assert.Error(t, store.RecordMigrationCutoverSubphase(context.Background(), command, domain.MigrationCutoverSubphase("engine error: secret=/host/socket")))
+
+	stale := checkpoint
+	require.NoError(t, store.Save(stale))
+	loaded, err = store.Load()
+	require.NoError(t, err)
+	assert.Equal(t, domain.MigrationCutoverSubphaseBeforePreparedRemove, loaded.CutoverSubphase, "stale writers cannot erase a mutation intent")
+}
+
 func TestMigrationCheckpointRecordsSanitizedRetryableCutoverFailure(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)

@@ -105,6 +105,9 @@ type MigrationCheckpoint struct {
 	// text so a fresh status can safely explain whether switch may be retried.
 	CutoverFailureCode      string `json:"cutover_failure_code,omitempty"`
 	CutoverFailureRetryable bool   `json:"cutover_failure_retryable,omitempty"`
+	// CutoverSubphase is a fixed intent record written and synced before the
+	// runtime mutates listener ownership. It contains no engine-derived data.
+	CutoverSubphase domain.MigrationCutoverSubphase `json:"cutover_subphase,omitempty"`
 }
 
 type MigrationCheckpointStore struct {
@@ -198,6 +201,55 @@ func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 	})
 }
 
+// RecordMigrationCutoverSubphase durably records a fixed mutation intent.
+// The runtime calls it before each listener-transfer mutation; the write is
+// atomic and fsynced by writeAtomic before the engine is invoked.
+func (s *MigrationCheckpointStore) RecordMigrationCutoverSubphase(_ context.Context, command domain.RuntimeSelfUpdateCommand, subphase domain.MigrationCutoverSubphase) error {
+	if s == nil || subphase == domain.MigrationCutoverSubphaseNone || !domain.IsMigrationCutoverSubphase(subphase) {
+		return fmt.Errorf("invalid migration cutover subphase")
+	}
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleActivate || command.TargetComponentRole != domain.ComponentRoleEdge || migrationID == "" {
+		return fmt.Errorf("invalid migration cutover command")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withLock(func() error {
+		checkpoint, err := s.load()
+		if err != nil {
+			return fmt.Errorf("load migration checkpoint for cutover subphase: %w", err)
+		}
+		if checkpoint.Phase != MigrationPhasePrepared || !matchesRuntimeCutover(*checkpoint, command, migrationID) {
+			return fmt.Errorf("migration cutover does not match prepared checkpoint")
+		}
+		checkpoint.CutoverSubphase = subphase
+		checkpoint.CutoverFailureCode = ""
+		checkpoint.CutoverFailureRetryable = false
+		checkpoint.LastRetryPhase = "switch"
+		return s.writeAtomic(*checkpoint)
+	})
+}
+
+// MigrationCutoverSubphase returns the current fixed intent marker after
+// checking the same authenticated lifecycle identity used for commit.
+func (s *MigrationCheckpointStore) MigrationCutoverSubphase(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.MigrationCutoverSubphase, error) {
+	if s == nil {
+		return domain.MigrationCutoverSubphaseNone, fmt.Errorf("migration checkpoint store is required")
+	}
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleActivate || command.TargetComponentRole != domain.ComponentRoleEdge || migrationID == "" {
+		return domain.MigrationCutoverSubphaseNone, fmt.Errorf("invalid migration cutover command")
+	}
+	checkpoint, err := s.Load()
+	if err != nil {
+		return domain.MigrationCutoverSubphaseNone, fmt.Errorf("load migration checkpoint for cutover state: %w", err)
+	}
+	if !matchesRuntimeCutover(*checkpoint, command, migrationID) {
+		return domain.MigrationCutoverSubphaseNone, fmt.Errorf("migration cutover does not match checkpoint")
+	}
+	return checkpoint.CutoverSubphase, nil
+}
+
 // CommitMigrationCutover is called by the replacement runtime after it has
 // made the final edge listener healthy. It validates the exact authenticated
 // lifecycle identity while holding the same cross-process checkpoint lock, so
@@ -233,6 +285,7 @@ func (s *MigrationCheckpointStore) CommitMigrationCutover(_ context.Context, com
 			return fmt.Errorf("migration cutover does not match prepared checkpoint")
 		}
 		checkpoint.Phase = MigrationPhaseSwitched
+		checkpoint.CutoverSubphase = domain.MigrationCutoverSubphaseBeforeCommit
 		checkpoint.LastRetryPhase = ""
 		checkpoint.CutoverFailureCode = ""
 		checkpoint.CutoverFailureRetryable = false
@@ -266,6 +319,7 @@ func (s *MigrationCheckpointStore) RecordMigrationCutoverFailure(_ context.Conte
 		}
 		checkpoint.CutoverFailureCode = code
 		checkpoint.CutoverFailureRetryable = retryable
+		checkpoint.CutoverSubphase = domain.MigrationCutoverSubphaseNone
 		checkpoint.LastRetryPhase = "switch"
 		return s.writeAtomic(*checkpoint)
 	})
@@ -341,6 +395,7 @@ func mergeMigrationCheckpoints(old, candidate MigrationCheckpoint) (MigrationChe
 	merged.ConnectedEdgeNetworks = stableStringUnion(old.ConnectedEdgeNetworks, candidate.ConnectedEdgeNetworks)
 	merged.RuntimeChannelTransferred = old.RuntimeChannelTransferred || candidate.RuntimeChannelTransferred
 	merged.PrepareComplete = old.PrepareComplete || candidate.PrepareComplete
+	mergeCutoverSubphase(old, candidate, &merged)
 	if old.RouteSnapshotGeneration > candidate.RouteSnapshotGeneration {
 		merged.RouteSnapshotGeneration = old.RouteSnapshotGeneration
 		merged.AppliedEdgeComponentID = old.AppliedEdgeComponentID
@@ -355,6 +410,22 @@ func mergeMigrationCheckpoints(old, candidate MigrationCheckpoint) (MigrationChe
 	}
 	mergeCutoverFailure(old, candidate, &merged)
 	return merged, nil
+}
+
+func mergeCutoverSubphase(old, candidate MigrationCheckpoint, merged *MigrationCheckpoint) {
+	if merged == nil {
+		return
+	}
+	// An explicit recorded failure follows a verified rollback and intentionally
+	// clears a prior intent so the next activation starts a new transaction.
+	if candidate.CutoverFailureCode != "" {
+		merged.CutoverSubphase = domain.MigrationCutoverSubphaseNone
+		return
+	}
+	if old.CutoverSubphase != domain.MigrationCutoverSubphaseNone && candidate.CutoverSubphase == domain.MigrationCutoverSubphaseNone && candidate.Phase != MigrationPhaseSwitched {
+		// A stale control writer cannot erase the runtime's durable mutation.
+		merged.CutoverSubphase = old.CutoverSubphase
+	}
 }
 
 func mergeCutoverFailure(old, candidate MigrationCheckpoint, merged *MigrationCheckpoint) {
@@ -534,6 +605,7 @@ func validateCheckpoint(checkpoint MigrationCheckpoint) error {
 	if strings.TrimSpace(checkpoint.MigrationID) == "" || phaseRank(checkpoint.Phase) < 0 || checkpoint.StartedAt.IsZero() ||
 		(checkpoint.CutoverFailureCode != "" && !validCutoverFailureCode(checkpoint.CutoverFailureCode)) ||
 		(checkpoint.CutoverFailureRetryable && checkpoint.CutoverFailureCode == "") ||
+		!domain.IsMigrationCutoverSubphase(checkpoint.CutoverSubphase) ||
 		(checkpoint.Phase == MigrationPhaseSwitched && (checkpoint.CutoverFailureCode != "" || checkpoint.CutoverFailureRetryable)) {
 		return fmt.Errorf("invalid migration checkpoint")
 	}

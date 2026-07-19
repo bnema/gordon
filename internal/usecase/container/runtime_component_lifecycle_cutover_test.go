@@ -17,8 +17,14 @@ import (
 
 type recordingMigrationCutoverCommitter struct {
 	commands       []domain.RuntimeSelfUpdateCommand
+	subphases      []domain.MigrationCutoverSubphase
 	failureRetries []bool
 	err            error
+}
+
+func (c *recordingMigrationCutoverCommitter) RecordMigrationCutoverSubphase(_ context.Context, _ domain.RuntimeSelfUpdateCommand, subphase domain.MigrationCutoverSubphase) error {
+	c.subphases = append(c.subphases, subphase)
+	return nil
 }
 
 func (c *recordingMigrationCutoverCommitter) CommitMigrationCutover(_ context.Context, command domain.RuntimeSelfUpdateCommand) error {
@@ -29,6 +35,15 @@ func (c *recordingMigrationCutoverCommitter) CommitMigrationCutover(_ context.Co
 func (c *recordingMigrationCutoverCommitter) RecordMigrationCutoverFailure(_ context.Context, _ domain.RuntimeSelfUpdateCommand, _ string, retryable bool) error {
 	c.failureRetries = append(c.failureRetries, retryable)
 	return nil
+}
+
+type recoveringMigrationCutoverCommitter struct {
+	recordingMigrationCutoverCommitter
+	subphase domain.MigrationCutoverSubphase
+}
+
+func (c *recoveringMigrationCutoverCommitter) MigrationCutoverSubphase(_ context.Context, _ domain.RuntimeSelfUpdateCommand) (domain.MigrationCutoverSubphase, error) {
+	return c.subphase, nil
 }
 
 func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionally(t *testing.T) {
@@ -56,6 +71,58 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
 	require.Len(t, committer.commands, 1)
 	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, committer.commands[0].LifecycleAction)
+}
+
+func TestRuntimeComponentLifecycleActivateRecordsDurableIntentBeforeEachMutation(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+	committer := &recordingMigrationCutoverCommitter{}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	assert.Equal(t, []domain.MigrationCutoverSubphase{
+		domain.MigrationCutoverSubphaseBeforeOldStop,
+		domain.MigrationCutoverSubphaseBeforePreparedStop,
+		domain.MigrationCutoverSubphaseBeforePreparedRemove,
+		domain.MigrationCutoverSubphaseBeforeFinalCreate,
+		domain.MigrationCutoverSubphaseBeforeFinalStart,
+		domain.MigrationCutoverSubphaseBeforeCommit,
+	}, committer.subphases)
+}
+
+func TestRuntimeComponentLifecycleActivateRecoversWhenPreparedEdgeWasRemoved(t *testing.T) {
+	config := cutoverConfig(t)
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	restored := &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{old}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "old").Return(false, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{old, restored}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "old").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "old").Return("healthy", true, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
+	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforePreparedRemove}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	require.Error(t, err)
+	assert.Equal(t, []bool{true}, committer.failureRetries, "retryability requires listener and health proof")
+	assert.NotContains(t, err.Error(), "old-monolith")
 }
 
 func TestRuntimeComponentLifecycleActivateCompletesAfterCallerCancellation(t *testing.T) {

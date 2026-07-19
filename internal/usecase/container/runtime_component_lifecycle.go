@@ -29,6 +29,10 @@ type RuntimeComponentLifecycleManager interface {
 // handoff. Its implementation lives outside this use case so the runtime never
 // imports control/app code or gains any extra socket capability.
 type MigrationCutoverCommitter interface {
+	// RecordMigrationCutoverSubphase durably precedes each engine mutation in
+	// the listener handoff. The subphase is an allowlisted domain value, never
+	// a raw engine status or error.
+	RecordMigrationCutoverSubphase(context.Context, domain.RuntimeSelfUpdateCommand, domain.MigrationCutoverSubphase) error
 	CommitMigrationCutover(context.Context, domain.RuntimeSelfUpdateCommand) error
 }
 
@@ -37,6 +41,14 @@ type MigrationCutoverCommitter interface {
 // expose container IDs, host paths, listener ports, or secrets.
 type MigrationCutoverFailureRecorder interface {
 	RecordMigrationCutoverFailure(context.Context, domain.RuntimeSelfUpdateCommand, string, bool) error
+}
+
+// MigrationCutoverRecoveryState is intentionally optional for unit-only
+// lifecycle implementations. The production checkpoint store implements it,
+// causing every post-restart activation to inspect the managed inventory
+// rather than trusting an in-memory transaction edge.
+type MigrationCutoverRecoveryState interface {
+	MigrationCutoverSubphase(context.Context, domain.RuntimeSelfUpdateCommand) (domain.MigrationCutoverSubphase, error)
 }
 
 type runtimeComponentLifecycleManager struct {
@@ -344,6 +356,15 @@ type edgeActivation struct {
 const edgeCutoverTransactionTimeout = 15 * time.Second
 
 func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	if recovery, ok := m.committer.(MigrationCutoverRecoveryState); ok && recovery != nil {
+		subphase, err := recovery.MigrationCutoverSubphase(ctx, command)
+		if err != nil {
+			return componentLifecycleError("load cutover state", err)
+		}
+		if subphase != domain.MigrationCutoverSubphaseNone {
+			return m.reconcileInterruptedEdgeActivation(ctx, command)
+		}
+	}
 	activation, err := m.validateEdgeActivation(ctx, command)
 	if err != nil {
 		return err
@@ -355,6 +376,129 @@ func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, com
 	transactionCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), edgeCutoverTransactionTimeout)
 	defer cancel()
 	return m.transferEdgeListener(transactionCtx, command, activation)
+}
+
+// reconcileInterruptedEdgeActivation observes inventory after a runtime
+// restart. A prior process may have removed the probe-only edge, so recovery
+// never assumes that a prepared container still exists. It either commits an
+// already healthy final listener or proves a full old/prepared rollback before
+// returning a retryable, sanitized outcome.
+func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	containers, err := m.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return componentLifecycleError("list cutover inventory", err)
+	}
+	old, target, err := m.cutoverInventory(command, containers)
+	if err != nil {
+		return err
+	}
+	oldRunning, err := m.runtime.IsContainerRunning(ctx, old.ID)
+	if err != nil {
+		return componentLifecycleError("inspect old serving", err)
+	}
+	if m.completedFinalCutover(ctx, command, target, oldRunning) {
+		return nil
+	}
+
+	restoreErr := m.restoreInterruptedEdgeInventory(ctx, command, target, old, oldRunning)
+	retryable := restoreErr == nil
+	if recordErr := m.recordCutoverFailure(ctx, command, "cutover_failed", retryable); recordErr != nil {
+		return componentLifecycleError("record cutover failure", recordErr)
+	}
+	if !retryable {
+		return componentLifecycleError("restore", restoreErr)
+	}
+	return componentLifecycleError("recovered", errors.New("cutover rollback completed"))
+}
+
+func (m *runtimeComponentLifecycleManager) completedFinalCutover(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target *domain.Container, oldRunning bool) bool {
+	if target == nil || oldRunning || !containerPortsMatch(target, command.FinalPortPublishes) || m.healthContainer(ctx, target) != nil {
+		return false
+	}
+	if m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeCommit) != nil {
+		return false
+	}
+	return m.committer.CommitMigrationCutover(ctx, command) == nil
+}
+
+func (m *runtimeComponentLifecycleManager) restoreInterruptedEdgeInventory(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target, old *domain.Container, oldRunning bool) error {
+	var restoreErr error
+	if target != nil && containerPortsMatch(target, command.FinalPortPublishes) {
+		restoreErr = errors.Join(restoreErr, m.runtime.StopContainer(ctx, target.ID))
+		restoreErr = errors.Join(restoreErr, m.runtime.RemoveContainer(ctx, target.ID, true))
+		target = nil
+	}
+	if target == nil {
+		restoreErr = errors.Join(restoreErr, m.restorePreparedEdge(ctx, command, command.PortPublishes))
+	} else if running, runErr := m.runtime.IsContainerRunning(ctx, target.ID); runErr != nil {
+		restoreErr = errors.Join(restoreErr, runErr)
+	} else if !running {
+		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, target.ID))
+	}
+	if !oldRunning {
+		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, old.ID))
+	}
+	if restoreErr != nil {
+		return restoreErr
+	}
+	return m.proveRollbackInventory(ctx, command)
+}
+
+func (m *runtimeComponentLifecycleManager) cutoverInventory(command domain.RuntimeSelfUpdateCommand, containers []*domain.Container) (*domain.Container, *domain.Container, error) {
+	var old, target *domain.Container
+	for _, container := range containers {
+		if container == nil {
+			continue
+		}
+		if container.Name == command.OldServingComponentID {
+			if container.Labels[domain.LabelManaged] != "true" || container.Labels[domain.LabelComponent] == "true" {
+				return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not Gordon-managed", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
+			}
+			old = container
+		}
+		if container.Name == command.TargetComponentID {
+			if !isManagedLifecycleComponent(container, command) {
+				return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
+			}
+			target = container
+		}
+	}
+	if old == nil {
+		return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not available", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
+	}
+	return old, target, nil
+}
+
+// proveRollbackInventory explicitly validates the public old listener and the
+// restored bootstrap edge after every compensating command. Successful engine
+// calls alone are not considered retry-safe.
+func (m *runtimeComponentLifecycleManager) proveRollbackInventory(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	containers, err := m.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return err
+	}
+	old, prepared, err := m.cutoverInventory(command, containers)
+	if err != nil || prepared == nil || !containerPortsMatch(prepared, command.PortPublishes) || !containerPortsMatch(old, command.FinalPortPublishes) {
+		return errors.New("rollback inventory proof failed")
+	}
+	if err := m.healthContainer(ctx, old); err != nil {
+		return err
+	}
+	return m.healthContainer(ctx, prepared)
+}
+
+func containerPortsMatch(container *domain.Container, expected []domain.ContainerPortPublish) bool {
+	if container == nil || len(container.Ports) != len(expected) {
+		return false
+	}
+	actual := append([]int(nil), container.Ports...)
+	slices.Sort(actual)
+	wanted := make([]int, 0, len(expected))
+	for _, port := range expected {
+		wanted = append(wanted, port.HostPort)
+	}
+	slices.Sort(wanted)
+	return slices.Equal(actual, wanted)
 }
 
 func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (edgeActivation, error) {
@@ -455,23 +599,26 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 		}
 		return componentLifecycleError("activate", err)
 	}
-	if err := m.runtime.StopContainer(ctx, activation.old.ID); err != nil {
+	if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforeOldStop, func() error { return m.runtime.StopContainer(ctx, activation.old.ID) }); err != nil {
 		return componentLifecycleError("stop old serving", err)
 	}
 	oldStopped = true
-	if err := m.runtime.StopContainer(ctx, activation.prepared.ID); err != nil {
+	if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforePreparedStop, func() error { return m.runtime.StopContainer(ctx, activation.prepared.ID) }); err != nil {
 		return failCutover(err)
 	}
 	preparedStopped = true
-	if err := m.runtime.RemoveContainer(ctx, activation.prepared.ID, true); err != nil {
+	if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforePreparedRemove, func() error { return m.runtime.RemoveContainer(ctx, activation.prepared.ID, true) }); err != nil {
 		return failCutover(err)
 	}
 	preparedRemoved = true
+	if err := m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeFinalCreate); err != nil {
+		return failCutover(err)
+	}
 	config, err := m.componentConfig(command, command.FinalPortPublishes)
 	if err != nil {
 		return failCutover(err)
 	}
-	final, err = m.startFinalEdgeListener(ctx, config)
+	final, err = m.startFinalEdgeListener(ctx, command, config)
 	if err != nil {
 		return failCutover(err)
 	}
@@ -485,15 +632,37 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	// monolith, whose CLI process can consequently disappear before receiving a
 	// reply. Commit only once the final listener is healthy; a failed commit
 	// rolls back the listener transfer and leaves the old path serving.
-	if strings.TrimSpace(m.policy.MigrationStateRoot) != "" && m.committer == nil {
-		return failCutover(fmt.Errorf("migration cutover durability is not configured"))
-	}
-	if m.committer != nil {
-		if err := m.committer.CommitMigrationCutover(ctx, command); err != nil {
-			return failCutover(err)
-		}
+	if err := m.commitFinalCutover(ctx, command); err != nil {
+		return failCutover(err)
 	}
 	return nil
+}
+
+func (m *runtimeComponentLifecycleManager) commitFinalCutover(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	if strings.TrimSpace(m.policy.MigrationStateRoot) != "" && m.committer == nil {
+		return fmt.Errorf("migration cutover durability is not configured")
+	}
+	if m.committer == nil {
+		return nil
+	}
+	if err := m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeCommit); err != nil {
+		return err
+	}
+	return m.committer.CommitMigrationCutover(ctx, command)
+}
+
+func (m *runtimeComponentLifecycleManager) runCutoverMutation(ctx context.Context, command domain.RuntimeSelfUpdateCommand, subphase domain.MigrationCutoverSubphase, mutate func() error) error {
+	if err := m.recordCutoverSubphase(ctx, command, subphase); err != nil {
+		return err
+	}
+	return mutate()
+}
+
+func (m *runtimeComponentLifecycleManager) recordCutoverSubphase(ctx context.Context, command domain.RuntimeSelfUpdateCommand, subphase domain.MigrationCutoverSubphase) error {
+	if m.committer == nil {
+		return nil
+	}
+	return m.committer.RecordMigrationCutoverSubphase(ctx, command, subphase)
 }
 
 func (m *runtimeComponentLifecycleManager) recordCutoverFailure(ctx context.Context, command domain.RuntimeSelfUpdateCommand, code string, retryable bool) error {
@@ -520,14 +689,16 @@ const (
 // window after the old listener has stopped. A failed start is removed before
 // another attempt, so there is never a second serving edge and rollback still
 // restores the probe-only edge and old listener on exhaustion.
-func (m *runtimeComponentLifecycleManager) startFinalEdgeListener(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error) {
+func (m *runtimeComponentLifecycleManager) startFinalEdgeListener(ctx context.Context, command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) (*domain.Container, error) {
 	deadline := time.NewTimer(edgeListenerReleaseTimeout)
 	defer deadline.Stop()
 	var lastErr error
 	for {
 		created, err := m.runtime.CreateContainer(ctx, config)
 		if err == nil {
-			err = m.runtime.StartContainer(ctx, created.ID)
+			if err = m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeFinalStart); err == nil {
+				err = m.runtime.StartContainer(ctx, created.ID)
+			}
 			if err == nil {
 				return created, nil
 			}
