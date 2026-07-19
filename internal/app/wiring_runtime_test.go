@@ -77,13 +77,6 @@ func TestRuntimeRoleStandaloneServiceManagerIsPolicyWrapped(t *testing.T) {
 	require.IsType(t, &container.RuntimeStandaloneServicePolicyManager{}, manager)
 }
 
-func TestRuntimeRoleBundleExposesStandaloneServiceManager(t *testing.T) {
-	manager := newRuntimeRoleStandaloneServiceManager(nil, Config{}, viper.New())
-	bundle := runtimeRoleWorkerBundle{standaloneServiceManager: manager}
-
-	require.Same(t, manager, runtimeRoleStandaloneServiceManager(bundle))
-}
-
 func TestRuntimeRoleServiceWiresControlRelayedDrainReceiver(t *testing.T) {
 	state := domain.RuntimeRouteState{Domain: "app.example.com", Generation: 1, ContainerAlias: "gordon-target-app-example-com", EdgeTargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1, Status: domain.RouteTargetStatusReady, BackingContainerName: "private-old"}
 	key, err := domain.ManagedRouteTargetKeyFromRuntimeState(state)
@@ -114,8 +107,8 @@ func TestRuntimeRoleWiringStartsGRPCWithInjectedDependencies(t *testing.T) {
 	require.NoError(t, err)
 	validator := &fakeRuntimeRoleTokenValidator{}
 	deps := runtimeRoleDependencies{
-		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error) {
-			return fakeRuntimeRoleWorker{}, func() {}, nil
+		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error) {
+			return runtimeRoleWorkerBundle{RuntimeWorker: fakeRuntimeRoleWorker{}}, func() {}, nil
 		},
 		listen: func(_, _ string) (net.Listener, error) {
 			return listener, nil
@@ -177,9 +170,9 @@ func TestRuntimeRoleStartupFailsClosedWhenComponentTokenStoreCannotBeCreated(t *
 	require.NoError(t, os.WriteFile(configPath, []byte("[auth]\nsecrets_backend = \"sops\"\n"), 0600))
 	workerBuilt := false
 	deps := runtimeRoleDependencies{
-		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error) {
+		buildWorker: func(context.Context, *viper.Viper, Config, zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error) {
 			workerBuilt = true
-			return fakeRuntimeRoleWorker{}, nil, nil
+			return runtimeRoleWorkerBundle{RuntimeWorker: fakeRuntimeRoleWorker{}}, nil, nil
 		},
 		listen:                     net.Listen,
 		newComponentTokenValidator: newRuntimeRoleComponentTokenValidator,
@@ -206,7 +199,7 @@ func TestRuntimeRoleServiceWiresActualStateSubscriberFromSnapshotWorker(t *testi
 	ctx, cancel := context.WithCancel(context.Background())
 	stream := &fakeActualStateStream{ctx: ctx, cancel: cancel}
 
-	err := newRuntimeRoleService(fakeSnapshotRuntimeRoleWorker{}).WatchActualState(&runtimev1.WatchActualStateRequest{}, stream)
+	err := newRuntimeRoleService(runtimeRoleBundleWithSnapshotter(fakeSnapshotRuntimeRoleWorker{})).WatchActualState(&runtimev1.WatchActualStateRequest{}, stream)
 	require.Error(t, err)
 	require.Len(t, stream.snapshots, 1)
 	require.Equal(t, uint64(1), stream.snapshots[0].Generation)
@@ -241,7 +234,7 @@ func TestRuntimeRoleServiceLeavesActualStateUnconfiguredWithoutSnapshotWorker(t 
 	defer cancel()
 	stream := &fakeActualStateStream{ctx: ctx, cancel: cancel}
 
-	err := newRuntimeRoleService(fakeRuntimeRoleWorker{}).WatchActualState(&runtimev1.WatchActualStateRequest{}, stream)
+	err := newRuntimeRoleService(runtimeRoleWorkerBundle{RuntimeWorker: fakeRuntimeRoleWorker{}}).WatchActualState(&runtimev1.WatchActualStateRequest{}, stream)
 	require.ErrorContains(t, err, "runtime state subscriber not configured")
 }
 
@@ -267,6 +260,12 @@ func (f *fakeActualStateStream) Send(snapshot *runtimev1.WatchActualStateRespons
 	f.snapshots = append(f.snapshots, snapshot)
 	f.cancel()
 	return nil
+}
+
+func runtimeRoleBundleWithSnapshotter(worker in.RuntimeWorker) runtimeRoleWorkerBundle {
+	bundle := runtimeRoleWorkerBundle{RuntimeWorker: worker}
+	bundle.stateSubscriber = &pollingRuntimeStateSubscriber{snapshotter: bundle, interval: time.Second, sourceComponentID: runtimeRoleComponentID()}
+	return bundle
 }
 
 type fakeSnapshotRuntimeRoleWorker struct {

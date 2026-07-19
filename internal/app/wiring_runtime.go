@@ -37,7 +37,7 @@ import (
 )
 
 type runtimeRoleDependencies struct {
-	buildWorker                func(context.Context, *viper.Viper, Config, zerowrap.Logger) (in.RuntimeWorker, func(), error)
+	buildWorker                func(context.Context, *viper.Viper, Config, zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error)
 	listen                     func(network, address string) (net.Listener, error)
 	newComponentTokenValidator func(Config, zerowrap.Logger) (interceptors.ComponentTokenValidator, error)
 }
@@ -243,30 +243,9 @@ type runtimeRoleWorkerBundle struct {
 	volumeManager            out.RuntimeVolumeManager
 	imageManager             out.RuntimeImageManager
 	routeDrainAckReceiver    out.RouteDrainAckReceiver
+	stateSubscriber          out.RuntimeStateSubscriber
 	standaloneServiceManager out.RuntimeStandaloneServiceManager
 	environmentProbe         out.RuntimeEnvironmentProbe
-}
-
-func (w runtimeRoleWorkerBundle) RuntimeLogReader() out.RuntimeLogReader { return w.logReader }
-
-func (w runtimeRoleWorkerBundle) RuntimeVolumeManager() out.RuntimeVolumeManager {
-	return w.volumeManager
-}
-
-func (w runtimeRoleWorkerBundle) RuntimeImageManager() out.RuntimeImageManager {
-	return w.imageManager
-}
-
-func (w runtimeRoleWorkerBundle) RuntimeStandaloneServiceManager() out.RuntimeStandaloneServiceManager {
-	return w.standaloneServiceManager
-}
-
-func (w runtimeRoleWorkerBundle) RuntimeEnvironmentProbe() out.RuntimeEnvironmentProbe {
-	return w.environmentProbe
-}
-
-func (w runtimeRoleWorkerBundle) RouteDrainAckReceiver() out.RouteDrainAckReceiver {
-	return w.routeDrainAckReceiver
 }
 
 // Snapshot preserves the concrete worker capability through the role bundle.
@@ -320,59 +299,16 @@ func (w runtimeRoleWorkerBundle) includeRuntimeSelf(ctx context.Context, snapsho
 	return snapshot, nil
 }
 
-func runtimeRoleLogReader(worker in.RuntimeWorker) out.RuntimeLogReader {
-	if w, ok := worker.(interface{ RuntimeLogReader() out.RuntimeLogReader }); ok {
-		return w.RuntimeLogReader()
-	}
-	return nil
-}
-
-func runtimeRoleVolumeManager(worker in.RuntimeWorker) out.RuntimeVolumeManager {
-	if w, ok := worker.(interface {
-		RuntimeVolumeManager() out.RuntimeVolumeManager
-	}); ok {
-		return w.RuntimeVolumeManager()
-	}
-	return nil
-}
-
-func runtimeRoleImageManager(worker in.RuntimeWorker) out.RuntimeImageManager {
-	if w, ok := worker.(interface {
-		RuntimeImageManager() out.RuntimeImageManager
-	}); ok {
-		return w.RuntimeImageManager()
-	}
-	return nil
-}
-
-func runtimeRoleStandaloneServiceManager(worker in.RuntimeWorker) out.RuntimeStandaloneServiceManager {
-	if w, ok := worker.(interface {
-		RuntimeStandaloneServiceManager() out.RuntimeStandaloneServiceManager
-	}); ok {
-		return w.RuntimeStandaloneServiceManager()
-	}
-	return nil
-}
-
-func runtimeRoleRouteDrainAckReceiver(worker in.RuntimeWorker) out.RouteDrainAckReceiver {
-	if w, ok := worker.(interface {
-		RouteDrainAckReceiver() out.RouteDrainAckReceiver
-	}); ok {
-		return w.RouteDrainAckReceiver()
-	}
-	return nil
-}
-
-func newRuntimeRoleService(worker in.RuntimeWorker) runtimev1.RuntimeServiceServer {
+func newRuntimeRoleService(worker runtimeRoleWorkerBundle) runtimev1.RuntimeServiceServer {
 	return runtimegrpc.NewServerWithEnvironmentProbe(
-		worker,
-		runtimeRoleLogReader(worker),
-		runtimeRoleVolumeManager(worker),
-		runtimeRoleImageManager(worker),
-		runtimeRoleStateSubscriber(worker),
-		runtimeRoleRouteDrainAckReceiver(worker),
-		runtimeRoleStandaloneServiceManager(worker),
-		runtimeRoleEnvironmentProbe(worker),
+		worker.RuntimeWorker,
+		worker.logReader,
+		worker.volumeManager,
+		worker.imageManager,
+		worker.stateSubscriber,
+		worker.routeDrainAckReceiver,
+		worker.standaloneServiceManager,
+		worker.environmentProbe,
 		runtimeRoleComponentID(),
 	)
 }
@@ -460,25 +396,6 @@ func runtimeRoleComponentID() string {
 	return "gordon-runtime"
 }
 
-func runtimeRoleEnvironmentProbe(worker in.RuntimeWorker) out.RuntimeEnvironmentProbe {
-	if w, ok := worker.(interface {
-		RuntimeEnvironmentProbe() out.RuntimeEnvironmentProbe
-	}); ok {
-		return w.RuntimeEnvironmentProbe()
-	}
-	return nil
-}
-
-func runtimeRoleStateSubscriber(worker in.RuntimeWorker) out.RuntimeStateSubscriber {
-	snapshotter, ok := worker.(interface {
-		Snapshot(context.Context, uint64, string, string) (domain.RuntimeActualStateSnapshot, error)
-	})
-	if !ok {
-		return nil
-	}
-	return &pollingRuntimeStateSubscriber{snapshotter: snapshotter, interval: time.Second, sourceComponentID: runtimeRoleComponentID()}
-}
-
 type pollingRuntimeStateSubscriber struct {
 	snapshotter interface {
 		Snapshot(context.Context, uint64, string, string) (domain.RuntimeActualStateSnapshot, error)
@@ -534,11 +451,11 @@ func runtimeStateVersion(generation uint64) string {
 	return "runtime-state:" + strconv.FormatUint(generation, 10)
 }
 
-func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (in.RuntimeWorker, func(), error) {
+func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error) {
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
 	runtimeAdapter, eventBus, err := createOutputAdapters(ctx, log, RoleRuntime, runtimeSocket)
 	if err != nil {
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 
 	svc := &services{runtime: runtimeAdapter, eventBus: eventBus}
@@ -554,30 +471,30 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 
 	if svc.logWriter, err = createLogWriter(cfg, log); err != nil {
 		cleanup()
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 	if svc.tokenStore, svc.authSvc, err = createAuthService(ctx, cfg, log); err != nil {
 		cleanup()
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 	if err := setupInternalRegistryAuth(svc, log); err != nil {
 		cleanup()
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 	svc.configSvc = config.NewService(v, svc.eventBus)
 
 	si := &serviceInit{ctx: ctx, v: v, cfg: cfg, log: log, svc: svc}
 	if err := si.initSecrets(); err != nil {
 		cleanup()
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 	if svc.containerSvc, err = createContainerService(ctx, v, cfg, svc, log); err != nil {
 		cleanup()
-		return nil, nil, err
+		return runtimeRoleWorkerBundle{}, nil, err
 	}
 	if err := svc.eventBus.Start(); err != nil {
 		cleanup()
-		return nil, nil, log.WrapErr(err, "failed to start runtime event bus")
+		return runtimeRoleWorkerBundle{}, nil, log.WrapErr(err, "failed to start runtime event bus")
 	}
 
 	resultStore, err := filesystem.NewRuntimeCommandResultStore(filesystem.RuntimeCommandResultStoreConfig{
@@ -585,17 +502,17 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 	})
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("open runtime command result store: %w", err)
+		return runtimeRoleWorkerBundle{}, nil, fmt.Errorf("open runtime command result store: %w", err)
 	}
 	if err := resultStore.Healthy(); err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("runtime command result store unhealthy: %w", err)
+		return runtimeRoleWorkerBundle{}, nil, fmt.Errorf("runtime command result store unhealthy: %w", err)
 	}
 	policy := runtimeRolePolicy(cfg, v)
 	cutoverStore, err := NewMigrationCheckpointStore(migrationCheckpointPath(cfg.Server.DataDir))
 	if err != nil {
 		cleanup()
-		return nil, nil, fmt.Errorf("open runtime migration cutover store: %w", err)
+		return runtimeRoleWorkerBundle{}, nil, fmt.Errorf("open runtime migration cutover store: %w", err)
 	}
 	lifecycle := container.WithMigrationCutoverCommitter(container.NewRuntimeComponentLifecycleManager(svc.runtime, policy), cutoverStore)
 	worker := container.NewRuntimeWorkerWithPolicyAndResultStore(svc.containerSvc, policy, resultStore).
@@ -604,7 +521,18 @@ func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config,
 	svc.containerSvc.SetProxyDrainWaiter(drainRegistry)
 	standaloneServiceManager := newRuntimeRoleStandaloneServiceManager(svc.runtime, cfg, v)
 	var environmentProbe out.RuntimeEnvironmentProbe = svc.runtime
-	return runtimeRoleWorkerBundle{RuntimeWorker: worker, runtime: svc.runtime, logReader: logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime), volumeManager: volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime), imageManager: images.NewLocalRuntimeImageManager(svc.runtime), routeDrainAckReceiver: drainRegistry, standaloneServiceManager: standaloneServiceManager, environmentProbe: environmentProbe}, cleanup, nil
+	bundle := runtimeRoleWorkerBundle{
+		RuntimeWorker:            worker,
+		runtime:                  svc.runtime,
+		logReader:                logs.NewLocalRuntimeLogReader(svc.containerSvc, svc.runtime),
+		volumeManager:            volumesSvc.NewLocalRuntimeVolumeManager(svc.runtime),
+		imageManager:             images.NewLocalRuntimeImageManager(svc.runtime),
+		routeDrainAckReceiver:    drainRegistry,
+		standaloneServiceManager: standaloneServiceManager,
+		environmentProbe:         environmentProbe,
+	}
+	bundle.stateSubscriber = &pollingRuntimeStateSubscriber{snapshotter: bundle, interval: time.Second, sourceComponentID: runtimeRoleComponentID()}
+	return bundle, cleanup, nil
 }
 
 func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Config, v *viper.Viper) out.RuntimeStandaloneServiceManager {
