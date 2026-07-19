@@ -347,6 +347,11 @@ enabled = false
 level = "warn"
 format = "console"
 
+[traffic.tcp]
+drain_timeout = "1s"
+
+[traffic.udp]
+drain_timeout = "1s"
 
 [[network_services]]
 name = %q
