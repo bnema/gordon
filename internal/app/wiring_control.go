@@ -159,7 +159,15 @@ func runControlServers(ctx context.Context, v *viper.Viper, cfg Config, deps con
 	if appliedReceiver == nil {
 		appliedReceiver = controlServices.appliedStateTracker
 	}
-	server, err := newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainCoordinator, appliedReceiver, eventsgrpc.NewDispatchingServer(eventHub, dispatcher))
+	server, err := newControlSnapshotServer(controlSnapshotServerOptions{
+		config:          cfg,
+		validator:       validator,
+		hub:             hub,
+		trafficHub:      trafficHub,
+		drainReceiver:   drainCoordinator,
+		appliedReceiver: appliedReceiver,
+		eventServer:     eventsgrpc.NewDispatchingServer(eventHub, dispatcher),
+	})
 	if err != nil {
 		return err
 	}
@@ -423,41 +431,35 @@ func controlProducerOptions(v *viper.Viper, cfg Config) (edgesnapshot.ProducerOp
 	return options, nil
 }
 
-// newControlSnapshotServer is composable so route orchestration can publish to
-// hub without granting the transport access to runtime or configuration state.
-func newControlSnapshotServer(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub) (*grpc.Server, error) {
-	return newControlSnapshotServerWithDrain(cfg, validator, hub, nil)
+// controlSnapshotServerOptions explicitly captures every optional control
+// service co-hosted with the authenticated edge snapshot transport.
+type controlSnapshotServerOptions struct {
+	config          Config
+	validator       interceptors.ComponentTokenValidator
+	hub             *edgesnapshot.SnapshotHub
+	trafficHub      *edgesnapshot.TrafficGraphHub
+	drainReceiver   edgesnapshot.DrainStateReceiver
+	appliedReceiver edgesnapshot.AppliedStateReceiver
+	eventServer     eventsv1.EventServiceServer
 }
 
-func newControlSnapshotServerWithDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
-	return newControlSnapshotServerWithTrafficGraphAndDrain(cfg, validator, hub, nil, drainReceiver)
-}
-
-func newControlSnapshotServerWithTrafficGraphAndDrain(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver) (*grpc.Server, error) {
-	return newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg, validator, hub, trafficHub, drainReceiver, nil)
-}
-
-// newControlSnapshotServerWithTrafficGraphDrainAndEvents co-hosts the typed
-// event intake with the existing sanitized edge streams. Event transport is
-// authenticated with its own method scopes; it never receives runtime sockets.
-func newControlSnapshotServerWithTrafficGraphDrainAndEvents(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver, eventServer eventsv1.EventServiceServer) (*grpc.Server, error) {
-	return newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg, validator, hub, trafficHub, drainReceiver, nil, eventServer)
-}
-
-func newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg Config, validator interceptors.ComponentTokenValidator, hub *edgesnapshot.SnapshotHub, trafficHub *edgesnapshot.TrafficGraphHub, drainReceiver edgesnapshot.DrainStateReceiver, appliedReceiver edgesnapshot.AppliedStateReceiver, eventServer eventsv1.EventServiceServer) (*grpc.Server, error) {
-	if validator == nil {
+// newControlSnapshotServer co-hosts typed component events with sanitized edge
+// streams. Both transports retain their independent authenticated scopes and
+// never receive runtime sockets.
+func newControlSnapshotServer(options controlSnapshotServerOptions) (*grpc.Server, error) {
+	if options.validator == nil {
 		return nil, fmt.Errorf("control component token validator is required")
 	}
-	if hub == nil {
+	if options.hub == nil {
 		return nil, fmt.Errorf("control route snapshot hub is required")
 	}
-	transport, err := controlServerTransportCredentials(cfg)
+	transport, err := controlServerTransportCredentials(options.config)
 	if err != nil {
 		return nil, err
 	}
 	scopes := edgesnapshotgrpc.MethodScopes()
 	roles := edgesnapshotgrpc.MethodRoles()
-	if eventServer != nil {
+	if options.eventServer != nil {
 		for method, scope := range eventsgrpc.MethodScopes() {
 			scopes[method] = scope
 		}
@@ -467,25 +469,25 @@ func newControlSnapshotServerWithTrafficGraphDrainAppliedStateAndEvents(cfg Conf
 	}
 	server := grpc.NewServer(
 		grpc.Creds(transport),
-		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(validator, scopes, roles)),
-		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, scopes, roles)),
+		grpc.UnaryInterceptor(interceptors.ComponentAuthUnaryInterceptor(options.validator, scopes, roles)),
+		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(options.validator, scopes, roles)),
 	)
-	if trafficHub != nil {
-		serverAdapter := edgesnapshotgrpc.NewServerWithTrafficGraphSource(hub, trafficHub)
-		if drainReceiver != nil {
-			serverAdapter = edgesnapshotgrpc.NewServerWithDrainStateReceiverAndTrafficGraphSource(hub, drainReceiver, trafficHub)
+	if options.trafficHub != nil {
+		serverAdapter := edgesnapshotgrpc.NewServerWithTrafficGraphSource(options.hub, options.trafficHub)
+		if options.drainReceiver != nil {
+			serverAdapter = edgesnapshotgrpc.NewServerWithDrainStateReceiverAndTrafficGraphSource(options.hub, options.drainReceiver, options.trafficHub)
 		}
-		if appliedReceiver != nil {
-			serverAdapter = edgesnapshotgrpc.NewServerWithTrafficGraphDrainAndAppliedStateReceiver(hub, drainReceiver, trafficHub, appliedReceiver)
+		if options.appliedReceiver != nil {
+			serverAdapter = edgesnapshotgrpc.NewServerWithTrafficGraphDrainAndAppliedStateReceiver(options.hub, options.drainReceiver, options.trafficHub, options.appliedReceiver)
 		}
 		edgev1.RegisterEdgeServiceServer(server, serverAdapter)
-	} else if drainReceiver != nil {
-		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithDrainStateReceiver(hub, drainReceiver))
+	} else if options.drainReceiver != nil {
+		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServerWithDrainStateReceiver(options.hub, options.drainReceiver))
 	} else {
-		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(hub))
+		edgev1.RegisterEdgeServiceServer(server, edgesnapshotgrpc.NewServer(options.hub))
 	}
-	if eventServer != nil {
-		eventsv1.RegisterEventServiceServer(server, eventServer)
+	if options.eventServer != nil {
+		eventsv1.RegisterEventServiceServer(server, options.eventServer)
 	}
 	return server, nil
 }

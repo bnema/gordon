@@ -69,7 +69,11 @@ func TestControlSnapshotServerRequiresEdgeAuthentication(t *testing.T) {
 	require.NoError(t, hub.Publish(domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{entry}}))
 
 	validator := grpctest.NewAuthFixture("edge", domain.ComponentRoleEdge, domain.ComponentScopeRoutesWatch)
-	server, err := newControlSnapshotServer(Config{Control: ControlConfig{InsecureTLS: true}}, validator, hub)
+	server, err := newControlSnapshotServer(controlSnapshotServerOptions{
+		config:    Config{Control: ControlConfig{InsecureTLS: true}},
+		validator: validator,
+		hub:       hub,
+	})
 	require.NoError(t, err)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -174,7 +178,11 @@ edge_alias = "gordon-edge"
 	require.NoError(t, producer.Start(ctx))
 
 	validator := grpctest.NewAuthFixture("edge", domain.ComponentRoleEdge, domain.ComponentScopeRoutesWatch)
-	server, err := newControlSnapshotServer(cfg, validator, hub)
+	server, err := newControlSnapshotServer(controlSnapshotServerOptions{
+		config:    cfg,
+		validator: validator,
+		hub:       hub,
+	})
 	require.NoError(t, err)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
