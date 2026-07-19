@@ -40,7 +40,7 @@ dockers_v2:
       - ghcr.io/bnema/gordon
     tags:
       - "{{ .Tag }}"
-      - "{{ if not .IsPrerelease }}latest{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
     platforms:
       - linux/amd64
       - linux/arm64
