@@ -380,8 +380,13 @@ release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts 
 		done
 	@$(MAKE) release-image-smoke
 
-release-image-smoke: ## Verify artifact-derived amd64/arm64 images under QEMU and real role probes
+release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
 	@set -eu; \
+		smoke_config=$$(mktemp); \
+		trap 'rm -f "$$smoke_config"; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+		printf '%s\n' '[server]' 'runtime = "docker"' 'port = 8088' 'data_dir = "/tmp/gordon"' '[auth]' 'enabled = false' 'secrets_backend = "unsafe"' > "$$smoke_config"; \
+		socket="$${DOCKER_HOST#unix://}"; test "$$socket" != "$${DOCKER_HOST:-}" || socket=/var/run/docker.sock; \
+		test -S "$$socket"; \
 		for arch in amd64 arm64; do \
 			image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
 			test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
@@ -389,16 +394,16 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images under QEMU an
 			test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
 			test "$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$$image")" = '["/app/gordon"]'; \
 			docker run --rm --platform "linux/$$arch" "$$image" --help >/dev/null; \
-			for role in monolith control runtime edge registry; do \
-				name="gordon-release-smoke-$$arch-$$role-$$$$"; \
-				docker run --detach --rm --name "$$name" --platform "linux/$$arch" "$$image" serve --role "$$role" >/dev/null; \
-				trap 'docker rm -f "$$name" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
-				for attempt in 1 2 3 4 5; do docker inspect --format '{{.State.Running}}' "$$name" | grep -qx true && break; sleep 1; done; \
-				docker inspect --format '{{.State.Running}}' "$$name" | grep -qx true; \
-				docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:8088/healthz || docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/healthz; \
-				docker rm -f "$$name" >/dev/null; trap - EXIT HUP INT TERM; \
-			done; \
-		done
+			for role in control runtime edge registry; do docker run --rm --platform "linux/$$arch" "$$image" serve --role "$$role" --help >/dev/null; done; \
+			name="gordon-release-smoke-$$arch-monolith-$$$$"; \
+			docker run --detach --rm --name "$$name" --platform "linux/$$arch" --user 0:0 \
+				-v "$$socket:/var/run/docker.sock" -v "$$smoke_config:/tmp/gordon.toml:ro" \
+				"$$image" serve --role monolith --config /tmp/gordon.toml >/dev/null; \
+			for attempt in 1 2 3 4 5; do docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/v2/ && break; sleep 1; done; \
+			docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/v2/; \
+			docker rm -f "$$name" >/dev/null; name=; \
+		done; \
+		rm -f "$$smoke_config"; trap - EXIT HUP INT TERM
 
 build-push: build ## Build and push Docker images
 	@echo "Cleaning up dangling images..."

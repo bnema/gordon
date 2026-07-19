@@ -22,7 +22,10 @@ RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata \
     && adduser -D -s /bin/sh gordon \
     && mkdir -p /app /data \
     && chown -R gordon:gordon /app /data
-WORKDIR /app
+# Keep runtime data/config discovery separate from the binary. Viper searches
+# the working directory for `gordon`, so /app would mistake /app/gordon for a
+# configuration file when no explicit config is mounted.
+WORKDIR /data
 USER gordon
 EXPOSE 8088 5000
 ENTRYPOINT ["/app/gordon"]
