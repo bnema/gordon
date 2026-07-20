@@ -22,6 +22,24 @@ func testMigrationCheckpoint() MigrationCheckpoint {
 	return MigrationCheckpoint{MigrationID: "migration-1", StartedAt: time.Now().UTC(), Phase: MigrationPhasePlanned, ComponentGeneration: 1, EnvFileReferences: []string{"/redacted/env"}}
 }
 
+func TestMigrationCheckpointDeleteRemovesDurableStateAndIsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "private", "checkpoint.json")
+	store, err := NewMigrationCheckpointStore(path)
+	require.NoError(t, err)
+	require.NoError(t, store.Save(testMigrationCheckpoint()))
+	require.FileExists(t, path)
+
+	require.NoError(t, store.Delete())
+	require.NoFileExists(t, path)
+	loaded, err := store.Load()
+	assert.Nil(t, loaded)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+
+	// Deleting an already-absent checkpoint is a durable no-op so a fresh
+	// prepare can always start from a clean slate.
+	require.NoError(t, store.Delete())
+}
+
 func TestMigrationCheckpointAtomicMonotonicAndSafe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "checkpoint.json")
 	store, err := NewMigrationCheckpointStore(path)

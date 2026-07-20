@@ -342,6 +342,39 @@ func (s *MigrationService) Switch(ctx context.Context) (*MigrationCheckpoint, er
 	return s.orchestrator.Switch(ctx, *checkpoint)
 }
 
+// MigrationCleanup removes the side-by-side prepared component generation and
+// resets the durable checkpoint so a fresh prepare can start over. It is the
+// only supported way to abandon a prepare that will not be switched. It fails
+// closed for any checkpoint that is already serving traffic or has handed off
+// runtime authority: those components must never be removed through the old
+// authority, and after handoff the old authority is gone.
+func (s *MigrationService) MigrationCleanup(ctx context.Context) error {
+	if s == nil || s.store == nil || s.orchestrator == nil {
+		return fmt.Errorf("migration cleanup is not available: %w", ErrMigrationNotReady)
+	}
+	checkpoint, err := s.store.Load()
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("no migration checkpoint: %w", ErrMigrationNotReady)
+	}
+	if err != nil {
+		return fmt.Errorf("load migration checkpoint for cleanup: %w", err)
+	}
+	if checkpoint.Phase == MigrationPhaseSwitched {
+		return fmt.Errorf("migration cleanup refused after cutover: %w", ErrMigrationNotReady)
+	}
+	if checkpoint.RuntimeChannelTransferred {
+		return fmt.Errorf("migration cleanup refused after runtime handoff: %w", ErrMigrationNotReady)
+	}
+	plan, err := NewComponentLaunchPlan(*checkpoint)
+	if err != nil {
+		return err
+	}
+	if err := s.orchestrator.CleanupPrepared(ctx, plan); err != nil {
+		return err
+	}
+	return s.store.Delete()
+}
+
 func (s *MigrationService) Status() (*MigrationCheckpoint, error) {
 	checkpoint, err := s.store.Load()
 	if errors.Is(err, os.ErrNotExist) {

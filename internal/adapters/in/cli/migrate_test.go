@@ -31,6 +31,35 @@ func (migrationCLIFake) MigrationStatus(context.Context) (*app.MigrationCheckpoi
 func (migrationCLIFake) MigrationResume(context.Context) (*app.MigrationCheckpoint, error) {
 	return nil, nil
 }
+func (migrationCLIFake) MigrationCleanup(context.Context) error {
+	return nil
+}
+
+type cleanupRecordingCLIFake struct {
+	migrationCLIFake
+	called bool
+}
+
+func (f *cleanupRecordingCLIFake) MigrationCleanup(context.Context) error {
+	f.called = true
+	return nil
+}
+
+func TestMigrateCleanupInvokesControlPlaneCleanup(t *testing.T) {
+	originalResolver, originalConfigPath := resolveMigrationControlPlane, configPath
+	t.Cleanup(func() { resolveMigrationControlPlane, configPath = originalResolver, originalConfigPath })
+	fake := &cleanupRecordingCLIFake{}
+	resolveMigrationControlPlane = func(string) (migrationControlPlane, func(), error) { return fake, func() {}, nil }
+	configPath = ""
+
+	var out bytes.Buffer
+	cmd := newMigrateCmd()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"cleanup"})
+	require.NoError(t, cmd.ExecuteContext(context.Background()))
+	assert.True(t, fake.called, "cleanup subcommand must invoke the control plane")
+	assert.Contains(t, out.String(), "removed")
+}
 func TestLocalControlPlaneUsesKernelMigrationFacade(t *testing.T) {
 	service, err := app.NewMigrationService(app.NewMigrationPreflight(app.MigrationPreflightProbes{}), mustMigrationStore(t))
 	require.NoError(t, err)
@@ -117,7 +146,7 @@ func TestMigrateSubcommandsAcceptExplicitConfigBeforeAndAfterOperation(t *testin
 		return migrationCLIFake{}, func() {}, nil
 	}
 
-	for _, operation := range []string{"plan", "prepare", "switch", "status", "resume"} {
+	for _, operation := range []string{"plan", "prepare", "switch", "status", "resume", "cleanup"} {
 		for _, args := range [][]string{{"--config", explicitConfig, operation}, {operation, "--config", explicitConfig}} {
 			t.Run(operation+"/"+args[0], func(t *testing.T) {
 				configPath = ""

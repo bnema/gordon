@@ -44,6 +44,13 @@ func (r *remoteControlPlane) MigrationResume(ctx context.Context) (*app.Migratio
 	body, err := r.client.MigrationResume(ctx)
 	return decodeMigrationCheckpoint(body, err)
 }
+
+// MigrationCleanup is deliberately unavailable over the Admin HTTP transport:
+// tearing down a prepared component generation requires the local runtime
+// authority, which a remote observer does not hold.
+func (r *remoteControlPlane) MigrationCleanup(context.Context) error {
+	return fmt.Errorf("migration is unavailable from this control plane")
+}
 func decodeMigrationCheckpoint(body []byte, err error) (*app.MigrationCheckpoint, error) {
 	if err != nil {
 		return nil, err

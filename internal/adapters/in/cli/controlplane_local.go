@@ -195,6 +195,26 @@ func (p *durableMigrationControlPlane) MigrationResume(ctx context.Context) (*ap
 	}
 	return local.MigrationResume(ctx)
 }
+
+// MigrationCleanup refuses a checkpoint that has switched or handed off runtime
+// authority before it ever opens the local monolith kernel: after handoff the
+// old authority is gone, so cleanup through it would be wrong. A prepared,
+// incomplete checkpoint is cleaned through the monolith's runtime authority.
+func (p *durableMigrationControlPlane) MigrationCleanup(ctx context.Context) error {
+	checkpoint, err := p.MigrationStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if checkpoint != nil && (checkpoint.Phase == app.MigrationPhaseSwitched || checkpoint.RuntimeChannelTransferred) {
+		return fmt.Errorf("migration cleanup is unavailable after runtime handoff: %w", app.ErrMigrationNotReady)
+	}
+	local, err := p.localMigration()
+	if err != nil {
+		return err
+	}
+	return local.MigrationCleanup(ctx)
+}
+
 func (l *localControlPlane) MigrationPlan(ctx context.Context) (app.MigrationPreflightReport, error) {
 	svc, err := l.migrationService()
 	if err != nil {
@@ -229,6 +249,13 @@ func (l *localControlPlane) MigrationResume(ctx context.Context) (*app.Migration
 		return nil, err
 	}
 	return svc.Resume(ctx)
+}
+func (l *localControlPlane) MigrationCleanup(ctx context.Context) error {
+	svc, err := l.migrationService()
+	if err != nil {
+		return err
+	}
+	return svc.MigrationCleanup(ctx)
 }
 
 func (l *localControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {

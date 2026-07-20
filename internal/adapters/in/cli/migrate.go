@@ -19,6 +19,7 @@ type migrationControlPlane interface {
 	MigrationSwitch(context.Context) (*app.MigrationCheckpoint, error)
 	MigrationStatus(context.Context) (*app.MigrationCheckpoint, error)
 	MigrationResume(context.Context) (*app.MigrationCheckpoint, error)
+	MigrationCleanup(context.Context) error
 }
 
 // resolveMigrationControlPlane keeps migration's config-selected local/remote
@@ -52,7 +53,7 @@ func migrationControlPlaneFromHandle(handle *controlPlaneHandle, err error) (mig
 func newMigrateCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "migrate", Short: "Plan and safely resume Gordon component migration"}
 	cmd.PersistentFlags().StringVarP(&configPath, "config", "c", "", "Path to config file")
-	cmd.AddCommand(newMigratePlanCmd(), newMigratePrepareCmd(), newMigrateSwitchCmd(), newMigrateStatusCmd(), newMigrateResumeCmd())
+	cmd.AddCommand(newMigratePlanCmd(), newMigratePrepareCmd(), newMigrateSwitchCmd(), newMigrateStatusCmd(), newMigrateResumeCmd(), newMigrateCleanupCmd())
 	return cmd
 }
 
@@ -80,6 +81,23 @@ func newMigrateResumeCmd() *cobra.Command {
 	return newMigrateOperationCmd("resume", func(ctx context.Context, service migrationControlPlane) (any, error) {
 		return service.MigrationResume(ctx)
 	})
+}
+
+// newMigrateCleanupCmd removes a prepared-but-abandoned component generation
+// and resets the durable checkpoint. It is intentionally not a read/print
+// operation: cleanup mutates runtime state and reports only a fixed outcome.
+func newMigrateCleanupCmd() *cobra.Command {
+	return &cobra.Command{Use: "cleanup", Short: "Remove a prepared migration and reset its checkpoint", RunE: func(cmd *cobra.Command, _ []string) error {
+		service, closeFn, err := resolveMigrationControlPlane(configPath)
+		if err != nil {
+			return err
+		}
+		defer closeFn()
+		if err := service.MigrationCleanup(cmd.Context()); err != nil {
+			return err
+		}
+		return cliWriteLine(cmd.OutOrStdout(), "migration prepared components removed")
+	}}
 }
 
 func newMigrateOperationCmd(name string, operation func(context.Context, migrationControlPlane) (any, error)) *cobra.Command {

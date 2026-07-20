@@ -201,6 +201,28 @@ func (s *MigrationCheckpointStore) Save(checkpoint MigrationCheckpoint) error {
 	})
 }
 
+// Delete removes the durable checkpoint so a fresh prepare can start from a
+// clean slate. It holds the same cross-process advisory lock as Save and
+// fsyncs the parent directory, so the removal survives a crash. A missing
+// checkpoint is a durable no-op; a checkpoint that is not a safe owner-only
+// regular file is refused rather than unlinked.
+func (s *MigrationCheckpointStore) Delete() error {
+	if s == nil {
+		return fmt.Errorf("migration checkpoint store is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.withLock(func() error {
+		if err := safeCheckpointDestination(s.path); err != nil {
+			return err
+		}
+		if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove migration checkpoint: %w", err)
+		}
+		return syncCheckpointParent(filepath.Dir(s.path))
+	})
+}
+
 // RecordMigrationCutoverSubphase durably records a fixed mutation intent.
 // The runtime calls it before each listener-transfer mutation; the write is
 // atomic and fsynced by writeAtomic before the engine is invoked.
