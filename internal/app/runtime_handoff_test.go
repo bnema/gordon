@@ -3,11 +3,14 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -79,6 +82,17 @@ func TestRuntimeComponentLauncherHandoffDoesNotSwapWithoutTargetProof(t *testing
 	require.Error(t, launcher.TransferRuntimeCommandChannel(context.Background(), component))
 	require.NoError(t, launcher.StopComponent(context.Background(), component))
 	assert.Len(t, old.commands, 2, "failure must retain old authority")
+}
+
+func TestIsTransientRuntimeHandoffErrorClassifiesByGRPCStatus(t *testing.T) {
+	assert.False(t, isTransientRuntimeHandoffError(nil))
+	assert.True(t, isTransientRuntimeHandoffError(status.Error(codes.Unavailable, "runtime not ready")))
+	assert.False(t, isTransientRuntimeHandoffError(status.Error(codes.Internal, "unavailable backend")),
+		"a non-Unavailable status must not be retried even if its message contains a fallback keyword")
+	assert.True(t, isTransientRuntimeHandoffError(fmt.Errorf("probe replacement runtime: %w", status.Error(codes.Unavailable, "x"))))
+	assert.True(t, isTransientRuntimeHandoffError(errors.New("connection refused by peer")),
+		"non-status errors still fall back to substring matching")
+	assert.False(t, isTransientRuntimeHandoffError(errors.New("permission denied")))
 }
 
 func TestVerifyHandoffSnapshotRejectsWrongRuntimeIdentity(t *testing.T) {

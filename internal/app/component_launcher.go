@@ -13,6 +13,8 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ComponentLauncher is the migration-only lifecycle boundary. Its production
@@ -307,7 +309,18 @@ func proveRuntimeHandoffOnce(ctx context.Context, target RuntimeHandoffClient, c
 }
 
 func isTransientRuntimeHandoffError(err error) bool {
-	return err != nil && (strings.Contains(strings.ToLower(err.Error()), "connection refused") || strings.Contains(strings.ToLower(err.Error()), "connection error") || strings.Contains(strings.ToLower(err.Error()), "unavailable"))
+	if err == nil {
+		return false
+	}
+	// A gRPC status is the authoritative signal: a replacement runtime that has
+	// not yet bound its bootstrap listener reports codes.Unavailable. Any other
+	// status code is a real failure and must not be retried, even if its message
+	// happens to contain a fallback keyword.
+	if st, ok := status.FromError(err); ok {
+		return st.Code() == codes.Unavailable
+	}
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "connection refused") || strings.Contains(text, "connection error") || strings.Contains(text, "unavailable")
 }
 
 func verifyRuntimeHandoffSnapshot(component ComponentLaunchComponent, snapshot domain.RuntimeActualStateSnapshot) error {
