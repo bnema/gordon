@@ -1,5 +1,14 @@
 # Monolith-to-split migration
 
+> **`gordon migrate` is a transitional v2 → v3 tool.** It exists only to convert a
+> **running monolith** into a split component deployment. It is planned for removal
+> in a future release once existing v2 installs have converted.
+>
+> **New v3 installs must not use `migrate`.** There is no monolith to convert, and
+> `migrate plan` fails closed with a `split_topology` preflight check when the
+> configuration already declares a split control plane. Set up a fresh v3 split
+> deployment from scratch instead: see [Split bootstrap](./split-bootstrap.md).
+
 The supported production migration target is **rootless Podman**. Migration is checkpointed and resumable; it does not provide a `rollback` subcommand.
 
 ## Requirements
