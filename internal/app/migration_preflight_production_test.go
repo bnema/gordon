@@ -61,7 +61,7 @@ func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.True(t, report.Ready)
-	require.Len(t, report.Checks, 12)
+	require.Len(t, report.Checks, 13)
 	for _, check := range report.Checks {
 		assert.Equalf(t, PreflightPass, check.Status, "%s: %s", check.Name, check.Remediation)
 	}

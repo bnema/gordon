@@ -13,10 +13,10 @@ func TestMigrationPreflightPassFailMatrixIsReadOnlyAndRedacted(t *testing.T) {
 	probes := passingMigrationProbes(&calls)
 	report := NewMigrationPreflight(probes).Check(context.Background())
 	assert.True(t, report.Ready)
-	assert.Len(t, report.Checks, 12)
-	assert.Equal(t, 12, calls)
+	assert.Len(t, report.Checks, 13)
+	assert.Equal(t, 13, calls)
 
-	for _, name := range []string{"runtime", "image", "config", "data", "registry", "env", "secrets", "ports", "network", "inventory", "disk", "credentials"} {
+	for _, name := range []string{"runtime", "image", "config", "split_topology", "data", "registry", "env", "secrets", "ports", "network", "inventory", "disk", "credentials"} {
 		t.Run(name, func(t *testing.T) {
 			failing := passingMigrationProbes(nil)
 			setFailingMigrationProbe(&failing, name)
@@ -70,7 +70,7 @@ func passingMigrationProbes(calls *int) MigrationPreflightProbes {
 			*calls++
 		}
 		return RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskAvailable: 1 << 30, DiskSufficient: true}, nil
-	}, Image: probe, Config: probe, DataDir: probe, Registry: probe, Env: probe, Secrets: probe, Ports: probe, Network: probe, Inventory: probe, Disk: probe, Credentials: probe}
+	}, Image: probe, Config: probe, SplitTopology: probe, DataDir: probe, Registry: probe, Env: probe, Secrets: probe, Ports: probe, Network: probe, Inventory: probe, Disk: probe, Credentials: probe}
 }
 func setFailingMigrationProbe(probes *MigrationPreflightProbes, name string) {
 	fail := func(context.Context) error { return errors.New("token=not-to-be-reported") }
@@ -83,6 +83,8 @@ func setFailingMigrationProbe(probes *MigrationPreflightProbes, name string) {
 		probes.Image = fail
 	case "config":
 		probes.Config = fail
+	case "split_topology":
+		probes.SplitTopology = fail
 	case "data":
 		probes.DataDir = fail
 	case "registry":

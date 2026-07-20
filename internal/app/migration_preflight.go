@@ -72,19 +72,20 @@ type RuntimePreflightTarget struct {
 // must not create networks, pull images, generate credentials, or mutate state.
 // Reset is called once per report and is used by production's runtime fact cache.
 type MigrationPreflightProbes struct {
-	Reset       func()
-	Runtime     func(context.Context) (RuntimePreflightTarget, error)
-	Image       func(context.Context) error
-	Config      func(context.Context) error
-	DataDir     func(context.Context) error
-	Registry    func(context.Context) error
-	Env         func(context.Context) error
-	Secrets     func(context.Context) error
-	Ports       func(context.Context) error
-	Network     func(context.Context) error
-	Inventory   func(context.Context) error
-	Disk        func(context.Context) error
-	Credentials func(context.Context) error
+	Reset         func()
+	Runtime       func(context.Context) (RuntimePreflightTarget, error)
+	Image         func(context.Context) error
+	Config        func(context.Context) error
+	SplitTopology func(context.Context) error
+	DataDir       func(context.Context) error
+	Registry      func(context.Context) error
+	Env           func(context.Context) error
+	Secrets       func(context.Context) error
+	Ports         func(context.Context) error
+	Network       func(context.Context) error
+	Inventory     func(context.Context) error
+	Disk          func(context.Context) error
+	Credentials   func(context.Context) error
 }
 
 type MigrationPreflight struct{ probes MigrationPreflightProbes }
@@ -123,19 +124,20 @@ func newControlMigrationPreflight(configPath string, cfg Config, runtime out.Run
 	dataDir := resolveDataDir(cfg.Server.DataDir)
 	facts := &runtimePreflightFacts{probe: runtime, publicPorts: configuredPublicPorts(cfg)}
 	probes := MigrationPreflightProbes{
-		Reset:       facts.reset,
-		Runtime:     facts.runtime,
-		Image:       facts.image,
-		Config:      configReparseProbe(configPath),
-		DataDir:     directoryAccessProbe(dataDir, unix.R_OK|unix.W_OK),
-		Registry:    directoryAccessProbe(filepath.Join(dataDir, "registry"), unix.R_OK|unix.W_OK),
-		Env:         environmentDirectoryProbe(resolveEnvDir(cfg)),
-		Secrets:     secretBackendHealthProbe(cfg),
-		Ports:       facts.publicListeners,
-		Network:     facts.network,
-		Inventory:   managedRuntimeInventoryProbe(inventory),
-		Disk:        diskSpaceProbe(dataDir),
-		Credentials: credentialStoreHealthProbe(dataDir),
+		Reset:         facts.reset,
+		Runtime:       facts.runtime,
+		Image:         facts.image,
+		Config:        configReparseProbe(configPath),
+		SplitTopology: splitTopologyProbe(cfg),
+		DataDir:       directoryAccessProbe(dataDir, unix.R_OK|unix.W_OK),
+		Registry:      directoryAccessProbe(filepath.Join(dataDir, "registry"), unix.R_OK|unix.W_OK),
+		Env:           environmentDirectoryProbe(resolveEnvDir(cfg)),
+		Secrets:       secretBackendHealthProbe(cfg),
+		Ports:         facts.publicListeners,
+		Network:       facts.network,
+		Inventory:     managedRuntimeInventoryProbe(inventory),
+		Disk:          diskSpaceProbe(dataDir),
+		Credentials:   credentialStoreHealthProbe(dataDir),
 	}
 	return NewMigrationPreflight(probes)
 }
@@ -150,6 +152,7 @@ func (p *MigrationPreflight) Check(ctx context.Context) MigrationPreflightReport
 		p.runtimeCheck(ctx),
 		p.probeCheck(ctx, "target_image", PreflightRuntime, "make the configured Gordon image available to the rootless Podman user", p.probes.Image),
 		p.probeCheck(ctx, "configuration", PreflightConfig, "fix the configuration error without changing the running deployment", p.probes.Config),
+		p.probeCheck(ctx, "split_topology", PreflightConfig, "this deployment is already running in split mode; migrate only converts a monolith deployment", p.probes.SplitTopology),
 		p.probeCheck(ctx, "data_directory", PreflightStorage, "make the configured data directory accessible and writable", p.probes.DataDir),
 		p.probeCheck(ctx, "registry_storage", PreflightStorage, "create and authorize the configured registry storage directory before migration", p.probes.Registry),
 		p.probeCheck(ctx, "environment_directory", PreflightEnv, "create and authorize the configured environment directory and required files before migration", p.probes.Env),
@@ -290,6 +293,20 @@ func (f *runtimePreflightFacts) publicListeners(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// splitTopologyProbe fails closed when configuration already declares an
+// external control plane. migrate converts a running monolith into split
+// components; a deployment that is already split has no monolith to convert and
+// must instead be provisioned from scratch. It reuses SplitModeEnabled so the
+// guard and the kernel split-mode rejection share a single detection signal.
+func splitTopologyProbe(cfg Config) func(context.Context) error {
+	return func(context.Context) error {
+		if SplitModeEnabled(cfg) {
+			return fmt.Errorf("deployment already runs in split mode")
+		}
+		return nil
+	}
 }
 
 func configReparseProbe(configPath string) func(context.Context) error {

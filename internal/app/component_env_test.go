@@ -148,7 +148,7 @@ func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 		Runtime: func(_ context.Context) (RuntimePreflightTarget, error) {
 			return RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true}, nil
 		},
-		Image: func(context.Context) error { return nil }, Config: func(context.Context) error { return nil }, DataDir: func(context.Context) error { return nil }, Registry: func(context.Context) error { return nil }, Env: func(context.Context) error { return nil }, Secrets: func(context.Context) error { return nil }, Ports: func(context.Context) error { return nil }, Network: func(context.Context) error { return nil }, Inventory: func(context.Context) error { return nil }, Disk: func(context.Context) error { return nil }, Credentials: func(context.Context) error { return nil },
+		Image: func(context.Context) error { return nil }, Config: func(context.Context) error { return nil }, SplitTopology: func(context.Context) error { return nil }, DataDir: func(context.Context) error { return nil }, Registry: func(context.Context) error { return nil }, Env: func(context.Context) error { return nil }, Secrets: func(context.Context) error { return nil }, Ports: func(context.Context) error { return nil }, Network: func(context.Context) error { return nil }, Inventory: func(context.Context) error { return nil }, Disk: func(context.Context) error { return nil }, Credentials: func(context.Context) error { return nil },
 	})
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)

@@ -367,7 +367,7 @@ func TestControlRoleMigrationPreflightProductionListenerNonRuntimeFailures(t *te
 			var report MigrationPreflightReport
 			require.NoError(t, json.Unmarshal(body, &report))
 			require.False(t, report.Ready)
-			require.Len(t, report.Checks, 12)
+			require.Len(t, report.Checks, 13)
 			failures := make([]PreflightCheck, 0, 1)
 			for _, check := range report.Checks {
 				if check.Status == PreflightFail {
@@ -459,7 +459,7 @@ func assertMigrationPreflightAuthContract(t *testing.T, baseURL, configPath stri
 
 func assertMigrationPreflightReport(t *testing.T, report MigrationPreflightReport) {
 	t.Helper()
-	require.Len(t, report.Checks, 12)
+	require.Len(t, report.Checks, 13)
 	for _, check := range report.Checks {
 		assert.NotEmpty(t, check.Name)
 		assert.NotEmpty(t, check.Category)
