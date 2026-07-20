@@ -45,7 +45,6 @@ type ComponentLauncher interface {
 	StartComponent(context.Context, ComponentLaunchComponent) error
 	StopComponent(context.Context, ComponentLaunchComponent) error
 	CheckComponentHealth(context.Context, ComponentLaunchComponent) error
-	ReadComponentLogs(context.Context, ComponentLaunchComponent) (string, error)
 	ConnectEdgeToAppNetwork(context.Context, ComponentLaunchComponent, string) error
 	RemovePreparedComponent(context.Context, ComponentLaunchComponent) error
 }
@@ -336,10 +335,6 @@ func runtimeHandoffContainerSummary(containers []domain.RuntimeContainerState) s
 }
 func (l *RuntimeComponentLauncher) CheckComponentHealth(ctx context.Context, component ComponentLaunchComponent) error {
 	return l.send(ctx, domain.RuntimeComponentLifecycleHealth, component, componentGeneration(component), componentMigrationID(component), "health")
-}
-func (l *RuntimeComponentLauncher) ReadComponentLogs(ctx context.Context, component ComponentLaunchComponent) (string, error) {
-	err := l.send(ctx, domain.RuntimeComponentLifecycleLogs, component, componentGeneration(component), componentMigrationID(component), "logs")
-	return "", err
 }
 func (l *RuntimeComponentLauncher) ConnectEdgeToAppNetwork(ctx context.Context, component ComponentLaunchComponent, network string) error {
 	component.InternalNetwork = network

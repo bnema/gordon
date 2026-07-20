@@ -28,9 +28,6 @@ func (l *recordingComponentLauncher) CheckComponentHealth(_ context.Context, com
 	l.calls = append(l.calls, "health:"+string(component.Role))
 	return nil
 }
-func (l *recordingComponentLauncher) ReadComponentLogs(context.Context, ComponentLaunchComponent) (string, error) {
-	return "", nil
-}
 func (l *recordingComponentLauncher) ConnectEdgeToAppNetwork(_ context.Context, component ComponentLaunchComponent, network string) error {
 	l.calls = append(l.calls, "connect:"+network)
 	return nil
