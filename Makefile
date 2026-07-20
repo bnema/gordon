@@ -343,7 +343,7 @@ pre-release-acceptance: ## Fail closed on every documented pre-release acceptanc
 	@$(MAKE) gitleaks
 	@$(MAKE) release-check
 	@go test ./internal/testutils/compatoldnew -run '^TestReleaseGateExampleConfigTOML$$' -count=1
-	@for operation in plan prepare resume status switch; do go run . migrate "$$operation" --help >/dev/null; done
+	@for operation in plan prepare resume status switch cleanup; do go run . migrate "$$operation" --help >/dev/null; done
 	@go run . --help >/dev/null
 	@go run . serve --help >/dev/null
 	@# This focused source gate creates all generated role manifests and proves role/env minimization.
