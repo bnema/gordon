@@ -253,7 +253,7 @@ func (o *MigrationOrchestrator) transferRuntimeCommandChannel(ctx context.Contex
 		return nil
 	}
 	for _, component := range plan.Components {
-		if component.Role != "runtime" {
+		if component.Role != domain.ComponentRoleRuntime {
 			continue
 		}
 		if err := transfer.TransferRuntimeCommandChannel(ctx, component); err != nil {
@@ -281,7 +281,7 @@ func (o *MigrationOrchestrator) checkPlanHealth(ctx context.Context, plan Compon
 // connects only checkpointed managed app networks; it never changes traffic.
 func (o *MigrationOrchestrator) connectEdgeAppNetworks(ctx context.Context, plan ComponentLaunchPlan, checkpoint *MigrationCheckpoint) error {
 	for _, component := range plan.Components {
-		if component.Role != "edge" {
+		if component.Role != domain.ComponentRoleEdge {
 			continue
 		}
 		for _, network := range plan.AppNetworks {
