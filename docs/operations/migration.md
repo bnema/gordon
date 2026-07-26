@@ -52,11 +52,13 @@ test -n "$secret_volume"
 For a consistency-safe backup, stop control and verify it is stopped before reading the volume. This releases the exclusive store lease and prevents GPG or `pass` writes during the archive. Stream the archive directly into authenticated encryption; no plaintext archive is created. Replace the recipient placeholder with an operator-held age recipient, keep the encrypted file owner-only, and never list archive contents in shared logs.
 
 ```bash
-set -o pipefail
+set -euo pipefail
 podman stop "$control_id"
 test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
 umask 077
-backup_file="$PWD/gordon-control-secrets.tar.gz.age"
+backup_dir="$PWD"
+backup_file="$backup_dir/gordon-control-secrets.tar.gz.age"
+backup_candidate="$(mktemp "$backup_dir/.gordon-control-secrets.tar.gz.age.candidate.XXXXXX")"
 age_recipient='age1exampleoperatorrecipient000000000000000000000000000000000'
 age_identity='/private/path/to/age-identity'
 verify_volume="gordon-secrets-backup-verify-$(date +%s)"
@@ -65,12 +67,13 @@ doctor_config="$(mktemp)"
 printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' \
   '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' \
   'token = "backup-validation-only-not-a-runtime-credential"' >"$doctor_config"
-trap 'rm -f "$doctor_config"; podman volume rm -f "$verify_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
+chmod 0644 "$doctor_config"
+trap 'test -z "$backup_candidate" || rm -f -- "$backup_candidate"; rm -f -- "$doctor_config"; podman volume rm -f "$verify_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
 podman run --rm -v "$secret_volume:/source:ro" docker.io/library/alpine:latest \
-  tar -C /source -czf - . | age --encrypt --recipient "$age_recipient" >"$backup_file"
-test -s "$backup_file"
+  tar -C /source -czf - . | age --encrypt --recipient "$age_recipient" >"$backup_candidate"
+test -s "$backup_candidate"
 podman volume create "$verify_volume" >/dev/null
-age --decrypt --identity "$age_identity" "$backup_file" | \
+age --decrypt --identity "$age_identity" "$backup_candidate" | \
   podman run --rm -i -v "$verify_volume:/verify" docker.io/library/alpine:latest \
     sh -ec 'umask 077; chmod 700 /verify; tar -C /verify -xzf -'
 podman run --rm -v "$verify_volume:/verify:ro" docker.io/library/alpine:latest sh -ec '
@@ -88,15 +91,26 @@ podman run --rm -v "$verify_volume:/var/lib/gordon/secrets" \
   -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store \
   "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
 podman volume rm "$verify_volume" >/dev/null
+# Preserve the previously verified ciphertext under a versioned name before the
+# atomic replacement. A hard link keeps the old inode safe if publication fails.
+if test -e "$backup_file"; then
+  backup_previous="${backup_file}.verified.$(date -u +%Y%m%dT%H%M%S%N)"
+  ln -- "$backup_file" "$backup_previous"
+fi
+mv -f -- "$backup_candidate" "$backup_file"
+backup_candidate=''
 rm -f "$doctor_config"
 trap - EXIT HUP INT TERM
 ```
 
-Do not declare or rotate to this backup unless decryption, authenticated archive extraction, structural checks, and the actual control artifact's `secrets doctor --write-check` all succeed. The doctor runs as the image's default user and performs managed-pass write/read/delete validation in the temporary verification volume. Cleanup is trapped on every exit; no plaintext archive is written to persistent storage.
+Do not declare or rotate to this backup unless decryption, authenticated archive extraction, structural checks, and the actual control artifact's `secrets doctor --write-check` all succeed. The owner-only candidate is created in the backup's destination directory, and the trap removes it after any failed pipeline or validation; the known-good backup is therefore never opened or truncated. After success, the old verified ciphertext is retained under a timestamped `.verified.*` name and `mv` atomically publishes the candidate. The doctor runs as the image's default user and performs managed-pass write/read/delete validation in the temporary verification volume. Cleanup is trapped on every exit; no plaintext archive is written to persistent storage.
+
+The doctor TOML is deliberately `0644` because the default rootless image user must read the bind mount. It contains only generic dummy validation configuration: authentication is disabled, the endpoint uses the documentation-only `192.0.2.0/24` range, and the token is not a credential. Never add secrets to these doctor files.
 
 Restore only while control remains stopped. First decrypt and authenticate the complete archive into a new owner-only staging volume. The live volume is not mounted during this phase, so a wrong identity, truncated ciphertext, malformed archive, or failed validation cannot damage the valid store. Supply the age identity through a private operator-controlled path.
 
 ```bash
+set -euo pipefail
 age_identity='/private/path/to/age-identity'
 staging_volume="gordon-secrets-restore-stage-$(date +%s)"
 control_image="$(podman inspect --format '{{.ImageName}}' "$control_id")"
@@ -106,9 +120,10 @@ umask 077
 printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' \
   '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' \
   'token = "restore-validation-only-not-a-runtime-credential"' >"$doctor_config"
+# Non-secret dummy config; world-readable so the default rootless image user can read it.
+chmod 0644 "$doctor_config"
 podman volume create "$staging_volume" >/dev/null
 trap 'rm -f "$doctor_config"; podman volume rm -f "$staging_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
-set -o pipefail
 age --decrypt --identity "$age_identity" "$backup_file" | \
   podman run --rm -i -v "$staging_volume:/staging" docker.io/library/alpine:latest \
     sh -ec 'umask 077; chmod 700 /staging; tar -C /staging -xzf -'
@@ -134,7 +149,7 @@ podman run --rm -v "$staging_volume:/var/lib/gordon/secrets" \
   "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
 ```
 
-The `doctor --write-check` invocation uses the actual control image and its default user. It validates the GPG identity and performs an application-level write/read/delete against staging without printing values.
+The `doctor --write-check` invocation uses the actual control image and its default rootless user. The explicitly `0644` doctor file is safe to bind-mount because it contains only the same generic, non-secret dummy validation configuration described above. It validates the GPG identity and performs an application-level write/read/delete against staging without printing values.
 
 Only after authenticated extraction and validation succeed, copy the staged `current` tree beside the live tree and publish it with a rename. Keep `.restore-old` until the replacement has started and passed a fresh write/read/delete check. Every failure path below stops control and automatically restores the old tree.
 
@@ -173,6 +188,8 @@ for attempt in $(seq 1 30); do
 done
 test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = true
 # Release the control lease, then perform the actual managed-pass read/write health check.
+# Reassert rootless readability before reusing the non-secret dummy doctor config.
+chmod 0644 "$doctor_config"
 podman stop "$control_id" >/dev/null
 podman run --rm -v "$secret_volume:/var/lib/gordon/secrets" \
   -v "$doctor_config:/tmp/gordon-doctor.toml:ro" \
