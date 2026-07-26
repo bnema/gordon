@@ -158,7 +158,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	if !approvedPreparedPortPublishes(command.TargetComponentRole, command.PortPublishes) {
 		return fmt.Errorf("invalid component bootstrap port binding")
 	}
-	if err := approvedComponentConfigFile(command.ConfigFile); err != nil {
+	if err := approvedComponentConfigFile(command, command.ConfigFile); err != nil {
 		return componentLifecycleError("validate config", err)
 	}
 	component, err := m.find(ctx, command)
@@ -190,7 +190,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 // commands may create. It is shared by prepare and cutover rollback so a
 // failed listener transfer can restore the identical probe-only edge.
 func (m *runtimeComponentLifecycleManager) componentConfig(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (*domain.ContainerConfig, error) {
-	env, err := componentLifecycleEnvironment(command.EnvironmentFile)
+	env, err := componentLifecycleEnvironment(command, command.EnvironmentFile)
 	if err != nil {
 		return nil, err
 	}
@@ -198,6 +198,11 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if err != nil {
 		return nil, err
 	}
+	identity, ok := domain.FixedComponentProcessIdentity(command.TargetComponentRole)
+	if !ok {
+		return nil, fmt.Errorf("invalid component process identity")
+	}
+	noNewPrivileges := true
 	config := &domain.ContainerConfig{
 		Image: command.DesiredImage, Name: command.TargetComponentID, Env: env,
 		Labels: componentLifecycleLabels(command), NetworkMode: command.InternalNetwork,
@@ -205,6 +210,12 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
 		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": configFile},
 		Volumes:         m.componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
+		User:            identity.User,
+		UsernsMode:      componentKeepIDMode(identity),
+		GroupAdd:        []string{},
+		CapDrop:         []string{"ALL"},
+		CapAdd:          []string{},
+		NoNewPrivileges: &noNewPrivileges,
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
 		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
@@ -1030,31 +1041,114 @@ func (m *runtimeComponentLifecycleManager) find(ctx context.Context, command dom
 	return nil, nil
 }
 
-func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand) error {
-	configured := strings.TrimSpace(m.policy.ManagedControlSecretsVolume)
-	managedMounts := make([]domain.ContainerVolumeMount, 0, 1)
-	for _, mount := range container.VolumeMounts {
-		managedSource := validManagedControlSecretsVolume(mount.Name) || validManagedControlSecretsVolume(mount.Source)
-		if managedSource || mount.Destination == managedControlSecretsPath {
-			managedMounts = append(managedMounts, mount)
-		}
-	}
+func componentKeepIDMode(identity domain.ComponentProcessIdentity) string {
+	return "keep-id:uid=" + strconv.Itoa(identity.UID) + ",gid=" + strconv.Itoa(identity.GID)
+}
 
-	valid := len(managedMounts) == 0
-	if command.TargetComponentRole == domain.ComponentRoleControl {
-		valid = validManagedControlSecretsVolume(configured) && len(managedMounts) == 1
-		if valid {
-			mount := managedMounts[0]
-			valid = mount.Type == "volume" && mount.Name == configured && mount.Destination == managedControlSecretsPath && !mount.ReadOnly
+func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand) error {
+	if !validExistingComponentIdentity(container, command.TargetComponentRole) {
+		return RuntimePolicyDeniedError{
+			Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle process identity is not allowed",
+			CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
 		}
 	}
-	if valid {
+	ports := command.PortPublishes
+	if containerPortsMatch(container, command.FinalPortPublishes) {
+		ports = command.FinalPortPublishes
+	}
+	expected, err := m.expectedLifecycleMounts(command, ports)
+	if err == nil && lifecycleMountsMatch(container.VolumeMounts, expected) {
 		return nil
 	}
 	return RuntimePolicyDeniedError{
-		Reason: RuntimePolicyReasonUnsafeHostBindDenied, Message: "component lifecycle managed secret volume is not allowed",
+		Reason: RuntimePolicyReasonUnsafeHostBindDenied, Message: "component lifecycle mounts are not allowed",
 		CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
 	}
+}
+
+type expectedLifecycleMount struct {
+	source   string
+	readOnly bool
+}
+
+func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (map[string]expectedLifecycleMount, error) {
+	configFile, err := componentLifecycleConfigFile(command, ports)
+	if err != nil {
+		return nil, err
+	}
+	expected := map[string]expectedLifecycleMount{"/etc/gordon/role.toml": {source: configFile, readOnly: true}}
+	for destination, source := range m.componentPersistentVolumes(command) {
+		expected[destination] = expectedLifecycleMount{source: source}
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRegistry && strings.TrimSpace(m.policy.RegistryStorageRoot) != "" {
+		expected = map[string]expectedLifecycleMount{
+			"/etc/gordon/role.toml":    {source: configFile, readOnly: true},
+			"/var/lib/gordon/registry": {source: filepath.Clean(m.policy.RegistryStorageRoot)},
+		}
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		environment, envErr := componentLifecycleEnvironment(command, command.EnvironmentFile)
+		if envErr != nil {
+			return nil, envErr
+		}
+		if source, _ := runtimeComponentSocketMount(environment); source != "" {
+			expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: source, readOnly: true}
+		}
+	}
+	m.addExpectedMigrationMounts(command, expected)
+	return expected, nil
+}
+
+func (m *runtimeComponentLifecycleManager) addExpectedMigrationMounts(command domain.RuntimeSelfUpdateCommand, expected map[string]expectedLifecycleMount) {
+	root := filepath.Clean(strings.TrimSpace(m.policy.MigrationStateRoot))
+	if root == "." || !filepath.IsAbs(root) {
+		return
+	}
+	id := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	state := filepath.Join(root, id)
+	destination := filepath.Join("/var/lib/gordon/migration", id)
+	switch command.TargetComponentRole {
+	case domain.ComponentRoleRuntime:
+		expected[destination] = expectedLifecycleMount{source: state}
+		for _, name := range []string{"config", "env"} {
+			path := filepath.Join(root, name)
+			expected[path] = expectedLifecycleMount{source: path, readOnly: true}
+		}
+	case domain.ComponentRoleControl:
+		expected[destination] = expectedLifecycleMount{source: state, readOnly: true}
+		expected[filepath.Join(destination, "attestation")] = expectedLifecycleMount{source: filepath.Join(state, "attestation")}
+	}
+}
+
+func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[string]expectedLifecycleMount) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(actual))
+	for _, mount := range actual {
+		wanted, ok := expected[mount.Destination]
+		if !ok || mount.ReadOnly != wanted.readOnly {
+			return false
+		}
+		if _, duplicate := seen[mount.Destination]; duplicate {
+			return false
+		}
+		seen[mount.Destination] = struct{}{}
+		if filepath.IsAbs(wanted.source) {
+			if mount.Type != "bind" || filepath.Clean(mount.Source) != filepath.Clean(wanted.source) {
+				return false
+			}
+		} else if mount.Type != "volume" || mount.Name != wanted.source {
+			return false
+		}
+	}
+	return true
+}
+
+func validExistingComponentIdentity(container *domain.Container, role domain.ComponentRole) bool {
+	identity, ok := domain.FixedComponentProcessIdentity(role)
+	return ok && container != nil && container.User == identity.User && container.UsernsMode == componentKeepIDMode(identity) &&
+		len(container.GroupAdd) == 0 && slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
@@ -1124,18 +1218,22 @@ func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command do
 // retain edge.toml, preserving the authenticated probe configuration.
 func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (string, error) {
 	path := command.ConfigFile
-	if command.TargetComponentRole == domain.ComponentRoleEdge && command.LifecycleAction == domain.RuntimeComponentLifecycleActivate && approvedFinalPortPublishes(ports) && filepath.Base(path) == "edge.toml" {
+	if command.TargetComponentRole == domain.ComponentRoleEdge && command.LifecycleAction == domain.RuntimeComponentLifecycleActivate && approvedFinalPortPublishes(ports) && slices.Equal(ports, command.FinalPortPublishes) && filepath.Base(path) == "edge.toml" {
 		path = filepath.Join(filepath.Dir(path), "edge-final.toml")
 	}
-	if err := approvedComponentConfigFile(path); err != nil {
+	if err := approvedComponentConfigFile(command, path); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-func approvedComponentConfigFile(path string) error {
+func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path string) error {
 	clean := filepath.Clean(strings.TrimSpace(path))
-	if !filepath.IsAbs(clean) || !strings.Contains(clean, "/migration/config/") {
+	name := string(command.TargetComponentRole) + ".toml"
+	if command.TargetComponentRole == domain.ComponentRoleEdge && filepath.Base(clean) == "edge-final.toml" {
+		name = "edge-final.toml"
+	}
+	if !approvedGeneratedRolePath(clean, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
 		return fmt.Errorf("invalid component configuration file")
 	}
 	info, err := os.Lstat(clean)
@@ -1145,15 +1243,30 @@ func approvedComponentConfigFile(path string) error {
 	return nil
 }
 
-func componentLifecycleEnvironment(path string) ([]string, error) {
+func approvedGeneratedRolePath(path, kind, migrationID string, generation uint64, name string) bool {
+	if !filepath.IsAbs(path) || migrationID == "" || generation == 0 || filepath.Base(path) != name {
+		return false
+	}
+	generationDir := filepath.Dir(path)
+	migrationDir := filepath.Dir(generationDir)
+	kindDir := filepath.Dir(migrationDir)
+	return filepath.Base(generationDir) == strconv.FormatUint(generation, 10) && filepath.Base(migrationDir) == migrationID &&
+		filepath.Base(kindDir) == kind && filepath.Base(filepath.Dir(kindDir)) == "migration"
+}
+
+func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path string) ([]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	info, err := os.Lstat(path)
+	clean := filepath.Clean(strings.TrimSpace(path))
+	if !approvedGeneratedRolePath(clean, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
+		return nil, fmt.Errorf("invalid component environment file")
+	}
+	info, err := os.Lstat(clean)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("invalid component environment file")
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(clean)
 	if err != nil || len(data) > 64<<10 {
 		return nil, fmt.Errorf("invalid component environment file")
 	}

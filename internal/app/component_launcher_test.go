@@ -37,6 +37,20 @@ func (l *recordingComponentLauncher) RemovePreparedComponent(_ context.Context, 
 	return nil
 }
 
+func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) {
+	checkpoint := MigrationCheckpoint{
+		MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2",
+		ConfigFileReferences: []string{
+			"/private/migration/config/fixture/1/control.toml",
+			"/private/migration/config/fixture/1/runtime.toml",
+			"/private/migration/config/fixture/1/registry.toml",
+			"/private/migration/config/other/1/edge.toml",
+		},
+	}
+	_, err := NewComponentLaunchPlan(checkpoint)
+	require.Error(t, err)
+}
+
 func TestComponentLauncherPlanIsOrderedAndNoCutover(t *testing.T) {
 	plan, err := NewComponentLaunchPlan(MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 2, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"})
 	require.NoError(t, err)
@@ -46,5 +60,8 @@ func TestComponentLauncherPlanIsOrderedAndNoCutover(t *testing.T) {
 	for _, component := range plan.Components {
 		assert.NotEmpty(t, component.Labels[domain.LabelComponentDesiredStateHash])
 		assert.NotEmpty(t, component.ComponentID)
+		identity, ok := domain.FixedComponentProcessIdentity(component.Role)
+		require.True(t, ok)
+		assert.Equal(t, componentRoleLaunchHash(component.ComponentID, component.Image, component.InternalNetwork, identity), component.DesiredStateHash)
 	}
 }

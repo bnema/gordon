@@ -107,6 +107,9 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
+	if err := validateComponentLaunchReferences(checkpoint, envByRole, configByRole); err != nil {
+		return ComponentLaunchPlan{}, err
+	}
 	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, nil) {
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid runtime bootstrap transport")
 	}
@@ -115,7 +118,11 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
-		hash := componentLaunchHash(componentID, image, plan.InternalNetwork)
+		identity, ok := domain.FixedComponentProcessIdentity(role)
+		if !ok {
+			return ComponentLaunchPlan{}, fmt.Errorf("component process identity is required")
+		}
+		hash := componentRoleLaunchHash(componentID, image, plan.InternalNetwork, identity)
 		labels, err := BuildComponentLabels(ComponentLabelRequest{Role: role, Version: version, Generation: checkpoint.ComponentGeneration, MigrationID: checkpoint.MigrationID, Owner: "migration", DesiredStateHash: hash})
 		if err != nil {
 			return ComponentLaunchPlan{}, err
@@ -151,6 +158,44 @@ func safeAppNetworks(networks []string) []string {
 func componentLaunchHash(componentID, image, network string) string {
 	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network))
 	return hex.EncodeToString(sum[:])
+}
+
+func componentRoleLaunchHash(componentID, image, network string, identity domain.ComponentProcessIdentity) string {
+	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User))
+	return hex.EncodeToString(sum[:])
+}
+
+func validateComponentLaunchReferences(checkpoint MigrationCheckpoint, envByRole, configByRole map[domain.ComponentRole]string) error {
+	if len(checkpoint.ConfigFileReferences) != 0 {
+		if len(checkpoint.ConfigFileReferences) != len(componentRoles) || len(configByRole) != len(componentRoles) {
+			return fmt.Errorf("component configuration references must cover every role")
+		}
+		for _, role := range componentRoles {
+			if !approvedLaunchReference(configByRole[role], "config", checkpoint, string(role)+".toml") {
+				return fmt.Errorf("invalid %s component configuration reference", role)
+			}
+		}
+	}
+	if len(checkpoint.EnvFileReferences) != 0 {
+		if len(envByRole) != len(checkpoint.EnvFileReferences) {
+			return fmt.Errorf("component environment references must have distinct roles")
+		}
+		for role, path := range envByRole {
+			if !approvedLaunchReference(path, "env", checkpoint, string(role)+".env") {
+				return fmt.Errorf("invalid %s component environment reference", role)
+			}
+		}
+	}
+	return nil
+}
+
+func approvedLaunchReference(path, kind string, checkpoint MigrationCheckpoint, name string) bool {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	generation := filepath.Dir(clean)
+	migration := filepath.Dir(generation)
+	kindDir := filepath.Dir(migration)
+	return filepath.IsAbs(clean) && filepath.Base(clean) == name && filepath.Base(generation) == fmt.Sprint(checkpoint.ComponentGeneration) &&
+		filepath.Base(migration) == checkpoint.MigrationID && filepath.Base(kindDir) == kind && filepath.Base(filepath.Dir(kindDir)) == "migration"
 }
 
 func componentPreparedPorts(bindings []MigrationPortBinding, role domain.ComponentRole) []domain.ContainerPortPublish {

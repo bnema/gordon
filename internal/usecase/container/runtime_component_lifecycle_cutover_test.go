@@ -48,7 +48,7 @@ func (c *recoveringMigrationCutoverCommitter) MigrationCutoverSubphase(_ context
 
 func TestRuntimeComponentLifecycleActivateColdCutoverWithoutOldContainer(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
@@ -72,8 +72,8 @@ func TestRuntimeComponentLifecycleActivateColdFailuresRestoreAndProvePreparedEdg
 	for _, failure := range []string{"stop-prepared", "remove-prepared", "create-final", "start-final", "health-final", "commit-final"} {
 		t.Run(failure, func(t *testing.T) {
 			config := cutoverConfig(t)
-			prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
-			restored := &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")}
+			prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
+			restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")})
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Twice()
 			runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
@@ -130,8 +130,8 @@ func TestRuntimeComponentLifecycleActivateColdFailuresRestoreAndProvePreparedEdg
 
 func TestRuntimeComponentLifecycleActivateColdNetworkFailureRestoresAndProvesPreparedEdge(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
-	restored := &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
+	restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Twice()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
@@ -160,7 +160,7 @@ func TestRuntimeComponentLifecycleActivateColdNetworkFailureRestoresAndProvesPre
 
 func TestRuntimeComponentLifecycleActivateColdRecoveryCommitsHealthyFinal(t *testing.T) {
 	config := cutoverConfig(t)
-	final := &domain.Container{ID: "final", Name: "gordon-edge-fixture-g1", Ports: []int{8080, 5000}, Labels: componentLabels("edge")}
+	final := edgeLifecycleFixture(config, &domain.Container{ID: "final", Name: "gordon-edge-fixture-g1", Ports: []int{8080, 5000}, Labels: componentLabels("edge")})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{final}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
@@ -173,7 +173,7 @@ func TestRuntimeComponentLifecycleActivateColdRecoveryCommitsHealthyFinal(t *tes
 
 func TestRuntimeComponentLifecycleActivateColdRecoveryRestoresPreparedEdge(t *testing.T) {
 	config := cutoverConfig(t)
-	restored := &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+	restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
@@ -190,7 +190,7 @@ func TestRuntimeComponentLifecycleActivateColdRecoveryRestoresPreparedEdge(t *te
 
 func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionally(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -217,7 +217,7 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 
 func TestRuntimeComponentLifecycleActivateRecordsDurableIntentBeforeEachMutation(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -247,7 +247,7 @@ func TestRuntimeComponentLifecycleActivateRecordsDurableIntentBeforeEachMutation
 func TestRuntimeComponentLifecycleActivateRecoversWhenPreparedEdgeWasRemoved(t *testing.T) {
 	config := cutoverConfig(t)
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
-	restored := &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+	restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{old}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "old").Return(false, nil).Once()
@@ -269,7 +269,7 @@ func TestRuntimeComponentLifecycleActivateRecoversWhenPreparedEdgeWasRemoved(t *
 
 func TestRuntimeComponentLifecycleActivateCompletesAfterCallerCancellation(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -293,7 +293,7 @@ func TestRuntimeComponentLifecycleActivateCompletesAfterCallerCancellation(t *te
 
 func TestRuntimeComponentLifecycleActivateRetriesTransientFinalListenerRelease(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -315,7 +315,7 @@ func TestRuntimeComponentLifecycleActivateRetriesTransientFinalListenerRelease(t
 
 func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -340,7 +340,7 @@ func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.
 
 func TestRuntimeComponentLifecycleActivateRollsBackWhenAppNetworkRestoreFails(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -370,7 +370,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenAppNetworkRestoreFails(t 
 
 func TestRuntimeComponentLifecycleActivateRollsBackWhenDurableCutoverCommitFails(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -401,7 +401,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenDurableCutoverCommitFails
 
 func TestRuntimeComponentLifecycleActivateMarksRollbackNonretryableWhenRestoreFails(t *testing.T) {
 	config := cutoverConfig(t)
-	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -424,7 +424,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testi
 	for _, failure := range []string{"stop-old", "stop-prepared", "remove-prepared", "create-final", "start-final", "postcheck-final"} {
 		t.Run(failure, func(t *testing.T) {
 			config := cutoverConfig(t)
-			prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+			prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 			old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
@@ -488,7 +488,7 @@ func TestRuntimeComponentLifecycleActivateRejectsUnmanagedOldOrFinalPorts(t *tes
 		{name: "unallowlisted final port", old: &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}, ports: []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 2375, ContainerPort: 2375, Protocol: domain.NetworkProtocolTCP}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+			prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")})
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
 			runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
@@ -520,12 +520,26 @@ func TestRuntimeComponentLifecycleRegistryReusesCanonicalStorage(t *testing.T) {
 	command.LifecycleAction = domain.RuntimeComponentLifecycleStart
 	command.TargetComponentRole = domain.ComponentRoleRegistry
 	command.TargetComponentID = "gordon-registry-fixture-g1"
+	command.ConfigFile = filepath.Join(filepath.Dir(config), "registry.toml")
+	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[registry]\n"), 0o600))
 
 	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, RegistryStorageRoot: storage}).(*runtimeComponentLifecycleManager)
 	component, err := manager.componentConfig(command, nil)
 	require.NoError(t, err)
 	assert.Equal(t, storage, component.Volumes["/var/lib/gordon/registry"])
 	assert.Len(t, component.Volumes, 1, "registry must not receive an empty generation volume")
+}
+
+func edgeLifecycleFixture(config string, container *domain.Container) *domain.Container {
+	if len(container.Ports) == 2 {
+		config = filepath.Join(filepath.Dir(config), "edge-final.toml")
+	}
+	container.User = "21003:21003"
+	container.UsernsMode = "keep-id:uid=21003,gid=21003"
+	container.CapDrop = []string{"ALL"}
+	container.NoNewPrivileges = true
+	container.VolumeMounts = []domain.ContainerVolumeMount{{Type: "bind", Source: config, Destination: "/etc/gordon/role.toml", ReadOnly: true}}
+	return container
 }
 
 func componentLabels(role string) map[string]string {

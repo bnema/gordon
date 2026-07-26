@@ -143,6 +143,9 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 
 func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
 	p = p.normalize()
+	if err := p.checkComponentProcessIdentity(identity, routeDomain, cfg); err != nil {
+		return err
+	}
 	if cfg.Privileged {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonPrivilegedDenied, "privileged containers are not allowed")
 	}
@@ -155,6 +158,19 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 		}
 	}
 	return p.checkContainerMounts(identity, routeDomain, cfg)
+}
+
+func (p RuntimePolicy) checkComponentProcessIdentity(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
+	if cfg.Labels[domain.LabelComponent] != "true" || cfg.Labels[domain.LabelComponentDesiredStateHash] == "" {
+		return nil
+	}
+	role := domain.ComponentRole(cfg.Labels[domain.LabelComponentRole])
+	expected, ok := domain.FixedComponentProcessIdentity(role)
+	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) || len(cfg.GroupAdd) != 0 ||
+		!slices.Equal(cfg.CapDrop, []string{"ALL"}) || len(cfg.CapAdd) != 0 || cfg.NoNewPrivileges == nil || !*cfg.NoNewPrivileges {
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnmanagedMutation, "component process identity is not allowed")
+	}
+	return nil
 }
 
 func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
