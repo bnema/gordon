@@ -31,7 +31,8 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 			"GORDON_SERVER_PORT":         "8080",
 			TokenSecretEnvVar:            "fixture-token-secret-at-least-32-characters",
 			"GORDON_MIGRATION_IMAGE":     "fixture.invalid/gordon:next",
-			"PASSWORD_STORE_DIR":         "/redacted/pass",
+			"PASSWORD_STORE_DIR":         "/host/password-store",
+			"GNUPGHOME":                  "/host/gnupg",
 			"CLOUDFLARE_DNS_API_TOKEN":   secret,
 			"AWS_ACCESS_KEY_ID":          "fixture-access",
 			"AWS_SECRET_ACCESS_KEY":      secret,
@@ -44,7 +45,11 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	})
 	require.NoError(t, err)
 
-	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
+	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", TokenSecretEnvVar, "GNUPGHOME", "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
+	assert.Equal(t, managedPassGPGHome, manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
+	assert.Equal(t, managedPassStoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
+	assert.NotEqual(t, "/host/gnupg", manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
+	assert.NotEqual(t, "/host/password-store", manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCKER_HOST", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
 	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_EDGE_TOKEN", "GORDON_MIGRATION_PROBE_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleEdge))
 	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_REGISTRY_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleRegistry))

@@ -71,8 +71,6 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 			Str(zerowrap.FieldLayer, "adapter").
 			Str(zerowrap.FieldAdapter, "secrets").
 			Str("provider", "pass").
-			Str("path", path).
-			Err(err).
 			Msg("rejected invalid pass path")
 		return "", err
 	}
@@ -83,10 +81,7 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); arguments are validated secret paths
 	output, err := cmd.Output()
 	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			return "", fmt.Errorf("pass command failed: %s", string(exitError.Stderr))
-		}
-		return "", fmt.Errorf("failed to execute pass command: %w", err)
+		return "", fmt.Errorf("pass command failed")
 	}
 
 	secret := strings.TrimSpace(string(output))
@@ -98,7 +93,6 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "secrets").
 		Str("provider", "pass").
-		Str("path", path).
 		Msg("successfully retrieved secret from pass")
 
 	return secret, nil

@@ -33,6 +33,12 @@ export GORDON_MIGRATION_IMAGE="ghcr.io/example/gordon:<target-version>"
 
 Do not put real token values in TOML, shell history, issue reports, or logs.
 
+## Pass secrets are operator-imported
+
+Split control owns a private `pass`/GPG store in its persistent managed volume. Migration never mounts a host keyring or password store and never imports legacy environment files automatically.
+
+After control is prepared, use a private shell with history disabled to re-enter each application and attachment secret with the authenticated `gordon secrets set` command. For a bulk move, export the old store to an owner-only temporary file and explicitly submit each key through that command; verify the new entries, then securely remove the export. Recreate authentication tokens after the move: tokens and signing material from the monolith are not implicitly transferred and old tokens must not be assumed valid.
+
 ## Maintenance-window procedure
 
 Before stopping the service, take and verify a mutually consistent snapshot of the config, `server.data_dir`, registry storage, migration state, and component volumes. Prepare an executable rollback script that stops any split public listener, restores that snapshot, and starts exactly one host `gordon.service`. Keep the script outside the directories it restores.

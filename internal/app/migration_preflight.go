@@ -381,9 +381,9 @@ func secretBackendHealthProbe(cfg Config) func(context.Context) error {
 		}
 		switch backend {
 		case domain.SecretsBackendPass:
-			if !secrets.NewPassProvider(zerowrap.Default()).IsAvailable() {
-				return fmt.Errorf("pass backend unavailable")
-			}
+			// Split control owns and initializes pass inside the artifact image;
+			// host pass/GPG availability and host keyring paths are irrelevant.
+			return nil
 		case domain.SecretsBackendSops:
 			if !secrets.NewSopsProvider(zerowrap.Default()).IsAvailable() {
 				return fmt.Errorf("sops backend unavailable")

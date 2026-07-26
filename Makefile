@@ -342,7 +342,7 @@ pre-release-acceptance: ## Fail closed on every documented pre-release acceptanc
 	@$(MAKE) proto-check
 	@$(MAKE) gitleaks
 	@$(MAKE) release-check
-	@go test ./internal/testutils/compatoldnew -run '^TestReleaseGateExampleConfigTOML$$' -count=1
+	@go test ./internal/testutils/compatoldnew -run '^TestReleaseGate(ExampleConfigTOML|ArtifactImageIncludesManagedPassTools)$$' -count=1
 	@for operation in plan prepare resume status switch cleanup; do go run . migrate "$$operation" --help >/dev/null; done
 	@go run . --help >/dev/null
 	@go run . serve --help >/dev/null
@@ -394,6 +394,9 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real mo
 			test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
 			test "$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$$image")" = '["/app/gordon"]'; \
 			docker run --rm --platform "linux/$$arch" "$$image" --help >/dev/null; \
+			docker run --rm --platform "linux/$$arch" --entrypoint pass "$$image" version >/dev/null; \
+			docker run --rm --platform "linux/$$arch" --entrypoint gpg "$$image" --version >/dev/null; \
+			docker run --rm --platform "linux/$$arch" --entrypoint sh "$$image" -c 'test -d /var/lib/gordon/secrets && test -w /var/lib/gordon/secrets'; \
 			for role in control runtime edge registry; do docker run --rm --platform "linux/$$arch" "$$image" serve --role "$$role" --help >/dev/null; done; \
 			name="gordon-release-smoke-$$arch-monolith-$$$$"; \
 			docker run --detach --rm --name "$$name" --platform "linux/$$arch" --user 0:0 \

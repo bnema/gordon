@@ -1062,6 +1062,11 @@ func isManagedLifecycleComponent(container *domain.Container, command domain.Run
 
 // componentLifecycleEnvironment reads only a runtime-owned generated env file.
 // It returns generic errors and never includes values in failures or logs.
+const (
+	managedControlSecretsPath   = "/var/lib/gordon/secrets" // #nosec G101 -- fixed mount destination, not credential material.
+	managedControlSecretsVolume = "gordon-control-secrets"
+)
+
 func componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[string]string {
 	// Persistent state belongs to explicit named volumes. Edge is stateless;
 	// registry storage is distinct so it can never be removed with a component.
@@ -1072,7 +1077,13 @@ func componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[str
 	if command.TargetComponentRole == domain.ComponentRoleRegistry {
 		name = "gordon-registry-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
 	}
-	return map[string]string{"/var/lib/gordon": name}
+	volumes := map[string]string{"/var/lib/gordon": name}
+	if command.TargetComponentRole == domain.ComponentRoleControl {
+		// This name deliberately excludes migration and generation identifiers so
+		// replacing control cannot replace its keyring or password store.
+		volumes[managedControlSecretsPath] = managedControlSecretsVolume
+	}
+	return volumes
 }
 
 // componentLifecycleConfigFile permits the dedicated final edge manifest only

@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"golang.org/x/sys/unix"
@@ -27,12 +29,17 @@ func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.Se
 
 	switch backend {
 	case domain.SecretsBackendPass:
+		if managedPassEnvironment() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := ensureManagedPassStore(ctx, managedPassRoot, execPassCommandRunner{})
+			cancel()
+			if err != nil {
+				return "", backend, nil, nil, log.WrapErr(err, "failed to initialize managed pass backend")
+			}
+		}
 		passStore, err := domainsecrets.NewPassStore(log)
 		if err != nil {
 			return "", backend, nil, nil, log.WrapErr(err, "failed to create pass domain secret store")
-		}
-		if err := migrateEnvFilesToPass(envDir, passStore, log); err != nil {
-			return "", backend, nil, nil, log.WrapErr(err, "failed to migrate env files to pass")
 		}
 		return envDir, backend, passStore, passStore, nil
 	default:
@@ -42,6 +49,210 @@ func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.Se
 		}
 		return envDir, backend, nil, store, nil
 	}
+}
+
+const (
+	managedPassMarkerName = ".gordon-managed-pass-fingerprint"
+	managedPassIdentity   = "Gordon Managed Secrets"
+)
+
+type passCommandRunner interface {
+	Run(context.Context, string, ...string) error
+	Output(context.Context, string, ...string) ([]byte, error)
+}
+
+type execPassCommandRunner struct{}
+
+func (execPassCommandRunner) Run(ctx context.Context, name string, args ...string) error {
+	return exec.CommandContext(ctx, name, args...).Run() //nolint:gosec // executable and arguments are fixed internal constants.
+}
+
+func (execPassCommandRunner) Output(ctx context.Context, name string, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, name, args...).Output() //nolint:gosec // executable and arguments are fixed internal constants.
+}
+
+func managedPassEnvironment() bool {
+	return os.Getenv("GNUPGHOME") == managedPassGPGHome && os.Getenv("PASSWORD_STORE_DIR") == managedPassStoreDir
+}
+
+// ensureManagedPassStore creates the control-owned keyring only on a genuinely
+// empty volume. Any partial state is treated as corruption and is never healed
+// by generating replacement key material.
+func ensureManagedPassStore(ctx context.Context, root string, runner passCommandRunner) error {
+	if runner == nil {
+		return fmt.Errorf("managed pass command runner is unavailable")
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return fmt.Errorf("prepare managed pass root")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Errorf("inspect managed pass state")
+	}
+	if len(entries) == 0 {
+		return initializeManagedPassStore(ctx, root, runner)
+	}
+	return validateManagedPassStore(ctx, root, runner)
+}
+
+func initializeManagedPassStore(ctx context.Context, root string, runner passCommandRunner) error {
+	gnupgHome := filepath.Join(root, "gnupg")
+	storeDir := filepath.Join(root, "password-store")
+	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- keyring directories require owner execute.
+		return fmt.Errorf("restrict managed pass root")
+	}
+	for _, directory := range []string{gnupgHome, storeDir} {
+		if err := os.Mkdir(directory, 0o700); err != nil {
+			return fmt.Errorf("prepare managed pass state")
+		}
+	}
+	args := []string{"--batch", "--no-tty", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-generate-key", managedPassIdentity, "future-default", "default", "0"}
+	if err := runner.Run(ctx, "gpg", args...); err != nil {
+		return fmt.Errorf("generate managed pass identity")
+	}
+	fingerprint, err := managedPassFingerprint(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if err := runner.Run(ctx, "pass", "init", fingerprint); err != nil {
+		return fmt.Errorf("initialize managed password store")
+	}
+	if err := writeManagedPassMarker(root, fingerprint); err != nil {
+		return err
+	}
+	return validateManagedPassStore(ctx, root, runner)
+}
+
+func validateManagedPassStore(ctx context.Context, root string, runner passCommandRunner) error {
+	entries, err := os.ReadDir(root)
+	if err != nil || !managedPassRootEntries(entries) {
+		return fmt.Errorf("managed pass state is inconsistent")
+	}
+	gnupgHome := filepath.Join(root, "gnupg")
+	storeDir := filepath.Join(root, "password-store")
+	markerPath := filepath.Join(root, managedPassMarkerName)
+	gpgIDPath := filepath.Join(storeDir, ".gpg-id")
+	for _, directory := range []string{root, gnupgHome, storeDir} {
+		info, err := os.Lstat(directory)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("managed pass state is incomplete")
+		}
+		if err := os.Chmod(directory, 0o700); err != nil { // #nosec G302 -- keyring directories require owner execute.
+			return fmt.Errorf("restrict managed pass state")
+		}
+	}
+	marker, err := readRestrictedManagedPassFile(markerPath)
+	if err != nil {
+		return err
+	}
+	gpgID, err := readRestrictedManagedPassFile(gpgIDPath)
+	if err != nil {
+		return err
+	}
+	fingerprint, err := managedPassFingerprint(ctx, runner)
+	if err != nil {
+		return err
+	}
+	if marker == "" || marker != gpgID || marker != fingerprint {
+		return fmt.Errorf("managed pass integrity validation failed")
+	}
+	return nil
+}
+
+func managedPassRootEntries(entries []os.DirEntry) bool {
+	if len(entries) != 3 {
+		return false
+	}
+	allowed := map[string]bool{"gnupg": false, "password-store": false, managedPassMarkerName: false}
+	for _, entry := range entries {
+		if _, ok := allowed[entry.Name()]; !ok || allowed[entry.Name()] {
+			return false
+		}
+		allowed[entry.Name()] = true
+	}
+	return allowed["gnupg"] && allowed["password-store"] && allowed[managedPassMarkerName]
+}
+
+func readRestrictedManagedPassFile(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("managed pass state is incomplete")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return "", fmt.Errorf("restrict managed pass state")
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read managed pass state")
+	}
+	return strings.TrimSpace(string(value)), nil
+}
+
+func managedPassFingerprint(ctx context.Context, runner passCommandRunner) (string, error) {
+	output, err := runner.Output(ctx, "gpg", "--batch", "--no-tty", "--with-colons", "--list-secret-keys", managedPassIdentity)
+	if err != nil {
+		return "", fmt.Errorf("inspect managed pass identity")
+	}
+	var fingerprints []string
+	awaitPrimaryFingerprint := false
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Split(line, ":")
+		if len(fields) == 0 {
+			continue
+		}
+		if fields[0] == "sec" {
+			awaitPrimaryFingerprint = true
+			continue
+		}
+		if awaitPrimaryFingerprint && fields[0] == "fpr" && len(fields) > 9 && validManagedPassFingerprint(fields[9]) {
+			fingerprints = append(fingerprints, fields[9])
+			awaitPrimaryFingerprint = false
+		}
+	}
+	if len(fingerprints) != 1 {
+		return "", fmt.Errorf("managed pass identity is invalid")
+	}
+	return fingerprints[0], nil
+}
+
+func validManagedPassFingerprint(value string) bool {
+	if len(value) != 40 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'A' || char > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func writeManagedPassMarker(root, fingerprint string) error {
+	file, err := os.CreateTemp(root, ".managed-pass-marker-*")
+	if err != nil {
+		return fmt.Errorf("create managed pass integrity marker")
+	}
+	temporary := file.Name()
+	defer os.Remove(temporary)
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("restrict managed pass integrity marker")
+	}
+	if _, err := file.WriteString(fingerprint + "\n"); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write managed pass integrity marker")
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync managed pass integrity marker")
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close managed pass integrity marker")
+	}
+	if err := os.Rename(temporary, filepath.Join(root, managedPassMarkerName)); err != nil {
+		return fmt.Errorf("commit managed pass integrity marker")
+	}
+	return nil
 }
 
 func resolveSecretsBackend(backend string) (domain.SecretsBackend, error) {

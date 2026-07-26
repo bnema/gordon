@@ -184,7 +184,7 @@ func BuildComponentEnvManifest(options ComponentEnvManifestOptions) (*ComponentE
 	missing := make(map[string]struct{})
 	add := componentEnvAdder(manifest, options.Environment, missing)
 	addConfigOverrideEnv(options.Environment, add)
-	addSecretProviderEnv(options.Config, add)
+	addSecretProviderEnv(options.Config, manifest, add)
 	addACMEEnv(options.Config, add)
 	addS3BackupEnv(options.Config, add)
 	addTelemetryEnv(options.Config, add)
@@ -243,12 +243,19 @@ func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
 	}
 }
 
-func addSecretProviderEnv(cfg Config, add componentEnvAdd) {
+const (
+	managedPassRoot     = "/var/lib/gordon/secrets" // #nosec G101 -- fixed container state path, not credential material.
+	managedPassGPGHome  = managedPassRoot + "/gnupg"
+	managedPassStoreDir = managedPassRoot + "/password-store"
+)
+
+func addSecretProviderEnv(cfg Config, manifest *ComponentEnvManifest, add componentEnvAdd) {
 	control := []domain.ComponentRole{domain.ComponentRoleControl}
 	switch strings.TrimSpace(cfg.Auth.SecretsBackend) {
 	case string(domain.SecretsBackendPass):
-		add("PASSWORD_STORE_DIR", control, false)
-		add("PASSWORD_STORE_X_SELECTION", control, false)
+		// Managed pass state is container-owned. Never copy host provider paths.
+		manifest.values[domain.ComponentRoleControl]["GNUPGHOME"] = managedPassGPGHome
+		manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"] = managedPassStoreDir
 	case string(domain.SecretsBackendSops):
 		add("SOPS_AGE_KEY_FILE", control, false)
 		add("SOPS_KMS_ARN", control, false)

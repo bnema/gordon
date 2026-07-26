@@ -142,6 +142,23 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
 }
 
+func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
+	base := domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:first"}
+	base.Generation = 1
+	base.TargetComponentRole = domain.ComponentRoleControl
+	controlFirst := componentPersistentVolumes(base)
+	assert.Equal(t, managedControlSecretsVolume, controlFirst[managedControlSecretsPath])
+
+	base.PolicyDecisionID = "migration:second"
+	base.Generation = 9
+	assert.Equal(t, managedControlSecretsVolume, componentPersistentVolumes(base)[managedControlSecretsPath], "managed secret volume must survive generation updates")
+
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		base.TargetComponentRole = role
+		assert.NotContains(t, componentPersistentVolumes(base), managedControlSecretsPath)
+	}
+}
+
 func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndControl(t *testing.T) {
 	data := t.TempDir()
 	configDir := filepath.Join(data, "migration", "config", "fixture", "1")

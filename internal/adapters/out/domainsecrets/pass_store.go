@@ -753,9 +753,9 @@ func (s *PassStore) ManifestExists(domainName string) (bool, error) {
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
 	cmd.Stdin = strings.NewReader(value)
-	output, err := cmd.CombinedOutput()
+	_, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("pass insert failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("pass insert failed")
 	}
 	return nil
 }
@@ -767,7 +767,7 @@ func (s *PassStore) passRemove(ctx context.Context, path string) error {
 		if passEntryMissing(string(output)) {
 			return nil
 		}
-		return fmt.Errorf("pass rm failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("pass remove failed")
 	}
 	return nil
 }
@@ -779,7 +779,7 @@ func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, er
 		if passEntryMissing(string(output)) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("pass show failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return "", false, fmt.Errorf("pass show failed")
 	}
 
 	clean := ansiRegex.ReplaceAllString(string(output), "")
@@ -798,7 +798,7 @@ func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([
 		if passEntryMissing(string(output)) {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("pass ls failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return nil, fmt.Errorf("pass list failed")
 	}
 
 	entries := []string{}

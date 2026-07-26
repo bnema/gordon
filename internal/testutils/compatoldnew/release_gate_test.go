@@ -22,6 +22,15 @@ func TestReleaseGateExampleConfigTOML(t *testing.T) {
 	require.Contains(t, document, "runtime")
 }
 
+func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Dockerfile"))
+	require.NoError(t, err)
+	dockerfile := string(contents)
+	require.Contains(t, dockerfile, "pass")
+	require.Contains(t, dockerfile, "gnupg")
+	require.Contains(t, dockerfile, "/var/lib/gordon/secrets")
+}
+
 func TestMigrationInvocationReportFailsClosed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "migration-report.json")
 	require.NoError(t, writeMigrationInvocationReport(path, migrationInvocationReport{

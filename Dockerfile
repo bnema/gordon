@@ -18,10 +18,10 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
 
 # alpine:3.24, verified 2026-03-18
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime-base
-RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata \
+RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata pass gnupg \
     && adduser -D -s /bin/sh gordon \
-    && mkdir -p /app /data \
-    && chown -R gordon:gordon /app /data
+    && mkdir -p /app /data /var/lib/gordon/secrets \
+    && chown -R gordon:gordon /app /data /var/lib/gordon
 # Keep runtime data/config discovery separate from the binary. Viper searches
 # the working directory for `gordon`, so /app would mistake /app/gordon for a
 # configuration file when no explicit config is mounted.
