@@ -397,8 +397,8 @@ release-podman-managed-pass-smoke: ## Block on rootless Podman validation of the
 		image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
 		test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
 		tmp=$$(mktemp -d); config="$$tmp/gordon.toml"; archive="$$tmp/artifact.tar"; \
-		volume="gordon-release-podman-secrets-$$$$"; owner="gordon-release-podman-owner-$$$$"; lease_error="$$tmp/lease-error"; \
-		trap 'podman rm -f "$$owner" >/dev/null 2>&1 || true; podman volume rm -f "$$volume" >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT HUP INT TERM; \
+		volume="gordon-release-podman-secrets-$$$$"; owner="gordon-release-podman-owner-$$$$"; lease_error="$$tmp/lease-error"; owner_pid=; readiness_pid=; \
+		trap 'test -z "$${readiness_pid:-}" || { kill "$$readiness_pid" >/dev/null 2>&1 || true; wait "$$readiness_pid" 2>/dev/null || true; readiness_pid=; }; test -z "$${owner_pid:-}" || { kill "$$owner_pid" >/dev/null 2>&1 || true; podman rm -f "$$owner" >/dev/null 2>&1 || true; wait "$$owner_pid" 2>/dev/null || true; owner_pid=; }; podman volume rm -f "$$volume" >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT HUP INT TERM; \
 		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' >"$$config"; chmod 0644 "$$config"; \
 		docker image inspect "$$image" >/dev/null; test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
 		docker save -o "$$archive" "$$image"; podman load -i "$$archive" >/dev/null; \
@@ -407,9 +407,12 @@ release-podman-managed-pass-smoke: ## Block on rootless Podman validation of the
 		podman volume create "$$volume" >/dev/null; \
 		podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
 		mkfifo "$$tmp/ready"; podman run --rm --name "$$owner" -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets lock --config /tmp/gordon.toml >"$$tmp/ready" & owner_pid=$$!; \
-		IFS= read -r readiness <"$$tmp/ready"; test "$$readiness" = 'Managed pass backend lock acquired'; \
+		{ IFS= read -r readiness <"$$tmp/ready" && test "$$readiness" = 'Managed pass backend lock acquired' && printf '%s\n' "$$readiness" >"$$tmp/readiness"; } & readiness_pid=$$!; \
+		for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if ! kill -0 "$$readiness_pid" 2>/dev/null; then break; fi; sleep 1; done; \
+		if kill -0 "$$readiness_pid" 2>/dev/null; then echo 'timed out waiting for managed pass backend lock' >&2; exit 1; fi; \
+		wait "$$readiness_pid"; readiness_pid=; test "$$(cat "$$tmp/readiness")" = 'Managed pass backend lock acquired'; rm -f "$$tmp/ready" "$$tmp/readiness"; \
 		if podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then exit 1; fi; \
-		grep -q 'managed pass store is already in use' "$$lease_error"; podman rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; \
+		grep -q 'managed pass store is already in use' "$$lease_error"; podman rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; owner_pid=; \
 		podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
 		podman run --rm -v "$$volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
 		podman volume rm "$$volume" >/dev/null; if podman volume inspect "$$volume" >/dev/null 2>&1; then exit 1; fi; volume=; owner=; \
@@ -417,8 +420,8 @@ release-podman-managed-pass-smoke: ## Block on rootless Podman validation of the
 
 release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
 	@set -eu; \
-		smoke_config=$$(mktemp); secrets_config=$$(mktemp); lease_dir=$$(mktemp -d); \
-		trap 'rm -f "$$smoke_config" "$$secrets_config" "$${lease_error:-}"; rm -rf "$$lease_dir"; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+		smoke_config=$$(mktemp); secrets_config=$$(mktemp); lease_dir=$$(mktemp -d); owner_pid=; readiness_pid=; \
+		trap 'test -z "$${readiness_pid:-}" || { kill "$$readiness_pid" >/dev/null 2>&1 || true; wait "$$readiness_pid" 2>/dev/null || true; readiness_pid=; }; test -z "$${owner_pid:-}" || { kill "$$owner_pid" >/dev/null 2>&1 || true; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; wait "$$owner_pid" 2>/dev/null || true; owner_pid=; }; rm -f "$$smoke_config" "$$secrets_config" "$${lease_error:-}"; rm -rf "$$lease_dir"; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
 		printf '%s\n' '[server]' 'runtime = "docker"' 'port = 8088' 'data_dir = "/tmp/gordon"' '[auth]' 'enabled = false' 'secrets_backend = "unsafe"' > "$$smoke_config"; \
 		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' > "$$secrets_config"; \
 		chmod 0644 "$$smoke_config" "$$secrets_config"; \
@@ -437,9 +440,12 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real mo
 			secrets_volume="gordon-release-smoke-secrets-$$arch-$$$$"; docker volume create "$$secrets_volume" >/dev/null; \
 			owner="gordon-release-smoke-secrets-owner-$$arch-$$$$"; lease_error=$$(mktemp); \
 			mkfifo "$$lease_dir/ready"; docker run --rm --name "$$owner" --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets lock --config /tmp/gordon.toml >"$$lease_dir/ready" & owner_pid=$$!; \
-			IFS= read -r readiness <"$$lease_dir/ready"; test "$$readiness" = 'Managed pass backend lock acquired'; \
+			{ IFS= read -r readiness <"$$lease_dir/ready" && test "$$readiness" = 'Managed pass backend lock acquired' && printf '%s\n' "$$readiness" >"$$lease_dir/readiness"; } & readiness_pid=$$!; \
+			for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if ! kill -0 "$$readiness_pid" 2>/dev/null; then break; fi; sleep 1; done; \
+			if kill -0 "$$readiness_pid" 2>/dev/null; then echo 'timed out waiting for managed pass backend lock' >&2; exit 1; fi; \
+			wait "$$readiness_pid"; readiness_pid=; test "$$(cat "$$lease_dir/readiness")" = 'Managed pass backend lock acquired'; rm -f "$$lease_dir/ready" "$$lease_dir/readiness"; \
 			if docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then exit 1; fi; \
-			grep -q 'managed pass store is already in use' "$$lease_error"; docker rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; owner=; rm -f "$$lease_error" "$$lease_dir/ready"; lease_error=; \
+			grep -q 'managed pass store is already in use' "$$lease_error"; docker rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; owner_pid=; owner=; rm -f "$$lease_error"; lease_error=; \
 			for restart in 1 2; do docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; done; \
 			docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
 			docker volume rm "$$secrets_volume" >/dev/null; secrets_volume=; \
