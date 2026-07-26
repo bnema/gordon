@@ -1,13 +1,41 @@
 package docker
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestFixedComponentProcessIdentities(t *testing.T) {
+	tests := []struct {
+		role domain.ComponentRole
+		uid  int
+		gid  int
+		user string
+	}{
+		{role: domain.ComponentRoleRuntime, uid: 21001, gid: 21001, user: "21001:21001"},
+		{role: domain.ComponentRoleControl, uid: 21002, gid: 21002, user: "21002:21002"},
+		{role: domain.ComponentRoleEdge, uid: 21003, gid: 21003, user: "21003:21003"},
+		{role: domain.ComponentRoleRegistry, uid: 21004, gid: 21004, user: "21004:21004"},
+	}
+	for _, test := range tests {
+		identity, ok := domain.FixedComponentProcessIdentity(test.role)
+		require.True(t, ok)
+		assert.Equal(t, test.uid, identity.UID)
+		assert.Equal(t, test.gid, identity.GID)
+		assert.Equal(t, test.user, identity.User)
+	}
+	_, ok := domain.FixedComponentProcessIdentity(domain.ComponentRole("monolith"))
+	assert.False(t, ok)
+}
 
 func TestRuntimeAdapterContractCreateContainer(t *testing.T) {
 	createBody := createTestContainer(t, &domain.ContainerConfig{
@@ -63,4 +91,59 @@ func TestRuntimeAdapterContractCreateContainer(t *testing.T) {
 	endpoint, ok := endpoints["gordon-app-net"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []any{"app.example.com"}, endpoint["Aliases"])
+}
+
+func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodGet, r.Method)
+		require.Equal(t, "/v1.41/containers/component-fixture/json", r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"Id":"component-fixture",
+			"Name":"/gordon-runtime-generation-7",
+			"Image":"sha256:fixture-image",
+			"Created":"2026-05-05T00:00:00Z",
+			"Config":{"Image":"gordon@sha256:fixture","User":"21001:21001","Labels":{"gordon.component.role":"runtime"}},
+			"HostConfig":{
+				"UsernsMode":"keep-id",
+				"GroupAdd":["21005"],
+				"CapDrop":["ALL"],
+				"CapAdd":["NET_BIND_SERVICE"],
+				"SecurityOpt":["no-new-privileges:true"]
+			},
+			"State":{"Status":"running","ExitCode":0},
+			"Mounts":[{
+				"Type":"volume","Name":"gordon-runtime-data-generation-7",
+				"Source":"/rootless-storage/volumes/runtime/_data",
+				"Destination":"/var/lib/gordon","Driver":"local","Mode":"Z",
+				"RW":false,"Propagation":"rprivate"
+			}],
+			"NetworkSettings":{"Ports":{}}
+		}`))
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+
+	inspected, err := NewRuntimeWithClient(cli).InspectContainer(context.Background(), "component-fixture")
+	require.NoError(t, err)
+	assert.Equal(t, "21001:21001", inspected.User)
+	assert.Equal(t, "keep-id", inspected.UsernsMode)
+	assert.Equal(t, []string{"21005"}, inspected.GroupAdd)
+	assert.Equal(t, []string{"ALL"}, inspected.CapDrop)
+	assert.Equal(t, []string{"NET_BIND_SERVICE"}, inspected.CapAdd)
+	assert.True(t, inspected.NoNewPrivileges)
+	require.Len(t, inspected.VolumeMounts, 1)
+	assert.Equal(t, domain.ContainerVolumeMount{
+		Name:        "gordon-runtime-data-generation-7",
+		Type:        "volume",
+		Source:      "/rootless-storage/volumes/runtime/_data",
+		Destination: "/var/lib/gordon",
+		Driver:      "local",
+		Mode:        "Z",
+		Propagation: "rprivate",
+		ReadOnly:    true,
+	}, inspected.VolumeMounts[0])
 }

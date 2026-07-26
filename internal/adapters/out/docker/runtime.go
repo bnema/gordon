@@ -184,7 +184,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Binds:          binds,
 		NetworkMode:    container.NetworkMode(config.NetworkMode),
 		Resources:      resources,
-		SecurityOpt:    []string{"no-new-privileges:true"},
+		SecurityOpt:    containerSecurityOptions(config.NoNewPrivileges),
+		UsernsMode:     container.UsernsMode(config.UsernsMode),
+		GroupAdd:       config.GroupAdd,
 		CapDrop:        capDrop,
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
@@ -219,6 +221,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 
 	// Inspect the created container to get full details
 	return r.InspectContainer(ctx, resp.ID)
+}
+
+func containerSecurityOptions(noNewPrivileges *bool) []string {
+	if noNewPrivileges == nil || *noNewPrivileges {
+		return []string{"no-new-privileges:true"}
+	}
+	return nil
 }
 
 func buildPortBindings(config *domain.ContainerConfig) (nat.PortSet, nat.PortMap, error) {
@@ -437,6 +446,9 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 				Type:        string(m.Type),
 				Source:      m.Source,
 				Destination: m.Destination,
+				Driver:      m.Driver,
+				Mode:        m.Mode,
+				Propagation: string(m.Propagation),
 				ReadOnly:    !m.RW,
 			})
 		}
@@ -497,11 +509,14 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 			Type:        string(m.Type),
 			Source:      m.Source,
 			Destination: m.Destination,
+			Driver:      m.Driver,
+			Mode:        m.Mode,
+			Propagation: string(m.Propagation),
 			ReadOnly:    !m.RW,
 		})
 	}
 
-	return &domain.Container{
+	inspected := &domain.Container{
 		ID:           resp.ID,
 		Image:        resp.Config.Image,
 		ImageID:      resp.Image,
@@ -511,8 +526,27 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Ports:        ports,
 		Labels:       resp.Config.Labels,
 		VolumeMounts: volumeMounts,
+		User:         resp.Config.User,
 		Created:      created,
-	}, nil
+	}
+	if resp.HostConfig != nil {
+		inspected.UsernsMode = string(resp.HostConfig.UsernsMode)
+		inspected.GroupAdd = slices.Clone(resp.HostConfig.GroupAdd)
+		inspected.CapDrop = slices.Clone(resp.HostConfig.CapDrop)
+		inspected.CapAdd = slices.Clone(resp.HostConfig.CapAdd)
+		inspected.NoNewPrivileges = hasNoNewPrivileges(resp.HostConfig.SecurityOpt)
+	}
+	return inspected, nil
+}
+
+func hasNoNewPrivileges(options []string) bool {
+	for _, option := range options {
+		name, value, hasValue := strings.Cut(option, ":")
+		if name == "no-new-privileges" && (!hasValue || strings.EqualFold(value, "true")) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetContainerLogs gets container logs.

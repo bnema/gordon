@@ -2,20 +2,57 @@
 // These types are used throughout the application and have no tags or framework dependencies.
 package domain
 
-import "time"
+import (
+	"strconv"
+	"time"
+)
+
+// ComponentProcessIdentity is the fixed in-image UNIX identity for a split Gordon role.
+type ComponentProcessIdentity struct {
+	UID  int
+	GID  int
+	User string
+}
+
+// FixedComponentProcessIdentity returns the immutable non-root identity for a split role.
+// These identities are used only by rootless split deployments; monolith and ordinary
+// workload containers retain their image/default user and user namespace.
+func FixedComponentProcessIdentity(role ComponentRole) (ComponentProcessIdentity, bool) {
+	var id int
+	switch role {
+	case ComponentRoleRuntime:
+		id = 21001
+	case ComponentRoleControl:
+		id = 21002
+	case ComponentRoleEdge:
+		id = 21003
+	case ComponentRoleRegistry:
+		id = 21004
+	default:
+		return ComponentProcessIdentity{}, false
+	}
+	idText := strconv.Itoa(id)
+	return ComponentProcessIdentity{UID: id, GID: id, User: idText + ":" + idText}, true
+}
 
 // Container represents a running container in the system.
 type Container struct {
-	ID           string
-	Image        string
-	ImageID      string // Docker image ID (sha256 digest) used to detect redundant deploys
-	Name         string
-	Status       string
-	ExitCode     int
-	Ports        []int
-	Labels       map[string]string
-	VolumeMounts []ContainerVolumeMount
-	Created      time.Time
+	ID              string
+	Image           string
+	ImageID         string // Docker image ID (sha256 digest) used to detect redundant deploys
+	Name            string
+	Status          string
+	ExitCode        int
+	Ports           []int
+	Labels          map[string]string
+	VolumeMounts    []ContainerVolumeMount
+	User            string
+	UsernsMode      string
+	GroupAdd        []string
+	CapDrop         []string
+	CapAdd          []string
+	NoNewPrivileges bool
+	Created         time.Time
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.
@@ -24,6 +61,9 @@ type ContainerVolumeMount struct {
 	Type        string
 	Source      string
 	Destination string
+	Driver      string
+	Mode        string
+	Propagation string
 	ReadOnly    bool
 }
 
@@ -95,8 +135,11 @@ type ContainerConfig struct {
 	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
 	Privileged      bool              // Run container with elevated host privileges
 	User            string            // User to run as
+	UsernsMode      string            // User namespace mode; keep-id is only for rootless split roles
+	GroupAdd        []string          // Supplementary groups for explicitly shared mounted data
 	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
 	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults
+	NoNewPrivileges *bool             // nil preserves the runtime hardening default (enabled)
 }
 
 // ContainerStatus represents the current state of a container.
