@@ -67,6 +67,9 @@ type RuntimePolicy struct {
 	// replacement registry may bind only this exact directory, preserving blobs
 	// and manifests instead of creating a generation-local empty volume.
 	RegistryStorageRoot string
+	// ManagedControlSecretsVolume is the installation-scoped named volume that
+	// only an authenticated, runtime-generated control lifecycle config may mount.
+	ManagedControlSecretsVolume string
 }
 
 func NewRuntimePolicy(mode RuntimePolicyMode) RuntimePolicy {
@@ -155,7 +158,20 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 }
 
 func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
-	for _, source := range cfg.Volumes {
+	if err := p.checkManagedControlSecretsMount(identity, routeDomain, cfg); err != nil {
+		return err
+	}
+	if err := p.checkWritableContainerMounts(identity, routeDomain, cfg); err != nil {
+		return err
+	}
+	return p.checkReadOnlyContainerMounts(identity, routeDomain, cfg)
+}
+
+func (p RuntimePolicy) checkWritableContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
+	for destination, source := range cfg.Volumes {
+		if destination == managedControlSecretsPath || source == p.ManagedControlSecretsVolume {
+			continue
+		}
 		if isRuntimeSocketMount(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
@@ -163,18 +179,66 @@ func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdenti
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
+	return nil
+}
+
+func (p RuntimePolicy) checkReadOnlyContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
 	for _, source := range cfg.ReadOnlyVolumes {
 		if isRuntimeSocketMount(source) && !isApprovedRuntimeSocketBind(cfg, source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
 		}
-		// Gordon role manifests are the sole host-file exception. They are
-		// generated with restrictive permissions under migration/config and may
-		// only be mounted read-only by a labeled component container.
 		if !isRuntimeSocketMount(source) && !isApprovedComponentConfigBind(cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && !isApprovedMigrationEnvironmentBind(p, cfg, source) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
 	return nil
+}
+
+func (p RuntimePolicy) checkManagedControlSecretsMount(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
+	reserved := strings.TrimSpace(p.ManagedControlSecretsVolume)
+	if reserved == "" {
+		return nil
+	}
+	destinationUsed, reservedSourceUsed := managedControlSecretsMountUsage(cfg, reserved)
+	if !destinationUsed && !reservedSourceUsed {
+		return nil
+	}
+	if !authorizedManagedControlSecretsMount(identity, cfg, reserved) {
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is reserved")
+	}
+	return nil
+}
+
+func managedControlSecretsMountUsage(cfg domain.ContainerConfig, reserved string) (bool, bool) {
+	_, destinationUsed := cfg.Volumes[managedControlSecretsPath]
+	reservedSourceUsed := false
+	for _, mountedSource := range cfg.Volumes {
+		reservedSourceUsed = reservedSourceUsed || mountedSource == reserved
+	}
+	for destination, mountedSource := range cfg.ReadOnlyVolumes {
+		destinationUsed = destinationUsed || destination == managedControlSecretsPath
+		reservedSourceUsed = reservedSourceUsed || mountedSource == reserved
+	}
+	return destinationUsed, reservedSourceUsed
+}
+
+func authorizedManagedControlSecretsMount(identity domain.RuntimeCommandIdentity, cfg domain.ContainerConfig, reserved string) bool {
+	if cfg.Volumes[managedControlSecretsPath] != reserved || cfg.Labels[domain.LabelComponent] != "true" ||
+		cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleControl) || cfg.Labels[domain.LabelComponentOwner] != "runtime" ||
+		!strings.HasPrefix(cfg.Name, "gordon-control-") || identity.SourceComponentID != "gordon-control" {
+		return false
+	}
+	for destination, source := range cfg.Volumes {
+		if source == reserved && destination != managedControlSecretsPath {
+			return false
+		}
+	}
+	for destination, source := range cfg.ReadOnlyVolumes {
+		if source == reserved || destination == managedControlSecretsPath {
+			return false
+		}
+	}
+	return true
 }
 
 func (p RuntimePolicy) checkManagedRouteMutation(identity domain.RuntimeCommandIdentity, routeDomain string) error {

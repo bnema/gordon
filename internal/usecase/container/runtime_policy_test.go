@@ -10,6 +10,36 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
+	identity := testRuntimeCommandIdentity("managed-secrets")
+	identity.SourceComponentID = "gordon-control"
+	const volume = "gordon-control-secrets-installation-a"
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: volume}
+	authorized := domain.ContainerConfig{
+		Name:    "gordon-control-fixture-g1",
+		Labels:  map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleControl), domain.LabelComponentOwner: "runtime"},
+		Volumes: map[string]string{managedControlSecretsPath: volume},
+	}
+	require.NoError(t, policy.CheckContainerConfig(identity, "", authorized))
+
+	for _, test := range []struct {
+		name string
+		cfg  domain.ContainerConfig
+	}{
+		{name: "workload exact pair", cfg: domain.ContainerConfig{Volumes: map[string]string{managedControlSecretsPath: volume}}},
+		{name: "runtime role", cfg: domain.ContainerConfig{Name: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "runtime", domain.LabelComponentOwner: "runtime"}, Volumes: map[string]string{managedControlSecretsPath: volume}}},
+		{name: "edge role", cfg: domain.ContainerConfig{Name: "gordon-edge-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "edge", domain.LabelComponentOwner: "runtime"}, Volumes: map[string]string{managedControlSecretsPath: volume}}},
+		{name: "registry role", cfg: domain.ContainerConfig{Name: "gordon-registry-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "registry", domain.LabelComponentOwner: "runtime"}, Volumes: map[string]string{managedControlSecretsPath: volume}}},
+		{name: "alternate source", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: "other"}}},
+		{name: "alternate destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{"/tmp/secrets": volume}}},
+		{name: "exact pair plus alternate destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: volume, "/tmp/secrets": volume}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.ErrorIs(t, policy.CheckContainerConfig(identity, "", test.cfg), ErrRuntimePolicyDenied)
+		})
+	}
+}
+
 func TestRuntimePolicyAllowsSocketOnlyForRuntimeComponent(t *testing.T) {
 	identity := testRuntimeCommandIdentity("runtime-socket")
 	config := domain.ContainerConfig{Name: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRuntime)}, ReadOnlyVolumes: map[string]string{"/run/gordon/runtime.sock": "/run/user/1000/podman/podman.sock"}}

@@ -244,9 +244,10 @@ func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
 }
 
 const (
-	managedPassRoot     = "/var/lib/gordon/secrets" // #nosec G101 -- fixed container state path, not credential material.
-	managedPassGPGHome  = managedPassRoot + "/gnupg"
-	managedPassStoreDir = managedPassRoot + "/password-store"
+	managedPassRoot       = "/var/lib/gordon/secrets" // #nosec G101 -- fixed container state path, not credential material.
+	managedPassCurrentDir = managedPassRoot + "/current"
+	managedPassGPGHome    = managedPassCurrentDir + "/gnupg"
+	managedPassStoreDir   = managedPassCurrentDir + "/password-store"
 )
 
 func addSecretProviderEnv(cfg Config, manifest *ComponentEnvManifest, add componentEnvAdd) {

@@ -539,22 +539,31 @@ func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Co
 	return container.NewRuntimeStandaloneServicePolicyManager(servicecfg.NewLocalRuntimeStandaloneServiceManager(runtime), runtimeRolePolicy(cfg, v))
 }
 
+func managedControlSecretsVolumeName(dataRoot string) string {
+	normalized := filepath.Clean(dataRoot)
+	installationDigest := sha256.Sum256([]byte(normalized))
+	return "gordon-control-secrets-" + hex.EncodeToString(installationDigest[:8])
+}
+
 func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 	managedNetworkPrefix := ""
 	if v != nil {
 		managedNetworkPrefix = v.GetString("network_isolation.network_prefix")
 	}
+	dataRoot := filepath.Clean(resolveDataDir(cfg.Server.DataDir))
 	registryStorageRoot := strings.TrimSpace(cfg.Runtime.RegistryStorageRoot)
 	if registryStorageRoot == "" {
-		registryStorageRoot = filepath.Join(resolveDataDir(cfg.Server.DataDir), "registry")
+		registryStorageRoot = filepath.Join(dataRoot, "registry")
 	}
+	managedSecretsVolume := managedControlSecretsVolumeName(dataRoot)
 	return container.RuntimePolicy{
-		Mode:                   container.RuntimePolicyModeEnforce,
-		ManagedNetworkPrefix:   managedNetworkPrefix,
-		AllowedImageRegistries: cfg.Images.AllowedRegistries,
-		RequireImageDigest:     cfg.Images.RequireDigest,
-		RuntimeComponentID:     "gordon-runtime",
-		MigrationStateRoot:     filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration"),
-		RegistryStorageRoot:    registryStorageRoot,
+		Mode:                        container.RuntimePolicyModeEnforce,
+		ManagedNetworkPrefix:        managedNetworkPrefix,
+		AllowedImageRegistries:      cfg.Images.AllowedRegistries,
+		RequireImageDigest:          cfg.Images.RequireDigest,
+		RuntimeComponentID:          "gordon-runtime",
+		MigrationStateRoot:          filepath.Join(dataRoot, "migration"),
+		RegistryStorageRoot:         registryStorageRoot,
+		ManagedControlSecretsVolume: managedSecretsVolume,
 	}
 }

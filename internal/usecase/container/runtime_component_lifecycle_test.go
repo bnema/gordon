@@ -143,19 +143,21 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 }
 
 func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
+	const volume = "gordon-control-secrets-installation-a"
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{ManagedControlSecretsVolume: volume}}
 	base := domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:first"}
 	base.Generation = 1
 	base.TargetComponentRole = domain.ComponentRoleControl
-	controlFirst := componentPersistentVolumes(base)
-	assert.Equal(t, managedControlSecretsVolume, controlFirst[managedControlSecretsPath])
+	controlFirst := manager.componentPersistentVolumes(base)
+	assert.Equal(t, volume, controlFirst[managedControlSecretsPath])
 
 	base.PolicyDecisionID = "migration:second"
 	base.Generation = 9
-	assert.Equal(t, managedControlSecretsVolume, componentPersistentVolumes(base)[managedControlSecretsPath], "managed secret volume must survive generation updates")
+	assert.Equal(t, volume, manager.componentPersistentVolumes(base)[managedControlSecretsPath], "managed secret volume must survive generation updates")
 
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
 		base.TargetComponentRole = role
-		assert.NotContains(t, componentPersistentVolumes(base), managedControlSecretsPath)
+		assert.NotContains(t, manager.componentPersistentVolumes(base), managedControlSecretsPath)
 	}
 }
 
