@@ -43,6 +43,8 @@ After control is prepared, use a private shell with history disabled to re-enter
 
 The control secret volume is installation-namespaced as `gordon-control-secrets-<installation-id>`; do not assume an unqualified volume name. Treat backup and restore as privileged offline operations. Stop control, prove that it is stopped, and keep it stopped while any other process mounts the volume. This releases the exclusive managed-store lease and prevents concurrent GPG or `pass` writes.
 
+For offline maintenance automation that must prove exclusive ownership without starting control, run `gordon secrets lock --config <path>`. It validates the configured managed `pass` backend, prints only `Managed pass backend lock acquired`, and holds the same exclusive process lease as control until `SIGINT`, `SIGTERM`, or context cancellation. It never reads or prints secret values. Use it only while control is stopped, and stop the lock holder before restarting control; concurrent `secrets doctor` and control startup fail closed while it is active.
+
 Use the exact digest-pinned Gordon control image selected by the deployment (a reference ending in `@sha256:<digest>`), not a tag and not a helper image. Before mounting secrets, resolve that local reference with pulls disabled and compare its immutable image ID with the stopped control container's recorded image ID. Abort on a missing image, a tag-only reference, or any mismatch. Every container invocation in the procedure must use that verified reference with `--pull=never` and `--network none`; no other image or container may mount, extract, inspect, copy, or delete managed secret data.
 
 A backup implementation is acceptable only when it satisfies all of these requirements:

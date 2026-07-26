@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -122,6 +123,32 @@ func TestManagedPassLeaseRejectsConcurrentWriter(t *testing.T) {
 	second, err := acquireManagedPassLease(root)
 	require.Error(t, err)
 	assert.Nil(t, second)
+}
+
+func TestHoldManagedPassStoreRejectsDoctorUntilCancellationThenReleases(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "secrets")
+	runner := &fakePassCommandRunner{root: root, fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567"}
+	ctx, cancel := context.WithCancel(context.Background())
+	ready := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- holdManagedPassStore(ctx, root, runner, func() error {
+			close(ready)
+			return nil
+		})
+	}()
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("managed pass holder did not become ready")
+	}
+	err := ensureManagedPassStore(context.Background(), root, runner)
+	require.ErrorContains(t, err, "managed pass store is already in use")
+
+	cancel()
+	require.NoError(t, <-done)
+	require.NoError(t, ensureManagedPassStore(context.Background(), root, runner))
 }
 
 func TestEnsureManagedPassStoreCleansRecognizedCrashStageOnlyBeforePublish(t *testing.T) {

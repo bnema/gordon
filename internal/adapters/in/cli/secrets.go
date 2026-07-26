@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -39,8 +42,39 @@ these commands operate on the remote server.`,
 	cmd.AddCommand(newSecretsSetCmd())
 	cmd.AddCommand(newSecretsRemoveCmd())
 	cmd.AddCommand(newSecretsDoctorCmd())
+	cmd.AddCommand(newSecretsLockCmd())
 
 	return cmd
+}
+
+const managedPassLockReadyLine = "Managed pass backend lock acquired"
+
+var holdManagedPassBackend = app.HoldManagedPassBackend
+
+func newSecretsLockCmd() *cobra.Command {
+	var configFile string
+	cmd := &cobra.Command{
+		Use:   "lock",
+		Short: "Hold the managed pass backend lease for offline maintenance",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return runSecretsLock(ctx, configFile, cmd.OutOrStdout())
+		},
+	}
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
+	return cmd
+}
+
+func runSecretsLock(ctx context.Context, configFile string, out io.Writer) error {
+	if err := validateManagedPassConfig(configFile); err != nil {
+		return err
+	}
+	return holdManagedPassBackend(ctx, func() error {
+		_, err := fmt.Fprintln(out, managedPassLockReadyLine)
+		return err
+	})
 }
 
 func newSecretsDoctorCmd() *cobra.Command {
@@ -60,15 +94,8 @@ func newSecretsDoctorCmd() *cobra.Command {
 }
 
 func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, out io.Writer) error {
-	v := viper.New()
-	app.ConfigureViper(v, configFile)
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return fmt.Errorf("read configuration: %w", err)
-		}
-	}
-	if resolveLocalSecretsBackend(v) != domain.SecretsBackendPass {
-		return fmt.Errorf("configured secrets backend is not pass")
+	if err := validateManagedPassConfig(configFile); err != nil {
+		return err
 	}
 	if err := app.ValidateManagedPassBackend(ctx); err != nil {
 		return fmt.Errorf("validate managed pass backend: %w", err)
@@ -80,6 +107,20 @@ func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, o
 	}
 	_, err := fmt.Fprintln(out, "Managed pass backend is healthy")
 	return err
+}
+
+func validateManagedPassConfig(configFile string) error {
+	v := viper.New()
+	app.ConfigureViper(v, configFile)
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return fmt.Errorf("read configuration: %w", err)
+		}
+	}
+	if resolveLocalSecretsBackend(v) != domain.SecretsBackendPass {
+		return fmt.Errorf("configured secrets backend is not pass")
+	}
+	return nil
 }
 
 func runManagedPassWriteCheck() error {

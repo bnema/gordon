@@ -96,6 +96,34 @@ func ValidateManagedPassBackend(ctx context.Context) error {
 	return ensureManagedPassStore(ctx, managedPassRoot, execPassCommandRunner{})
 }
 
+// HoldManagedPassBackend validates the control-owned pass backend, signals
+// readiness, and retains its production lease until the context is canceled.
+func HoldManagedPassBackend(ctx context.Context, ready func() error) error {
+	if !managedPassEnvironment() {
+		return fmt.Errorf("managed pass environment is not configured")
+	}
+	return holdManagedPassStore(ctx, managedPassRoot, execPassCommandRunner{}, ready)
+}
+
+func holdManagedPassStore(ctx context.Context, root string, runner passCommandRunner, ready func() error) error {
+	lease, err := acquireManagedPassLease(root)
+	if err != nil {
+		return err
+	}
+	defer releaseManagedPassLease(lease)
+	if err := ensureManagedPassStoreLocked(ctx, root, runner); err != nil {
+		return err
+	}
+	if ready == nil {
+		return fmt.Errorf("managed pass readiness callback is unavailable")
+	}
+	if err := ready(); err != nil {
+		return fmt.Errorf("report managed pass readiness: %w", err)
+	}
+	<-ctx.Done()
+	return nil
+}
+
 // ensureManagedPassStore acquires the same lease as production but releases it
 // after validation. Production retains the lease for the process lifetime.
 func ensureManagedPassStore(ctx context.Context, root string, runner passCommandRunner) error {
