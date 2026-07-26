@@ -11,7 +11,9 @@ Gordon exposes migration lifecycle commands, not a general `components update` o
 
 ## During migration
 
-`prepare` starts candidate roles without transferring public/runtime authority. A failed switch retains the prepared checkpoint and old serving path. Repair the cause and rerun `switch`/`resume`; durable idempotency prevents successful terminal commands from repeating and permits failed retryable work to run again.
+Use a maintenance window for the v2-to-split migration. Take and verify a mutually consistent snapshot, prepare an executable restoration script, stop the host `gordon.service`, and keep it stopped while running `migrate plan`, `prepare`, and `switch`.
+
+`prepare` starts candidate roles without transferring public/runtime authority; the old host process is not retained as a serving fallback. A failed cold switch removes a partial final edge and proves the probe-only prepared edge. Repair the cause and rerun `switch`/`resume` only when status reports a retryable failure. Otherwise preserve checkpoint evidence and run the prepared rollback script, which must stop split public listeners before restoring the snapshot and starting exactly one host service.
 
 ## After switch
 

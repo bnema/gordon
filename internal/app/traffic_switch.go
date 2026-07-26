@@ -22,7 +22,6 @@ type TrafficSwitchChecks interface {
 	AppliedTrafficGeneration(context.Context) (uint64, error)
 	TestApplicationThroughEdge(context.Context) error
 	TestRegistryV2ThroughEdge(context.Context) error
-	OldServingPathHealthy(context.Context, string) error
 }
 
 // TrafficSwitcher keeps public cutover behind all fail-closed checks.
@@ -44,8 +43,8 @@ func NewTrafficSwitch(runtime out.RuntimeSelfUpdater, checks TrafficSwitchChecks
 }
 
 // Switch activates the already healthy edge generation through the narrow
-// runtime lifecycle protocol. It deliberately does not stop, remove, or alter
-// the old serving path; retirement is a later, separately audited operation.
+// runtime lifecycle protocol. The runtime supports both the default cold
+// cutover and compensation when a managed old container is still present.
 func (s *trafficSwitch) Switch(ctx context.Context, checkpoint MigrationCheckpoint, plan ComponentLaunchPlan) error {
 	if s == nil || s.runtime == nil || s.checks == nil {
 		return fmt.Errorf("traffic switch is not configured")
@@ -114,9 +113,6 @@ func (s *trafficSwitch) verify(ctx context.Context, checkpoint MigrationCheckpoi
 	if err := s.checks.TestRegistryV2ThroughEdge(ctx); err != nil {
 		return fmt.Errorf("traffic switch registry /v2 edge prerequisite: %w", err)
 	}
-	if err := s.checks.OldServingPathHealthy(ctx, checkpoint.OldServingPath); err != nil {
-		return fmt.Errorf("traffic switch old serving path prerequisite: %w", err)
-	}
 	return nil
 }
 
@@ -125,7 +121,7 @@ const trafficSwitchAppliedGenerationWait = 10 * time.Second
 // waitForAppliedGeneration gives an asynchronously started edge a bounded
 // opportunity to report an actual matching snapshot application. Only the
 // explicit stale acknowledgement state is retried; malformed, mismatched, and
-// transport errors still fail immediately and preserve the old serving path.
+// transport errors still fail immediately before public listener activation.
 func (s *trafficSwitch) waitForAppliedGeneration(ctx context.Context, expected uint64) error {
 	deadline := time.NewTimer(trafficSwitchAppliedGenerationWait)
 	defer deadline.Stop()

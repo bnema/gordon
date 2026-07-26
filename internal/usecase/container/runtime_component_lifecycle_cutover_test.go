@@ -46,6 +46,148 @@ func (c *recoveringMigrationCutoverCommitter) MigrationCutoverSubphase(_ context
 	return c.subphase, nil
 }
 
+func TestRuntimeComponentLifecycleActivateColdCutoverWithoutOldContainer(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+
+	committer := &recordingMigrationCutoverCommitter{}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.Len(t, committer.commands, 1)
+	assert.NotContains(t, committer.subphases, domain.MigrationCutoverSubphaseBeforeOldStop)
+}
+
+func TestRuntimeComponentLifecycleActivateColdFailuresRestoreAndProvePreparedEdge(t *testing.T) {
+	for _, failure := range []string{"stop-prepared", "remove-prepared", "create-final", "start-final", "health-final", "commit-final"} {
+		t.Run(failure, func(t *testing.T) {
+			config := cutoverConfig(t)
+			prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+			restored := &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")}
+			runtime := outmocks.NewMockContainerRuntime(t)
+			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Twice()
+			runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+			runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+
+			proof := prepared
+			if failure == "stop-prepared" {
+				runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(errors.New("injected stop failure")).Once()
+			} else {
+				runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+				if failure == "remove-prepared" {
+					runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(errors.New("injected remove failure")).Once()
+					runtime.EXPECT().StartContainer(mock.Anything, "prepared").Return(nil).Once()
+				} else {
+					runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+					if failure == "create-final" {
+						runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(nil, errors.New("injected create failure")).Once()
+					} else {
+						runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+						if failure == "start-final" {
+							runtime.EXPECT().StartContainer(mock.Anything, "final").Return(errors.New("injected start failure")).Once()
+							runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
+							runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
+						} else {
+							runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+							runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(failure != "health-final", nil).Once()
+							if failure == "commit-final" {
+								runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+							}
+							runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
+							runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
+						}
+					}
+					runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+					runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+					proof = restored
+				}
+			}
+			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{proof}, nil).Once()
+			runtime.EXPECT().IsContainerRunning(mock.Anything, proof.ID).Return(true, nil).Once()
+			runtime.EXPECT().GetContainerHealthStatus(mock.Anything, proof.ID).Return("healthy", true, nil).Once()
+
+			committer := &recordingMigrationCutoverCommitter{}
+			if failure == "commit-final" {
+				committer.err = errors.New("injected commit failure")
+			}
+			manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+			err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+			require.Error(t, err)
+			assert.Equal(t, []bool{true}, committer.failureRetries)
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleActivateColdNetworkFailureRestoresAndProvesPreparedEdge(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+	restored := &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Twice()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", prepared.Name}}}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, prepared.Name, "gordon-app-fixture").Return(errors.New("injected network failure")).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{restored}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
+
+	command := cutoverCommand(config)
+	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
+	committer := &recordingMigrationCutoverCommitter{}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
+	require.Error(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	assert.Equal(t, []bool{true}, committer.failureRetries)
+}
+
+func TestRuntimeComponentLifecycleActivateColdRecoveryCommitsHealthyFinal(t *testing.T) {
+	config := cutoverConfig(t)
+	final := &domain.Container{ID: "final", Name: "gordon-edge-fixture-g1", Ports: []int{8080, 5000}, Labels: componentLabels("edge")}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{final}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforeCommit}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.Len(t, committer.commands, 1)
+}
+
+func TestRuntimeComponentLifecycleActivateColdRecoveryRestoresPreparedEdge(t *testing.T) {
+	config := cutoverConfig(t)
+	restored := &domain.Container{ID: "restored", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{restored}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
+	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforePreparedRemove}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
+	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	require.Error(t, err)
+	assert.Equal(t, []bool{true}, committer.failureRetries)
+}
+
 func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionally(t *testing.T) {
 	config := cutoverConfig(t)
 	prepared := &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Labels: componentLabels("edge")}

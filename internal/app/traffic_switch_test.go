@@ -63,7 +63,7 @@ func TestTrafficSwitchPreconditionsFailClosed(t *testing.T) {
 	checks := []string{
 		"health:control", "health:runtime", "health:registry", "health:edge",
 		"auth:control", "auth:runtime", "auth:registry", "auth:edge",
-		"route-generation", "traffic-generation", "application-edge", "registry-v2-edge", "old-path",
+		"route-generation", "traffic-generation", "application-edge", "registry-v2-edge",
 	}
 	for _, check := range checks {
 		t.Run(check, func(t *testing.T) {
@@ -75,6 +75,15 @@ func TestTrafficSwitchPreconditionsFailClosed(t *testing.T) {
 			assert.Empty(t, runtime.commands, "failed prerequisite must not mutate traffic")
 		})
 	}
+}
+
+func TestTrafficSwitchDoesNotRequireOldServingPathHealth(t *testing.T) {
+	runtime := &recordingTrafficRuntime{}
+	switcher, err := NewTrafficSwitch(runtime, fixtureTrafficChecks{fail: "old-path"})
+	require.NoError(t, err)
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 7, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 7, OldServingPath: "monolith"}
+	require.NoError(t, switcher.Switch(context.Background(), checkpoint, fixtureSwitchPlan(t)))
+	assert.Len(t, runtime.commands, 1)
 }
 
 func TestTrafficSwitchRejectsGenerationMismatchAndSwitchesOnlyViaRuntime(t *testing.T) {

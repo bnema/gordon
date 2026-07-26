@@ -19,6 +19,11 @@ import (
 // migrationTrafficChecks is the production cutover reader. It consumes only
 // authenticated runtime lifecycle commands, sanitized runtime state, and edge
 // reports; it never creates a Docker-compatible client or opens a socket.
+type migrationTrafficCheckSet interface {
+	TrafficSwitchChecks
+	OldServingPathHealthy(context.Context, string) error
+}
+
 type migrationTrafficChecks struct {
 	runtime              out.RuntimeSelfUpdater
 	state                out.RuntimeStateSubscriber
@@ -31,7 +36,7 @@ type migrationTrafficChecks struct {
 	privateProbeClient   func(string, net.IP) *http.Client
 }
 
-func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.RuntimeStateSubscriber, store *MigrationCheckpointStore, applied *edgesnapshotusecase.AppliedStateTracker, cfg Config) (TrafficSwitchChecks, error) {
+func newMigrationTrafficChecks(runtime out.RuntimeSelfUpdater, state out.RuntimeStateSubscriber, store *MigrationCheckpointStore, applied *edgesnapshotusecase.AppliedStateTracker, cfg Config) (migrationTrafficCheckSet, error) {
 	if runtime == nil || state == nil || store == nil || applied == nil {
 		return nil, fmt.Errorf("runtime lifecycle, runtime state, checkpoint store, and edge applied-state tracker are required")
 	}

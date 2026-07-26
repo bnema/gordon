@@ -188,7 +188,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 
 // componentConfig produces the only component container shape that lifecycle
 // commands may create. It is shared by prepare and cutover rollback so a
-// failed listener transfer always restores the identical probe-only edge.
+// failed listener transfer can restore the identical probe-only edge.
 func (m *runtimeComponentLifecycleManager) componentConfig(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (*domain.ContainerConfig, error) {
 	env, err := componentLifecycleEnvironment(command.EnvironmentFile)
 	if err != nil {
@@ -353,9 +353,10 @@ type edgeActivation struct {
 }
 
 // activateEdge transfers listener ownership as a compensating transaction.
-// The old process is a container selected by its Gordon labels, never the
-// invoking CLI/control host process. Any failure restores both the old
-// listener and the prepared probe-only edge before returning the error.
+// Cold cutover normally has no old container because the host service is
+// already stopped. When a managed old container is present, label validation
+// and the existing compensation path remain in force. Any failure restores
+// and proves the prepared probe-only edge before returning the error.
 const edgeCutoverTransactionTimeout = 15 * time.Second
 
 func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
@@ -384,8 +385,8 @@ func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, com
 // reconcileInterruptedEdgeActivation observes inventory after a runtime
 // restart. A prior process may have removed the probe-only edge, so recovery
 // never assumes that a prepared container still exists. It either commits an
-// already healthy final listener or proves a full old/prepared rollback before
-// returning a retryable, sanitized outcome.
+// already healthy final listener or proves the prepared rollback (and the old
+// owner when one is present) before returning a retryable, sanitized outcome.
 func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
 	containers, err := m.runtime.ListContainers(ctx, true)
 	if err != nil {
@@ -395,9 +396,12 @@ func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ct
 	if err != nil {
 		return err
 	}
-	oldRunning, err := m.runtime.IsContainerRunning(ctx, old.ID)
-	if err != nil {
-		return componentLifecycleError("inspect old serving", err)
+	oldRunning := false
+	if old != nil {
+		oldRunning, err = m.runtime.IsContainerRunning(ctx, old.ID)
+		if err != nil {
+			return componentLifecycleError("inspect old serving", err)
+		}
 	}
 	if m.completedFinalCutover(ctx, command, target, oldRunning) {
 		return nil
@@ -438,7 +442,7 @@ func (m *runtimeComponentLifecycleManager) restoreInterruptedEdgeInventory(ctx c
 	} else if !running {
 		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, target.ID))
 	}
-	if !oldRunning {
+	if old != nil && !oldRunning {
 		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, old.ID))
 	}
 	if restoreErr != nil {
@@ -466,9 +470,6 @@ func (m *runtimeComponentLifecycleManager) cutoverInventory(command domain.Runti
 			target = container
 		}
 	}
-	if old == nil {
-		return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not available", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
-	}
 	return old, target, nil
 }
 
@@ -481,11 +482,16 @@ func (m *runtimeComponentLifecycleManager) proveRollbackInventory(ctx context.Co
 		return err
 	}
 	old, prepared, err := m.cutoverInventory(command, containers)
-	if err != nil || prepared == nil || !containerPortsMatch(prepared, command.PortPublishes) || !containerPortsMatch(old, command.FinalPortPublishes) {
+	if err != nil || prepared == nil || !containerPortsMatch(prepared, command.PortPublishes) {
 		return errors.New("rollback inventory proof failed")
 	}
-	if err := m.healthContainer(ctx, old); err != nil {
-		return err
+	if old != nil {
+		if !containerPortsMatch(old, command.FinalPortPublishes) {
+			return errors.New("rollback inventory proof failed")
+		}
+		if err := m.healthContainer(ctx, old); err != nil {
+			return err
+		}
 	}
 	return m.healthContainer(ctx, prepared)
 }
@@ -525,7 +531,7 @@ func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Co
 	if err != nil {
 		return edgeActivation{}, err
 	}
-	if !finalPortsMatchOld(command.FinalPortPublishes, old.Ports) {
+	if old != nil && !finalPortsMatchOld(command.FinalPortPublishes, old.Ports) {
 		return edgeActivation{}, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "edge activation final ports do not match old serving container", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 	}
 	appNetworkNames, err := m.preparedEdgeAppNetworks(ctx, command, prepared)
@@ -602,10 +608,12 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 		}
 		return componentLifecycleError("activate", err)
 	}
-	if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforeOldStop, func() error { return m.runtime.StopContainer(ctx, activation.old.ID) }); err != nil {
-		return componentLifecycleError("stop old serving", err)
+	if activation.old != nil {
+		if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforeOldStop, func() error { return m.runtime.StopContainer(ctx, activation.old.ID) }); err != nil {
+			return componentLifecycleError("stop old serving", err)
+		}
+		oldStopped = true
 	}
-	oldStopped = true
 	if err := m.runCutoverMutation(ctx, command, domain.MigrationCutoverSubphaseBeforePreparedStop, func() error { return m.runtime.StopContainer(ctx, activation.prepared.ID) }); err != nil {
 		return failCutover(err)
 	}
@@ -631,10 +639,10 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	if err := m.healthContainer(ctx, final); err != nil {
 		return failCutover(err)
 	}
-	// The replacement runtime continues this handler after stopping the old
-	// monolith, whose CLI process can consequently disappear before receiving a
-	// reply. Commit only once the final listener is healthy; a failed commit
-	// rolls back the listener transfer and leaves the old path serving.
+	// The replacement runtime may continue this handler after stopping a managed
+	// old monolith, whose CLI process can consequently disappear before receiving
+	// a reply. Commit only once the final listener is healthy; a failed commit
+	// restores the probe-only edge and, when present, the managed old owner.
 	if err := m.commitFinalCutover(ctx, command); err != nil {
 		return failCutover(err)
 	}
@@ -705,8 +713,10 @@ func (m *runtimeComponentLifecycleManager) startFinalEdgeListener(ctx context.Co
 			if err == nil {
 				return created, nil
 			}
-			_ = m.runtime.StopContainer(ctx, created.ID)
-			_ = m.runtime.RemoveContainer(ctx, created.ID, true)
+			cleanupErr := errors.Join(m.runtime.StopContainer(ctx, created.ID), m.runtime.RemoveContainer(ctx, created.ID, true))
+			if cleanupErr != nil {
+				return created, errors.Join(err, cleanupErr)
+			}
 		}
 		lastErr = err
 		if !transientEdgeListenerReleaseError(err) {
@@ -756,6 +766,9 @@ func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Co
 	if oldStopped {
 		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, activation.old.ID))
 	}
+	if activation.old == nil {
+		restoreErr = errors.Join(restoreErr, m.proveRollbackInventory(ctx, command))
+	}
 	return restoreErr
 }
 
@@ -784,7 +797,7 @@ func (m *runtimeComponentLifecycleManager) managedOldServingContainer(ctx contex
 			return container, nil
 		}
 	}
-	return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not available", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
+	return nil, nil
 }
 
 func (m *runtimeComponentLifecycleManager) healthContainer(ctx context.Context, container *domain.Container) error {

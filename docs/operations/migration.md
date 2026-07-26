@@ -1,7 +1,7 @@
 # Monolith-to-split migration
 
 > **`gordon migrate` is a transitional v2 → v3 tool.** It exists only to convert a
-> **running monolith** into a split component deployment. It is planned for removal
+> **host-operated v2 monolith** into a split component deployment. It is planned for removal
 > in a future release once existing v2 installs have converted.
 >
 > **New v3 installs must not use `migrate`.** There is no monolith to convert, and
@@ -13,12 +13,12 @@ The supported production migration target is **rootless Podman**. Migration is c
 
 ## Requirements
 
-- A healthy monolith using the target config and data directory.
+- A healthy monolith using the target config and data directory before the maintenance window.
 - Rootless Podman with its user socket active and API reachable.
 - The candidate Gordon image available or pullable by that Podman user.
 - Writable config, data, registry, environment, and credential storage.
 - Enough disk space and no ambiguous/unmanaged Gordon resources.
-- Public ports still owned by the current Gordon deployment until switching. Set `server.port` to the intended generated split-edge listen port even though monolith public traffic uses `[entrypoints]`.
+- A maintenance window in which the host `gordon.service` is stopped and its public ports remain free through plan, prepare, and switch. Set `server.port` to the intended generated split-edge listen port even though monolith public traffic uses `[entrypoints]`.
 - A private runtime handoff seed, preferably via environment:
 
 ```toml
@@ -33,20 +33,27 @@ export GORDON_MIGRATION_IMAGE="ghcr.io/example/gordon:<target-version>"
 
 Do not put real token values in TOML, shell history, issue reports, or logs.
 
-## Commands
+## Maintenance-window procedure
 
-Run each command against the same local config. Add `--json` for machine-readable output.
+Before stopping the service, take and verify a mutually consistent snapshot of the config, `server.data_dir`, registry storage, migration state, and component volumes. Prepare an executable rollback script that stops any split public listener, restores that snapshot, and starts exactly one host `gordon.service`. Keep the script outside the directories it restores.
+
+Stop the host service, confirm it is inactive, and run every migration command against the same local config. The commands introduce no cold-migration flag; free public ports select the normal path.
 
 ```bash
+sudo systemctl stop gordon.service
+sudo systemctl is-active --quiet gordon.service && exit 1
+
 gordon migrate plan --config ~/.config/gordon/gordon.toml --json
 gordon migrate prepare --config ~/.config/gordon/gordon.toml --json
 gordon migrate status --config ~/.config/gordon/gordon.toml --json
 gordon migrate switch --config ~/.config/gordon/gordon.toml --json
 ```
 
-`plan` is read-only and must report `"ready": true`. `prepare` writes private role manifests/environment, creates the private component network, and starts prepared components while the old serving path remains authoritative. `switch` verifies old and new application/registry paths, requires authenticated edge state, transfers runtime authority, and activates final listeners.
+`plan` is read-only and must report `"ready": true`. `prepare` writes private role manifests/environment, creates the private component network, and starts the probe-only prepared components while the host service remains stopped. `switch` requires authenticated prepared-edge state, transfers runtime authority, and activates final listeners.
 
-A switch can stop the old monolith before its in-container CLI prints success. Check from a fresh host shell:
+If any command fails, leave `gordon.service` stopped while inspecting status. A failed switch removes a partial final edge and proves the prepared edge. Retry only when the reported outcome is retryable; otherwise run the prepared rollback script.
+
+A switch can complete after its initiating CLI loses the runtime connection. Check from a fresh host shell:
 
 ```bash
 gordon migrate status --config ~/.config/gordon/gordon.toml --json
@@ -57,7 +64,7 @@ After runtime handoff, `resume` reads the durable checkpoint and the generated `
 
 ## Failure and rollback boundary
 
-Before a successful switch, Gordon retains the old serving path and records the retry phase/attempt. Fix the reported category and rerun `switch` or `resume`; do not delete migration state.
+Before a successful switch, the host monolith remains stopped. Gordon records the retry phase/attempt and restores the probe-only prepared edge after a failed cold cutover. Fix the reported category and rerun `switch` or `resume` only when status marks the failure retryable; otherwise preserve evidence and run the prepared rollback script.
 
 There is no automatic reverse migration after phase `switched`. Recovery after a completed switch means repairing/resuming the split deployment. A manual restoration to monolith is an operator disaster-recovery action: stop split public listeners first, preserve all data volumes and checkpoint evidence, restore a verified backup, then start exactly one monolith owner. Never run monolith and split runtime as simultaneous owners.
 

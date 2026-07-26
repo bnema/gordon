@@ -123,8 +123,9 @@ func (o *MigrationOrchestrator) Prepare(ctx context.Context, checkpoint Migratio
 
 // Switch advances only a prepared checkpoint after TrafficSwitcher has
 // verified every prerequisite and activated the edge through RuntimeSelfUpdate.
-// A failed switch persists retry metadata but never deletes or stops the old
-// serving path.
+// A failed switch persists retry metadata after the runtime has compensated
+// the managed inventory. Cold cutover restores the probe-only prepared edge;
+// compatibility cutover also restores a managed old container when present.
 func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint MigrationCheckpoint) (*MigrationCheckpoint, error) {
 	if o == nil || o.store == nil || o.switcher == nil {
 		return nil, fmt.Errorf("migration traffic switch is not configured")
@@ -149,7 +150,7 @@ func (o *MigrationOrchestrator) Switch(ctx context.Context, checkpoint Migration
 		if saveErr := o.store.Save(checkpoint); saveErr != nil {
 			return nil, fmt.Errorf("checkpoint failed traffic switch: %w", saveErr)
 		}
-		return nil, fmt.Errorf("traffic switch retained old serving path: %w", err)
+		return nil, fmt.Errorf("traffic switch failed with compensated inventory: %w", err)
 	}
 	checkpoint.Phase = MigrationPhaseSwitched
 	checkpoint.LastRetryPhase = ""
