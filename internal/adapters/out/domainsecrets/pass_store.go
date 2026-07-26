@@ -213,62 +213,17 @@ func (s *PassStore) Delete(domainName, key string) error {
 }
 
 func (s *PassStore) deleteLocked(domainName, key string) error {
-	if _, err := s.domainPath(domainName); err != nil {
-		return err
-	}
-
 	keyPath, err := s.keyPath(domainName, key)
 	if err != nil {
 		return err
 	}
-
-	showCtx, showCancel := context.WithTimeout(context.Background(), s.timeout)
-	previous, existed, err := s.passShow(showCtx, keyPath)
-	showCancel()
-	if err != nil {
-		return err
-	}
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
-		rmCancel()
-		return err
-	}
-	rmCancel()
-
-	keys, err := s.listKeysLocked(domainName)
-	if err != nil {
-		return err
-	}
-
-	updated := make([]string, 0, len(keys))
-	for _, existingKey := range keys {
-		if existingKey == key {
-			continue
-		}
-		updated = append(updated, existingKey)
-	}
-	sort.Strings(updated)
-
 	manifestPath, err := s.manifestPath(domainName)
 	if err != nil {
 		return err
 	}
-
-	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer insertCancel()
-	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
-		if existed {
-			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), s.timeout)
-			rollbackErr := s.passInsert(rollbackCtx, keyPath, previous)
-			rollbackCancel()
-			if rollbackErr != nil {
-				return fmt.Errorf("failed to update manifest and restore removed secret")
-			}
-		}
-		return fmt.Errorf("failed to update manifest: %w", err)
-	}
-
-	return nil
+	return s.deleteSecretTransaction(key, keyPath, manifestPath, func() ([]string, error) {
+		return s.listKeysLocked(domainName)
+	})
 }
 
 // SetAttachmentIfEmpty sets attachment secrets only when no keys already exist.
@@ -333,62 +288,17 @@ func (s *PassStore) DeleteAttachment(containerName, key string) error {
 }
 
 func (s *PassStore) deleteAttachmentLocked(containerName, key string) error {
-	if _, err := s.attachmentPath(containerName); err != nil {
-		return err
-	}
-
 	keyPath, err := s.attachmentKeyPath(containerName, key)
 	if err != nil {
 		return err
 	}
-
-	showCtx, showCancel := context.WithTimeout(context.Background(), s.timeout)
-	previous, existed, err := s.passShow(showCtx, keyPath)
-	showCancel()
-	if err != nil {
-		return err
-	}
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
-		rmCancel()
-		return err
-	}
-	rmCancel()
-
-	keys, err := s.listAttachmentKeys(containerName)
-	if err != nil {
-		return err
-	}
-
-	updated := make([]string, 0, len(keys))
-	for _, existingKey := range keys {
-		if existingKey == key {
-			continue
-		}
-		updated = append(updated, existingKey)
-	}
-	sort.Strings(updated)
-
 	manifestPath, err := s.attachmentManifestPath(containerName)
 	if err != nil {
 		return err
 	}
-
-	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer insertCancel()
-	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
-		if existed {
-			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), s.timeout)
-			rollbackErr := s.passInsert(rollbackCtx, keyPath, previous)
-			rollbackCancel()
-			if rollbackErr != nil {
-				return fmt.Errorf("failed to update attachment manifest and restore removed secret")
-			}
-		}
-		return fmt.Errorf("failed to update attachment manifest: %w", err)
-	}
-
-	return nil
+	return s.deleteSecretTransaction(key, keyPath, manifestPath, func() ([]string, error) {
+		return s.listAttachmentKeys(containerName)
+	})
 }
 
 // GetAllAttachment returns all secrets for an attachment container as a key-value map.
@@ -965,6 +875,69 @@ func (s *PassStore) commitSecretTransaction(existingKeys []string, values, paths
 	return nil
 }
 
+func (s *PassStore) deleteSecretTransaction(key, keyPath, manifestPath string, listKeys func() ([]string, error)) error {
+	keySnapshot, err := s.snapshotPassValue(keyPath)
+	if err != nil {
+		return err
+	}
+	manifestSnapshot, err := s.snapshotPassValue(manifestPath)
+	if err != nil {
+		return err
+	}
+	snapshots := []passValueSnapshot{keySnapshot, manifestSnapshot}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	err = s.passRemove(ctx, keyPath)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	keys, err := listKeys()
+	if err != nil {
+		return s.deleteTransactionFailure(snapshots)
+	}
+	updated := make([]string, 0, len(keys))
+	for _, existingKey := range keys {
+		if existingKey != key {
+			updated = append(updated, existingKey)
+		}
+	}
+	sort.Strings(updated)
+
+	ctx, cancel = context.WithTimeout(context.Background(), s.timeout)
+	err = s.passInsert(ctx, manifestPath, strings.Join(updated, "\n"))
+	cancel()
+	if err != nil {
+		return s.deleteTransactionFailure(snapshots)
+	}
+	return nil
+}
+
+func (s *PassStore) deleteTransactionFailure(snapshots []passValueSnapshot) error {
+	if s.restorePassSnapshots(snapshots) {
+		return fmt.Errorf("secret delete failed and rollback failed")
+	}
+	return fmt.Errorf("secret delete failed")
+}
+
+func (s *PassStore) restorePassSnapshots(snapshots []passValueSnapshot) bool {
+	rollbackFailed := false
+	for index := len(snapshots) - 1; index >= 0; index-- {
+		snapshot := snapshots[index]
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		var err error
+		if snapshot.exists {
+			err = s.passInsert(ctx, snapshot.path, snapshot.value)
+		} else {
+			err = s.passRemove(ctx, snapshot.path)
+		}
+		cancel()
+		rollbackFailed = rollbackFailed || err != nil
+	}
+	return rollbackFailed
+}
+
 func (s *PassStore) snapshotPassValue(path string) (passValueSnapshot, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
 	defer cancel()
@@ -976,20 +949,11 @@ func (s *PassStore) snapshotPassValue(path string) (passValueSnapshot, error) {
 }
 
 func (s *PassStore) transactionFailure(attempted []string, snapshots map[string]passValueSnapshot) error {
-	rollbackFailed := false
-	for index := len(attempted) - 1; index >= 0; index-- {
-		snapshot := snapshots[attempted[index]]
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-		var err error
-		if snapshot.exists {
-			err = s.passInsert(ctx, snapshot.path, snapshot.value)
-		} else {
-			err = s.passRemove(ctx, snapshot.path)
-		}
-		cancel()
-		rollbackFailed = rollbackFailed || err != nil
+	ordered := make([]passValueSnapshot, 0, len(attempted))
+	for _, path := range attempted {
+		ordered = append(ordered, snapshots[path])
 	}
-	if rollbackFailed {
+	if s.restorePassSnapshots(ordered) {
 		return fmt.Errorf("secret transaction failed and rollback failed")
 	}
 	return fmt.Errorf("secret transaction failed")

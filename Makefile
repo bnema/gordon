@@ -44,9 +44,11 @@ COMPAT_TRAFFIC_BINARY_TESTS := TestCompatibilityTrafficProtocolBinaries
 # The split drain gate is in-process but uses the production TCP/gRPC/HTTP
 # adapters. It must pass exactly once and must never become an environmental skip.
 COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
-# Migration always runs a deterministic protocol fixture locally. Setting
-# GORDON_COMPAT_PODMAN=1 additionally selects the rootless Podman fixture;
-# JSON inspection makes that selected release gate fail rather than skip.
+# Migration always runs a deterministic protocol fixture on portable CI. Setting
+# GORDON_COMPAT_PODMAN=1 additionally selects the host-architecture rootless
+# Podman fixture, including its fresh default-user managed-pass volume smoke;
+# JSON inspection makes that selected release gate fail rather than skip. The
+# production pre-release acceptance target always sets GORDON_COMPAT_PODMAN=1.
 COMPAT_MIGRATION_PROTOCOL_TESTS := TestCompatibilityMigrationProtocolFixture|TestMigrationInterruptedRetry|TestMigrationMissingEnvFailsPreflight|TestMigrationTrafficSwitchFailsClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
 COMPAT_MIGRATION_PODMAN_TEST := TestCompatibilityMigrationRootlessPodmanOldToSplit
 # Registry is an exact Docker-backed old/new OCI gate.  JSON inspection rejects
@@ -295,6 +297,8 @@ compat-harness-migration: ## Run blocking migration protocol and rootless-Podman
 			echo "migration compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
 		fi; \
 		jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report_path" >/dev/null; \
+	else \
+		echo "Rootless Podman smoke not selected for this portable run; pre-release-acceptance requires it."; \
 	fi
 
 compat-harness-security: ## Run blocking current-security compatibility gates

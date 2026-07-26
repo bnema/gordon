@@ -42,6 +42,9 @@ func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
 	for _, command := range []string{"migrate plan", "migrate prepare", "migrate status", "migrate switch"} {
 		require.Contains(t, text, command, "the real fixture must execute %q", command)
 	}
+	for _, managedPassGate := range []string{"secrets_backend = \"pass\"", "USER gordon", "secrets doctor", "--write-check", "gordon-control-secrets-"} {
+		require.Contains(t, text, managedPassGate, "rootless migration must retain authentic managed-pass gate %q", managedPassGate)
+	}
 }
 
 // TestMigrationInterruptedRetry documents the release invariant in a stable,
@@ -154,6 +157,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	probes.Registry = true
 	fixture.assertInterruptedSwitchRetry()
 	probes.Resume = true
+	fixture.assertManagedPassVolumePersistence()
 }
 
 type realMigrationFixture struct {
@@ -322,7 +326,7 @@ func (f *realMigrationFixture) componentContainers() ([]PodmanResource, error) {
 func (f *realMigrationFixture) buildCandidateImage() {
 	binary := filepath.Join(f.root, "gordon")
 	require.NoError(f.t, securityBuildCandidate(f.ctx, projectRoot(f.t), binary))
-	containerfile := "FROM docker.io/library/alpine:3.20\nCOPY gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
+	containerfile := "FROM docker.io/library/alpine:3.20\nRUN apk add --no-cache ca-certificates pass gnupg && adduser -D -s /bin/sh gordon && mkdir -p /app /data /var/lib/gordon/secrets && chown -R gordon:gordon /app /data /var/lib/gordon\nWORKDIR /data\nUSER gordon\nCOPY --chown=gordon:gordon gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
 	require.NoError(f.t, os.WriteFile(filepath.Join(f.root, "Containerfile"), []byte(containerfile), 0o600))
 	policy := filepath.Join(f.root, "policy.json")
 	require.NoError(f.t, os.WriteFile(policy, []byte(`{"default":[{"type":"insecureAcceptAnything"}]}`), 0o600))
@@ -344,7 +348,7 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
@@ -796,6 +800,56 @@ func (f *realMigrationFixture) assertInterruptedSwitchRetry() {
 	require.Equal(f.t, "switched", phase, "a retry after a terminated caller must retain the switched checkpoint")
 }
 
+func (f *realMigrationFixture) assertManagedPassVolumePersistence() {
+	f.t.Helper()
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	var control PodmanResource
+	for _, container := range containers {
+		if container.Labels[domain.LabelComponentRole] == "control" {
+			control = container
+			break
+		}
+	}
+	require.NotEmpty(f.t, control.resourceName(), "candidate migration must create control")
+	imageUser, err := podmanOutput(f.ctx, "inspect", "--format", "{{.Config.User}}", f.image)
+	require.NoError(f.t, err)
+	require.NotEmpty(f.t, strings.TrimSpace(imageUser), "managed-pass smoke must use the image default non-root user")
+	require.NotEqual(f.t, "0", strings.TrimSpace(imageUser))
+
+	mounts, err := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon/secrets\"}}{{.Name}}{{end}}{{end}}", control.resourceName())
+	require.NoError(f.t, err)
+	volume := strings.TrimSpace(mounts)
+	require.Regexp(f.t, `^gordon-control-secrets-[0-9a-f]{16}$`, volume)
+
+	doctorConfig := filepath.Join(f.root, "managed-pass-doctor.toml")
+	require.NoError(f.t, os.WriteFile(doctorConfig, []byte("[auth]\nenabled = false\nsecrets_backend = \"pass\"\n"), 0o644))
+	runDoctor := func() {
+		f.t.Helper()
+		args := []string{
+			"run", "--rm",
+			"--volume", volume + ":/var/lib/gordon/secrets",
+			"--volume", doctorConfig + ":/tmp/gordon-doctor.toml:ro",
+			"--env", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
+			"--env", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
+			f.image, "secrets", "doctor", "--config", "/tmp/gordon-doctor.toml", "--write-check",
+		}
+		require.NoError(f.t, migrationPodman(f.ctx, args...), "default-user doctor must write, read, and delete without exposing values")
+	}
+
+	require.NoError(f.t, migrationPodman(f.ctx, "stop", control.resourceName()))
+	require.NoError(f.t, migrationPodman(f.ctx, "run", "--rm", "--volume", volume+":/var/lib/gordon/secrets:ro", "--entrypoint", "sh", f.image, "-ec", "test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg"), "control startup must initialize the fresh managed-pass volume before doctor runs")
+	runDoctor()
+	require.NoError(f.t, migrationPodman(f.ctx, "start", control.resourceName()))
+	require.Eventually(f.t, func() bool {
+		running, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.State.Running}}", control.resourceName())
+		return inspectErr == nil && strings.TrimSpace(running) == "true"
+	}, 10*time.Second, 100*time.Millisecond, "control must restart with its initialized managed pass volume")
+	require.NoError(f.t, migrationPodman(f.ctx, "stop", control.resourceName()))
+	runDoctor()
+	require.NoError(f.t, migrationPodman(f.ctx, "start", control.resourceName()))
+}
+
 func normalizeNetworkSet(networks string) []string {
 	parts := strings.Split(networks, ";")
 	normalized := make([]string, 0, len(parts))
@@ -835,7 +889,7 @@ registry_domain = "registry.example.test"
 
 [auth]
 enabled = false
-secrets_backend = "unsafe"
+secrets_backend = "pass"
 
 [network_isolation]
 enabled = true
@@ -867,6 +921,10 @@ func migrationStartPodmanService(t *testing.T, ctx context.Context, root string)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if info, err := os.Stat(socket); err == nil && info.Mode()&os.ModeSocket != 0 {
+			// The fixture root is owner-only, and this socket is mounted only into
+			// the old monolith and authenticated runtime. Permit the image's
+			// default non-root user to open that private runtime-authority socket.
+			require.NoError(t, os.Chmod(socket, 0o666))
 			return socket, service
 		}
 		time.Sleep(25 * time.Millisecond)

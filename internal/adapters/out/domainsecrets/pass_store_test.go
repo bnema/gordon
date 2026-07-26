@@ -153,6 +153,146 @@ func TestPassStoreDeleteRollbackIsSerializedAgainstConcurrentSet(t *testing.T) {
 	assert.Equal(t, "next", entries[basePath+"/NEXT"])
 }
 
+func TestPassStoreDeleteRollsBackEntryAndManifestAfterPostRemoveListFailure(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	tests := []struct {
+		name         string
+		base         string
+		deleteSecret func(*PassStore) error
+	}{
+		{
+			name: "domain",
+			base: PassDomainSecretsPath + "/" + safeDomain,
+			deleteSecret: func(store *PassStore) error {
+				return store.Delete("app.example.test", "TOKEN")
+			},
+		},
+		{
+			name: "attachment",
+			base: PassAttachmentPath + "/app-db",
+			deleteSecret: func(store *PassStore) error {
+				return store.DeleteAttachment("app-db", "TOKEN")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := map[string]string{test.base + "/TOKEN": "original", test.base + "/.keys": "TOKEN"}
+			removed := false
+			store := &PassStore{timeout: time.Second, log: testLogger()}
+			store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+				path := args[len(args)-1]
+				switch args[0] {
+				case "show":
+					if removed && test.name == "attachment" && path == test.base+"/.keys" {
+						return nil, errors.New("forced post-remove attachment list failure")
+					}
+					value, ok := entries[path]
+					if !ok {
+						return []byte("not in the password store"), errors.New("missing")
+					}
+					return []byte(value), nil
+				case "ls":
+					if removed && test.name == "domain" {
+						return nil, errors.New("forced post-remove domain list failure")
+					}
+					return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+				case "rm":
+					delete(entries, path)
+					if path == test.base+"/TOKEN" {
+						removed = true
+					}
+					return nil, nil
+				case "insert":
+					entries[path] = stdin
+					return nil, nil
+				default:
+					return nil, errors.New("unexpected command")
+				}
+			}
+
+			err := test.deleteSecret(store)
+			require.EqualError(t, err, "secret delete failed")
+			assert.Equal(t, "original", entries[test.base+"/TOKEN"])
+			assert.Equal(t, "TOKEN", entries[test.base+"/.keys"])
+		})
+	}
+}
+
+func TestPassStoreDeleteReturnsGenericErrorWhenPostRemoveRollbackFails(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	tests := []struct {
+		name         string
+		base         string
+		deleteSecret func(*PassStore) error
+	}{
+		{
+			name: "domain",
+			base: PassDomainSecretsPath + "/" + safeDomain,
+			deleteSecret: func(store *PassStore) error {
+				return store.Delete("app.example.test", "TOKEN")
+			},
+		},
+		{
+			name: "attachment",
+			base: PassAttachmentPath + "/app-db",
+			deleteSecret: func(store *PassStore) error {
+				return store.DeleteAttachment("app-db", "TOKEN")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := map[string]string{test.base + "/TOKEN": "original", test.base + "/.keys": "TOKEN"}
+			removed := false
+			rollbackAttempts := 0
+			store := &PassStore{timeout: time.Second, log: testLogger()}
+			store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+				path := args[len(args)-1]
+				switch args[0] {
+				case "show":
+					if removed && test.name == "attachment" && path == test.base+"/.keys" {
+						return nil, errors.New("sensitive list failure")
+					}
+					value, ok := entries[path]
+					if !ok {
+						return []byte("not in the password store"), errors.New("missing")
+					}
+					return []byte(value), nil
+				case "ls":
+					if removed && test.name == "domain" {
+						return nil, errors.New("sensitive list failure")
+					}
+					return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+				case "rm":
+					delete(entries, path)
+					if path == test.base+"/TOKEN" {
+						removed = true
+					}
+					return nil, nil
+				case "insert":
+					rollbackAttempts++
+					if path == test.base+"/TOKEN" {
+						return nil, errors.New("sensitive rollback failure")
+					}
+					entries[path] = stdin
+					return nil, nil
+				default:
+					return nil, errors.New("unexpected command")
+				}
+			}
+
+			err := test.deleteSecret(store)
+			require.EqualError(t, err, "secret delete failed and rollback failed")
+			assert.Equal(t, 2, rollbackAttempts, "both snapshots must be restored even after one rollback step fails")
+			assert.Equal(t, "TOKEN", entries[test.base+"/.keys"])
+			assert.NotContains(t, err.Error(), "sensitive")
+		})
+	}
+}
+
 func TestPassStoreSetRollsBackOverwritesAndManifestOnFailure(t *testing.T) {
 	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
 	require.NoError(t, err)
