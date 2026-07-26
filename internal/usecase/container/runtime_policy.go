@@ -201,17 +201,14 @@ func (p RuntimePolicy) checkManagedControlSecretsMount(identity domain.RuntimeCo
 	if controlLifecycle && !validManagedControlSecretsVolume(reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is not configured")
 	}
-	if reserved == "" {
-		return nil
-	}
-	if !validManagedControlSecretsVolume(reserved) {
+	destinationUsed, managedSourceUsed := managedControlSecretsMountUsage(cfg)
+	if reserved != "" && !validManagedControlSecretsVolume(reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is invalid")
 	}
-	destinationUsed, reservedSourceUsed := managedControlSecretsMountUsage(cfg, reserved)
-	if !destinationUsed && !reservedSourceUsed {
+	if !destinationUsed && !managedSourceUsed {
 		return nil
 	}
-	if !authorizedManagedControlSecretsMount(identity, cfg, reserved) {
+	if !validManagedControlSecretsVolume(reserved) || !authorizedManagedControlSecretsMount(identity, cfg, reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is reserved")
 	}
 	return nil
@@ -230,17 +227,17 @@ func validManagedControlSecretsVolume(value string) bool {
 	return true
 }
 
-func managedControlSecretsMountUsage(cfg domain.ContainerConfig, reserved string) (bool, bool) {
+func managedControlSecretsMountUsage(cfg domain.ContainerConfig) (bool, bool) {
 	_, destinationUsed := cfg.Volumes[managedControlSecretsPath]
-	reservedSourceUsed := false
+	managedSourceUsed := false
 	for _, mountedSource := range cfg.Volumes {
-		reservedSourceUsed = reservedSourceUsed || mountedSource == reserved
+		managedSourceUsed = managedSourceUsed || validManagedControlSecretsVolume(mountedSource)
 	}
 	for destination, mountedSource := range cfg.ReadOnlyVolumes {
 		destinationUsed = destinationUsed || destination == managedControlSecretsPath
-		reservedSourceUsed = reservedSourceUsed || mountedSource == reserved
+		managedSourceUsed = managedSourceUsed || validManagedControlSecretsVolume(mountedSource)
 	}
-	return destinationUsed, reservedSourceUsed
+	return destinationUsed, managedSourceUsed
 }
 
 func authorizedManagedControlSecretsMount(identity domain.RuntimeCommandIdentity, cfg domain.ContainerConfig, reserved string) bool {
@@ -250,12 +247,12 @@ func authorizedManagedControlSecretsMount(identity domain.RuntimeCommandIdentity
 		return false
 	}
 	for destination, source := range cfg.Volumes {
-		if source == reserved && destination != managedControlSecretsPath {
+		if validManagedControlSecretsVolume(source) && (source != reserved || destination != managedControlSecretsPath) {
 			return false
 		}
 	}
 	for destination, source := range cfg.ReadOnlyVolumes {
-		if source == reserved || destination == managedControlSecretsPath {
+		if validManagedControlSecretsVolume(source) || destination == managedControlSecretsPath {
 			return false
 		}
 	}

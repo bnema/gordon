@@ -74,7 +74,7 @@ MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 .PHONY: all build build-push clean dev-release \
 	test test-short test-race test-coverage \
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
-	release-check pre-release-acceptance release-smoke release-image-smoke \
+	release-check pre-release-acceptance release-smoke release-image-smoke release-podman-managed-pass-smoke \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
 	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
 
@@ -383,6 +383,40 @@ release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts 
 			go version -m "$$tmp/gordon" >/dev/null; rm -rf "$$tmp"; trap - EXIT HUP INT TERM; \
 		done
 	@$(MAKE) release-image-smoke
+	@$(MAKE) release-podman-managed-pass-smoke
+
+release-podman-managed-pass-smoke: ## Block on rootless Podman validation of the exact host-architecture artifact image
+	@set -eu; \
+		if ! command -v podman >/dev/null 2>&1; then \
+			echo "PRODUCTION GATE BLOCKED: rootless Podman is required for the managed-pass artifact smoke." >&2; exit 1; \
+		fi; \
+		if [ "$$(podman info --format '{{.Host.Security.Rootless}}')" != "true" ]; then \
+			echo "PRODUCTION GATE BLOCKED: Podman is not running rootless." >&2; exit 1; \
+		fi; \
+		test -s "$(DIST_DIR)/artifacts.json"; arch=$$(go env GOARCH); \
+		image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
+		test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
+		tmp=$$(mktemp -d); config="$$tmp/gordon.toml"; archive="$$tmp/artifact.tar"; \
+		volume="gordon-release-podman-secrets-$$$$"; owner="gordon-release-podman-owner-$$$$"; lease_error="$$tmp/lease-error"; \
+		trap 'podman rm -f "$$owner" >/dev/null 2>&1 || true; podman volume rm -f "$$volume" >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT HUP INT TERM; \
+		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' 'token = "release-podman-smoke-runtime-token"' >"$$config"; chmod 0644 "$$config"; \
+		docker image inspect "$$image" >/dev/null; test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
+		docker save -o "$$archive" "$$image"; podman load -i "$$archive" >/dev/null; \
+		test "$$(podman image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
+		podman run --rm --entrypoint sh "$$image" -ec 'test "$$(id -u)" -ne 0; grep -Eq "^3\\.24\\." /etc/alpine-release'; \
+		podman volume create "$$volume" >/dev/null; \
+		podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
+		podman run --detach --name "$$owner" -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" serve --role control --config /tmp/gordon.toml >/dev/null; \
+		lease_rejected=0; for attempt in $$(seq 1 30); do \
+			if ! podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then \
+				grep -q 'managed pass store is already in use' "$$lease_error" && lease_rejected=1 && break; \
+			fi; podman inspect --format '{{.State.Running}}' "$$owner" | grep -q true; sleep 1; \
+		done; \
+		test "$$lease_rejected" -eq 1; podman rm -f "$$owner" >/dev/null; \
+		podman run --rm -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
+		podman run --rm -v "$$volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
+		podman volume rm "$$volume" >/dev/null; if podman volume inspect "$$volume" >/dev/null 2>&1; then exit 1; fi; volume=; owner=; \
+		rm -rf "$$tmp"; trap - EXIT HUP INT TERM
 
 release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
 	@set -eu; \

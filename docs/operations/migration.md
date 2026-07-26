@@ -60,11 +60,16 @@ backup_file="$PWD/gordon-control-secrets.tar.gz.age"
 age_recipient='age1exampleoperatorrecipient000000000000000000000000000000000'
 age_identity='/private/path/to/age-identity'
 verify_volume="gordon-secrets-backup-verify-$(date +%s)"
+control_image="$(podman inspect --format '{{.ImageName}}' "$control_id")"
+doctor_config="$(mktemp)"
+printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' \
+  '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' \
+  'token = "backup-validation-only-not-a-runtime-credential"' >"$doctor_config"
+trap 'rm -f "$doctor_config"; podman volume rm -f "$verify_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
 podman run --rm -v "$secret_volume:/source:ro" docker.io/library/alpine:latest \
   tar -C /source -czf - . | age --encrypt --recipient "$age_recipient" >"$backup_file"
 test -s "$backup_file"
 podman volume create "$verify_volume" >/dev/null
-trap 'podman volume rm -f "$verify_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
 age --decrypt --identity "$age_identity" "$backup_file" | \
   podman run --rm -i -v "$verify_volume:/verify" docker.io/library/alpine:latest \
     sh -ec 'umask 077; chmod 700 /verify; tar -C /verify -xzf -'
@@ -77,11 +82,17 @@ podman run --rm -v "$verify_volume:/verify:ro" docker.io/library/alpine:latest s
   test -z "$(find /verify -mindepth 1 -maxdepth 1 ! -name current ! -name .control.lock -print -quit)"
   test -z "$(find /verify/current -mindepth 1 -maxdepth 1 ! -name gnupg ! -name password-store ! -name .gordon-managed-pass-fingerprint -print -quit)"
 '
+podman run --rm -v "$verify_volume:/var/lib/gordon/secrets" \
+  -v "$doctor_config:/tmp/gordon-doctor.toml:ro" \
+  -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg \
+  -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store \
+  "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
 podman volume rm "$verify_volume" >/dev/null
+rm -f "$doctor_config"
 trap - EXIT HUP INT TERM
 ```
 
-Do not declare or rotate to this backup unless the decrypt, authenticated archive read, and structural checks all succeed. The verification volume is private staging; no plaintext archive is written to persistent storage.
+Do not declare or rotate to this backup unless decryption, authenticated archive extraction, structural checks, and the actual control artifact's `secrets doctor --write-check` all succeed. The doctor runs as the image's default user and performs managed-pass write/read/delete validation in the temporary verification volume. Cleanup is trapped on every exit; no plaintext archive is written to persistent storage.
 
 Restore only while control remains stopped. First decrypt and authenticate the complete archive into a new owner-only staging volume. The live volume is not mounted during this phase, so a wrong identity, truncated ciphertext, malformed archive, or failed validation cannot damage the valid store. Supply the age identity through a private operator-controlled path.
 

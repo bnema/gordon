@@ -14,6 +14,7 @@ func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
 	identity := testRuntimeCommandIdentity("managed-secrets")
 	identity.SourceComponentID = "gordon-control"
 	const volume = "gordon-control-secrets-0123456789abcdef"
+	const foreignVolume = "gordon-control-secrets-fedcba9876543210"
 	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: volume}
 	authorized := domain.ContainerConfig{
 		Name:    "gordon-control-fixture-g1",
@@ -33,11 +34,65 @@ func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
 		{name: "alternate source", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: "other"}}},
 		{name: "alternate destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{"/tmp/secrets": volume}}},
 		{name: "exact pair plus alternate destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: volume, "/tmp/secrets": volume}}},
+		{name: "workload foreign writable source", cfg: domain.ContainerConfig{Volumes: map[string]string{"/data": foreignVolume}}},
+		{name: "runtime foreign writable source", cfg: domain.ContainerConfig{Name: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "runtime", domain.LabelComponentOwner: "runtime"}, Volumes: map[string]string{"/data": foreignVolume}}},
+		{name: "edge current read-only source", cfg: domain.ContainerConfig{Name: "gordon-edge-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "edge", domain.LabelComponentOwner: "runtime"}, ReadOnlyVolumes: map[string]string{"/data": volume}}},
+		{name: "registry foreign read-only source", cfg: domain.ContainerConfig{Name: "gordon-registry-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "registry", domain.LabelComponentOwner: "runtime"}, ReadOnlyVolumes: map[string]string{"/data": foreignVolume}}},
+		{name: "control foreign source at managed destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: foreignVolume}}},
+		{name: "exact pair plus foreign source", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{managedControlSecretsPath: volume, "/tmp/foreign-secrets": foreignVolume}}},
+		{name: "control foreign source at alternate destination", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, Volumes: map[string]string{"/tmp/secrets": foreignVolume}}},
+		{name: "control foreign read-only source", cfg: domain.ContainerConfig{Name: authorized.Name, Labels: authorized.Labels, ReadOnlyVolumes: map[string]string{"/tmp/secrets": foreignVolume}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			require.ErrorIs(t, policy.CheckContainerConfig(identity, "", test.cfg), ErrRuntimePolicyDenied)
 		})
 	}
+}
+
+func TestRuntimePolicyDeniesManagedSecretsPatternForEveryNonControlRoleAndMountMode(t *testing.T) {
+	identity := testRuntimeCommandIdentity("managed-secrets-role-isolation")
+	identity.SourceComponentID = "gordon-control"
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}
+
+	roles := []struct {
+		name   string
+		config domain.ContainerConfig
+	}{
+		{name: "workload", config: domain.ContainerConfig{}},
+		{name: "runtime", config: domain.ContainerConfig{Name: "gordon-runtime-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRuntime), domain.LabelComponentOwner: "runtime"}}},
+		{name: "edge", config: domain.ContainerConfig{Name: "gordon-edge-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleEdge), domain.LabelComponentOwner: "runtime"}}},
+		{name: "registry", config: domain.ContainerConfig{Name: "gordon-registry-fixture-g1", Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRegistry), domain.LabelComponentOwner: "runtime"}}},
+	}
+	volumes := []struct {
+		name   string
+		source string
+	}{
+		{name: "current", source: configuredVolume},
+		{name: "foreign", source: "gordon-control-secrets-fedcba9876543210"},
+	}
+
+	for _, role := range roles {
+		for _, volume := range volumes {
+			t.Run(role.name+"/writable/"+volume.name, func(t *testing.T) {
+				cfg := role.config
+				cfg.Volumes = map[string]string{"/alternate-secrets": volume.source}
+				require.ErrorIs(t, policy.CheckContainerConfig(identity, "app.example.com", cfg), ErrRuntimePolicyDenied)
+			})
+			t.Run(role.name+"/read-only/"+volume.name, func(t *testing.T) {
+				cfg := role.config
+				cfg.ReadOnlyVolumes = map[string]string{"/alternate-secrets": volume.source}
+				require.ErrorIs(t, policy.CheckContainerConfig(identity, "app.example.com", cfg), ErrRuntimePolicyDenied)
+			})
+		}
+	}
+}
+
+func TestRuntimePolicyReservesManagedControlSecretsPatternWithoutLocalConfiguration(t *testing.T) {
+	identity := testRuntimeCommandIdentity("managed-secrets-global-reservation")
+	cfg := domain.ContainerConfig{ReadOnlyVolumes: map[string]string{"/data": "gordon-control-secrets-fedcba9876543210"}}
+
+	require.ErrorIs(t, (RuntimePolicy{Mode: RuntimePolicyModeEnforce}).CheckContainerConfig(identity, "app.example.com", cfg), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimePolicyFailsClosedForControlWithoutValidManagedSecretsVolume(t *testing.T) {
