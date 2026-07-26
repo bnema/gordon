@@ -41,171 +41,30 @@ After control is prepared, use a private shell with history disabled to re-enter
 
 ### Back up and restore the managed pass volume
 
-The control secret volume is installation-namespaced as `gordon-control-secrets-<installation-id>`; do not assume an unqualified volume name. Discover the exact source from the control container without printing environment or secret contents:
+The control secret volume is installation-namespaced as `gordon-control-secrets-<installation-id>`; do not assume an unqualified volume name. Treat backup and restore as privileged offline operations. Stop control, prove that it is stopped, and keep it stopped while any other process mounts the volume. This releases the exclusive managed-store lease and prevents concurrent GPG or `pass` writes.
 
-```bash
-control_id="$(podman ps -aq --filter label=gordon.component.role=control)"
-secret_volume="$(podman inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/gordon/secrets"}}{{.Name}}{{end}}{{end}}' "$control_id")"
-test -n "$secret_volume"
-```
+Use the exact digest-pinned Gordon control image selected by the deployment (a reference ending in `@sha256:<digest>`), not a tag and not a helper image. Before mounting secrets, resolve that local reference with pulls disabled and compare its immutable image ID with the stopped control container's recorded image ID. Abort on a missing image, a tag-only reference, or any mismatch. Every container invocation in the procedure must use that verified reference with `--pull=never` and `--network none`; no other image or container may mount, extract, inspect, copy, or delete managed secret data.
 
-For a consistency-safe backup, stop control and verify it is stopped before reading the volume. This releases the exclusive store lease and prevents GPG or `pass` writes during the archive. Stream the archive directly into authenticated encryption; no plaintext archive is created. Replace the recipient placeholder with an operator-held age recipient, keep the encrypted file owner-only, and never list archive contents in shared logs.
+A backup implementation is acceptable only when it satisfies all of these requirements:
 
-```bash
-set -euo pipefail
-podman stop "$control_id"
-test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
-umask 077
-backup_dir="$PWD"
-backup_file="$backup_dir/gordon-control-secrets.tar.gz.age"
-backup_candidate="$(mktemp "$backup_dir/.gordon-control-secrets.tar.gz.age.candidate.XXXXXX")"
-age_recipient='age1exampleoperatorrecipient000000000000000000000000000000000'
-age_identity='/private/path/to/age-identity'
-verify_volume="gordon-secrets-backup-verify-$(date +%s)"
-control_image="$(podman inspect --format '{{.ImageName}}' "$control_id")"
-doctor_config="$(mktemp)"
-printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' \
-  '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' \
-  'token = "backup-validation-only-not-a-runtime-credential"' >"$doctor_config"
-chmod 0644 "$doctor_config"
-trap 'test -z "$backup_candidate" || rm -f -- "$backup_candidate"; rm -f -- "$doctor_config"; podman volume rm -f "$verify_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
-podman run --rm -v "$secret_volume:/source:ro" docker.io/library/alpine:latest \
-  tar -C /source -czf - . | age --encrypt --recipient "$age_recipient" >"$backup_candidate"
-test -s "$backup_candidate"
-podman volume create "$verify_volume" >/dev/null
-age --decrypt --identity "$age_identity" "$backup_candidate" | \
-  podman run --rm -i -v "$verify_volume:/verify" docker.io/library/alpine:latest \
-    sh -ec 'umask 077; chmod 700 /verify; tar -C /verify -xzf -'
-podman run --rm -v "$verify_volume:/verify:ro" docker.io/library/alpine:latest sh -ec '
-  test -d /verify/current/gnupg
-  test -d /verify/current/password-store
-  test -f /verify/current/.gordon-managed-pass-fingerprint
-  test -f /verify/current/password-store/.gpg-id
-  test -z "$(find /verify -mindepth 1 ! -type d ! -type f -print -quit)"
-  test -z "$(find /verify -mindepth 1 -maxdepth 1 ! -name current ! -name .control.lock -print -quit)"
-  test -z "$(find /verify/current -mindepth 1 -maxdepth 1 ! -name gnupg ! -name password-store ! -name .gordon-managed-pass-fingerprint -print -quit)"
-'
-podman run --rm -v "$verify_volume:/var/lib/gordon/secrets" \
-  -v "$doctor_config:/tmp/gordon-doctor.toml:ro" \
-  -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg \
-  -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store \
-  "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
-podman volume rm "$verify_volume" >/dev/null
-# Preserve the previously verified ciphertext under a versioned name before the
-# atomic replacement. A hard link keeps the old inode safe if publication fails.
-if test -e "$backup_file"; then
-  backup_previous="${backup_file}.verified.$(date -u +%Y%m%dT%H%M%S%N)"
-  ln -- "$backup_file" "$backup_previous"
-fi
-mv -f -- "$backup_candidate" "$backup_file"
-backup_candidate=''
-rm -f "$doctor_config"
-trap - EXIT HUP INT TERM
-```
+- The verified control artifact mounts the stopped source volume read-only and streams the archive to `age` encryption. The ciphertext is written as an owner-only candidate beside the final backup and atomically renamed only after validation; an existing verified ciphertext is never truncated or removed first.
+- Validation streams authenticated `age` decryption over stdin directly into an owner-only container tmpfs. Use an explicit tmpfs mode of `0700`, the artifact user's UID/GID, and a documented size limit at least as large as the uncompressed store plus the operator's chosen safety margin. Check the store size before starting and abort rather than silently exceeding that limit.
+- Extraction, rejection of non-regular/non-directory entries and unexpected paths, managed-store structural checks, and the real `/app/gordon secrets doctor --write-check` all run in that same networkless, digest-verified container. The doctor uses the extracted tmpfs tree as `/var/lib/gordon/secrets` and the normal managed `GNUPGHOME` and `PASSWORD_STORE_DIR` paths.
+- Plaintext exists only in the pipeline and that tmpfs. Do not use a named volume, bind-mounted host directory, temporary host file, or a second container for decrypted staging or inspection. Destroy the tmpfs by removing the validation container on every success, failure, signal, and timeout.
 
-Do not declare or rotate to this backup unless decryption, authenticated archive extraction, structural checks, and the actual control artifact's `secrets doctor --write-check` all succeed. The owner-only candidate is created in the backup's destination directory, and the trap removes it after any failed pipeline or validation; the known-good backup is therefore never opened or truncated. After success, the old verified ciphertext is retained under a timestamped `.verified.*` name and `mv` atomically publishes the candidate. The doctor runs as the image's default user and performs managed-pass write/read/delete validation in the temporary verification volume. Cleanup is trapped on every exit; no plaintext archive is written to persistent storage.
+Size the tmpfs from the stopped source store's uncompressed byte count, round upward, and record the chosen limit in the operator's private runbook. For example, a 180 MiB store with a 25% margin needs at least 225 MiB; choosing 256 MiB leaves explicit headroom. The limit is a safety bound, not a substitute for checking available memory. A backup is valid only after authenticated decryption, safe extraction, structural validation, and the artifact's application-level write/read/delete check all succeed.
 
-The doctor TOML is deliberately `0644` because the default rootless image user must read the bind mount. It contains only generic dummy validation configuration: authentication is disabled, the endpoint uses the documentation-only `192.0.2.0/24` range, and the token is not a credential. Never add secrets to these doctor files.
+Restore is a transaction on the stopped live volume, not a copy from a staging volume. A restore implementation is acceptable only when it satisfies all of these requirements:
 
-Restore only while control remains stopped. First decrypt and authenticate the complete archive into a new owner-only staging volume. The live volume is not mounted during this phase, so a wrong identity, truncated ciphertext, malformed archive, or failed validation cannot damage the valid store. Supply the age identity through a private operator-controlled path.
+1. Reverify the same digest-pinned control artifact before it mounts the live volume. Use `--pull=never` and `--network none` for every invocation and keep control stopped.
+2. Stream authenticated `age` decryption over stdin into that artifact. Within the live volume, safely extract the candidate as a uniquely named, owner-only `.restore-new-*` generation; never decrypt to the host or a named staging volume. Reject absolute paths, `..` traversal, links, devices, sockets, FIFOs, duplicate required roots, and unexpected top-level entries before they can affect another generation.
+3. Flush the candidate's files and directories. In one volume-local transaction, rename the stopped live `current` to a uniquely named `.restore-old-*` rollback generation, rename the candidate to `current`, and flush the parent directory. Never copy over, empty, or delete the old `current` in place.
+4. While the old generation remains intact and control remains stopped, run `/app/gordon secrets doctor --write-check` against the replacement using the same verified networkless artifact. On any extraction, rename, flush, or doctor failure, restore the old generation to `current` and retain the failed candidate for private diagnosis or remove it only after rollback is proven.
+5. Start control and complete the normal health checks before marking the transaction committed. Retain `.restore-old-*` as the rollback generation until an explicit later cleanup after validation and a new verified encrypted backup. No automatic cleanup or failure trap may delete it early.
 
-```bash
-set -euo pipefail
-age_identity='/private/path/to/age-identity'
-staging_volume="gordon-secrets-restore-stage-$(date +%s)"
-control_image="$(podman inspect --format '{{.ImageName}}' "$control_id")"
-doctor_config="$(mktemp)"
-test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
-umask 077
-printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' \
-  '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' \
-  'token = "restore-validation-only-not-a-runtime-credential"' >"$doctor_config"
-# Non-secret dummy config; world-readable so the default rootless image user can read it.
-chmod 0644 "$doctor_config"
-podman volume create "$staging_volume" >/dev/null
-trap 'rm -f "$doctor_config"; podman volume rm -f "$staging_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
-age --decrypt --identity "$age_identity" "$backup_file" | \
-  podman run --rm -i -v "$staging_volume:/staging" docker.io/library/alpine:latest \
-    sh -ec 'umask 077; chmod 700 /staging; tar -C /staging -xzf -'
-```
+The restore mechanism must durably record its phase outside the directories being renamed and fsync both phase changes and volume directory renames. Recovery after a host failure is deterministic: keep control stopped, reverify the exact artifact, then inspect the durable phase and generation names. Before the `current`→`.restore-old-*` phase, discard only an incomplete `.restore-new-*`. After the old rename but before a recorded successful doctor and health check, move any replacement aside and rename `.restore-old-*` back to `current`. After recorded validation, keep the replacement as `current` and retain `.restore-old-*` until explicit cleanup. If the phase record and directory layout disagree, make no changes, preserve every generation, and escalate for offline recovery.
 
-Validate the staged tree before the stopped live volume is mounted. Only directories and regular files are accepted: symlinks, devices, sockets, FIFOs, unexpected root entries, and an incomplete managed-store layout all fail closed.
-
-```bash
-podman run --rm -v "$staging_volume:/staging:ro" docker.io/library/alpine:latest sh -ec '
-  test -d /staging/current
-  test -d /staging/current/gnupg
-  test -d /staging/current/password-store
-  test -f /staging/current/.gordon-managed-pass-fingerprint
-  test -f /staging/current/password-store/.gpg-id
-  test -z "$(find /staging -mindepth 1 ! -type d ! -type f -print -quit)"
-  test -z "$(find /staging -mindepth 1 -maxdepth 1 ! -name current ! -name .control.lock -print -quit)"
-  test -z "$(find /staging/current -mindepth 1 -maxdepth 1 ! -name gnupg ! -name password-store ! -name .gordon-managed-pass-fingerprint -print -quit)"
-'
-podman run --rm -v "$staging_volume:/var/lib/gordon/secrets" \
-  -v "$doctor_config:/tmp/gordon-doctor.toml:ro" \
-  -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg \
-  -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store \
-  "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
-```
-
-The `doctor --write-check` invocation uses the actual control image and its default rootless user. The explicitly `0644` doctor file is safe to bind-mount because it contains only the same generic, non-secret dummy validation configuration described above. It validates the GPG identity and performs an application-level write/read/delete against staging without printing values.
-
-Only after authenticated extraction and validation succeed, copy the staged `current` tree beside the live tree and publish it with a rename. Keep `.restore-old` until the replacement has started and passed a fresh write/read/delete check. Every failure path below stops control and automatically restores the old tree.
-
-```bash
-restore_old() {
-  podman stop "$control_id" >/dev/null 2>&1 || true
-  podman run --rm -v "$secret_volume:/live" docker.io/library/alpine:latest sh -ec '
-    if test -d /live/.restore-old; then
-      rm -rf /live/current /live/.restore-new
-      mv /live/.restore-old /live/current
-    else
-      rm -rf /live/.restore-new
-    fi
-  ' >/dev/null 2>&1 || true
-}
-trap 'restore_old; rm -f "$doctor_config"; podman volume rm -f "$staging_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
-podman run --rm -v "$staging_volume:/staging:ro" -v "$secret_volume:/live" docker.io/library/alpine:latest sh -ec '
-  umask 077
-  test -d /live/current
-  test ! -e /live/.restore-new
-  test ! -e /live/.restore-old
-  cp -a /staging/current /live/.restore-new
-  rollback() {
-    rm -rf /live/.restore-new
-    test -e /live/current || { test ! -d /live/.restore-old || mv /live/.restore-old /live/current; }
-  }
-  trap rollback EXIT HUP INT TERM
-  mv /live/current /live/.restore-old
-  mv /live/.restore-new /live/current
-  trap - EXIT HUP INT TERM
-'
-podman start "$control_id" >/dev/null
-for attempt in $(seq 1 30); do
-  test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = true && break
-  sleep 1
-done
-test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = true
-# Release the control lease, then perform the actual managed-pass read/write health check.
-# Reassert rootless readability before reusing the non-secret dummy doctor config.
-chmod 0644 "$doctor_config"
-podman stop "$control_id" >/dev/null
-podman run --rm -v "$secret_volume:/var/lib/gordon/secrets" \
-  -v "$doctor_config:/tmp/gordon-doctor.toml:ro" \
-  -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg \
-  -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store \
-  "$control_image" secrets doctor --config /tmp/gordon-doctor.toml --write-check >/dev/null
-podman start "$control_id" >/dev/null
-test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = true
-podman run --rm -v "$secret_volume:/live" docker.io/library/alpine:latest \
-  sh -ec 'rm -rf /live/.restore-old /live/.restore-new'
-podman volume rm "$staging_volume" >/dev/null
-rm -f "$doctor_config"
-trap - EXIT HUP INT TERM
-```
-
-If startup, doctor, read/write/delete health, or restart fails, the active trap restores the old `current` automatically. Do not manually remove `.restore-old` before the final health check.
+These are requirements, not a copy-and-paste shell recipe. Podman shell pipelines cannot make signal handling, archive path validation, fsync ordering, and host-crash recovery concise enough to publish as pseudo-transactional safety. Use a reviewed restore tool or operator runbook that implements and tests every invariant above. Never substitute a distribution helper, a mutable tag, a network-enabled container, or persistent plaintext staging.
 
 If no valid backup exists, do not edit or delete a partially published `current` directory to trigger regeneration. Provision a new empty installation volume through the normal control lifecycle, then re-enter secrets with authenticated `gordon secrets set` commands. If importing operator-held GPG material, use an offline private shell and `gpg --import` with output redirected to an owner-only audit file; initialize `pass`, re-enter each secret, verify by key name, and securely remove temporary exports. Never paste secret values, private-key output, or command output into logs.
 
