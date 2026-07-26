@@ -74,6 +74,7 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 			forge(&container)
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{&container}, nil).Once()
+			runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(&container, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
 			require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
 		})
@@ -82,7 +83,9 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 
 func TestRuntimeComponentLifecycleRejectsUnlabeledGordonNamedWorkload(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
-	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: "workload", Name: "gordon-edge-fixture-g1", Labels: map[string]string{domain.LabelDomain: "app.example"}}}, nil).Once()
+	workload := &domain.Container{ID: "workload", Name: "gordon-edge-fixture-g1", Labels: map[string]string{domain.LabelDomain: "app.example"}}
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{workload}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, workload.ID).Return(workload, nil).Once()
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
 	err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: testRuntimeCommandIdentity("component-security"), TargetComponentID: "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge,

@@ -584,12 +584,18 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 
 		var accessCommand string
 		switch role {
-		case "runtime":
-			accessCommand = "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"
-		case "control":
-			accessCommand = "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test ! -w /var/lib/gordon/migration/migration; probe=/var/lib/gordon/migration/migration/attestation/.identity-write-check; : >$probe; rm $probe"
+		case "runtime", "control":
+			volume, volumeErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{.Name}}{{end}}{{end}}", name)
+			require.NoError(f.t, volumeErr)
+			require.Equal(f.t, "gordon-"+role+"-migration-g1", strings.TrimSpace(volume), "%s must receive only its generation-scoped state volume", role)
+			stateProbe := "state_probe=/var/lib/gordon/.identity-write-check; : >$state_probe; test -r $state_probe; rm $state_probe; test ! -e $state_probe; "
+			if role == "runtime" {
+				accessCommand = stateProbe + "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"
+			} else {
+				accessCommand = stateProbe + "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test ! -w /var/lib/gordon/migration/migration; probe=/var/lib/gordon/migration/migration/attestation/.identity-write-check; : >$probe; test -r $probe; rm $probe; test ! -e $probe"
+			}
 		case "registry":
-			accessCommand = "probe=/var/lib/gordon/registry/.identity-write-check; : >$probe; rm $probe"
+			accessCommand = "probe=/var/lib/gordon/registry/.identity-write-check; : >$probe; test -r $probe; rm $probe; test ! -e $probe"
 		case "edge":
 			accessCommand = "test -r /etc/gordon/role.toml; test ! -w /etc/gordon/role.toml; test ! -e /run/gordon/runtime.sock"
 		}

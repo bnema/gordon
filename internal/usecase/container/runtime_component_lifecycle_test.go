@@ -2,14 +2,20 @@ package container
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	dockeradapter "github.com/bnema/gordon/internal/adapters/out/docker"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -78,6 +84,7 @@ func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppN
 	}})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{edge}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, edge.ID).Return(edge, nil).Once()
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test"}}}, nil).Once()
 	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, edge.Name, "gordon-app-fixture").Return(nil).Once()
 
@@ -107,6 +114,7 @@ func TestRuntimeComponentLifecycleRejectsUnsafeAppNetworkConnections(t *testing.
 		t.Run(name, func(t *testing.T) {
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{edge}, nil).Once()
+			runtime.EXPECT().InspectContainer(mock.Anything, edge.ID).Return(edge, nil).Once()
 			runtime.EXPECT().ListNetworks(mock.Anything).Return(networks, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
 			err := manager.ApplyComponentLifecycle(context.Background(), command)
@@ -150,6 +158,7 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 	}})
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{edge}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, edge.ID).Return(edge, nil).Once()
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: command.InternalNetwork, Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{edge.Name, "gordon-target-app-example-test"}}}, nil).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
@@ -206,6 +215,7 @@ func TestRuntimeComponentLifecycleRejectsInvalidManagedSecretsMountsOnExistingTa
 			container := &domain.Container{ID: "existing", Name: command.TargetComponentID, Status: test.status, Labels: componentLifecycleLabels(command), VolumeMounts: test.mounts}
 			runtime := outmocks.NewMockContainerRuntime(t)
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+			runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume})
 
 			err := manager.ApplyComponentLifecycle(context.Background(), command)
@@ -237,6 +247,95 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 	return container
 }
 
+func TestRuntimeComponentLifecycleUsesAuthoritativeInspectForSparseHealthyRetry(t *testing.T) {
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	configPath := testLifecycleConfig(t, domain.ComponentRoleControl)
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}).(*runtimeComponentLifecycleManager)
+	inspected := exactLifecycleContainer(t, manager, command, &domain.Container{ID: "existing", Name: command.TargetComponentID, Status: "running", Labels: componentLifecycleLabels(command)})
+
+	// Docker-compatible list responses do not contain process identity fields.
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: inspected.ID, Name: inspected.Name}}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, inspected.ID).Return(inspected, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, inspected.ID).Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, inspected.ID).Return("healthy", true, nil).Once()
+
+	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+}
+
+func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testing.T) {
+	configPath := testLifecycleConfig(t, domain.ComponentRoleEdge)
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
+
+	for _, test := range []struct {
+		name          string
+		inspectedName string
+		wantDenied    bool
+	}{
+		{name: "healthy retry", inspectedName: command.TargetComponentID},
+		{name: "forged inspect mismatch", inspectedName: "foreign", wantDenied: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/v1.41/containers/json":
+					_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": "existing", "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
+				case "/v1.41/containers/existing/json":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"Id": "existing", "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
+						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": "21003:21003", "Labels": componentLifecycleLabels(command)},
+						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "GroupAdd": []string{}, "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+						"State":           map[string]any{"Status": "running", "ExitCode": 0},
+						"Mounts":          []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "RW": false}},
+						"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+					})
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			defer server.Close()
+
+			host := strings.TrimPrefix(server.URL, "http://")
+			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+			err = manager.ApplyComponentLifecycle(context.Background(), command)
+			if test.wantDenied {
+				require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleFailsClosedWhenCandidateInspectFails(t *testing.T) {
+	configPath := testLifecycleConfig(t, domain.ComponentRoleEdge)
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleStop, configPath)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: "existing", Name: command.TargetComponentID}}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "existing").Return(nil, assert.AnError).Once()
+
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	require.Error(t, manager.ApplyComponentLifecycle(context.Background(), command))
+}
+
+func TestRuntimeComponentLifecycleRejectsForgedSparseCandidateAfterInspectMismatch(t *testing.T) {
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	configPath := testLifecycleConfig(t, domain.ComponentRoleControl)
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleStart, configPath)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}).(*runtimeComponentLifecycleManager)
+	forged := exactLifecycleContainer(t, manager, command, &domain.Container{ID: "forged", Name: "foreign", Labels: componentLifecycleLabels(command)})
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: forged.ID, Name: command.TargetComponentID}}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, forged.ID).Return(forged, nil).Once()
+
+	require.ErrorIs(t, manager.ApplyComponentLifecycle(context.Background(), command), ErrRuntimePolicyDenied)
+}
+
 func TestRuntimeComponentLifecycleAcceptsOnlyExactManagedControlMountForExistingStart(t *testing.T) {
 	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
@@ -251,6 +350,7 @@ func TestRuntimeComponentLifecycleAcceptsOnlyExactManagedControlMountForExisting
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}).(*runtimeComponentLifecycleManager)
 			container := exactLifecycleContainer(t, manager, command, &domain.Container{ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command)})
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+			runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
 			runtime.EXPECT().IsContainerRunning(mock.Anything, container.ID).Return(running, nil).Once()
 			if !running {
 				runtime.EXPECT().StartContainer(mock.Anything, container.ID).Return(nil).Once()
@@ -264,9 +364,11 @@ func TestRuntimeComponentLifecycleRecoveryInventoryRejectsManagedSecretsOnNonCon
 	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleActivate, "/not-used")
 	target := &domain.Container{ID: "target", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), VolumeMounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: "/tmp/secrets"}}}
-	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().InspectContainer(mock.Anything, target.ID).Return(target, nil).Once()
+	manager := &runtimeComponentLifecycleManager{runtime: runtime, policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}}
 
-	_, _, err := manager.cutoverInventory(command, []*domain.Container{target})
+	_, _, err := manager.cutoverInventory(context.Background(), command, []*domain.Container{target})
 	require.ErrorIs(t, err, ErrRuntimePolicyDenied)
 }
 

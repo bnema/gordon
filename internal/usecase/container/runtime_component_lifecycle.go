@@ -403,7 +403,7 @@ func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ct
 	if err != nil {
 		return componentLifecycleError("list cutover inventory", err)
 	}
-	old, target, err := m.cutoverInventory(command, containers)
+	old, target, err := m.cutoverInventory(ctx, command, containers)
 	if err != nil {
 		return err
 	}
@@ -462,26 +462,24 @@ func (m *runtimeComponentLifecycleManager) restoreInterruptedEdgeInventory(ctx c
 	return m.proveRollbackInventory(ctx, command)
 }
 
-func (m *runtimeComponentLifecycleManager) cutoverInventory(command domain.RuntimeSelfUpdateCommand, containers []*domain.Container) (*domain.Container, *domain.Container, error) {
+func (m *runtimeComponentLifecycleManager) cutoverInventory(ctx context.Context, command domain.RuntimeSelfUpdateCommand, containers []*domain.Container) (*domain.Container, *domain.Container, error) {
 	var old, target *domain.Container
-	for _, container := range containers {
-		if container == nil {
+	for _, candidate := range containers {
+		if candidate == nil {
 			continue
 		}
-		if container.Name == command.OldServingComponentID {
-			if container.Labels[domain.LabelManaged] != "true" || container.Labels[domain.LabelComponent] == "true" {
+		if candidate.Name == command.OldServingComponentID {
+			if candidate.Labels[domain.LabelManaged] != "true" || candidate.Labels[domain.LabelComponent] == "true" {
 				return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "old serving container is not Gordon-managed", CommandID: command.ID, ComponentID: command.OldServingComponentID, Generation: command.Generation}
 			}
-			old = container
+			old = candidate
 		}
-		if container.Name == command.TargetComponentID {
-			if !isManagedLifecycleComponent(container, command) {
-				return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
-			}
-			if err := m.validateExistingLifecycleMounts(container, command); err != nil {
+		if candidate.Name == command.TargetComponentID {
+			inspected, err := m.inspectLifecycleCandidate(ctx, candidate, command)
+			if err != nil {
 				return nil, nil, err
 			}
-			target = container
+			target = inspected
 		}
 	}
 	return old, target, nil
@@ -495,7 +493,7 @@ func (m *runtimeComponentLifecycleManager) proveRollbackInventory(ctx context.Co
 	if err != nil {
 		return err
 	}
-	old, prepared, err := m.cutoverInventory(command, containers)
+	old, prepared, err := m.cutoverInventory(ctx, command, containers)
 	if err != nil || prepared == nil || !containerPortsMatch(prepared, command.PortPublishes) {
 		return errors.New("rollback inventory proof failed")
 	}
@@ -1027,18 +1025,36 @@ func (m *runtimeComponentLifecycleManager) find(ctx context.Context, command dom
 	if err != nil {
 		return nil, err
 	}
-	for _, container := range containers {
-		if container != nil && container.Name == command.TargetComponentID {
-			if !isManagedLifecycleComponent(container, command) {
-				return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
-			}
-			if err := m.validateExistingLifecycleMounts(container, command); err != nil {
-				return nil, err
-			}
-			return container, nil
+	for _, candidate := range containers {
+		if candidate != nil && candidate.Name == command.TargetComponentID {
+			return m.inspectLifecycleCandidate(ctx, candidate, command)
 		}
 	}
 	return nil, nil
+}
+
+// inspectLifecycleCandidate treats list output only as candidate discovery.
+// Docker-compatible list responses omit process identity and may expose stale
+// mount metadata, so every lifecycle decision is based on a fresh inspect.
+func (m *runtimeComponentLifecycleManager) inspectLifecycleCandidate(ctx context.Context, candidate *domain.Container, command domain.RuntimeSelfUpdateCommand) (*domain.Container, error) {
+	if candidate == nil || strings.TrimSpace(candidate.ID) == "" {
+		return nil, m.deniedLifecycleCandidate(command)
+	}
+	inspected, err := m.runtime.InspectContainer(ctx, candidate.ID)
+	if err != nil {
+		return nil, err
+	}
+	if inspected == nil || inspected.ID != candidate.ID || inspected.Name != command.TargetComponentID || !isManagedLifecycleComponent(inspected, command) {
+		return nil, m.deniedLifecycleCandidate(command)
+	}
+	if err := m.validateExistingLifecycleMounts(inspected, command); err != nil {
+		return nil, err
+	}
+	return inspected, nil
+}
+
+func (m *runtimeComponentLifecycleManager) deniedLifecycleCandidate(command domain.RuntimeSelfUpdateCommand) error {
+	return RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target identity is not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 }
 
 func componentKeepIDMode(identity domain.ComponentProcessIdentity) string {
