@@ -129,6 +129,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	require.Contains(t, normalizedStatus, `"bootstrap_runtime_endpoint":"unix:///var/lib/gordon/migration/`, "old monolith must use the private Gordon Unix RPC socket")
 	require.Contains(t, normalizedStatus, `"old_serving_probe_endpoint":"127.0.0.1:15000"`, "old serving proof must target the monolith's in-namespace registry listener, never rootless host-port NAT")
 	fixture.assertPreparedTargets()
+	fixture.assertPreparedRoleSecurityAndPrivateAccess()
 	fixture.assertPreparedAppNetworkHandoff()
 	fixture.assertPreparedEdgeProbeListener()
 	fixture.assertRuntimeBootstrapTransport()
@@ -158,6 +159,8 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.assertInterruptedSwitchRetry()
 	probes.Resume = true
 	fixture.assertManagedPassVolumePersistence()
+	fixture.cleanup()
+	fixture.assertCleaned()
 }
 
 type realMigrationFixture struct {
@@ -233,6 +236,26 @@ func (f *realMigrationFixture) cleanup() {
 	_ = CleanupRunResources(context.Background(), f.runID)
 	_ = migrationPodman(context.Background(), "image", "rm", "--force", f.image)
 	_ = os.RemoveAll(f.root)
+}
+
+func (f *realMigrationFixture) assertCleaned() {
+	f.t.Helper()
+	for _, name := range []string{f.old, f.app, "gordon-control-migration-g1", "gordon-runtime-migration-g1", "gordon-edge-migration-g1", "gordon-registry-migration-g1"} {
+		_, err := podmanOutput(context.Background(), "container", "inspect", name)
+		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
+	}
+	for _, name := range []string{f.network, "gordon-internal-migration-g1"} {
+		_, err := podmanOutput(context.Background(), "network", "inspect", name)
+		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
+	}
+	for _, name := range []string{f.volume, "gordon-control-migration-g1", "gordon-runtime-migration-g1", "gordon-registry-migration-g1"} {
+		_, err := podmanOutput(context.Background(), "volume", "inspect", name)
+		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
+	}
+	_, err := podmanOutput(context.Background(), "image", "inspect", f.image)
+	require.Error(f.t, err, "candidate image must be removed by fixture cleanup")
+	_, err = os.Stat(f.root)
+	require.ErrorIs(f.t, err, os.ErrNotExist, "fixture root and private API socket must be removed")
 }
 
 func (f *realMigrationFixture) failureDiagnostics() string {
@@ -519,6 +542,60 @@ func (f *realMigrationFixture) assertPreparedTargets() {
 	controlIdentity, controlIdentityErr := podmanOutput(f.ctx, "exec", roles["control"].resourceName(), "printenv", "GORDON_MIGRATION_EDGE_COMPONENT_ID")
 	require.NoError(f.t, controlIdentityErr)
 	require.Equal(f.t, strings.TrimSpace(identity), strings.TrimSpace(controlIdentity))
+}
+
+// assertPreparedRoleSecurityAndPrivateAccess proves the production-created
+// containers use their fixed, distinct numeric identities and exact rootless
+// Podman confinement. It also exercises each role's intended private mount:
+// runtime owns the handoff socket, control owns only attestation writes,
+// registry owns its migrated store, and edge remains stateless.
+func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
+	f.t.Helper()
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	seen := make(map[string]bool, 4)
+	for _, container := range containers {
+		role := container.Labels[domain.LabelComponentRole]
+		identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRole(role))
+		if !ok {
+			continue
+		}
+		name := container.resourceName()
+		seen[role] = true
+		uidGID, execErr := podmanOutput(f.ctx, "exec", name, "sh", "-ec", "printf '%s:%s' \"$(id -u)\" \"$(id -g)\"")
+		require.NoError(f.t, execErr)
+		require.Equal(f.t, identity.User, strings.TrimSpace(uidGID), "%s must execute as its fixed role identity", role)
+
+		user, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.Config.User}}", name)
+		require.NoError(f.t, inspectErr)
+		require.Equal(f.t, identity.User, strings.TrimSpace(user))
+		userns, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.HostConfig.UsernsMode}}", name)
+		require.NoError(f.t, inspectErr)
+		require.Equal(f.t, fmt.Sprintf("keep-id:uid=%d,gid=%d", identity.UID, identity.GID), strings.TrimSpace(userns))
+		capDrop, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .HostConfig.CapDrop}}", name)
+		require.NoError(f.t, inspectErr)
+		require.JSONEq(f.t, `["ALL"]`, strings.TrimSpace(capDrop))
+		capAdd, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .HostConfig.CapAdd}}{{.}}{{end}}", name)
+		require.NoError(f.t, inspectErr)
+		require.Empty(f.t, strings.TrimSpace(capAdd), "%s must not add capabilities", role)
+		securityOpts, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .HostConfig.SecurityOpt}}", name)
+		require.NoError(f.t, inspectErr)
+		require.Contains(f.t, securityOpts, "no-new-privileges", "%s must set no-new-privileges", role)
+
+		var accessCommand string
+		switch role {
+		case "runtime":
+			accessCommand = "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"
+		case "control":
+			accessCommand = "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test ! -w /var/lib/gordon/migration/migration; probe=/var/lib/gordon/migration/migration/attestation/.identity-write-check; : >$probe; rm $probe"
+		case "registry":
+			accessCommand = "probe=/var/lib/gordon/registry/.identity-write-check; : >$probe; rm $probe"
+		case "edge":
+			accessCommand = "test -r /etc/gordon/role.toml; test ! -w /etc/gordon/role.toml; test ! -e /run/gordon/runtime.sock"
+		}
+		require.NoError(f.t, migrationPodman(f.ctx, "exec", name, "sh", "-ec", accessCommand), "%s must have exactly its role-private access", role)
+	}
+	require.Equal(f.t, map[string]bool{"control": true, "runtime": true, "edge": true, "registry": true}, seen, "all four split roles must start and pass identity checks")
 }
 
 // assertPreparedEdgeProbeListener verifies the temporary listener is the sole
@@ -824,10 +901,14 @@ func (f *realMigrationFixture) assertManagedPassVolumePersistence() {
 
 	doctorConfig := filepath.Join(f.root, "managed-pass-doctor.toml")
 	require.NoError(f.t, os.WriteFile(doctorConfig, []byte("[auth]\nenabled = false\nsecrets_backend = \"pass\"\n"), 0o644))
+	controlIdentity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	require.True(f.t, ok)
+	controlUserNS := fmt.Sprintf("keep-id:uid=%d,gid=%d", controlIdentity.UID, controlIdentity.GID)
 	runDoctor := func() {
 		f.t.Helper()
 		args := []string{
-			"run", "--rm",
+			"run", "--rm", "--user", controlIdentity.User, "--userns", controlUserNS,
+			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 			"--volume", volume + ":/var/lib/gordon/secrets",
 			"--volume", doctorConfig + ":/tmp/gordon-doctor.toml:ro",
 			"--env", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
@@ -838,7 +919,7 @@ func (f *realMigrationFixture) assertManagedPassVolumePersistence() {
 	}
 
 	require.NoError(f.t, migrationPodman(f.ctx, "stop", control.resourceName()))
-	require.NoError(f.t, migrationPodman(f.ctx, "run", "--rm", "--volume", volume+":/var/lib/gordon/secrets:ro", "--entrypoint", "sh", f.image, "-ec", "test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg"), "control startup must initialize the fresh managed-pass volume before doctor runs")
+	require.NoError(f.t, migrationPodman(f.ctx, "run", "--rm", "--user", controlIdentity.User, "--userns", controlUserNS, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", volume+":/var/lib/gordon/secrets:ro", "--entrypoint", "sh", f.image, "-ec", "test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg"), "control startup must initialize the fresh managed-pass volume before doctor runs")
 	runDoctor()
 	require.NoError(f.t, migrationPodman(f.ctx, "start", control.resourceName()))
 	require.Eventually(f.t, func() bool {

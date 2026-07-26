@@ -2,6 +2,17 @@
 
 Gordon uses one binary with five `serve` roles: `monolith`, `control`, `runtime`, `edge`, and `registry`. A production split deployment runs the last four as containers on one private component network. Use the migration commands to generate and launch their role-specific configuration; do not copy the monolith configuration into each role.
 
+## Runtime compatibility
+
+| Deployment | Engine mode | Support |
+| --- | --- | --- |
+| Split | Rootless Podman, local user service | **Supported in this phase** |
+| Split | Rootful Podman or Docker | Pending role-scoped configuration publication; do not deploy |
+| Split | Rootless Docker or a remote daemon | Rejected |
+| Monolith | Rootful Podman or Docker | Supported |
+
+Split support is deliberately limited to a local rootless Podman user service. The generated four-role lifecycle relies on Podman's exact `keep-id:uid=<role-uid>,gid=<role-gid>` mapping and local private bind/socket ownership. A Docker-compatible API alone does not satisfy that contract. Monolith remains an ordinary image invocation and does not receive split-only `keep-id` settings.
+
 ## Responsibilities
 
 | Role | Responsibility | Container-runtime access |
@@ -12,6 +23,8 @@ Gordon uses one binary with five `serve` roles: `monolith`, `control`, `runtime`
 | registry | OCI storage and durable push-event delivery | No |
 
 Only runtime receives `DOCKER_HOST`, `PODMAN_HOST`, or `CONTAINER_HOST` and the engine socket. Control talks to runtime over Gordon's authenticated, migration-private Unix RPC socket. This is not the Docker or Podman socket.
+
+Each split role has a fixed, distinct non-root UID/GID: runtime `21001:21001`, control `21002:21002`, edge `21003:21003`, and registry `21004:21004`. Generated containers drop all capabilities, add none, and set `no-new-privileges`. Do not override these identities or user-namespace settings. They bind private files, persistent volumes, and the runtime-only engine socket to the role that owns them.
 
 ## Network and TLS boundaries
 

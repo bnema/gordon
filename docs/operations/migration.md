@@ -9,12 +9,14 @@
 > configuration already declares a split control plane. Set up a fresh v3 split
 > deployment from scratch instead: see [Split bootstrap](./split-bootstrap.md).
 
-The supported production migration target is **rootless Podman**. Migration is checkpointed and resumable; it does not provide a `rollback` subcommand.
+The supported production migration target is **a local rootless Podman user service**. Migration is checkpointed and resumable; it does not provide a `rollback` subcommand.
+
+Rootful split migration is not supported in this phase; it remains pending role-scoped configuration publication. Rootless Docker and remote Docker/Podman daemons are rejected because they cannot prove the local `keep-id` and private mount ownership contract. Rootful Docker and Podman remain supported for ordinary monolith operation, which does not receive split-only user-namespace settings. See the [split-mode compatibility matrix](./split-mode.md#runtime-compatibility).
 
 ## Requirements
 
 - A healthy monolith using the target config and data directory before the maintenance window.
-- Rootless Podman with its user socket active and API reachable.
+- Local rootless Podman with its user socket active and API reachable as the migrating host user. Rootful engines, rootless Docker, and remote daemons are not valid split targets.
 - The candidate Gordon image available or pullable by that Podman user.
 - Writable config, data, registry, environment, and credential storage.
 - Enough disk space and no ambiguous/unmanaged Gordon resources.
@@ -85,7 +87,7 @@ gordon migrate status --config ~/.config/gordon/gordon.toml --json
 gordon migrate switch --config ~/.config/gordon/gordon.toml --json
 ```
 
-`plan` is read-only and must report `"ready": true`. `prepare` writes private role manifests/environment, creates the private component network, and starts the probe-only prepared components while the host service remains stopped. `switch` requires authenticated prepared-edge state, transfers runtime authority, and activates final listeners.
+`plan` is read-only and must report `"ready": true`. `prepare` writes private role manifests/environment, creates the private component network, and starts the probe-only prepared components while the host service remains stopped. Those four containers use fixed distinct non-root identities (runtime `21001:21001`, control `21002:21002`, edge `21003:21003`, registry `21004:21004`), exact Podman `keep-id` mappings, dropped capabilities, and `no-new-privileges`; only runtime receives the engine socket. `switch` requires authenticated prepared-edge state, transfers runtime authority, and activates final listeners.
 
 If any command fails, leave `gordon.service` stopped while inspecting status. A failed switch removes a partial final edge and proves the prepared edge. Retry only when the reported outcome is retryable; otherwise run the prepared rollback script.
 
