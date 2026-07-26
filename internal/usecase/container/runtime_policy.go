@@ -166,7 +166,7 @@ func (p RuntimePolicy) checkComponentProcessIdentity(identity domain.RuntimeComm
 	}
 	role := domain.ComponentRole(cfg.Labels[domain.LabelComponentRole])
 	expected, ok := domain.FixedComponentProcessIdentity(role)
-	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) || len(cfg.GroupAdd) != 0 ||
+	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) || !slices.Equal(cfg.GroupAdd, []string{fmt.Sprintf("%d", domain.ComponentDataGID)}) ||
 		!slices.Equal(cfg.CapDrop, []string{"ALL"}) || len(cfg.CapAdd) != 0 || cfg.NoNewPrivileges == nil || !*cfg.NoNewPrivileges {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnmanagedMutation, "component process identity is not allowed")
 	}

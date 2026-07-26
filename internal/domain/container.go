@@ -14,6 +14,10 @@ type ComponentProcessIdentity struct {
 	User string
 }
 
+// ComponentDataGID is the fixed supplementary group shared by split roles for
+// their explicitly mounted Gordon data volumes.
+const ComponentDataGID = 21900
+
 // FixedComponentProcessIdentity returns the immutable non-root identity for a split role.
 // These identities are used only by rootless split deployments; monolith and ordinary
 // workload containers retain their image/default user and user namespace.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -161,7 +162,7 @@ func componentLaunchHash(componentID, image, network string) string {
 }
 
 func componentRoleLaunchHash(componentID, image, network string, identity domain.ComponentProcessIdentity) string {
-	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User))
+	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User + "\x00" + strconv.Itoa(domain.ComponentDataGID)))
 	return hex.EncodeToString(sum[:])
 }
 

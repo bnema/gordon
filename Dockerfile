@@ -20,6 +20,7 @@ RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
 FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS runtime-base
 RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata pass gnupg \
     && adduser -D -s /bin/sh gordon \
+    && addgroup -S -g 21900 gordon-data \
     && addgroup -S -g 21001 gordon-runtime \
     && adduser -S -D -H -s /sbin/nologin -u 21001 -G gordon-runtime gordon-runtime \
     && addgroup -S -g 21002 gordon-control \
@@ -28,8 +29,16 @@ RUN apk add --no-cache ca-certificates docker-cli curl wget tzdata pass gnupg \
     && adduser -S -D -H -s /sbin/nologin -u 21003 -G gordon-edge gordon-edge \
     && addgroup -S -g 21004 gordon-registry \
     && adduser -S -D -H -s /sbin/nologin -u 21004 -G gordon-registry gordon-registry \
+    && addgroup gordon-runtime gordon-data \
+    && addgroup gordon-control gordon-data \
+    && addgroup gordon-edge gordon-data \
+    && addgroup gordon-registry gordon-data \
     && mkdir -p /app /data /var/lib/gordon/secrets \
-    && chown -R gordon:gordon /app /data /var/lib/gordon
+    && chown -R gordon:gordon /app /data \
+    && chown root:gordon-data /var/lib/gordon \
+    && chmod 0770 /var/lib/gordon \
+    && chown 21002:21002 /var/lib/gordon/secrets \
+    && chmod 0700 /var/lib/gordon/secrets
 # Keep runtime data/config discovery separate from the binary. Viper searches
 # the working directory for `gordon`, so /app would mistake /app/gordon for a
 # configuration file when no explicit config is mounted.

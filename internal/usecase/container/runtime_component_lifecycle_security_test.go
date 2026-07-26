@@ -31,7 +31,7 @@ func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testi
 			require.True(t, ok)
 			assert.Equal(t, identity.User, config.User)
 			assert.Equal(t, "keep-id:uid="+strconv.Itoa(identity.UID)+",gid="+strconv.Itoa(identity.GID), config.UsernsMode)
-			assert.Empty(t, config.GroupAdd)
+			assert.Equal(t, []string{strconv.Itoa(domain.ComponentDataGID)}, config.GroupAdd)
 			assert.Equal(t, []string{"ALL"}, config.CapDrop)
 			assert.Empty(t, config.CapAdd)
 			require.NotNil(t, config.NoNewPrivileges)
@@ -49,14 +49,16 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	valid := domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: "keep-id:uid=21003,gid=21003", CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: "keep-id:uid=21003,gid=21003", GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
 	}
 	for name, forge := range map[string]func(*domain.Container){
 		"root user":                 func(c *domain.Container) { c.User = "0:0" },
 		"generic user":              func(c *domain.Container) { c.User = "gordon" },
 		"wrong user namespace":      func(c *domain.Container) { c.UsernsMode = "keep-id" },
-		"supplemental group":        func(c *domain.Container) { c.GroupAdd = []string{"21001"} },
+		"missing data group":        func(c *domain.Container) { c.GroupAdd = nil },
+		"wrong data group":          func(c *domain.Container) { c.GroupAdd = []string{"21001"} },
+		"extra supplemental group":  func(c *domain.Container) { c.GroupAdd = []string{strconv.Itoa(domain.ComponentDataGID), "21001"} },
 		"missing capability drop":   func(c *domain.Container) { c.CapDrop = nil },
 		"added capability":          func(c *domain.Container) { c.CapAdd = []string{"NET_BIND_SERVICE"} },
 		"missing no-new-privileges": func(c *domain.Container) { c.NoNewPrivileges = false },
@@ -64,6 +66,9 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 		"writable config":           func(c *domain.Container) { c.VolumeMounts[0].ReadOnly = false },
 		"duplicate config":          func(c *domain.Container) { c.VolumeMounts = append(c.VolumeMounts, c.VolumeMounts[0]) },
 		"foreign config":            func(c *domain.Container) { c.VolumeMounts[0].Source = filepath.Join(configDir, "foreign.toml") },
+		"cross-role generation volume": func(c *domain.Container) {
+			c.VolumeMounts = append(c.VolumeMounts, domain.ContainerVolumeMount{Type: "volume", Name: "gordon-runtime-fixture-g1", Destination: "/var/lib/gordon"})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			container := valid
@@ -79,6 +84,48 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 			require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
 		})
 	}
+}
+
+func TestRuntimeComponentLifecycleRejectsCrossRoleGenerationVolume(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "runtime.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
+	container := &domain.Container{
+		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
+		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		VolumeMounts: []domain.ContainerVolumeMount{
+			{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true},
+			{Type: "volume", Name: "gordon-control-fixture-g1", Destination: "/var/lib/gordon"},
+		},
+	}
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
+}
+
+func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHash(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "edge.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	container := &domain.Container{
+		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
+		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
+	}
+	container.Labels[domain.LabelComponentDesiredStateHash] = "different"
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimeComponentLifecycleRejectsUnlabeledGordonNamedWorkload(t *testing.T) {

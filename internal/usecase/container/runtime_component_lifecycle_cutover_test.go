@@ -554,6 +554,7 @@ func edgeLifecycleFixture(config string, container *domain.Container) *domain.Co
 	}
 	container.User = "21003:21003"
 	container.UsernsMode = "keep-id:uid=21003,gid=21003"
+	container.GroupAdd = []string{"21900"}
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
 	container.VolumeMounts = []domain.ContainerVolumeMount{{Type: "bind", Source: config, Destination: "/etc/gordon/role.toml", ReadOnly: true}}
@@ -561,7 +562,7 @@ func edgeLifecycleFixture(config string, container *domain.Container) *domain.Co
 }
 
 func componentLabels(role string) map[string]string {
-	return map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: role, domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture", domain.LabelComponentOwner: "runtime"}
+	return map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: role, domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture", domain.LabelComponentOwner: "runtime", domain.LabelComponentDesiredStateHash: "fixture"}
 }
 
 func cutoverCommand(config string) domain.RuntimeSelfUpdateCommand {

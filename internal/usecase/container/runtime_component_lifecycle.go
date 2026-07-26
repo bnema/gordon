@@ -212,7 +212,7 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		Volumes:         m.componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
 		User:            identity.User,
 		UsernsMode:      componentKeepIDMode(identity),
-		GroupAdd:        []string{},
+		GroupAdd:        []string{strconv.Itoa(domain.ComponentDataGID)},
 		CapDrop:         []string{"ALL"},
 		CapAdd:          []string{},
 		NoNewPrivileges: &noNewPrivileges,
@@ -1164,7 +1164,7 @@ func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[str
 func validExistingComponentIdentity(container *domain.Container, role domain.ComponentRole) bool {
 	identity, ok := domain.FixedComponentProcessIdentity(role)
 	return ok && container != nil && container.User == identity.User && container.UsernsMode == componentKeepIDMode(identity) &&
-		len(container.GroupAdd) == 0 && slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
+		slices.Equal(container.GroupAdd, []string{strconv.Itoa(domain.ComponentDataGID)}) && slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
@@ -1200,7 +1200,8 @@ func isManagedLifecycleComponent(container *domain.Container, command domain.Run
 	if container == nil || container.Labels == nil || container.Labels[domain.LabelComponent] != "true" || container.Labels[domain.LabelComponentRole] != string(command.TargetComponentRole) {
 		return false
 	}
-	if container.Labels[domain.LabelComponentGeneration] != strconv.FormatUint(command.Generation, 10) || container.Labels[domain.LabelComponentMigrationID] != strings.TrimPrefix(command.PolicyDecisionID, "migration:") {
+	if container.Labels[domain.LabelComponentGeneration] != strconv.FormatUint(command.Generation, 10) || container.Labels[domain.LabelComponentMigrationID] != strings.TrimPrefix(command.PolicyDecisionID, "migration:") ||
+		container.Labels[domain.LabelComponentDesiredStateHash] != command.DesiredStateHash {
 		return false
 	}
 	return container.Labels[domain.LabelComponentOwner] == "runtime" || container.Labels[domain.LabelComponentOwner] == "migration"
