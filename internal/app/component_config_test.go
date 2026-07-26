@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -34,6 +35,29 @@ func TestGeneratedRuntimePolicyKeepsHostInstallationIdentityAcrossGenerations(t 
 	assert.Equal(t, firstGeneration, generatedVolume(t, firstRoot, "2"))
 	assert.NotEqual(t, firstGeneration, generatedVolume(t, secondRoot, "1"))
 	assert.Regexp(t, `^gordon-control-secrets-[0-9a-f]{16}$`, firstGeneration)
+}
+
+func TestGeneratedPassRuntimeConfigRequiresInstallationScopedManagedSecretsVolume(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "installation")
+	cfg := Config{}
+	cfg.Server.DataDir = root
+	cfg.Auth.SecretsBackend = string(domain.SecretsBackendPass)
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(root, "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	path := componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleRuntime]
+	_, generated, err := initConfig(path)
+	require.NoError(t, err)
+	require.NoError(t, validateRuntimeManagedControlSecretsConfig(generated))
+
+	original, err := os.ReadFile(path)
+	require.NoError(t, err)
+	for _, replacement := range []string{"managed_control_secrets_volume = ''", "managed_control_secrets_volume = 'gordon-control-secrets-invalid'"} {
+		mutated := regexp.MustCompile(`managed_control_secrets_volume = '[^']+'`).ReplaceAllString(string(original), replacement)
+		require.NoError(t, os.WriteFile(path, []byte(mutated), 0o600))
+		_, generated, err = initConfig(path)
+		require.NoError(t, err)
+		require.Error(t, validateRuntimeManagedControlSecretsConfig(generated))
+	}
 }
 
 func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {

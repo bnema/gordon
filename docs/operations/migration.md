@@ -62,15 +62,56 @@ podman run --rm -v "$secret_volume:/source:ro" docker.io/library/alpine:latest \
 test -s "$backup_file"
 ```
 
-Restore only while control remains stopped. Decrypt directly into the extractor for the **same discovered namespaced volume** (a stopped container still references it); no plaintext archive is written. Supply the age identity through a private operator-controlled path, then start one control process. Gordon validates the atomically published `current` store and fails closed rather than replacing invalid key material.
+Restore only while control remains stopped. First decrypt and authenticate the complete archive into a new owner-only staging volume. The live volume is not mounted during this phase, so a wrong identity, truncated ciphertext, malformed archive, or failed validation cannot damage the valid store. Supply the age identity through a private operator-controlled path.
 
 ```bash
-age_identity='/path/to/operator-age-identity'
+age_identity='/private/path/to/age-identity'
+staging_volume="gordon-secrets-restore-stage-$(date +%s)"
 test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
+podman volume create "$staging_volume" >/dev/null
+trap 'podman volume rm -f "$staging_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM
 set -o pipefail
 age --decrypt --identity "$age_identity" "$backup_file" | \
-  podman run --rm -i -v "$secret_volume:/restore" docker.io/library/alpine:latest \
-    sh -ec 'find /restore -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /restore -xzf -'
+  podman run --rm -i -v "$staging_volume:/staging" docker.io/library/alpine:latest \
+    sh -ec 'umask 077; chmod 700 /staging; tar -C /staging -xzf -'
+```
+
+Validate the staged tree before the stopped live volume is mounted. Only directories and regular files are accepted: symlinks, devices, sockets, FIFOs, unexpected root entries, and an incomplete managed-store layout all fail closed.
+
+```bash
+podman run --rm -v "$staging_volume:/staging:ro" docker.io/library/alpine:latest sh -ec '
+  test -d /staging/current
+  test -d /staging/current/gnupg
+  test -d /staging/current/password-store
+  test -f /staging/current/.gordon-managed-pass-fingerprint
+  test -f /staging/current/password-store/.gpg-id
+  test -z "$(find /staging -mindepth 1 ! -type d ! -type f -print -quit)"
+  test -z "$(find /staging -mindepth 1 -maxdepth 1 ! -name current ! -name .control.lock -print -quit)"
+  test -z "$(find /staging/current -mindepth 1 -maxdepth 1 ! -name gnupg ! -name password-store ! -name .gordon-managed-pass-fingerprint -print -quit)"
+'
+```
+
+Only after authenticated extraction and validation succeed, copy the staged `current` tree beside the live tree and publish it with a rename. The previous `current` remains intact until the commit rename; the trap restores it if publication fails. The staging volume is removed on exit.
+
+```bash
+podman run --rm -v "$staging_volume:/staging:ro" -v "$secret_volume:/live" docker.io/library/alpine:latest sh -ec '
+  umask 077
+  test -d /live/current
+  test ! -e /live/.restore-new
+  test ! -e /live/.restore-old
+  cp -a /staging/current /live/.restore-new
+  rollback() {
+    test -e /live/current || { test ! -e /live/.restore-old || mv /live/.restore-old /live/current; }
+    rm -rf /live/.restore-new
+  }
+  trap rollback EXIT HUP INT TERM
+  mv /live/current /live/.restore-old
+  mv /live/.restore-new /live/current
+  trap - EXIT HUP INT TERM
+  rm -rf /live/.restore-old
+'
+podman volume rm "$staging_volume" >/dev/null
+trap - EXIT HUP INT TERM
 podman start "$control_id"
 ```
 

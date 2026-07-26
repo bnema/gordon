@@ -13,7 +13,7 @@ import (
 func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
 	identity := testRuntimeCommandIdentity("managed-secrets")
 	identity.SourceComponentID = "gordon-control"
-	const volume = "gordon-control-secrets-installation-a"
+	const volume = "gordon-control-secrets-0123456789abcdef"
 	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: volume}
 	authorized := domain.ContainerConfig{
 		Name:    "gordon-control-fixture-g1",
@@ -37,6 +37,20 @@ func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			require.ErrorIs(t, policy.CheckContainerConfig(identity, "", test.cfg), ErrRuntimePolicyDenied)
 		})
+	}
+}
+
+func TestRuntimePolicyFailsClosedForControlWithoutValidManagedSecretsVolume(t *testing.T) {
+	identity := testRuntimeCommandIdentity("managed-secrets-invalid")
+	identity.SourceComponentID = "gordon-control"
+	control := domain.ContainerConfig{
+		Name:    "gordon-control-fixture-g1",
+		Labels:  map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleControl), domain.LabelComponentOwner: "runtime"},
+		Volumes: map[string]string{},
+	}
+	for _, volume := range []string{"", "gordon-control-fixture-g1", "gordon-control-secrets-ABCDEF0123456789", "gordon-control-secrets-0123"} {
+		policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: volume}
+		require.ErrorIs(t, policy.CheckContainerConfig(identity, "", control), ErrRuntimePolicyDenied)
 	}
 }
 

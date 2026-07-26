@@ -196,8 +196,16 @@ func (p RuntimePolicy) checkReadOnlyContainerMounts(identity domain.RuntimeComma
 
 func (p RuntimePolicy) checkManagedControlSecretsMount(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
 	reserved := strings.TrimSpace(p.ManagedControlSecretsVolume)
+	controlLifecycle := cfg.Labels[domain.LabelComponent] == "true" && cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleControl) &&
+		cfg.Labels[domain.LabelComponentOwner] == "runtime" && strings.HasPrefix(cfg.Name, "gordon-control-")
+	if controlLifecycle && !validManagedControlSecretsVolume(reserved) {
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is not configured")
+	}
 	if reserved == "" {
 		return nil
+	}
+	if !validManagedControlSecretsVolume(reserved) {
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is invalid")
 	}
 	destinationUsed, reservedSourceUsed := managedControlSecretsMountUsage(cfg, reserved)
 	if !destinationUsed && !reservedSourceUsed {
@@ -207,6 +215,19 @@ func (p RuntimePolicy) checkManagedControlSecretsMount(identity domain.RuntimeCo
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is reserved")
 	}
 	return nil
+}
+
+func validManagedControlSecretsVolume(value string) bool {
+	const prefix = "gordon-control-secrets-"
+	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+16 {
+		return false
+	}
+	for _, char := range strings.TrimPrefix(value, prefix) {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func managedControlSecretsMountUsage(cfg domain.ContainerConfig, reserved string) (bool, bool) {

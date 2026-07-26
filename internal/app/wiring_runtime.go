@@ -177,6 +177,9 @@ func runRuntimeWithDependencies(ctx context.Context, configPath string, deps run
 	if err != nil {
 		return err
 	}
+	if err := validateRuntimeManagedControlSecretsConfig(cfg); err != nil {
+		return err
+	}
 	log, cleanupLog, err := initLogger(cfg)
 	if err != nil {
 		return err
@@ -542,6 +545,16 @@ func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Co
 
 var managedControlSecretsVolumePattern = regexp.MustCompile(`^gordon-control-secrets-[0-9a-f]{16}$`)
 
+func validateRuntimeManagedControlSecretsConfig(cfg Config) error {
+	if domain.SecretsBackend(strings.TrimSpace(cfg.Auth.SecretsBackend)) != domain.SecretsBackendPass {
+		return nil
+	}
+	if !managedControlSecretsVolumePattern.MatchString(strings.TrimSpace(cfg.Runtime.ManagedControlSecretsVolume)) {
+		return fmt.Errorf("runtime managed control secrets volume is required for pass backend")
+	}
+	return nil
+}
+
 func managedControlSecretsVolumeName(dataRoot string) string {
 	normalized := filepath.Clean(dataRoot)
 	installationDigest := sha256.Sum256([]byte(normalized))
@@ -561,9 +574,6 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 	managedSecretsVolume := strings.TrimSpace(cfg.Runtime.ManagedControlSecretsVolume)
 	if managedSecretsVolume == "" && dataRoot != componentDataDirectory {
 		managedSecretsVolume = managedControlSecretsVolumeName(dataRoot)
-	}
-	if !managedControlSecretsVolumePattern.MatchString(managedSecretsVolume) {
-		managedSecretsVolume = ""
 	}
 	return container.RuntimePolicy{
 		Mode:                        container.RuntimePolicyModeEnforce,

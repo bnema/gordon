@@ -1075,12 +1075,10 @@ func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command do
 		name = "gordon-registry-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
 	}
 	volumes := map[string]string{"/var/lib/gordon": name}
-	if command.TargetComponentRole == domain.ComponentRoleControl {
+	if command.TargetComponentRole == domain.ComponentRoleControl && validManagedControlSecretsVolume(strings.TrimSpace(m.policy.ManagedControlSecretsVolume)) {
 		// This name deliberately excludes migration and generation identifiers so
 		// replacing control cannot replace its keyring or password store.
-		if strings.TrimSpace(m.policy.ManagedControlSecretsVolume) != "" {
-			volumes[managedControlSecretsPath] = m.policy.ManagedControlSecretsVolume
-		}
+		volumes[managedControlSecretsPath] = strings.TrimSpace(m.policy.ManagedControlSecretsVolume)
 	}
 	return volumes
 }

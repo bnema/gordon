@@ -383,9 +383,9 @@ release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts 
 release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
 	@set -eu; \
 		smoke_config=$$(mktemp); secrets_config=$$(mktemp); \
-		trap 'rm -f "$$smoke_config" "$$secrets_config"; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+		trap 'rm -f "$$smoke_config" "$$secrets_config" "$${lease_error:-}"; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
 		printf '%s\n' '[server]' 'runtime = "docker"' 'port = 8088' 'data_dir = "/tmp/gordon"' '[auth]' 'enabled = false' 'secrets_backend = "unsafe"' > "$$smoke_config"; \
-		printf '%s\n' '[auth]' 'secrets_backend = "pass"' > "$$secrets_config"; \
+		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' '[runtime]' 'endpoint = "192.0.2.1:9444"' 'insecure = true' 'token = "release-smoke-runtime-token"' > "$$secrets_config"; \
 		chmod 0644 "$$smoke_config" "$$secrets_config"; \
 		socket="$${DOCKER_HOST#unix://}"; test "$$socket" != "$${DOCKER_HOST:-}" || socket=/var/run/docker.sock; \
 		test -S "$$socket"; \
@@ -400,6 +400,10 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real mo
 			docker run --rm --platform "linux/$$arch" --entrypoint gpg "$$image" --version >/dev/null; \
 			docker run --rm --platform "linux/$$arch" --entrypoint sh "$$image" -c 'test -d /var/lib/gordon/secrets && test -w /var/lib/gordon/secrets'; \
 			secrets_volume="gordon-release-smoke-secrets-$$arch-$$$$"; docker volume create "$$secrets_volume" >/dev/null; \
+			owner="gordon-release-smoke-secrets-owner-$$arch-$$$$"; lease_error=$$(mktemp); \
+			docker run --detach --rm --name "$$owner" --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" serve --role control --config /tmp/gordon.toml >/dev/null; \
+			lease_rejected=0; for attempt in $$(seq 1 30); do if ! docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then grep -q 'managed pass store is already in use' "$$lease_error" && lease_rejected=1 && break; fi; docker inspect --format '{{.State.Running}}' "$$owner" | grep -q true; sleep 1; done; \
+			test "$$lease_rejected" -eq 1; docker rm -f "$$owner" >/dev/null; owner=; rm -f "$$lease_error"; lease_error=; \
 			for restart in 1 2; do docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; done; \
 			docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
 			docker volume rm "$$secrets_volume" >/dev/null; secrets_volume=; \

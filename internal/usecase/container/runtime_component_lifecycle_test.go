@@ -48,8 +48,9 @@ func TestRuntimeComponentLifecycleUsesRuntimeOnlyContainerProtocol(t *testing.T)
 	})).Return(&domain.Container{ID: "component-id"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "component-id").Return(nil).Once()
 
-	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"})
 	identity := testRuntimeCommandIdentity("component-lifecycle")
+	identity.SourceComponentID = "gordon-control"
 	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-network-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleEnsureNetwork, InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true}))
 	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}))
 }
@@ -143,7 +144,7 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 }
 
 func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
-	const volume = "gordon-control-secrets-installation-a"
+	const volume = "gordon-control-secrets-0123456789abcdef"
 	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{ManagedControlSecretsVolume: volume}}
 	base := domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:first"}
 	base.Generation = 1
@@ -161,6 +162,20 @@ func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testin
 	}
 }
 
+func TestControlComponentConfigRejectsMissingOrMalformedManagedSecretsVolume(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testRuntimeCommandIdentity("control-secrets"), TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath}
+	command.SourceComponentID = "gordon-control"
+	for _, volume := range []string{"", "gordon-control-secrets-invalid"} {
+		manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: volume}}
+		_, err := manager.componentConfig(command, nil)
+		require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+	}
+}
+
 func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndControl(t *testing.T) {
 	data := t.TempDir()
 	configDir := filepath.Join(data, "migration", "config", "fixture", "1")
@@ -169,8 +184,9 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	require.NoError(t, os.MkdirAll(envDir, 0o700))
 	configPath := filepath.Join(configDir, "runtime.toml")
 	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
-	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: filepath.Join(data, "migration")}).(*runtimeComponentLifecycleManager)
+	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: filepath.Join(data, "migration"), ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"}).(*runtimeComponentLifecycleManager)
 	identity := testRuntimeCommandIdentity("component-socket-state")
+	identity.SourceComponentID = "gordon-control"
 	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-runtime-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}
 	config, err := manager.componentConfig(command, nil)
 	require.NoError(t, err)
