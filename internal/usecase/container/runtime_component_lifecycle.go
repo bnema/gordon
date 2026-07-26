@@ -467,6 +467,9 @@ func (m *runtimeComponentLifecycleManager) cutoverInventory(command domain.Runti
 			if !isManagedLifecycleComponent(container, command) {
 				return nil, nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 			}
+			if err := m.validateExistingLifecycleMounts(container, command); err != nil {
+				return nil, nil, err
+			}
 			target = container
 		}
 	}
@@ -886,6 +889,9 @@ func (m *runtimeComponentLifecycleManager) health(ctx context.Context, command d
 		if err == nil {
 			return nil
 		}
+		if errors.Is(err, ErrRuntimePolicyDenied) {
+			return err
+		}
 		lastErr = err
 		timer := time.NewTimer(componentHealthRetryInterval)
 		select {
@@ -1015,10 +1021,40 @@ func (m *runtimeComponentLifecycleManager) find(ctx context.Context, command dom
 			if !isManagedLifecycleComponent(container, command) {
 				return nil, RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target labels are not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 			}
+			if err := m.validateExistingLifecycleMounts(container, command); err != nil {
+				return nil, err
+			}
 			return container, nil
 		}
 	}
 	return nil, nil
+}
+
+func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand) error {
+	configured := strings.TrimSpace(m.policy.ManagedControlSecretsVolume)
+	managedMounts := make([]domain.ContainerVolumeMount, 0, 1)
+	for _, mount := range container.VolumeMounts {
+		managedSource := validManagedControlSecretsVolume(mount.Name) || validManagedControlSecretsVolume(mount.Source)
+		if managedSource || mount.Destination == managedControlSecretsPath {
+			managedMounts = append(managedMounts, mount)
+		}
+	}
+
+	valid := len(managedMounts) == 0
+	if command.TargetComponentRole == domain.ComponentRoleControl {
+		valid = validManagedControlSecretsVolume(configured) && len(managedMounts) == 1
+		if valid {
+			mount := managedMounts[0]
+			valid = mount.Type == "volume" && mount.Name == configured && mount.Destination == managedControlSecretsPath && !mount.ReadOnly
+		}
+	}
+	if valid {
+		return nil
+	}
+	return RuntimePolicyDeniedError{
+		Reason: RuntimePolicyReasonUnsafeHostBindDenied, Message: "component lifecycle managed secret volume is not allowed",
+		CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
+	}
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {

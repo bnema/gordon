@@ -162,6 +162,101 @@ func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testin
 	}
 }
 
+func TestRuntimeComponentLifecycleRejectsInvalidManagedSecretsMountsOnExistingTargets(t *testing.T) {
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	const foreignVolume = "gordon-control-secrets-fedcba9876543210"
+	validMount := domain.ContainerVolumeMount{Name: configuredVolume, Type: "volume", Destination: managedControlSecretsPath}
+
+	for _, test := range []struct {
+		name   string
+		role   domain.ComponentRole
+		action domain.RuntimeComponentLifecycleAction
+		mounts []domain.ContainerVolumeMount
+		status string
+	}{
+		{name: "running control missing mount", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, status: "running"},
+		{name: "stopped control missing mount", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, status: "exited"},
+		{name: "control foreign source", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{{Name: foreignVolume, Type: "volume", Destination: managedControlSecretsPath}}, status: "running"},
+		{name: "control read-only source", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: managedControlSecretsPath, ReadOnly: true}}, status: "running"},
+		{name: "control duplicate source", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{validMount, validMount}, status: "running"},
+		{name: "control alternate destination", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: "/tmp/secrets"}}, status: "running"},
+		{name: "control foreign source at managed destination", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{{Name: "ordinary-volume", Type: "volume", Destination: managedControlSecretsPath}}, status: "running"},
+		{name: "non-control managed source", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleStart, mounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: "/tmp/secrets"}}, status: "running"},
+		{name: "health rejects before inspect", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleHealth, mounts: []domain.ContainerVolumeMount{validMount, {Name: foreignVolume, Type: "volume", Destination: "/tmp/foreign"}}, status: "running"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+			require.NoError(t, os.MkdirAll(configDir, 0o700))
+			configPath := filepath.Join(configDir, string(test.role)+".toml")
+			require.NoError(t, os.WriteFile(configPath, []byte("[component]\n"), 0o600))
+			command := managedSecretsLifecycleCommand(test.role, test.action, configPath)
+			container := &domain.Container{ID: "existing", Name: command.TargetComponentID, Status: test.status, Labels: componentLifecycleLabels(command), VolumeMounts: test.mounts}
+			runtime := outmocks.NewMockContainerRuntime(t)
+			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume})
+
+			err := manager.ApplyComponentLifecycle(context.Background(), command)
+			require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleAcceptsOnlyExactManagedControlMountForExistingStart(t *testing.T) {
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleStart, configPath)
+
+	for _, running := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stopped", true: "running"}[running], func(t *testing.T) {
+			container := &domain.Container{ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), VolumeMounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: managedControlSecretsPath}}}
+			runtime := outmocks.NewMockContainerRuntime(t)
+			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
+			runtime.EXPECT().IsContainerRunning(mock.Anything, container.ID).Return(running, nil).Once()
+			if !running {
+				runtime.EXPECT().StartContainer(mock.Anything, container.ID).Return(nil).Once()
+			}
+			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume})
+			require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleRecoveryInventoryRejectsManagedSecretsOnNonControl(t *testing.T) {
+	const configuredVolume = "gordon-control-secrets-0123456789abcdef"
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleActivate, "/not-used")
+	target := &domain.Container{ID: "target", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), VolumeMounts: []domain.ContainerVolumeMount{{Name: configuredVolume, Type: "volume", Destination: "/tmp/secrets"}}}
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume}}
+
+	_, _, err := manager.cutoverInventory(command, []*domain.Container{target})
+	require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+}
+
+func managedSecretsLifecycleCommand(role domain.ComponentRole, action domain.RuntimeComponentLifecycleAction, configPath string) domain.RuntimeSelfUpdateCommand {
+	identity := testRuntimeCommandIdentity("managed-secrets-existing")
+	identity.SourceComponentID = "gordon-control"
+	return domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: identity,
+		TargetComponentID:      "gordon-" + string(role) + "-fixture-g1",
+		TargetComponentRole:    role,
+		TargetVersion:          "v2",
+		Policy:                 domain.RuntimeSelfUpdatePolicyManualApproval,
+		PolicyDecisionID:       "migration:fixture",
+		LifecycleAction:        action,
+		DesiredImage:           "example.invalid/gordon:v2",
+		DesiredStateHash:       "fixture-hash",
+		InternalNetwork:        "gordon-internal-fixture-g1",
+		ConfigFile:             configPath,
+		OldServingComponentID:  "old-monolith",
+		FinalPortPublishes: []domain.ContainerPortPublish{
+			{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP},
+		},
+		PreserveVolumes: true,
+	}
+}
+
 func TestControlComponentConfigRejectsMissingOrMalformedManagedSecretsVolume(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
