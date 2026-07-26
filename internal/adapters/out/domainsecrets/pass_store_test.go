@@ -2,6 +2,7 @@ package domainsecrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -61,6 +62,95 @@ func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 
 	manifestPath := fmt.Sprintf("%s/%s/.keys", PassDomainSecretsPath, safeDomain)
 	_ = passCmd("rm", "-f", manifestPath)
+}
+
+func TestPassStoreMutationsWaitForStoreLock(t *testing.T) {
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	mutations := []struct {
+		name string
+		run  func() error
+	}{
+		{"set", func() error { return store.Set("app.example.test", map[string]string{}) }},
+		{"delete", func() error { return store.Delete("app.example.test", "TOKEN") }},
+		{"set attachment", func() error { return store.SetAttachment("app-db", map[string]string{}) }},
+		{"delete attachment", func() error { return store.DeleteAttachment("app-db", "TOKEN") }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			store.mu.Lock()
+			done := make(chan struct{})
+			go func() { _ = mutation.run(); close(done) }()
+			select {
+			case <-done:
+				store.mu.Unlock()
+				t.Fatal("mutation bypassed store lock")
+			case <-time.After(20 * time.Millisecond):
+			}
+			store.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("mutation remained blocked after lock release")
+			}
+		})
+	}
+}
+
+func TestPassStoreDeleteRollbackIsSerializedAgainstConcurrentSet(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	basePath := "gordon/env/" + safeDomain
+	entries := map[string]string{
+		basePath + "/TOKEN": "original",
+		basePath + "/.keys": "TOKEN",
+	}
+	manifestFailureReached := make(chan struct{})
+	releaseFailure := make(chan struct{})
+	failed := false
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		switch args[0] {
+		case "show":
+			value, ok := entries[path]
+			if !ok {
+				return []byte("not in the password store"), errors.New("missing")
+			}
+			return []byte(value), nil
+		case "ls":
+			return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+		case "rm":
+			delete(entries, path)
+			return nil, nil
+		case "insert":
+			if strings.HasSuffix(path, "/.keys") && !failed {
+				failed = true
+				close(manifestFailureReached)
+				<-releaseFailure
+				return nil, errors.New("forced manifest failure")
+			}
+			entries[path] = stdin
+			return nil, nil
+		default:
+			return nil, errors.New("unexpected pass command")
+		}
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- store.Delete("app.example.test", "TOKEN") }()
+	<-manifestFailureReached
+	setDone := make(chan error, 1)
+	go func() { setDone <- store.Set("app.example.test", map[string]string{"NEXT": "next"}) }()
+	select {
+	case <-setDone:
+		t.Fatal("concurrent set entered while delete rollback was pending")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFailure)
+	require.Error(t, <-deleteDone)
+	require.NoError(t, <-setDone)
+	assert.Equal(t, "original", entries[basePath+"/TOKEN"])
+	assert.Equal(t, "next", entries[basePath+"/NEXT"])
 }
 
 func TestPassStore_SetGetDelete(t *testing.T) {

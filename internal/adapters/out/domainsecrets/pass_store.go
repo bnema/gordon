@@ -31,6 +31,7 @@ type PassStore struct {
 	mu      sync.Mutex
 	timeout time.Duration
 	log     zerowrap.Logger
+	runPass func(context.Context, string, ...string) ([]byte, error)
 }
 
 // NewPassStore creates a new pass-based domain secret store.
@@ -51,11 +52,18 @@ func NewPassStore(log zerowrap.Logger) (*PassStore, error) {
 	return &PassStore{
 		timeout: 10 * time.Second,
 		log:     log,
+		runPass: execPass,
 	}, nil
 }
 
 // ListKeys returns the list of secret keys for a domain (not values).
 func (s *PassStore) ListKeys(domainName string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listKeysLocked(domainName)
+}
+
+func (s *PassStore) listKeysLocked(domainName string) ([]string, error) {
 	manifestPath, err := s.manifestPath(domainName)
 	if err != nil {
 		return nil, err
@@ -147,14 +155,14 @@ func (s *PassStore) SetIfEmpty(domainName string, secretsMap map[string]string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existingKeys, err := s.ListKeys(domainName)
+	existingKeys, err := s.listKeysLocked(domainName)
 	if err != nil {
 		return nil, err
 	}
 	if len(existingKeys) > 0 {
 		return nil, fmt.Errorf("%w: pass secrets already exist for %s (found %d keys)", domain.ErrSecretsAlreadyExist, domainName, len(existingKeys))
 	}
-	if err := s.Set(domainName, secretsMap); err != nil {
+	if err := s.setLocked(domainName, secretsMap); err != nil {
 		return nil, err
 	}
 	return sortedMapKeys(secretsMap), nil
@@ -162,11 +170,17 @@ func (s *PassStore) SetIfEmpty(domainName string, secretsMap map[string]string) 
 
 // Set sets or updates multiple secrets for a domain.
 func (s *PassStore) Set(domainName string, secretsMap map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setLocked(domainName, secretsMap)
+}
+
+func (s *PassStore) setLocked(domainName string, secretsMap map[string]string) error {
 	if _, err := s.domainPath(domainName); err != nil {
 		return err
 	}
 
-	existingKeys, err := s.ListKeys(domainName)
+	existingKeys, err := s.listKeysLocked(domainName)
 	if err != nil {
 		return err
 	}
@@ -232,6 +246,12 @@ func (s *PassStore) Set(domainName string, secretsMap map[string]string) error {
 
 // Delete removes a specific secret key from a domain.
 func (s *PassStore) Delete(domainName, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteLocked(domainName, key)
+}
+
+func (s *PassStore) deleteLocked(domainName, key string) error {
 	if _, err := s.domainPath(domainName); err != nil {
 		return err
 	}
@@ -241,13 +261,20 @@ func (s *PassStore) Delete(domainName, key string) error {
 		return err
 	}
 
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer rmCancel()
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
+	showCtx, showCancel := context.WithTimeout(context.Background(), s.timeout)
+	previous, existed, err := s.passShow(showCtx, keyPath)
+	showCancel()
+	if err != nil {
 		return err
 	}
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
+	if err := s.passRemove(rmCtx, keyPath); err != nil {
+		rmCancel()
+		return err
+	}
+	rmCancel()
 
-	keys, err := s.ListKeys(domainName)
+	keys, err := s.listKeysLocked(domainName)
 	if err != nil {
 		return err
 	}
@@ -269,6 +296,14 @@ func (s *PassStore) Delete(domainName, key string) error {
 	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
 	defer insertCancel()
 	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
+		if existed {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), s.timeout)
+			rollbackErr := s.passInsert(rollbackCtx, keyPath, previous)
+			rollbackCancel()
+			if rollbackErr != nil {
+				return fmt.Errorf("failed to update manifest and restore removed secret")
+			}
+		}
 		return fmt.Errorf("failed to update manifest: %w", err)
 	}
 
@@ -289,7 +324,7 @@ func (s *PassStore) SetAttachmentIfEmpty(containerName string, secretsMap map[st
 	if len(existingKeys) > 0 {
 		return nil, fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys)", domain.ErrSecretsAlreadyExist, containerName, len(existingKeys))
 	}
-	if err := s.SetAttachment(containerName, secretsMap); err != nil {
+	if err := s.setAttachmentLocked(containerName, secretsMap); err != nil {
 		return nil, err
 	}
 	return sortedMapKeys(secretsMap), nil
@@ -297,6 +332,12 @@ func (s *PassStore) SetAttachmentIfEmpty(containerName string, secretsMap map[st
 
 // SetAttachment sets or updates multiple secrets for an attachment container.
 func (s *PassStore) SetAttachment(containerName string, secretsMap map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setAttachmentLocked(containerName, secretsMap)
+}
+
+func (s *PassStore) setAttachmentLocked(containerName string, secretsMap map[string]string) error {
 	if _, err := s.attachmentPath(containerName); err != nil {
 		return err
 	}
@@ -367,6 +408,12 @@ func (s *PassStore) SetAttachment(containerName string, secretsMap map[string]st
 
 // DeleteAttachment removes a specific secret key from an attachment container.
 func (s *PassStore) DeleteAttachment(containerName, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteAttachmentLocked(containerName, key)
+}
+
+func (s *PassStore) deleteAttachmentLocked(containerName, key string) error {
 	if _, err := s.attachmentPath(containerName); err != nil {
 		return err
 	}
@@ -376,11 +423,18 @@ func (s *PassStore) DeleteAttachment(containerName, key string) error {
 		return err
 	}
 
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer rmCancel()
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
+	showCtx, showCancel := context.WithTimeout(context.Background(), s.timeout)
+	previous, existed, err := s.passShow(showCtx, keyPath)
+	showCancel()
+	if err != nil {
 		return err
 	}
+	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
+	if err := s.passRemove(rmCtx, keyPath); err != nil {
+		rmCancel()
+		return err
+	}
+	rmCancel()
 
 	keys, err := s.listAttachmentKeys(containerName)
 	if err != nil {
@@ -404,6 +458,14 @@ func (s *PassStore) DeleteAttachment(containerName, key string) error {
 	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
 	defer insertCancel()
 	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
+		if existed {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), s.timeout)
+			rollbackErr := s.passInsert(rollbackCtx, keyPath, previous)
+			rollbackCancel()
+			if rollbackErr != nil {
+				return fmt.Errorf("failed to update attachment manifest and restore removed secret")
+			}
+		}
 		return fmt.Errorf("failed to update attachment manifest: %w", err)
 	}
 
@@ -750,10 +812,22 @@ func (s *PassStore) ManifestExists(domainName string) (bool, error) {
 	return exists, nil
 }
 
+func execPass(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "pass", args...) //nolint:gosec // binary is constant ("pass"); path arguments are validated by secrets path validator
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.CombinedOutput()
+}
+
+func (s *PassStore) run(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+	runner := s.runPass
+	if runner == nil {
+		runner = execPass
+	}
+	return runner(ctx, stdin, args...)
+}
+
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	cmd.Stdin = strings.NewReader(value)
-	_, err := cmd.CombinedOutput()
+	_, err := s.run(ctx, value, "insert", "-m", "-f", path)
 	if err != nil {
 		return fmt.Errorf("pass insert failed")
 	}
@@ -761,8 +835,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 }
 
 func (s *PassStore) passRemove(ctx context.Context, path string) error {
-	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "rm", "-f", path)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return nil
@@ -773,8 +846,7 @@ func (s *PassStore) passRemove(ctx context.Context, path string) error {
 }
 
 func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "show", path)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return "", false, nil
@@ -792,8 +864,7 @@ func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "pass", "ls", basePath) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "ls", basePath)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return []string{}, nil

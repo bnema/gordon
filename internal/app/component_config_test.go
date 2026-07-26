@@ -15,6 +15,27 @@ import (
 	"github.com/bnema/gordon/internal/usecase/traffic"
 )
 
+func TestGeneratedRuntimePolicyKeepsHostInstallationIdentityAcrossGenerations(t *testing.T) {
+	firstRoot := filepath.Join(t.TempDir(), "installation")
+	secondRoot := filepath.Join(t.TempDir(), "installation")
+	generatedVolume := func(t *testing.T, root, generation string) string {
+		t.Helper()
+		cfg := Config{}
+		cfg.Server.DataDir = root
+		files, err := WriteComponentConfigManifests(cfg, filepath.Join(root, "migration", "config", "fixture", generation))
+		require.NoError(t, err)
+		_, generated, err := initConfig(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleRuntime])
+		require.NoError(t, err)
+		policy := runtimeRolePolicy(generated, nil)
+		return policy.ManagedControlSecretsVolume
+	}
+
+	firstGeneration := generatedVolume(t, firstRoot, "1")
+	assert.Equal(t, firstGeneration, generatedVolume(t, firstRoot, "2"))
+	assert.NotEqual(t, firstGeneration, generatedVolume(t, secondRoot, "1"))
+	assert.Regexp(t, `^gordon-control-secrets-[0-9a-f]{16}$`, firstGeneration)
+}
+
 func TestWriteComponentConfigManifestsScopesRolesAndPermissions(t *testing.T) {
 	cfg := Config{}
 	cfg.Server.DataDir = filepath.Join(t.TempDir(), "data")

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -539,6 +540,8 @@ func newRuntimeRoleStandaloneServiceManager(runtime out.ContainerRuntime, cfg Co
 	return container.NewRuntimeStandaloneServicePolicyManager(servicecfg.NewLocalRuntimeStandaloneServiceManager(runtime), runtimeRolePolicy(cfg, v))
 }
 
+var managedControlSecretsVolumePattern = regexp.MustCompile(`^gordon-control-secrets-[0-9a-f]{16}$`)
+
 func managedControlSecretsVolumeName(dataRoot string) string {
 	normalized := filepath.Clean(dataRoot)
 	installationDigest := sha256.Sum256([]byte(normalized))
@@ -555,7 +558,13 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 	if registryStorageRoot == "" {
 		registryStorageRoot = filepath.Join(dataRoot, "registry")
 	}
-	managedSecretsVolume := managedControlSecretsVolumeName(dataRoot)
+	managedSecretsVolume := strings.TrimSpace(cfg.Runtime.ManagedControlSecretsVolume)
+	if managedSecretsVolume == "" && dataRoot != componentDataDirectory {
+		managedSecretsVolume = managedControlSecretsVolumeName(dataRoot)
+	}
+	if !managedControlSecretsVolumePattern.MatchString(managedSecretsVolume) {
+		managedSecretsVolume = ""
+	}
 	return container.RuntimePolicy{
 		Mode:                        container.RuntimePolicyModeEnforce,
 		ManagedNetworkPrefix:        managedNetworkPrefix,

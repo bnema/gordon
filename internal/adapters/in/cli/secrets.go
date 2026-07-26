@@ -2,14 +2,23 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
+	"time"
+
+	"github.com/bnema/zerowrap"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
-
-	"github.com/spf13/cobra"
+	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
+	"github.com/bnema/gordon/internal/app"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // newSecretsCmd creates the secrets command group.
@@ -29,8 +38,74 @@ these commands operate on the remote server.`,
 	cmd.AddCommand(newSecretsListCmd())
 	cmd.AddCommand(newSecretsSetCmd())
 	cmd.AddCommand(newSecretsRemoveCmd())
+	cmd.AddCommand(newSecretsDoctorCmd())
 
 	return cmd
+}
+
+func newSecretsDoctorCmd() *cobra.Command {
+	var configFile string
+	var writeCheck bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Initialize and validate the configured managed pass backend",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runSecretsDoctor(cmd.Context(), configFile, writeCheck, cmd.OutOrStdout())
+		},
+	}
+	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
+	cmd.Flags().BoolVar(&writeCheck, "write-check", false, "Verify an application-level write/read/delete without displaying values")
+	return cmd
+}
+
+func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, out io.Writer) error {
+	v := viper.New()
+	app.ConfigureViper(v, configFile)
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return fmt.Errorf("read configuration: %w", err)
+		}
+	}
+	if resolveLocalSecretsBackend(v) != domain.SecretsBackendPass {
+		return fmt.Errorf("configured secrets backend is not pass")
+	}
+	if err := app.ValidateManagedPassBackend(ctx); err != nil {
+		return fmt.Errorf("validate managed pass backend: %w", err)
+	}
+	if writeCheck {
+		if err := runManagedPassWriteCheck(); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(out, "Managed pass backend is healthy")
+	return err
+}
+
+func runManagedPassWriteCheck() error {
+	marker := make([]byte, 16)
+	if _, err := rand.Read(marker); err != nil {
+		return fmt.Errorf("generate managed pass write check")
+	}
+	domainName := "doctor-" + fmt.Sprint(time.Now().UnixNano()) + ".invalid"
+	const key = "GORDON_DOCTOR_MARKER"
+	value := hex.EncodeToString(marker)
+	store, err := domainsecrets.NewPassStore(zerowrap.New(cliLogConfig))
+	if err != nil {
+		return fmt.Errorf("open managed pass backend: %w", err)
+	}
+	if err := store.Set(domainName, map[string]string{key: value}); err != nil {
+		return fmt.Errorf("write managed pass check: %w", err)
+	}
+	values, err := store.GetAll(domainName)
+	if err != nil || values[key] != value {
+		_ = store.Delete(domainName, key)
+		return fmt.Errorf("read managed pass check failed")
+	}
+	if err := store.Delete(domainName, key); err != nil {
+		return fmt.Errorf("remove managed pass check: %w", err)
+	}
+	return nil
 }
 
 // newSecretsListCmd creates the secrets list command.

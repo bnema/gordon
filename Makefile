@@ -382,9 +382,11 @@ release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts 
 
 release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
 	@set -eu; \
-		smoke_config=$$(mktemp); \
-		trap 'rm -f "$$smoke_config"; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
+		smoke_config=$$(mktemp); secrets_config=$$(mktemp); \
+		trap 'rm -f "$$smoke_config" "$$secrets_config"; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
 		printf '%s\n' '[server]' 'runtime = "docker"' 'port = 8088' 'data_dir = "/tmp/gordon"' '[auth]' 'enabled = false' 'secrets_backend = "unsafe"' > "$$smoke_config"; \
+		printf '%s\n' '[auth]' 'secrets_backend = "pass"' > "$$secrets_config"; \
+		chmod 0644 "$$smoke_config" "$$secrets_config"; \
 		socket="$${DOCKER_HOST#unix://}"; test "$$socket" != "$${DOCKER_HOST:-}" || socket=/var/run/docker.sock; \
 		test -S "$$socket"; \
 		for arch in amd64 arm64; do \
@@ -398,8 +400,8 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real mo
 			docker run --rm --platform "linux/$$arch" --entrypoint gpg "$$image" --version >/dev/null; \
 			docker run --rm --platform "linux/$$arch" --entrypoint sh "$$image" -c 'test -d /var/lib/gordon/secrets && test -w /var/lib/gordon/secrets'; \
 			secrets_volume="gordon-release-smoke-secrets-$$arch-$$$$"; docker volume create "$$secrets_volume" >/dev/null; \
-			docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" --entrypoint sh "$$image" -ec 'umask 077; mkdir -p /var/lib/gordon/secrets/current/gnupg /var/lib/gordon/secrets/current/password-store; export GNUPGHOME=/var/lib/gordon/secrets/current/gnupg PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store; gpg --batch --no-tty --pinentry-mode loopback --passphrase "" --quick-generate-key "Gordon Release Smoke" future-default default 0 >/dev/null 2>&1; fingerprint=$$(gpg --batch --with-colons --list-secret-keys "Gordon Release Smoke" | awk -F: '\''$$1 == "fpr" { print $$10; exit }'\''); test -n "$$fingerprint"; pass init "$$fingerprint" >/dev/null 2>&1; printf %s "artifact-persistence-check" | pass insert -m -f smoke/value >/dev/null 2>&1'; \
-			docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" --entrypoint sh "$$image" -ec 'export GNUPGHOME=/var/lib/gordon/secrets/current/gnupg PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store; test "$$(pass show smoke/value)" = "artifact-persistence-check"'; \
+			for restart in 1 2; do docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; done; \
+			docker run --rm --platform "linux/$$arch" -v "$$secrets_volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
 			docker volume rm "$$secrets_volume" >/dev/null; secrets_volume=; \
 			for role in control runtime edge registry; do docker run --rm --platform "linux/$$arch" "$$image" serve --role "$$role" --help >/dev/null; done; \
 			name="gordon-release-smoke-$$arch-monolith-$$$$"; \
@@ -410,7 +412,7 @@ release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real mo
 			docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/v2/; \
 			docker rm -f "$$name" >/dev/null; name=; \
 		done; \
-		rm -f "$$smoke_config"; trap - EXIT HUP INT TERM
+		rm -f "$$smoke_config" "$$secrets_config"; trap - EXIT HUP INT TERM
 
 build-push: build ## Build and push Docker images
 	@echo "Cleaning up dangling images..."

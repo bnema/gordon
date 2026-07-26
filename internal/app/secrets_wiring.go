@@ -87,6 +87,15 @@ func managedPassEnvironment() bool {
 	return os.Getenv("GNUPGHOME") == managedPassGPGHome && os.Getenv("PASSWORD_STORE_DIR") == managedPassStoreDir
 }
 
+// ValidateManagedPassBackend initializes or validates the control-owned pass
+// backend through the same lifecycle used by production control startup.
+func ValidateManagedPassBackend(ctx context.Context) error {
+	if !managedPassEnvironment() {
+		return fmt.Errorf("managed pass environment is not configured")
+	}
+	return ensureManagedPassStore(ctx, managedPassRoot, execPassCommandRunner{})
+}
+
 // ensureManagedPassStore acquires the same lease as production but releases it
 // after validation. Production retains the lease for the process lifetime.
 func ensureManagedPassStore(ctx context.Context, root string, runner passCommandRunner) error {
@@ -217,6 +226,12 @@ func initializeManagedPassStore(ctx context.Context, root string, runner passCom
 	}
 	if err := validateManagedPassStore(ctx, stage, runner); err != nil {
 		return err
+	}
+	// GPG may leave agent sockets whose paths would become stale after the
+	// atomic staging-directory rename. Stop the staging agent before syncing
+	// and publishing the durable tree.
+	if err := runner.Run(ctx, env, "gpgconf", "--kill", "gpg-agent"); err != nil {
+		return fmt.Errorf("stop managed pass staging agent")
 	}
 	if err := syncManagedPassTree(stage); err != nil {
 		return err

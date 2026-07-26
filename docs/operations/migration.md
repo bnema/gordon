@@ -49,21 +49,28 @@ secret_volume="$(podman inspect --format '{{range .Mounts}}{{if eq .Destination 
 test -n "$secret_volume"
 ```
 
-For a consistency-safe backup, stop control and verify it is stopped before reading the volume. This releases the exclusive store lease and prevents GPG or `pass` writes during the archive. Keep the archive owner-only and encrypted at rest; never list archive contents in shared logs.
+For a consistency-safe backup, stop control and verify it is stopped before reading the volume. This releases the exclusive store lease and prevents GPG or `pass` writes during the archive. Stream the archive directly into authenticated encryption; no plaintext archive is created. Replace the recipient placeholder with an operator-held age recipient, keep the encrypted file owner-only, and never list archive contents in shared logs.
 
 ```bash
 podman stop "$control_id"
 test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
 umask 077
-podman run --rm -v "$secret_volume:/source:ro" -v "$PWD:/backup" docker.io/library/alpine:latest \
-  tar -C /source -czf /backup/gordon-control-secrets.tgz .
+backup_file="$PWD/gordon-control-secrets.tar.gz.age"
+age_recipient='age1exampleoperatorrecipient000000000000000000000000000000000'
+podman run --rm -v "$secret_volume:/source:ro" docker.io/library/alpine:latest \
+  tar -C /source -czf - . | age --encrypt --recipient "$age_recipient" >"$backup_file"
+test -s "$backup_file"
 ```
 
-Restore only while control remains stopped. Empty and restore the **same discovered namespaced volume** (a stopped container still references it), then start one control process. Gordon validates the atomically published `current` store and fails closed rather than replacing invalid key material.
+Restore only while control remains stopped. Decrypt directly into the extractor for the **same discovered namespaced volume** (a stopped container still references it); no plaintext archive is written. Supply the age identity through a private operator-controlled path, then start one control process. Gordon validates the atomically published `current` store and fails closed rather than replacing invalid key material.
 
 ```bash
-podman run --rm -v "$secret_volume:/restore" -v "$PWD:/backup:ro" docker.io/library/alpine:latest sh -ec \
-  'find /restore -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /restore -xzf /backup/gordon-control-secrets.tgz'
+age_identity='/path/to/operator-age-identity'
+test "$(podman inspect --format '{{.State.Running}}' "$control_id")" = false
+set -o pipefail
+age --decrypt --identity "$age_identity" "$backup_file" | \
+  podman run --rm -i -v "$secret_volume:/restore" docker.io/library/alpine:latest \
+    sh -ec 'find /restore -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +; tar -C /restore -xzf -'
 podman start "$control_id"
 ```
 

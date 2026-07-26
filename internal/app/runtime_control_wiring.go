@@ -18,12 +18,13 @@ import (
 )
 
 type RuntimeControlConfig struct {
-	Endpoint            string `mapstructure:"endpoint"`
-	ListenAddress       string `mapstructure:"listen_address"`
-	Token               string `mapstructure:"token"`
-	TokenEnv            string `mapstructure:"token_env"`
-	RegistryStorageRoot string `mapstructure:"registry_storage_root"`
-	Insecure            bool   `mapstructure:"insecure"`
+	Endpoint                    string `mapstructure:"endpoint"`
+	ListenAddress               string `mapstructure:"listen_address"`
+	Token                       string `mapstructure:"token"`
+	TokenEnv                    string `mapstructure:"token_env"`
+	RegistryStorageRoot         string `mapstructure:"registry_storage_root"`
+	ManagedControlSecretsVolume string `mapstructure:"managed_control_secrets_volume"`
+	Insecure                    bool   `mapstructure:"insecure"`
 }
 
 func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (out.RuntimeCommandClient, error) {
