@@ -33,7 +33,9 @@ func newCleanupMigrationService(t *testing.T, launcher ComponentLauncher) (*Migr
 	require.NoError(t, err)
 	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, launcher)
 	require.NoError(t, err)
-	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store)
+	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store, MigrationEnvOptions{
+		Config: Config{}, Environment: map[string]string{}, Directory: filepath.Join(filepath.Dir(store.Path()), "env"),
+	})
 	require.NoError(t, err)
 	service.WithMigrationOrchestrator(orchestrator)
 	return service, store

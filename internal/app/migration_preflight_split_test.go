@@ -54,7 +54,7 @@ func TestMigrationServicePrepareRefusesSplitTopology(t *testing.T) {
 	launcher := &recordingComponentLauncher{}
 	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(probes), store, launcher)
 	require.NoError(t, err)
-	service, err := NewMigrationService(NewMigrationPreflight(probes), store)
+	service, err := NewMigrationService(NewMigrationPreflight(probes), store, MigrationEnvOptions{Config: splitTopologyConfig()})
 	require.NoError(t, err)
 	service.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage("example.invalid/gordon:v3")
 

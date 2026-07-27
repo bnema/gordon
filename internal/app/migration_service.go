@@ -28,30 +28,26 @@ type MigrationService struct {
 	orchestrator   *MigrationOrchestrator
 }
 
-// NewMigrationService accepts an optional, already-loaded component env plan.
-// Keeping it optional preserves the Phase 2 facade for callers that have not
-// yet composed split roles, while production always provides it.
-func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpointStore, envOptions ...MigrationEnvOptions) (*MigrationService, error) {
+// NewMigrationService requires the explicit, already-loaded component env
+// plan used by every prepare and cleanup path.
+func NewMigrationService(preflight *MigrationPreflight, store *MigrationCheckpointStore, options MigrationEnvOptions) (*MigrationService, error) {
 	if preflight == nil || store == nil {
 		return nil, fmt.Errorf("migration preflight and checkpoint store are required")
 	}
-	if len(envOptions) > 1 {
-		return nil, fmt.Errorf("only one migration environment configuration is allowed")
+	effectiveConfig, manifest, err := buildMigrationComponentEnvManifest(options)
+	if manifest == nil {
+		if err == nil {
+			err = fmt.Errorf("component environment manifest is required")
+		}
+		return nil, err
 	}
-	service := &MigrationService{preflight: preflight, store: store, now: time.Now}
-	if len(envOptions) == 1 {
-		options := envOptions[0]
-		manifest, err := BuildMigrationComponentEnvManifest(options)
-		if manifest == nil {
-			return nil, err
-		}
-		service.envManifest, service.envError = manifest, err
-		service.config = options.Config
-		service.externalRoutes = options.ExternalRoutes
-		service.envDirectory = options.Directory
-		if service.envDirectory == "" {
-			service.envDirectory = filepath.Join(filepath.Dir(store.Path()), "env")
-		}
+	service := &MigrationService{
+		preflight: preflight, store: store, now: time.Now,
+		envManifest: manifest, envError: err, config: effectiveConfig,
+		externalRoutes: options.ExternalRoutes, envDirectory: options.Directory,
+	}
+	if service.envDirectory == "" {
+		service.envDirectory = filepath.Join(filepath.Dir(store.Path()), "env")
 	}
 	return service, nil
 }
@@ -229,9 +225,6 @@ func (s *MigrationService) loadOrCreateCheckpoint() (MigrationCheckpoint, error)
 }
 
 func (s *MigrationService) writeComponentConfig(checkpoint *MigrationCheckpoint) error {
-	if s.envManifest == nil {
-		return nil
-	}
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component configuration")
 	}
@@ -278,9 +271,6 @@ func migrationComponentConfigDirectory(envDirectory, migrationID string, generat
 }
 
 func (s *MigrationService) writeComponentEnv(checkpoint *MigrationCheckpoint) error {
-	if s.envManifest == nil {
-		return nil
-	}
 	if checkpoint == nil || !componentLabelValue.MatchString(checkpoint.MigrationID) {
 		return fmt.Errorf("invalid migration ID for component environment")
 	}

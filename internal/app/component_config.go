@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -29,6 +30,30 @@ type ComponentConfigFile struct {
 type ComponentConfigOptions struct {
 	ExternalRoutes   any
 	FinalEdgeBinding *MigrationPortBinding
+}
+
+// canonicalizeComponentAuthConfig applies the snapshotted, non-secret auth
+// environment overrides which Viper may not include when a key exists only in
+// the environment. Secret material remains exclusively in role env files.
+func canonicalizeComponentAuthConfig(cfg Config, environment map[string]string) (Config, error) {
+	if value := environment["GORDON_AUTH_ENABLED"]; value != "" {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(value))
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid component configuration environment variable: GORDON_AUTH_ENABLED")
+		}
+		cfg.Auth.Enabled = enabled
+	}
+	applyString := func(key string, destination *string) {
+		if value := environment[key]; value != "" {
+			*destination = value
+		}
+	}
+	applyString("GORDON_AUTH_TYPE", &cfg.Auth.Type)
+	applyString("GORDON_AUTH_SECRETS_BACKEND", &cfg.Auth.SecretsBackend)
+	applyString("GORDON_AUTH_USERNAME", &cfg.Auth.Username)
+	applyString("GORDON_AUTH_TOKEN_EXPIRY", &cfg.Auth.TokenExpiry)
+	applyString("GORDON_AUTH_ACCESS_TOKEN_TTL", &cfg.Auth.AccessTokenTTL)
+	return cfg, nil
 }
 
 // WriteComponentConfigManifests materializes only the configuration each role
@@ -171,14 +196,12 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			"server": map[string]any{"data_dir": componentDataDirectory},
 			// Token references and provider credentials remain in the private role
 			// environment/secrets store, never in a generated TOML manifest.
-			"auth": map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_expiry": cfg.Auth.TokenExpiry, "access_token_ttl": cfg.Auth.AccessTokenTTL},
+			"auth": componentAuthConfig(cfg),
 		}
 		for key, value := range controlRouting {
 			if key == "server" {
 				server := control["server"].(map[string]any)
-				for serverKey, serverValue := range value.(map[string]any) {
-					server[serverKey] = serverValue
-				}
+				maps.Copy(server, value.(map[string]any))
 				continue
 			}
 			control[key] = value
@@ -191,13 +214,13 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			// Runtime validates scoped component credentials before it binds the
 			// private Unix listener. It needs the backend selection, but never a
 			// control-plane token reference or credential value in this manifest.
-			"auth":    map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "token_expiry": cfg.Auth.TokenExpiry},
+			"auth":    componentAuthConfig(cfg),
 			"volumes": cfg.Volumes,
 		}
 	case domain.ComponentRoleRegistry:
 		return map[string]any{
 			"storage":    map[string]any{"data_dir": "/var/lib/gordon"},
-			"auth":       map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_expiry": cfg.Auth.TokenExpiry, "access_token_ttl": cfg.Auth.AccessTokenTTL},
+			"auth":       componentAuthConfig(cfg),
 			"limits":     map[string]any{"max_blob_chunk_size": cfg.Server.MaxBlobChunkSize, "max_blob_size": cfg.Server.MaxBlobSize},
 			"listen":     map[string]any{"address": "0.0.0.0:" + fmt.Sprint(cfg.Server.RegistryPort), "tls": map[string]any{"mode": registryTLSDisabled}},
 			"forwarding": map[string]any{"token_env": registryForwardTokenEnvVar},
@@ -225,6 +248,13 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 		}
 	default:
 		return nil
+	}
+}
+
+func componentAuthConfig(cfg Config) map[string]any {
+	return map[string]any{
+		"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend,
+		"username": cfg.Auth.Username, "token_expiry": cfg.Auth.TokenExpiry, "access_token_ttl": cfg.Auth.AccessTokenTTL,
 	}
 }
 

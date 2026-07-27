@@ -61,7 +61,7 @@ func TestMigrateCleanupInvokesControlPlaneCleanup(t *testing.T) {
 	assert.Contains(t, out.String(), "removed")
 }
 func TestLocalControlPlaneUsesKernelMigrationFacade(t *testing.T) {
-	service, err := app.NewMigrationService(app.NewMigrationPreflight(app.MigrationPreflightProbes{}), mustMigrationStore(t))
+	service, err := app.NewMigrationService(app.NewMigrationPreflight(app.MigrationPreflightProbes{}), mustMigrationStore(t), app.MigrationEnvOptions{Config: app.Config{}})
 	require.NoError(t, err)
 	plane := &localControlPlane{migration: func() (*app.MigrationService, error) { return service, nil }}
 	report, err := plane.MigrationPlan(context.Background())

@@ -17,7 +17,7 @@ func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *tes
 	launcher := &recordingComponentLauncher{}
 	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, launcher)
 	require.NoError(t, err)
-	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store)
+	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store, MigrationEnvOptions{Config: Config{}})
 	require.NoError(t, err)
 	service.WithMigrationOrchestrator(orchestrator)
 	_, err = service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration"})

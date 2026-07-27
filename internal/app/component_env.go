@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,6 +51,17 @@ func (e *MissingEnvVarError) Error() string {
 		return "required component environment variable is missing"
 	}
 	return "required component environment variables are missing: " + strings.Join(e.Keys, ", ")
+}
+
+// InvalidEnvVarError reports only the offending key. Values and validation
+// policy details are deliberately omitted from migration diagnostics.
+type InvalidEnvVarError struct{ Key string }
+
+func (e *InvalidEnvVarError) Error() string {
+	if e == nil || e.Key == "" {
+		return "component environment variable is invalid"
+	}
+	return "component environment variable is invalid: " + e.Key
 }
 
 // ComponentEnvManifest is the explicit, role-scoped environment transfer
@@ -113,23 +125,29 @@ const (
 // with the explicit migration env file mechanism. The parser accepts only
 // KEY=value records and reports keys, never their values.
 func BuildMigrationComponentEnvManifest(options MigrationEnvOptions) (*ComponentEnvManifest, error) {
+	_, manifest, err := buildMigrationComponentEnvManifest(options)
+	return manifest, err
+}
+
+func buildMigrationComponentEnvManifest(options MigrationEnvOptions) (Config, *ComponentEnvManifest, error) {
+	config, err := canonicalizeComponentAuthConfig(options.Config, options.Environment)
+	if err != nil {
+		return Config{}, nil, err
+	}
 	environment := make(map[string]string, len(options.Environment))
-	for key, value := range options.Environment {
-		environment[key] = value
-	}
+	maps.Copy(environment, options.Environment)
 	if strings.TrimSpace(options.ExplicitEnvFile) != "" {
-		values, err := readExplicitComponentEnvFile(options.ExplicitEnvFile, options.ExplicitAllowlist)
-		if err != nil {
-			return nil, err
+		values, readErr := readExplicitComponentEnvFile(options.ExplicitEnvFile, options.ExplicitAllowlist)
+		if readErr != nil {
+			return Config{}, nil, readErr
 		}
-		for key, value := range values {
-			environment[key] = value
-		}
+		maps.Copy(environment, values)
 	}
-	return BuildComponentEnvManifest(ComponentEnvManifestOptions{
-		Config: options.Config, Environment: environment, ExplicitAllowlist: options.ExplicitAllowlist,
+	manifest, err := BuildComponentEnvManifest(ComponentEnvManifestOptions{
+		Config: config, Environment: environment, ExplicitAllowlist: options.ExplicitAllowlist,
 		runtimeEndpoint: options.runtimeEndpoint,
 	})
+	return config, manifest, err
 }
 
 func readExplicitComponentEnvFile(path string, allowlist []string) (map[string]string, error) {
@@ -173,7 +191,7 @@ func explicitComponentEnvAllowlist(allowlist []string) map[string]struct{} {
 
 func parseExplicitComponentEnvFile(data []byte, allowed map[string]struct{}) (map[string]string, error) {
 	values := make(map[string]string)
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		key, value, skip, err := parseExplicitComponentEnvLine(line, allowed)
 		if err != nil {
 			return nil, err
@@ -212,7 +230,10 @@ func BuildComponentEnvManifest(options ComponentEnvManifestOptions) (*ComponentE
 	missing := make(map[string]struct{})
 	add := componentEnvAdder(manifest, options.Environment, missing)
 	addConfigOverrideEnv(options.Environment, add)
-	addMigrationJWTSigningSecret(options.Config, options.Environment, manifest, missing, add)
+	if err := addMigrationJWTSigningSecret(options.Config, options.Environment, manifest, add); err != nil {
+		sortManifest(manifest)
+		return manifest, err
+	}
 	addSecretProviderEnv(options.Config, manifest, add)
 	addACMEEnv(options.Config, add)
 	addS3BackupEnv(options.Config, add)
@@ -266,22 +287,27 @@ func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
 	}
 }
 
-func addMigrationJWTSigningSecret(cfg Config, environment map[string]string, manifest *ComponentEnvManifest, missing map[string]struct{}, add componentEnvAdd) {
+func addMigrationJWTSigningSecret(cfg Config, environment map[string]string, manifest *ComponentEnvManifest, add componentEnvAdd) error {
 	if !cfg.Auth.Enabled {
-		return
+		return nil
 	}
 	roles := []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry}
 	add(TokenSecretEnvVar, roles, true)
 	// Migration intentionally does not transfer auth.token_secret references:
 	// legacy secret-provider ownership cannot be safely reproduced across role
 	// stores. The named environment source is the only supported handoff.
-	if len(environment[TokenSecretEnvVar]) >= 32 {
-		return
+	secret := environment[TokenSecretEnvVar]
+	if secret == "" {
+		return nil
 	}
-	missing[TokenSecretEnvVar] = struct{}{}
+	const minimumJWTSigningKeyBytes = 32
+	if len(secret) >= minimumJWTSigningKeyBytes {
+		return nil
+	}
 	for _, role := range roles {
 		delete(manifest.values[role], TokenSecretEnvVar)
 	}
+	return &InvalidEnvVarError{Key: TokenSecretEnvVar}
 }
 
 const (
