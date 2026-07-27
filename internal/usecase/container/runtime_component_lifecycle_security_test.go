@@ -2,17 +2,23 @@ package container
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	dockeradapter "github.com/bnema/gordon/internal/adapters/out/docker"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -177,6 +183,59 @@ func TestRuntimeComponentLifecycleExistingGenerationVolumeRequiresExactU(t *test
 			require.ErrorIs(t, manager.validateExistingLifecycleMounts(&container, command), ErrRuntimePolicyDenied)
 		})
 	}
+}
+
+func TestRuntimeComponentLifecycleAcceptsAdapterInspectionMountOptions(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	require.True(t, ok)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		require.Equal(t, http.MethodGet, request.Method)
+		require.Equal(t, "/v1.41/containers/existing/json", request.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			"Id":      "existing",
+			"Name":    "/" + command.TargetComponentID,
+			"Image":   "sha256:fixture",
+			"Created": "2026-05-05T00:00:00Z",
+			"Config": map[string]any{
+				"Image":  "gordon:fixture",
+				"User":   identity.User,
+				"Labels": componentLifecycleLabels(command),
+			},
+			"HostConfig": map[string]any{
+				"UsernsMode":  componentKeepIDMode(identity),
+				"CapDrop":     []string{"ALL"},
+				"CapAdd":      []string{},
+				"SecurityOpt": []string{"no-new-privileges:true"},
+			},
+			"State": map[string]any{"Status": "running", "ExitCode": 0},
+			"Mounts": []map[string]any{
+				{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
+				{"Type": "volume", "Name": componentGenerationVolumeName(command), "Source": "/rootless/volume", "Destination": "/var/lib/gordon", "Driver": "local", "Mode": domain.ContainerVolumeOptionChown, "RW": true, "Propagation": "rprivate"},
+			},
+			"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+		}))
+	}))
+	defer server.Close()
+
+	host := strings.TrimPrefix(server.URL, "http://")
+	apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	require.NoError(t, err)
+	inspected, err := dockeradapter.NewRuntimeWithClient(apiClient).InspectContainer(t.Context(), "existing")
+	require.NoError(t, err)
+	require.Len(t, inspected.VolumeMounts, 2)
+	assert.True(t, inspected.VolumeMounts[0].ReadOnly)
+	assert.Empty(t, inspected.VolumeMounts[0].Options, "ro is mount access metadata, not an engine-specific option")
+	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[1].Options)
+
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce}}
+	require.NoError(t, manager.validateExistingLifecycleMounts(inspected, command))
 }
 
 func cloneVolumeOptions(options map[string][]string) map[string][]string {

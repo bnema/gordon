@@ -4,6 +4,7 @@ package domain
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,32 @@ type ComponentProcessIdentity struct {
 // ContainerVolumeOptionChown is Podman's named-volume ownership option. It is
 // authorized only for rootless split-role generation volumes.
 const ContainerVolumeOptionChown = "U"
+
+// CanonicalContainerVolumeOptions validates explicit engine-specific options
+// for one mount. Access is represented by ContainerConfig.ReadOnlyVolumes, so
+// ro and rw are never valid here. The only supported option is Podman's exact,
+// singleton U ownership option.
+func CanonicalContainerVolumeOptions(options []string) ([]string, bool) {
+	if len(options) == 0 {
+		return nil, false
+	}
+	canonical := make([]string, 0, len(options))
+	seen := make(map[string]struct{}, len(options))
+	for _, option := range options {
+		if option == "" || option != strings.TrimSpace(option) || strings.Contains(option, ",") || option != ContainerVolumeOptionChown {
+			return nil, false
+		}
+		if _, duplicate := seen[option]; duplicate {
+			return nil, false
+		}
+		seen[option] = struct{}{}
+		canonical = append(canonical, option)
+	}
+	if len(canonical) != 1 {
+		return nil, false
+	}
+	return canonical, true
+}
 
 // FixedComponentProcessIdentity returns the immutable non-root identity for a split role.
 // These identities are used only by rootless split deployments; monolith and ordinary

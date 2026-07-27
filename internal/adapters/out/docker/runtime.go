@@ -146,10 +146,14 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if err != nil {
 		return nil, err
 	}
-	if err := r.preflightVolumeOptions(ctx, config); err != nil {
+	volumeOptions, err := canonicalVolumeOptions(config)
+	if err != nil {
 		return nil, err
 	}
-	binds := buildVolumeBinds(config, log)
+	if err := r.preflightVolumeOptions(ctx, volumeOptions); err != nil {
+		return nil, err
+	}
+	binds := buildVolumeBindsWithOptions(config, volumeOptions, log)
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -270,18 +274,44 @@ func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPor
 	return nil
 }
 
+func canonicalVolumeOptions(config *domain.ContainerConfig) (map[string][]string, error) {
+	if len(config.VolumeOptions) == 0 {
+		return nil, nil
+	}
+	canonical := make(map[string][]string, len(config.VolumeOptions))
+	for destination, options := range config.VolumeOptions {
+		if _, writable := config.Volumes[destination]; !writable {
+			return nil, fmt.Errorf("invalid container volume options")
+		}
+		normalized, ok := domain.CanonicalContainerVolumeOptions(options)
+		if !ok {
+			return nil, fmt.Errorf("invalid container volume options")
+		}
+		canonical[destination] = normalized
+	}
+	return canonical, nil
+}
+
 func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []string {
+	options, err := canonicalVolumeOptions(config)
+	if err != nil {
+		return nil
+	}
+	return buildVolumeBindsWithOptions(config, options, log)
+}
+
+func buildVolumeBindsWithOptions(config *domain.ContainerConfig, volumeOptions map[string][]string, log zerowrap.Logger) []string {
 	binds := make([]string, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
 	for containerPath, volumeName := range config.Volumes {
 		bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
-		if options := config.VolumeOptions[containerPath]; len(options) > 0 {
+		if options := volumeOptions[containerPath]; len(options) > 0 {
 			bind += ":" + strings.Join(options, ",")
 		}
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
 	}
 	for containerPath, volumeName := range config.ReadOnlyVolumes {
-		options := append([]string{"ro"}, config.VolumeOptions[containerPath]...)
+		options := append([]string{"ro"}, volumeOptions[containerPath]...)
 		bind := fmt.Sprintf("%s:%s:%s", volumeName, containerPath, strings.Join(options, ","))
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
@@ -289,8 +319,8 @@ func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []str
 	return binds
 }
 
-func (r *Runtime) preflightVolumeOptions(ctx context.Context, config *domain.ContainerConfig) error {
-	if !containerUsesVolumeOption(config, domain.ContainerVolumeOptionChown) {
+func (r *Runtime) preflightVolumeOptions(ctx context.Context, volumeOptions map[string][]string) error {
+	if !containerUsesVolumeOption(volumeOptions, domain.ContainerVolumeOptionChown) {
 		return nil
 	}
 	version, err := r.runtimeVersion(ctx)
@@ -304,8 +334,8 @@ func (r *Runtime) preflightVolumeOptions(ctx context.Context, config *domain.Con
 	return nil
 }
 
-func containerUsesVolumeOption(config *domain.ContainerConfig, wanted string) bool {
-	for _, options := range config.VolumeOptions {
+func containerUsesVolumeOption(volumeOptions map[string][]string, wanted string) bool {
+	for _, options := range volumeOptions {
 		if slices.Contains(options, wanted) {
 			return true
 		}
@@ -317,9 +347,17 @@ func parseVolumeOptions(mode string) []string {
 	if strings.TrimSpace(mode) == "" {
 		return nil
 	}
-	options := strings.Split(mode, ",")
-	for index := range options {
-		options[index] = strings.TrimSpace(options[index])
+	parsed := strings.Split(mode, ",")
+	options := make([]string, 0, len(parsed))
+	for _, option := range parsed {
+		option = strings.TrimSpace(option)
+		if option == "ro" || option == "rw" {
+			continue
+		}
+		options = append(options, option)
+	}
+	if len(options) == 0 {
+		return nil
 	}
 	return options
 }
