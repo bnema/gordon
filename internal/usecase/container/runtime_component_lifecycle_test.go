@@ -371,7 +371,7 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 		inspectedName string
 		wantDenied    bool
 	}{
-		{name: "healthy retry", inspectedName: command.TargetComponentID},
+		{name: "plausible inspect lacks native proof", inspectedName: command.TargetComponentID, wantDenied: true},
 		{name: "forged inspect mismatch", inspectedName: "foreign", wantDenied: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {

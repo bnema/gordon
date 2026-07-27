@@ -240,9 +240,13 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 		case "/v1.41/containers/" + containerID + "/json":
 			require.NoError(t, json.NewEncoder(w).Encode(inspectFixture))
 		case "/v4.0.0/libpod/containers/" + containerID + "/json":
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"HostConfig": map[string]any{"IDMappings": map[string]any{
-				"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
-			}}}))
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+				"BoundingCaps":  nil,
+				"EffectiveCaps": nil,
+				"HostConfig": map[string]any{"IDMappings": map[string]any{
+					"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
+				}},
+			}))
 		default:
 			http.NotFound(w, request)
 		}

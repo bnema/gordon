@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +17,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/client"
-	"github.com/moby/sys/capability"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -36,9 +36,36 @@ type nativePodmanClient interface {
 }
 
 type nativePodmanInspect struct {
-	HostConfig struct {
+	BoundingCaps nativePodmanBoundingCaps `json:"BoundingCaps"`
+	HostConfig   struct {
 		IDMappings *nativePodmanIDMappings `json:"IDMappings"`
 	} `json:"HostConfig"`
+}
+
+type nativePodmanBoundingCaps struct {
+	present      bool
+	explicitNull bool
+	duplicate    bool
+}
+
+func (caps *nativePodmanBoundingCaps) UnmarshalJSON(data []byte) error {
+	if caps.present {
+		caps.duplicate = true
+		caps.explicitNull = false
+		return nil
+	}
+	caps.present = true
+	caps.explicitNull = bytes.Equal(data, []byte("null"))
+	return nil
+}
+
+func (caps nativePodmanBoundingCaps) provesExplicitNull() bool {
+	return caps.present && caps.explicitNull && !caps.duplicate
+}
+
+type nativePodmanSecurityProof struct {
+	usernsMode       string
+	boundingCapsNull bool
 }
 
 type nativePodmanIDMappings struct {
@@ -52,49 +79,8 @@ type nativePodmanIDMap struct {
 	Size        uint64 `json:"Size"`
 }
 
-func normalizeInspectedCapDrop(dropped, added []string) []string {
-	return normalizeInspectedCapDropWithSource(dropped, added, supportedKernelCapabilities)
-}
-
-func normalizeInspectedCapDropWithSource(
-	dropped, added []string,
-	source func() ([]string, bool),
-) []string {
-	allCapabilities, ok := source()
-	if !ok {
-		return nil
-	}
-	return normalizeInspectedCapDropAgainst(dropped, added, allCapabilities)
-}
-
-// supportedKernelCapabilities returns only capabilities supported by the
-// running Linux kernel. On non-Linux systems capability.ListSupported reports
-// that capability discovery is unsupported, so normalization fails closed.
-func supportedKernelCapabilities() ([]string, bool) {
-	supported, err := capability.ListSupported()
-	if err != nil || len(supported) == 0 {
-		return nil, false
-	}
-	capabilities := make([]string, len(supported))
-	for index, known := range supported {
-		capabilities[index] = known.String()
-	}
-	return capabilities, true
-}
-
-func normalizeInspectedCapDropAgainst(dropped, added, allCapabilities []string) []string {
-	if len(added) != 0 || len(dropped) == 0 || len(allCapabilities) == 0 || len(dropped) != len(allCapabilities) {
-		return nil
-	}
-	expected := make(map[string]struct{}, len(allCapabilities))
-	for _, capabilityName := range allCapabilities {
-		canonical, ok := canonicalCapability(capabilityName)
-		if !ok {
-			return nil
-		}
-		expected[canonical] = struct{}{}
-	}
-	if len(expected) != len(allCapabilities) {
+func normalizeInspectedCapDrop(dropped, added []string, boundingCapsNull bool) []string {
+	if !boundingCapsNull || len(added) != 0 || len(dropped) == 0 {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(dropped))
@@ -104,9 +90,6 @@ func normalizeInspectedCapDropAgainst(dropped, added, allCapabilities []string) 
 			return nil
 		}
 		if _, duplicate := seen[canonical]; duplicate {
-			return nil
-		}
-		if _, known := expected[canonical]; !known {
 			return nil
 		}
 		seen[canonical] = struct{}{}
@@ -122,23 +105,53 @@ func canonicalCapability(capabilityName string) (string, bool) {
 	if !strings.HasPrefix(canonical, "CAP_") {
 		canonical = "CAP_" + canonical
 	}
-	return canonical, canonical != "CAP_ALL"
+	if canonical == "CAP_ALL" || len(canonical) == len("CAP_") {
+		return "", false
+	}
+	for index := len("CAP_"); index < len(canonical); index++ {
+		character := canonical[index]
+		if character != '_' && (character < 'A' || character > 'Z') && (character < '0' || character > '9') {
+			return "", false
+		}
+	}
+	return canonical, knownLinuxCapability(canonical)
 }
 
-func inspectNativePodmanKeepID(
+func knownLinuxCapability(capabilityName string) bool {
+	switch capabilityName {
+	case "CAP_AUDIT_CONTROL", "CAP_AUDIT_READ", "CAP_AUDIT_WRITE",
+		"CAP_BLOCK_SUSPEND", "CAP_BPF", "CAP_CHECKPOINT_RESTORE", "CAP_CHOWN",
+		"CAP_DAC_OVERRIDE", "CAP_DAC_READ_SEARCH", "CAP_FOWNER", "CAP_FSETID",
+		"CAP_IPC_LOCK", "CAP_IPC_OWNER", "CAP_KILL", "CAP_LEASE", "CAP_LINUX_IMMUTABLE",
+		"CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE", "CAP_MKNOD", "CAP_NET_ADMIN",
+		"CAP_NET_BIND_SERVICE", "CAP_NET_BROADCAST", "CAP_NET_RAW", "CAP_PERFMON",
+		"CAP_SETFCAP", "CAP_SETGID", "CAP_SETPCAP", "CAP_SETUID", "CAP_SYS_ADMIN",
+		"CAP_SYS_BOOT", "CAP_SYS_CHROOT", "CAP_SYS_MODULE", "CAP_SYS_NICE", "CAP_SYS_PACCT",
+		"CAP_SYS_PTRACE", "CAP_SYS_RAWIO", "CAP_SYS_RESOURCE", "CAP_SYS_TIME",
+		"CAP_SYS_TTY_CONFIG", "CAP_SYSLOG", "CAP_WAKE_ALARM":
+		return true
+	default:
+		return false
+	}
+}
+
+func inspectNativePodmanSecurity(
 	ctx context.Context,
 	apiClient nativePodmanClient,
 	inspected *domain.Container,
-) (string, bool) {
+) (nativePodmanSecurityProof, bool) {
 	identity, ok := inspectedComponentIdentity(inspected)
 	if !ok || !canonicalContainerID(inspected.ID) || !localUnixDaemon(apiClient.DaemonHost()) {
-		return "", false
+		return nativePodmanSecurityProof{}, false
 	}
 	native, ok := fetchNativePodmanInspect(ctx, apiClient, inspected.ID)
 	if !ok || native.HostConfig.IDMappings == nil || !validNativeKeepIDMappings(*native.HostConfig.IDMappings, identity) {
-		return "", false
+		return nativePodmanSecurityProof{}, false
 	}
-	return fmt.Sprintf("keep-id:uid=%d,gid=%d", identity.UID, identity.GID), true
+	return nativePodmanSecurityProof{
+		usernsMode:       fmt.Sprintf("keep-id:uid=%d,gid=%d", identity.UID, identity.GID),
+		boundingCapsNull: native.BoundingCaps.provesExplicitNull(),
+	}, true
 }
 
 func fetchNativePodmanInspect(

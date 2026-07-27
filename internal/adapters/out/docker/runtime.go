@@ -735,15 +735,18 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	if resp.HostConfig != nil {
 		inspected.UsernsMode = string(resp.HostConfig.UsernsMode)
 		inspected.CapDrop = slices.Clone(resp.HostConfig.CapDrop)
-		if _, component := inspectedComponentIdentity(inspected); component {
-			inspected.CapDrop = normalizeInspectedCapDrop(resp.HostConfig.CapDrop, resp.HostConfig.CapAdd)
-		}
 		inspected.CapAdd = slices.Clone(resp.HostConfig.CapAdd)
 		inspected.NoNewPrivileges = hasNoNewPrivileges(resp.HostConfig.SecurityOpt)
-	}
-	if inspected.UsernsMode == "private" {
-		if normalized, ok := inspectNativePodmanKeepID(ctx, r.client, inspected); ok {
-			inspected.UsernsMode = normalized
+		if _, component := inspectedComponentIdentity(inspected); component {
+			proof, ok := inspectNativePodmanSecurity(ctx, r.client, inspected)
+			if ok {
+				if inspected.UsernsMode == "private" {
+					inspected.UsernsMode = proof.usernsMode
+				}
+				inspected.CapDrop = normalizeInspectedCapDrop(resp.HostConfig.CapDrop, resp.HostConfig.CapAdd, proof.boundingCapsNull)
+			} else {
+				inspected.CapDrop = nil
+			}
 		}
 	}
 	return inspected, nil
