@@ -1062,17 +1062,26 @@ func (m *runtimeComponentLifecycleManager) deniedLifecycleCandidate(command doma
 }
 
 func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand) error {
-	if !validExistingComponentIdentity(container, command.LifecycleProfile) {
+	expectedProfile, ok := domain.FixedRuntimeComponentLifecycleProfile(command.TargetComponentRole)
+	if !ok || command.LifecycleProfile.ProcessIdentity != expectedProfile.ProcessIdentity || !validExistingComponentIdentity(container, expectedProfile) {
 		return RuntimePolicyDeniedError{
 			Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle process identity is not allowed",
 			CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
 		}
 	}
-	ports := command.PortPublishes
-	if containerPortsMatch(container, command.FinalPortPublishes) {
-		ports = command.FinalPortPublishes
+	var (
+		expected map[string]expectedLifecycleMount
+		err      error
+	)
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		expected, err = m.expectedReadLifecycleMounts(container, command, expectedProfile)
+	} else {
+		ports := command.PortPublishes
+		if containerPortsMatch(container, command.FinalPortPublishes) {
+			ports = command.FinalPortPublishes
+		}
+		expected, err = m.expectedLifecycleMounts(command, ports)
 	}
-	expected, err := m.expectedLifecycleMounts(command, ports)
 	if err == nil && lifecycleMountsMatch(container.VolumeMounts, expected) {
 		return nil
 	}
@@ -1080,6 +1089,53 @@ func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(conta
 		Reason: RuntimePolicyReasonUnsafeHostBindDenied, Message: "component lifecycle mounts are not allowed",
 		CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
 	}
+}
+
+func (m *runtimeComponentLifecycleManager) expectedReadLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand, profile domain.RuntimeComponentLifecycleProfile) (map[string]expectedLifecycleMount, error) {
+	configSource, ok := existingLifecycleMountSource(container.VolumeMounts, "/etc/gordon/role.toml")
+	if !ok || approvedComponentConfigFile(command, configSource, m.policy.MigrationStateRoot) != nil {
+		return nil, fmt.Errorf("invalid existing component configuration mount")
+	}
+	expected := map[string]expectedLifecycleMount{
+		"/etc/gordon/role.toml": {source: configSource, readOnly: true},
+	}
+	profileCommand := command
+	profileCommand.LifecycleProfile = profile
+	persistentVolumes := m.componentPersistentVolumes(profileCommand)
+	volumeOptions := componentGenerationVolumeOptions(profileCommand, persistentVolumes)
+	for destination, source := range persistentVolumes {
+		expected[destination] = expectedLifecycleMount{source: source, options: volumeOptions[destination]}
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRegistry && strings.TrimSpace(m.policy.RegistryStorageRoot) != "" {
+		expected = map[string]expectedLifecycleMount{
+			"/etc/gordon/role.toml":    {source: configSource, readOnly: true},
+			"/var/lib/gordon/registry": {source: filepath.Clean(m.policy.RegistryStorageRoot)},
+		}
+	}
+	if command.TargetComponentRole == domain.ComponentRoleRuntime {
+		socketSource, mounted := existingLifecycleMountSource(container.VolumeMounts, "/run/gordon/runtime.sock")
+		clean := filepath.Clean(strings.TrimSpace(socketSource))
+		if !mounted || !filepath.IsAbs(clean) || clean == string(filepath.Separator) {
+			return nil, fmt.Errorf("invalid existing runtime socket mount")
+		}
+		expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: clean, readOnly: true}
+	}
+	m.addExpectedMigrationMounts(command, expected)
+	return expected, nil
+}
+
+func existingLifecycleMountSource(mounts []domain.ContainerVolumeMount, destination string) (string, bool) {
+	var source string
+	for _, mount := range mounts {
+		if mount.Destination != destination {
+			continue
+		}
+		if source != "" || mount.Type != "bind" || strings.TrimSpace(mount.Source) == "" {
+			return "", false
+		}
+		source = mount.Source
+	}
+	return source, source != ""
 }
 
 type expectedLifecycleMount struct {
@@ -1204,8 +1260,15 @@ func isManagedLifecycleComponent(container *domain.Container, command domain.Run
 	if container == nil || container.Labels == nil || container.Labels[domain.LabelComponent] != "true" || container.Labels[domain.LabelComponentRole] != string(command.TargetComponentRole) {
 		return false
 	}
-	if container.Labels[domain.LabelComponentGeneration] != strconv.FormatUint(command.Generation, 10) || container.Labels[domain.LabelComponentMigrationID] != strings.TrimPrefix(command.PolicyDecisionID, "migration:") ||
-		container.Labels[domain.LabelComponentDesiredStateHash] != command.DesiredStateHash {
+	if container.Labels[domain.LabelComponentGeneration] != strconv.FormatUint(command.Generation, 10) || container.Labels[domain.LabelComponentMigrationID] != strings.TrimPrefix(command.PolicyDecisionID, "migration:") {
+		return false
+	}
+	actualHash := container.Labels[domain.LabelComponentDesiredStateHash]
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		if actualHash == "" {
+			return false
+		}
+	} else if actualHash != command.DesiredStateHash {
 		return false
 	}
 	return container.Labels[domain.LabelComponentOwner] == "runtime" || container.Labels[domain.LabelComponentOwner] == "migration"

@@ -483,6 +483,41 @@ func TestRuntimeWorkerConcurrentDuplicateWaitRespectsContextCancellation(t *test
 	}
 }
 
+type recordingLifecycleManager struct {
+	command domain.RuntimeSelfUpdateCommand
+}
+
+func (m *recordingLifecycleManager) ApplyComponentLifecycle(_ context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	m.command = command
+	return nil
+}
+
+func TestRuntimeWorkerAcceptsMinimalHealthIdentity(t *testing.T) {
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
+	command := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("cmd-health"), TargetComponentID: "gordon-edge-fixture-g1",
+		TargetComponentRole: domain.ComponentRoleEdge, PolicyDecisionID: "migration:fixture",
+		LifecycleAction:  domain.RuntimeComponentLifecycleHealth,
+		LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity},
+	}
+	manager := &recordingLifecycleManager{}
+	worker := NewRuntimeWorker(&fakeRuntimeWorkerService{}).WithComponentLifecycleManager(manager)
+
+	result, err := worker.SelfUpdate(context.Background(), command)
+
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
+	assert.Equal(t, command, manager.command)
+
+	missing := command
+	missing.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
+	result, err = worker.SelfUpdate(context.Background(), missing)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RuntimeCommandStatusFailed, result.Status)
+	assert.Equal(t, command, manager.command, "invalid read identity must not reach lifecycle manager")
+}
+
 func TestRuntimeWorkerSelfUpdateDeniedWithoutMutation(t *testing.T) {
 	fake := &fakeRuntimeWorkerService{}
 	worker := NewRuntimeWorker(fake)

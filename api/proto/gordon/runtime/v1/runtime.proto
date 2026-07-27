@@ -114,9 +114,9 @@ message RuntimeSelfUpdateCommand {
   // prepared edge already uses. Runtime bounds and validates these names; raw
   // engine network IDs are never accepted by this RPC.
   repeated string edge_app_networks = 19;
-  // lifecycle_profile is the exact authenticated split-role process and
-  // rootless Podman mount contract. It is required for component lifecycle
-  // actions other than ensure_network.
+  // Mutation actions carry the exact split-role process and rootless Podman
+  // profile. Health and logs carry only fixed process identity; runtime
+  // authoritatively inspects the existing security and mount profile.
   RuntimeComponentLifecycleProfile lifecycle_profile = 20;
 }
 

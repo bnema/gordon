@@ -272,7 +272,7 @@ func TestRuntimeComponentLifecycleRejectsCrossRoleGenerationVolume(t *testing.T)
 	require.ErrorIs(t, applyTestComponentLifecycle(manager, t.Context(), command), ErrRuntimePolicyDenied)
 }
 
-func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHash(t *testing.T) {
+func TestRuntimeComponentLifecycleReadRejectsExistingContainerWithoutDesiredIdentity(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "edge.toml")
@@ -284,7 +284,7 @@ func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHa
 		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
 	}
-	container.Labels[domain.LabelComponentDesiredStateHash] = "different"
+	delete(container.Labels, domain.LabelComponentDesiredStateHash)
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()

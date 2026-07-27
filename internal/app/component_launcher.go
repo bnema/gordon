@@ -490,6 +490,18 @@ func newComponentLifecycleCommand(component ComponentLaunchComponent, action dom
 	if generation == 0 || strings.TrimSpace(migrationID) == "" {
 		return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle identity is required")
 	}
+	identity := domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: requestedAt.UTC()}
+	if domain.IsRuntimeComponentLifecycleReadAction(action) {
+		processIdentity, ok := domain.FixedComponentProcessIdentity(component.Role)
+		if !ok {
+			return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle identity is required")
+		}
+		return domain.RuntimeSelfUpdateCommand{
+			RuntimeCommandIdentity: identity, TargetComponentID: component.ComponentID, TargetComponentRole: component.Role,
+			PolicyDecisionID: "migration:" + migrationID, LifecycleAction: action,
+			LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: processIdentity},
+		}, nil
+	}
 	var profile domain.RuntimeComponentLifecycleProfile
 	if action != domain.RuntimeComponentLifecycleEnsureNetwork {
 		var ok bool
@@ -499,7 +511,7 @@ func newComponentLifecycleCommand(component ComponentLaunchComponent, action dom
 		}
 	}
 	return domain.RuntimeSelfUpdateCommand{
-		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: requestedAt.UTC()},
+		RuntimeCommandIdentity: identity,
 		TargetComponentID:      component.ComponentID, TargetComponentRole: component.Role, TargetVersion: component.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
 		LifecycleAction: action, LifecycleProfile: profile, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PortPublishes: append([]domain.ContainerPortPublish(nil), component.PortPublishes...), PreserveVolumes: true,
 	}, nil

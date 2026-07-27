@@ -20,19 +20,40 @@ func TestRuntimeSelfUpdateCommandCarriesLifecycleProfile(t *testing.T) {
 	assert.Equal(t, reflect.TypeFor[domain.RuntimeComponentLifecycleProfile](), field.Type)
 }
 
-func TestComponentLifecycleCommandValidationRejectsMissingProfile(t *testing.T) {
+func TestComponentLifecycleReadCommandCarriesOnlyFixedProcessIdentity(t *testing.T) {
 	component := ComponentLaunchComponent{
-		Role: domain.ComponentRoleControl, ComponentID: "gordon-control-fixture-g1",
+		Role: domain.ComponentRoleControl, ComponentID: "gordon-control-fixture-g1", Image: "example.invalid/gordon:v2",
+		InternalNetwork: "gordon-internal-fixture-g1", EnvironmentFile: "/private/control.env", ConfigFile: "/private/control.toml",
+		DesiredStateHash: "state-hash", PortPublishes: []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}},
 		Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"},
 	}
-	command, err := newComponentLifecycleCommand(component, domain.RuntimeComponentLifecycleHealth, "fixture", "health", time.Unix(1, 0).UTC())
-	require.NoError(t, err)
-	require.NoError(t, command.Validate())
-	command.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
-	require.ErrorIs(t, command.Validate(), domain.ErrInvalidRuntimeCommand)
+	for _, action := range []domain.RuntimeComponentLifecycleAction{domain.RuntimeComponentLifecycleHealth, domain.RuntimeComponentLifecycleLogs} {
+		command, err := newComponentLifecycleCommand(component, action, "fixture", string(action), time.Unix(1, 0).UTC())
+		require.NoError(t, err)
+		require.NoError(t, command.Validate())
+		expectedIdentity, ok := domain.FixedComponentProcessIdentity(component.Role)
+		require.True(t, ok)
+		assert.Equal(t, expectedIdentity, command.LifecycleProfile.ProcessIdentity)
+		assert.Empty(t, command.LifecycleProfile.UsernsMode)
+		assert.Empty(t, command.LifecycleProfile.CapDrop)
+		assert.False(t, command.LifecycleProfile.NoNewPrivileges)
+		assert.Empty(t, command.LifecycleProfile.GenerationVolumeOptions)
+		assert.Empty(t, command.TargetVersion)
+		assert.Empty(t, command.Policy)
+		assert.Empty(t, command.DesiredImage)
+		assert.Empty(t, command.DesiredStateHash)
+		assert.Empty(t, command.InternalNetwork)
+		assert.Empty(t, command.EnvironmentFile)
+		assert.Empty(t, command.ConfigFile)
+		assert.Empty(t, command.PortPublishes)
+		assert.False(t, command.PreserveVolumes)
+
+		command.LifecycleProfile.ProcessIdentity = domain.ComponentProcessIdentity{}
+		require.ErrorIs(t, command.Validate(), domain.ErrInvalidRuntimeCommand)
+	}
 }
 
-func TestComponentLifecycleCommandUsesExactFixedRoleProfileForEveryAction(t *testing.T) {
+func TestComponentLifecycleMutationCommandUsesExactFixedRoleProfile(t *testing.T) {
 	tests := []struct {
 		name   string
 		role   domain.ComponentRole
@@ -41,8 +62,6 @@ func TestComponentLifecycleCommandUsesExactFixedRoleProfileForEveryAction(t *tes
 		{name: "replace", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleReplace},
 		{name: "start", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleStart},
 		{name: "stop", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleStop},
-		{name: "health", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleHealth},
-		{name: "logs", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleLogs},
 		{name: "connect", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleConnect},
 		{name: "remove", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleRemove},
 		{name: "transfer", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleTransferChannel},

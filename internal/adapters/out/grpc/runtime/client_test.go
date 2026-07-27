@@ -226,6 +226,37 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	require.NoError(t, client.AcknowledgeRouteDrain(context.Background(), domain.RouteDrainAck{RouteDrainState: domain.RouteDrainState{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: testRouteDrainKey, AcknowledgedAt: time.Unix(1, 0).UTC()}, Status: domain.RouteDrainStatusAcknowledged}))
 }
 
+func TestDomainSelfUpdateSerializesOnlyMinimalReadIdentity(t *testing.T) {
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	require.True(t, ok)
+	command := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testIdentity("cmd-logs"), TargetComponentID: "gordon-control-fixture-g1",
+		TargetComponentRole: domain.ComponentRoleControl, PolicyDecisionID: "migration:fixture",
+		LifecycleAction:  domain.RuntimeComponentLifecycleLogs,
+		LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity},
+	}
+
+	serialized := domainSelfUpdate(command)
+
+	require.NotNil(t, serialized.LifecycleProfile)
+	assert.Equal(t, int64(identity.UID), serialized.LifecycleProfile.Uid)
+	assert.Equal(t, int64(identity.GID), serialized.LifecycleProfile.Gid)
+	assert.Equal(t, identity.User, serialized.LifecycleProfile.User)
+	assert.Empty(t, serialized.TargetVersion)
+	assert.Empty(t, serialized.Policy)
+	assert.Empty(t, serialized.DesiredImage)
+	assert.Empty(t, serialized.DesiredStateHash)
+	assert.Empty(t, serialized.InternalNetwork)
+	assert.Empty(t, serialized.EnvironmentFile)
+	assert.Empty(t, serialized.ConfigFile)
+	assert.Empty(t, serialized.PortPublishes)
+	assert.False(t, serialized.PreserveVolumes)
+	assert.Empty(t, serialized.LifecycleProfile.UsernsMode)
+	assert.Empty(t, serialized.LifecycleProfile.CapDrop)
+	assert.False(t, serialized.LifecycleProfile.NoNewPrivileges)
+	assert.Empty(t, serialized.LifecycleProfile.GenerationVolumeOptions)
+}
+
 func TestClientPreservesContextCancellation(t *testing.T) {
 	conn := newRuntimeTestConn(t, inruntime.NewServer(&fakeRuntimeWorker{}, "runtime-1"))
 	client := NewClient(conn)

@@ -137,6 +137,28 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	assert.True(t, worker.self.PreserveVolumes)
 }
 
+func TestServerRuntimeSelfUpdateAcceptsMinimalReadIdentity(t *testing.T) {
+	worker := &fakeRuntimeWorker{}
+	server := NewServer(worker, "runtime-1")
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
+
+	_, err := server.RuntimeSelfUpdate(context.Background(), &runtimev1.RuntimeSelfUpdateRequest{Command: &runtimev1.RuntimeSelfUpdateCommand{
+		Identity: protoTestIdentity("cmd-health", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1",
+		TargetComponentRole: string(domain.ComponentRoleEdge), PolicyDecisionId: "migration:fixture",
+		LifecycleAction:  string(domain.RuntimeComponentLifecycleHealth),
+		LifecycleProfile: &runtimev1.RuntimeComponentLifecycleProfile{Uid: int64(identity.UID), Gid: int64(identity.GID), User: identity.User},
+	}})
+
+	require.NoError(t, err)
+	assert.Equal(t, identity, worker.self.LifecycleProfile.ProcessIdentity)
+	assert.Empty(t, worker.self.TargetVersion)
+	assert.Empty(t, worker.self.DesiredImage)
+	assert.Empty(t, worker.self.ConfigFile)
+	assert.Empty(t, worker.self.InternalNetwork)
+	assert.False(t, worker.self.PreserveVolumes)
+}
+
 func TestServerRuntimeSelfUpdatePreservesValidatedEdgeAppNetworks(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
 	server := NewServer(worker, "runtime-1")

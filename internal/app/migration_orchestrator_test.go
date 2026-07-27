@@ -18,7 +18,11 @@ type profileEnforcingHandoffRuntime struct {
 
 func (r *profileEnforcingHandoffRuntime) SelfUpdateRuntime(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
 	r.commands = append(r.commands, command)
-	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !command.LifecycleProfile.IsFixedFor(command.TargetComponentRole) {
+	validProfile := command.LifecycleProfile.IsFixedFor(command.TargetComponentRole)
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		validProfile = command.LifecycleProfile.IsFixedIdentityOnlyFor(command.TargetComponentRole)
+	}
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !validProfile {
 		return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusDenied, Error: &domain.RuntimeCommandError{Message: "component lifecycle process identity is not allowed"}}, nil
 	}
 	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
@@ -39,7 +43,7 @@ func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *tes
 	require.NoFileExists(t, store.Path())
 }
 
-func TestMigrationOrchestratorPostHandoffHealthUsesExactRoleProfiles(t *testing.T) {
+func TestMigrationOrchestratorPostHandoffHealthUsesExactRoleIdentities(t *testing.T) {
 	plan, err := NewComponentLaunchPlan(MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"})
 	require.NoError(t, err)
 	runtimeComponent, ok := componentForRole(plan, domain.ComponentRoleRuntime)
@@ -63,11 +67,12 @@ func TestMigrationOrchestratorPostHandoffHealthUsesExactRoleProfiles(t *testing.
 	require.Len(t, replacement.commands, 4)
 	for index, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		command := replacement.commands[index]
-		expected, profileOK := domain.FixedRuntimeComponentLifecycleProfile(role)
-		require.True(t, profileOK)
+		expected, identityOK := domain.FixedComponentProcessIdentity(role)
+		require.True(t, identityOK)
 		assert.Equal(t, domain.RuntimeComponentLifecycleHealth, command.LifecycleAction)
 		assert.Equal(t, role, command.TargetComponentRole)
-		assert.Equal(t, expected, command.LifecycleProfile)
+		assert.Equal(t, domain.RuntimeComponentLifecycleProfile{ProcessIdentity: expected}, command.LifecycleProfile)
+		assert.True(t, command.HasOnlyReadLifecycleIdentity())
 	}
 }
 

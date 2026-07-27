@@ -19,8 +19,6 @@ func TestRuntimePolicyRequiresExactProfileForEveryComponentLifecycleAction(t *te
 		{name: "replace", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleReplace},
 		{name: "start", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleStart},
 		{name: "stop", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleStop},
-		{name: "health", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleHealth},
-		{name: "logs", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleLogs},
 		{name: "connect", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleConnect},
 		{name: "remove", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleRemove},
 		{name: "transfer", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleTransferChannel},
@@ -40,7 +38,7 @@ func TestRuntimePolicyRequiresExactProfileForEveryComponentLifecycleAction(t *te
 				LifecycleAction:        test.action,
 				LifecycleProfile:       profile,
 			}
-			require.NoError(t, policy.CheckSelfUpdate(command), "read-only actions must not require mutation fields")
+			require.NoError(t, policy.CheckSelfUpdate(command))
 
 			missing := command
 			missing.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
@@ -63,6 +61,39 @@ func TestRuntimePolicyRequiresExactProfileForEveryComponentLifecycleAction(t *te
 				})
 			}
 		})
+	}
+}
+
+func TestRuntimePolicyReadActionsRequireIdentityOnlyProfile(t *testing.T) {
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce}
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	require.True(t, ok)
+	base := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("read-profile"), TargetComponentID: "gordon-control-fixture-g1",
+		TargetComponentRole: domain.ComponentRoleControl, PolicyDecisionID: "migration:fixture",
+		LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity},
+	}
+	for _, action := range []domain.RuntimeComponentLifecycleAction{domain.RuntimeComponentLifecycleHealth, domain.RuntimeComponentLifecycleLogs} {
+		command := base
+		command.LifecycleAction = action
+		require.NoError(t, command.Validate())
+		require.NoError(t, policy.CheckSelfUpdate(command))
+
+		missing := command
+		missing.LifecycleProfile.ProcessIdentity = domain.ComponentProcessIdentity{}
+		require.ErrorIs(t, policy.CheckSelfUpdate(missing), ErrRuntimePolicyDenied)
+
+		wrong := command
+		wrong.LifecycleProfile.ProcessIdentity.UID++
+		require.ErrorIs(t, policy.CheckSelfUpdate(wrong), ErrRuntimePolicyDenied)
+
+		mutationProfile := command
+		mutationProfile.LifecycleProfile.UsernsMode = "keep-id"
+		require.ErrorIs(t, policy.CheckSelfUpdate(mutationProfile), ErrRuntimePolicyDenied)
+
+		mutationField := command
+		mutationField.DesiredImage = "example.invalid/forged:latest"
+		require.ErrorIs(t, policy.CheckSelfUpdate(mutationField), ErrRuntimePolicyDenied)
 	}
 }
 

@@ -583,9 +583,32 @@ func protoStandaloneServiceState(service *runtimev1.RuntimeStandaloneServiceStat
 
 func domainSelfUpdate(command domain.RuntimeSelfUpdateCommand) *runtimev1.RuntimeSelfUpdateCommand {
 	profile := command.LifecycleProfile
-	result := &runtimev1.RuntimeSelfUpdateCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID, TargetComponentRole: string(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: string(command.Policy), PolicyDecisionId: command.PolicyDecisionID, ApprovedBy: command.ApprovedBy, LifecycleAction: string(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentId: command.OldServingComponentID, PreserveVolumes: command.PreserveVolumes,
-		LifecycleProfile: &runtimev1.RuntimeComponentLifecycleProfile{Uid: int64(profile.ProcessIdentity.UID), Gid: int64(profile.ProcessIdentity.GID), User: profile.ProcessIdentity.User, UsernsMode: profile.UsernsMode, CapDrop: append([]string(nil), profile.CapDrop...), NoNewPrivileges: profile.NoNewPrivileges, GenerationVolumeOptions: append([]string(nil), profile.GenerationVolumeOptions...)},
+	result := &runtimev1.RuntimeSelfUpdateCommand{
+		Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID,
+		TargetComponentRole: string(command.TargetComponentRole), PolicyDecisionId: command.PolicyDecisionID,
+		LifecycleAction: string(command.LifecycleAction),
+		LifecycleProfile: &runtimev1.RuntimeComponentLifecycleProfile{
+			Uid: int64(profile.ProcessIdentity.UID), Gid: int64(profile.ProcessIdentity.GID), User: profile.ProcessIdentity.User,
+		},
 	}
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		return result
+	}
+	result.CurrentVersion = command.CurrentVersion
+	result.TargetVersion = command.TargetVersion
+	result.Policy = string(command.Policy)
+	result.ApprovedBy = command.ApprovedBy
+	result.DesiredImage = command.DesiredImage
+	result.DesiredStateHash = command.DesiredStateHash
+	result.InternalNetwork = command.InternalNetwork
+	result.EnvironmentFile = command.EnvironmentFile
+	result.ConfigFile = command.ConfigFile
+	result.OldServingComponentId = command.OldServingComponentID
+	result.PreserveVolumes = command.PreserveVolumes
+	result.LifecycleProfile.UsernsMode = profile.UsernsMode
+	result.LifecycleProfile.CapDrop = append([]string(nil), profile.CapDrop...)
+	result.LifecycleProfile.NoNewPrivileges = profile.NoNewPrivileges
+	result.LifecycleProfile.GenerationVolumeOptions = append([]string(nil), profile.GenerationVolumeOptions...)
 	for _, port := range command.PortPublishes {
 		if !validProtoComponentPort(port) {
 			continue

@@ -197,9 +197,10 @@ const (
 	MaxEdgeAppNetworkNameLength = 255
 )
 
-// RuntimeComponentLifecycleProfile is the exact process and rootless Podman
-// mount contract for one split Gordon role. Authenticated lifecycle commands
-// carry this profile so mutation and read-only actions cannot drift apart.
+// RuntimeComponentLifecycleProfile carries the exact process and rootless
+// Podman mount contract for one split Gordon role. Mutation commands carry the
+// full profile; health and logs carry only ProcessIdentity while runtime
+// authoritatively inspects the existing security and mount profile.
 type RuntimeComponentLifecycleProfile struct {
 	ProcessIdentity         ComponentProcessIdentity
 	UsernsMode              string
@@ -236,6 +237,20 @@ func (p RuntimeComponentLifecycleProfile) IsFixedFor(role ComponentRole) bool {
 	return ok && p.ProcessIdentity == expected.ProcessIdentity && p.UsernsMode == expected.UsernsMode &&
 		slices.Equal(p.CapDrop, expected.CapDrop) && p.NoNewPrivileges == expected.NoNewPrivileges &&
 		slices.Equal(p.GenerationVolumeOptions, expected.GenerationVolumeOptions)
+}
+
+// IsFixedIdentityOnlyFor reports whether a read-only command carries exactly
+// the immutable process identity for role and no container-creation profile.
+func (p RuntimeComponentLifecycleProfile) IsFixedIdentityOnlyFor(role ComponentRole) bool {
+	expected, ok := FixedComponentProcessIdentity(role)
+	return ok && p.ProcessIdentity == expected && p.UsernsMode == "" && len(p.CapDrop) == 0 &&
+		!p.NoNewPrivileges && len(p.GenerationVolumeOptions) == 0
+}
+
+// IsRuntimeComponentLifecycleReadAction identifies actions that authenticate
+// and inspect an existing component without carrying desired-state mutation.
+func IsRuntimeComponentLifecycleReadAction(action RuntimeComponentLifecycleAction) bool {
+	return action == RuntimeComponentLifecycleHealth || action == RuntimeComponentLifecycleLogs
 }
 
 // RuntimeSelfUpdateCommand asks a managed Gordon runtime component to update itself under policy.
@@ -283,16 +298,27 @@ func (c RuntimeSelfUpdateCommand) Validate() error {
 	if err := c.RuntimeCommandIdentity.Validate(); err != nil {
 		return err
 	}
+	if err := c.validateSelfUpdateTarget(); err != nil {
+		return err
+	}
+	if err := c.validateLifecycleProfile(); err != nil {
+		return err
+	}
+	return validateEdgeAppNetworks(c)
+}
+
+func (c RuntimeSelfUpdateCommand) validateSelfUpdateTarget() error {
 	if strings.TrimSpace(c.TargetComponentID) == "" {
 		return fmt.Errorf("%w: target component id is required", ErrInvalidRuntimeCommand)
 	}
 	if !IsKnownComponentRole(c.TargetComponentRole) {
 		return fmt.Errorf("%w: self-update target component role is invalid", ErrInvalidRuntimeCommand)
 	}
-	if strings.TrimSpace(c.TargetVersion) == "" {
+	readOnly := IsRuntimeComponentLifecycleReadAction(c.LifecycleAction)
+	if !readOnly && strings.TrimSpace(c.TargetVersion) == "" {
 		return fmt.Errorf("%w: target version is required", ErrInvalidRuntimeCommand)
 	}
-	if !isKnownRuntimeSelfUpdatePolicy(c.Policy) {
+	if !readOnly && !isKnownRuntimeSelfUpdatePolicy(c.Policy) {
 		return fmt.Errorf("%w: self-update policy is invalid", ErrInvalidRuntimeCommand)
 	}
 	if strings.TrimSpace(c.PolicyDecisionID) == "" {
@@ -301,13 +327,29 @@ func (c RuntimeSelfUpdateCommand) Validate() error {
 	if c.LifecycleAction != "" && !isKnownRuntimeComponentLifecycleAction(c.LifecycleAction) {
 		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
 	}
+	return nil
+}
+
+func (c RuntimeSelfUpdateCommand) validateLifecycleProfile() error {
+	if IsRuntimeComponentLifecycleReadAction(c.LifecycleAction) {
+		if !c.LifecycleProfile.IsFixedIdentityOnlyFor(c.TargetComponentRole) || !c.HasOnlyReadLifecycleIdentity() {
+			return fmt.Errorf("%w: component lifecycle read identity is invalid", ErrInvalidRuntimeCommand)
+		}
+		return nil
+	}
 	if c.LifecycleAction != "" && c.LifecycleAction != RuntimeComponentLifecycleEnsureNetwork && !c.LifecycleProfile.IsFixedFor(c.TargetComponentRole) {
 		return fmt.Errorf("%w: component lifecycle profile is invalid", ErrInvalidRuntimeCommand)
 	}
-	if err := validateEdgeAppNetworks(c); err != nil {
-		return err
-	}
 	return nil
+}
+
+// HasOnlyReadLifecycleIdentity reports whether no desired-state mutation field
+// is present on a health or logs command.
+func (c RuntimeSelfUpdateCommand) HasOnlyReadLifecycleIdentity() bool {
+	return c.CurrentVersion == "" && c.TargetVersion == "" && c.Policy == "" && c.ApprovedBy == "" &&
+		c.DesiredImage == "" && c.DesiredStateHash == "" && c.InternalNetwork == "" && c.EnvironmentFile == "" &&
+		c.ConfigFile == "" && len(c.PortPublishes) == 0 && c.OldServingComponentID == "" &&
+		len(c.FinalPortPublishes) == 0 && len(c.EdgeAppNetworks) == 0 && !c.PreserveVolumes
 }
 
 func validateEdgeAppNetworks(command RuntimeSelfUpdateCommand) error {

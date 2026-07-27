@@ -55,7 +55,26 @@ func TestApprovedPreparedPortPublishesPermitsOnlyOnePrivateEdgeProbe(t *testing.
 }
 
 func applyTestComponentLifecycle(manager RuntimeComponentLifecycleManager, ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork {
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		identity, ok := domain.FixedComponentProcessIdentity(command.TargetComponentRole)
+		if ok {
+			command.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity}
+		}
+		command.CurrentVersion = ""
+		command.TargetVersion = ""
+		command.Policy = ""
+		command.ApprovedBy = ""
+		command.DesiredImage = ""
+		command.DesiredStateHash = ""
+		command.InternalNetwork = ""
+		command.EnvironmentFile = ""
+		command.ConfigFile = ""
+		command.PortPublishes = nil
+		command.OldServingComponentID = ""
+		command.FinalPortPublishes = nil
+		command.EdgeAppNetworks = nil
+		command.PreserveVolumes = false
+	} else if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork {
 		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(command.TargetComponentRole)
 		if ok {
 			command.LifecycleProfile = profile
@@ -260,6 +279,72 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 		container.VolumeMounts = append(container.VolumeMounts, actual)
 	}
 	return container
+}
+
+func TestRuntimeComponentLifecycleReadUsesAuthoritativeExistingProfile(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	configPath := filepath.Join(root, "config", "fixture", "1", "edge.toml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
+	command := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("minimal-health"), TargetComponentID: "gordon-edge-fixture-g1",
+		TargetComponentRole: domain.ComponentRoleEdge, PolicyDecisionID: "migration:fixture",
+		LifecycleAction:  domain.RuntimeComponentLifecycleHealth,
+		LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity},
+	}
+	valid := &domain.Container{
+		ID: "existing", Name: command.TargetComponentID, User: identity.User,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		Labels: map[string]string{
+			domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleEdge),
+			domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture",
+			domain.LabelComponentOwner: "runtime", domain.LabelComponentDesiredStateHash: "authoritative-hash",
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*domain.Container)
+		valid  bool
+	}{
+		{name: "exact profile", valid: true},
+		{name: "wrong security", mutate: func(container *domain.Container) { container.NoNewPrivileges = false }},
+		{name: "extra mount", mutate: func(container *domain.Container) {
+			container.VolumeMounts = append(container.VolumeMounts, domain.ContainerVolumeMount{Type: "bind", Source: "/tmp/foreign", Destination: "/tmp/foreign"})
+		}},
+		{name: "wrong role", mutate: func(container *domain.Container) {
+			container.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleControl)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inspected := *valid
+			inspected.Labels = map[string]string{}
+			for key, value := range valid.Labels {
+				inspected.Labels[key] = value
+			}
+			inspected.VolumeMounts = append([]domain.ContainerVolumeMount(nil), valid.VolumeMounts...)
+			if test.mutate != nil {
+				test.mutate(&inspected)
+			}
+			runtime := outmocks.NewMockContainerRuntime(t)
+			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: inspected.ID, Name: inspected.Name}}, nil).Once()
+			runtime.EXPECT().InspectContainer(mock.Anything, inspected.ID).Return(&inspected, nil).Once()
+			if test.valid {
+				runtime.EXPECT().IsContainerRunning(mock.Anything, inspected.ID).Return(true, nil).Once()
+				runtime.EXPECT().GetContainerHealthStatus(mock.Anything, inspected.ID).Return("healthy", true, nil).Once()
+			}
+			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: root})
+			err := manager.ApplyComponentLifecycle(context.Background(), command)
+			if test.valid {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+			}
+		})
+	}
 }
 
 func TestRuntimeComponentLifecycleUsesAuthoritativeInspectForSparseHealthyRetry(t *testing.T) {

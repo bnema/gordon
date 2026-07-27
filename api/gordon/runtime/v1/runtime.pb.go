@@ -477,9 +477,9 @@ type RuntimeSelfUpdateCommand struct {
 	// prepared edge already uses. Runtime bounds and validates these names; raw
 	// engine network IDs are never accepted by this RPC.
 	EdgeAppNetworks []string `protobuf:"bytes,19,rep,name=edge_app_networks,json=edgeAppNetworks,proto3" json:"edge_app_networks,omitempty"`
-	// lifecycle_profile is the exact authenticated split-role process and
-	// rootless Podman mount contract. It is required for component lifecycle
-	// actions other than ensure_network.
+	// Mutation actions carry the exact split-role process and rootless Podman
+	// profile. Health and logs carry only fixed process identity; runtime
+	// authoritatively inspects the existing security and mount profile.
 	LifecycleProfile *RuntimeComponentLifecycleProfile `protobuf:"bytes,20,opt,name=lifecycle_profile,json=lifecycleProfile,proto3" json:"lifecycle_profile,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

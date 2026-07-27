@@ -123,18 +123,7 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 	// control intents for Gordon-owned component names. They are executed only
 	// by gordon-runtime and cannot carry raw engine flags or a socket path.
 	if command.LifecycleAction != "" {
-		if !validComponentLifecycleTarget(command) {
-			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
-		}
-		if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
-			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
-		}
-		if strings.TrimSpace(command.DesiredImage) != "" {
-			if err := p.checkImage(command.DesiredImage, command.RuntimeCommandIdentity, ""); err != nil {
-				return err
-			}
-		}
-		return nil
+		return p.checkComponentLifecycle(command)
 	}
 	if strings.TrimSpace(p.RuntimeComponentID) != "" && command.TargetComponentID != p.RuntimeComponentID {
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target component is not authorized")
@@ -143,6 +132,25 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target role is not authorized")
 	}
 	return nil
+}
+
+func (p RuntimePolicy) checkComponentLifecycle(command domain.RuntimeSelfUpdateCommand) error {
+	if !validComponentLifecycleTarget(command) {
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
+	}
+	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+		if !command.LifecycleProfile.IsFixedIdentityOnlyFor(command.TargetComponentRole) || !command.HasOnlyReadLifecycleIdentity() {
+			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle read identity is not allowed")
+		}
+		return nil
+	}
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
+	}
+	if strings.TrimSpace(command.DesiredImage) == "" {
+		return nil
+	}
+	return p.checkImage(command.DesiredImage, command.RuntimeCommandIdentity, "")
 }
 
 func validRuntimeComponentLifecycleProfile(role domain.ComponentRole, actual domain.RuntimeComponentLifecycleProfile) bool {
