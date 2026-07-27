@@ -20,6 +20,64 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+type alternateRuntimeEndpoint struct {
+	name  string
+	value string
+}
+
+func alternateRuntimeBootstrapEndpoints(migrationID string) []alternateRuntimeEndpoint {
+	canonicalPath := "/var/lib/gordon/migration/" + migrationID + "/runtime-control.sock"
+	return []alternateRuntimeEndpoint{
+		{name: "leading whitespace", value: " unix://" + canonicalPath},
+		{name: "trailing whitespace", value: "unix://" + canonicalPath + " "},
+		{name: "single scheme slash", value: "unix:" + canonicalPath},
+		{name: "extra scheme slash", value: "unix:///" + canonicalPath},
+		{name: "host authority", value: "unix://localhost" + canonicalPath},
+		{name: "userinfo authority", value: "unix://user@" + canonicalPath},
+		{name: "query", value: "unix://" + canonicalPath + "?mode=private"},
+		{name: "empty query", value: "unix://" + canonicalPath + "?"},
+		{name: "fragment", value: "unix://" + canonicalPath + "#socket"},
+		{name: "empty fragment", value: "unix://" + canonicalPath + "#"},
+		{name: "noncanonical scheme", value: "UNIX://" + canonicalPath},
+		{name: "duplicate separator", value: "unix:///var/lib/gordon//migration/" + migrationID + "/runtime-control.sock"},
+		{name: "dot segment", value: "unix:///var/lib/gordon/./migration/" + migrationID + "/runtime-control.sock"},
+		{name: "encoded path byte", value: "unix://" + canonicalPath[:len(canonicalPath)-1] + "%6b"},
+		{name: "encoded separator", value: "unix:///var/lib/gordon/migration/" + migrationID + "%2Fruntime-control.sock"},
+		{name: "encoded dot", value: "unix:///var/lib/gordon/migration/" + migrationID + "/%2e/runtime-control.sock"},
+		{name: "encoded dot traversal", value: "unix:///var/lib/gordon/migration/other/%2e%2e/" + migrationID + "/runtime-control.sock"},
+	}
+}
+
+func TestRuntimeBootstrapSocketPathAcceptsOnlyCanonicalUnixEndpoint(t *testing.T) {
+	canonical := "unix:///var/lib/gordon/migration/fixture/runtime-control.sock"
+	path, ok := runtimeBootstrapSocketPath(canonical, componentDataDirectory)
+	require.True(t, ok)
+	assert.Equal(t, "/var/lib/gordon/migration/fixture/runtime-control.sock", path)
+
+	for _, endpoint := range alternateRuntimeBootstrapEndpoints("fixture") {
+		t.Run(endpoint.name, func(t *testing.T) {
+			_, ok := runtimeBootstrapSocketPath(endpoint.value, componentDataDirectory)
+			assert.False(t, ok, "%q must not be accepted as an alternate spelling", endpoint.value)
+		})
+	}
+}
+
+func TestPostHandoffRecoveryRejectsAlternateRuntimeEndpointSpellings(t *testing.T) {
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", BootstrapRuntimeEndpoint: "unix:///var/lib/gordon/migration/fixture/runtime-control.sock"}
+	dataDir := t.TempDir()
+	endpoint, err := validatePostHandoffRuntimeEndpoint(checkpoint, dataDir)
+	require.NoError(t, err)
+	assert.Equal(t, "unix://"+filepath.Join(dataDir, "migration", "fixture", bootstrapRuntimeSocketName), endpoint)
+
+	for _, alternate := range alternateRuntimeBootstrapEndpoints(checkpoint.MigrationID) {
+		t.Run(alternate.name, func(t *testing.T) {
+			checkpoint.BootstrapRuntimeEndpoint = alternate.value
+			_, err := validatePostHandoffRuntimeEndpoint(checkpoint, dataDir)
+			assert.Error(t, err, "recovery must reject %q", alternate.value)
+		})
+	}
+}
+
 func TestMigrationBootstrapTransportSeparatesHostDialAndComponentEndpoints(t *testing.T) {
 	hostDataDir := t.TempDir()
 	checkpoint := MigrationCheckpoint{MigrationID: "fixture", TargetImage: "example.invalid/gordon:fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared}

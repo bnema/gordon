@@ -22,6 +22,39 @@ func testMigrationCheckpoint() MigrationCheckpoint {
 	return MigrationCheckpoint{MigrationID: "migration-1", StartedAt: time.Now().UTC(), Phase: MigrationPhasePlanned, ComponentGeneration: 1, EnvFileReferences: []string{"/redacted/env"}}
 }
 
+func TestMigrationCheckpointLoadAndSaveRejectAlternateRuntimeEndpointSpellings(t *testing.T) {
+	canonical := "unix:///var/lib/gordon/migration/migration-1/runtime-control.sock"
+	checkpoint := testMigrationCheckpoint()
+	checkpoint.BootstrapRuntimeEndpoint = canonical
+
+	canonicalStore, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+	require.NoError(t, err)
+	require.NoError(t, canonicalStore.Save(checkpoint))
+	loaded, err := canonicalStore.Load()
+	require.NoError(t, err)
+	assert.Equal(t, canonical, loaded.BootstrapRuntimeEndpoint)
+
+	for _, endpoint := range alternateRuntimeBootstrapEndpoints("migration-1") {
+		t.Run(endpoint.name, func(t *testing.T) {
+			alternate := checkpoint
+			alternate.BootstrapRuntimeEndpoint = endpoint.value
+
+			writeStore, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
+			require.NoError(t, err)
+			assert.Error(t, writeStore.Save(alternate), "checkpoint writes must reject %q", endpoint.value)
+
+			loadPath := filepath.Join(t.TempDir(), "checkpoint.json")
+			encoded, err := json.Marshal(alternate)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(loadPath, encoded, 0o600))
+			loadStore, err := NewMigrationCheckpointStore(loadPath)
+			require.NoError(t, err)
+			_, err = loadStore.Load()
+			assert.Error(t, err, "checkpoint loads must reject %q", endpoint.value)
+		})
+	}
+}
+
 func TestMigrationCheckpointDeleteRemovesDurableStateAndIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "checkpoint.json")
 	store, err := NewMigrationCheckpointStore(path)

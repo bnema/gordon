@@ -762,20 +762,39 @@ func validBootstrapRuntimeEndpoint(endpoint string, _ []MigrationPortBinding) bo
 	return ok && filepath.Base(path) == bootstrapRuntimeSocketName
 }
 
-// runtimeBootstrapSocketPath accepts only a clean, absolute unix:// endpoint
-// directly below <data>/migration/<migration-id>. It deliberately rejects TCP,
-// relative paths, traversal, and any alternate socket name.
+// runtimeBootstrapSocketPath accepts only the byte-for-byte canonical
+// unix:///absolute/clean/path spelling directly below
+// <data>/migration/<migration-id>. URL normalization is not accepted: an
+// authority, query, fragment, percent encoding, or alternate slash spelling
+// must never identify the recovery transport differently from its checkpoint.
 func runtimeBootstrapSocketPath(endpoint, dataDir string) (string, bool) {
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil || parsed.Scheme != "unix" || parsed.Host != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+	parsedPath, ok := canonicalUnixEndpointPath(endpoint)
+	if !ok {
 		return "", false
 	}
-	path := filepath.Clean(parsed.Path)
+	path := filepath.Clean(parsedPath)
 	root := filepath.Join(filepath.Clean(dataDir), "migration")
-	if !filepath.IsAbs(path) || path != parsed.Path || filepath.Base(path) != bootstrapRuntimeSocketName || filepath.Dir(filepath.Dir(path)) != root || !componentLabelValue.MatchString(filepath.Base(filepath.Dir(path))) {
+	if !filepath.IsAbs(path) || path != parsedPath || filepath.Base(path) != bootstrapRuntimeSocketName ||
+		filepath.Dir(filepath.Dir(path)) != root || !componentLabelValue.MatchString(filepath.Base(filepath.Dir(path))) {
 		return "", false
 	}
 	return path, true
+}
+
+func canonicalUnixEndpointPath(endpoint string) (string, bool) {
+	if endpoint == "" || endpoint != strings.TrimSpace(endpoint) {
+		return "", false
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || !canonicalUnixURL(parsed) || endpoint != "unix://"+parsed.Path {
+		return "", false
+	}
+	return parsed.Path, true
+}
+
+func canonicalUnixURL(parsed *url.URL) bool {
+	return parsed.Scheme == "unix" && parsed.Host == "" && parsed.User == nil && parsed.Opaque == "" &&
+		parsed.RawPath == "" && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && parsed.RawFragment == ""
 }
 
 // newRuntimeBootstrapEndpoints translates only the fixed component endpoint
