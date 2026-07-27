@@ -12,6 +12,10 @@ import (
 	"io"
 	"maps"
 	"math"
+	"mime"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -33,6 +37,7 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
@@ -735,10 +740,266 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	if resp.HostConfig != nil {
 		inspected.UsernsMode = string(resp.HostConfig.UsernsMode)
 		inspected.CapDrop = slices.Clone(resp.HostConfig.CapDrop)
+		if _, component := inspectedComponentIdentity(inspected); component {
+			inspected.CapDrop = normalizeInspectedCapDrop(resp.HostConfig.CapDrop, resp.HostConfig.CapAdd)
+		}
 		inspected.CapAdd = slices.Clone(resp.HostConfig.CapAdd)
 		inspected.NoNewPrivileges = hasNoNewPrivileges(resp.HostConfig.SecurityOpt)
 	}
+	if inspected.UsernsMode == "private" {
+		if normalized, ok := r.inspectNativePodmanKeepID(ctx, inspected); ok {
+			inspected.UsernsMode = normalized
+		}
+	}
 	return inspected, nil
+}
+
+func normalizeInspectedCapDrop(dropped, added []string) []string {
+	return normalizeInspectedCapDropAgainst(dropped, added, caps.GetAllCapabilities())
+}
+
+func normalizeInspectedCapDropAgainst(dropped, added, allCapabilities []string) []string {
+	if len(added) != 0 || len(dropped) != len(allCapabilities) {
+		return nil
+	}
+	expected := make(map[string]struct{}, len(allCapabilities))
+	for _, capability := range allCapabilities {
+		canonical, ok := canonicalCapability(capability)
+		if !ok {
+			return nil
+		}
+		expected[canonical] = struct{}{}
+	}
+	if len(expected) != len(allCapabilities) {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(dropped))
+	for _, capability := range dropped {
+		canonical, ok := canonicalCapability(capability)
+		if !ok {
+			return nil
+		}
+		if _, duplicate := seen[canonical]; duplicate {
+			return nil
+		}
+		if _, known := expected[canonical]; !known {
+			return nil
+		}
+		seen[canonical] = struct{}{}
+	}
+	return []string{"ALL"}
+}
+
+func canonicalCapability(capability string) (string, bool) {
+	if capability == "" || strings.TrimSpace(capability) != capability {
+		return "", false
+	}
+	canonical := strings.ToUpper(capability)
+	if !strings.HasPrefix(canonical, "CAP_") {
+		canonical = "CAP_" + canonical
+	}
+	return canonical, canonical != "CAP_ALL"
+}
+
+const (
+	nativePodmanInspectPrefix          = "/v4.0.0/libpod/containers/"
+	nativePodmanInspectSuffix          = "/json"
+	maxNativePodmanInspectBytes        = 1 << 20
+	maxNativePodmanIDMapEntries        = 64
+	maxLinuxIDExclusive         uint64 = 1 << 32
+)
+
+type nativePodmanInspect struct {
+	HostConfig struct {
+		IDMappings *nativePodmanIDMappings `json:"IDMappings"`
+	} `json:"HostConfig"`
+}
+
+type nativePodmanIDMappings struct {
+	UIDMap []nativePodmanIDMap `json:"UidMap"`
+	GIDMap []nativePodmanIDMap `json:"GidMap"`
+}
+
+type nativePodmanIDMap struct {
+	ContainerID uint64 `json:"ContainerID"`
+	HostID      uint64 `json:"HostID"`
+	Size        uint64 `json:"Size"`
+}
+
+func (r *Runtime) inspectNativePodmanKeepID(ctx context.Context, inspected *domain.Container) (string, bool) {
+	identity, ok := inspectedComponentIdentity(inspected)
+	if !ok || !canonicalContainerID(inspected.ID) || !localUnixDaemon(r.client.DaemonHost()) {
+		return "", false
+	}
+	native, ok := r.fetchNativePodmanInspect(ctx, inspected.ID)
+	if !ok || native.HostConfig.IDMappings == nil || !validNativeKeepIDMappings(*native.HostConfig.IDMappings, identity) {
+		return "", false
+	}
+	return fmt.Sprintf("keep-id:uid=%d,gid=%d", identity.UID, identity.GID), true
+}
+
+func (r *Runtime) fetchNativePodmanInspect(ctx context.Context, containerID string) (nativePodmanInspect, bool) {
+	endpoint := "http://localhost" + nativePodmanInspectPrefix + url.PathEscape(containerID) + nativePodmanInspectSuffix
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nativePodmanInspect{}, false
+	}
+	request.Header.Set("Accept", "application/json")
+
+	httpClient, transport := r.nativePodmanHTTPClient()
+	defer transport.CloseIdleConnections()
+	response, err := httpClient.Do(request)
+	if err != nil {
+		return nativePodmanInspect{}, false
+	}
+	defer response.Body.Close()
+	if !validNativePodmanResponse(response) {
+		return nativePodmanInspect{}, false
+	}
+	return decodeNativePodmanInspect(response.Body)
+}
+
+func (r *Runtime) nativePodmanHTTPClient() (*http.Client, *http.Transport) {
+	dial := r.client.Dialer()
+	httpClient := r.client.HTTPClient()
+	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	transport := &http.Transport{
+		DisableCompression: true,
+		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
+			return dial(dialCtx)
+		},
+	}
+	httpClient.Transport = transport
+	return httpClient, transport
+}
+
+func validNativePodmanResponse(response *http.Response) bool {
+	return response.StatusCode == http.StatusOK && response.ContentLength <= maxNativePodmanInspectBytes &&
+		response.Header.Get("Content-Encoding") == "" && jsonContentType(response.Header.Get("Content-Type"))
+}
+
+func decodeNativePodmanInspect(body io.Reader) (nativePodmanInspect, bool) {
+	limited := &io.LimitedReader{R: body, N: maxNativePodmanInspectBytes + 1}
+	var native nativePodmanInspect
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(&native); err != nil || limited.N == 0 {
+		return nativePodmanInspect{}, false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) || limited.N == 0 {
+		return nativePodmanInspect{}, false
+	}
+	return native, true
+}
+
+func inspectedComponentIdentity(inspected *domain.Container) (domain.ComponentProcessIdentity, bool) {
+	if inspected == nil || inspected.Labels[domain.LabelComponent] != "true" {
+		return domain.ComponentProcessIdentity{}, false
+	}
+	return domain.FixedComponentProcessIdentity(domain.ComponentRole(inspected.Labels[domain.LabelComponentRole]))
+}
+
+func canonicalContainerID(containerID string) bool {
+	if len(containerID) != 64 {
+		return false
+	}
+	for _, character := range containerID {
+		if character < '0' || character > '9' {
+			if character < 'a' || character > 'f' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func localUnixDaemon(daemonHost string) bool {
+	parsed, err := client.ParseHostURL(daemonHost)
+	return err == nil && parsed.Scheme == "unix" && parsed.Host != "" && path.IsAbs(parsed.Host) && path.Clean(parsed.Host) == parsed.Host
+}
+
+func jsonContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && mediaType == "application/json"
+}
+
+func validNativeKeepIDMappings(mappings nativePodmanIDMappings, identity domain.ComponentProcessIdentity) bool {
+	if identity.UID <= 0 || identity.GID <= 0 {
+		return false
+	}
+	uid, ok := validateNativeIDMap(mappings.UIDMap, uint64(identity.UID))
+	if !ok {
+		return false
+	}
+	gid, ok := validateNativeIDMap(mappings.GIDMap, uint64(identity.GID))
+	if !ok || len(uid) != len(gid) {
+		return false
+	}
+	for index := range uid {
+		if uid[index].ContainerID != gid[index].ContainerID || uid[index].Size != gid[index].Size {
+			return false
+		}
+	}
+	return true
+}
+
+func validateNativeIDMap(mappings []nativePodmanIDMap, roleID uint64) ([]nativePodmanIDMap, bool) {
+	if len(mappings) < 3 || len(mappings) > maxNativePodmanIDMapEntries {
+		return nil, false
+	}
+	sorted := slices.Clone(mappings)
+	slices.SortFunc(sorted, func(left, right nativePodmanIDMap) int {
+		return intCompare(left.ContainerID, right.ContainerID)
+	})
+	roleEntries := 0
+	var containerEnd uint64
+	for _, mapping := range sorted {
+		if !validNativeIDMapRange(mapping) || mapping.ContainerID != containerEnd {
+			return nil, false
+		}
+		containerEnd = mapping.ContainerID + mapping.Size
+		if mapping.ContainerID == roleID {
+			if mapping.Size != 1 || mapping.HostID == 0 {
+				return nil, false
+			}
+			roleEntries++
+		}
+	}
+	if roleEntries != 1 || containerEnd <= roleID+1 || nativeHostRangesOverlap(sorted) {
+		return nil, false
+	}
+	return sorted, true
+}
+
+func validNativeIDMapRange(mapping nativePodmanIDMap) bool {
+	return mapping.Size > 0 && mapping.ContainerID < maxLinuxIDExclusive && mapping.HostID < maxLinuxIDExclusive &&
+		mapping.Size <= maxLinuxIDExclusive-mapping.ContainerID && mapping.Size <= maxLinuxIDExclusive-mapping.HostID
+}
+
+func nativeHostRangesOverlap(mappings []nativePodmanIDMap) bool {
+	byHost := slices.Clone(mappings)
+	slices.SortFunc(byHost, func(left, right nativePodmanIDMap) int {
+		return intCompare(left.HostID, right.HostID)
+	})
+	for index := 1; index < len(byHost); index++ {
+		if byHost[index].HostID < byHost[index-1].HostID+byHost[index-1].Size {
+			return true
+		}
+	}
+	return false
+}
+
+func intCompare(left, right uint64) int {
+	switch {
+	case left < right:
+		return -1
+	case left > right:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func hasNoNewPrivileges(options []string) bool {

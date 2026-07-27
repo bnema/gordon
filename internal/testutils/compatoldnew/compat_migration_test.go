@@ -193,8 +193,10 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.assertAuthenticatedEdgeAttestation()
 
 	// A second prepare is an interruption/retry at the persisted checkpoint
-	// boundary. It must discover the same target generation instead of making a
-	// second set of component containers.
+	// boundary. It must discover and reuse the same target generation through
+	// the production adapter. On rootless Podman, compatible inspect projects
+	// keep-id as private and expands CapDrop=ALL, so this retry also gates the
+	// adapter's native ID-mapping and complete capability normalization.
 	fixture.runCLI("migrate", "prepare", "--json")
 	fixture.assertPreparedTargets()
 	// The runtime handler survives its caller's monolith termination. The

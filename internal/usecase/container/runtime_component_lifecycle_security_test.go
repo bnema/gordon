@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/oci/caps"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -190,6 +192,7 @@ func TestRuntimeComponentLifecycleExistingGenerationVolumeRequiresExactU(t *test
 }
 
 func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *testing.T) {
+	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "control.toml")
@@ -199,8 +202,9 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 	require.True(t, ok)
 
 	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	allCapabilities := caps.GetAllCapabilities()
 	inspectFixture := map[string]any{
-		"Id":      "existing",
+		"Id":      containerID,
 		"Name":    "/" + command.TargetComponentID,
 		"Image":   "sha256:fixture",
 		"Created": "2026-05-05T00:00:00Z",
@@ -211,8 +215,8 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 		},
 		"HostConfig": map[string]any{
 			"Binds":         []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U"},
-			"UsernsMode":    componentKeepIDMode(identity),
-			"CapDrop":       []string{"ALL"},
+			"UsernsMode":    "private",
+			"CapDrop":       allCapabilities,
 			"CapAdd":        []string{},
 			"SecurityOpt":   []string{"no-new-privileges:true"},
 			"RestartPolicy": map[string]any{},
@@ -230,21 +234,30 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 		switch request.URL.Path {
 		case "/v1.41/containers/json":
 			require.NoError(t, json.NewEncoder(w).Encode([]map[string]any{{
-				"Id": "existing", "Names": []string{"/" + command.TargetComponentID}, "Image": "gordon:fixture", "ImageID": "sha256:fixture", "State": "running", "Labels": componentLifecycleLabels(command),
+				"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "Image": "gordon:fixture", "ImageID": "sha256:fixture", "State": "running", "Labels": componentLifecycleLabels(command),
 			}}))
-		case "/v1.41/containers/existing/json":
+		case "/v1.41/containers/" + containerID + "/json":
 			require.NoError(t, json.NewEncoder(w).Encode(inspectFixture))
+		case "/v4.0.0/libpod/containers/" + containerID + "/json":
+			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"HostConfig": map[string]any{"IDMappings": map[string]any{
+				"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
+			}}}))
 		default:
 			http.NotFound(w, request)
 		}
 	}))
 	defer server.Close()
 
-	host := strings.TrimPrefix(server.URL, "http://")
-	apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
+	defer transport.CloseIdleConnections()
+	apiClient, err := client.NewClientWithOpts(client.WithHost("unix:///run/user/fixture/podman.sock"), client.WithVersion("1.41"), client.WithHTTPClient(&http.Client{Transport: transport}))
 	require.NoError(t, err)
-	inspected, err := dockeradapter.NewRuntimeWithClient(apiClient).InspectContainer(t.Context(), "existing")
+	inspected, err := dockeradapter.NewRuntimeWithClient(apiClient).InspectContainer(t.Context(), containerID)
 	require.NoError(t, err)
+	assert.Equal(t, componentKeepIDMode(identity), inspected.UsernsMode)
+	assert.Equal(t, []string{"ALL"}, inspected.CapDrop)
 	require.Len(t, inspected.VolumeMounts, 2)
 	assert.True(t, inspected.VolumeMounts[0].ReadOnly)
 	assert.Empty(t, inspected.VolumeMounts[0].Options, "ro is mount access metadata, not an engine-specific option")
@@ -255,6 +268,75 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 		t.Run(string(action), func(t *testing.T) {
 			actionCommand := managedSecretsLifecycleCommand(domain.ComponentRoleControl, action, configPath)
 			require.NoError(t, applyTestComponentLifecycle(manager, t.Context(), actionCommand))
+		})
+	}
+}
+
+func lifecycleNativeIDMap(roleID int) []map[string]any {
+	return []map[string]any{
+		{"ContainerID": 0, "HostID": 100000, "Size": roleID},
+		{"ContainerID": roleID, "HostID": 1000, "Size": 1},
+		{"ContainerID": roleID + 1, "HostID": 100000 + roleID, "Size": 65535 - roleID},
+	}
+}
+
+func TestRuntimeComponentLifecycleRejectsUnverifiedPrivatePodmanIdentity(t *testing.T) {
+	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "edge.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
+	allCapabilities := caps.GetAllCapabilities()
+
+	for name, test := range map[string]struct {
+		remote       bool
+		nativeStatus int
+		nativeBody   any
+	}{
+		"remote authority":   {remote: true},
+		"native unavailable": {nativeStatus: http.StatusNotFound, nativeBody: map[string]any{"message": "not found"}},
+		"Docker response":    {nativeStatus: http.StatusOK, nativeBody: map[string]any{"Id": containerID, "HostConfig": map[string]any{}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/v1.41/containers/json":
+					require.NoError(t, json.NewEncoder(w).Encode([]map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}}}))
+				case "/v1.41/containers/" + containerID + "/json":
+					require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+						"Id": containerID, "Name": "/" + command.TargetComponentID, "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
+						"Config":     map[string]any{"Image": "gordon:fixture", "User": identity.User, "Labels": componentLifecycleLabels(command)},
+						"HostConfig": map[string]any{"Binds": []string{configPath + ":/etc/gordon/role.toml:ro"}, "UsernsMode": "private", "CapDrop": allCapabilities, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+						"State":      map[string]any{"Status": "running"}, "Mounts": []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false}}, "NetworkSettings": map[string]any{"Ports": map[string]any{}},
+					}))
+				case "/v4.0.0/libpod/containers/" + containerID + "/json":
+					w.WriteHeader(test.nativeStatus)
+					require.NoError(t, json.NewEncoder(w).Encode(test.nativeBody))
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			defer server.Close()
+
+			var apiClient *client.Client
+			var err error
+			if test.remote {
+				host := strings.TrimPrefix(server.URL, "http://")
+				apiClient, err = client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			} else {
+				transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+					return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+				}}
+				defer transport.CloseIdleConnections()
+				apiClient, err = client.NewClientWithOpts(client.WithHost("unix:///run/user/fixture/podman.sock"), client.WithVersion("1.41"), client.WithHTTPClient(&http.Client{Transport: transport}))
+			}
+			require.NoError(t, err)
+			manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+			require.ErrorIs(t, applyTestComponentLifecycle(manager, t.Context(), command), ErrRuntimePolicyDenied)
 		})
 	}
 }
