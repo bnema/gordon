@@ -20,6 +20,7 @@ require (
 	github.com/google/go-containerregistry v0.21.7
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-runewidth v0.0.24
+	github.com/moby/sys/capability v0.4.0
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/rs/zerolog v1.35.1
