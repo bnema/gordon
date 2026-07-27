@@ -293,6 +293,11 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 		return fmt.Errorf("connect authenticated replacement runtime: %w", err)
 	}
 	if err := proveRuntimeHandoff(ctx, target, component); err != nil {
+		if closer, ok := target.(interface{ Close() error }); ok {
+			if closeErr := closer.Close(); closeErr != nil {
+				return fmt.Errorf("prove replacement runtime: %w (close failed: %v)", err, closeErr)
+			}
+		}
 		return fmt.Errorf("prove replacement runtime: %w", err)
 	}
 	l.mu.Lock()

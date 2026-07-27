@@ -232,6 +232,37 @@ func TestRuntimeBootstrapDescriptorRejectsUncleanAndSymlinkHostRoots(t *testing.
 	}
 }
 
+func TestRuntimeComponentLauncherClosesFailedPrivateHandoffClient(t *testing.T) {
+	oldRuntime := &handoffRuntime{}
+	failedTarget := &closingHandoffRuntime{handoffRuntime: handoffRuntime{probeErrors: []error{status.Error(codes.PermissionDenied, "invalid runtime")}}}
+	component := ComponentLaunchComponent{
+		Role:        domain.ComponentRoleRuntime,
+		ComponentID: "gordon-runtime-fixture-g1",
+		Labels: map[string]string{
+			domain.LabelComponentVersion:     "v2",
+			domain.LabelComponentGeneration:  "1",
+			domain.LabelComponentMigrationID: "fixture",
+		},
+	}
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(oldRuntime, func(context.Context, ComponentLaunchComponent) (RuntimeHandoffClient, error) {
+		return failedTarget, nil
+	})
+	require.NoError(t, err)
+
+	require.Error(t, launcher.TransferRuntimeCommandChannel(t.Context(), component))
+	assert.True(t, failedTarget.closed, "a rejected bootstrap connection must stop its gRPC goroutines")
+}
+
+type closingHandoffRuntime struct {
+	handoffRuntime
+	closed bool
+}
+
+func (r *closingHandoffRuntime) Close() error {
+	r.closed = true
+	return nil
+}
+
 func TestRuntimeHandoffDialerRejectsWrongRoleTokenAndMissingDescriptor(t *testing.T) {
 	dial := newRuntimeHandoffDialer(RuntimeControlConfig{Token: "fixture-token"})
 	component := ComponentLaunchComponent{Role: domain.ComponentRoleEdge}

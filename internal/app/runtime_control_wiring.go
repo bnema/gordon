@@ -3,17 +3,21 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
 	outruntime "github.com/bnema/gordon/internal/adapters/out/grpc/runtime"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -139,7 +143,7 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 		if component.Role != domain.ComponentRoleRuntime || len(component.PortPublishes) != 0 || !endpoints.valid() || endpoints.migrationID != componentMigrationID(component) {
 			return nil, fmt.Errorf("replacement runtime bootstrap transport is invalid")
 		}
-		client, err := createPrivateRuntimeCommandClient(cfg, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+		client, err := createPrivateBootstrapRuntimeCommandClient(cfg, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
 			if !endpoints.valid() {
 				return nil, status.Error(codes.PermissionDenied, "replacement runtime transport is invalid")
 			}
@@ -157,6 +161,25 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 }
 
 func createPrivateRuntimeCommandClient(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
+	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial)
+}
+
+func createPrivateBootstrapRuntimeCommandClient(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
+	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial,
+		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff: backoff.Config{
+				BaseDelay:  25 * time.Millisecond,
+				Multiplier: 1.4,
+				Jitter:     0.2,
+				MaxDelay:   100 * time.Millisecond,
+			},
+			MinConnectTimeout: 100 * time.Millisecond,
+		}),
+	)
+}
+
+func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error), extraOptions ...grpc.DialOption) (out.RuntimeCommandClient, error) {
 	token := runtimeControlToken(cfg)
 	if token == "" {
 		return nil, fmt.Errorf("private runtime authentication token is required")
@@ -165,16 +188,32 @@ func createPrivateRuntimeCommandClient(cfg RuntimeControlConfig, target string, 
 	if err != nil {
 		return nil, fmt.Errorf("create private runtime credentials: %w", err)
 	}
-	conn, err := grpc.NewClient(target,
+	dialOptions := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return dial(ctx) }),
 		grpc.WithPerRPCCredentials(creds),
-	)
+	}
+	dialOptions = append(dialOptions, extraOptions...)
+	conn, err := grpc.NewClient(target, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("create private runtime client: %w", err)
 	}
-	return outruntime.NewClient(conn), nil
+	return &privateRuntimeCommandClient{Client: outruntime.NewClient(conn), conn: conn}, nil
 }
+
+type privateRuntimeCommandClient struct {
+	*outruntime.Client
+	conn *grpc.ClientConn
+}
+
+func (c *privateRuntimeCommandClient) Close() error {
+	return c.conn.Close()
+}
+
+// WaitForReady retries ordinary picker errors but deliberately fails gRPC
+// status errors. Keep only ENOENT and ECONNREFUSED transient; validation and
+// permission failures retain a terminal status and fail closed.
+var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable")
 
 func dialValidatedRuntimeSocket(ctx context.Context, path string) (net.Conn, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName || pathContainsSymlink(filepath.Dir(path)) {
@@ -184,14 +223,23 @@ func dialValidatedRuntimeSocket(ctx context.Context, path string) (net.Conn, err
 	if err == nil && (info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0) {
 		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
 	}
-	if err != nil && !os.IsNotExist(err) {
-		return nil, status.Error(codes.Unavailable, "private runtime transport is unavailable")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errPrivateRuntimeTransportUnavailable
+	}
+	if err != nil {
+		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
 	}
 	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
-	if err != nil {
-		return nil, status.Error(codes.Unavailable, "private runtime transport is unavailable")
+	if err == nil {
+		return connection, nil
 	}
-	return connection, nil
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+		return nil, errPrivateRuntimeTransportUnavailable
+	}
+	return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
 }
 
 func runtimeUnixEndpoint(endpoint string) (string, bool) {
