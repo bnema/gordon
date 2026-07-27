@@ -68,105 +68,133 @@ func TestParseVolumeOptionsSeparatesAccessFromEngineOptions(t *testing.T) {
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("rw,U"))
 }
 
-func TestInspectVolumeOptionsRecoversPodmanNamedVolumeChownBind(t *testing.T) {
-	mountPoint := container.MountPoint{
-		Type:        mount.TypeVolume,
-		Name:        "gordon-runtime-migration-g1",
-		Source:      "/home/fixture/.local/share/containers/storage/volumes/gordon-runtime-migration-g1/_data",
-		Destination: "/var/lib/gordon",
-		Mode:        "",
-		RW:          true,
-	}
+func TestNormalizeInspectedGenerationVolumeChownAcceptsOnlyCanonicalPodmanModes(t *testing.T) {
+	for _, mode := range []string{
+		domain.ContainerVolumeOptionChown,
+		"U,rprivate,nosuid,nodev,rbind",
+	} {
+		t.Run(mode, func(t *testing.T) {
+			inspected := canonicalGenerationContainer()
+			normalizeInspectedGenerationVolumeChown(inspected, []string{
+				"gordon-runtime-migration-g1:/var/lib/gordon:" + mode,
+			}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
 
-	options := inspectVolumeOptions(mountPoint, []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"})
-
-	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, options)
-}
-
-func TestInspectVolumeOptionsRejectsUntrustedChownBindEvidence(t *testing.T) {
-	mountPoint := container.MountPoint{
-		Type:        mount.TypeVolume,
-		Name:        "gordon-runtime-migration-g1",
-		Source:      "/home/fixture/.local/share/containers/storage/volumes/gordon-runtime-migration-g1/_data",
-		Destination: "/var/lib/gordon",
-		Mode:        "",
-		RW:          true,
-	}
-	tests := map[string]struct {
-		mount container.MountPoint
-		binds []string
-	}{
-		"missing":                     {mount: mountPoint},
-		"malformed":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U:extra"}},
-		"duplicate":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:U"}},
-		"conflicting":                 {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw"}},
-		"malformed duplicate":         {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw:extra"}},
-		"alias duplicate":             {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/other/../gordon:rw"}},
-		"bind source":                 {mount: mountPoint, binds: []string{"/srv/gordon:/var/lib/gordon:U"}},
-		"source traversal":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1/../other:/var/lib/gordon:U"}},
-		"unknown option":              {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U,z"}},
-		"destination mismatch":        {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other:U"}},
-		"destination dot alias":       {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/./gordon:U"}},
-		"destination traversal alias": {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other/../gordon:U"}},
-		"destination slash alias":     {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon/:U"}},
-		"source mismatch":             {mount: mountPoint, binds: []string{"other-volume:/var/lib/gordon:U"}},
-		"read only":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:ro,U"}},
-		"mount destination alias": {
-			mount: func() container.MountPoint {
-				aliased := mountPoint
-				aliased.Destination = "/var/lib/./gordon"
-				return aliased
-			}(),
-			binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"},
-		},
-		"mount conflict": {
-			mount: func() container.MountPoint {
-				conflicting := mountPoint
-				conflicting.Mode = "U,U"
-				return conflicting
-			}(),
-			binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"},
-		},
-	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			assert.Nil(t, inspectVolumeOptions(test.mount, test.binds))
+			assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
 		})
 	}
 }
 
-func TestInspectVolumeOptionsRequiresBindEvidenceForMountModeChown(t *testing.T) {
-	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "U", RW: true}
-
-	assert.Nil(t, inspectVolumeOptions(mountPoint, nil))
-	assert.Nil(t, inspectVolumeOptions(mountPoint, []string{"app-data:/data:rw"}))
-}
-
-func TestInspectVolumeOptionsReconcilesEachMountWithoutDroppingOtherOptions(t *testing.T) {
-	binds := []string{
-		"app-data:/data:U",
-		"config-data:/config:ro",
-		"unrelated:/other:U:malformed",
+func TestNormalizeInspectedGenerationVolumeChownRejectsModeVariants(t *testing.T) {
+	variants := map[string][]string{
+		"missing":                 nil,
+		"subset":                  {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev"},
+		"superset":                {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
+		"reordered":               {"gordon-runtime-migration-g1:/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"},
+		"duplicate token":         {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"},
+		"lowercase alias":         {"gordon-runtime-migration-g1:/var/lib/gordon:u,rprivate,nosuid,nodev,rbind"},
+		"extra access flag":       {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"},
+		"bind source":             {"/srv/gordon:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other volume":            {"other-volume:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other destination":       {"gordon-runtime-migration-g1:/data:U,rprivate,nosuid,nodev,rbind"},
+		"destination alias":       {"gordon-runtime-migration-g1:/var/lib/./gordon:U,rprivate,nosuid,nodev,rbind"},
+		"duplicate bind":          {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", "gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"conflicting destination": {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", "gordon-runtime-migration-g1:/var/lib/gordon:rw"},
 	}
-	owned := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "delegated", RW: true}
-	unrelated := container.MountPoint{Type: mount.TypeBind, Source: "/host/config", Destination: "/config", Mode: "ro,z", RW: false}
-
-	assert.Equal(t, []string{"delegated", domain.ContainerVolumeOptionChown}, inspectVolumeOptions(owned, binds))
-	assert.Equal(t, []string{"z"}, inspectVolumeOptions(unrelated, binds))
+	for name, binds := range variants {
+		t.Run(name, func(t *testing.T) {
+			inspected := canonicalGenerationContainer()
+			normalizeInspectedGenerationVolumeChown(inspected, binds, nativePodmanSecurityProof{boundingCapsNull: true}, true)
+			assert.Nil(t, inspected.VolumeMounts[0].Options)
+		})
+	}
 }
 
-func TestInspectVolumeOptionsIgnoresMalformedChownEvidenceForAnotherDestination(t *testing.T) {
-	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", RW: true}
-	binds := []string{"app-data:/data:U", "other:/other:U:malformed"}
-
-	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspectVolumeOptions(mountPoint, binds))
+func TestNormalizeInspectedGenerationVolumeChownRequiresNativeProofAndExactGenerationMount(t *testing.T) {
+	tests := map[string]func(*domain.Container) (nativePodmanSecurityProof, bool){
+		"proof absent": func(_ *domain.Container) (nativePodmanSecurityProof, bool) { return nativePodmanSecurityProof{}, false },
+		"bounding caps unproved": func(_ *domain.Container) (nativePodmanSecurityProof, bool) {
+			return nativePodmanSecurityProof{}, true
+		},
+		"noncanonical container ID": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.ID = "existing"
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"non-generation name": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.Name = "gordon-runtime-other-g1"
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"wrong volume": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.VolumeMounts[0].Name = "other-volume"
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"bind mount": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.VolumeMounts[0].Type = string(mount.TypeBind)
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"read only": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.VolumeMounts[0].ReadOnly = true
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"wrong destination": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.VolumeMounts[0].Destination = "/data"
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"existing mount option": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.VolumeMounts[0].Options = []string{"delegated"}
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+		"edge role": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
+			container.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleEdge)
+			container.Name = "gordon-edge-migration-g1"
+			container.VolumeMounts[0].Name = container.Name
+			return nativePodmanSecurityProof{boundingCapsNull: true}, true
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			inspected := canonicalGenerationContainer()
+			proof, ok := mutate(inspected)
+			normalizeInspectedGenerationVolumeChown(inspected, []string{
+				inspected.VolumeMounts[0].Name + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
+			}, proof, ok)
+			assert.NotEqual(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
+		})
+	}
 }
 
-func TestInspectVolumeOptionsLeavesDockerMountWithoutChownUnchanged(t *testing.T) {
-	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "rw", RW: true}
+func TestNormalizeInspectedGenerationVolumeChownPreservesOtherMountOptions(t *testing.T) {
+	inspected := canonicalGenerationContainer()
+	inspected.VolumeMounts = append(inspected.VolumeMounts, domain.ContainerVolumeMount{
+		Type: string(mount.TypeBind), Source: "/host/config", Destination: "/config", Mode: "ro,z", Options: []string{"z"}, ReadOnly: true,
+	})
+	normalizeInspectedGenerationVolumeChown(inspected, []string{
+		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
+		"/host/config:/config:ro",
+	}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
 
-	assert.Nil(t, inspectVolumeOptions(mountPoint, []string{"app-data:/data:rw"}))
-	assert.Nil(t, inspectVolumeOptions(mountPoint, nil))
+	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
+	assert.Equal(t, []string{"z"}, inspected.VolumeMounts[1].Options)
+}
+
+func canonicalGenerationContainer() *domain.Container {
+	return &domain.Container{
+		ID:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Name: "gordon-runtime-migration-g1",
+		Labels: map[string]string{
+			domain.LabelComponent:            "true",
+			domain.LabelComponentRole:        string(domain.ComponentRoleRuntime),
+			domain.LabelComponentMigrationID: "migration",
+			domain.LabelComponentGeneration:  "1",
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Type: string(mount.TypeVolume), Name: "gordon-runtime-migration-g1", Destination: "/var/lib/gordon",
+		}},
+	}
+}
+
+func TestInspectVolumeOptionsPreservesNonChownOptionsWithoutTrustingMountModeU(t *testing.T) {
+	assert.Nil(t, inspectVolumeOptions(container.MountPoint{Mode: "rw,U"}))
+	assert.Equal(t, []string{"z", "delegated"}, inspectVolumeOptions(container.MountPoint{Mode: "ro,z,delegated,U"}))
 }
 
 func TestBuildVolumeBindsReturnsVolumeOptionValidationErrors(t *testing.T) {

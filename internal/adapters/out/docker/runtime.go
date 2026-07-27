@@ -330,18 +330,13 @@ func parseVolumeOptions(mode string) []string {
 	return options
 }
 
-// inspectVolumeOptions reconciles Podman's create-time bind intent with its
-// inspect-time mount projection. HostConfig.Binds is authoritative for :U;
-// Mounts.Mode can corroborate that intent but can never establish it alone.
-func inspectVolumeOptions(mountPoint container.MountPoint, binds []string) []string {
-	mountOptions := inspectOptionsWithoutChown(parseVolumeOptions(mountPoint.Mode))
-	if !inspectNamedVolumeChownEvidence(mountPoint, binds) || !inspectModeAllowsChown(mountPoint.Mode, mountPoint.RW) {
-		return mountOptions
-	}
-	return append(mountOptions, domain.ContainerVolumeOptionChown)
-}
+const canonicalPodmanInspectedChownMode = "U,rprivate,nosuid,nodev,rbind"
 
-func inspectOptionsWithoutChown(options []string) []string {
+// inspectVolumeOptions preserves the compatible API's mount projection. The
+// create-only Podman U intent is restored separately, only after native Podman
+// has proved the inspected Gordon component's identity and confinement.
+func inspectVolumeOptions(mountPoint container.MountPoint) []string {
+	options := parseVolumeOptions(mountPoint.Mode)
 	options = slices.DeleteFunc(options, func(option string) bool {
 		return option == domain.ContainerVolumeOptionChown
 	})
@@ -351,22 +346,68 @@ func inspectOptionsWithoutChown(options []string) []string {
 	return options
 }
 
+func normalizeInspectedGenerationVolumeChown(
+	inspected *domain.Container,
+	binds []string,
+	proof nativePodmanSecurityProof,
+	proofOK bool,
+) {
+	if !proofOK || !proof.boundingCapsNull || inspected == nil || !canonicalContainerID(inspected.ID) {
+		return
+	}
+	expectedName, ok := inspectedGenerationVolumeName(inspected)
+	if !ok {
+		return
+	}
+	mountIndex, ok := exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
+	if !ok || !inspectNamedVolumeChownEvidence(expectedName, binds) {
+		return
+	}
+	inspected.VolumeMounts[mountIndex].Options = []string{domain.ContainerVolumeOptionChown}
+}
+
+func inspectedGenerationVolumeName(inspected *domain.Container) (string, bool) {
+	_, ok := inspectedComponentIdentity(inspected)
+	role := domain.ComponentRole(inspected.Labels[domain.LabelComponentRole])
+	if !ok || role == domain.ComponentRoleEdge {
+		return "", false
+	}
+	migrationID := inspected.Labels[domain.LabelComponentMigrationID]
+	generation := inspected.Labels[domain.LabelComponentGeneration]
+	parsedGeneration, err := strconv.ParseUint(generation, 10, 64)
+	if err != nil || parsedGeneration == 0 || strconv.FormatUint(parsedGeneration, 10) != generation ||
+		migrationID == "" || strings.TrimSpace(migrationID) != migrationID {
+		return "", false
+	}
+	expected := fmt.Sprintf("gordon-%s-%s-g%s", role, migrationID, generation)
+	return expected, inspected.Name == expected && canonicalInspectVolumeName(expected)
+}
+
+func exactInspectedGenerationMount(mounts []domain.ContainerVolumeMount, expectedName string) (int, bool) {
+	matched := -1
+	for index, mountPoint := range mounts {
+		if !inspectDestinationMayTarget(mountPoint.Destination, "/var/lib/gordon") {
+			continue
+		}
+		if matched >= 0 || mountPoint.Type != string(mount.TypeVolume) || mountPoint.Name != expectedName ||
+			mountPoint.Destination != "/var/lib/gordon" || mountPoint.ReadOnly || mountPoint.Mode != "" || len(mountPoint.Options) != 0 {
+			return 0, false
+		}
+		matched = index
+	}
+	return matched, matched >= 0
+}
+
 type inspectBindSpec struct {
 	source      string
 	destination string
 	hasChown    bool
-	access      string
 }
 
-func inspectNamedVolumeChownEvidence(mountPoint container.MountPoint, binds []string) bool {
-	if mountPoint.Type != mount.TypeVolume || !mountPoint.RW ||
-		!canonicalInspectVolumeName(mountPoint.Name) || !canonicalInspectDestination(mountPoint.Destination) {
-		return false
-	}
-
+func inspectNamedVolumeChownEvidence(expectedName string, binds []string) bool {
 	matched := false
 	for _, raw := range binds {
-		if !inspectBindMayTarget(raw, mountPoint.Destination) {
+		if !inspectBindMayTarget(raw, "/var/lib/gordon") {
 			continue
 		}
 		if matched {
@@ -375,10 +416,7 @@ func inspectNamedVolumeChownEvidence(mountPoint container.MountPoint, binds []st
 		matched = true
 
 		spec, valid := parseInspectBindSpec(raw)
-		if !valid || spec.source != mountPoint.Name || spec.destination != mountPoint.Destination || !canonicalInspectVolumeName(spec.source) {
-			return false
-		}
-		if !spec.hasChown || (spec.access != "" && (spec.access == "rw") != mountPoint.RW) {
+		if !valid || spec.source != expectedName || spec.destination != "/var/lib/gordon" || !spec.hasChown {
 			return false
 		}
 	}
@@ -390,7 +428,10 @@ func inspectBindMayTarget(raw, destination string) bool {
 	if len(parts) < 2 {
 		return false
 	}
-	candidate := parts[1]
+	return inspectDestinationMayTarget(parts[1], destination)
+}
+
+func inspectDestinationMayTarget(candidate, destination string) bool {
 	if candidate == destination {
 		return true
 	}
@@ -432,52 +473,11 @@ func parseInspectBindSpec(raw string) (inspectBindSpec, bool) {
 	if len(parts) == 2 {
 		return spec, true
 	}
-	hasChown, access, valid := parseInspectBindOptions(parts[2])
-	if !valid {
+	if parts[2] != domain.ContainerVolumeOptionChown && parts[2] != canonicalPodmanInspectedChownMode {
 		return inspectBindSpec{}, false
 	}
-	spec.hasChown = hasChown
-	spec.access = access
+	spec.hasChown = true
 	return spec, true
-}
-
-func parseInspectBindOptions(raw string) (bool, string, bool) {
-	chownCount := 0
-	access := ""
-	for option := range strings.SplitSeq(raw, ",") {
-		switch option {
-		case domain.ContainerVolumeOptionChown:
-			chownCount++
-		case "ro", "rw":
-			if access != "" {
-				return false, "", false
-			}
-			access = option
-		default:
-			return false, "", false
-		}
-	}
-	if chownCount > 1 {
-		return false, "", false
-	}
-	return chownCount == 1, access, true
-}
-
-func inspectModeAllowsChown(mode string, readWrite bool) bool {
-	chownCount := 0
-	access := ""
-	for raw := range strings.SplitSeq(mode, ",") {
-		switch option := strings.TrimSpace(raw); option {
-		case domain.ContainerVolumeOptionChown:
-			chownCount++
-		case "ro", "rw":
-			if access != "" {
-				return false
-			}
-			access = option
-		}
-	}
-	return chownCount <= 1 && (access == "" || (access == "rw") == readWrite)
 }
 
 // StartContainer starts a container.
@@ -714,7 +714,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 			Driver:      m.Driver,
 			Mode:        m.Mode,
 			Propagation: string(m.Propagation),
-			Options:     inspectVolumeOptions(m, binds),
+			Options:     inspectVolumeOptions(m),
 			ReadOnly:    !m.RW,
 		})
 	}
@@ -747,6 +747,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 			} else {
 				inspected.CapDrop = nil
 			}
+			normalizeInspectedGenerationVolumeChown(inspected, binds, proof, ok)
 		}
 	}
 	return inspected, nil

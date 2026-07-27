@@ -217,7 +217,7 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 		Driver:      "local",
 		Mode:        "",
 		Propagation: "rprivate",
-		Options:     []string{domain.ContainerVolumeOptionChown},
+		Options:     nil,
 		ReadOnly:    false,
 	}, inspected.VolumeMounts[0])
 }
