@@ -68,25 +68,19 @@ func TestParseVolumeOptionsSeparatesAccessFromEngineOptions(t *testing.T) {
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("rw,U"))
 }
 
-func TestNormalizeInspectedGenerationVolumeChownAcceptsOnlyCanonicalPodmanModes(t *testing.T) {
-	for _, mode := range []string{
-		domain.ContainerVolumeOptionChown,
-		"U,rprivate,nosuid,nodev,rbind",
-	} {
-		t.Run(mode, func(t *testing.T) {
-			inspected := canonicalGenerationContainer()
-			normalizeInspectedGenerationVolumeChown(inspected, []string{
-				"gordon-runtime-migration-g1:/var/lib/gordon:" + mode,
-			}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
+func TestNormalizeInspectedGenerationVolumeChownAcceptsOnlyCanonicalPodmanMode(t *testing.T) {
+	inspected := canonicalGenerationContainer()
+	normalizeInspectedGenerationVolumeChown(inspected, []string{
+		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
+	}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
 
-			assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
-		})
-	}
+	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
 }
 
 func TestNormalizeInspectedGenerationVolumeChownRejectsModeVariants(t *testing.T) {
 	variants := map[string][]string{
 		"missing":                 nil,
+		"bare create mode":        {"gordon-runtime-migration-g1:/var/lib/gordon:U"},
 		"subset":                  {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev"},
 		"superset":                {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
 		"reordered":               {"gordon-runtime-migration-g1:/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"},

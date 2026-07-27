@@ -473,7 +473,7 @@ func parseInspectBindSpec(raw string) (inspectBindSpec, bool) {
 	if len(parts) == 2 {
 		return spec, true
 	}
-	if parts[2] != domain.ContainerVolumeOptionChown && parts[2] != canonicalPodmanInspectedChownMode {
+	if parts[2] != canonicalPodmanInspectedChownMode {
 		return inspectBindSpec{}, false
 	}
 	spec.hasChown = true
