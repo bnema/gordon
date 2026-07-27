@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	grpcauth "github.com/bnema/gordon/internal/adapters/out/grpc/auth"
@@ -316,7 +315,7 @@ func classifyValidatedRuntimeConnectError(err error) validatedRuntimeConnectErro
 		return validatedRuntimeConnectCanceled
 	case errors.Is(err, context.DeadlineExceeded):
 		return validatedRuntimeConnectDeadline
-	case errors.Is(err, os.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+	case errors.Is(err, os.ErrPermission):
 		return validatedRuntimeConnectPermission
 	default:
 		return validatedRuntimeConnectRetryable
