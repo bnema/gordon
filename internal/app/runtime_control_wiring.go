@@ -242,9 +242,12 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			if errors.Is(ctxErr, context.DeadlineExceeded) && isTransientPrivateRuntimeTransportError(err) {
-				return boundedPrivateRuntimeTransportUnavailable(ctxErr)
+				return boundedPrivateRuntimeTransportUnavailable()
 			}
-			return ctxErr
+			if errors.Is(ctxErr, context.DeadlineExceeded) {
+				return context.DeadlineExceeded
+			}
+			return context.Canceled
 		}
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -253,19 +256,16 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 			return context.DeadlineExceeded
 		}
 		if !isTransientPrivateRuntimeTransportError(err) {
-			if _, ok := errors.AsType[*privateRuntimeTransportValidationStatus](err); ok {
-				return err
+			if category, ok := privateRuntimeTransportValidationCategory(err); ok {
+				return privateRuntimeTransportValidationError(category)
 			}
 			if errors.Is(err, os.ErrPermission) {
 				return privateRuntimeTransportValidationError(privateRuntimeTransportConnectPermission)
 			}
 			return privateRuntimeTransportValidationError(privateRuntimeTransportUnvalidatedFailure)
 		}
-		if err := retry(ctx); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return boundedPrivateRuntimeTransportUnavailable(err)
-			}
-			return err
+		if retryErr := retry(ctx); retryErr != nil {
+			return canonicalPrivateRuntimeRetryError(retryErr)
 		}
 	}
 }
@@ -274,8 +274,29 @@ func isTransientPrivateRuntimeTransportError(err error) bool {
 	return errors.Is(err, errPrivateRuntimeTransportUnavailable)
 }
 
-func boundedPrivateRuntimeTransportUnavailable(cause error) error {
-	return fmt.Errorf("%w: %w", errPrivateRuntimeTransportUnavailable, cause)
+func canonicalPrivateRuntimeRetryError(err error) error {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return boundedPrivateRuntimeTransportUnavailable()
+	case errors.Is(err, context.Canceled):
+		return context.Canceled
+	default:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportUnvalidatedFailure)
+	}
+}
+
+type boundedPrivateRuntimeTransportError struct{}
+
+func (boundedPrivateRuntimeTransportError) Error() string {
+	return errPrivateRuntimeTransportUnavailable.Error()
+}
+
+func (boundedPrivateRuntimeTransportError) Unwrap() []error {
+	return []error{errPrivateRuntimeTransportUnavailable, context.DeadlineExceeded}
+}
+
+func boundedPrivateRuntimeTransportUnavailable() error {
+	return boundedPrivateRuntimeTransportError{}
 }
 
 func waitRuntimeHandoffRetry(ctx context.Context) error {
@@ -325,8 +346,12 @@ func validatePrivateRuntimeSocketPath(path string, lstat func(string) (os.FileIn
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName {
 		return privateRuntimeTransportValidationError(privateRuntimeTransportInvalidShape)
 	}
-	if err := validatePrivateRuntimeSocketAncestors(filepath.Dir(path), lstat); err != nil {
-		return err
+	switch inspectRuntimeSocketAncestors(filepath.Dir(path), lstat) {
+	case runtimeSocketAncestorsValid:
+	case runtimeSocketAncestorSymlink:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportSymlinkAncestor)
+	case runtimeSocketAncestorMissing, runtimeSocketAncestorInspectionFailure, runtimeSocketAncestorInvalidPath:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
 	}
 	info, err := lstat(path)
 	if err != nil {
@@ -334,27 +359,6 @@ func validatePrivateRuntimeSocketPath(path string, lstat func(string) (os.FileIn
 	}
 	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
 		return privateRuntimeTransportValidationError(privateRuntimeTransportInvalidNode)
-	}
-	return nil
-}
-
-func validatePrivateRuntimeSocketAncestors(path string, lstat func(string) (os.FileInfo, error)) error {
-	current := string(filepath.Separator)
-	for part := range strings.SplitSeq(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
-		if part == "" {
-			continue
-		}
-		current = filepath.Join(current, part)
-		info, err := lstat(current)
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			return privateRuntimeTransportValidationError(privateRuntimeTransportSymlinkAncestor)
-		}
 	}
 	return nil
 }
@@ -372,7 +376,30 @@ func (e *privateRuntimeTransportValidationStatus) GRPCStatus() *status.Status {
 }
 
 func privateRuntimeTransportValidationError(category privateRuntimeTransportErrorCategory) error {
-	return &privateRuntimeTransportValidationStatus{category: category}
+	return &privateRuntimeTransportValidationStatus{category: canonicalPrivateRuntimeTransportCategory(category)}
+}
+
+func privateRuntimeTransportValidationCategory(err error) (privateRuntimeTransportErrorCategory, bool) {
+	validation, ok := errors.AsType[*privateRuntimeTransportValidationStatus](err)
+	if !ok || validation == nil {
+		return "", false
+	}
+	return canonicalPrivateRuntimeTransportCategory(validation.category), true
+}
+
+func canonicalPrivateRuntimeTransportCategory(category privateRuntimeTransportErrorCategory) privateRuntimeTransportErrorCategory {
+	switch category {
+	case privateRuntimeTransportInvalidShape,
+		privateRuntimeTransportSymlinkAncestor,
+		privateRuntimeTransportInvalidNode,
+		privateRuntimeTransportInspectionFailure,
+		privateRuntimeTransportConnectPermission,
+		privateRuntimeTransportConnectUnavailable,
+		privateRuntimeTransportUnvalidatedFailure:
+		return category
+	default:
+		return privateRuntimeTransportUnvalidatedFailure
+	}
 }
 
 type validatedRuntimeConnectErrorCategory uint8

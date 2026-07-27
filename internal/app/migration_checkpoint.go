@@ -85,7 +85,11 @@ func (e RuntimeBootstrapEndpoints) valid() bool {
 		return false
 	}
 	hostPath := e.hostDialPath()
-	return filepath.IsAbs(hostPath) && filepath.Clean(hostPath) == hostPath && !pathContainsSymlink(filepath.Dir(hostPath))
+	if !filepath.IsAbs(hostPath) || filepath.Clean(hostPath) != hostPath {
+		return false
+	}
+	result := inspectRuntimeSocketAncestors(filepath.Dir(hostPath), os.Lstat)
+	return result == runtimeSocketAncestorsValid || result == runtimeSocketAncestorMissing
 }
 
 type MigrationCheckpoint struct {
@@ -812,29 +816,41 @@ func newRuntimeBootstrapEndpoints(componentEndpoint, dataDir, migrationID string
 	return endpoints, nil
 }
 
-// pathContainsSymlink rejects every existing symlink in a descriptor path.
-// Missing trailing components are allowed during prepare and are checked again
-// by the dialer after the replacement runtime creates its socket.
-func pathContainsSymlink(path string) bool {
-	clean := filepath.Clean(path)
-	if !filepath.IsAbs(clean) {
-		return true
+type runtimeSocketAncestorResult uint8
+
+const (
+	runtimeSocketAncestorsValid runtimeSocketAncestorResult = iota
+	runtimeSocketAncestorMissing
+	runtimeSocketAncestorSymlink
+	runtimeSocketAncestorInspectionFailure
+	runtimeSocketAncestorInvalidPath
+)
+
+// inspectRuntimeSocketAncestors is the canonical ancestor walk for both
+// endpoint descriptors and live socket dialing. It returns only a fixed result;
+// path and filesystem error text never cross the validation boundary.
+func inspectRuntimeSocketAncestors(path string, lstat func(string) (os.FileInfo, error)) runtimeSocketAncestorResult {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return runtimeSocketAncestorInvalidPath
 	}
 	current := string(filepath.Separator)
-	for part := range strings.SplitSeq(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator)) {
+	for part := range strings.SplitSeq(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
 		if part == "" {
 			continue
 		}
 		current = filepath.Join(current, part)
-		info, err := os.Lstat(current)
+		info, err := lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
-			return false
+			return runtimeSocketAncestorMissing
 		}
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return true
+		if err != nil {
+			return runtimeSocketAncestorInspectionFailure
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return runtimeSocketAncestorSymlink
 		}
 	}
-	return false
+	return runtimeSocketAncestorsValid
 }
 
 func phaseRank(phase MigrationPhase) int {

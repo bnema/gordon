@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -422,9 +423,10 @@ func TestValidatePrivateRuntimeSocketPathReportsValueFreeInspectionFailures(t *t
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			const maliciousText = "inspection token=do-not-leak"
 			err := validatePrivateRuntimeSocketPath(tc.path, func(path string) (os.FileInfo, error) {
 				if path == tc.failAt {
-					return nil, os.ErrPermission
+					return nil, fmt.Errorf("inspect path=%s %s: %w", path, maliciousText, os.ErrPermission)
 				}
 				return rootInfo, nil
 			})
@@ -432,6 +434,7 @@ func TestValidatePrivateRuntimeSocketPathReportsValueFreeInspectionFailures(t *t
 			assert.Equal(t, codes.PermissionDenied, status.Code(err))
 			assert.Contains(t, err.Error(), "category=inspection_failure")
 			assert.NotContains(t, err.Error(), tc.path)
+			assert.NotContains(t, err.Error(), maliciousText)
 		})
 	}
 }
@@ -487,6 +490,33 @@ func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *t
 			})
 			require.Error(t, err)
 			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportNormalizesWrappedValidationStatus(t *testing.T) {
+	const maliciousText = "caller path=/private/runtime.sock token=do-not-leak"
+	for _, tc := range []struct {
+		name     string
+		category privateRuntimeTransportErrorCategory
+		want     privateRuntimeTransportErrorCategory
+	}{
+		{name: "known category", category: privateRuntimeTransportInvalidNode, want: privateRuntimeTransportInvalidNode},
+		{name: "unknown category", category: privateRuntimeTransportErrorCategory(maliciousText), want: privateRuntimeTransportUnvalidatedFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wrapped := fmt.Errorf("%s: %w", maliciousText, &privateRuntimeTransportValidationStatus{category: tc.category})
+			err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+				return nil, wrapped
+			}, func(context.Context) error {
+				t.Fatal("terminal validation status must not retry")
+				return nil
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Contains(t, err.Error(), "category="+string(tc.want))
+			assert.NotContains(t, err.Error(), maliciousText)
 		})
 	}
 }
@@ -623,6 +653,31 @@ func TestWaitForPrivateRuntimeTransportRejectsWrappedConnectContextErrorsImmedia
 				return nil
 			})
 			require.ErrorIs(t, err, contextErr)
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportNormalizesRetryContextCauses(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		cause             error
+		wantUnavailableIs bool
+	}{
+		{name: "deadline", cause: context.DeadlineExceeded, wantUnavailableIs: true},
+		{name: "cancellation", cause: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const maliciousText = "retry path=/private/runtime.sock token=do-not-leak"
+			err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+				return nil, fmt.Errorf("dial path=/another/private.sock: %w", errPrivateRuntimeTransportUnavailable)
+			}, func(context.Context) error {
+				return fmt.Errorf("%s: %w", maliciousText, tc.cause)
+			})
+
+			require.ErrorIs(t, err, tc.cause)
+			assert.Equal(t, tc.wantUnavailableIs, errors.Is(err, errPrivateRuntimeTransportUnavailable))
+			assert.NotContains(t, err.Error(), maliciousText)
+			assert.NotContains(t, err.Error(), "/another/private.sock")
 		})
 	}
 }
