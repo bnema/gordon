@@ -232,6 +232,12 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if errors.Is(err, context.Canceled) {
+			return context.Canceled
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return context.DeadlineExceeded
+		}
 		if !isTransientPrivateRuntimeTransportError(err) {
 			if status.Code(err) == codes.PermissionDenied {
 				return err
@@ -245,7 +251,7 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 }
 
 func isTransientPrivateRuntimeTransportError(err error) bool {
-	return errors.Is(err, errPrivateRuntimeTransportUnavailable) || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+	return errors.Is(err, errPrivateRuntimeTransportUnavailable)
 }
 
 func waitRuntimeHandoffRetry(ctx context.Context) error {
@@ -260,30 +266,61 @@ func waitRuntimeHandoffRetry(ctx context.Context) error {
 }
 
 func dialValidatedRuntimeSocket(ctx context.Context, path string) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	return dialValidatedRuntimeSocketWithDialer(ctx, path, dialer.DialContext)
+}
+
+// dialValidatedRuntimeSocketWithDialer classifies connectivity errors only
+// after the canonical path and socket inode have been validated. This keeps
+// startup retries from widening authority to a missing or replaced node.
+func dialValidatedRuntimeSocketWithDialer(ctx context.Context, path string, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName || pathContainsSymlink(filepath.Dir(path)) {
 		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
 	}
 	info, err := os.Lstat(path)
-	if err == nil && (info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0) {
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
 		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
 	}
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, errPrivateRuntimeTransportUnavailable
-	}
-	if err != nil {
-		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
-	}
-	connection, err := (&net.Dialer{}).DialContext(ctx, "unix", path)
+	connection, err := dial(ctx, "unix", path)
 	if err == nil {
 		return connection, nil
 	}
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED) {
+	switch classifyValidatedRuntimeConnectError(err) {
+	case validatedRuntimeConnectCanceled:
+		return nil, context.Canceled
+	case validatedRuntimeConnectDeadline:
+		return nil, context.DeadlineExceeded
+	case validatedRuntimeConnectRetryable:
 		return nil, errPrivateRuntimeTransportUnavailable
 	}
 	return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
+}
+
+type validatedRuntimeConnectErrorCategory uint8
+
+const (
+	validatedRuntimeConnectRetryable validatedRuntimeConnectErrorCategory = iota
+	validatedRuntimeConnectPermission
+	validatedRuntimeConnectCanceled
+	validatedRuntimeConnectDeadline
+)
+
+// classifyValidatedRuntimeConnectError intentionally returns only a category:
+// caller-controlled path and syscall details must not escape the trust check.
+func classifyValidatedRuntimeConnectError(err error) validatedRuntimeConnectErrorCategory {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return validatedRuntimeConnectCanceled
+	case errors.Is(err, context.DeadlineExceeded):
+		return validatedRuntimeConnectDeadline
+	case errors.Is(err, os.ErrPermission), errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		return validatedRuntimeConnectPermission
+	default:
+		return validatedRuntimeConnectRetryable
+	}
 }
 
 func runtimeUnixEndpoint(endpoint string) (string, bool) {

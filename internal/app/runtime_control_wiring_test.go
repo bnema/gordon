@@ -2,12 +2,14 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,13 +121,13 @@ func TestPostHandoffRuntimeClientDialsOnlyValidatedHostMigrationSocket(t *testin
 }
 
 func TestPrivateBootstrapRuntimeClientWaitsForConnectableSocketBeforeConstruction(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, bootstrapRuntimeSocketName)
+	path := newStaleValidatedRuntimeSocketPath(t)
 	var listener net.Listener
 	var server *grpc.Server
 	retryCalls := 0
 	retry := func(context.Context) error {
 		retryCalls++
+		require.NoError(t, os.Remove(path))
 		var err error
 		listener, err = net.Listen("unix", path)
 		require.NoError(t, err)
@@ -196,8 +198,7 @@ func TestPrivateBootstrapRuntimeClientRejectsMissingTokenBeforeTransportWait(t *
 }
 
 func TestPrivateBootstrapRuntimeClientResolvesTokenBeforeTransportWait(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, bootstrapRuntimeSocketName)
+	path := newStaleValidatedRuntimeSocketPath(t)
 	const (
 		tokenEnv = "GORDON_TEST_RUNTIME_TOKEN"
 		token    = "resolved-bootstrap-token"
@@ -207,6 +208,7 @@ func TestPrivateBootstrapRuntimeClientResolvesTokenBeforeTransportWait(t *testin
 	var server *grpc.Server
 	retry := func(context.Context) error {
 		t.Setenv(tokenEnv, "")
+		require.NoError(t, os.Remove(path))
 		var err error
 		listener, err = net.Listen("unix", path)
 		require.NoError(t, err)
@@ -292,6 +294,9 @@ func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *t
 		prepare func(string) error
 	}{
 		{name: "invalid path", path: filepath.Join(root, "wrong.sock")},
+		{name: "missing socket", path: filepath.Join(root, "missing", bootstrapRuntimeSocketName), prepare: func(path string) error {
+			return os.MkdirAll(filepath.Dir(path), 0o700)
+		}},
 		{name: "regular file", path: filepath.Join(root, "regular", bootstrapRuntimeSocketName), prepare: func(path string) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return err
@@ -332,11 +337,153 @@ func TestWaitForPrivateRuntimeTransportRejectsPermissionFailureWithoutRetry(t *t
 	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
-func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "gordon-private-client-")
+func TestWaitForPrivateRuntimeTransportDoesNotRetryUnvalidatedConnectErrors(t *testing.T) {
+	for _, connectErr := range []error{syscall.ENOENT, syscall.ECONNREFUSED, syscall.EAGAIN} {
+		t.Run(connectErr.Error(), func(t *testing.T) {
+			err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+				return nil, wrappedUnixConnectError(connectErr)
+			}, func(context.Context) error {
+				t.Fatal("a connect error must not retry without validated-socket classification")
+				return nil
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportRetriesValidatedSocketConnectFailures(t *testing.T) {
+	path := newValidatedRuntimeSocketPath(t)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "again", err: syscall.EAGAIN},
+		{name: "interrupted", err: syscall.EINTR},
+		{name: "invalid argument", err: syscall.EINVAL},
+		{name: "no such device or address", err: syscall.ENXIO},
+		{name: "connection reset", err: syscall.ECONNRESET},
+		{name: "connection refused", err: syscall.ECONNREFUSED},
+		{name: "socket disappeared", err: syscall.ENOENT},
+		{name: "unknown non-permission failure", err: syscall.EIO},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dialCalls := 0
+			retryCalls := 0
+			var peer net.Conn
+			err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+				return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
+					dialCalls++
+					if dialCalls == 1 {
+						return nil, wrappedUnixConnectError(tc.err)
+					}
+					server, client := net.Pipe()
+					peer = server
+					return client, nil
+				})
+			}, func(context.Context) error {
+				retryCalls++
+				return nil
+			})
+			require.NoError(t, err)
+			require.NoError(t, peer.Close())
+			assert.Equal(t, 2, dialCalls)
+			assert.Equal(t, 1, retryCalls)
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportRejectsValidatedSocketSecurityErrorsImmediately(t *testing.T) {
+	path := newValidatedRuntimeSocketPath(t)
+	for _, permissionErr := range []error{syscall.EACCES, syscall.EPERM} {
+		t.Run(permissionErr.Error(), func(t *testing.T) {
+			dialCalls := 0
+			started := time.Now()
+			err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+				return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
+					dialCalls++
+					return nil, wrappedUnixConnectError(permissionErr)
+				})
+			}, func(context.Context) error {
+				t.Fatal("permission failures from a validated socket must not retry")
+				return nil
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Equal(t, 1, dialCalls)
+			assert.Less(t, time.Since(started), 250*time.Millisecond)
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportRejectsWrappedConnectContextErrorsImmediately(t *testing.T) {
+	path := newValidatedRuntimeSocketPath(t)
+	for _, contextErr := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(contextErr.Error(), func(t *testing.T) {
+			err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+				return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
+					return nil, wrappedUnixConnectError(contextErr)
+				})
+			}, func(context.Context) error {
+				t.Fatal("connect context failures must not retry")
+				return nil
+			})
+			require.ErrorIs(t, err, contextErr)
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportValidatedConnectFailureStopsAtDeadline(t *testing.T) {
+	path := newValidatedRuntimeSocketPath(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := waitForPrivateRuntimeTransport(ctx, func(ctx context.Context) (net.Conn, error) {
+		return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
+			return nil, wrappedUnixConnectError(syscall.EAGAIN)
+		})
+	}, waitRuntimeHandoffRetry)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 250*time.Millisecond, "the shared startup deadline must interrupt retry sleep")
+}
+
+func newValidatedRuntimeSocketPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+	listener, err := net.Listen("unix", path)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
-	path := filepath.Join(root, bootstrapRuntimeSocketName)
+	t.Cleanup(func() { require.NoError(t, listener.Close()) })
+	return path
+}
+
+func newStaleValidatedRuntimeSocketPath(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	require.NoError(t, err)
+	listener.SetUnlinkOnClose(false)
+	require.NoError(t, listener.Close())
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSocket)
+	t.Cleanup(func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			t.Errorf("remove stale Unix socket: %v", err)
+		}
+	})
+	return path
+}
+
+func wrappedUnixConnectError(err error) error {
+	return fmt.Errorf("outer connect wrapper: %w", &net.OpError{
+		Op:  "dial",
+		Net: "unix",
+		Err: fmt.Errorf("syscall connect: %w", err),
+	})
+}
+
+func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
+	path := newStaleValidatedRuntimeSocketPath(t)
 	client, err := createPrivateRuntimeCommandClient(RuntimeControlConfig{Token: "runtime-token"}, "passthrough:///runtime", func(ctx context.Context) (net.Conn, error) {
 		return dialValidatedRuntimeSocket(ctx, path)
 	})
