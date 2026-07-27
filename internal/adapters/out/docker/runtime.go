@@ -13,6 +13,7 @@ import (
 	"maps"
 	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -329,6 +330,145 @@ func parseVolumeOptions(mode string) []string {
 	return options
 }
 
+// inspectVolumeOptions reconciles Podman's create-time bind intent with its
+// inspect-time mount projection. Podman preserves :U in HostConfig.Binds but
+// can omit it from Mounts.Mode, so recovery is limited to one exact named
+// volume bind that agrees with the canonical inspected mount.
+func inspectVolumeOptions(mountPoint container.MountPoint, binds []string) []string {
+	mountOptions := parseVolumeOptions(mountPoint.Mode)
+	if len(binds) == 0 {
+		return mountOptions
+	}
+	if !inspectEvidenceMentionsChown(mountPoint.Mode, binds) {
+		return mountOptions
+	}
+	if mountPoint.Type != mount.TypeVolume || strings.TrimSpace(mountPoint.Name) == "" || !mountPoint.RW {
+		return nil
+	}
+
+	evidence, valid := inspectNamedVolumeChownEvidence(mountPoint, binds)
+	if !valid || !evidence || !inspectModeAllowsChown(mountPoint.Mode, mountPoint.RW) {
+		return nil
+	}
+	return []string{domain.ContainerVolumeOptionChown}
+}
+
+func inspectEvidenceMentionsChown(mode string, binds []string) bool {
+	if optionListContainsChown(mode) {
+		return true
+	}
+	for _, bind := range binds {
+		if optionListContainsChown(strings.ReplaceAll(bind, ":", ",")) {
+			return true
+		}
+	}
+	return false
+}
+
+func optionListContainsChown(options string) bool {
+	for _, option := range strings.Split(options, ",") {
+		if option == domain.ContainerVolumeOptionChown {
+			return true
+		}
+	}
+	return false
+}
+
+type inspectBindSpec struct {
+	source      string
+	destination string
+	hasChown    bool
+	access      string
+}
+
+func inspectNamedVolumeChownEvidence(mountPoint container.MountPoint, binds []string) (bool, bool) {
+	destination := path.Clean(mountPoint.Destination)
+	matched := 0
+	hasChown := false
+	for _, raw := range binds {
+		spec, valid := parseInspectBindSpec(raw)
+		if !valid {
+			if optionListContainsChown(strings.ReplaceAll(raw, ":", ",")) {
+				return false, false
+			}
+			continue
+		}
+		sameDestination := spec.destination == destination
+		sameSource := spec.source == mountPoint.Name
+		if spec.hasChown && sameSource != sameDestination {
+			return false, false
+		}
+		if !sameDestination {
+			continue
+		}
+		matched++
+		if matched > 1 || !sameSource || path.IsAbs(spec.source) {
+			return false, false
+		}
+		if spec.access != "" && (spec.access == "rw") != mountPoint.RW {
+			return false, false
+		}
+		hasChown = spec.hasChown
+	}
+	return matched == 1 && hasChown, matched == 1
+}
+
+func parseInspectBindSpec(raw string) (inspectBindSpec, bool) {
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return inspectBindSpec{}, false
+	}
+	source := strings.TrimSpace(parts[0])
+	destination := strings.TrimSpace(parts[1])
+	if source != parts[0] || destination != parts[1] || !path.IsAbs(destination) || path.Clean(destination) == "/" {
+		return inspectBindSpec{}, false
+	}
+	spec := inspectBindSpec{source: source, destination: path.Clean(destination)}
+	if len(parts) == 2 {
+		return spec, true
+	}
+	hasChown, access, valid := parseInspectBindOptions(parts[2])
+	if !valid {
+		return inspectBindSpec{}, false
+	}
+	spec.hasChown = hasChown
+	spec.access = access
+	return spec, true
+}
+
+func parseInspectBindOptions(raw string) (bool, string, bool) {
+	chownCount := 0
+	access := ""
+	for _, option := range strings.Split(raw, ",") {
+		switch option {
+		case domain.ContainerVolumeOptionChown:
+			chownCount++
+		case "ro", "rw":
+			if access != "" {
+				return false, "", false
+			}
+			access = option
+		default:
+			return false, "", false
+		}
+	}
+	if chownCount > 1 {
+		return false, "", false
+	}
+	return chownCount == 1, access, true
+}
+
+func inspectModeAllowsChown(mode string, readWrite bool) bool {
+	if mode == "" {
+		return true
+	}
+	hasChown, access, valid := parseInspectBindOptions(mode)
+	if !valid || (access != "" && (access == "rw") != readWrite) {
+		return false
+	}
+	return !hasChown || domain.IsContainerVolumeChownOptions(parseVolumeOptions(mode))
+}
+
 // StartContainer starts a container.
 func (r *Runtime) StartContainer(ctx context.Context, containerID string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -550,6 +690,10 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 
 	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
 	volumeMounts := make([]domain.ContainerVolumeMount, 0, len(resp.Mounts))
+	var binds []string
+	if resp.HostConfig != nil {
+		binds = resp.HostConfig.Binds
+	}
 	for _, m := range resp.Mounts {
 		volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
 			Name:        m.Name,
@@ -559,7 +703,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 			Driver:      m.Driver,
 			Mode:        m.Mode,
 			Propagation: string(m.Propagation),
-			Options:     parseVolumeOptions(m.Mode),
+			Options:     inspectVolumeOptions(m, binds),
 			ReadOnly:    !m.RW,
 		})
 	}

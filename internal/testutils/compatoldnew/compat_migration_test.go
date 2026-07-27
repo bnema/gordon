@@ -42,7 +42,7 @@ func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
 	for _, command := range []string{"migrate plan", "migrate prepare", "migrate status", "migrate switch"} {
 		require.Contains(t, text, command, "the real fixture must execute %q", command)
 	}
-	for _, managedPassGate := range []string{"secrets_backend = \"pass\"", "USER gordon", "ContainerVolumeOptionChown", "chmod 0700", "secrets doctor", "--write-check", "gordon-control-secrets-"} {
+	for _, managedPassGate := range []string{"secrets_backend = \"pass\"", "USER gordon", "ContainerVolumeOptionChown", "HostConfig.Binds", "chmod 0700", "secrets doctor", "--write-check", "gordon-control-secrets-"} {
 		require.Contains(t, text, managedPassGate, "rootless migration must retain authentic role-owned volume gate %q", managedPassGate)
 	}
 	for _, removedSharedGroupGate := range []string{"gordon-" + "data", "21" + "900", "--group-" + "add"} {
@@ -651,9 +651,15 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 		var accessCommand string
 		switch role {
 		case "runtime", "control":
+			volumeName := "gordon-" + role + "-migration-g1"
 			volume, volumeErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{.Name}}:{{.Mode}}{{end}}{{end}}", name)
 			require.NoError(f.t, volumeErr)
-			require.Equal(f.t, "gordon-"+role+"-migration-g1:"+domain.ContainerVolumeOptionChown, strings.TrimSpace(volume), "%s generation state must use exact Podman U", role)
+			require.Equal(f.t, volumeName+":", strings.TrimSpace(volume), "%s Podman mount projection must retain the named volume while omitting create-only U", role)
+			bindsJSON, bindsErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .HostConfig.Binds}}", name)
+			require.NoError(f.t, bindsErr)
+			var binds []string
+			require.NoError(f.t, json.Unmarshal([]byte(strings.TrimSpace(bindsJSON)), &binds))
+			require.Contains(f.t, binds, volumeName+":/var/lib/gordon:"+domain.ContainerVolumeOptionChown, "%s authoritative create intent must retain exact Podman U", role)
 			stateProbe := "test \"$(stat -c '%u:%g' /var/lib/gordon)\" = \"" + identity.User + "\"; chmod 0700 /var/lib/gordon; test \"$(stat -c '%a' /var/lib/gordon)\" = 700; state_probe=/var/lib/gordon/.identity-write-check; : >$state_probe; test -r $state_probe; rm $state_probe; test ! -e $state_probe; "
 			if role == "runtime" {
 				accessCommand = stateProbe + "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"

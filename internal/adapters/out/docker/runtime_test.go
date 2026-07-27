@@ -13,6 +13,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,66 @@ func TestParseVolumeOptionsSeparatesAccessFromEngineOptions(t *testing.T) {
 	assert.Nil(t, parseVolumeOptions("rw"))
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("ro,U"))
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("rw,U"))
+}
+
+func TestInspectVolumeOptionsRecoversPodmanNamedVolumeChownBind(t *testing.T) {
+	mountPoint := container.MountPoint{
+		Type:        mount.TypeVolume,
+		Name:        "gordon-runtime-migration-g1",
+		Source:      "/home/fixture/.local/share/containers/storage/volumes/gordon-runtime-migration-g1/_data",
+		Destination: "/var/lib/gordon",
+		Mode:        "",
+		RW:          true,
+	}
+
+	options := inspectVolumeOptions(mountPoint, []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"})
+
+	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, options)
+}
+
+func TestInspectVolumeOptionsRejectsUntrustedChownBindEvidence(t *testing.T) {
+	mountPoint := container.MountPoint{
+		Type:        mount.TypeVolume,
+		Name:        "gordon-runtime-migration-g1",
+		Source:      "/home/fixture/.local/share/containers/storage/volumes/gordon-runtime-migration-g1/_data",
+		Destination: "/var/lib/gordon",
+		Mode:        "",
+		RW:          true,
+	}
+	tests := map[string]struct {
+		mount container.MountPoint
+		binds []string
+	}{
+		"missing":              {mount: mountPoint},
+		"malformed":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U:extra"}},
+		"duplicate":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:U"}},
+		"conflicting":          {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw"}},
+		"bind source":          {mount: mountPoint, binds: []string{"/srv/gordon:/var/lib/gordon:U"}},
+		"unknown option":       {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U,z"}},
+		"destination mismatch": {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other:U"}},
+		"source mismatch":      {mount: mountPoint, binds: []string{"other-volume:/var/lib/gordon:U"}},
+		"read only":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:ro,U"}},
+		"mount conflict": {
+			mount: func() container.MountPoint {
+				conflicting := mountPoint
+				conflicting.Mode = "U,U"
+				return conflicting
+			}(),
+			binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			assert.Nil(t, inspectVolumeOptions(test.mount, test.binds))
+		})
+	}
+}
+
+func TestInspectVolumeOptionsLeavesDockerMountWithoutChownUnchanged(t *testing.T) {
+	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "rw", RW: true}
+
+	assert.Nil(t, inspectVolumeOptions(mountPoint, []string{"app-data:/data:rw"}))
+	assert.Nil(t, inspectVolumeOptions(mountPoint, nil))
 }
 
 func TestBuildVolumeBindsReturnsVolumeOptionValidationErrors(t *testing.T) {

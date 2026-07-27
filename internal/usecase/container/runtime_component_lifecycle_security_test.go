@@ -189,7 +189,7 @@ func TestRuntimeComponentLifecycleExistingGenerationVolumeRequiresExactU(t *test
 	}
 }
 
-func TestRuntimeComponentLifecycleAcceptsAdapterInspectionMountOptions(t *testing.T) {
+func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "control.toml")
@@ -198,33 +198,45 @@ func TestRuntimeComponentLifecycleAcceptsAdapterInspectionMountOptions(t *testin
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)
 
+	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	inspectFixture := map[string]any{
+		"Id":      "existing",
+		"Name":    "/" + command.TargetComponentID,
+		"Image":   "sha256:fixture",
+		"Created": "2026-05-05T00:00:00Z",
+		"Config": map[string]any{
+			"Image":  "gordon:fixture",
+			"User":   identity.User,
+			"Labels": componentLifecycleLabels(command),
+		},
+		"HostConfig": map[string]any{
+			"Binds":         []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U"},
+			"UsernsMode":    componentKeepIDMode(identity),
+			"CapDrop":       []string{"ALL"},
+			"CapAdd":        []string{},
+			"SecurityOpt":   []string{"no-new-privileges:true"},
+			"RestartPolicy": map[string]any{},
+		},
+		"State": map[string]any{"Status": "running", "ExitCode": 0},
+		"Mounts": []map[string]any{
+			{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
+			{"Type": "volume", "Name": volumeName, "Source": "/home/fixture/.local/share/containers/storage/volumes/" + volumeName + "/_data", "Destination": "/var/lib/gordon", "Driver": "local", "Mode": "", "RW": true, "Propagation": "rprivate"},
+		},
+		"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		require.Equal(t, http.MethodGet, request.Method)
-		require.Equal(t, "/v1.41/containers/existing/json", request.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
-			"Id":      "existing",
-			"Name":    "/" + command.TargetComponentID,
-			"Image":   "sha256:fixture",
-			"Created": "2026-05-05T00:00:00Z",
-			"Config": map[string]any{
-				"Image":  "gordon:fixture",
-				"User":   identity.User,
-				"Labels": componentLifecycleLabels(command),
-			},
-			"HostConfig": map[string]any{
-				"UsernsMode":  componentKeepIDMode(identity),
-				"CapDrop":     []string{"ALL"},
-				"CapAdd":      []string{},
-				"SecurityOpt": []string{"no-new-privileges:true"},
-			},
-			"State": map[string]any{"Status": "running", "ExitCode": 0},
-			"Mounts": []map[string]any{
-				{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
-				{"Type": "volume", "Name": componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation), "Source": "/rootless/volume", "Destination": "/var/lib/gordon", "Driver": "local", "Mode": domain.ContainerVolumeOptionChown, "RW": true, "Propagation": "rprivate"},
-			},
-			"NetworkSettings": map[string]any{"Ports": map[string]any{}},
-		}))
+		switch request.URL.Path {
+		case "/v1.41/containers/json":
+			require.NoError(t, json.NewEncoder(w).Encode([]map[string]any{{
+				"Id": "existing", "Names": []string{"/" + command.TargetComponentID}, "Image": "gordon:fixture", "ImageID": "sha256:fixture", "State": "running", "Labels": componentLifecycleLabels(command),
+			}}))
+		case "/v1.41/containers/existing/json":
+			require.NoError(t, json.NewEncoder(w).Encode(inspectFixture))
+		default:
+			http.NotFound(w, request)
+		}
 	}))
 	defer server.Close()
 
@@ -238,8 +250,57 @@ func TestRuntimeComponentLifecycleAcceptsAdapterInspectionMountOptions(t *testin
 	assert.Empty(t, inspected.VolumeMounts[0].Options, "ro is mount access metadata, not an engine-specific option")
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[1].Options)
 
-	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce}}
-	require.NoError(t, manager.validateExistingLifecycleMounts(inspected, command))
+	manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
+	for _, action := range []domain.RuntimeComponentLifecycleAction{domain.RuntimeComponentLifecycleHealth, domain.RuntimeComponentLifecycleStart} {
+		t.Run(string(action), func(t *testing.T) {
+			actionCommand := managedSecretsLifecycleCommand(domain.ComponentRoleControl, action, configPath)
+			require.NoError(t, applyTestComponentLifecycle(manager, t.Context(), actionCommand))
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleRejectsUntrustedPodmanHostBindChown(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	require.True(t, ok)
+	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+
+	for name, binds := range map[string][]string{
+		"missing U despite owned writable mount": {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:rw"},
+		"malformed U":                            {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,unknown"},
+		"conflicting duplicate":                  {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U", volumeName + ":/var/lib/gordon:rw"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				require.Equal(t, "/v1.41/containers/existing/json", request.URL.Path)
+				w.Header().Set("Content-Type", "application/json")
+				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+					"Id": "existing", "Name": "/" + command.TargetComponentID, "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
+					"Config":     map[string]any{"Image": "gordon:fixture", "User": identity.User, "Labels": componentLifecycleLabels(command)},
+					"HostConfig": map[string]any{"Binds": binds, "UsernsMode": componentKeepIDMode(identity), "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+					"State":      map[string]any{"Status": "running", "ExitCode": 0},
+					"Mounts": []map[string]any{
+						{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false},
+						{"Type": "volume", "Name": volumeName, "Source": "/home/fixture/.local/share/containers/storage/volumes/" + volumeName + "/_data", "Destination": "/var/lib/gordon", "Mode": "", "RW": true},
+					},
+					"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+				}))
+			}))
+			defer server.Close()
+
+			host := strings.TrimPrefix(server.URL, "http://")
+			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			inspected, err := dockeradapter.NewRuntimeWithClient(apiClient).InspectContainer(t.Context(), "existing")
+			require.NoError(t, err)
+			manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce}}
+			require.ErrorIs(t, manager.validateExistingLifecycleMounts(inspected, command), ErrRuntimePolicyDenied)
+		})
+	}
 }
 
 func cloneVolumeOptions(options map[string][]string) map[string][]string {
