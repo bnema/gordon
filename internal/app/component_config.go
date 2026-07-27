@@ -171,7 +171,7 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			"server": map[string]any{"data_dir": componentDataDirectory},
 			// Token references and provider credentials remain in the private role
 			// environment/secrets store, never in a generated TOML manifest.
-			"auth": map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend},
+			"auth": map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_expiry": cfg.Auth.TokenExpiry, "access_token_ttl": cfg.Auth.AccessTokenTTL},
 		}
 		for key, value := range controlRouting {
 			if key == "server" {
@@ -191,13 +191,13 @@ func componentRoleConfig(cfg Config, role domain.ComponentRole, migrationID, con
 			// Runtime validates scoped component credentials before it binds the
 			// private Unix listener. It needs the backend selection, but never a
 			// control-plane token reference or credential value in this manifest.
-			"auth":    map[string]any{"secrets_backend": cfg.Auth.SecretsBackend},
+			"auth":    map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "token_expiry": cfg.Auth.TokenExpiry},
 			"volumes": cfg.Volumes,
 		}
 	case domain.ComponentRoleRegistry:
 		return map[string]any{
 			"storage":    map[string]any{"data_dir": "/var/lib/gordon"},
-			"auth":       map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username},
+			"auth":       map[string]any{"enabled": cfg.Auth.Enabled, "type": cfg.Auth.Type, "secrets_backend": cfg.Auth.SecretsBackend, "username": cfg.Auth.Username, "token_expiry": cfg.Auth.TokenExpiry, "access_token_ttl": cfg.Auth.AccessTokenTTL},
 			"limits":     map[string]any{"max_blob_chunk_size": cfg.Server.MaxBlobChunkSize, "max_blob_size": cfg.Server.MaxBlobSize},
 			"listen":     map[string]any{"address": "0.0.0.0:" + fmt.Sprint(cfg.Server.RegistryPort), "tls": map[string]any{"mode": registryTLSDisabled}},
 			"forwarding": map[string]any{"token_env": registryForwardTokenEnvVar},

@@ -51,6 +51,17 @@ func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
 // TestMigrationInterruptedRetry documents the release invariant in a stable,
 // engine-free way. The real interruption is performed through the candidate
 // CLI in TestCompatibilityMigrationRootlessPodmanOldToSplit.
+func TestMigrationAuthDisabledEnvironmentNeedsOnlyRootlessSessionInputs(t *testing.T) {
+	environment := migrationAuthDisabledEnvironment("/run/user/1000")
+	require.ElementsMatch(t, []string{
+		"XDG_RUNTIME_DIR=/run/user/1000",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+	}, environment)
+	for _, entry := range environment {
+		require.NotContains(t, entry, "GORDON_AUTH_TOKEN_SECRET")
+	}
+}
+
 func TestMigrationInterruptedRetry(t *testing.T) {
 	require.True(t, strings.Contains(migrationScenarioOperations, "migrate prepare") && strings.Contains(migrationScenarioOperations, "migrate status"))
 }
@@ -131,6 +142,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	require.Contains(t, normalizedStatus, `"old_serving_probe_endpoint":"127.0.0.1:15000"`, "old serving proof must target the monolith's in-namespace registry listener, never rootless host-port NAT")
 	fixture.assertPreparedTargets()
 	fixture.assertPreparedRoleSecurityAndPrivateAccess()
+	fixture.assertAuthDisabledRoleIsolation()
 	fixture.assertPreparedAppNetworkHandoff()
 	fixture.assertPreparedEdgeProbeListener()
 	fixture.assertRuntimeBootstrapTransport()
@@ -360,6 +372,13 @@ func (f *realMigrationFixture) buildCandidateImage() {
 	require.Contains(f.t, entrypoint, "/usr/local/bin/gordon", "candidate image must contain the candidate Gordon binary")
 }
 
+func migrationAuthDisabledEnvironment(runtimeDir string) []string {
+	return []string{
+		"XDG_RUNTIME_DIR=" + runtimeDir,
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(runtimeDir, "bus"),
+	}
+}
+
 func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	labels = cloneMigrationLabels(labels)
 	// The old serving container is migration-owned but is not an application
@@ -372,7 +391,12 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "XDG_RUNTIME_DIR=" + f.root, "--env", "DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(f.root, "bus"), "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
+	args := []string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket}
+	for _, variable := range migrationAuthDisabledEnvironment(f.root) {
+		args = append(args, "--env", variable)
+	}
+	args = append(args, "--env", "GORDON_MIGRATION_IMAGE="+f.image)
+	args = append(args, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
@@ -646,6 +670,28 @@ func (f *realMigrationFixture) assertPreparedAppNetworkHandoff() {
 	f.t.Fatal("prepared edge was not found")
 }
 
+func (f *realMigrationFixture) assertAuthDisabledRoleIsolation() {
+	f.t.Helper()
+	containers, err := f.componentContainers()
+	require.NoError(f.t, err)
+	seen := make(map[string]bool, 4)
+	for _, container := range containers {
+		role := container.Labels[domain.LabelComponentRole]
+		if role == "" {
+			continue
+		}
+		seen[role] = true
+		command := "test -z \"${GORDON_AUTH_TOKEN_SECRET+x}\""
+		if role == "control" {
+			command += "; test \"$GNUPGHOME\" = /var/lib/gordon/secrets/current/gnupg; test \"$PASSWORD_STORE_DIR\" = /var/lib/gordon/secrets/current/password-store"
+		} else {
+			command += "; test -z \"${GNUPGHOME+x}\"; test -z \"${PASSWORD_STORE_DIR+x}\"; test ! -e /var/lib/gordon/secrets"
+		}
+		require.NoError(f.t, migrationPodman(f.ctx, "exec", container.resourceName(), "sh", "-ec", command), "%s must not receive disabled JWT auth or control-owned pass state", role)
+	}
+	require.Equal(f.t, map[string]bool{"control": true, "runtime": true, "edge": true, "registry": true}, seen)
+}
+
 func (f *realMigrationFixture) assertPreparedEdgeProbeListener() {
 	f.t.Helper()
 	containers, err := f.componentContainers()
@@ -852,11 +898,12 @@ func (f *realMigrationFixture) runFreshMigrationCLI(args ...string) (string, err
 	environment := make([]string, 0, len(os.Environ())+4)
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
-		if key != "DOCKER_HOST" && key != "CONTAINER_HOST" && key != "PODMAN_HOST" {
+		if key != "DOCKER_HOST" && key != "CONTAINER_HOST" && key != "PODMAN_HOST" && key != "GORDON_AUTH_TOKEN_SECRET" {
 			environment = append(environment, entry)
 		}
 	}
-	command.Env = append(environment, "XDG_RUNTIME_DIR="+f.root, "DBUS_SESSION_BUS_ADDRESS=unix:path="+filepath.Join(f.root, "bus"), "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
+	command.Env = append(environment, migrationAuthDisabledEnvironment(f.root)...)
+	command.Env = append(command.Env, "GORDON_MIGRATION_IMAGE="+f.image)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }

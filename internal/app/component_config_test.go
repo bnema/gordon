@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -69,6 +70,57 @@ func TestGeneratedPassRuntimeConfigRequiresInstallationScopedManagedSecretsVolum
 		_, generated, err = initConfig(path)
 		require.NoError(t, err)
 		require.Error(t, validateRuntimeManagedControlSecretsConfig(generated))
+	}
+}
+
+func TestComponentRoleConfigsPreserveAuthBehaviorWithoutSecretReferences(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run("enabled="+strconv.FormatBool(enabled), func(t *testing.T) {
+			t.Setenv(TokenSecretEnvVar, "role-config-signing-secret-at-least-32-bytes")
+			cfg := Config{}
+			cfg.Auth.Enabled = enabled
+			cfg.Auth.Type = "token"
+			cfg.Auth.SecretsBackend = "unsafe"
+			cfg.Auth.Username = "operator"
+			cfg.Auth.TokenSecret = "legacy-operator-owned-signing-reference"
+			cfg.Auth.TokenExpiry = "48h"
+			cfg.Auth.AccessTokenTTL = "20m"
+
+			files, err := WriteComponentConfigManifests(cfg, filepath.Join(t.TempDir(), "migration", "config", "fixture", "1"))
+			require.NoError(t, err)
+			byRole := componentConfigReferences(componentConfigPaths(files))
+
+			for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime} {
+				_, roleConfig, configErr := initConfig(byRole[role])
+				require.NoError(t, configErr)
+				assert.Equal(t, enabled, roleConfig.Auth.Enabled, "%s must preserve auth.enabled", role)
+				assert.Equal(t, "token", roleConfig.Auth.Type, "%s must preserve auth.type", role)
+				assert.Equal(t, "48h", roleConfig.Auth.TokenExpiry, "%s must preserve token lifetime behavior", role)
+				if role == domain.ComponentRoleControl {
+					assert.Equal(t, "operator", roleConfig.Auth.Username)
+					assert.Equal(t, "20m", roleConfig.Auth.AccessTokenTTL)
+				}
+				body, readErr := os.ReadFile(byRole[role])
+				require.NoError(t, readErr)
+				assert.NotContains(t, string(body), cfg.Auth.TokenSecret)
+			}
+
+			registryConfig, err := initRegistryConfig(byRole[domain.ComponentRoleRegistry])
+			require.NoError(t, err)
+			assert.Equal(t, enabled, registryConfig.Auth.Enabled)
+			assert.Equal(t, "token", registryConfig.Auth.Type)
+			assert.Equal(t, "operator", registryConfig.Auth.Username)
+			assert.Equal(t, "48h", registryConfig.Auth.TokenExpiry)
+			assert.Equal(t, "20m", registryConfig.Auth.AccessTokenTTL)
+			registryBody, err := os.ReadFile(byRole[domain.ComponentRoleRegistry])
+			require.NoError(t, err)
+			assert.NotContains(t, string(registryBody), cfg.Auth.TokenSecret)
+
+			edgeBody, err := os.ReadFile(byRole[domain.ComponentRoleEdge])
+			require.NoError(t, err)
+			assert.NotContains(t, string(edgeBody), "[auth]")
+			assert.NotContains(t, string(edgeBody), cfg.Auth.TokenSecret)
+		})
 	}
 }
 

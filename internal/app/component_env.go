@@ -212,6 +212,7 @@ func BuildComponentEnvManifest(options ComponentEnvManifestOptions) (*ComponentE
 	missing := make(map[string]struct{})
 	add := componentEnvAdder(manifest, options.Environment, missing)
 	addConfigOverrideEnv(options.Environment, add)
+	addMigrationJWTSigningSecret(options.Config, options.Environment, manifest, missing, add)
 	addSecretProviderEnv(options.Config, manifest, add)
 	addACMEEnv(options.Config, add)
 	addS3BackupEnv(options.Config, add)
@@ -256,18 +257,30 @@ func componentEnvAdder(manifest *ComponentEnvManifest, environment map[string]st
 }
 
 func addConfigOverrideEnv(environment map[string]string, add componentEnvAdd) {
-	// GORDON_ROLE is process-local role selection, never a config override.
+	// GORDON_ROLE is process-local role selection, never a config override. The
+	// JWT signing secret has a separate auth-aware role contract below.
 	for _, key := range sortedEnvironmentKeys(environment, func(key string) bool {
-		return strings.HasPrefix(key, "GORDON_") && key != "GORDON_ROLE" && key != "GORDON_MIGRATION_IMAGE"
+		return strings.HasPrefix(key, "GORDON_") && key != "GORDON_ROLE" && key != "GORDON_MIGRATION_IMAGE" && key != TokenSecretEnvVar
 	}) {
-		roles := []domain.ComponentRole{domain.ComponentRoleControl}
-		// Runtime must initialize the token issuer used by its local worker.
-		// Keep the signing secret scoped to the control/runtime bootstrap pair;
-		// edge and registry must never receive it.
-		if key == TokenSecretEnvVar {
-			roles = append(roles, domain.ComponentRoleRuntime)
-		}
-		add(key, roles, true)
+		add(key, []domain.ComponentRole{domain.ComponentRoleControl}, true)
+	}
+}
+
+func addMigrationJWTSigningSecret(cfg Config, environment map[string]string, manifest *ComponentEnvManifest, missing map[string]struct{}, add componentEnvAdd) {
+	if !cfg.Auth.Enabled {
+		return
+	}
+	roles := []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry}
+	add(TokenSecretEnvVar, roles, true)
+	// Migration intentionally does not transfer auth.token_secret references:
+	// legacy secret-provider ownership cannot be safely reproduced across role
+	// stores. The named environment source is the only supported handoff.
+	if len(environment[TokenSecretEnvVar]) >= 32 {
+		return
+	}
+	missing[TokenSecretEnvVar] = struct{}{}
+	for _, role := range roles {
+		delete(manifest.values[role], TokenSecretEnvVar)
 	}
 }
 

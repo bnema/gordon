@@ -35,6 +35,19 @@ export GORDON_MIGRATION_IMAGE="ghcr.io/example/gordon:<target-version>"
 
 Do not put real token values in TOML, shell history, issue reports, or logs.
 
+### Authentication signing key
+
+When `auth.enabled=true`, the migration process requires a JWT signing key of at least 32 bytes from the named environment source before `plan` can succeed:
+
+```bash
+export GORDON_AUTH_TOKEN_SECRET="$(openssl rand -hex 32)"
+gordon migrate plan --config ~/.config/gordon/gordon.toml --json
+```
+
+`auth.token_secret` remains operator-owned and is not copied from the monolith or resolved and republished into split role manifests. If `plan` reports `GORDON_AUTH_TOKEN_SECRET` as missing, set that key in the migration command's environment and rerun `plan`; the report contains the key name only, never its value. The private value is scoped to control, runtime, and registry, which perform JWT signing or symmetric verification. Edge never receives it.
+
+When `auth.enabled=false`, no JWT signing key is required or transferred. The generated control, runtime, and registry configurations retain disabled auth, and none of those roles initializes user JWT/token authentication.
+
 ## Pass secrets are operator-imported
 
 Split control owns a private `pass`/GPG store in its persistent managed volume. Migration never mounts a host keyring or password store and never imports legacy environment files automatically.
