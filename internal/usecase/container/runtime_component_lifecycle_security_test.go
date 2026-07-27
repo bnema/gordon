@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net"
@@ -14,8 +15,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/containerd/containerd/v2/pkg/cap"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/oci/caps"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -202,7 +203,7 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 	require.True(t, ok)
 
 	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
-	allCapabilities := caps.GetAllCapabilities()
+	allCapabilities := cap.Known()
 	inspectFixture := map[string]any{
 		"Id":      containerID,
 		"Name":    "/" + command.TargetComponentID,
@@ -272,11 +273,11 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 	}
 }
 
-func lifecycleNativeIDMap(roleID int) []map[string]any {
-	return []map[string]any{
-		{"ContainerID": 0, "HostID": 100000, "Size": roleID},
-		{"ContainerID": roleID, "HostID": 1000, "Size": 1},
-		{"ContainerID": roleID + 1, "HostID": 100000 + roleID, "Size": 65535 - roleID},
+func lifecycleNativeIDMap(roleID int) []string {
+	return []string{
+		fmt.Sprintf("0:1:%d", roleID),
+		fmt.Sprintf("%d:0:1", roleID),
+		fmt.Sprintf("%d:%d:%d", roleID+1, roleID+1, 65536-roleID),
 	}
 }
 
@@ -289,7 +290,7 @@ func TestRuntimeComponentLifecycleRejectsUnverifiedPrivatePodmanIdentity(t *test
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	require.True(t, ok)
-	allCapabilities := caps.GetAllCapabilities()
+	allCapabilities := cap.Known()
 
 	for name, test := range map[string]struct {
 		remote       bool

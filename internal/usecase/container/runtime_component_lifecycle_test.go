@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/containerd/containerd/v2/pkg/cap"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/oci/caps"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -384,7 +384,7 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 					_ = json.NewEncoder(w).Encode(map[string]any{
 						"Id": "existing", "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
 						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": "21003:21003", "Labels": componentLifecycleLabels(command)},
-						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "CapDrop": caps.GetAllCapabilities(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 						"State":           map[string]any{"Status": "running", "ExitCode": 0},
 						"Mounts":          []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "RW": false}},
 						"NetworkSettings": map[string]any{"Ports": map[string]any{}},

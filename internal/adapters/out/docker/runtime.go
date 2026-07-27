@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+	"github.com/containerd/containerd/v2/pkg/cap"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -37,7 +38,6 @@ import (
 	"github.com/docker/docker/api/types/strslice"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/oci/caps"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
@@ -755,11 +755,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 }
 
 func normalizeInspectedCapDrop(dropped, added []string) []string {
-	return normalizeInspectedCapDropAgainst(dropped, added, caps.GetAllCapabilities())
+	return normalizeInspectedCapDropAgainst(dropped, added, cap.Known())
 }
 
 func normalizeInspectedCapDropAgainst(dropped, added, allCapabilities []string) []string {
-	if len(added) != 0 || len(dropped) != len(allCapabilities) {
+	if len(added) != 0 || len(dropped) == 0 || len(allCapabilities) == 0 || len(dropped) != len(allCapabilities) {
 		return nil
 	}
 	expected := make(map[string]struct{}, len(allCapabilities))
@@ -816,8 +816,8 @@ type nativePodmanInspect struct {
 }
 
 type nativePodmanIDMappings struct {
-	UIDMap []nativePodmanIDMap `json:"UidMap"`
-	GIDMap []nativePodmanIDMap `json:"GidMap"`
+	UIDMap []string `json:"UidMap"`
+	GIDMap []string `json:"GidMap"`
 }
 
 type nativePodmanIDMap struct {
@@ -929,11 +929,11 @@ func validNativeKeepIDMappings(mappings nativePodmanIDMappings, identity domain.
 	if identity.UID <= 0 || identity.GID <= 0 {
 		return false
 	}
-	uid, ok := validateNativeIDMap(mappings.UIDMap, uint64(identity.UID))
+	uid, ok := parseAndValidateNativeIDMap(mappings.UIDMap, uint64(identity.UID))
 	if !ok {
 		return false
 	}
-	gid, ok := validateNativeIDMap(mappings.GIDMap, uint64(identity.GID))
+	gid, ok := parseAndValidateNativeIDMap(mappings.GIDMap, uint64(identity.GID))
 	if !ok || len(uid) != len(gid) {
 		return false
 	}
@@ -945,10 +945,55 @@ func validNativeKeepIDMappings(mappings nativePodmanIDMappings, identity domain.
 	return true
 }
 
-func validateNativeIDMap(mappings []nativePodmanIDMap, roleID uint64) ([]nativePodmanIDMap, bool) {
-	if len(mappings) < 3 || len(mappings) > maxNativePodmanIDMapEntries {
+func parseAndValidateNativeIDMap(encoded []string, roleID uint64) ([]nativePodmanIDMap, bool) {
+	if len(encoded) < 3 || len(encoded) > maxNativePodmanIDMapEntries {
 		return nil, false
 	}
+	mappings := make([]nativePodmanIDMap, len(encoded))
+	for index, entry := range encoded {
+		mapping, ok := parseNativeIDMapEntry(entry)
+		if !ok {
+			return nil, false
+		}
+		mappings[index] = mapping
+	}
+	return validateNativeIDMap(mappings, roleID)
+}
+
+func parseNativeIDMapEntry(entry string) (nativePodmanIDMap, bool) {
+	fields := strings.Split(entry, ":")
+	if len(fields) != 3 {
+		return nativePodmanIDMap{}, false
+	}
+	containerID, ok := parseCanonicalNativeID(fields[0])
+	if !ok {
+		return nativePodmanIDMap{}, false
+	}
+	hostID, ok := parseCanonicalNativeID(fields[1])
+	if !ok {
+		return nativePodmanIDMap{}, false
+	}
+	size, ok := parseCanonicalNativeID(fields[2])
+	if !ok || size == 0 {
+		return nativePodmanIDMap{}, false
+	}
+	return nativePodmanIDMap{ContainerID: containerID, HostID: hostID, Size: size}, true
+}
+
+func parseCanonicalNativeID(encoded string) (uint64, bool) {
+	if encoded == "" {
+		return 0, false
+	}
+	for index := range len(encoded) {
+		if encoded[index] < '0' || encoded[index] > '9' {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseUint(encoded, 10, 64)
+	return value, err == nil && strconv.FormatUint(value, 10) == encoded
+}
+
+func validateNativeIDMap(mappings []nativePodmanIDMap, roleID uint64) ([]nativePodmanIDMap, bool) {
 	sorted := slices.Clone(mappings)
 	slices.SortFunc(sorted, func(left, right nativePodmanIDMap) int {
 		return intCompare(left.ContainerID, right.ContainerID)
@@ -956,21 +1001,32 @@ func validateNativeIDMap(mappings []nativePodmanIDMap, roleID uint64) ([]nativeP
 	roleEntries := 0
 	var containerEnd uint64
 	for _, mapping := range sorted {
-		if !validNativeIDMapRange(mapping) || mapping.ContainerID != containerEnd {
+		if !validNativeIDMapRange(mapping) || mapping.ContainerID != containerEnd || !coherentNativeKeepIDRange(mapping, roleID) {
 			return nil, false
 		}
 		containerEnd = mapping.ContainerID + mapping.Size
 		if mapping.ContainerID == roleID {
-			if mapping.Size != 1 || mapping.HostID == 0 {
-				return nil, false
-			}
 			roleEntries++
 		}
 	}
-	if roleEntries != 1 || containerEnd <= roleID+1 || nativeHostRangesOverlap(sorted) {
+	if roleEntries != 1 || containerEnd <= roleID+1 || !nativeHostRangesCoherent(sorted, containerEnd) {
 		return nil, false
 	}
 	return sorted, true
+}
+
+func coherentNativeKeepIDRange(mapping nativePodmanIDMap, roleID uint64) bool {
+	rangeEnd := mapping.ContainerID + mapping.Size
+	switch {
+	case rangeEnd <= roleID:
+		return mapping.HostID == mapping.ContainerID+1
+	case mapping.ContainerID == roleID:
+		return mapping.HostID == 0 && mapping.Size == 1
+	case mapping.ContainerID > roleID:
+		return mapping.HostID == mapping.ContainerID
+	default:
+		return false
+	}
 }
 
 func validNativeIDMapRange(mapping nativePodmanIDMap) bool {
@@ -978,17 +1034,19 @@ func validNativeIDMapRange(mapping nativePodmanIDMap) bool {
 		mapping.Size <= maxLinuxIDExclusive-mapping.ContainerID && mapping.Size <= maxLinuxIDExclusive-mapping.HostID
 }
 
-func nativeHostRangesOverlap(mappings []nativePodmanIDMap) bool {
+func nativeHostRangesCoherent(mappings []nativePodmanIDMap, expectedEnd uint64) bool {
 	byHost := slices.Clone(mappings)
 	slices.SortFunc(byHost, func(left, right nativePodmanIDMap) int {
 		return intCompare(left.HostID, right.HostID)
 	})
-	for index := 1; index < len(byHost); index++ {
-		if byHost[index].HostID < byHost[index-1].HostID+byHost[index-1].Size {
-			return true
+	var hostEnd uint64
+	for _, mapping := range byHost {
+		if mapping.HostID != hostEnd {
+			return false
 		}
+		hostEnd = mapping.HostID + mapping.Size
 	}
-	return false
+	return hostEnd == expectedEnd
 }
 
 func intCompare(left, right uint64) int {
