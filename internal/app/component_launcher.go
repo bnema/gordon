@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -39,7 +41,9 @@ type RuntimeHandoffClient interface {
 
 // RuntimeHandoffDialer creates an authenticated client for the deterministic
 // bootstrap endpoint of the prepared runtime. Implementations must not fall
-// back to the old runtime endpoint on an error.
+// back to the old runtime endpoint on an error. A production-created client
+// must implement io.Closer; ownership transfers to RuntimeComponentLauncher
+// when the dial succeeds. Non-closing injected fakes remain caller-owned.
 type RuntimeHandoffDialer func(context.Context, ComponentLaunchComponent) (RuntimeHandoffClient, error)
 
 type ComponentLauncher interface {
@@ -229,19 +233,37 @@ func componentEnvReferences(references []string) map[domain.ComponentRole]string
 // RuntimeComponentLauncher serializes lifecycle intents into authenticated
 // RuntimeSelfUpdate commands. It has no container runtime field by design.
 type RuntimeComponentLauncher struct {
-	mu      sync.RWMutex
-	runtime out.RuntimeSelfUpdater
-	handoff RuntimeHandoffDialer
-	now     func() time.Time
+	handoffMu    sync.Mutex
+	mu           sync.RWMutex
+	runtime      out.RuntimeSelfUpdater
+	ownedRuntime io.Closer
+	handoff      RuntimeHandoffDialer
+	now          func() time.Time
+	closed       bool
+	closeErr     error
 }
 
 func NewRuntimeComponentLauncher(runtime out.RuntimeSelfUpdater) (*RuntimeComponentLauncher, error) {
 	return NewRuntimeComponentLauncherWithHandoff(runtime, nil)
 }
 
+// NewRuntimeComponentLauncherWithOwnedRuntime is the explicit ownership form
+// for a runtime client created solely for this launcher. Injected clients
+// should use NewRuntimeComponentLauncher and remain caller-owned.
+func NewRuntimeComponentLauncherWithOwnedRuntime(runtime out.RuntimeSelfUpdater) (*RuntimeComponentLauncher, error) {
+	launcher, err := NewRuntimeComponentLauncher(runtime)
+	if err != nil {
+		return nil, err
+	}
+	launcher.ownedRuntime, _ = runtime.(io.Closer)
+	return launcher, nil
+}
+
 // NewRuntimeComponentLauncherWithHandoff makes runtime authority swappable
 // only after a live, authenticated replacement has proved its identity and
 // actual-state stream. Until then all commands continue to use oldRuntime.
+// oldRuntime remains caller-owned even when it implements io.Closer. The
+// launcher owns only successful clients returned by handoff.
 func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, handoff RuntimeHandoffDialer) (*RuntimeComponentLauncher, error) {
 	if oldRuntime == nil {
 		return nil, fmt.Errorf("runtime self-update client is required")
@@ -283,6 +305,15 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 	if l == nil || l.handoff == nil {
 		return fmt.Errorf("runtime handoff target is not configured")
 	}
+	l.handoffMu.Lock()
+	defer l.handoffMu.Unlock()
+
+	l.mu.RLock()
+	closed := l.closed
+	l.mu.RUnlock()
+	if closed {
+		return fmt.Errorf("runtime component launcher is closed")
+	}
 	// This acknowledgement is deliberately sent through the old authority. It
 	// authorizes bootstrap but does not claim the handoff succeeded.
 	if err := l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentGeneration(component), componentMigrationID(component), "transfer-channel"); err != nil {
@@ -292,18 +323,61 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("connect authenticated replacement runtime: %w", err)
 	}
+	targetCloser, _ := target.(io.Closer)
 	if err := proveRuntimeHandoff(ctx, target, component); err != nil {
-		if closer, ok := target.(interface{ Close() error }); ok {
-			if closeErr := closer.Close(); closeErr != nil {
-				return fmt.Errorf("prove replacement runtime: %w (close failed: %v)", err, closeErr)
-			}
+		if closeErr := closeRuntimeClient(targetCloser); closeErr != nil {
+			return fmt.Errorf("prove replacement runtime: %w (close failed: %v)", err, closeErr)
 		}
 		return fmt.Errorf("prove replacement runtime: %w", err)
 	}
 	l.mu.Lock()
+	previousOwned := l.ownedRuntime
 	l.runtime = target
+	l.ownedRuntime = targetCloser
 	l.mu.Unlock()
+	if closeErr := closeRuntimeClient(previousOwned); closeErr != nil {
+		l.mu.Lock()
+		l.closeErr = errors.Join(l.closeErr, fmt.Errorf("close replaced runtime client: %w", closeErr))
+		l.mu.Unlock()
+	}
 	return nil
+}
+
+// Close releases only runtime clients whose ownership arrived through a
+// successful handoff. The initial injected authority is never closed here.
+func (l *RuntimeComponentLauncher) Close() error {
+	if l == nil {
+		return nil
+	}
+	l.handoffMu.Lock()
+	defer l.handoffMu.Unlock()
+	l.mu.Lock()
+	if l.closed {
+		err := l.closeErr
+		l.mu.Unlock()
+		return err
+	}
+	l.closed = true
+	owned := l.ownedRuntime
+	l.ownedRuntime = nil
+	l.runtime = nil
+	l.mu.Unlock()
+	if err := closeRuntimeClient(owned); err != nil {
+		l.mu.Lock()
+		l.closeErr = errors.Join(l.closeErr, fmt.Errorf("close active runtime client: %w", err))
+		l.mu.Unlock()
+	}
+	l.mu.RLock()
+	err := l.closeErr
+	l.mu.RUnlock()
+	return err
+}
+
+func closeRuntimeClient(client io.Closer) error {
+	if client == nil {
+		return nil
+	}
+	return client.Close()
 }
 
 const (

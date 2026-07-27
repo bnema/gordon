@@ -213,6 +213,9 @@ func TestRuntimeHandoffDialerUsesHostBindWhileComponentKeepsFixedPath(t *testing
 
 	target, err := newRuntimeHandoffDialer(RuntimeControlConfig{Token: token})(t.Context(), runtimeComponent)
 	require.NoError(t, err)
+	closer, ok := target.(interface{ Close() error })
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
 	require.NoError(t, target.PingRuntime(t.Context()))
 	assert.NoFileExists(t, "/var/lib/gordon/migration/fixture/runtime-control.sock", "the host coordinator must not depend on the component namespace")
 	assert.Equal(t, "unix:///var/lib/gordon/migration/fixture/runtime-control.sock", migrationRuntimeSocketEndpoint("fixture"), "generated runtime config keeps the component endpoint")

@@ -24,13 +24,41 @@ import (
 )
 
 func TestCreateRuntimeCommandClientFromEndpoint(t *testing.T) {
-	client, err := createRuntimeCommandClient(context.Background(), RuntimeControlConfig{Endpoint: "runtime.example.com:443", Token: "token"})
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, err := createRuntimeCommandClient(t.Context(), RuntimeControlConfig{Endpoint: "runtime.example.com:443", Token: "token"})
+	require.NoError(t, err)
+	require.NotNil(t, client)
+	closer, ok := client.(interface{ Close() error })
+	require.True(t, ok, "created runtime clients must expose connection cleanup")
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
 
-	client, err = createRuntimeCommandClient(context.Background(), RuntimeControlConfig{})
+	client, err = createRuntimeCommandClient(t.Context(), RuntimeControlConfig{})
 	assert.NoError(t, err)
 	assert.Nil(t, client)
+}
+
+func TestCreatedRuntimeCommandClientClosesWithApplicationContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	client, err := createRuntimeCommandClient(ctx, RuntimeControlConfig{Endpoint: "runtime.example.com:443", Token: "token"})
+	require.NoError(t, err)
+	owner, ok := client.(interface{ AddOwnedCloser(io.Closer) error })
+	require.True(t, ok)
+	closed := make(signalCloser)
+	require.NoError(t, owner.AddOwnedCloser(closed))
+
+	cancel()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("application cancellation did not close its runtime client resources")
+	}
+	require.NoError(t, client.(io.Closer).Close(), "explicit cleanup after cancellation must be idempotent")
+}
+
+type signalCloser chan struct{}
+
+func (closer signalCloser) Close() error {
+	close(closer)
+	return nil
 }
 
 func TestCreateRuntimeCommandClientUsesPrivateUnixSocketWithRequiredToken(t *testing.T) {
@@ -40,6 +68,9 @@ func TestCreateRuntimeCommandClientUsesPrivateUnixSocketWithRequiredToken(t *tes
 	})
 	require.NoError(t, err)
 	require.NotNil(t, client)
+	closer, ok := client.(interface{ Close() error })
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
 	_, err = createRuntimeCommandClient(context.Background(), RuntimeControlConfig{Endpoint: "unix:///var/lib/gordon/migration/fixture/runtime-control.sock"})
 	require.Error(t, err, "Unix transport requires a component token")
 }
@@ -76,6 +107,9 @@ func TestPostHandoffRuntimeClientDialsOnlyValidatedHostMigrationSocket(t *testin
 	endpoint := "unix://" + path
 	client, err := createPostHandoffRuntimeCommandClient(t.Context(), RuntimeControlConfig{Endpoint: endpoint, Token: token}, root)
 	require.NoError(t, err)
+	closer, ok := client.(interface{ Close() error })
+	require.True(t, ok)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
 	health, ok := client.(out.RuntimeHealthClient)
 	require.True(t, ok)
 	require.NoError(t, health.PingRuntime(t.Context()), "the generated recovery token must authenticate over the host socket")
@@ -315,6 +349,72 @@ type recoveryRuntimeHealthServer struct {
 
 func (recoveryRuntimeHealthServer) GetHealth(context.Context, *runtimev1.GetHealthRequest) (*runtimev1.GetHealthResponse, error) {
 	return &runtimev1.GetHealthResponse{Message: "healthy"}, nil
+}
+
+func TestRuntimeComponentLauncherOwnsOnlySuccessfulHandoffClients(t *testing.T) {
+	oldRuntime := &ownedHandoffRuntime{}
+	component := ComponentLaunchComponent{
+		Role:        domain.ComponentRoleRuntime,
+		ComponentID: "gordon-runtime-fixture-g1",
+		Labels: map[string]string{
+			domain.LabelComponentVersion:     "v2",
+			domain.LabelComponentGeneration:  "1",
+			domain.LabelComponentMigrationID: "fixture",
+		},
+	}
+	validState := domain.RuntimeActualStateSnapshot{
+		SourceComponentID: component.ComponentID,
+		Containers: []domain.RuntimeContainerState{{
+			Name:   component.ComponentID,
+			Status: domain.ContainerStatusRunning,
+			Labels: map[string]string{
+				domain.LabelComponent:           "true",
+				domain.LabelComponentRole:       string(domain.ComponentRoleRuntime),
+				domain.LabelComponentGeneration: "1",
+			},
+		}},
+	}
+	first := &ownedHandoffRuntime{handoffRuntime: handoffRuntime{probe: out.RuntimeEnvironment{APIReachable: true, Rootless: true}, states: []domain.RuntimeActualStateSnapshot{validState}}}
+	second := &ownedHandoffRuntime{handoffRuntime: handoffRuntime{probe: out.RuntimeEnvironment{APIReachable: true, Rootless: true}, states: []domain.RuntimeActualStateSnapshot{validState}}}
+	targets := []*ownedHandoffRuntime{first, second}
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(oldRuntime, func(context.Context, ComponentLaunchComponent) (RuntimeHandoffClient, error) {
+		target := targets[0]
+		targets = targets[1:]
+		return target, nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, launcher.TransferRuntimeCommandChannel(t.Context(), component))
+	assert.Zero(t, oldRuntime.closeCalls, "the launcher must not close an injected initial authority")
+	assert.Zero(t, first.closeCalls, "the active handoff connection must remain open")
+
+	require.NoError(t, launcher.TransferRuntimeCommandChannel(t.Context(), component))
+	assert.Equal(t, 1, first.closeCalls, "replacing an owned handoff connection must close it")
+	assert.Zero(t, second.closeCalls)
+
+	require.NoError(t, launcher.Close())
+	require.NoError(t, launcher.Close(), "launcher cleanup must be idempotent")
+	assert.Equal(t, 1, second.closeCalls, "launcher shutdown must close the active handoff connection")
+	assert.Zero(t, oldRuntime.closeCalls, "launcher shutdown must not close an injected initial authority")
+}
+
+func TestRuntimeComponentLauncherClosesExplicitlyOwnedInitialClient(t *testing.T) {
+	runtime := &ownedHandoffRuntime{}
+	launcher, err := NewRuntimeComponentLauncherWithOwnedRuntime(runtime)
+	require.NoError(t, err)
+
+	require.NoError(t, launcher.Close())
+	assert.Equal(t, 1, runtime.closeCalls)
+}
+
+type ownedHandoffRuntime struct {
+	handoffRuntime
+	closeCalls int
+}
+
+func (r *ownedHandoffRuntime) Close() error {
+	r.closeCalls++
+	return nil
 }
 
 func TestRuntimeControlConfigDefaultsAndMapsInsecureTransportOptIn(t *testing.T) {

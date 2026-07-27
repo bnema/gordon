@@ -32,7 +32,8 @@ func OpenMigrationCheckpointStore(configPath string) (*MigrationCheckpointStore,
 // NewPostHandoffMigrationRecovery constructs the deliberately narrow recovery
 // plane used only after the old runtime has transferred authority. It connects
 // exclusively to the replacement Gordon runtime's authenticated Unix RPC; it
-// never constructs an engine client or accepts an engine socket endpoint.
+// never constructs an engine client or accepts an engine socket endpoint. The
+// caller owns the returned service and must Close it after the recovery action.
 func NewPostHandoffMigrationRecovery(configPath string) (*MigrationService, error) {
 	_, cfg, err := initConfig(configPath)
 	if err != nil {
@@ -49,13 +50,16 @@ func NewPostHandoffMigrationRecovery(configPath string) (*MigrationService, erro
 		}
 		runtime, ok := client.(RuntimeHandoffClient)
 		if !ok {
+			if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
+				return nil, fmt.Errorf("replacement Gordon runtime does not support recovery (close failed: %v)", closeErr)
+			}
 			return nil, fmt.Errorf("replacement Gordon runtime does not support recovery")
 		}
 		return runtime, nil
 	})
 }
 
-func newPostHandoffMigrationRecovery(cfg Config, store *MigrationCheckpointStore, dial func(context.Context, RuntimeControlConfig) (RuntimeHandoffClient, error)) (*MigrationService, error) {
+func newPostHandoffMigrationRecovery(cfg Config, store *MigrationCheckpointStore, dial func(context.Context, RuntimeControlConfig) (RuntimeHandoffClient, error)) (_ *MigrationService, retErr error) {
 	if store == nil || dial == nil {
 		return nil, fmt.Errorf("post-handoff migration recovery is not configured")
 	}
@@ -95,10 +99,12 @@ func newPostHandoffMigrationRecovery(cfg Config, store *MigrationCheckpointStore
 	if runtime == nil {
 		return nil, fmt.Errorf("replacement Gordon runtime is unavailable")
 	}
-	launcher, err := NewRuntimeComponentLauncher(runtime)
+	launcher, err := NewRuntimeComponentLauncherWithOwnedRuntime(runtime)
 	if err != nil {
 		return nil, fmt.Errorf("create post-handoff runtime launcher: %w", err)
 	}
+	keepLauncher := false
+	defer closePostHandoffLauncherOnError(&retErr, launcher, &keepLauncher)
 	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(MigrationPreflightProbes{}), store, launcher)
 	if err != nil {
 		return nil, fmt.Errorf("create post-handoff migration orchestrator: %w", err)
@@ -112,7 +118,17 @@ func newPostHandoffMigrationRecovery(cfg Config, store *MigrationCheckpointStore
 		return nil, fmt.Errorf("create post-handoff migration traffic switch: %w", err)
 	}
 	orchestrator.WithTrafficSwitcher(switcher)
-	return (&MigrationService{store: store}).WithMigrationOrchestrator(orchestrator), nil
+	keepLauncher = true
+	return (&MigrationService{store: store}).WithMigrationOrchestrator(orchestrator).withLifecycleOwner(launcher), nil
+}
+
+func closePostHandoffLauncherOnError(retErr *error, launcher *RuntimeComponentLauncher, keep *bool) {
+	if retErr == nil || launcher == nil || (keep != nil && *keep) {
+		return
+	}
+	if closeErr := launcher.Close(); closeErr != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("close post-handoff runtime launcher: %w", closeErr))
+	}
 }
 
 // ResumePostHandoff resumes the only safe incomplete state after authority has

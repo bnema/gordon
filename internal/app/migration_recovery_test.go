@@ -18,6 +18,16 @@ import (
 
 type recoveryRuntime struct{}
 
+type closingRecoveryRuntime struct {
+	recoveryRuntime
+	closed bool
+}
+
+func (r *closingRecoveryRuntime) Close() error {
+	r.closed = true
+	return nil
+}
+
 func (recoveryRuntime) SelfUpdateRuntime(context.Context, domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
 	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
 }
@@ -47,16 +57,20 @@ func TestPostHandoffRecoveryUsesCheckpointedRuntimeCredential(t *testing.T) {
 	cfg.Server.DataDir = dataDir
 	cfg.Runtime.Token = "source-runtime-token-must-not-authenticate-recovery"
 	var got RuntimeControlConfig
+	runtime := &closingRecoveryRuntime{}
 	recovery, err := newPostHandoffMigrationRecovery(cfg, store, func(_ context.Context, target RuntimeControlConfig) (RuntimeHandoffClient, error) {
 		got = target
-		return recoveryRuntime{}, nil
+		return runtime, nil
 	})
 	require.NoError(t, err)
 	require.NotNil(t, recovery)
+	t.Cleanup(func() { require.NoError(t, recovery.Close()) })
 	assert.Equal(t, "unix://"+filepath.Join(dataDir, "migration", "fixture", bootstrapRuntimeSocketName), got.Endpoint)
 	assert.Equal(t, "generated-replacement-runtime-token", got.Token)
 	assert.Empty(t, got.TokenEnv)
 	assert.NotEqual(t, cfg.Runtime.Token, got.Token)
+	require.NoError(t, recovery.Close())
+	assert.True(t, runtime.closed, "post-handoff recovery must close its explicitly owned runtime client")
 
 	checkpoint.BootstrapRuntimeEndpoint = "unix:///var/run/docker.sock"
 	_, err = validatePostHandoffRuntimeEndpoint(checkpoint, dataDir)

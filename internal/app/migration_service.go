@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ type MigrationService struct {
 	externalRoutes any
 	candidateImage string
 	orchestrator   *MigrationOrchestrator
+	lifecycleOwner io.Closer
 }
 
 // NewMigrationService requires the explicit, already-loaded component env
@@ -69,6 +71,22 @@ func (s *MigrationService) WithMigrationCandidateImage(image string) *MigrationS
 		s.candidateImage = strings.TrimSpace(image)
 	}
 	return s
+}
+
+func (s *MigrationService) withLifecycleOwner(owner io.Closer) *MigrationService {
+	if s != nil {
+		s.lifecycleOwner = owner
+	}
+	return s
+}
+
+// Close releases transports created exclusively for this migration facade.
+// Most services have no lifecycle owner and therefore close as a no-op.
+func (s *MigrationService) Close() error {
+	if s == nil || s.lifecycleOwner == nil {
+		return nil
+	}
+	return s.lifecycleOwner.Close()
 }
 
 func (s *MigrationService) Plan(ctx context.Context) (MigrationPreflightReport, error) {

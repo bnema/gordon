@@ -35,7 +35,7 @@ type RuntimeControlConfig struct {
 	Insecure                    bool   `mapstructure:"insecure"`
 }
 
-func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (out.RuntimeCommandClient, error) {
+func createRuntimeCommandClient(ctx context.Context, cfg RuntimeControlConfig) (out.RuntimeCommandClient, error) {
 	endpoint := strings.TrimSpace(cfg.Endpoint)
 	if endpoint == "" {
 		return nil, nil
@@ -78,7 +78,7 @@ func createRuntimeCommandClient(_ context.Context, cfg RuntimeControlConfig) (ou
 	if err != nil {
 		return nil, fmt.Errorf("create runtime command client: %w", err)
 	}
-	return outruntime.NewClient(conn), nil
+	return outruntime.NewOwnedClient(ctx, conn), nil
 }
 
 // createPostHandoffRuntimeCommandClient is intentionally separate from the
@@ -128,6 +128,9 @@ func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlC
 	}
 	receiver, ok := client.(out.RouteDrainAckReceiver)
 	if !ok {
+		if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
+			return nil, fmt.Errorf("runtime command client does not provide route drain acknowledgement (close failed: %v)", closeErr)
+		}
 		return nil, fmt.Errorf("runtime command client does not provide route drain acknowledgement")
 	}
 	return receiver, nil
@@ -154,6 +157,9 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 		}
 		handoff, ok := client.(RuntimeHandoffClient)
 		if !ok {
+			if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
+				return nil, fmt.Errorf("replacement runtime client lacks handoff protocol (close failed: %v)", closeErr)
+			}
 			return nil, fmt.Errorf("replacement runtime client lacks handoff protocol")
 		}
 		return handoff, nil
@@ -198,16 +204,10 @@ func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, targ
 	if err != nil {
 		return nil, fmt.Errorf("create private runtime client: %w", err)
 	}
-	return &privateRuntimeCommandClient{Client: outruntime.NewClient(conn), conn: conn}, nil
-}
-
-type privateRuntimeCommandClient struct {
-	*outruntime.Client
-	conn *grpc.ClientConn
-}
-
-func (c *privateRuntimeCommandClient) Close() error {
-	return c.conn.Close()
+	// The launcher assumes ownership of private handoff clients returned by its
+	// dialer. No operation context is attached here because successful handoffs
+	// must survive the request that proved them; launcher Close is the owner.
+	return outruntime.NewOwnedClient(context.Background(), conn), nil
 }
 
 // WaitForReady retries ordinary picker errors but deliberately fails gRPC
@@ -256,6 +256,9 @@ func createRuntimeStateSubscriber(ctx context.Context, cfg RuntimeControlConfig)
 	}
 	subscriber, ok := client.(out.RuntimeStateSubscriber)
 	if !ok {
+		if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
+			return nil, fmt.Errorf("runtime command client does not provide actual-state subscription (close failed: %v)", closeErr)
+		}
 		return nil, fmt.Errorf("runtime command client does not provide actual-state subscription")
 	}
 	return subscriber, nil

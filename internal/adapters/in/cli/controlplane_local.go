@@ -166,7 +166,11 @@ func (p *durableMigrationControlPlane) MigrationSwitch(ctx context.Context) (*ap
 		if err != nil {
 			return nil, err
 		}
-		return recovery.Switch(ctx)
+		result, switchErr := recovery.Switch(ctx)
+		if closeErr := recovery.Close(); closeErr != nil {
+			switchErr = errors.Join(switchErr, fmt.Errorf("close post-handoff migration recovery: %w", closeErr))
+		}
+		return result, switchErr
 	}
 	local, err := p.localMigration()
 	if err != nil {
@@ -187,7 +191,11 @@ func (p *durableMigrationControlPlane) MigrationResume(ctx context.Context) (*ap
 		if err != nil {
 			return nil, err
 		}
-		return recovery.ResumePostHandoff(ctx)
+		result, resumeErr := recovery.ResumePostHandoff(ctx)
+		if closeErr := recovery.Close(); closeErr != nil {
+			resumeErr = errors.Join(resumeErr, fmt.Errorf("close post-handoff migration recovery: %w", closeErr))
+		}
+		return result, resumeErr
 	}
 	local, err := p.localMigration()
 	if err != nil {

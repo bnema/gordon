@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -35,7 +37,7 @@ import (
 // newControlRoleServices constructs only control-owned services. In particular
 // it does not call createOutputAdapters or createStorage: container sockets,
 // registry storage, and public traffic listeners belong to other roles.
-func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string, preflightProduction PreflightProductionDependencies) (*services, error) {
+func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string, preflightProduction PreflightProductionDependencies) (_ *services, retErr error) {
 	configSvc := configusecase.NewService(v, nil)
 	if err := configSvc.Load(ctx); err != nil {
 		return nil, fmt.Errorf("load control configuration: %w", err)
@@ -57,6 +59,9 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if svc.runtimeCommandClient, err = createRuntimeCommandClient(ctx, cfg.Runtime); err != nil {
 		return nil, err
 	}
+	// The application context is the normal close point. Also close immediately
+	// if later service construction fails while that context remains live.
+	defer closeOwnedRuntimeCommandClientOnError(&retErr, svc.runtimeCommandClient)
 	initRuntimeControlFacade(svc)
 	svc.healthSvc = newControlHealthService(configSvc, svc.runtimeControl)
 	svc.reloadCoordinator = newReloadCoordinator(v, configSvc, nil, nil, nil, nil, log)
@@ -244,7 +249,31 @@ func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, c
 	}
 	orchestrator.WithTrafficSwitcher(switcher)
 	svc.migrationSvc.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE"))
+	if owner, ok := svc.runtimeCommandClient.(interface{ AddOwnedCloser(io.Closer) error }); ok {
+		if err := owner.AddOwnedCloser(launcher); err != nil {
+			return fmt.Errorf("own runtime component launcher: %w", err)
+		}
+	}
+	// Injected clients without ownership support remain caller-owned and are
+	// deliberately not closed by application wiring.
 	return nil
+}
+
+func closeOwnedRuntimeCommandClient(client out.RuntimeCommandClient) error {
+	closer, ok := client.(io.Closer)
+	if !ok {
+		return nil
+	}
+	return closer.Close()
+}
+
+func closeOwnedRuntimeCommandClientOnError(retErr *error, client out.RuntimeCommandClient) {
+	if retErr == nil || *retErr == nil {
+		return
+	}
+	if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
+		*retErr = errors.Join(*retErr, fmt.Errorf("close runtime command client after initialization failure: %w", closeErr))
+	}
 }
 
 // controlHealthService translates the runtime status facade into the existing

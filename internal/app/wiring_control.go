@@ -77,6 +77,11 @@ func runControlImpl(ctx context.Context, configPath string) error {
 }
 
 func runControlWithDependencies(ctx context.Context, configPath string, deps controlRoleDependencies) error {
+	// All ordinary runtime gRPC clients created during control wiring are owned
+	// by this derived application lifetime, including startup-error returns.
+	ctx, cancelRuntimeClients := context.WithCancel(ctx)
+	defer cancelRuntimeClients()
+
 	v, cfg, err := initConfig(configPath)
 	if err != nil {
 		return err

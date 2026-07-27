@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"sync"
 
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -19,17 +20,109 @@ import (
 // Client adapts runtime gRPC calls to outbound runtime control boundaries.
 type Client struct {
 	client runtimev1.RuntimeServiceClient
+
+	closeOnce sync.Once
+	closeMu   sync.Mutex
+	closeDone chan struct{}
+	closeErr  error
+	closed    bool
+	conn      io.Closer
+	owned     []io.Closer
+	stopClose func() bool
 }
 
 var _ out.RuntimeStandaloneServiceManager = (*Client)(nil)
 var _ out.RuntimeEnvironmentProbe = (*Client)(nil)
 
+// NewClient adapts a caller-owned connection. Close is safe but does not close
+// conn; callers that create a grpc.ClientConn must retain and close it.
 func NewClient(conn grpc.ClientConnInterface) *Client {
-	return &Client{client: runtimev1.NewRuntimeServiceClient(conn)}
+	return newClient(runtimev1.NewRuntimeServiceClient(conn), nil)
+}
+
+// NewOwnedClient adapts and owns conn. Close releases the connection and any
+// closers registered with AddOwnedCloser. Cancellation of lifecycleCtx closes
+// the client, making application context cancellation an explicit close point.
+func NewOwnedClient(lifecycleCtx context.Context, conn interface {
+	grpc.ClientConnInterface
+	io.Closer
+}) *Client {
+	client := newClient(runtimev1.NewRuntimeServiceClient(conn), conn)
+	if lifecycleCtx != nil {
+		stopClose := context.AfterFunc(lifecycleCtx, func() { _ = client.Close() })
+		client.closeMu.Lock()
+		if client.closed {
+			client.closeMu.Unlock()
+			stopClose()
+		} else {
+			client.stopClose = stopClose
+			client.closeMu.Unlock()
+		}
+	}
+	return client
 }
 
 func NewClientWithRuntimeService(client runtimev1.RuntimeServiceClient) *Client {
-	return &Client{client: client}
+	return newClient(client, nil)
+}
+
+func newClient(client runtimev1.RuntimeServiceClient, conn io.Closer) *Client {
+	return &Client{client: client, conn: conn, closeDone: make(chan struct{})}
+}
+
+// AddOwnedCloser ties a dependent transport to this client's lifecycle. It is
+// used when an application-owned authority client creates a replacement
+// authority whose connection must close with the same application.
+func (c *Client) AddOwnedCloser(closer io.Closer) error {
+	if closer == nil {
+		return nil
+	}
+	c.closeMu.Lock()
+	if !c.closed {
+		c.owned = append(c.owned, closer)
+		c.closeMu.Unlock()
+		return nil
+	}
+	c.closeMu.Unlock()
+	return closer.Close()
+}
+
+// Close is idempotent. NewClient is non-owning, so Close is a no-op for its
+// caller-owned connection; NewOwnedClient closes all resources it owns.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	c.closeOnce.Do(func() {
+		c.closeMu.Lock()
+		c.closed = true
+		owned := append([]io.Closer(nil), c.owned...)
+		c.owned = nil
+		conn := c.conn
+		c.conn = nil
+		stopClose := c.stopClose
+		c.stopClose = nil
+		c.closeMu.Unlock()
+
+		if stopClose != nil {
+			stopClose()
+		}
+		var closeErr error
+		for i := len(owned) - 1; i >= 0; i-- {
+			closeErr = errors.Join(closeErr, owned[i].Close())
+		}
+		if conn != nil {
+			closeErr = errors.Join(closeErr, conn.Close())
+		}
+		c.closeMu.Lock()
+		c.closeErr = closeErr
+		close(c.closeDone)
+		c.closeMu.Unlock()
+	})
+	<-c.closeDone
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	return c.closeErr
 }
 
 func (c *Client) DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {

@@ -40,10 +40,11 @@ type Kernel struct {
 	// not create migration files or contact the runtime. The initializer is
 	// composed around the already-running monolith runtime worker, never a
 	// second Docker/Podman adapter owned by the CLI.
-	migrationOnce sync.Once
-	migrationSvc  *MigrationService
-	migrationErr  error
-	migrationInit func() (*MigrationService, error)
+	migrationOnce   sync.Once
+	migrationSvc    *MigrationService
+	migrationErr    error
+	migrationInit   func() (*MigrationService, error)
+	migrationCloser io.Closer
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -111,7 +112,11 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			cleanup:         wrappedCleanup,
 		}
 		kernel.migrationInit = func() (*MigrationService, error) {
-			return newMonolithMigrationService(configPath, cfg, svc)
+			migration, launcher, migrationErr := newMonolithMigrationService(configPath, cfg, svc)
+			if migrationErr == nil {
+				kernel.migrationCloser = launcher
+			}
+			return migration, migrationErr
 		}
 		return kernel, nil
 	} else {
@@ -145,11 +150,17 @@ func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
 }
 
 func (k *Kernel) Close() error {
-	if k == nil || k.cleanup == nil {
+	if k == nil {
 		return nil
 	}
-	k.cleanup()
-	return nil
+	var closeErr error
+	if k.migrationCloser != nil {
+		closeErr = k.migrationCloser.Close()
+	}
+	if k.cleanup != nil {
+		k.cleanup()
+	}
+	return closeErr
 }
 
 func (k *Kernel) Config() in.ConfigService { return k.configSvc }
@@ -227,9 +238,9 @@ func (r *monolithMigrationRuntime) SubscribeRuntimeState(ctx context.Context) (<
 	return updates, nil
 }
 
-func newMonolithMigrationService(configPath string, cfg Config, svc *services) (*MigrationService, error) {
+func newMonolithMigrationService(configPath string, cfg Config, svc *services) (*MigrationService, *RuntimeComponentLauncher, error) {
 	if svc == nil || svc.runtime == nil || svc.containerSvc == nil {
-		return nil, fmt.Errorf("monolith runtime migration is unavailable")
+		return nil, nil, fmt.Errorf("monolith runtime migration is unavailable")
 	}
 	// The worker is the existing monolith socket authority. It is retained only
 	// until the split runtime channel handoff; no local CLI capability reaches
@@ -243,12 +254,12 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	bridge := &monolithMigrationRuntime{worker: worker, probe: svc.runtime, listenerProbe: svc.runtime}
 	store, err := NewMigrationCheckpointStore(migrationCheckpointPath(cfg.Server.DataDir))
 	if err != nil {
-		return nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)
+		return nil, nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)
 	}
 	preflight := newControlMigrationPreflight(configPath, cfg, bridge, bridge).withSelectedLocalRuntimeEndpoint(svc.runtimeEndpoint)
 	v, _, err := initConfig(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("load migration routing configuration: %w", err)
+		return nil, nil, fmt.Errorf("load migration routing configuration: %w", err)
 	}
 	migration, err := NewMigrationService(preflight, store, MigrationEnvOptions{
 		Config:          cfg,
@@ -258,15 +269,15 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 		ExternalRoutes:  v.Get("external_routes"),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	launcher, err := NewRuntimeComponentLauncherWithHandoff(bridge, newRuntimeHandoffDialer(cfg.Runtime))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	orchestrator, err := NewMigrationOrchestrator(preflight, store, launcher)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	orchestrator.WithRuntimeSnapshotAppNetworks(bridge)
 	// Bootstrap uses the embedded runtime worker as the sole socket authority,
@@ -275,14 +286,14 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	// are available, it cannot activate the replacement listener.
 	checks, checkErr := newMigrationTrafficChecks(bridge, bridge, store, edgesnapshotusecase.NewAppliedStateTrackerAny(), cfg)
 	if checkErr != nil {
-		return nil, fmt.Errorf("create monolith migration traffic checks: %w", checkErr)
+		return nil, nil, fmt.Errorf("create monolith migration traffic checks: %w", checkErr)
 	}
 	// The launcher now forwards to the proven replacement runtime, so its
 	// cutover handler survives stopping this monolith/CLI container.
 	switcher, switchErr := NewTrafficSwitch(launcher, checks)
 	if switchErr != nil {
-		return nil, fmt.Errorf("create monolith migration traffic switch: %w", switchErr)
+		return nil, nil, fmt.Errorf("create monolith migration traffic switch: %w", switchErr)
 	}
 	orchestrator.WithTrafficSwitcher(switcher)
-	return migration.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE")), nil
+	return migration.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE")), launcher, nil
 }
