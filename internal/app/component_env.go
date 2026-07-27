@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -61,6 +63,18 @@ type ComponentEnvManifest struct {
 	values map[domain.ComponentRole]map[string]string
 }
 
+// selectedLocalRuntimeEndpoint is the exact local Unix endpoint selected while
+// the active runtime adapter is constructed. Its path cannot be synthesized or
+// changed after adapter selection.
+type selectedLocalRuntimeEndpoint struct{ path string }
+
+func newSelectedLocalRuntimeEndpoint(path string) (*selectedLocalRuntimeEndpoint, error) {
+	if path == "" || path != strings.TrimSpace(path) || !filepath.IsAbs(path) || strings.Contains(path, "://") || filepath.Clean(path) != path {
+		return nil, fmt.Errorf("runtime endpoint must be a local Unix socket")
+	}
+	return &selectedLocalRuntimeEndpoint{path: path}, nil
+}
+
 // ComponentEnvManifestOptions uses the already-loaded configuration and a
 // caller-supplied environment snapshot. Supplying the snapshot makes planning
 // deterministic and prevents unrelated workload process environment bleed.
@@ -68,9 +82,9 @@ type ComponentEnvManifestOptions struct {
 	Config            Config
 	Environment       map[string]string
 	ExplicitAllowlist []string
-	// RuntimeSocket is the exact local Unix socket selected by application
-	// wiring. It is carried privately and emitted only to the runtime role.
-	RuntimeSocket string
+	// runtimeEndpoint is the selected local endpoint capability. Ambient runtime
+	// variables are never considered as runtime endpoint configuration.
+	runtimeEndpoint *selectedLocalRuntimeEndpoint
 }
 
 // MigrationEnvOptions connects the explicit manifest to migration prepare.
@@ -78,11 +92,7 @@ type MigrationEnvOptions struct {
 	Config            Config
 	Environment       map[string]string
 	ExplicitAllowlist []string
-	// RuntimeSocket and RuntimeName are the already-selected local runtime
-	// detection result. Values remain private to generated runtime launch data.
-	RuntimeSocket         string
-	RuntimeName           string
-	RuntimeSocketRequired bool
+	runtimeEndpoint   *selectedLocalRuntimeEndpoint
 	// ExplicitEnvFile is an optional migration-command supplied file. Its keys
 	// must be explicitly allowlisted and non-secret-like before values are read.
 	ExplicitEnvFile string
@@ -116,29 +126,16 @@ func BuildMigrationComponentEnvManifest(options MigrationEnvOptions) (*Component
 			environment[key] = value
 		}
 	}
-	manifest, err := BuildComponentEnvManifest(ComponentEnvManifestOptions{
+	return BuildComponentEnvManifest(ComponentEnvManifestOptions{
 		Config: options.Config, Environment: environment, ExplicitAllowlist: options.ExplicitAllowlist,
-		RuntimeSocket: options.RuntimeSocket,
+		runtimeEndpoint: options.runtimeEndpoint,
 	})
-	if err != nil {
-		return manifest, err
-	}
-	if options.RuntimeSocketRequired && strings.TrimSpace(options.RuntimeName) != "podman" {
-		return manifest, fmt.Errorf("migration requires a local rootless Podman runtime endpoint")
-	}
-	if options.RuntimeSocketRequired && strings.TrimSpace(options.RuntimeSocket) == "" {
-		return manifest, fmt.Errorf("migration runtime endpoint is unavailable")
-	}
-	return manifest, nil
 }
 
 func readExplicitComponentEnvFile(path string, allowlist []string) (map[string]string, error) {
-	if err := validateExplicitComponentEnvFile(path); err != nil {
-		return nil, err
-	}
-	file, err := os.Open(path)
+	file, err := openPrivateRegularFileNoFollow(path)
 	if err != nil {
-		return nil, fmt.Errorf("open explicit component environment file: %w", err)
+		return nil, err
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxExplicitComponentEnvBytes+1))
@@ -148,12 +145,22 @@ func readExplicitComponentEnvFile(path string, allowlist []string) (map[string]s
 	return parseExplicitComponentEnvFile(data, explicitComponentEnvAllowlist(allowlist))
 }
 
-func validateExplicitComponentEnvFile(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("invalid explicit component environment file")
+func openPrivateRegularFileNoFollow(path string) (*os.File, error) {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid explicit component environment file")
 	}
-	return nil
+	file := os.NewFile(uintptr(fd), filepath.Base(path))
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("invalid explicit component environment file")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("invalid explicit component environment file")
+	}
+	return file, nil
 }
 
 func explicitComponentEnvAllowlist(allowlist []string) map[string]struct{} {
@@ -209,9 +216,7 @@ func BuildComponentEnvManifest(options ComponentEnvManifestOptions) (*ComponentE
 	addACMEEnv(options.Config, add)
 	addS3BackupEnv(options.Config, add)
 	addTelemetryEnv(options.Config, add)
-	if err := addRuntimeSocketEnv(manifest, options.Environment, options.RuntimeSocket); err != nil {
-		return manifest, err
-	}
+	addRuntimeEndpointEnv(manifest, options.runtimeEndpoint)
 	addRuntimeBootstrapToken(options.Config, options.Environment, manifest)
 	if err := addExplicitComponentEnv(options.ExplicitAllowlist, add); err != nil {
 		return nil, err
@@ -342,50 +347,13 @@ func addRuntimeBootstrapToken(cfg Config, environment map[string]string, manifes
 	manifest.values[domain.ComponentRoleRegistry][registryForwardTokenEnvVar] = forwardToken
 }
 
-func addRuntimeSocketEnv(manifest *ComponentEnvManifest, environment map[string]string, detected string) error {
+func addRuntimeEndpointEnv(manifest *ComponentEnvManifest, endpoint *selectedLocalRuntimeEndpoint) {
+	if endpoint == nil {
+		return
+	}
 	const canonicalKey = "DOCKER_HOST"
-	selected, err := localRuntimeSocketPath(detected)
-	if err != nil {
-		return err
-	}
-	for _, key := range []string{"CONTAINER_HOST", "DOCKER_HOST", "PODMAN_HOST"} {
-		value := strings.TrimSpace(environment[key])
-		if value == "" {
-			continue
-		}
-		path, pathErr := localRuntimeSocketPath(value)
-		if pathErr != nil {
-			return pathErr
-		}
-		if selected != "" && path != selected {
-			return fmt.Errorf("conflicting runtime endpoint configuration")
-		}
-		selected = path
-	}
-	if selected == "" {
-		return nil
-	}
 	manifest.Optional = append(manifest.Optional, OptionalEnvVar{Key: canonicalKey, Roles: []domain.ComponentRole{domain.ComponentRoleRuntime}})
-	manifest.values[domain.ComponentRoleRuntime][canonicalKey] = "unix://" + selected
-	return nil
-}
-
-func localRuntimeSocketPath(endpoint string) (string, error) {
-	endpoint = strings.TrimSpace(endpoint)
-	if endpoint == "" {
-		return "", nil
-	}
-	path := endpoint
-	if strings.HasPrefix(path, "unix://") {
-		path = strings.TrimPrefix(path, "unix://")
-	} else if strings.Contains(path, "://") {
-		return "", fmt.Errorf("runtime endpoint must be a local Unix socket")
-	}
-	path = filepath.Clean(path)
-	if !filepath.IsAbs(path) || !strings.HasSuffix(path, ".sock") {
-		return "", fmt.Errorf("runtime endpoint must be a supported local Unix socket")
-	}
-	return path, nil
+	manifest.values[domain.ComponentRoleRuntime][canonicalKey] = "unix://" + endpoint.path
 }
 
 func addExplicitComponentEnv(allowlist []string, add componentEnvAdd) error {

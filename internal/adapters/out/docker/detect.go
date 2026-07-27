@@ -9,9 +9,8 @@ import (
 
 // DetectionResult holds the result of runtime socket detection.
 type DetectionResult struct {
-	SocketPath  string
-	Source      string
-	RuntimeName string
+	SocketPath string
+	Source     string
 }
 
 var defaultSocketPaths = []string{
@@ -25,9 +24,8 @@ var defaultSocketPaths = []string{
 func DetectRuntimeSocket(explicit string) DetectionResult {
 	if explicit != "" {
 		return DetectionResult{
-			SocketPath:  explicit,
-			Source:      "explicit",
-			RuntimeName: guessRuntimeName(explicit),
+			SocketPath: explicit,
+			Source:     "explicit",
 		}
 	}
 
@@ -35,9 +33,8 @@ func DetectRuntimeSocket(explicit string) DetectionResult {
 	if dockerHost != "" {
 		if path, ok := parseUnixSocketPath(dockerHost); ok {
 			return DetectionResult{
-				SocketPath:  path,
-				Source:      "DOCKER_HOST",
-				RuntimeName: guessRuntimeName(path),
+				SocketPath: path,
+				Source:     "DOCKER_HOST",
 			}
 		}
 		return DetectionResult{
@@ -48,9 +45,8 @@ func DetectRuntimeSocket(explicit string) DetectionResult {
 	for _, path := range defaultSocketPaths {
 		if socketResponds(path) {
 			return DetectionResult{
-				SocketPath:  path,
-				Source:      "probed",
-				RuntimeName: guessRuntimeName(path),
+				SocketPath: path,
+				Source:     "probed",
 			}
 		}
 	}
@@ -60,9 +56,8 @@ func DetectRuntimeSocket(explicit string) DetectionResult {
 		podmanPath := xdg + "/podman/podman.sock"
 		if socketResponds(podmanPath) {
 			return DetectionResult{
-				SocketPath:  podmanPath,
-				Source:      "probed",
-				RuntimeName: "podman",
+				SocketPath: podmanPath,
+				Source:     "probed",
 			}
 		}
 	}
@@ -87,11 +82,4 @@ func socketResponds(path string) bool {
 	}
 	conn.Close()
 	return true
-}
-
-func guessRuntimeName(path string) string {
-	if strings.Contains(path, "podman") {
-		return "podman"
-	}
-	return "docker"
 }

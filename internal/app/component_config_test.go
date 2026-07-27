@@ -37,6 +37,18 @@ func TestGeneratedRuntimePolicyKeepsHostInstallationIdentityAcrossGenerations(t 
 	assert.Regexp(t, `^gordon-control-secrets-[0-9a-f]{16}$`, firstGeneration)
 }
 
+func TestGeneratedRuntimePolicyRetainsHostMigrationRootAfterHandoff(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "installation")
+	cfg := Config{}
+	cfg.Server.DataDir = root
+	files, err := WriteComponentConfigManifests(cfg, filepath.Join(root, "migration", "config", "fixture", "1"))
+	require.NoError(t, err)
+	_, generated, err := initConfig(componentConfigReferences(componentConfigPaths(files))[domain.ComponentRoleRuntime])
+	require.NoError(t, err)
+
+	assert.Equal(t, filepath.Join(root, "migration"), runtimeRolePolicy(generated, nil).MigrationStateRoot)
+}
+
 func TestGeneratedPassRuntimeConfigRequiresInstallationScopedManagedSecretsVolume(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "installation")
 	cfg := Config{}

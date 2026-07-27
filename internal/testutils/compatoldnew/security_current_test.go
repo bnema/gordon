@@ -56,7 +56,7 @@ func TestCompatibilitySecurityComponentEnvMinimization(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.Contains(t, manifest.KeysForRole(domain.ComponentRoleRuntime), "DOCKER_HOST")
+	assert.NotContains(t, manifest.KeysForRole(domain.ComponentRoleRuntime), "DOCKER_HOST")
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
 		assert.NotContains(t, manifest.KeysForRole(role), "DOCKER_HOST")
 		assert.NotContains(t, manifest.KeysForRole(role), "WORKLOAD_DATABASE_PASSWORD")
@@ -65,9 +65,8 @@ func TestCompatibilitySecurityComponentEnvMinimization(t *testing.T) {
 	assert.NotContains(t, manifest.RedactedSummary(), "fixture-token-not-reported")
 }
 
-// RunSecurityControlNoPodmanSocketAfterSplit verifies the generated control
-// launch manifest is socket-free while preserving the runtime-only endpoint.
-// This is the actual component-launch contract used by split deployments.
+// RunSecurityControlNoPodmanSocketAfterSplit verifies that ambient endpoint
+// variables cannot grant a generated component runtime authority.
 func RunSecurityControlNoPodmanSocketAfterSplit(artifactDir string) (Report, error) {
 	manifest, err := securityComponentEnvManifest()
 	if err != nil {
@@ -76,9 +75,9 @@ func RunSecurityControlNoPodmanSocketAfterSplit(artifactDir string) (Report, err
 	controlKeys := manifest.KeysForRole(domain.ComponentRoleControl)
 	runtimeKeys := manifest.KeysForRole(domain.ComponentRoleRuntime)
 	return writeCurrentSecurityReport(artifactDir, map[string]bool{
-		"controlHasNoRuntimeEndpoint":    !containsString(controlKeys, "DOCKER_HOST"),
-		"controlHasNoWorkloadSecret":     !containsString(controlKeys, "WORKLOAD_DATABASE_PASSWORD"),
-		"runtimeRetainsRequiredEndpoint": runtimeKeys != nil && containsString(runtimeKeys, "DOCKER_HOST"),
+		"controlHasNoRuntimeEndpoint": !containsString(controlKeys, "DOCKER_HOST"),
+		"controlHasNoWorkloadSecret":  !containsString(controlKeys, "WORKLOAD_DATABASE_PASSWORD"),
+		"runtimeHasNoAmbientEndpoint": !containsString(runtimeKeys, "DOCKER_HOST"),
 	})
 }
 

@@ -36,6 +36,18 @@ func TestMigrationPreflightPassFailMatrixIsReadOnlyAndRedacted(t *testing.T) {
 	}
 }
 
+func TestMigrationPreflightCombinesSelectedLocalEndpointWithRuntimeFacts(t *testing.T) {
+	endpoint, err := newSelectedLocalRuntimeEndpoint("/run/user/1000/podman/native-api")
+	assert.NoError(t, err)
+	local := NewMigrationPreflight(passingMigrationProbes(nil)).withSelectedLocalRuntimeEndpoint(endpoint).Check(context.Background())
+	assert.True(t, local.Ready)
+	assert.Equal(t, PreflightPass, local.Checks[0].Status)
+
+	remote := NewMigrationPreflight(passingMigrationProbes(nil)).withSelectedLocalRuntimeEndpoint(nil).Check(context.Background())
+	assert.False(t, remote.Ready)
+	assert.Equal(t, PreflightFail, remote.Checks[0].Status)
+}
+
 func TestMigrationPreflightRejectsNonRootlessOrUnavailableRuntime(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -44,6 +56,7 @@ func TestMigrationPreflightRejectsNonRootlessOrUnavailableRuntime(t *testing.T) 
 	}{
 		{name: "docker", target: RuntimePreflightTarget{Engine: "docker", Rootless: true, APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}},
 		{name: "rootful podman", target: RuntimePreflightTarget{Engine: "podman", APIReachable: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}},
+		{name: "unreachable podman API", target: RuntimePreflightTarget{Engine: "podman", Rootless: true, ImageAvailable: true, ImagePullable: true, NetworkFeasible: true, DiskSufficient: true}},
 		{name: "runtime unavailable", err: errors.New("runtime endpoint unavailable")},
 	}
 	for _, tc := range cases {

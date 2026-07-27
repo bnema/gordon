@@ -53,24 +53,34 @@ func resolveRuntimeConfig(value string) string {
 	return value
 }
 
-// createOutputAdapters creates the container runtime and event bus.
-func createOutputAdapters(ctx context.Context, log zerowrap.Logger, role Role, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
-	return createOutputAdaptersFromDetection(ctx, log, role, docker.DetectRuntimeSocket(runtimeSocket))
+func selectedLocalRuntimeEndpointFromDetection(detection docker.DetectionResult) (*selectedLocalRuntimeEndpoint, error) {
+	if strings.TrimSpace(detection.SocketPath) == "" {
+		return nil, nil
+	}
+	return newSelectedLocalRuntimeEndpoint(detection.SocketPath)
 }
 
-func createOutputAdaptersFromDetection(ctx context.Context, log zerowrap.Logger, role Role, detection docker.DetectionResult) (*docker.Runtime, *eventbus.InMemory, error) {
+// createOutputAdapters creates the container runtime and event bus.
+func createOutputAdapters(ctx context.Context, log zerowrap.Logger, role Role, runtimeSocket string) (*docker.Runtime, *eventbus.InMemory, error) {
+	runtime, eventBus, _, err := createOutputAdaptersFromDetection(ctx, log, role, docker.DetectRuntimeSocket(runtimeSocket))
+	return runtime, eventBus, err
+}
+
+func createOutputAdaptersFromDetection(ctx context.Context, log zerowrap.Logger, role Role, detection docker.DetectionResult) (*docker.Runtime, *eventbus.InMemory, *selectedLocalRuntimeEndpoint, error) {
 	if !roleMayInstantiateRuntimeAdapter(role) {
-		return nil, nil, fmt.Errorf("%w: role %q cannot instantiate container runtime", ErrRoleRuntimeOwnership, role)
+		return nil, nil, nil, fmt.Errorf("%w: role %q cannot instantiate container runtime", ErrRoleRuntimeOwnership, role)
+	}
+	endpoint, err := selectedLocalRuntimeEndpointFromDetection(detection)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	var runtime *docker.Runtime
-	var err error
 
 	switch detection.Source {
 	case "none":
-		return nil, nil, fmt.Errorf("no container runtime found: checked Docker socket, Podman socket, DOCKER_HOST env var. Install Docker or Podman, or set server.runtime in config")
+		return nil, nil, nil, fmt.Errorf("no container runtime found: checked Docker socket, Podman socket, DOCKER_HOST env var. Install Docker or Podman, or set server.runtime in config")
 	case "DOCKER_HOST_passthrough":
-		detection.RuntimeName = "docker"
 		runtime, err = docker.NewRuntime()
 	default:
 		if detection.SocketPath != "" {
@@ -80,23 +90,22 @@ func createOutputAdaptersFromDetection(ctx context.Context, log zerowrap.Logger,
 		}
 	}
 	if err != nil {
-		return nil, nil, log.WrapErr(err, "failed to create container runtime")
+		return nil, nil, nil, log.WrapErr(err, "failed to create container runtime")
 	}
 
 	if err := runtime.Ping(ctx); err != nil {
-		return nil, nil, log.WrapErr(err, fmt.Sprintf("container runtime not available (detected: %s via %s)", detection.RuntimeName, detection.Source))
+		return nil, nil, nil, log.WrapErr(err, fmt.Sprintf("container runtime not available via %s", detection.Source))
 	}
 
 	runtimeVersion, _ := runtime.Version(ctx)
 	log.Info().
-		Str("runtime", detection.RuntimeName).
 		Str("version", runtimeVersion).
 		Str("source", detection.Source).
 		Msg("container runtime initialized")
 
 	eventBus := eventbus.NewInMemory(100, log)
 
-	return runtime, eventBus, nil
+	return runtime, eventBus, endpoint, nil
 }
 
 func buildContainerServiceConfig(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (container.Config, error) {

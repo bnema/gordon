@@ -266,7 +266,7 @@ type Config struct {
 type services struct {
 	role                  Role
 	runtime               *docker.Runtime
-	runtimeDetection      docker.DetectionResult
+	runtimeEndpoint       *selectedLocalRuntimeEndpoint
 	eventBus              *eventbus.InMemory
 	blobStorage           *filesystem.BlobStorage
 	manifestStorage       *filesystem.ManifestStorage
@@ -396,11 +396,11 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 	}()
 	var err error
 
-	// Detect once and retain the exact selected endpoint for migration. The
-	// runtime adapter and generated runtime role environment share this result.
+	// Adapter creation returns the same exact endpoint capability it consumed;
+	// migration never repeats detection or consults ambient runtime variables.
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
-	si.svc.runtimeDetection = docker.DetectRuntimeSocket(runtimeSocket)
-	if si.svc.runtime, si.svc.eventBus, err = createOutputAdaptersFromDetection(ctx, log, RoleMonolith, si.svc.runtimeDetection); err != nil {
+	detection := docker.DetectRuntimeSocket(runtimeSocket)
+	if si.svc.runtime, si.svc.eventBus, si.svc.runtimeEndpoint, err = createOutputAdaptersFromDetection(ctx, log, RoleMonolith, detection); err != nil {
 		return nil, err
 	}
 

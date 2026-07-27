@@ -459,7 +459,7 @@ func runtimeStateVersion(generation uint64) string {
 func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error) {
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
 	detection := docker.DetectRuntimeSocket(runtimeSocket)
-	runtimeAdapter, eventBus, err := createOutputAdaptersFromDetection(ctx, log, RoleRuntime, detection)
+	runtimeAdapter, eventBus, _, err := createOutputAdaptersFromDetection(ctx, log, RoleRuntime, detection)
 	if err != nil {
 		return runtimeRoleWorkerBundle{}, nil, err
 	}
@@ -569,6 +569,10 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 		managedNetworkPrefix = v.GetString("network_isolation.network_prefix")
 	}
 	dataRoot := filepath.Clean(resolveDataDir(cfg.Server.DataDir))
+	migrationStateRoot := strings.TrimSpace(cfg.Runtime.MigrationStateRoot)
+	if migrationStateRoot == "" {
+		migrationStateRoot = filepath.Join(dataRoot, "migration")
+	}
 	registryStorageRoot := strings.TrimSpace(cfg.Runtime.RegistryStorageRoot)
 	if registryStorageRoot == "" {
 		registryStorageRoot = filepath.Join(dataRoot, "registry")
@@ -583,7 +587,7 @@ func runtimeRolePolicy(cfg Config, v *viper.Viper) container.RuntimePolicy {
 		AllowedImageRegistries:      cfg.Images.AllowedRegistries,
 		RequireImageDigest:          cfg.Images.RequireDigest,
 		RuntimeComponentID:          "gordon-runtime",
-		MigrationStateRoot:          filepath.Join(dataRoot, "migration"),
+		MigrationStateRoot:          migrationStateRoot,
 		RegistryStorageRoot:         registryStorageRoot,
 		ManagedControlSecretsVolume: managedSecretsVolume,
 	}

@@ -164,7 +164,7 @@ func TestRuntimePolicy(t *testing.T) {
 			check: func(p RuntimePolicy) error {
 				return p.CheckContainerConfig(identity, "app.example.com", domain.ContainerConfig{Volumes: map[string]string{"/sock": "/run/user/1000/podman/podman.sock"}})
 			},
-			wantReason: RuntimePolicyReasonSocketMountDenied,
+			wantReason: RuntimePolicyReasonUnsafeHostBindDenied,
 		},
 		{
 			name:   "unmanaged network denied",

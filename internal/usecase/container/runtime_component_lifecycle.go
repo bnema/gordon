@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -158,7 +160,7 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 	if !approvedPreparedPortPublishes(command.TargetComponentRole, command.PortPublishes) {
 		return fmt.Errorf("invalid component bootstrap port binding")
 	}
-	if err := approvedComponentConfigFile(command, command.ConfigFile); err != nil {
+	if err := approvedComponentConfigFile(command, command.ConfigFile, m.policy.MigrationStateRoot); err != nil {
 		return componentLifecycleError("validate config", err)
 	}
 	component, err := m.find(ctx, command)
@@ -190,14 +192,14 @@ func (m *runtimeComponentLifecycleManager) start(ctx context.Context, command do
 // commands may create. It is shared by prepare and cutover rollback so a
 // failed listener transfer can restore the identical probe-only edge.
 func (m *runtimeComponentLifecycleManager) componentConfig(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (*domain.ContainerConfig, error) {
-	env, err := componentLifecycleEnvironment(command, command.EnvironmentFile)
+	env, err := componentLifecycleEnvironment(command, command.EnvironmentFile, m.policy.MigrationStateRoot)
 	if err != nil {
 		return nil, err
 	}
 	if command.TargetComponentRole != domain.ComponentRoleRuntime && componentEnvironmentHasRuntimeEndpoint(env) {
 		return nil, fmt.Errorf("component role cannot receive a runtime endpoint")
 	}
-	configFile, err := componentLifecycleConfigFile(command, ports)
+	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -1093,7 +1095,7 @@ type expectedLifecycleMount struct {
 }
 
 func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (map[string]expectedLifecycleMount, error) {
-	configFile, err := componentLifecycleConfigFile(command, ports)
+	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -1108,7 +1110,7 @@ func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domai
 		}
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
-		environment, envErr := componentLifecycleEnvironment(command, command.EnvironmentFile)
+		environment, envErr := componentLifecycleEnvironment(command, command.EnvironmentFile, m.policy.MigrationStateRoot)
 		if envErr != nil {
 			return nil, envErr
 		}
@@ -1240,24 +1242,24 @@ func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command do
 // componentLifecycleConfigFile permits the dedicated final edge manifest only
 // for an activation's validated public bindings. All prepare and rollback paths
 // retain edge.toml, preserving the authenticated probe configuration.
-func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (string, error) {
+func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish, migrationRoot string) (string, error) {
 	path := command.ConfigFile
 	if command.TargetComponentRole == domain.ComponentRoleEdge && command.LifecycleAction == domain.RuntimeComponentLifecycleActivate && approvedFinalPortPublishes(ports) && slices.Equal(ports, command.FinalPortPublishes) && filepath.Base(path) == "edge.toml" {
 		path = filepath.Join(filepath.Dir(path), "edge-final.toml")
 	}
-	if err := approvedComponentConfigFile(command, path); err != nil {
+	if err := approvedComponentConfigFile(command, path, migrationRoot); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
-func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path string) error {
+func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path, migrationRoot string) error {
 	clean := filepath.Clean(strings.TrimSpace(path))
 	name := string(command.TargetComponentRole) + ".toml"
 	if command.TargetComponentRole == domain.ComponentRoleEdge && filepath.Base(clean) == "edge-final.toml" {
 		name = "edge-final.toml"
 	}
-	if !approvedGeneratedRolePath(clean, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
+	if !approvedGeneratedRolePath(clean, migrationRoot, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
 		return fmt.Errorf("invalid component configuration file")
 	}
 	info, err := os.Lstat(clean)
@@ -1267,9 +1269,16 @@ func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path s
 	return nil
 }
 
-func approvedGeneratedRolePath(path, kind, migrationID string, generation uint64, name string) bool {
+func approvedGeneratedRolePath(path, migrationRoot, kind, migrationID string, generation uint64, name string) bool {
 	if !filepath.IsAbs(path) || migrationID == "" || generation == 0 || filepath.Base(path) != name {
 		return false
+	}
+	if strings.TrimSpace(migrationRoot) != "" {
+		root := filepath.Clean(migrationRoot)
+		expected := filepath.Join(root, kind, migrationID, strconv.FormatUint(generation, 10), name)
+		if !filepath.IsAbs(root) || path != expected {
+			return false
+		}
 	}
 	generationDir := filepath.Dir(path)
 	migrationDir := filepath.Dir(generationDir)
@@ -1278,20 +1287,23 @@ func approvedGeneratedRolePath(path, kind, migrationID string, generation uint64
 		filepath.Base(kindDir) == kind && filepath.Base(filepath.Dir(kindDir)) == "migration"
 }
 
-func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path string) ([]string, error) {
+const maxComponentLifecycleEnvironmentBytes int64 = 64 << 10
+
+func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path, migrationRoot string) ([]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
 	clean := filepath.Clean(strings.TrimSpace(path))
-	if !approvedGeneratedRolePath(clean, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
+	if !approvedGeneratedRolePath(clean, migrationRoot, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
 		return nil, fmt.Errorf("invalid component environment file")
 	}
-	info, err := os.Lstat(clean)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
-		return nil, fmt.Errorf("invalid component environment file")
+	file, err := openPrivateComponentEnvironmentFile(clean, migrationRoot)
+	if err != nil {
+		return nil, err
 	}
-	data, err := os.ReadFile(clean)
-	if err != nil || len(data) > 64<<10 {
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxComponentLifecycleEnvironmentBytes+1))
+	if err != nil || int64(len(data)) > maxComponentLifecycleEnvironmentBytes {
 		return nil, fmt.Errorf("invalid component environment file")
 	}
 	values := make([]string, 0)
@@ -1302,6 +1314,53 @@ func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path
 	}
 	return values, nil
 }
+
+func openPrivateComponentEnvironmentFile(path, migrationRoot string) (*os.File, error) {
+	fd, err := openComponentEnvironmentDescriptor(path, migrationRoot)
+	if err != nil {
+		return nil, fmt.Errorf("invalid component environment file")
+	}
+	file := os.NewFile(uintptr(fd), filepath.Base(path))
+	if file == nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("invalid component environment file")
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		_ = file.Close()
+		return nil, fmt.Errorf("invalid component environment file")
+	}
+	return file, nil
+}
+
+func openComponentEnvironmentDescriptor(path, migrationRoot string) (int, error) {
+	const fileFlags = unix.O_RDONLY | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	if strings.TrimSpace(migrationRoot) == "" {
+		return unix.Open(path, fileFlags, 0)
+	}
+	root := filepath.Clean(migrationRoot)
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return -1, fmt.Errorf("environment path is outside migration root")
+	}
+	current, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	for _, directory := range parts[:len(parts)-1] {
+		next, openErr := unix.Openat(current, directory, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		_ = unix.Close(current)
+		if openErr != nil {
+			return -1, openErr
+		}
+		current = next
+	}
+	fd, err := unix.Openat(current, parts[len(parts)-1], fileFlags, 0)
+	_ = unix.Close(current)
+	return fd, err
+}
+
 func componentEnvironmentHasRuntimeEndpoint(environment []string) bool {
 	for _, entry := range environment {
 		key, _, found := strings.Cut(entry, "=")
@@ -1342,8 +1401,8 @@ func runtimeSocketSource(endpoint string) (string, error) {
 	if !strings.HasPrefix(endpoint, "unix://") {
 		return "", fmt.Errorf("runtime endpoint must be a local Unix socket")
 	}
-	path := filepath.Clean(strings.TrimPrefix(endpoint, "unix://"))
-	if !filepath.IsAbs(path) || !isRuntimeSocketMount(path) {
+	path := strings.TrimPrefix(endpoint, "unix://")
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", fmt.Errorf("runtime endpoint must be a supported local Unix socket")
 	}
 	return path, nil

@@ -245,19 +245,17 @@ func newMonolithMigrationService(configPath string, cfg Config, svc *services) (
 	if err != nil {
 		return nil, fmt.Errorf("create monolith migration checkpoint store: %w", err)
 	}
-	preflight := newControlMigrationPreflight(configPath, cfg, bridge, bridge)
+	preflight := newControlMigrationPreflight(configPath, cfg, bridge, bridge).withSelectedLocalRuntimeEndpoint(svc.runtimeEndpoint)
 	v, _, err := initConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("load migration routing configuration: %w", err)
 	}
 	migration, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:                cfg,
-		Environment:           componentEnvironmentFromEnviron(os.Environ()),
-		RuntimeSocket:         svc.runtimeDetection.SocketPath,
-		RuntimeName:           svc.runtimeDetection.RuntimeName,
-		RuntimeSocketRequired: true,
-		Directory:             filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "env"),
-		ExternalRoutes:        v.Get("external_routes"),
+		Config:          cfg,
+		Environment:     componentEnvironmentFromEnviron(os.Environ()),
+		runtimeEndpoint: svc.runtimeEndpoint,
+		Directory:       filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "env"),
+		ExternalRoutes:  v.Get("external_routes"),
 	})
 	if err != nil {
 		return nil, err

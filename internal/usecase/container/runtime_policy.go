@@ -188,9 +188,6 @@ func (p RuntimePolicy) checkWritableContainerMounts(identity domain.RuntimeComma
 		if destination == managedControlSecretsPath || source == p.ManagedControlSecretsVolume {
 			continue
 		}
-		if isRuntimeSocketMount(source) {
-			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
-		}
 		if !isApprovedMigrationRuntimeStateBind(p, cfg, source, false) && !isApprovedRegistryStorageBind(p, cfg, source) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
@@ -199,11 +196,14 @@ func (p RuntimePolicy) checkWritableContainerMounts(identity domain.RuntimeComma
 }
 
 func (p RuntimePolicy) checkReadOnlyContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
-	for _, source := range cfg.ReadOnlyVolumes {
-		if isRuntimeSocketMount(source) && !isApprovedRuntimeSocketBind(cfg, source) {
-			return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
+	for destination, source := range cfg.ReadOnlyVolumes {
+		if destination == "/run/gordon/runtime.sock" {
+			if !isApprovedRuntimeSocketBind(cfg, source) {
+				return p.denied(identity, routeDomain, RuntimePolicyReasonSocketMountDenied, "runtime socket mounts are not allowed")
+			}
+			continue
 		}
-		if !isRuntimeSocketMount(source) && !isApprovedComponentConfigBind(cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && !isApprovedMigrationEnvironmentBind(p, cfg, source) && isUnsafeHostBind(source) {
+		if !isApprovedComponentConfigBind(p, cfg, source) && !isApprovedMigrationRuntimeStateBind(p, cfg, source, true) && !isApprovedMigrationEnvironmentBind(p, cfg, source) && isUnsafeHostBind(source) {
 			return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "unsafe host bind mount is not allowed")
 		}
 	}
@@ -310,22 +310,15 @@ func runtimePolicyImageRegistry(image string) string {
 	return "docker.io"
 }
 
-func isRuntimeSocketMount(source string) bool {
-	clean := filepath.Clean(strings.TrimSpace(source))
-	if !strings.HasSuffix(clean, ".sock") {
-		return false
-	}
-	return filepath.IsAbs(clean) || strings.Contains(clean, "/podman/") || strings.Contains(clean, "podman.sock") || strings.Contains(clean, "docker.sock")
-}
-
 func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool {
 	if cfg.Labels[domain.LabelComponent] != "true" || cfg.Labels[domain.LabelComponentRole] != string(domain.ComponentRoleRuntime) || !strings.HasPrefix(cfg.Name, "gordon-runtime-") || cfg.ReadOnlyVolumes["/run/gordon/runtime.sock"] != source {
 		return false
 	}
 	// A lifecycle-generated runtime container may receive exactly the engine
-	// socket source discovered from its own scoped env file. The destination is
-	// fixed by the lifecycle manager; no other role reaches this exception.
-	return isRuntimeSocketMount(source)
+	// socket source selected by the active adapter. The destination is fixed by
+	// the lifecycle manager; no filename convention is part of this capability.
+	clean := filepath.Clean(strings.TrimSpace(source))
+	return filepath.IsAbs(clean) && clean != string(filepath.Separator)
 }
 
 func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string, readOnly bool) bool {
@@ -391,12 +384,26 @@ func isApprovedMigrationEnvironmentBind(policy RuntimePolicy, cfg domain.Contain
 	return filepath.IsAbs(source) && filepath.Clean(source) == expected && cfg.ReadOnlyVolumes[source] == source
 }
 
-func isApprovedComponentConfigBind(cfg domain.ContainerConfig, source string) bool {
+func isApprovedComponentConfigBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string) bool {
 	if cfg.Labels[domain.LabelComponent] != "true" {
 		return false
 	}
 	clean := filepath.Clean(strings.TrimSpace(source))
-	return filepath.IsAbs(clean) && (strings.Contains(clean, "/migration/config/") || strings.HasSuffix(clean, "/migration/config"))
+	if !filepath.IsAbs(clean) {
+		return false
+	}
+	if strings.TrimSpace(policy.MigrationStateRoot) == "" {
+		return strings.Contains(clean, "/migration/config/") || strings.HasSuffix(clean, "/migration/config")
+	}
+	root := filepath.Join(filepath.Clean(policy.MigrationStateRoot), "config")
+	relative, err := filepath.Rel(root, clean)
+	if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if relative == "." {
+		return cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleRuntime) && cfg.ReadOnlyVolumes[clean] == source
+	}
+	return true
 }
 
 func isUnsafeHostBind(source string) bool {

@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -166,15 +167,15 @@ func TestRuntimeComponentLifecycleStartUsesRoleConfigAndPersistentStorage(t *tes
 	require.NoError(t, err)
 }
 
-func TestRuntimeComponentSocketMountUsesExactSourceAndCanonicalEndpoint(t *testing.T) {
-	const sourcePath = "/run/user/1000/podman/podman.sock"
+func TestRuntimeComponentSocketMountAcceptsUnixSocketNameWithoutSockSuffix(t *testing.T) {
+	const sourcePath = "/run/user/1000/podman/native-api"
 	source, env, err := runtimeComponentSocketMount([]string{"PODMAN_HOST=unix://" + sourcePath, "SAFE=value"})
 	require.NoError(t, err)
 	require.Equal(t, sourcePath, source)
 	require.Equal(t, []string{"SAFE=value", "DOCKER_HOST=unix:///run/gordon/runtime.sock"}, env)
 }
 
-func TestRuntimeComponentLifecycleMountsExactSocketAndValidatesExistingContainer(t *testing.T) {
+func TestRuntimeComponentLifecycleMountsExactSelectedSocketAndValidatesExistingContainer(t *testing.T) {
 	root := t.TempDir()
 	configDir := filepath.Join(root, "migration", "config", "fixture", "1")
 	envDir := filepath.Join(root, "migration", "env", "fixture", "1")
@@ -182,7 +183,7 @@ func TestRuntimeComponentLifecycleMountsExactSocketAndValidatesExistingContainer
 	require.NoError(t, os.MkdirAll(envDir, 0o700))
 	configPath := filepath.Join(configDir, "runtime.toml")
 	envPath := filepath.Join(envDir, "runtime.env")
-	const sourcePath = "/run/user/1000/podman/podman.sock"
+	const sourcePath = "/run/user/1000/podman/native-api"
 	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
 	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix://"+sourcePath+"\n"), 0o600))
 
@@ -219,7 +220,6 @@ func TestRuntimeComponentSocketMountFailsClosedWithoutEndpointLeakage(t *testing
 	for name, environment := range map[string][]string{
 		"absent":      {"SAFE=value"},
 		"remote":      {"DOCKER_HOST=ssh://private.example/run/podman.sock"},
-		"unsupported": {"DOCKER_HOST=unix:///tmp/engine.socket"},
 		"conflicting": {"DOCKER_HOST=unix:///run/user/1000/podman/podman.sock", "PODMAN_HOST=unix:///private/conflict/podman.sock"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -229,6 +229,78 @@ func TestRuntimeComponentSocketMountFailsClosedWithoutEndpointLeakage(t *testing
 			assert.NotContains(t, err.Error(), "private/conflict")
 		})
 	}
+}
+
+func TestPrivateLifecycleEnvironmentOpenAnchorsDescriptorAcrossPathReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.env")
+	const original = "DOCKER_HOST=unix:///run/user/1000/podman/native-api\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+
+	file, err := openPrivateComponentEnvironmentFile(path, "")
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, os.Rename(path, path+".opened"))
+	require.NoError(t, os.WriteFile(path, []byte("DOCKER_HOST=unix:///replacement\n"), 0o600))
+
+	data, err := io.ReadAll(file)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(data))
+}
+
+func TestComponentLifecycleEnvironmentRejectsSymlinkAndOversizedDescriptor(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	directory := filepath.Join(root, "env", "fixture", "1")
+	require.NoError(t, os.MkdirAll(directory, 0o700))
+	path := filepath.Join(directory, "runtime.env")
+	target := filepath.Join(t.TempDir(), "target.env")
+	require.NoError(t, os.WriteFile(target, []byte("DOCKER_HOST=unix:///run/user/1000/podman/native-api\n"), 0o600))
+	require.NoError(t, os.Symlink(target, path))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleStart, filepath.Join(root, "config", "fixture", "1", "runtime.toml"))
+	_, err := componentLifecycleEnvironment(command, path, root)
+	require.Error(t, err)
+
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.WriteFile(path, make([]byte, maxComponentLifecycleEnvironmentBytes+1), 0o600))
+	_, err = componentLifecycleEnvironment(command, path, root)
+	require.Error(t, err)
+
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "env", "fixture")))
+	outside := filepath.Join(t.TempDir(), "fixture")
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "1"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "1", "runtime.env"), []byte("DOCKER_HOST=unix:///replacement\n"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "env", "fixture")))
+	_, err = componentLifecycleEnvironment(command, path, root)
+	require.Error(t, err)
+}
+
+func TestRuntimeComponentLifecycleAnchorsGeneratedFilesUnderConfiguredMigrationRoot(t *testing.T) {
+	configuredRoot := filepath.Join(t.TempDir(), "migration")
+	foreignRoot := filepath.Join(t.TempDir(), "migration")
+	for _, root := range []string{configuredRoot, foreignRoot} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "config", "fixture", "1"), 0o700))
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "env", "fixture", "1"), 0o700))
+	}
+	configuredConfig := filepath.Join(configuredRoot, "config", "fixture", "1", "runtime.toml")
+	foreignConfig := filepath.Join(foreignRoot, "config", "fixture", "1", "runtime.toml")
+	configuredEnv := filepath.Join(configuredRoot, "env", "fixture", "1", "runtime.env")
+	foreignEnv := filepath.Join(foreignRoot, "env", "fixture", "1", "runtime.env")
+	for _, path := range []string{configuredConfig, foreignConfig} {
+		require.NoError(t, os.WriteFile(path, []byte("[runtime]\n"), 0o600))
+	}
+	for _, path := range []string{configuredEnv, foreignEnv} {
+		require.NoError(t, os.WriteFile(path, []byte("DOCKER_HOST=unix:///run/user/1000/podman/native-api\n"), 0o600))
+	}
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: configuredRoot}}
+
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleStart, foreignConfig)
+	command.EnvironmentFile = configuredEnv
+	_, err := manager.componentConfig(command, nil)
+	require.Error(t, err)
+
+	command.ConfigFile = configuredConfig
+	command.EnvironmentFile = foreignEnv
+	_, err = manager.componentConfig(command, nil)
+	require.Error(t, err)
 }
 
 func TestRuntimeComponentLifecycleRejectsAnotherRolesGeneratedFiles(t *testing.T) {

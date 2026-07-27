@@ -539,9 +539,11 @@ func TestRuntimeWorkerSnapshotSanitization(t *testing.T) {
 	assert.NotContains(t, snapshot.Containers[1].Labels, "TOKEN")
 	require.Len(t, snapshot.Networks, 1)
 	assert.Equal(t, []string{"gordon-target-app-example-com"}, snapshot.Networks[0].Aliases)
-	require.Len(t, snapshot.Volumes, 1)
+	require.Len(t, snapshot.Volumes, 2)
 	assert.Equal(t, "app-data", snapshot.Volumes[0].Name)
 	assert.Equal(t, []string{"gordon-app.example.com"}, snapshot.Volumes[0].AttachedTo)
+	assert.Equal(t, "docker.sock", snapshot.Volumes[1].Name)
+	assert.Empty(t, snapshot.Volumes[1].AttachedTo)
 	require.Len(t, snapshot.EdgeAttachments, 1)
 	assert.Equal(t, "gordon-target-app-example-com", snapshot.EdgeAttachments[0].TargetAlias)
 }

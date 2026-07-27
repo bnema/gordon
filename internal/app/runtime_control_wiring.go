@@ -23,6 +23,7 @@ type RuntimeControlConfig struct {
 	Token                       string `mapstructure:"token"`
 	TokenEnv                    string `mapstructure:"token_env"`
 	RegistryStorageRoot         string `mapstructure:"registry_storage_root"`
+	MigrationStateRoot          string `mapstructure:"migration_state_root"`
 	ManagedControlSecretsVolume string `mapstructure:"managed_control_secrets_volume"`
 	Insecure                    bool   `mapstructure:"insecure"`
 }

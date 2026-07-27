@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -50,7 +52,7 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	assert.Equal(t, managedPassStoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.NotEqual(t, "/host/gnupg", manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
 	assert.NotEqual(t, "/host/password-store", manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
-	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "DOCKER_HOST", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
+	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", TokenSecretEnvVar, "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
 	assert.ElementsMatch(t, []string{"CLOUDFLARE_DNS_API_TOKEN", "OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_EDGE_TOKEN", "GORDON_MIGRATION_PROBE_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleEdge))
 	assert.ElementsMatch(t, []string{"OTEL_EXPORTER_OTLP_HEADERS", "GORDON_COMPONENT_REGISTRY_TOKEN", registryForwardTokenEnvVar}, manifest.KeysForRole(domain.ComponentRoleRegistry))
 	assert.NotContains(t, strings.Join(manifest.KeysForRole(domain.ComponentRoleEdge), ","), "DOCKER_HOST")
@@ -131,59 +133,101 @@ func TestComponentEnvManifestMissingAndExplicitVariableErrorsAreKeyOnly(t *testi
 	}
 }
 
-func TestMigrationEnvPropagatesDetectedRuntimeSocketWithoutHostEndpoint(t *testing.T) {
-	const detectedSocket = "/run/user/1000/podman/podman.sock"
+func TestMigrationEnvUsesSelectedLocalEndpointDespiteConflictingAmbientVariables(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "unix:///ambient/docker.sock")
+	endpoint, err := selectedLocalRuntimeEndpointFromDetection(docker.DetectRuntimeSocket("/run/user/1000/podman/native-api"))
+	require.NoError(t, err)
+
 	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
-		Environment:           map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
-		RuntimeSocket:         detectedSocket,
-		RuntimeName:           "podman",
-		RuntimeSocketRequired: true,
+		Environment: map[string]string{
+			"DOCKER_HOST": "unix:///ambient/docker.sock",
+			"PODMAN_HOST": "ssh://ambient.example.invalid/run/podman.sock",
+		},
+		runtimeEndpoint: endpoint,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "unix:///run/user/1000/podman/native-api", manifest.values[domain.ComponentRoleRuntime]["DOCKER_HOST"])
+	assert.NotContains(t, manifest.RedactedSummary(), "native-api")
+}
+
+func TestMigrationEnvPropagatesSelectedRuntimeEndpointWithoutHostEndpoint(t *testing.T) {
+	const selectedPath = "/run/user/1000/podman/podman.sock"
+	endpoint, err := newSelectedLocalRuntimeEndpoint(selectedPath)
+	require.NoError(t, err)
+	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
+		Environment:     map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
+		runtimeEndpoint: endpoint,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"DOCKER_HOST"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
-	assert.Equal(t, "unix://"+detectedSocket, manifest.values[domain.ComponentRoleRuntime]["DOCKER_HOST"])
+	assert.Equal(t, "unix://"+selectedPath, manifest.values[domain.ComponentRoleRuntime]["DOCKER_HOST"])
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
 		assert.Empty(t, manifest.KeysForRole(role))
 	}
-	assert.NotContains(t, manifest.RedactedSummary(), detectedSocket)
+	assert.NotContains(t, manifest.RedactedSummary(), selectedPath)
 }
 
-func TestMigrationRuntimeSocketConfigurationFailsClosedWithoutValueLeakage(t *testing.T) {
-	const privateEndpoint = "ssh://private-host.example/run/podman.sock"
-	for name, options := range map[string]MigrationEnvOptions{
-		"absent": {RuntimeSocketRequired: true},
-		"remote": {RuntimeSocket: privateEndpoint, RuntimeName: "podman", RuntimeSocketRequired: true},
-		"docker": {RuntimeSocket: "/var/run/docker.sock", RuntimeName: "docker", RuntimeSocketRequired: true},
-		"conflict": {
-			RuntimeSocket: "/run/user/1000/podman/podman.sock", RuntimeName: "podman", RuntimeSocketRequired: true,
-			Environment: map[string]string{"DOCKER_HOST": "unix:///run/user/1000/podman/podman.sock", "PODMAN_HOST": "unix:///private/conflicting/podman.sock"},
-		},
+func TestSelectedLocalRuntimeEndpointRejectsNonLocalOrAmbiguousPathsWithoutValueLeakage(t *testing.T) {
+	for name, path := range map[string]string{
+		"absent":   "",
+		"remote":   "ssh://private-host.example/run/podman.sock",
+		"relative": "private/podman.sock",
+		"unclean":  "/run/user/1000/../private/podman.sock",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := BuildMigrationComponentEnvManifest(options)
+			_, err := newSelectedLocalRuntimeEndpoint(path)
 			require.Error(t, err)
-			assert.NotContains(t, err.Error(), privateEndpoint)
-			assert.NotContains(t, err.Error(), "private/conflicting")
+			if path != "" {
+				assert.NotContains(t, err.Error(), path)
+			}
 		})
 	}
+}
+
+func TestPrivateExplicitEnvOpenAnchorsDescriptorAcrossPathReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "explicit.env")
+	const original = "SAFE_FEATURE_FLAG=original\n"
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+
+	file, err := openPrivateRegularFileNoFollow(path)
+	require.NoError(t, err)
+	defer file.Close()
+	require.NoError(t, os.Rename(path, path+".opened"))
+	require.NoError(t, os.WriteFile(path, []byte("SAFE_FEATURE_FLAG=replacement\n"), 0o600))
+
+	data, err := io.ReadAll(file)
+	require.NoError(t, err)
+	assert.Equal(t, original, string(data))
+}
+
+func TestExplicitEnvFileRejectsSymlinkAndOversizedDescriptor(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.env")
+	link := filepath.Join(root, "explicit.env")
+	require.NoError(t, os.WriteFile(target, []byte("SAFE_FEATURE_FLAG=value\n"), 0o600))
+	require.NoError(t, os.Symlink(target, link))
+	_, err := readExplicitComponentEnvFile(link, []string{"SAFE_FEATURE_FLAG"})
+	require.Error(t, err)
+
+	oversized := filepath.Join(root, "oversized.env")
+	require.NoError(t, os.WriteFile(oversized, make([]byte, maxExplicitComponentEnvBytes+1), 0o600))
+	_, err = readExplicitComponentEnvFile(oversized, []string{"SAFE_FEATURE_FLAG"})
+	require.Error(t, err)
 }
 
 func TestMigrationEnvOptionsAcceptOnlyAllowlistedExplicitEnvFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "explicit.env")
 	require.NoError(t, os.WriteFile(path, []byte("SAFE_FEATURE_FLAG=fixture-value-not-reported\n"), 0o600))
 	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
-		Environment:           map[string]string{},
-		RuntimeSocket:         "/run/user/1000/podman/podman.sock",
-		RuntimeName:           "podman",
-		RuntimeSocketRequired: true,
-		ExplicitAllowlist:     []string{"SAFE_FEATURE_FLAG"},
-		ExplicitEnvFile:       path,
+		Environment:       map[string]string{},
+		ExplicitAllowlist: []string{"SAFE_FEATURE_FLAG"},
+		ExplicitEnvFile:   path,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
 
 	require.NoError(t, os.WriteFile(path, []byte("CUSTOM_TOKEN=fixture-value-not-reported\n"), 0o600))
-	_, err = BuildMigrationComponentEnvManifest(MigrationEnvOptions{RuntimeSocket: "/run/user/1000/podman/podman.sock", RuntimeName: "podman", RuntimeSocketRequired: true, ExplicitAllowlist: []string{"CUSTOM_TOKEN"}, ExplicitEnvFile: path})
+	_, err = BuildMigrationComponentEnvManifest(MigrationEnvOptions{ExplicitAllowlist: []string{"CUSTOM_TOKEN"}, ExplicitEnvFile: path})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture-value-not-reported")
 }
@@ -198,13 +242,10 @@ func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)
 	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:                Config{},
-		RuntimeSocket:         "/run/user/1000/podman/podman.sock",
-		RuntimeName:           "podman",
-		RuntimeSocketRequired: true,
-		Environment:           map[string]string{"GORDON_SERVER_PORT": "8080"},
-		Directory:             filepath.Join(t.TempDir(), "env"),
-		ExternalRoutes:        map[string]any{"public.example.test": "198.51.100.10:8443"},
+		Config:         Config{},
+		Environment:    map[string]string{"GORDON_SERVER_PORT": "8080"},
+		Directory:      filepath.Join(t.TempDir(), "env"),
+		ExternalRoutes: map[string]any{"public.example.test": "198.51.100.10:8443"},
 	})
 	require.NoError(t, err)
 	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})

@@ -88,10 +88,25 @@ type MigrationPreflightProbes struct {
 	Credentials   func(context.Context) error
 }
 
-type MigrationPreflight struct{ probes MigrationPreflightProbes }
+type localRuntimePreflightRequirement struct{ endpoint *selectedLocalRuntimeEndpoint }
+
+type MigrationPreflight struct {
+	probes       MigrationPreflightProbes
+	localRuntime *localRuntimePreflightRequirement
+}
 
 func NewMigrationPreflight(probes MigrationPreflightProbes) *MigrationPreflight {
 	return &MigrationPreflight{probes: probes}
+}
+
+// withSelectedLocalRuntimeEndpoint requires migration to use the endpoint
+// selected by the active local adapter. A nil endpoint represents a remote
+// selection and therefore fails the local rootless-Podman migration contract.
+func (p *MigrationPreflight) withSelectedLocalRuntimeEndpoint(endpoint *selectedLocalRuntimeEndpoint) *MigrationPreflight {
+	if p != nil {
+		p.localRuntime = &localRuntimePreflightRequirement{endpoint: endpoint}
+	}
+	return p
 }
 
 // PreflightProductionDependencies is the control composition seam for
@@ -174,7 +189,7 @@ func (p *MigrationPreflight) Check(ctx context.Context) MigrationPreflightReport
 
 func (p *MigrationPreflight) runtimeCheck(ctx context.Context) PreflightCheck {
 	check := PreflightCheck{Name: "rootless_podman", Category: PreflightRuntime, Remediation: "install and start rootless Podman; Docker-only runtimes are not supported for production migration"}
-	if p == nil || p.probes.Runtime == nil {
+	if p == nil || p.probes.Runtime == nil || (p.localRuntime != nil && p.localRuntime.endpoint == nil) {
 		check.Status = PreflightFail
 		return check
 	}

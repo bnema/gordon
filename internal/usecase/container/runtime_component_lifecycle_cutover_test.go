@@ -216,7 +216,7 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
 
 	committer := &recordingMigrationCutoverCommitter{}
-	root := filepath.Dir(filepath.Dir(filepath.Dir(config)))
+	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(config))))
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: root}), committer)
 	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
 	require.Len(t, committer.commands, 1)
