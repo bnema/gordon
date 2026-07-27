@@ -102,6 +102,9 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 	if command.LifecycleAction == "" {
 		return errRuntimeSelfUpdateUnavailable
 	}
+	if _, ok := domain.RuntimeComponentLifecycleRequirement(command.LifecycleAction); !ok {
+		return fmt.Errorf("unsupported component lifecycle action")
+	}
 	if err := m.policy.CheckSelfUpdate(command); err != nil {
 		return err
 	}

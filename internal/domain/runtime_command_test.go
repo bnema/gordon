@@ -105,6 +105,62 @@ func TestRuntimeSelfUpdateCommandValidateRequiresComponentLifecyclePolicy(t *tes
 	require.ErrorIs(t, withoutPolicy.Validate(), ErrInvalidRuntimeCommand)
 }
 
+func TestRuntimeComponentLifecycleRequirementCoversEveryAction(t *testing.T) {
+	tests := []struct {
+		action RuntimeComponentLifecycleAction
+		mode   RuntimeComponentLifecycleProfileMode
+	}{
+		{RuntimeComponentLifecycleReplace, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleEnsureNetwork, RuntimeComponentLifecycleProfileNone},
+		{RuntimeComponentLifecycleStart, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleStop, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleHealth, RuntimeComponentLifecycleProfileIdentityOnly},
+		{RuntimeComponentLifecycleLogs, RuntimeComponentLifecycleProfileIdentityOnly},
+		{RuntimeComponentLifecycleConnect, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleRemove, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleTransferChannel, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleActivate, RuntimeComponentLifecycleProfileFull},
+		{RuntimeComponentLifecycleDrain, RuntimeComponentLifecycleProfileFull},
+	}
+	for _, test := range tests {
+		requirement, ok := RuntimeComponentLifecycleRequirement(test.action)
+		require.True(t, ok, test.action)
+		assert.Equal(t, test.mode, requirement.ProfileMode, test.action)
+	}
+
+	_, ok := RuntimeComponentLifecycleRequirement(RuntimeComponentLifecycleAction("exec"))
+	assert.False(t, ok)
+}
+
+func TestNewRuntimeComponentLifecycleReadCommandBuildsMinimalIdentityPayload(t *testing.T) {
+	identity := RuntimeCommandIdentity{ID: "health", IdempotencyKey: "health", Generation: 1, SourceComponentID: "gordon-control"}
+	command, err := NewRuntimeComponentLifecycleReadCommand(identity, "gordon-edge-fixture-g1", ComponentRoleEdge, "migration:fixture", RuntimeComponentLifecycleHealth)
+	require.NoError(t, err)
+	require.NoError(t, command.Validate())
+	assert.Equal(t, identity, command.RuntimeCommandIdentity)
+	assert.Equal(t, RuntimeComponentLifecycleHealth, command.LifecycleAction)
+	expectedIdentity, ok := FixedComponentProcessIdentity(ComponentRoleEdge)
+	require.True(t, ok)
+	assert.Equal(t, RuntimeComponentLifecycleProfile{ProcessIdentity: expectedIdentity}, command.LifecycleProfile)
+	assert.True(t, command.HasOnlyReadLifecycleIdentity())
+
+	_, err = NewRuntimeComponentLifecycleReadCommand(identity, "gordon-edge-fixture-g1", ComponentRoleEdge, "migration:fixture", RuntimeComponentLifecycleStart)
+	require.ErrorIs(t, err, ErrInvalidRuntimeCommand)
+}
+
+func TestRuntimeSelfUpdateCommandValidateRequiresNoProfileForEnsureNetwork(t *testing.T) {
+	command := RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: RuntimeCommandIdentity{ID: "network", IdempotencyKey: "network", Generation: 1, SourceComponentID: "gordon-control"},
+		TargetComponentID:      "gordon-network-fixture-g1", TargetComponentRole: ComponentRoleRuntime,
+		TargetVersion: "v2", Policy: RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture",
+		LifecycleAction: RuntimeComponentLifecycleEnsureNetwork,
+	}
+	require.NoError(t, command.Validate())
+
+	command.LifecycleProfile, _ = FixedRuntimeComponentLifecycleProfile(ComponentRoleRuntime)
+	require.ErrorIs(t, command.Validate(), ErrInvalidRuntimeCommand)
+}
+
 func TestRuntimeSelfUpdateCommandValidateBoundsAndSanitizesEdgeAppNetworks(t *testing.T) {
 	profile, ok := FixedRuntimeComponentLifecycleProfile(ComponentRoleEdge)
 	require.True(t, ok)

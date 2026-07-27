@@ -64,6 +64,21 @@ func TestRuntimePolicyRequiresExactProfileForEveryComponentLifecycleAction(t *te
 	}
 }
 
+func TestRuntimePolicyRequiresEmptyProfileForProfilelessLifecycleAction(t *testing.T) {
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce}
+	command := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testRuntimeCommandIdentity("profile-none"),
+		TargetComponentID:      "gordon-network-fixture-g1",
+		TargetComponentRole:    domain.ComponentRoleRuntime,
+		PolicyDecisionID:       "migration:fixture",
+		LifecycleAction:        domain.RuntimeComponentLifecycleEnsureNetwork,
+	}
+	require.NoError(t, policy.CheckSelfUpdate(command))
+
+	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRuntime)
+	require.ErrorIs(t, policy.CheckSelfUpdate(command), ErrRuntimePolicyDenied)
+}
+
 func TestRuntimePolicyReadActionsRequireIdentityOnlyProfile(t *testing.T) {
 	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce}
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)

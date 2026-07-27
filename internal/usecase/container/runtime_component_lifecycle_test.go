@@ -55,30 +55,27 @@ func TestApprovedPreparedPortPublishesPermitsOnlyOnePrivateEdgeProbe(t *testing.
 }
 
 func applyTestComponentLifecycle(manager RuntimeComponentLifecycleManager, ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
-	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
-		identity, ok := domain.FixedComponentProcessIdentity(command.TargetComponentRole)
-		if ok {
-			command.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{ProcessIdentity: identity}
+	requirement, ok := domain.RuntimeComponentLifecycleRequirement(command.LifecycleAction)
+	if !ok {
+		return manager.ApplyComponentLifecycle(ctx, command)
+	}
+	switch requirement.ProfileMode {
+	case domain.RuntimeComponentLifecycleProfileIdentityOnly:
+		readCommand, err := domain.NewRuntimeComponentLifecycleReadCommand(
+			command.RuntimeCommandIdentity, command.TargetComponentID, command.TargetComponentRole,
+			command.PolicyDecisionID, command.LifecycleAction,
+		)
+		if err != nil {
+			return err
 		}
-		command.CurrentVersion = ""
-		command.TargetVersion = ""
-		command.Policy = ""
-		command.ApprovedBy = ""
-		command.DesiredImage = ""
-		command.DesiredStateHash = ""
-		command.InternalNetwork = ""
-		command.EnvironmentFile = ""
-		command.ConfigFile = ""
-		command.PortPublishes = nil
-		command.OldServingComponentID = ""
-		command.FinalPortPublishes = nil
-		command.EdgeAppNetworks = nil
-		command.PreserveVolumes = false
-	} else if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork {
-		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(command.TargetComponentRole)
-		if ok {
+		command = readCommand
+	case domain.RuntimeComponentLifecycleProfileFull:
+		profile, profileOK := domain.FixedRuntimeComponentLifecycleProfile(command.TargetComponentRole)
+		if profileOK {
 			command.LifecycleProfile = profile
 		}
+	case domain.RuntimeComponentLifecycleProfileNone:
+		command.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
 	}
 	return manager.ApplyComponentLifecycle(ctx, command)
 }

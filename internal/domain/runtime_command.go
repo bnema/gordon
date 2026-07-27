@@ -56,6 +56,39 @@ const (
 	RuntimeComponentLifecycleDrain RuntimeComponentLifecycleAction = "drain"
 )
 
+// RuntimeComponentLifecycleProfileMode defines how much immutable process
+// profile an action is allowed to carry.
+type RuntimeComponentLifecycleProfileMode string
+
+const (
+	RuntimeComponentLifecycleProfileNone         RuntimeComponentLifecycleProfileMode = "none"
+	RuntimeComponentLifecycleProfileIdentityOnly RuntimeComponentLifecycleProfileMode = "identity-only"
+	RuntimeComponentLifecycleProfileFull         RuntimeComponentLifecycleProfileMode = "full"
+)
+
+// RuntimeComponentLifecycleActionRequirement is the authoritative contract
+// for one allowlisted lifecycle action.
+type RuntimeComponentLifecycleActionRequirement struct {
+	ProfileMode RuntimeComponentLifecycleProfileMode
+}
+
+// RuntimeComponentLifecycleRequirement reports the immutable profile contract
+// for an allowlisted action. This is the single lifecycle action inventory.
+func RuntimeComponentLifecycleRequirement(action RuntimeComponentLifecycleAction) (RuntimeComponentLifecycleActionRequirement, bool) {
+	switch action {
+	case RuntimeComponentLifecycleEnsureNetwork:
+		return RuntimeComponentLifecycleActionRequirement{ProfileMode: RuntimeComponentLifecycleProfileNone}, true
+	case RuntimeComponentLifecycleHealth, RuntimeComponentLifecycleLogs:
+		return RuntimeComponentLifecycleActionRequirement{ProfileMode: RuntimeComponentLifecycleProfileIdentityOnly}, true
+	case RuntimeComponentLifecycleReplace, RuntimeComponentLifecycleStart, RuntimeComponentLifecycleStop,
+		RuntimeComponentLifecycleConnect, RuntimeComponentLifecycleRemove, RuntimeComponentLifecycleTransferChannel,
+		RuntimeComponentLifecycleActivate, RuntimeComponentLifecycleDrain:
+		return RuntimeComponentLifecycleActionRequirement{ProfileMode: RuntimeComponentLifecycleProfileFull}, true
+	default:
+		return RuntimeComponentLifecycleActionRequirement{}, false
+	}
+}
+
 var (
 	// ErrInvalidRuntimeCommand is returned when a runtime intent command is malformed.
 	ErrInvalidRuntimeCommand = errors.New("invalid runtime command")
@@ -239,6 +272,12 @@ func (p RuntimeComponentLifecycleProfile) IsFixedFor(role ComponentRole) bool {
 		slices.Equal(p.GenerationVolumeOptions, expected.GenerationVolumeOptions)
 }
 
+// IsEmpty reports whether an action carries no process profile.
+func (p RuntimeComponentLifecycleProfile) IsEmpty() bool {
+	return p.ProcessIdentity == (ComponentProcessIdentity{}) && p.UsernsMode == "" && len(p.CapDrop) == 0 &&
+		!p.NoNewPrivileges && len(p.GenerationVolumeOptions) == 0
+}
+
 // IsFixedIdentityOnlyFor reports whether a read-only command carries exactly
 // the immutable process identity for role and no container-creation profile.
 func (p RuntimeComponentLifecycleProfile) IsFixedIdentityOnlyFor(role ComponentRole) bool {
@@ -250,7 +289,8 @@ func (p RuntimeComponentLifecycleProfile) IsFixedIdentityOnlyFor(role ComponentR
 // IsRuntimeComponentLifecycleReadAction identifies actions that authenticate
 // and inspect an existing component without carrying desired-state mutation.
 func IsRuntimeComponentLifecycleReadAction(action RuntimeComponentLifecycleAction) bool {
-	return action == RuntimeComponentLifecycleHealth || action == RuntimeComponentLifecycleLogs
+	requirement, ok := RuntimeComponentLifecycleRequirement(action)
+	return ok && requirement.ProfileMode == RuntimeComponentLifecycleProfileIdentityOnly
 }
 
 // RuntimeSelfUpdateCommand asks a managed Gordon runtime component to update itself under policy.
@@ -314,31 +354,46 @@ func (c RuntimeSelfUpdateCommand) validateSelfUpdateTarget() error {
 	if !IsKnownComponentRole(c.TargetComponentRole) {
 		return fmt.Errorf("%w: self-update target component role is invalid", ErrInvalidRuntimeCommand)
 	}
-	readOnly := IsRuntimeComponentLifecycleReadAction(c.LifecycleAction)
-	if !readOnly && strings.TrimSpace(c.TargetVersion) == "" {
+	requirement, lifecycleAction := RuntimeComponentLifecycleRequirement(c.LifecycleAction)
+	if c.LifecycleAction != "" && !lifecycleAction {
+		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
+	}
+	identityOnly := lifecycleAction && requirement.ProfileMode == RuntimeComponentLifecycleProfileIdentityOnly
+	if !identityOnly && strings.TrimSpace(c.TargetVersion) == "" {
 		return fmt.Errorf("%w: target version is required", ErrInvalidRuntimeCommand)
 	}
-	if !readOnly && !isKnownRuntimeSelfUpdatePolicy(c.Policy) {
+	if !identityOnly && !isKnownRuntimeSelfUpdatePolicy(c.Policy) {
 		return fmt.Errorf("%w: self-update policy is invalid", ErrInvalidRuntimeCommand)
 	}
 	if strings.TrimSpace(c.PolicyDecisionID) == "" {
 		return fmt.Errorf("%w: policy decision id is required", ErrInvalidRuntimeCommand)
 	}
-	if c.LifecycleAction != "" && !isKnownRuntimeComponentLifecycleAction(c.LifecycleAction) {
-		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
-	}
 	return nil
 }
 
 func (c RuntimeSelfUpdateCommand) validateLifecycleProfile() error {
-	if IsRuntimeComponentLifecycleReadAction(c.LifecycleAction) {
+	if c.LifecycleAction == "" {
+		return nil
+	}
+	requirement, ok := RuntimeComponentLifecycleRequirement(c.LifecycleAction)
+	if !ok {
+		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
+	}
+	switch requirement.ProfileMode {
+	case RuntimeComponentLifecycleProfileNone:
+		if !c.LifecycleProfile.IsEmpty() {
+			return fmt.Errorf("%w: component lifecycle profile must be empty", ErrInvalidRuntimeCommand)
+		}
+	case RuntimeComponentLifecycleProfileIdentityOnly:
 		if !c.LifecycleProfile.IsFixedIdentityOnlyFor(c.TargetComponentRole) || !c.HasOnlyReadLifecycleIdentity() {
 			return fmt.Errorf("%w: component lifecycle read identity is invalid", ErrInvalidRuntimeCommand)
 		}
-		return nil
-	}
-	if c.LifecycleAction != "" && c.LifecycleAction != RuntimeComponentLifecycleEnsureNetwork && !c.LifecycleProfile.IsFixedFor(c.TargetComponentRole) {
-		return fmt.Errorf("%w: component lifecycle profile is invalid", ErrInvalidRuntimeCommand)
+	case RuntimeComponentLifecycleProfileFull:
+		if !c.LifecycleProfile.IsFixedFor(c.TargetComponentRole) {
+			return fmt.Errorf("%w: component lifecycle profile is invalid", ErrInvalidRuntimeCommand)
+		}
+	default:
+		return fmt.Errorf("%w: component lifecycle profile mode is invalid", ErrInvalidRuntimeCommand)
 	}
 	return nil
 }
@@ -350,6 +405,27 @@ func (c RuntimeSelfUpdateCommand) HasOnlyReadLifecycleIdentity() bool {
 		c.DesiredImage == "" && c.DesiredStateHash == "" && c.InternalNetwork == "" && c.EnvironmentFile == "" &&
 		c.ConfigFile == "" && len(c.PortPublishes) == 0 && c.OldServingComponentID == "" &&
 		len(c.FinalPortPublishes) == 0 && len(c.EdgeAppNetworks) == 0 && !c.PreserveVolumes
+}
+
+// NewRuntimeComponentLifecycleReadCommand constructs the complete minimal
+// command accepted for an identity-only lifecycle action.
+func NewRuntimeComponentLifecycleReadCommand(identity RuntimeCommandIdentity, targetID string, role ComponentRole, policyDecisionID string, action RuntimeComponentLifecycleAction) (RuntimeSelfUpdateCommand, error) {
+	requirement, ok := RuntimeComponentLifecycleRequirement(action)
+	if !ok || requirement.ProfileMode != RuntimeComponentLifecycleProfileIdentityOnly {
+		return RuntimeSelfUpdateCommand{}, fmt.Errorf("%w: component lifecycle action is not identity-only", ErrInvalidRuntimeCommand)
+	}
+	processIdentity, ok := FixedComponentProcessIdentity(role)
+	if !ok {
+		return RuntimeSelfUpdateCommand{}, fmt.Errorf("%w: component lifecycle role is invalid", ErrInvalidRuntimeCommand)
+	}
+	return RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: identity,
+		TargetComponentID:      targetID,
+		TargetComponentRole:    role,
+		PolicyDecisionID:       policyDecisionID,
+		LifecycleAction:        action,
+		LifecycleProfile:       RuntimeComponentLifecycleProfile{ProcessIdentity: processIdentity},
+	}, nil
 }
 
 func validateEdgeAppNetworks(command RuntimeSelfUpdateCommand) error {
@@ -414,20 +490,6 @@ type RuntimeCommandResult struct {
 	StartedAt      time.Time
 	CompletedAt    time.Time
 	Error          *RuntimeCommandError
-}
-
-func isKnownRuntimeComponentLifecycleAction(action RuntimeComponentLifecycleAction) bool {
-	switch action {
-	case RuntimeComponentLifecycleReplace, RuntimeComponentLifecycleEnsureNetwork,
-		RuntimeComponentLifecycleStart, RuntimeComponentLifecycleStop,
-		RuntimeComponentLifecycleHealth, RuntimeComponentLifecycleLogs,
-		RuntimeComponentLifecycleConnect, RuntimeComponentLifecycleRemove,
-		RuntimeComponentLifecycleTransferChannel, RuntimeComponentLifecycleActivate,
-		RuntimeComponentLifecycleDrain:
-		return true
-	default:
-		return false
-	}
 }
 
 func isKnownRuntimeSelfUpdatePolicy(policy RuntimeSelfUpdatePolicy) bool {

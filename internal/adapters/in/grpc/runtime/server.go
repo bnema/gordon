@@ -239,6 +239,12 @@ func (s *Server) RuntimeSelfUpdate(ctx context.Context, req *runtimev1.RuntimeSe
 	if req == nil || req.Command == nil {
 		return nil, status.Error(codes.InvalidArgument, "runtime self-update command is required")
 	}
+	action := domain.RuntimeComponentLifecycleAction(req.Command.LifecycleAction)
+	if action != "" {
+		if _, ok := domain.RuntimeComponentLifecycleRequirement(action); !ok {
+			return nil, status.Error(codes.InvalidArgument, "invalid runtime self-update command")
+		}
+	}
 	command := protoSelfUpdate(req.Command)
 	if err := command.Validate(); err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid runtime self-update command")

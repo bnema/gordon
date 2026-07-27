@@ -226,6 +226,20 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	require.NoError(t, client.AcknowledgeRouteDrain(context.Background(), domain.RouteDrainAck{RouteDrainState: domain.RouteDrainState{CanonicalDomain: "app.example.com", TransitionGeneration: 7, OldTargetKey: testRouteDrainKey, AcknowledgedAt: time.Unix(1, 0).UTC()}, Status: domain.RouteDrainStatusAcknowledged}))
 }
 
+func TestDomainSelfUpdateOmitsProfileForProfilelessAction(t *testing.T) {
+	command := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: testIdentity("cmd-network"), TargetComponentID: "gordon-network-fixture-g1",
+		TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2",
+		Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture",
+		LifecycleAction: domain.RuntimeComponentLifecycleEnsureNetwork, InternalNetwork: "gordon-internal-fixture-g1",
+	}
+
+	serialized := domainSelfUpdate(command)
+
+	assert.Nil(t, serialized.LifecycleProfile)
+	assert.Equal(t, command.InternalNetwork, serialized.InternalNetwork)
+}
+
 func TestDomainSelfUpdateSerializesOnlyMinimalReadIdentity(t *testing.T) {
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)

@@ -138,14 +138,26 @@ func (p RuntimePolicy) checkComponentLifecycle(command domain.RuntimeSelfUpdateC
 	if !validComponentLifecycleTarget(command) {
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
 	}
-	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
+	requirement, ok := domain.RuntimeComponentLifecycleRequirement(command.LifecycleAction)
+	if !ok {
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle action is not allowed")
+	}
+	switch requirement.ProfileMode {
+	case domain.RuntimeComponentLifecycleProfileNone:
+		if !command.LifecycleProfile.IsEmpty() {
+			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle profile is not allowed")
+		}
+	case domain.RuntimeComponentLifecycleProfileIdentityOnly:
 		if !command.LifecycleProfile.IsFixedIdentityOnlyFor(command.TargetComponentRole) || !command.HasOnlyReadLifecycleIdentity() {
 			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle read identity is not allowed")
 		}
 		return nil
-	}
-	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
-		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
+	case domain.RuntimeComponentLifecycleProfileFull:
+		if !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
+			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
+		}
+	default:
+		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle profile mode is not allowed")
 	}
 	if strings.TrimSpace(command.DesiredImage) == "" {
 		return nil

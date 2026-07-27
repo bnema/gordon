@@ -491,20 +491,15 @@ func newComponentLifecycleCommand(component ComponentLaunchComponent, action dom
 		return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle identity is required")
 	}
 	identity := domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: requestedAt.UTC()}
-	if domain.IsRuntimeComponentLifecycleReadAction(action) {
-		processIdentity, ok := domain.FixedComponentProcessIdentity(component.Role)
-		if !ok {
-			return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle identity is required")
-		}
-		return domain.RuntimeSelfUpdateCommand{
-			RuntimeCommandIdentity: identity, TargetComponentID: component.ComponentID, TargetComponentRole: component.Role,
-			PolicyDecisionID: "migration:" + migrationID, LifecycleAction: action,
-			LifecycleProfile: domain.RuntimeComponentLifecycleProfile{ProcessIdentity: processIdentity},
-		}, nil
+	requirement, ok := domain.RuntimeComponentLifecycleRequirement(action)
+	if !ok {
+		return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle action is invalid")
+	}
+	if requirement.ProfileMode == domain.RuntimeComponentLifecycleProfileIdentityOnly {
+		return domain.NewRuntimeComponentLifecycleReadCommand(identity, component.ComponentID, component.Role, "migration:"+migrationID, action)
 	}
 	var profile domain.RuntimeComponentLifecycleProfile
-	if action != domain.RuntimeComponentLifecycleEnsureNetwork {
-		var ok bool
+	if requirement.ProfileMode == domain.RuntimeComponentLifecycleProfileFull {
 		profile, ok = domain.FixedRuntimeComponentLifecycleProfile(component.Role)
 		if !ok {
 			return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle profile is required")

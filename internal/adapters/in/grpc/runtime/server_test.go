@@ -137,6 +137,21 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 	assert.True(t, worker.self.PreserveVolumes)
 }
 
+func TestServerRuntimeSelfUpdateRejectsUnknownLifecycleActionBeforeMapping(t *testing.T) {
+	worker := &fakeRuntimeWorker{}
+	server := NewServer(worker, "runtime-1")
+
+	_, err := server.RuntimeSelfUpdate(context.Background(), &runtimev1.RuntimeSelfUpdateRequest{Command: &runtimev1.RuntimeSelfUpdateCommand{
+		Identity: protoTestIdentity("cmd-unknown", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1",
+		TargetComponentRole: string(domain.ComponentRoleEdge), PolicyDecisionId: "migration:fixture",
+		LifecycleAction: "exec",
+	}})
+
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	assert.Empty(t, worker.self.LifecycleAction)
+}
+
 func TestServerRuntimeSelfUpdateAcceptsMinimalReadIdentity(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
 	server := NewServer(worker, "runtime-1")
