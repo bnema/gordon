@@ -23,6 +23,7 @@ import (
 	runtimev1 "github.com/bnema/gordon/api/gordon/runtime/v1"
 	"github.com/bnema/gordon/internal/adapters/in/grpc/interceptors"
 	runtimegrpc "github.com/bnema/gordon/internal/adapters/in/grpc/runtime"
+	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/adapters/out/tokenstore"
 	"github.com/bnema/gordon/internal/boundaries/in"
@@ -457,7 +458,8 @@ func runtimeStateVersion(generation uint64) string {
 
 func buildRuntimeRoleWorkerImpl(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (runtimeRoleWorkerBundle, func(), error) {
 	runtimeSocket := resolveRuntimeConfig(v.GetString("server.runtime"))
-	runtimeAdapter, eventBus, err := createOutputAdapters(ctx, log, RoleRuntime, runtimeSocket)
+	detection := docker.DetectRuntimeSocket(runtimeSocket)
+	runtimeAdapter, eventBus, err := createOutputAdaptersFromDetection(ctx, log, RoleRuntime, detection)
 	if err != nil {
 		return runtimeRoleWorkerBundle{}, nil, err
 	}

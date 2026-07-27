@@ -25,6 +25,12 @@ func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testi
 			configPath := filepath.Join(configDir, string(role)+".toml")
 			require.NoError(t, os.WriteFile(configPath, []byte("[component]\n"), 0o600))
 			command := managedSecretsLifecycleCommand(role, domain.RuntimeComponentLifecycleStart, configPath)
+			if role == domain.ComponentRoleRuntime {
+				envDir := filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(configPath)))), "env", "fixture", "1")
+				require.NoError(t, os.MkdirAll(envDir, 0o700))
+				command.EnvironmentFile = filepath.Join(envDir, "runtime.env")
+				require.NoError(t, os.WriteFile(command.EnvironmentFile, []byte("DOCKER_HOST=unix:///run/user/1000/podman/podman.sock\n"), 0o600))
+			}
 			config, err := manager.componentConfig(command, nil)
 			require.NoError(t, err)
 			identity, ok := domain.FixedComponentProcessIdentity(role)
@@ -160,12 +166,69 @@ func TestRuntimeComponentLifecycleStartUsesRoleConfigAndPersistentStorage(t *tes
 	require.NoError(t, err)
 }
 
-func TestRuntimeComponentSocketMountIsRuntimeOnly(t *testing.T) {
-	source, env := runtimeComponentSocketMount([]string{"PODMAN_HOST=unix:///run/user/1000/podman/podman.sock", "SAFE=value"})
-	require.Equal(t, "/run/user/1000/podman/podman.sock", source)
-	require.Contains(t, env, "PODMAN_HOST=unix:///run/gordon/runtime.sock")
-	source, _ = runtimeComponentSocketMount([]string{"SAFE=value"})
-	require.Empty(t, source)
+func TestRuntimeComponentSocketMountUsesExactSourceAndCanonicalEndpoint(t *testing.T) {
+	const sourcePath = "/run/user/1000/podman/podman.sock"
+	source, env, err := runtimeComponentSocketMount([]string{"PODMAN_HOST=unix://" + sourcePath, "SAFE=value"})
+	require.NoError(t, err)
+	require.Equal(t, sourcePath, source)
+	require.Equal(t, []string{"SAFE=value", "DOCKER_HOST=unix:///run/gordon/runtime.sock"}, env)
+}
+
+func TestRuntimeComponentLifecycleMountsExactSocketAndValidatesExistingContainer(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "migration", "config", "fixture", "1")
+	envDir := filepath.Join(root, "migration", "env", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	require.NoError(t, os.MkdirAll(envDir, 0o700))
+	configPath := filepath.Join(configDir, "runtime.toml")
+	envPath := filepath.Join(envDir, "runtime.env")
+	const sourcePath = "/run/user/1000/podman/podman.sock"
+	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
+	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix://"+sourcePath+"\n"), 0o600))
+
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce}}
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleStart, configPath)
+	command.EnvironmentFile = envPath
+	config, err := manager.componentConfig(command, nil)
+	require.NoError(t, err)
+	assert.Equal(t, sourcePath, config.ReadOnlyVolumes["/run/gordon/runtime.sock"])
+	assert.Contains(t, config.Env, "DOCKER_HOST=unix:///run/gordon/runtime.sock")
+	assert.NotContains(t, config.Env, "DOCKER_HOST=unix://"+sourcePath)
+
+	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
+	existing := &domain.Container{
+		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
+		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+	}
+	for destination, source := range config.Volumes {
+		existing.VolumeMounts = append(existing.VolumeMounts, domain.ContainerVolumeMount{Type: "volume", Name: source, Destination: destination})
+	}
+	for destination, source := range config.ReadOnlyVolumes {
+		existing.VolumeMounts = append(existing.VolumeMounts, domain.ContainerVolumeMount{Type: "bind", Source: source, Destination: destination, ReadOnly: true})
+	}
+	require.NoError(t, manager.validateExistingLifecycleMounts(existing, command))
+	for index := range existing.VolumeMounts {
+		if existing.VolumeMounts[index].Destination == "/run/gordon/runtime.sock" {
+			existing.VolumeMounts[index].Source = "/private/other/podman.sock"
+		}
+	}
+	require.ErrorIs(t, manager.validateExistingLifecycleMounts(existing, command), ErrRuntimePolicyDenied)
+}
+
+func TestRuntimeComponentSocketMountFailsClosedWithoutEndpointLeakage(t *testing.T) {
+	for name, environment := range map[string][]string{
+		"absent":      {"SAFE=value"},
+		"remote":      {"DOCKER_HOST=ssh://private.example/run/podman.sock"},
+		"unsupported": {"DOCKER_HOST=unix:///tmp/engine.socket"},
+		"conflicting": {"DOCKER_HOST=unix:///run/user/1000/podman/podman.sock", "PODMAN_HOST=unix:///private/conflict/podman.sock"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := runtimeComponentSocketMount(environment)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "private.example")
+			assert.NotContains(t, err.Error(), "private/conflict")
+		})
+	}
 }
 
 func TestRuntimeComponentLifecycleRejectsAnotherRolesGeneratedFiles(t *testing.T) {

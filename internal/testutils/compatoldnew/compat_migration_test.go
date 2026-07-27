@@ -372,7 +372,7 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
-	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "DOCKER_HOST=unix://" + f.socket, "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
+	args := append([]string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket, "--env", "XDG_RUNTIME_DIR=" + f.root, "--env", "DBUS_SESSION_BUS_ADDRESS=unix:path=" + filepath.Join(f.root, "bus"), "--env", "GORDON_MIGRATION_IMAGE=" + f.image, "--env", "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes"}, migrationLabelArgs(labels)...)
 	args = append(args, f.image, "serve", "--role", "monolith", "--config", f.config)
 	require.NoError(f.t, migrationPodman(f.ctx, args...))
 }
@@ -849,7 +849,14 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 func (f *realMigrationFixture) runFreshMigrationCLI(args ...string) (string, error) {
 	f.t.Helper()
 	command := exec.CommandContext(f.ctx, filepath.Join(f.root, "gordon"), args...) // #nosec G204 -- candidate binary and arguments are fixture-owned.
-	command.Env = append(os.Environ(), "DOCKER_HOST=unix://"+f.socket, "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
+	environment := make([]string, 0, len(os.Environ())+4)
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "DOCKER_HOST" && key != "CONTAINER_HOST" && key != "PODMAN_HOST" {
+			environment = append(environment, entry)
+		}
+	}
+	command.Env = append(environment, "XDG_RUNTIME_DIR="+f.root, "DBUS_SESSION_BUS_ADDRESS=unix:path="+filepath.Join(f.root, "bus"), "GORDON_MIGRATION_IMAGE="+f.image, "GORDON_AUTH_TOKEN_SECRET=migration-fixture-signing-secret-at-least-32-bytes")
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -1004,7 +1011,8 @@ security_profile = "compat"
 
 func migrationStartPodmanService(t *testing.T, ctx context.Context, root string) (string, *exec.Cmd) {
 	t.Helper()
-	socket := filepath.Join(root, "podman.sock")
+	socket := filepath.Join(root, "podman", "podman.sock")
+	require.NoError(t, os.MkdirAll(filepath.Dir(socket), 0o700))
 	// The test's user-local Podman wrapper is a CLI client, not a socket mount
 	// source. Start a private rootless API service so the old monolith receives
 	// the only engine socket and the target runtime can inherit it.

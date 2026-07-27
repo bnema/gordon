@@ -418,11 +418,13 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	require.NoError(t, os.MkdirAll(envDir, 0o700))
 	configPath := filepath.Join(configDir, "runtime.toml")
+	envPath := filepath.Join(envDir, "runtime.env")
 	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
+	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix:///run/user/1000/podman/podman.sock\n"), 0o600))
 	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: filepath.Join(data, "migration"), ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"}).(*runtimeComponentLifecycleManager)
 	identity := testRuntimeCommandIdentity("component-socket-state")
 	identity.SourceComponentID = "gordon-control"
-	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-runtime-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-runtime-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, EnvironmentFile: envPath, PreserveVolumes: true}
 	config, err := manager.componentConfig(command, nil)
 	require.NoError(t, err)
 	state := filepath.Join(data, "migration", "fixture")
@@ -433,11 +435,13 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	assert.NotContains(t, config.ReadOnlyVolumes, "/var/lib/gordon/migration/fixture")
 	assert.Equal(t, filepath.Join(data, "migration", "config"), config.ReadOnlyVolumes[filepath.Join(data, "migration", "config")], "runtime alone needs a read-only host-path view to validate later role manifests")
 	assert.Equal(t, filepath.Join(data, "migration", "env"), config.ReadOnlyVolumes[filepath.Join(data, "migration", "env")], "runtime alone needs a read-only host-path view to load later role environments")
-	assert.NotContains(t, config.Volumes, "/run/gordon/runtime.sock")
+	assert.Equal(t, "/run/user/1000/podman/podman.sock", config.ReadOnlyVolumes["/run/gordon/runtime.sock"])
+	assert.Contains(t, config.Env, "DOCKER_HOST=unix:///run/gordon/runtime.sock")
 
 	command.TargetComponentRole = domain.ComponentRoleControl
 	command.TargetComponentID = "gordon-control-fixture-g1"
 	command.ConfigFile = filepath.Join(configDir, "control.toml")
+	command.EnvironmentFile = ""
 	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[control]\n"), 0o600))
 	config, err = manager.componentConfig(command, nil)
 	require.NoError(t, err)

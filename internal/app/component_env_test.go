@@ -131,19 +131,59 @@ func TestComponentEnvManifestMissingAndExplicitVariableErrorsAreKeyOnly(t *testi
 	}
 }
 
+func TestMigrationEnvPropagatesDetectedRuntimeSocketWithoutHostEndpoint(t *testing.T) {
+	const detectedSocket = "/run/user/1000/podman/podman.sock"
+	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
+		Environment:           map[string]string{"XDG_RUNTIME_DIR": "/run/user/1000", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
+		RuntimeSocket:         detectedSocket,
+		RuntimeName:           "podman",
+		RuntimeSocketRequired: true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"DOCKER_HOST"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
+	assert.Equal(t, "unix://"+detectedSocket, manifest.values[domain.ComponentRoleRuntime]["DOCKER_HOST"])
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
+		assert.Empty(t, manifest.KeysForRole(role))
+	}
+	assert.NotContains(t, manifest.RedactedSummary(), detectedSocket)
+}
+
+func TestMigrationRuntimeSocketConfigurationFailsClosedWithoutValueLeakage(t *testing.T) {
+	const privateEndpoint = "ssh://private-host.example/run/podman.sock"
+	for name, options := range map[string]MigrationEnvOptions{
+		"absent": {RuntimeSocketRequired: true},
+		"remote": {RuntimeSocket: privateEndpoint, RuntimeName: "podman", RuntimeSocketRequired: true},
+		"docker": {RuntimeSocket: "/var/run/docker.sock", RuntimeName: "docker", RuntimeSocketRequired: true},
+		"conflict": {
+			RuntimeSocket: "/run/user/1000/podman/podman.sock", RuntimeName: "podman", RuntimeSocketRequired: true,
+			Environment: map[string]string{"DOCKER_HOST": "unix:///run/user/1000/podman/podman.sock", "PODMAN_HOST": "unix:///private/conflicting/podman.sock"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildMigrationComponentEnvManifest(options)
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), privateEndpoint)
+			assert.NotContains(t, err.Error(), "private/conflicting")
+		})
+	}
+}
+
 func TestMigrationEnvOptionsAcceptOnlyAllowlistedExplicitEnvFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "explicit.env")
 	require.NoError(t, os.WriteFile(path, []byte("SAFE_FEATURE_FLAG=fixture-value-not-reported\n"), 0o600))
 	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
-		Environment:       map[string]string{},
-		ExplicitAllowlist: []string{"SAFE_FEATURE_FLAG"},
-		ExplicitEnvFile:   path,
+		Environment:           map[string]string{},
+		RuntimeSocket:         "/run/user/1000/podman/podman.sock",
+		RuntimeName:           "podman",
+		RuntimeSocketRequired: true,
+		ExplicitAllowlist:     []string{"SAFE_FEATURE_FLAG"},
+		ExplicitEnvFile:       path,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
 
 	require.NoError(t, os.WriteFile(path, []byte("CUSTOM_TOKEN=fixture-value-not-reported\n"), 0o600))
-	_, err = BuildMigrationComponentEnvManifest(MigrationEnvOptions{ExplicitAllowlist: []string{"CUSTOM_TOKEN"}, ExplicitEnvFile: path})
+	_, err = BuildMigrationComponentEnvManifest(MigrationEnvOptions{RuntimeSocket: "/run/user/1000/podman/podman.sock", RuntimeName: "podman", RuntimeSocketRequired: true, ExplicitAllowlist: []string{"CUSTOM_TOKEN"}, ExplicitEnvFile: path})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture-value-not-reported")
 }
@@ -158,10 +198,13 @@ func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
 	require.NoError(t, err)
 	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:         Config{},
-		Environment:    map[string]string{"GORDON_SERVER_PORT": "8080"},
-		Directory:      filepath.Join(t.TempDir(), "env"),
-		ExternalRoutes: map[string]any{"public.example.test": "198.51.100.10:8443"},
+		Config:                Config{},
+		RuntimeSocket:         "/run/user/1000/podman/podman.sock",
+		RuntimeName:           "podman",
+		RuntimeSocketRequired: true,
+		Environment:           map[string]string{"GORDON_SERVER_PORT": "8080"},
+		Directory:             filepath.Join(t.TempDir(), "env"),
+		ExternalRoutes:        map[string]any{"public.example.test": "198.51.100.10:8443"},
 	})
 	require.NoError(t, err)
 	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})

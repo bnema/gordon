@@ -312,7 +312,10 @@ func runtimePolicyImageRegistry(image string) string {
 
 func isRuntimeSocketMount(source string) bool {
 	clean := filepath.Clean(strings.TrimSpace(source))
-	return strings.HasSuffix(clean, ".sock") && (strings.Contains(clean, "/podman/") || strings.Contains(clean, "podman.sock") || strings.Contains(clean, "docker.sock"))
+	if !strings.HasSuffix(clean, ".sock") {
+		return false
+	}
+	return filepath.IsAbs(clean) || strings.Contains(clean, "/podman/") || strings.Contains(clean, "podman.sock") || strings.Contains(clean, "docker.sock")
 }
 
 func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool {

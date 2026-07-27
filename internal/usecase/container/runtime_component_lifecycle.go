@@ -194,6 +194,9 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if err != nil {
 		return nil, err
 	}
+	if command.TargetComponentRole != domain.ComponentRoleRuntime && componentEnvironmentHasRuntimeEndpoint(env) {
+		return nil, fmt.Errorf("component role cannot receive a runtime endpoint")
+	}
 	configFile, err := componentLifecycleConfigFile(command, ports)
 	if err != nil {
 		return nil, err
@@ -219,10 +222,12 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
 		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
-		if source, rewritten := runtimeComponentSocketMount(config.Env); source != "" {
-			config.Env = rewritten
-			config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
+		source, rewritten, socketErr := runtimeComponentSocketMount(config.Env)
+		if socketErr != nil {
+			return nil, socketErr
 		}
+		config.Env = rewritten
+		config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
 	}
 	if err := m.mountCanonicalRegistryStorage(command, config); err != nil {
 		return nil, err
@@ -1107,9 +1112,11 @@ func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domai
 		if envErr != nil {
 			return nil, envErr
 		}
-		if source, _ := runtimeComponentSocketMount(environment); source != "" {
-			expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: source, readOnly: true}
+		source, _, socketErr := runtimeComponentSocketMount(environment)
+		if socketErr != nil {
+			return nil, socketErr
 		}
+		expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: source, readOnly: true}
 	}
 	m.addExpectedMigrationMounts(command, expected)
 	return expected, nil
@@ -1295,21 +1302,51 @@ func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path
 	}
 	return values, nil
 }
-func runtimeComponentSocketMount(environment []string) (string, []string) {
-	copyOf := append([]string(nil), environment...)
-	for index, entry := range copyOf {
+func componentEnvironmentHasRuntimeEndpoint(environment []string) bool {
+	for _, entry := range environment {
+		key, _, found := strings.Cut(entry, "=")
+		if found && (key == "CONTAINER_HOST" || key == "DOCKER_HOST" || key == "PODMAN_HOST") {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeComponentSocketMount(environment []string) (string, []string, error) {
+	var source string
+	rewritten := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
 		key, value, found := strings.Cut(entry, "=")
 		if !found || (key != "CONTAINER_HOST" && key != "DOCKER_HOST" && key != "PODMAN_HOST") {
+			rewritten = append(rewritten, entry)
 			continue
 		}
-		path := strings.TrimPrefix(strings.TrimSpace(value), "unix://")
-		if !isRuntimeSocketMount(path) {
-			continue
+		path, err := runtimeSocketSource(value)
+		if err != nil {
+			return "", nil, err
 		}
-		copyOf[index] = key + "=unix:///run/gordon/runtime.sock"
-		return path, copyOf
+		if source != "" && source != path {
+			return "", nil, fmt.Errorf("conflicting runtime endpoint configuration")
+		}
+		source = path
 	}
-	return "", copyOf
+	if source == "" {
+		return "", nil, fmt.Errorf("runtime endpoint is unavailable")
+	}
+	rewritten = append(rewritten, "DOCKER_HOST=unix:///run/gordon/runtime.sock")
+	return source, rewritten, nil
+}
+
+func runtimeSocketSource(endpoint string) (string, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if !strings.HasPrefix(endpoint, "unix://") {
+		return "", fmt.Errorf("runtime endpoint must be a local Unix socket")
+	}
+	path := filepath.Clean(strings.TrimPrefix(endpoint, "unix://"))
+	if !filepath.IsAbs(path) || !isRuntimeSocketMount(path) {
+		return "", fmt.Errorf("runtime endpoint must be a supported local Unix socket")
+	}
+	return path, nil
 }
 
 func approvedPreparedPortPublishes(role domain.ComponentRole, ports []domain.ContainerPortPublish) bool {
