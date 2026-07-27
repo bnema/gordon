@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -118,117 +117,97 @@ func TestPostHandoffRuntimeClientDialsOnlyValidatedHostMigrationSocket(t *testin
 	require.Error(t, err, "the generic runtime client must not accept host migration or engine sockets")
 }
 
-func TestPrivateBootstrapRuntimeClientWaitsForSocketAndAuthenticatedProbe(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "gordon-bootstrap-readiness-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
+func TestPrivateBootstrapRuntimeClientWaitsForConnectableSocketBeforeConstruction(t *testing.T) {
+	root := t.TempDir()
 	path := filepath.Join(root, bootstrapRuntimeSocketName)
-
-	attempted := make(chan struct{})
-	var signalAttempt sync.Once
-	client, err := createPrivateBootstrapRuntimeCommandClient(RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
-		signalAttempt.Do(func() { close(attempted) })
-		return dialValidatedRuntimeSocket(ctx, path)
-	})
-	require.NoError(t, err)
-	closer, ok := client.(interface{ Close() error })
-	require.True(t, ok, "private bootstrap clients must expose connection cleanup")
-	t.Cleanup(func() { require.NoError(t, closer.Close()) })
-	probe, ok := client.(out.RuntimeEnvironmentProbe)
-	require.True(t, ok)
-
-	probeCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	probeDone := make(chan error, 1)
-	go func() {
-		result, probeErr := probe.ProbeRuntimeEnvironment(probeCtx)
-		if probeErr == nil && (!result.APIReachable || !result.Rootless) {
-			probeErr = status.Error(codes.FailedPrecondition, "unexpected environment probe")
-		}
-		probeDone <- probeErr
-	}()
-
-	select {
-	case <-attempted:
-	case <-probeCtx.Done():
-		t.Fatal("bootstrap RPC did not dial before its deadline")
+	var listener net.Listener
+	var server *grpc.Server
+	retryCalls := 0
+	retry := func(context.Context) error {
+		retryCalls++
+		var err error
+		listener, err = net.Listen("unix", path)
+		require.NoError(t, err)
+		server = newAuthenticatedBootstrapRuntimeServer("bootstrap-token")
+		go func() { _ = server.Serve(listener) }()
+		return nil
 	}
-	listener, err := net.Listen("unix", path)
+
+	client, err := createPrivateBootstrapRuntimeCommandClientWithRetry(t.Context(), RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+		return dialValidatedRuntimeSocket(ctx, path)
+	}, retry)
 	require.NoError(t, err)
-	server := newAuthenticatedBootstrapRuntimeServer("bootstrap-token")
-	go func() { _ = server.Serve(listener) }()
+	require.Equal(t, 1, retryCalls, "the missing endpoint must be observed before client construction")
+	closer := client.(io.Closer)
 	t.Cleanup(func() {
+		require.NoError(t, closer.Close())
 		server.Stop()
 		_ = listener.Close()
 	})
 
-	require.NoError(t, <-probeDone, "the in-flight RPC must reconnect after the socket appears")
-}
-
-func TestPrivateBootstrapRuntimeClientStopsWaitingAtContextDeadline(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "gordon-bootstrap-deadline-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
-	path := filepath.Join(root, bootstrapRuntimeSocketName)
-
-	client, err := createPrivateBootstrapRuntimeCommandClient(RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
-		return dialValidatedRuntimeSocket(ctx, path)
-	})
-	require.NoError(t, err)
-	closer, ok := client.(interface{ Close() error })
+	probe, ok := client.(out.RuntimeEnvironmentProbe)
 	require.True(t, ok)
-	t.Cleanup(func() { require.NoError(t, closer.Close()) })
-	probe := client.(out.RuntimeEnvironmentProbe)
-
-	probeCtx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
-	defer cancel()
-	started := time.Now()
-	_, err = probe.ProbeRuntimeEnvironment(probeCtx)
-	require.Error(t, err)
-	assert.Equal(t, codes.DeadlineExceeded, status.Code(err))
-	assert.GreaterOrEqual(t, time.Since(started), 100*time.Millisecond, "missing sockets must wait rather than fail fast")
-	assert.Less(t, time.Since(started), time.Second, "context deadlines must terminate bootstrap retries promptly")
+	result, err := probe.ProbeRuntimeEnvironment(t.Context())
+	require.NoError(t, err)
+	assert.True(t, result.APIReachable)
+	assert.True(t, result.Rootless)
 }
 
-func TestPrivateBootstrapRuntimeClientStopsPromptlyWhenCanceled(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "gordon-bootstrap-cancel-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
-	path := filepath.Join(root, bootstrapRuntimeSocketName)
-	attempted := make(chan struct{})
-	var signalAttempt sync.Once
-	client, err := createPrivateBootstrapRuntimeCommandClient(RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
-		signalAttempt.Do(func() { close(attempted) })
-		return dialValidatedRuntimeSocket(ctx, path)
+func TestWaitForPrivateRuntimeTransportClosesReadinessProbe(t *testing.T) {
+	server, client := net.Pipe()
+	closed := make(chan error, 1)
+	go func() {
+		buffer := make([]byte, 1)
+		_, err := server.Read(buffer)
+		closed <- err
+	}()
+	t.Cleanup(func() { require.NoError(t, server.Close()) })
+
+	err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+		return client, nil
+	}, func(context.Context) error {
+		t.Fatal("a successful readiness probe must not retry")
+		return nil
 	})
 	require.NoError(t, err)
-	closer := client.(interface{ Close() error })
-	t.Cleanup(func() { require.NoError(t, closer.Close()) })
-
-	probeCtx, cancel := context.WithCancel(t.Context())
-	probeDone := make(chan error, 1)
-	go func() {
-		_, probeErr := client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(probeCtx)
-		probeDone <- probeErr
-	}()
-	select {
-	case <-attempted:
-	case <-time.After(time.Second):
-		t.Fatal("bootstrap RPC did not start")
-	}
-	started := time.Now()
-	cancel()
-	err = <-probeDone
-	require.Error(t, err)
-	assert.Equal(t, codes.Canceled, status.Code(err))
-	assert.Less(t, time.Since(started), 500*time.Millisecond)
+	require.ErrorIs(t, <-closed, io.EOF)
 }
 
-func TestPrivateBootstrapRuntimeClientRejectsInvalidTransportsWithoutRetry(t *testing.T) {
-	root, err := os.MkdirTemp("/tmp", "gordon-bootstrap-invalid-")
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
+func TestWaitForPrivateRuntimeTransportMissingUntilDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	dialCalls := 0
+	err := waitForPrivateRuntimeTransport(ctx, func(context.Context) (net.Conn, error) {
+		dialCalls++
+		return nil, errPrivateRuntimeTransportUnavailable
+	}, func(context.Context) error {
+		t.Fatal("an expired deadline must stop before retry")
+		return nil
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, 1, dialCalls)
+}
 
+func TestWaitForPrivateRuntimeTransportStopsPromptlyWhenCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	waitStarted := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForPrivateRuntimeTransport(ctx, func(context.Context) (net.Conn, error) {
+			return nil, errPrivateRuntimeTransportUnavailable
+		}, func(waitCtx context.Context) error {
+			close(waitStarted)
+			<-waitCtx.Done()
+			return waitCtx.Err()
+		})
+	}()
+	<-waitStarted
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *testing.T) {
+	root := t.TempDir()
 	for _, tc := range []struct {
 		name    string
 		path    string
@@ -252,20 +231,27 @@ func TestPrivateBootstrapRuntimeClientRejectsInvalidTransportsWithoutRetry(t *te
 			if tc.prepare != nil {
 				require.NoError(t, tc.prepare(tc.path))
 			}
-			client, err := createPrivateBootstrapRuntimeCommandClient(RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+			err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
 				return dialValidatedRuntimeSocket(ctx, tc.path)
+			}, func(context.Context) error {
+				t.Fatal("invalid transport must fail closed without retry")
+				return nil
 			})
-			require.NoError(t, err)
-			closer := client.(interface{ Close() error })
-			t.Cleanup(func() { require.NoError(t, closer.Close()) })
-
-			started := time.Now()
-			_, err = client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(t.Context())
 			require.Error(t, err)
 			assert.Equal(t, codes.PermissionDenied, status.Code(err))
-			assert.Less(t, time.Since(started), 500*time.Millisecond, "invalid transports must fail closed without readiness retry")
 		})
 	}
+}
+
+func TestWaitForPrivateRuntimeTransportRejectsPermissionFailureWithoutRetry(t *testing.T) {
+	err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+		return nil, os.ErrPermission
+	}, func(context.Context) error {
+		t.Fatal("permission failure must fail closed without retry")
+		return nil
+	})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
 }
 
 func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {

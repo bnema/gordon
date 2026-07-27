@@ -320,12 +320,14 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 	if err := l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentMigrationID(component), "transfer-channel"); err != nil {
 		return err
 	}
-	target, err := l.handoff(ctx, component)
+	startupCtx, cancelStartup := context.WithTimeout(ctx, runtimeHandoffStartupTimeout)
+	defer cancelStartup()
+	target, err := l.handoff(startupCtx, component)
 	if err != nil {
 		return fmt.Errorf("connect authenticated replacement runtime: %w", err)
 	}
 	targetCloser, _ := target.(io.Closer)
-	if err := proveRuntimeHandoff(ctx, target, component); err != nil {
+	if err := proveRuntimeHandoff(startupCtx, target, component); err != nil {
 		if closeErr := closeRuntimeClient(targetCloser); closeErr != nil {
 			return fmt.Errorf("prove replacement runtime: %w (close failed: %v)", err, closeErr)
 		}
@@ -386,25 +388,24 @@ const (
 	runtimeHandoffRetryInterval  = 50 * time.Millisecond
 )
 
-// proveRuntimeHandoff allows a just-started runtime a short, bounded window to
-// bind its private bootstrap listener. A lifecycle Start acknowledgement means
-// only that Podman started the process; it does not prove gRPC is accepting yet.
+// proveRuntimeHandoff retries protocol proof within the startup context shared
+// with handoff target creation and transport readiness. A lifecycle Start
+// acknowledgement means only that Podman started the process; it does not prove
+// gRPC is accepting yet.
 func proveRuntimeHandoff(ctx context.Context, target RuntimeHandoffClient, component ComponentLaunchComponent) error {
 	if target == nil {
 		return fmt.Errorf("replacement runtime client is required")
 	}
-	startupCtx, cancel := context.WithTimeout(ctx, runtimeHandoffStartupTimeout)
-	defer cancel()
 	for {
-		err := proveRuntimeHandoffOnce(startupCtx, target, component)
+		err := proveRuntimeHandoffOnce(ctx, target, component)
 		if err == nil || !isTransientRuntimeHandoffError(err) {
 			return err
 		}
 		timer := time.NewTimer(runtimeHandoffRetryInterval)
 		select {
-		case <-startupCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
-			return fmt.Errorf("replacement runtime did not become ready: %w", err)
+			return fmt.Errorf("replacement runtime did not become ready: %w", ctx.Err())
 		case <-timer.C:
 		}
 	}

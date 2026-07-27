@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -81,6 +82,57 @@ func TestComponentLifecycleMutationCommandUsesExactFixedRoleProfile(t *testing.T
 			assert.Equal(t, expected, command.LifecycleProfile)
 		})
 	}
+}
+
+type startupBudgetHandoffRuntime struct {
+	handoffRuntime
+	proofDeadline    time.Time
+	proofHasDeadline bool
+}
+
+func (r *startupBudgetHandoffRuntime) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnvironment, error) {
+	r.proofDeadline, r.proofHasDeadline = ctx.Deadline()
+	return r.handoffRuntime.ProbeRuntimeEnvironment(ctx)
+}
+
+func TestRuntimeHandoffStartupBudgetCoversFactoryAndProtocolProof(t *testing.T) {
+	component := ComponentLaunchComponent{
+		Role:        domain.ComponentRoleRuntime,
+		ComponentID: "gordon-runtime-fixture-g1",
+		Labels: map[string]string{
+			domain.LabelComponentVersion:     "v2",
+			domain.LabelComponentGeneration:  "1",
+			domain.LabelComponentMigrationID: "fixture",
+		},
+	}
+	state := domain.RuntimeActualStateSnapshot{
+		SourceComponentID: component.ComponentID,
+		Containers: []domain.RuntimeContainerState{{
+			Name:   component.ComponentID,
+			Status: domain.ContainerStatusRunning,
+			Labels: map[string]string{
+				domain.LabelComponent:           "true",
+				domain.LabelComponentRole:       string(domain.ComponentRoleRuntime),
+				domain.LabelComponentGeneration: "1",
+			},
+		}},
+	}
+	target := &startupBudgetHandoffRuntime{handoffRuntime: handoffRuntime{
+		probe:  out.RuntimeEnvironment{APIReachable: true, Rootless: true},
+		states: []domain.RuntimeActualStateSnapshot{state},
+	}}
+	var factoryDeadline time.Time
+	var factoryHasDeadline bool
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(&handoffRuntime{}, func(ctx context.Context, _ ComponentLaunchComponent) (RuntimeHandoffClient, error) {
+		factoryDeadline, factoryHasDeadline = ctx.Deadline()
+		return target, nil
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, launcher.TransferRuntimeCommandChannel(context.Background(), component))
+	require.True(t, factoryHasDeadline, "handoff target creation must receive the startup deadline")
+	require.True(t, target.proofHasDeadline, "protocol proof must receive the startup deadline")
+	assert.Equal(t, factoryDeadline, target.proofDeadline, "factory readiness and protocol proof must share one budget")
 }
 
 type recordingComponentLauncher struct{ calls []string }

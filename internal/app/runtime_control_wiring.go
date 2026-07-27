@@ -141,12 +141,12 @@ func createRuntimeRouteDrainAckReceiver(ctx context.Context, cfg RuntimeControlC
 // is a private transient descriptor and is never copied into configuration,
 // lifecycle commands, checkpoints, status, or errors.
 func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
-	return func(_ context.Context, component ComponentLaunchComponent) (RuntimeHandoffClient, error) {
+	return func(ctx context.Context, component ComponentLaunchComponent) (RuntimeHandoffClient, error) {
 		endpoints := component.BootstrapEndpoints
 		if component.Role != domain.ComponentRoleRuntime || len(component.PortPublishes) != 0 || !endpoints.valid() || endpoints.migrationID != componentMigrationID(component) {
 			return nil, fmt.Errorf("replacement runtime bootstrap transport is invalid")
 		}
-		client, err := createPrivateBootstrapRuntimeCommandClient(cfg, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+		client, err := createPrivateBootstrapRuntimeCommandClient(ctx, cfg, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
 			if !endpoints.valid() {
 				return nil, status.Error(codes.PermissionDenied, "replacement runtime transport is invalid")
 			}
@@ -170,7 +170,17 @@ func createPrivateRuntimeCommandClient(cfg RuntimeControlConfig, target string, 
 	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial)
 }
 
-func createPrivateBootstrapRuntimeCommandClient(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
+func createPrivateBootstrapRuntimeCommandClient(ctx context.Context, cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
+	return createPrivateBootstrapRuntimeCommandClientWithRetry(ctx, cfg, target, dial, waitRuntimeHandoffRetry)
+}
+
+func createPrivateBootstrapRuntimeCommandClientWithRetry(ctx context.Context, cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) (out.RuntimeCommandClient, error) {
+	if runtimeControlToken(cfg) == "" {
+		return nil, fmt.Errorf("private runtime authentication token is required")
+	}
+	if err := waitForPrivateRuntimeTransport(ctx, dial, retry); err != nil {
+		return nil, fmt.Errorf("wait for private runtime transport: %w", err)
+	}
 	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithConnectParams(grpc.ConnectParams{
@@ -214,6 +224,45 @@ func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, targ
 // status errors. Keep only ENOENT and ECONNREFUSED transient; validation and
 // permission failures retain a terminal status and fail closed.
 var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable")
+
+func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) error {
+	for {
+		connection, err := dial(ctx)
+		if err == nil {
+			if closeErr := connection.Close(); closeErr != nil {
+				return status.Error(codes.Internal, "private runtime readiness probe cleanup failed")
+			}
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !isTransientPrivateRuntimeTransportError(err) {
+			if status.Code(err) == codes.PermissionDenied {
+				return err
+			}
+			return status.Error(codes.PermissionDenied, "private runtime transport is invalid")
+		}
+		if err := retry(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+func isTransientPrivateRuntimeTransportError(err error) bool {
+	return errors.Is(err, errPrivateRuntimeTransportUnavailable) || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ECONNREFUSED)
+}
+
+func waitRuntimeHandoffRetry(ctx context.Context) error {
+	timer := time.NewTimer(runtimeHandoffRetryInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 func dialValidatedRuntimeSocket(ctx context.Context, path string) (net.Conn, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName || pathContainsSymlink(filepath.Dir(path)) {
