@@ -106,9 +106,11 @@ func TestRuntimeSelfUpdateCommandValidateRequiresComponentLifecyclePolicy(t *tes
 }
 
 func TestRuntimeSelfUpdateCommandValidateBoundsAndSanitizesEdgeAppNetworks(t *testing.T) {
+	profile, ok := FixedRuntimeComponentLifecycleProfile(ComponentRoleEdge)
+	require.True(t, ok)
 	command := RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: RuntimeCommandIdentity{ID: RuntimeCommandID("cmd-edge"), IdempotencyKey: "self-update:edge:1", Generation: 1, SourceComponentID: "control-1"},
-		TargetComponentID:      "gordon-edge-fixture-g1", TargetComponentRole: ComponentRoleEdge, TargetVersion: "1.2.3", Policy: RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: RuntimeComponentLifecycleActivate,
+		TargetComponentID:      "gordon-edge-fixture-g1", TargetComponentRole: ComponentRoleEdge, TargetVersion: "1.2.3", Policy: RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: RuntimeComponentLifecycleActivate, LifecycleProfile: profile,
 		EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"},
 	}
 	require.NoError(t, command.Validate())

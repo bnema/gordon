@@ -36,7 +36,7 @@ func TestRuntimeComponentLifecycleRejectsArbitraryPreparedPortBinding(t *testing
 		{name: "registry bootstrap", role: domain.ComponentRoleRegistry, port: domain.ContainerPortPublish{HostIP: "127.0.0.1", HostPort: 25000, ContainerPort: 5000, Protocol: domain.NetworkProtocolTCP}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
+			err := applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{
 				RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "port", IdempotencyKey: "port", Generation: 1, SourceComponentID: "gordon-control"},
 				TargetComponentID:      "gordon-" + string(test.role) + "-fixture-g1", TargetComponentRole: test.role, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart,
 				DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: "/not/used", PreserveVolumes: true,

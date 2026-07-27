@@ -4,13 +4,65 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestRuntimeSelfUpdateCommandCarriesLifecycleProfile(t *testing.T) {
+	field, ok := reflect.TypeFor[domain.RuntimeSelfUpdateCommand]().FieldByName("LifecycleProfile")
+	require.True(t, ok, "component lifecycle commands need an explicit authenticated runtime profile")
+	assert.Equal(t, reflect.TypeFor[domain.RuntimeComponentLifecycleProfile](), field.Type)
+}
+
+func TestComponentLifecycleCommandValidationRejectsMissingProfile(t *testing.T) {
+	component := ComponentLaunchComponent{
+		Role: domain.ComponentRoleControl, ComponentID: "gordon-control-fixture-g1",
+		Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"},
+	}
+	command, err := newComponentLifecycleCommand(component, domain.RuntimeComponentLifecycleHealth, "fixture", "health", time.Unix(1, 0).UTC())
+	require.NoError(t, err)
+	require.NoError(t, command.Validate())
+	command.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
+	require.ErrorIs(t, command.Validate(), domain.ErrInvalidRuntimeCommand)
+}
+
+func TestComponentLifecycleCommandUsesExactFixedRoleProfileForEveryAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		role   domain.ComponentRole
+		action domain.RuntimeComponentLifecycleAction
+	}{
+		{name: "replace", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleReplace},
+		{name: "start", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleStart},
+		{name: "stop", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleStop},
+		{name: "health", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleHealth},
+		{name: "logs", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleLogs},
+		{name: "connect", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleConnect},
+		{name: "remove", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleRemove},
+		{name: "transfer", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleTransferChannel},
+		{name: "activate", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleActivate},
+		{name: "drain", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleDrain},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			component := ComponentLaunchComponent{
+				Role: test.role, ComponentID: "gordon-" + string(test.role) + "-fixture-g1",
+				Labels: map[string]string{domain.LabelComponentVersion: "v2", domain.LabelComponentGeneration: "1", domain.LabelComponentMigrationID: "fixture"},
+			}
+			command, err := newComponentLifecycleCommand(component, test.action, "fixture", test.name, time.Unix(1, 0).UTC())
+			require.NoError(t, err)
+			expected, ok := domain.FixedRuntimeComponentLifecycleProfile(test.role)
+			require.True(t, ok)
+			assert.Equal(t, expected, command.LifecycleProfile)
+		})
+	}
+}
 
 type recordingComponentLauncher struct{ calls []string }
 
@@ -53,15 +105,15 @@ func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) 
 	require.Error(t, err)
 }
 
-func TestComponentRoleLaunchHashIncludesGenerationVolumeOwnershipOption(t *testing.T) {
-	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
+func TestComponentRoleLaunchHashIncludesExactRuntimeProfile(t *testing.T) {
+	profile, ok := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRuntime)
 	require.True(t, ok)
 	const componentID = "gordon-runtime-fixture-g1"
 	const image = "example.invalid/gordon:v2"
 	const network = "gordon-internal-fixture-g1"
-	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User + "\x00" + domain.ContainerVolumeOptionChown))
+	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + profile.ProcessIdentity.User + "\x00" + profile.UsernsMode + "\x00ALL\x00true\x00" + domain.ContainerVolumeOptionChown))
 
-	assert.Equal(t, hex.EncodeToString(sum[:]), componentRoleLaunchHash(componentID, image, network, identity))
+	assert.Equal(t, hex.EncodeToString(sum[:]), componentRoleLaunchHash(componentID, image, network, profile))
 }
 
 func TestComponentLauncherPlanIsOrderedAndNoCutover(t *testing.T) {
@@ -73,8 +125,8 @@ func TestComponentLauncherPlanIsOrderedAndNoCutover(t *testing.T) {
 	for _, component := range plan.Components {
 		assert.NotEmpty(t, component.Labels[domain.LabelComponentDesiredStateHash])
 		assert.NotEmpty(t, component.ComponentID)
-		identity, ok := domain.FixedComponentProcessIdentity(component.Role)
+		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(component.Role)
 		require.True(t, ok)
-		assert.Equal(t, componentRoleLaunchHash(component.ComponentID, component.Image, component.InternalNetwork, identity), component.DesiredStateHash)
+		assert.Equal(t, componentRoleLaunchHash(component.ComponentID, component.Image, component.InternalNetwork, profile), component.DesiredStateHash)
 	}
 }

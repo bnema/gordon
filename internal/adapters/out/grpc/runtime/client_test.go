@@ -202,14 +202,19 @@ func TestClientSelfUpdateHealthAndDrain(t *testing.T) {
 	conn := newRuntimeTestConn(t, inruntime.NewServerWithRouteDrainAckReceiver(worker, receiver, "runtime-1"))
 	client := NewClient(conn)
 
-	result, err := client.SelfUpdateRuntime(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-self"), TargetComponentID: "runtime-1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v1.2.3", DesiredStateHash: "fixture-state-hash", InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true})
+	profile, ok := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRuntime)
+	require.True(t, ok)
+	result, err := client.SelfUpdateRuntime(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-self"), TargetComponentID: "runtime-1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "decision-1", LifecycleAction: domain.RuntimeComponentLifecycleStart, LifecycleProfile: profile, DesiredImage: "example.invalid/gordon:v1.2.3", DesiredStateHash: "fixture-state-hash", InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true})
 	require.NoError(t, err)
 	assert.Equal(t, domain.RuntimeCommandStatusSucceeded, result.Status)
 	assert.Equal(t, "runtime-1", worker.self.TargetComponentID)
 	assert.Equal(t, domain.RuntimeComponentLifecycleStart, worker.self.LifecycleAction)
+	assert.Equal(t, profile, worker.self.LifecycleProfile)
 	assert.True(t, worker.self.PreserveVolumes)
 
-	edgeCommand := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-edge"), TargetComponentID: "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleActivate, EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"}, PreserveVolumes: true}
+	edgeProfile, ok := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleEdge)
+	require.True(t, ok)
+	edgeCommand := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: testIdentity("cmd-edge"), TargetComponentID: "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v1.2.3", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleActivate, LifecycleProfile: edgeProfile, EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"}, PreserveVolumes: true}
 	_, err = client.SelfUpdateRuntime(context.Background(), edgeCommand)
 	require.NoError(t, err)
 	assert.Equal(t, edgeCommand.EdgeAppNetworks, worker.self.EdgeAppNetworks)

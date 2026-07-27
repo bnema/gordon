@@ -203,11 +203,8 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if err != nil {
 		return nil, err
 	}
-	identity, ok := domain.FixedComponentProcessIdentity(command.TargetComponentRole)
-	if !ok {
-		return nil, fmt.Errorf("invalid component process identity")
-	}
-	noNewPrivileges := true
+	profile := command.LifecycleProfile
+	noNewPrivileges := profile.NoNewPrivileges
 	config := &domain.ContainerConfig{
 		Image: command.DesiredImage, Name: command.TargetComponentID, Env: env,
 		Labels: componentLifecycleLabels(command), NetworkMode: command.InternalNetwork,
@@ -215,9 +212,9 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
 		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": configFile},
 		Volumes:         m.componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
-		User:            identity.User,
-		UsernsMode:      componentKeepIDMode(identity),
-		CapDrop:         []string{"ALL"},
+		User:            profile.ProcessIdentity.User,
+		UsernsMode:      profile.UsernsMode,
+		CapDrop:         append([]string(nil), profile.CapDrop...),
 		CapAdd:          []string{},
 		NoNewPrivileges: &noNewPrivileges,
 	}
@@ -1064,12 +1061,8 @@ func (m *runtimeComponentLifecycleManager) deniedLifecycleCandidate(command doma
 	return RuntimePolicyDeniedError{Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle target identity is not Gordon-owned", CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation}
 }
 
-func componentKeepIDMode(identity domain.ComponentProcessIdentity) string {
-	return "keep-id:uid=" + strconv.Itoa(identity.UID) + ",gid=" + strconv.Itoa(identity.GID)
-}
-
 func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(container *domain.Container, command domain.RuntimeSelfUpdateCommand) error {
-	if !validExistingComponentIdentity(container, command.TargetComponentRole) {
+	if !validExistingComponentIdentity(container, command.LifecycleProfile) {
 		return RuntimePolicyDeniedError{
 			Reason: RuntimePolicyReasonUnmanagedMutation, Message: "component lifecycle process identity is not allowed",
 			CommandID: command.ID, ComponentID: command.TargetComponentID, Generation: command.Generation,
@@ -1173,10 +1166,9 @@ func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[str
 	return true
 }
 
-func validExistingComponentIdentity(container *domain.Container, role domain.ComponentRole) bool {
-	identity, ok := domain.FixedComponentProcessIdentity(role)
-	return ok && container != nil && container.User == identity.User && container.UsernsMode == componentKeepIDMode(identity) &&
-		slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
+func validExistingComponentIdentity(container *domain.Container, profile domain.RuntimeComponentLifecycleProfile) bool {
+	return container != nil && container.User == profile.ProcessIdentity.User && container.UsernsMode == profile.UsernsMode &&
+		slices.Equal(container.CapDrop, profile.CapDrop) && len(container.CapAdd) == 0 && container.NoNewPrivileges == profile.NoNewPrivileges
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
@@ -1244,10 +1236,10 @@ func componentGenerationVolumeName(role domain.ComponentRole, migrationID string
 
 func componentGenerationVolumeOptions(command domain.RuntimeSelfUpdateCommand, volumes map[string]string) map[string][]string {
 	name := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
-	if volumes["/var/lib/gordon"] != name {
+	if volumes["/var/lib/gordon"] != name || len(command.LifecycleProfile.GenerationVolumeOptions) == 0 {
 		return nil
 	}
-	return map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}}
+	return map[string][]string{"/var/lib/gordon": append([]string(nil), command.LifecycleProfile.GenerationVolumeOptions...)}
 }
 
 // componentLifecycleConfigFile permits the dedicated final edge manifest only

@@ -64,7 +64,7 @@ func TestRuntimeComponentLifecycleActivateColdCutoverWithoutOldContainer(t *test
 
 	committer := &recordingMigrationCutoverCommitter{}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config)))
 	require.Len(t, committer.commands, 1)
 	assert.NotContains(t, committer.subphases, domain.MigrationCutoverSubphaseBeforeOldStop)
 }
@@ -124,7 +124,7 @@ func TestRuntimeComponentLifecycleActivateColdFailuresRestoreAndProvePreparedEdg
 				committer.err = errors.New("injected commit failure")
 			}
 			manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-			err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+			err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 			require.Error(t, err)
 			assert.Equal(t, []bool{true}, committer.failureRetries)
 		})
@@ -159,7 +159,7 @@ func TestRuntimeComponentLifecycleActivateColdNetworkFailureRestoresAndProvesPre
 	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
 	committer := &recordingMigrationCutoverCommitter{}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
-	require.Error(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.Error(t, applyTestComponentLifecycle(manager, context.Background(), command))
 	assert.Equal(t, []bool{true}, committer.failureRetries)
 }
 
@@ -173,7 +173,7 @@ func TestRuntimeComponentLifecycleActivateColdRecoveryCommitsHealthyFinal(t *tes
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforeCommit}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config)))
 	require.Len(t, committer.commands, 1)
 }
 
@@ -190,7 +190,7 @@ func TestRuntimeComponentLifecycleActivateColdRecoveryRestoresPreparedEdge(t *te
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforePreparedRemove}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 	require.Error(t, err)
 	assert.Equal(t, []bool{true}, committer.failureRetries)
 }
@@ -218,7 +218,7 @@ func TestRuntimeComponentLifecycleActivateTransfersManagedListenerTransactionall
 	committer := &recordingMigrationCutoverCommitter{}
 	root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(config))))
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: root}), committer)
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config)))
 	require.Len(t, committer.commands, 1)
 	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, committer.commands[0].LifecycleAction)
 }
@@ -242,7 +242,7 @@ func TestRuntimeComponentLifecycleActivateRecordsDurableIntentBeforeEachMutation
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
 	committer := &recordingMigrationCutoverCommitter{}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config)))
 	assert.Equal(t, []domain.MigrationCutoverSubphase{
 		domain.MigrationCutoverSubphaseBeforeOldStop,
 		domain.MigrationCutoverSubphaseBeforePreparedStop,
@@ -271,7 +271,7 @@ func TestRuntimeComponentLifecycleActivateRecoversWhenPreparedEdgeWasRemoved(t *
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforePreparedRemove}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 	require.Error(t, err)
 	assert.Equal(t, []bool{true}, committer.failureRetries, "retryability requires listener and health proof")
 	assert.NotContains(t, err.Error(), "old-monolith")
@@ -299,7 +299,7 @@ func TestRuntimeComponentLifecycleActivateCompletesAfterCallerCancellation(t *te
 	runtime.EXPECT().GetContainerHealthStatus(uncanceled, "final").Return("healthy", true, nil).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	require.NoError(t, manager.ApplyComponentLifecycle(ctx, cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, ctx, cutoverCommand(config)))
 }
 
 func TestRuntimeComponentLifecycleActivateRetriesTransientFinalListenerRelease(t *testing.T) {
@@ -322,7 +322,7 @@ func TestRuntimeComponentLifecycleActivateRetriesTransientFinalListenerRelease(t
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config)))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config)))
 }
 
 func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.T) {
@@ -348,7 +348,7 @@ func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.
 	command := cutoverCommand(config)
 	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), command))
 }
 
 func TestRuntimeComponentLifecycleActivateRollsBackWhenAppNetworkRestoreFails(t *testing.T) {
@@ -377,7 +377,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenAppNetworkRestoreFails(t 
 	command := cutoverCommand(config)
 	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-	err := manager.ApplyComponentLifecycle(context.Background(), command)
+	err := applyTestComponentLifecycle(manager, context.Background(), command)
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "injected network failure", "raw runtime errors must not cross the lifecycle boundary")
 }
@@ -407,7 +407,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenDurableCutoverCommitFails
 
 	committer := &recordingMigrationCutoverCommitter{err: errors.New("injected durable write failure")}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 	require.Error(t, err)
 	require.Len(t, committer.commands, 1)
 	assert.Equal(t, []bool{true}, committer.failureRetries, "retryability is recorded only after every compensation succeeds")
@@ -430,7 +430,7 @@ func TestRuntimeComponentLifecycleActivateMarksRollbackNonretryableWhenRestoreFa
 
 	committer := &recordingMigrationCutoverCommitter{}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
-	err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+	err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 	require.Error(t, err)
 	assert.Equal(t, []bool{false}, committer.failureRetries)
 	assert.NotContains(t, err.Error(), "injected old restore failure")
@@ -487,7 +487,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testi
 				}
 			}
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-			err := manager.ApplyComponentLifecycle(context.Background(), cutoverCommand(config))
+			err := applyTestComponentLifecycle(manager, context.Background(), cutoverCommand(config))
 			require.Error(t, err)
 			assert.NotContains(t, err.Error(), "old-monolith", "errors never expose arbitrary engine data")
 		})
@@ -515,7 +515,7 @@ func TestRuntimeComponentLifecycleActivateRejectsUnmanagedOldOrFinalPorts(t *tes
 			command := cutoverCommand(config)
 			command.FinalPortPublishes = test.ports
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-			require.Error(t, manager.ApplyComponentLifecycle(context.Background(), command))
+			require.Error(t, applyTestComponentLifecycle(manager, context.Background(), command))
 		})
 	}
 }
@@ -537,6 +537,7 @@ func TestRuntimeComponentLifecycleRegistryReusesCanonicalStorage(t *testing.T) {
 	command := cutoverCommand(config)
 	command.LifecycleAction = domain.RuntimeComponentLifecycleStart
 	command.TargetComponentRole = domain.ComponentRoleRegistry
+	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRegistry)
 	command.TargetComponentID = "gordon-registry-fixture-g1"
 	command.ConfigFile = filepath.Join(filepath.Dir(config), "registry.toml")
 	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[registry]\n"), 0o600))
@@ -566,9 +567,10 @@ func componentLabels(role string) map[string]string {
 }
 
 func cutoverCommand(config string) domain.RuntimeSelfUpdateCommand {
+	profile, _ := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleEdge)
 	return domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "cutover", IdempotencyKey: "cutover", Generation: 1, SourceComponentID: "gordon-control"},
-		TargetComponentID:      "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleActivate,
+		TargetComponentID:      "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleActivate, LifecycleProfile: profile,
 		DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: config, OldServingComponentID: "old-monolith", PreserveVolumes: true,
 		PortPublishes:      []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}},
 		FinalPortPublishes: []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}, {HostIP: "0.0.0.0", HostPort: 5000, ContainerPort: 5000, Protocol: domain.NetworkProtocolTCP}},

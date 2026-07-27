@@ -114,6 +114,10 @@ message RuntimeSelfUpdateCommand {
   // prepared edge already uses. Runtime bounds and validates these names; raw
   // engine network IDs are never accepted by this RPC.
   repeated string edge_app_networks = 19;
+  // lifecycle_profile is the exact authenticated split-role process and
+  // rootless Podman mount contract. It is required for component lifecycle
+  // actions other than ensure_network.
+  RuntimeComponentLifecycleProfile lifecycle_profile = 20;
 }
 
 // ComponentPortBinding carries a deterministic migration listener binding.
@@ -433,4 +437,14 @@ message PrepareEdgeDrainRequest {
 message PrepareEdgeDrainResponse {
   bool ok = 1;
   string message = 2;
+}
+
+message RuntimeComponentLifecycleProfile {
+  int64 uid = 1;
+  int64 gid = 2;
+  string user = 3;
+  string userns_mode = 4;
+  repeated string cap_drop = 5;
+  bool no_new_privileges = 6;
+  repeated string generation_volume_options = 7;
 }

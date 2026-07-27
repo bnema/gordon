@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -195,6 +197,47 @@ const (
 	MaxEdgeAppNetworkNameLength = 255
 )
 
+// RuntimeComponentLifecycleProfile is the exact process and rootless Podman
+// mount contract for one split Gordon role. Authenticated lifecycle commands
+// carry this profile so mutation and read-only actions cannot drift apart.
+type RuntimeComponentLifecycleProfile struct {
+	ProcessIdentity         ComponentProcessIdentity
+	UsernsMode              string
+	CapDrop                 []string
+	NoNewPrivileges         bool
+	GenerationVolumeOptions []string
+}
+
+// FixedRuntimeComponentLifecycleProfile returns the immutable runtime profile
+// for a split role. Edge is stateless and therefore has no generation-volume
+// ownership option.
+func FixedRuntimeComponentLifecycleProfile(role ComponentRole) (RuntimeComponentLifecycleProfile, bool) {
+	identity, ok := FixedComponentProcessIdentity(role)
+	if !ok {
+		return RuntimeComponentLifecycleProfile{}, false
+	}
+	profile := RuntimeComponentLifecycleProfile{
+		ProcessIdentity: identity,
+		UsernsMode:      "keep-id:uid=" + strconv.Itoa(identity.UID) + ",gid=" + strconv.Itoa(identity.GID),
+		CapDrop:         []string{"ALL"},
+		NoNewPrivileges: true,
+	}
+	if role != ComponentRoleEdge {
+		profile.GenerationVolumeOptions = []string{ContainerVolumeOptionChown}
+	}
+	return profile, true
+}
+
+// IsFixedFor reports whether the complete profile is the immutable contract
+// for role. Nil and empty slices compare equally only where the fixed profile
+// itself is empty (the stateless edge volume profile).
+func (p RuntimeComponentLifecycleProfile) IsFixedFor(role ComponentRole) bool {
+	expected, ok := FixedRuntimeComponentLifecycleProfile(role)
+	return ok && p.ProcessIdentity == expected.ProcessIdentity && p.UsernsMode == expected.UsernsMode &&
+		slices.Equal(p.CapDrop, expected.CapDrop) && p.NoNewPrivileges == expected.NoNewPrivileges &&
+		slices.Equal(p.GenerationVolumeOptions, expected.GenerationVolumeOptions)
+}
+
 // RuntimeSelfUpdateCommand asks a managed Gordon runtime component to update itself under policy.
 type RuntimeSelfUpdateCommand struct {
 	RuntimeCommandIdentity
@@ -209,6 +252,7 @@ type RuntimeSelfUpdateCommand struct {
 	// components. They never contain a socket path, secret value, or raw engine
 	// option. Empty action retains pre-split self-update compatibility.
 	LifecycleAction  RuntimeComponentLifecycleAction
+	LifecycleProfile RuntimeComponentLifecycleProfile
 	DesiredImage     string
 	DesiredStateHash string
 	InternalNetwork  string
@@ -256,6 +300,9 @@ func (c RuntimeSelfUpdateCommand) Validate() error {
 	}
 	if c.LifecycleAction != "" && !isKnownRuntimeComponentLifecycleAction(c.LifecycleAction) {
 		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
+	}
+	if c.LifecycleAction != "" && c.LifecycleAction != RuntimeComponentLifecycleEnsureNetwork && !c.LifecycleProfile.IsFixedFor(c.TargetComponentRole) {
+		return fmt.Errorf("%w: component lifecycle profile is invalid", ErrInvalidRuntimeCommand)
 	}
 	if err := validateEdgeAppNetworks(c); err != nil {
 		return err

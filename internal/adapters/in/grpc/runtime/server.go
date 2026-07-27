@@ -628,7 +628,7 @@ func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.Runtime
 	if command == nil {
 		return domain.RuntimeSelfUpdateCommand{}
 	}
-	result := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy, LifecycleAction: domain.RuntimeComponentLifecycleAction(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentID: command.OldServingComponentId, PreserveVolumes: command.PreserveVolumes}
+	result := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: protoIdentity(command.Identity), TargetComponentID: command.TargetComponentId, TargetComponentRole: domain.ComponentRole(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: domain.RuntimeSelfUpdatePolicy(command.Policy), PolicyDecisionID: command.PolicyDecisionId, ApprovedBy: command.ApprovedBy, LifecycleAction: domain.RuntimeComponentLifecycleAction(command.LifecycleAction), LifecycleProfile: protoLifecycleProfile(command.LifecycleProfile), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentID: command.OldServingComponentId, PreserveVolumes: command.PreserveVolumes}
 	for _, port := range command.PortPublishes {
 		if port != nil {
 			result.PortPublishes = append(result.PortPublishes, domain.ContainerPortPublish{HostIP: port.HostIp, HostPort: int(port.HostPort), ContainerPort: int(port.ContainerPort), Protocol: domain.NetworkProtocol(port.Protocol)})
@@ -643,6 +643,19 @@ func protoSelfUpdate(command *runtimev1.RuntimeSelfUpdateCommand) domain.Runtime
 	// it to the worker. Copy it to avoid retaining the protobuf request slice.
 	result.EdgeAppNetworks = append([]string(nil), command.EdgeAppNetworks...)
 	return result
+}
+
+func protoLifecycleProfile(profile *runtimev1.RuntimeComponentLifecycleProfile) domain.RuntimeComponentLifecycleProfile {
+	if profile == nil || profile.Uid < 0 || profile.Gid < 0 || uint64(profile.Uid) > uint64(^uint(0)>>1) || uint64(profile.Gid) > uint64(^uint(0)>>1) {
+		return domain.RuntimeComponentLifecycleProfile{}
+	}
+	return domain.RuntimeComponentLifecycleProfile{
+		ProcessIdentity:         domain.ComponentProcessIdentity{UID: int(profile.Uid), GID: int(profile.Gid), User: profile.User}, // #nosec G115 -- values are bounded to platform int above.
+		UsernsMode:              profile.UsernsMode,
+		CapDrop:                 append([]string(nil), profile.CapDrop...),
+		NoNewPrivileges:         profile.NoNewPrivileges,
+		GenerationVolumeOptions: append([]string(nil), profile.GenerationVolumeOptions...),
+	}
 }
 
 func protoRuntimeCommandResult(result domain.RuntimeCommandResult) *runtimev1.RuntimeCommandResult {

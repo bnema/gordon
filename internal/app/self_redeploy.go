@@ -132,16 +132,11 @@ func (e *RuntimeComponentRedeployExecutor) RecoverRuntime(ctx context.Context, c
 	return e.send(ctx, c, domain.RuntimeComponentLifecycleHealth, "recover")
 }
 func (e *RuntimeComponentRedeployExecutor) send(ctx context.Context, c ComponentLaunchComponent, action domain.RuntimeComponentLifecycleAction, operation string) error {
-	generation := componentGeneration(c)
-	migrationID := componentMigrationID(c)
-	if generation == 0 || migrationID == "" {
-		return fmt.Errorf("component lifecycle identity is required")
+	command, err := newComponentLifecycleCommand(c, action, componentMigrationID(c), operation, e.now())
+	if err != nil {
+		return err
 	}
-	result, err := e.runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
-		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + c.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + c.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: e.now().UTC()},
-		TargetComponentID:      c.ComponentID, TargetComponentRole: c.Role, TargetVersion: c.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
-		LifecycleAction: action, DesiredImage: c.Image, DesiredStateHash: c.DesiredStateHash, InternalNetwork: c.InternalNetwork, EnvironmentFile: c.EnvironmentFile, PreserveVolumes: true,
-	})
+	result, err := e.runtime.SelfUpdateRuntime(ctx, command)
 	if err != nil {
 		return fmt.Errorf("send component %s command: %w", operation, err)
 	}

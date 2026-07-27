@@ -8,8 +8,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+type profileEnforcingHandoffRuntime struct {
+	handoffRuntime
+}
+
+func (r *profileEnforcingHandoffRuntime) SelfUpdateRuntime(_ context.Context, command domain.RuntimeSelfUpdateCommand) (domain.RuntimeCommandResult, error) {
+	r.commands = append(r.commands, command)
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !command.LifecycleProfile.IsFixedFor(command.TargetComponentRole) {
+		return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusDenied, Error: &domain.RuntimeCommandError{Message: "component lifecycle process identity is not allowed"}}, nil
+	}
+	return domain.RuntimeCommandResult{Status: domain.RuntimeCommandStatusSucceeded}, nil
+}
 
 func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *testing.T) {
 	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
@@ -24,6 +37,38 @@ func TestMigrationServicePrepareRequiresConfiguredCandidateBeforeMutation(t *tes
 	require.Error(t, err)
 	assert.Empty(t, launcher.calls)
 	require.NoFileExists(t, store.Path())
+}
+
+func TestMigrationOrchestratorPostHandoffHealthUsesExactRoleProfiles(t *testing.T) {
+	plan, err := NewComponentLaunchPlan(MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"})
+	require.NoError(t, err)
+	runtimeComponent, ok := componentForRole(plan, domain.ComponentRoleRuntime)
+	require.True(t, ok)
+	oldRuntime := &handoffRuntime{}
+	replacement := &profileEnforcingHandoffRuntime{handoffRuntime: handoffRuntime{
+		probe: out.RuntimeEnvironment{APIReachable: true, Rootless: true},
+		states: []domain.RuntimeActualStateSnapshot{{
+			SourceComponentID: runtimeComponent.ComponentID,
+			Containers: []domain.RuntimeContainerState{{
+				Name: runtimeComponent.ComponentID, Status: domain.ContainerStatusRunning,
+				Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRuntime), domain.LabelComponentGeneration: "1"},
+			}},
+		}},
+	}}
+	launcher, err := NewRuntimeComponentLauncherWithHandoff(oldRuntime, func(context.Context, ComponentLaunchComponent) (RuntimeHandoffClient, error) { return replacement, nil })
+	require.NoError(t, err)
+	require.NoError(t, launcher.TransferRuntimeCommandChannel(t.Context(), runtimeComponent))
+	orchestrator := &MigrationOrchestrator{launcher: launcher}
+	require.NoError(t, orchestrator.checkPlanHealth(t.Context(), plan))
+	require.Len(t, replacement.commands, 4)
+	for index, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
+		command := replacement.commands[index]
+		expected, profileOK := domain.FixedRuntimeComponentLifecycleProfile(role)
+		require.True(t, profileOK)
+		assert.Equal(t, domain.RuntimeComponentLifecycleHealth, command.LifecycleAction)
+		assert.Equal(t, role, command.TargetComponentRole)
+		assert.Equal(t, expected, command.LifecycleProfile)
+	}
 }
 
 func TestMigrationOrchestratorDryRunAndPrepareAreOrderedIdempotent(t *testing.T) {

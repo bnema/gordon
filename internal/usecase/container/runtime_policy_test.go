@@ -10,6 +10,62 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestRuntimePolicyRequiresExactProfileForEveryComponentLifecycleAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		role   domain.ComponentRole
+		action domain.RuntimeComponentLifecycleAction
+	}{
+		{name: "replace", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleReplace},
+		{name: "start", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleStart},
+		{name: "stop", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleStop},
+		{name: "health", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleHealth},
+		{name: "logs", role: domain.ComponentRoleControl, action: domain.RuntimeComponentLifecycleLogs},
+		{name: "connect", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleConnect},
+		{name: "remove", role: domain.ComponentRoleRegistry, action: domain.RuntimeComponentLifecycleRemove},
+		{name: "transfer", role: domain.ComponentRoleRuntime, action: domain.RuntimeComponentLifecycleTransferChannel},
+		{name: "activate", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleActivate},
+		{name: "drain", role: domain.ComponentRoleEdge, action: domain.RuntimeComponentLifecycleDrain},
+	}
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile, ok := domain.FixedRuntimeComponentLifecycleProfile(test.role)
+			require.True(t, ok)
+			command := domain.RuntimeSelfUpdateCommand{
+				RuntimeCommandIdentity: testRuntimeCommandIdentity("profile-" + test.name),
+				TargetComponentID:      "gordon-" + string(test.role) + "-fixture-g1",
+				TargetComponentRole:    test.role,
+				PolicyDecisionID:       "migration:fixture",
+				LifecycleAction:        test.action,
+				LifecycleProfile:       profile,
+			}
+			require.NoError(t, policy.CheckSelfUpdate(command), "read-only actions must not require mutation fields")
+
+			missing := command
+			missing.LifecycleProfile = domain.RuntimeComponentLifecycleProfile{}
+			require.ErrorIs(t, policy.CheckSelfUpdate(missing), ErrRuntimePolicyDenied)
+
+			for name, forge := range map[string]func(*domain.RuntimeComponentLifecycleProfile){
+				"wrong UID":               func(p *domain.RuntimeComponentLifecycleProfile) { p.ProcessIdentity.UID++ },
+				"wrong user":              func(p *domain.RuntimeComponentLifecycleProfile) { p.ProcessIdentity.User = "0:0" },
+				"wrong user namespace":    func(p *domain.RuntimeComponentLifecycleProfile) { p.UsernsMode = "keep-id" },
+				"missing capability drop": func(p *domain.RuntimeComponentLifecycleProfile) { p.CapDrop = nil },
+				"missing hardening":       func(p *domain.RuntimeComponentLifecycleProfile) { p.NoNewPrivileges = false },
+				"wrong volume profile":    func(p *domain.RuntimeComponentLifecycleProfile) { p.GenerationVolumeOptions = []string{"z"} },
+			} {
+				t.Run(name, func(t *testing.T) {
+					wrong := command
+					wrong.LifecycleProfile.CapDrop = append([]string(nil), command.LifecycleProfile.CapDrop...)
+					wrong.LifecycleProfile.GenerationVolumeOptions = append([]string(nil), command.LifecycleProfile.GenerationVolumeOptions...)
+					forge(&wrong.LifecycleProfile)
+					require.ErrorIs(t, policy.CheckSelfUpdate(wrong), ErrRuntimePolicyDenied)
+				})
+			}
+		})
+	}
+}
+
 func TestRuntimePolicyReservesManagedControlSecretsVolume(t *testing.T) {
 	identity := testRuntimeCommandIdentity("managed-secrets")
 	identity.SourceComponentID = "gordon-control"

@@ -477,8 +477,12 @@ type RuntimeSelfUpdateCommand struct {
 	// prepared edge already uses. Runtime bounds and validates these names; raw
 	// engine network IDs are never accepted by this RPC.
 	EdgeAppNetworks []string `protobuf:"bytes,19,rep,name=edge_app_networks,json=edgeAppNetworks,proto3" json:"edge_app_networks,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// lifecycle_profile is the exact authenticated split-role process and
+	// rootless Podman mount contract. It is required for component lifecycle
+	// actions other than ensure_network.
+	LifecycleProfile *RuntimeComponentLifecycleProfile `protobuf:"bytes,20,opt,name=lifecycle_profile,json=lifecycleProfile,proto3" json:"lifecycle_profile,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RuntimeSelfUpdateCommand) Reset() {
@@ -640,6 +644,13 @@ func (x *RuntimeSelfUpdateCommand) GetFinalPortPublishes() []*ComponentPortBindi
 func (x *RuntimeSelfUpdateCommand) GetEdgeAppNetworks() []string {
 	if x != nil {
 		return x.EdgeAppNetworks
+	}
+	return nil
+}
+
+func (x *RuntimeSelfUpdateCommand) GetLifecycleProfile() *RuntimeComponentLifecycleProfile {
+	if x != nil {
+		return x.LifecycleProfile
 	}
 	return nil
 }
@@ -3704,6 +3715,98 @@ func (x *PrepareEdgeDrainResponse) GetMessage() string {
 	return ""
 }
 
+type RuntimeComponentLifecycleProfile struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	Uid                     int64                  `protobuf:"varint,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Gid                     int64                  `protobuf:"varint,2,opt,name=gid,proto3" json:"gid,omitempty"`
+	User                    string                 `protobuf:"bytes,3,opt,name=user,proto3" json:"user,omitempty"`
+	UsernsMode              string                 `protobuf:"bytes,4,opt,name=userns_mode,json=usernsMode,proto3" json:"userns_mode,omitempty"`
+	CapDrop                 []string               `protobuf:"bytes,5,rep,name=cap_drop,json=capDrop,proto3" json:"cap_drop,omitempty"`
+	NoNewPrivileges         bool                   `protobuf:"varint,6,opt,name=no_new_privileges,json=noNewPrivileges,proto3" json:"no_new_privileges,omitempty"`
+	GenerationVolumeOptions []string               `protobuf:"bytes,7,rep,name=generation_volume_options,json=generationVolumeOptions,proto3" json:"generation_volume_options,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *RuntimeComponentLifecycleProfile) Reset() {
+	*x = RuntimeComponentLifecycleProfile{}
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeComponentLifecycleProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeComponentLifecycleProfile) ProtoMessage() {}
+
+func (x *RuntimeComponentLifecycleProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_gordon_runtime_v1_runtime_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeComponentLifecycleProfile.ProtoReflect.Descriptor instead.
+func (*RuntimeComponentLifecycleProfile) Descriptor() ([]byte, []int) {
+	return file_gordon_runtime_v1_runtime_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetUid() int64 {
+	if x != nil {
+		return x.Uid
+	}
+	return 0
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetGid() int64 {
+	if x != nil {
+		return x.Gid
+	}
+	return 0
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetUser() string {
+	if x != nil {
+		return x.User
+	}
+	return ""
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetUsernsMode() string {
+	if x != nil {
+		return x.UsernsMode
+	}
+	return ""
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetCapDrop() []string {
+	if x != nil {
+		return x.CapDrop
+	}
+	return nil
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetNoNewPrivileges() bool {
+	if x != nil {
+		return x.NoNewPrivileges
+	}
+	return false
+}
+
+func (x *RuntimeComponentLifecycleProfile) GetGenerationVolumeOptions() []string {
+	if x != nil {
+		return x.GenerationVolumeOptions
+	}
+	return nil
+}
+
 var File_gordon_runtime_v1_runtime_proto protoreflect.FileDescriptor
 
 const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
@@ -3742,7 +3845,7 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x120\n" +
 	"\x14expected_route_count\x18\x03 \x01(\x05R\x12expectedRouteCount\x122\n" +
 	"\x15desired_state_version\x18\x04 \x01(\tR\x13desiredStateVersion\x12R\n" +
-	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\xac\a\n" +
+	"\x0edesired_routes\x18\x05 \x03(\v2+.gordon.runtime.v1.RuntimeRouteDesiredStateR\rdesiredRoutes\"\x8e\b\n" +
 	"\x18RuntimeSelfUpdateCommand\x12E\n" +
 	"\bidentity\x18\x01 \x01(\v2).gordon.runtime.v1.RuntimeCommandIdentityR\bidentity\x12.\n" +
 	"\x13target_component_id\x18\x02 \x01(\tR\x11targetComponentId\x122\n" +
@@ -3765,7 +3868,8 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x0eport_publishes\x18\x10 \x03(\v2'.gordon.runtime.v1.ComponentPortBindingR\rportPublishes\x127\n" +
 	"\x18old_serving_component_id\x18\x11 \x01(\tR\x15oldServingComponentId\x12Y\n" +
 	"\x14final_port_publishes\x18\x12 \x03(\v2'.gordon.runtime.v1.ComponentPortBindingR\x12finalPortPublishes\x12*\n" +
-	"\x11edge_app_networks\x18\x13 \x03(\tR\x0fedgeAppNetworks\"\x8f\x01\n" +
+	"\x11edge_app_networks\x18\x13 \x03(\tR\x0fedgeAppNetworks\x12`\n" +
+	"\x11lifecycle_profile\x18\x14 \x01(\v23.gordon.runtime.v1.RuntimeComponentLifecycleProfileR\x10lifecycleProfile\"\x8f\x01\n" +
 	"\x14ComponentPortBinding\x12\x17\n" +
 	"\ahost_ip\x18\x01 \x01(\tR\x06hostIp\x12\x1b\n" +
 	"\thost_port\x18\x02 \x01(\x05R\bhostPort\x12%\n" +
@@ -4013,7 +4117,16 @@ const file_gordon_runtime_v1_runtime_proto_rawDesc = "" +
 	"\x0eold_target_key\x18\x03 \x01(\tR\foldTargetKey\"D\n" +
 	"\x18PrepareEdgeDrainResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\xcf\f\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xfe\x01\n" +
+	" RuntimeComponentLifecycleProfile\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\x03R\x03uid\x12\x10\n" +
+	"\x03gid\x18\x02 \x01(\x03R\x03gid\x12\x12\n" +
+	"\x04user\x18\x03 \x01(\tR\x04user\x12\x1f\n" +
+	"\vuserns_mode\x18\x04 \x01(\tR\n" +
+	"usernsMode\x12\x19\n" +
+	"\bcap_drop\x18\x05 \x03(\tR\acapDrop\x12*\n" +
+	"\x11no_new_privileges\x18\x06 \x01(\bR\x0fnoNewPrivileges\x12:\n" +
+	"\x19generation_volume_options\x18\a \x03(\tR\x17generationVolumeOptions2\xcf\f\n" +
 	"\x0eRuntimeService\x12_\n" +
 	"\fApplyCommand\x12&.gordon.runtime.v1.ApplyCommandRequest\x1a'.gordon.runtime.v1.ApplyCommandResponse\x12m\n" +
 	"\x10WatchActualState\x12*.gordon.runtime.v1.WatchActualStateRequest\x1a+.gordon.runtime.v1.WatchActualStateResponse0\x01\x12V\n" +
@@ -4045,7 +4158,7 @@ func file_gordon_runtime_v1_runtime_proto_rawDescGZIP() []byte {
 	return file_gordon_runtime_v1_runtime_proto_rawDescData
 }
 
-var file_gordon_runtime_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 57)
+var file_gordon_runtime_v1_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 58)
 var file_gordon_runtime_v1_runtime_proto_goTypes = []any{
 	(*RuntimeCommandIdentity)(nil),             // 0: gordon.runtime.v1.RuntimeCommandIdentity
 	(*DeployRouteCommand)(nil),                 // 1: gordon.runtime.v1.DeployRouteCommand
@@ -4102,12 +4215,13 @@ var file_gordon_runtime_v1_runtime_proto_goTypes = []any{
 	(*ReportEdgeDrainResponse)(nil),            // 52: gordon.runtime.v1.ReportEdgeDrainResponse
 	(*PrepareEdgeDrainRequest)(nil),            // 53: gordon.runtime.v1.PrepareEdgeDrainRequest
 	(*PrepareEdgeDrainResponse)(nil),           // 54: gordon.runtime.v1.PrepareEdgeDrainResponse
-	nil,                                        // 55: gordon.runtime.v1.RuntimeContainerState.LabelsEntry
-	nil,                                        // 56: gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
-	(*timestamppb.Timestamp)(nil),              // 57: google.protobuf.Timestamp
+	(*RuntimeComponentLifecycleProfile)(nil),   // 55: gordon.runtime.v1.RuntimeComponentLifecycleProfile
+	nil,                                        // 56: gordon.runtime.v1.RuntimeContainerState.LabelsEntry
+	nil,                                        // 57: gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
+	(*timestamppb.Timestamp)(nil),              // 58: google.protobuf.Timestamp
 }
 var file_gordon_runtime_v1_runtime_proto_depIdxs = []int32{
-	57, // 0: gordon.runtime.v1.RuntimeCommandIdentity.requested_at:type_name -> google.protobuf.Timestamp
+	58, // 0: gordon.runtime.v1.RuntimeCommandIdentity.requested_at:type_name -> google.protobuf.Timestamp
 	0,  // 1: gordon.runtime.v1.DeployRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
 	0,  // 2: gordon.runtime.v1.RestartRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
 	0,  // 3: gordon.runtime.v1.RemoveRouteCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
@@ -4116,80 +4230,81 @@ var file_gordon_runtime_v1_runtime_proto_depIdxs = []int32{
 	0,  // 6: gordon.runtime.v1.RuntimeSelfUpdateCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
 	7,  // 7: gordon.runtime.v1.RuntimeSelfUpdateCommand.port_publishes:type_name -> gordon.runtime.v1.ComponentPortBinding
 	7,  // 8: gordon.runtime.v1.RuntimeSelfUpdateCommand.final_port_publishes:type_name -> gordon.runtime.v1.ComponentPortBinding
-	1,  // 9: gordon.runtime.v1.ApplyCommandRequest.deploy_route:type_name -> gordon.runtime.v1.DeployRouteCommand
-	2,  // 10: gordon.runtime.v1.ApplyCommandRequest.restart_route:type_name -> gordon.runtime.v1.RestartRouteCommand
-	3,  // 11: gordon.runtime.v1.ApplyCommandRequest.remove_route:type_name -> gordon.runtime.v1.RemoveRouteCommand
-	5,  // 12: gordon.runtime.v1.ApplyCommandRequest.reconcile:type_name -> gordon.runtime.v1.ReconcileRuntimeCommand
-	6,  // 13: gordon.runtime.v1.RuntimeSelfUpdateRequest.command:type_name -> gordon.runtime.v1.RuntimeSelfUpdateCommand
-	57, // 14: gordon.runtime.v1.RuntimeCommandResult.started_at:type_name -> google.protobuf.Timestamp
-	57, // 15: gordon.runtime.v1.RuntimeCommandResult.completed_at:type_name -> google.protobuf.Timestamp
-	10, // 16: gordon.runtime.v1.RuntimeCommandResult.error:type_name -> gordon.runtime.v1.RuntimeCommandError
-	11, // 17: gordon.runtime.v1.ApplyCommandResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
-	11, // 18: gordon.runtime.v1.RuntimeSelfUpdateResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
-	15, // 19: gordon.runtime.v1.StandaloneServiceSpec.ports:type_name -> gordon.runtime.v1.StandaloneServicePortSpec
-	16, // 20: gordon.runtime.v1.StandaloneServiceSpec.volumes:type_name -> gordon.runtime.v1.StandaloneServiceVolumeSpec
-	17, // 21: gordon.runtime.v1.StandaloneServiceSpec.readiness:type_name -> gordon.runtime.v1.StandaloneServiceReadinessSpec
-	18, // 22: gordon.runtime.v1.StandaloneServiceSpec.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
-	0,  // 23: gordon.runtime.v1.ApplyStandaloneServiceCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
-	14, // 24: gordon.runtime.v1.ApplyStandaloneServiceCommand.service:type_name -> gordon.runtime.v1.StandaloneServiceSpec
-	19, // 25: gordon.runtime.v1.ApplyStandaloneServiceRequest.command:type_name -> gordon.runtime.v1.ApplyStandaloneServiceCommand
-	11, // 26: gordon.runtime.v1.ApplyStandaloneServiceResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
-	0,  // 27: gordon.runtime.v1.RemoveStandaloneServiceCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
-	18, // 28: gordon.runtime.v1.RemoveStandaloneServiceCommand.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
-	22, // 29: gordon.runtime.v1.RemoveStandaloneServiceRequest.command:type_name -> gordon.runtime.v1.RemoveStandaloneServiceCommand
-	11, // 30: gordon.runtime.v1.RemoveStandaloneServiceResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
-	18, // 31: gordon.runtime.v1.RuntimeStandaloneServiceState.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
-	26, // 32: gordon.runtime.v1.ListStandaloneServiceStateResponse.services:type_name -> gordon.runtime.v1.RuntimeStandaloneServiceState
-	57, // 33: gordon.runtime.v1.RuntimeContainerState.started_at:type_name -> google.protobuf.Timestamp
-	55, // 34: gordon.runtime.v1.RuntimeContainerState.labels:type_name -> gordon.runtime.v1.RuntimeContainerState.LabelsEntry
-	57, // 35: gordon.runtime.v1.WatchActualStateResponse.observed_at:type_name -> google.protobuf.Timestamp
-	29, // 36: gordon.runtime.v1.WatchActualStateResponse.routes:type_name -> gordon.runtime.v1.RuntimeRouteState
-	30, // 37: gordon.runtime.v1.WatchActualStateResponse.containers:type_name -> gordon.runtime.v1.RuntimeContainerState
-	31, // 38: gordon.runtime.v1.WatchActualStateResponse.networks:type_name -> gordon.runtime.v1.RuntimeNetworkState
-	32, // 39: gordon.runtime.v1.WatchActualStateResponse.volumes:type_name -> gordon.runtime.v1.RuntimeActualVolumeState
-	33, // 40: gordon.runtime.v1.WatchActualStateResponse.edge_attachments:type_name -> gordon.runtime.v1.RuntimeEdgeNetworkAttachmentState
-	57, // 41: gordon.runtime.v1.StreamLogsResponse.observed_at:type_name -> google.protobuf.Timestamp
-	57, // 42: gordon.runtime.v1.RuntimeVolumeInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 43: gordon.runtime.v1.RuntimeVolumeInfo.labels:type_name -> gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
-	42, // 44: gordon.runtime.v1.ListVolumesResponse.volumes:type_name -> gordon.runtime.v1.RuntimeVolumeInfo
-	57, // 45: gordon.runtime.v1.RuntimeImageInfo.created:type_name -> google.protobuf.Timestamp
-	47, // 46: gordon.runtime.v1.ListImagesResponse.images:type_name -> gordon.runtime.v1.RuntimeImageInfo
-	57, // 47: gordon.runtime.v1.ReportEdgeDrainRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
-	8,  // 48: gordon.runtime.v1.RuntimeService.ApplyCommand:input_type -> gordon.runtime.v1.ApplyCommandRequest
-	28, // 49: gordon.runtime.v1.RuntimeService.WatchActualState:input_type -> gordon.runtime.v1.WatchActualStateRequest
-	35, // 50: gordon.runtime.v1.RuntimeService.GetHealth:input_type -> gordon.runtime.v1.GetHealthRequest
-	37, // 51: gordon.runtime.v1.RuntimeService.ProbeEnvironment:input_type -> gordon.runtime.v1.ProbeEnvironmentRequest
-	39, // 52: gordon.runtime.v1.RuntimeService.StreamLogs:input_type -> gordon.runtime.v1.StreamLogsRequest
-	41, // 53: gordon.runtime.v1.RuntimeService.ListVolumes:input_type -> gordon.runtime.v1.ListVolumesRequest
-	44, // 54: gordon.runtime.v1.RuntimeService.RemoveVolume:input_type -> gordon.runtime.v1.RemoveVolumeRequest
-	46, // 55: gordon.runtime.v1.RuntimeService.ListImages:input_type -> gordon.runtime.v1.ListImagesRequest
-	49, // 56: gordon.runtime.v1.RuntimeService.PruneImages:input_type -> gordon.runtime.v1.PruneImagesRequest
-	9,  // 57: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:input_type -> gordon.runtime.v1.RuntimeSelfUpdateRequest
-	20, // 58: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:input_type -> gordon.runtime.v1.ApplyStandaloneServiceRequest
-	23, // 59: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:input_type -> gordon.runtime.v1.RemoveStandaloneServiceRequest
-	25, // 60: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:input_type -> gordon.runtime.v1.ListStandaloneServiceStateRequest
-	51, // 61: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:input_type -> gordon.runtime.v1.ReportEdgeDrainRequest
-	53, // 62: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:input_type -> gordon.runtime.v1.PrepareEdgeDrainRequest
-	12, // 63: gordon.runtime.v1.RuntimeService.ApplyCommand:output_type -> gordon.runtime.v1.ApplyCommandResponse
-	34, // 64: gordon.runtime.v1.RuntimeService.WatchActualState:output_type -> gordon.runtime.v1.WatchActualStateResponse
-	36, // 65: gordon.runtime.v1.RuntimeService.GetHealth:output_type -> gordon.runtime.v1.GetHealthResponse
-	38, // 66: gordon.runtime.v1.RuntimeService.ProbeEnvironment:output_type -> gordon.runtime.v1.ProbeEnvironmentResponse
-	40, // 67: gordon.runtime.v1.RuntimeService.StreamLogs:output_type -> gordon.runtime.v1.StreamLogsResponse
-	43, // 68: gordon.runtime.v1.RuntimeService.ListVolumes:output_type -> gordon.runtime.v1.ListVolumesResponse
-	45, // 69: gordon.runtime.v1.RuntimeService.RemoveVolume:output_type -> gordon.runtime.v1.RemoveVolumeResponse
-	48, // 70: gordon.runtime.v1.RuntimeService.ListImages:output_type -> gordon.runtime.v1.ListImagesResponse
-	50, // 71: gordon.runtime.v1.RuntimeService.PruneImages:output_type -> gordon.runtime.v1.PruneImagesResponse
-	13, // 72: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:output_type -> gordon.runtime.v1.RuntimeSelfUpdateResponse
-	21, // 73: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:output_type -> gordon.runtime.v1.ApplyStandaloneServiceResponse
-	24, // 74: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:output_type -> gordon.runtime.v1.RemoveStandaloneServiceResponse
-	27, // 75: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:output_type -> gordon.runtime.v1.ListStandaloneServiceStateResponse
-	52, // 76: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:output_type -> gordon.runtime.v1.ReportEdgeDrainResponse
-	54, // 77: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:output_type -> gordon.runtime.v1.PrepareEdgeDrainResponse
-	63, // [63:78] is the sub-list for method output_type
-	48, // [48:63] is the sub-list for method input_type
-	48, // [48:48] is the sub-list for extension type_name
-	48, // [48:48] is the sub-list for extension extendee
-	0,  // [0:48] is the sub-list for field type_name
+	55, // 9: gordon.runtime.v1.RuntimeSelfUpdateCommand.lifecycle_profile:type_name -> gordon.runtime.v1.RuntimeComponentLifecycleProfile
+	1,  // 10: gordon.runtime.v1.ApplyCommandRequest.deploy_route:type_name -> gordon.runtime.v1.DeployRouteCommand
+	2,  // 11: gordon.runtime.v1.ApplyCommandRequest.restart_route:type_name -> gordon.runtime.v1.RestartRouteCommand
+	3,  // 12: gordon.runtime.v1.ApplyCommandRequest.remove_route:type_name -> gordon.runtime.v1.RemoveRouteCommand
+	5,  // 13: gordon.runtime.v1.ApplyCommandRequest.reconcile:type_name -> gordon.runtime.v1.ReconcileRuntimeCommand
+	6,  // 14: gordon.runtime.v1.RuntimeSelfUpdateRequest.command:type_name -> gordon.runtime.v1.RuntimeSelfUpdateCommand
+	58, // 15: gordon.runtime.v1.RuntimeCommandResult.started_at:type_name -> google.protobuf.Timestamp
+	58, // 16: gordon.runtime.v1.RuntimeCommandResult.completed_at:type_name -> google.protobuf.Timestamp
+	10, // 17: gordon.runtime.v1.RuntimeCommandResult.error:type_name -> gordon.runtime.v1.RuntimeCommandError
+	11, // 18: gordon.runtime.v1.ApplyCommandResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
+	11, // 19: gordon.runtime.v1.RuntimeSelfUpdateResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
+	15, // 20: gordon.runtime.v1.StandaloneServiceSpec.ports:type_name -> gordon.runtime.v1.StandaloneServicePortSpec
+	16, // 21: gordon.runtime.v1.StandaloneServiceSpec.volumes:type_name -> gordon.runtime.v1.StandaloneServiceVolumeSpec
+	17, // 22: gordon.runtime.v1.StandaloneServiceSpec.readiness:type_name -> gordon.runtime.v1.StandaloneServiceReadinessSpec
+	18, // 23: gordon.runtime.v1.StandaloneServiceSpec.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
+	0,  // 24: gordon.runtime.v1.ApplyStandaloneServiceCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
+	14, // 25: gordon.runtime.v1.ApplyStandaloneServiceCommand.service:type_name -> gordon.runtime.v1.StandaloneServiceSpec
+	19, // 26: gordon.runtime.v1.ApplyStandaloneServiceRequest.command:type_name -> gordon.runtime.v1.ApplyStandaloneServiceCommand
+	11, // 27: gordon.runtime.v1.ApplyStandaloneServiceResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
+	0,  // 28: gordon.runtime.v1.RemoveStandaloneServiceCommand.identity:type_name -> gordon.runtime.v1.RuntimeCommandIdentity
+	18, // 29: gordon.runtime.v1.RemoveStandaloneServiceCommand.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
+	22, // 30: gordon.runtime.v1.RemoveStandaloneServiceRequest.command:type_name -> gordon.runtime.v1.RemoveStandaloneServiceCommand
+	11, // 31: gordon.runtime.v1.RemoveStandaloneServiceResponse.result:type_name -> gordon.runtime.v1.RuntimeCommandResult
+	18, // 32: gordon.runtime.v1.RuntimeStandaloneServiceState.cleanup:type_name -> gordon.runtime.v1.StandaloneServiceCleanupSpec
+	26, // 33: gordon.runtime.v1.ListStandaloneServiceStateResponse.services:type_name -> gordon.runtime.v1.RuntimeStandaloneServiceState
+	58, // 34: gordon.runtime.v1.RuntimeContainerState.started_at:type_name -> google.protobuf.Timestamp
+	56, // 35: gordon.runtime.v1.RuntimeContainerState.labels:type_name -> gordon.runtime.v1.RuntimeContainerState.LabelsEntry
+	58, // 36: gordon.runtime.v1.WatchActualStateResponse.observed_at:type_name -> google.protobuf.Timestamp
+	29, // 37: gordon.runtime.v1.WatchActualStateResponse.routes:type_name -> gordon.runtime.v1.RuntimeRouteState
+	30, // 38: gordon.runtime.v1.WatchActualStateResponse.containers:type_name -> gordon.runtime.v1.RuntimeContainerState
+	31, // 39: gordon.runtime.v1.WatchActualStateResponse.networks:type_name -> gordon.runtime.v1.RuntimeNetworkState
+	32, // 40: gordon.runtime.v1.WatchActualStateResponse.volumes:type_name -> gordon.runtime.v1.RuntimeActualVolumeState
+	33, // 41: gordon.runtime.v1.WatchActualStateResponse.edge_attachments:type_name -> gordon.runtime.v1.RuntimeEdgeNetworkAttachmentState
+	58, // 42: gordon.runtime.v1.StreamLogsResponse.observed_at:type_name -> google.protobuf.Timestamp
+	58, // 43: gordon.runtime.v1.RuntimeVolumeInfo.created_at:type_name -> google.protobuf.Timestamp
+	57, // 44: gordon.runtime.v1.RuntimeVolumeInfo.labels:type_name -> gordon.runtime.v1.RuntimeVolumeInfo.LabelsEntry
+	42, // 45: gordon.runtime.v1.ListVolumesResponse.volumes:type_name -> gordon.runtime.v1.RuntimeVolumeInfo
+	58, // 46: gordon.runtime.v1.RuntimeImageInfo.created:type_name -> google.protobuf.Timestamp
+	47, // 47: gordon.runtime.v1.ListImagesResponse.images:type_name -> gordon.runtime.v1.RuntimeImageInfo
+	58, // 48: gordon.runtime.v1.ReportEdgeDrainRequest.acknowledged_at:type_name -> google.protobuf.Timestamp
+	8,  // 49: gordon.runtime.v1.RuntimeService.ApplyCommand:input_type -> gordon.runtime.v1.ApplyCommandRequest
+	28, // 50: gordon.runtime.v1.RuntimeService.WatchActualState:input_type -> gordon.runtime.v1.WatchActualStateRequest
+	35, // 51: gordon.runtime.v1.RuntimeService.GetHealth:input_type -> gordon.runtime.v1.GetHealthRequest
+	37, // 52: gordon.runtime.v1.RuntimeService.ProbeEnvironment:input_type -> gordon.runtime.v1.ProbeEnvironmentRequest
+	39, // 53: gordon.runtime.v1.RuntimeService.StreamLogs:input_type -> gordon.runtime.v1.StreamLogsRequest
+	41, // 54: gordon.runtime.v1.RuntimeService.ListVolumes:input_type -> gordon.runtime.v1.ListVolumesRequest
+	44, // 55: gordon.runtime.v1.RuntimeService.RemoveVolume:input_type -> gordon.runtime.v1.RemoveVolumeRequest
+	46, // 56: gordon.runtime.v1.RuntimeService.ListImages:input_type -> gordon.runtime.v1.ListImagesRequest
+	49, // 57: gordon.runtime.v1.RuntimeService.PruneImages:input_type -> gordon.runtime.v1.PruneImagesRequest
+	9,  // 58: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:input_type -> gordon.runtime.v1.RuntimeSelfUpdateRequest
+	20, // 59: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:input_type -> gordon.runtime.v1.ApplyStandaloneServiceRequest
+	23, // 60: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:input_type -> gordon.runtime.v1.RemoveStandaloneServiceRequest
+	25, // 61: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:input_type -> gordon.runtime.v1.ListStandaloneServiceStateRequest
+	51, // 62: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:input_type -> gordon.runtime.v1.ReportEdgeDrainRequest
+	53, // 63: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:input_type -> gordon.runtime.v1.PrepareEdgeDrainRequest
+	12, // 64: gordon.runtime.v1.RuntimeService.ApplyCommand:output_type -> gordon.runtime.v1.ApplyCommandResponse
+	34, // 65: gordon.runtime.v1.RuntimeService.WatchActualState:output_type -> gordon.runtime.v1.WatchActualStateResponse
+	36, // 66: gordon.runtime.v1.RuntimeService.GetHealth:output_type -> gordon.runtime.v1.GetHealthResponse
+	38, // 67: gordon.runtime.v1.RuntimeService.ProbeEnvironment:output_type -> gordon.runtime.v1.ProbeEnvironmentResponse
+	40, // 68: gordon.runtime.v1.RuntimeService.StreamLogs:output_type -> gordon.runtime.v1.StreamLogsResponse
+	43, // 69: gordon.runtime.v1.RuntimeService.ListVolumes:output_type -> gordon.runtime.v1.ListVolumesResponse
+	45, // 70: gordon.runtime.v1.RuntimeService.RemoveVolume:output_type -> gordon.runtime.v1.RemoveVolumeResponse
+	48, // 71: gordon.runtime.v1.RuntimeService.ListImages:output_type -> gordon.runtime.v1.ListImagesResponse
+	50, // 72: gordon.runtime.v1.RuntimeService.PruneImages:output_type -> gordon.runtime.v1.PruneImagesResponse
+	13, // 73: gordon.runtime.v1.RuntimeService.RuntimeSelfUpdate:output_type -> gordon.runtime.v1.RuntimeSelfUpdateResponse
+	21, // 74: gordon.runtime.v1.RuntimeService.ApplyStandaloneService:output_type -> gordon.runtime.v1.ApplyStandaloneServiceResponse
+	24, // 75: gordon.runtime.v1.RuntimeService.RemoveStandaloneService:output_type -> gordon.runtime.v1.RemoveStandaloneServiceResponse
+	27, // 76: gordon.runtime.v1.RuntimeService.ListStandaloneServiceState:output_type -> gordon.runtime.v1.ListStandaloneServiceStateResponse
+	52, // 77: gordon.runtime.v1.RuntimeService.ReportEdgeDrain:output_type -> gordon.runtime.v1.ReportEdgeDrainResponse
+	54, // 78: gordon.runtime.v1.RuntimeService.PrepareEdgeDrain:output_type -> gordon.runtime.v1.PrepareEdgeDrainResponse
+	64, // [64:79] is the sub-list for method output_type
+	49, // [49:64] is the sub-list for method input_type
+	49, // [49:49] is the sub-list for extension type_name
+	49, // [49:49] is the sub-list for extension extendee
+	0,  // [0:49] is the sub-list for field type_name
 }
 
 func init() { file_gordon_runtime_v1_runtime_proto_init() }
@@ -4209,7 +4324,7 @@ func file_gordon_runtime_v1_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gordon_runtime_v1_runtime_proto_rawDesc), len(file_gordon_runtime_v1_runtime_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   57,
+			NumMessages:   58,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

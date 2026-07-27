@@ -62,26 +62,14 @@ func (s *trafficSwitch) Switch(ctx context.Context, checkpoint MigrationCheckpoi
 	if !ok {
 		return fmt.Errorf("traffic switch edge component is missing")
 	}
-	result, err := s.runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
-		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{
-			ID:                domain.RuntimeCommandID("migration:" + checkpoint.MigrationID + ":switch:" + edge.ComponentID),
-			IdempotencyKey:    "migration:" + checkpoint.MigrationID + ":switch:" + edge.ComponentID,
-			Generation:        checkpoint.ComponentGeneration,
-			SourceComponentID: "gordon-control",
-			RequestedAt:       s.now().UTC(),
-		},
-		TargetComponentID: edge.ComponentID, TargetComponentRole: domain.ComponentRoleEdge,
-		TargetVersion: edge.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval,
-		PolicyDecisionID: "migration:" + checkpoint.MigrationID,
-		LifecycleAction:  domain.RuntimeComponentLifecycleActivate,
-		DesiredImage:     edge.Image, DesiredStateHash: edge.DesiredStateHash, InternalNetwork: edge.InternalNetwork,
-		EnvironmentFile: edge.EnvironmentFile, ConfigFile: edge.ConfigFile,
-		PortPublishes:         append([]domain.ContainerPortPublish(nil), edge.PortPublishes...),
-		OldServingComponentID: checkpoint.OldServingPath,
-		FinalPortPublishes:    componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge),
-		EdgeAppNetworks:       append([]string(nil), plan.AppNetworks...),
-		PreserveVolumes:       true,
-	})
+	command, err := newComponentLifecycleCommand(edge, domain.RuntimeComponentLifecycleActivate, checkpoint.MigrationID, "switch", s.now())
+	if err != nil {
+		return err
+	}
+	command.OldServingComponentID = checkpoint.OldServingPath
+	command.FinalPortPublishes = componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge)
+	command.EdgeAppNetworks = append([]string(nil), plan.AppNetworks...)
+	result, err := s.runtime.SelfUpdateRuntime(ctx, command)
 	if err != nil {
 		return fmt.Errorf("activate split edge through runtime: %w", err)
 	}

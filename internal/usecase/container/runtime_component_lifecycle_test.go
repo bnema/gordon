@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,6 +20,10 @@ import (
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func componentKeepIDMode(identity domain.ComponentProcessIdentity) string {
+	return "keep-id:uid=" + strconv.Itoa(identity.UID) + ",gid=" + strconv.Itoa(identity.GID)
+}
 
 func testLifecycleConfig(t *testing.T, role domain.ComponentRole) string {
 	t.Helper()
@@ -49,6 +54,16 @@ func TestApprovedPreparedPortPublishesPermitsOnlyOnePrivateEdgeProbe(t *testing.
 	}
 }
 
+func applyTestComponentLifecycle(manager RuntimeComponentLifecycleManager, ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork {
+		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(command.TargetComponentRole)
+		if ok {
+			command.LifecycleProfile = profile
+		}
+	}
+	return manager.ApplyComponentLifecycle(ctx, command)
+}
+
 func TestRuntimeComponentLifecycleUsesRuntimeOnlyContainerProtocol(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
@@ -66,8 +81,8 @@ func TestRuntimeComponentLifecycleUsesRuntimeOnlyContainerProtocol(t *testing.T)
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"})
 	identity := testRuntimeCommandIdentity("component-lifecycle")
 	identity.SourceComponentID = "gordon-control"
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-network-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleEnsureNetwork, InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true}))
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-network-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleEnsureNetwork, InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true}))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}))
 }
 
 func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppNetwork(t *testing.T) {
@@ -89,7 +104,7 @@ func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppN
 	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, edge.Name, "gordon-app-fixture").Return(nil).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), command))
 }
 
 func TestRuntimeComponentLifecycleRejectsUnsafeAppNetworkConnections(t *testing.T) {
@@ -117,7 +132,7 @@ func TestRuntimeComponentLifecycleRejectsUnsafeAppNetworkConnections(t *testing.
 			runtime.EXPECT().InspectContainer(mock.Anything, edge.ID).Return(edge, nil).Once()
 			runtime.EXPECT().ListNetworks(mock.Anything).Return(networks, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-			err := manager.ApplyComponentLifecycle(context.Background(), command)
+			err := applyTestComponentLifecycle(manager, context.Background(), command)
 			require.Error(t, err)
 		})
 	}
@@ -128,7 +143,7 @@ func TestRuntimeComponentLifecycleRejectsUnsafeAppNetworkConnections(t *testing.
 			unsafeCommand := command
 			unsafeCommand.InternalNetwork = unsafeName
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-			require.Error(t, manager.ApplyComponentLifecycle(context.Background(), unsafeCommand))
+			require.Error(t, applyTestComponentLifecycle(manager, context.Background(), unsafeCommand))
 		})
 	}
 }
@@ -141,7 +156,7 @@ func TestRuntimeComponentLifecycleConnectRejectsNonEdgeRole(t *testing.T) {
 		ConfigFile: testLifecycleConfig(t, domain.ComponentRoleEdge),
 	}
 	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-	require.ErrorIs(t, manager.ApplyComponentLifecycle(context.Background(), command), ErrRuntimePolicyDenied)
+	require.ErrorIs(t, applyTestComponentLifecycle(manager, context.Background(), command), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *testing.T) {
@@ -162,7 +177,7 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: command.InternalNetwork, Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{edge.Name, "gordon-target-app-example-test"}}}, nil).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"})
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), command))
 }
 
 func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
@@ -218,7 +233,7 @@ func TestRuntimeComponentLifecycleRejectsInvalidManagedSecretsMountsOnExistingTa
 			runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: configuredVolume})
 
-			err := manager.ApplyComponentLifecycle(context.Background(), command)
+			err := applyTestComponentLifecycle(manager, context.Background(), command)
 			require.ErrorIs(t, err, ErrRuntimePolicyDenied)
 		})
 	}
@@ -261,7 +276,7 @@ func TestRuntimeComponentLifecycleUsesAuthoritativeInspectForSparseHealthyRetry(
 	runtime.EXPECT().IsContainerRunning(mock.Anything, inspected.ID).Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, inspected.ID).Return("healthy", true, nil).Once()
 
-	require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), command))
 }
 
 func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testing.T) {
@@ -301,7 +316,7 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
 			require.NoError(t, err)
 			manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-			err = manager.ApplyComponentLifecycle(context.Background(), command)
+			err = applyTestComponentLifecycle(manager, context.Background(), command)
 			if test.wantDenied {
 				require.ErrorIs(t, err, ErrRuntimePolicyDenied)
 				return
@@ -319,7 +334,7 @@ func TestRuntimeComponentLifecycleFailsClosedWhenCandidateInspectFails(t *testin
 	runtime.EXPECT().InspectContainer(mock.Anything, "existing").Return(nil, assert.AnError).Once()
 
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	require.Error(t, manager.ApplyComponentLifecycle(context.Background(), command))
+	require.Error(t, applyTestComponentLifecycle(manager, context.Background(), command))
 }
 
 func TestRuntimeComponentLifecycleRejectsForgedSparseCandidateAfterInspectMismatch(t *testing.T) {
@@ -333,7 +348,7 @@ func TestRuntimeComponentLifecycleRejectsForgedSparseCandidateAfterInspectMismat
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{ID: forged.ID, Name: command.TargetComponentID}}, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, forged.ID).Return(forged, nil).Once()
 
-	require.ErrorIs(t, manager.ApplyComponentLifecycle(context.Background(), command), ErrRuntimePolicyDenied)
+	require.ErrorIs(t, applyTestComponentLifecycle(manager, context.Background(), command), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimeComponentLifecycleAcceptsOnlyExactManagedControlMountForExistingStart(t *testing.T) {
@@ -355,7 +370,7 @@ func TestRuntimeComponentLifecycleAcceptsOnlyExactManagedControlMountForExisting
 			if !running {
 				runtime.EXPECT().StartContainer(mock.Anything, container.ID).Return(nil).Once()
 			}
-			require.NoError(t, manager.ApplyComponentLifecycle(context.Background(), command))
+			require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), command))
 		})
 	}
 }
@@ -375,6 +390,7 @@ func TestRuntimeComponentLifecycleRecoveryInventoryRejectsManagedSecretsOnNonCon
 func managedSecretsLifecycleCommand(role domain.ComponentRole, action domain.RuntimeComponentLifecycleAction, configPath string) domain.RuntimeSelfUpdateCommand {
 	identity := testRuntimeCommandIdentity("managed-secrets-existing")
 	identity.SourceComponentID = "gordon-control"
+	profile, _ := domain.FixedRuntimeComponentLifecycleProfile(role)
 	return domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: identity,
 		TargetComponentID:      "gordon-" + string(role) + "-fixture-g1",
@@ -383,6 +399,7 @@ func managedSecretsLifecycleCommand(role domain.ComponentRole, action domain.Run
 		Policy:                 domain.RuntimeSelfUpdatePolicyManualApproval,
 		PolicyDecisionID:       "migration:fixture",
 		LifecycleAction:        action,
+		LifecycleProfile:       profile,
 		DesiredImage:           "example.invalid/gordon:v2",
 		DesiredStateHash:       "fixture-hash",
 		InternalNetwork:        "gordon-internal-fixture-g1",
@@ -422,7 +439,8 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	manager := NewRuntimeComponentLifecycleManager(outmocks.NewMockContainerRuntime(t), RuntimePolicy{Mode: RuntimePolicyModeEnforce, MigrationStateRoot: filepath.Join(data, "migration"), ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"}).(*runtimeComponentLifecycleManager)
 	identity := testRuntimeCommandIdentity("component-socket-state")
 	identity.SourceComponentID = "gordon-control"
-	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-runtime-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, EnvironmentFile: envPath, PreserveVolumes: true}
+	runtimeProfile, _ := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRuntime)
+	command := domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-runtime-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, LifecycleProfile: runtimeProfile, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, EnvironmentFile: envPath, PreserveVolumes: true}
 	config, err := manager.componentConfig(command, nil)
 	require.NoError(t, err)
 	state := filepath.Join(data, "migration", "fixture")
@@ -437,6 +455,7 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	assert.Contains(t, config.Env, "DOCKER_HOST=unix:///run/gordon/runtime.sock")
 
 	command.TargetComponentRole = domain.ComponentRoleControl
+	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleControl)
 	command.TargetComponentID = "gordon-control-fixture-g1"
 	command.ConfigFile = filepath.Join(configDir, "control.toml")
 	command.EnvironmentFile = ""
@@ -457,6 +476,7 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	assert.NotContains(t, config.ReadOnlyVolumes, filepath.Join(data, "migration", "env"))
 
 	command.TargetComponentRole = domain.ComponentRoleEdge
+	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleEdge)
 	command.TargetComponentID = "gordon-edge-fixture-g1"
 	command.ConfigFile = filepath.Join(configDir, "edge.toml")
 	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[edge]\n"), 0o600))

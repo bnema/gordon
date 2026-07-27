@@ -121,6 +121,7 @@ func TestServerRuntimeSelfUpdateTranslation(t *testing.T) {
 		Policy:              string(domain.RuntimeSelfUpdatePolicyManualApproval),
 		PolicyDecisionId:    "decision-1",
 		LifecycleAction:     string(domain.RuntimeComponentLifecycleStart),
+		LifecycleProfile:    testProtoLifecycleProfile(domain.ComponentRoleRuntime),
 		DesiredImage:        "example.invalid/gordon:v1.2.3",
 		DesiredStateHash:    "fixture-state-hash",
 		InternalNetwork:     "gordon-internal-fixture-g1",
@@ -140,7 +141,7 @@ func TestServerRuntimeSelfUpdatePreservesValidatedEdgeAppNetworks(t *testing.T) 
 	worker := &fakeRuntimeWorker{}
 	server := NewServer(worker, "runtime-1")
 	command := &runtimev1.RuntimeSelfUpdateCommand{
-		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), PreserveVolumes: true,
+		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), LifecycleProfile: testProtoLifecycleProfile(domain.ComponentRoleEdge), PreserveVolumes: true,
 		EdgeAppNetworks: []string{"gordon-app-one", "gordon-app-two"},
 	}
 
@@ -153,7 +154,7 @@ func TestServerRuntimeSelfUpdateRejectsUnsafeEdgeAppNetworks(t *testing.T) {
 	worker := &fakeRuntimeWorker{}
 	server := NewServer(worker, "runtime-1")
 	command := &runtimev1.RuntimeSelfUpdateCommand{
-		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), PreserveVolumes: true,
+		Identity: protoTestIdentity("cmd-edge", time.Unix(10, 0).UTC()), TargetComponentId: "gordon-edge-fixture-g1", TargetComponentRole: string(domain.ComponentRoleEdge), TargetVersion: "v1.2.3", Policy: string(domain.RuntimeSelfUpdatePolicyManualApproval), PolicyDecisionId: "migration:fixture", LifecycleAction: string(domain.RuntimeComponentLifecycleActivate), LifecycleProfile: testProtoLifecycleProfile(domain.ComponentRoleEdge), PreserveVolumes: true,
 		EdgeAppNetworks: []string{"gordon-app-one", "../engine-network"},
 	}
 
@@ -859,6 +860,15 @@ func newAuthenticatedRuntimeServerConn(t *testing.T, server runtimev1.RuntimeSer
 		grpc.StreamInterceptor(interceptors.ComponentAuthStreamInterceptor(validator, MethodScopes(), MethodRoles())),
 	)
 	return harness.Conn(t)
+}
+
+func testProtoLifecycleProfile(role domain.ComponentRole) *runtimev1.RuntimeComponentLifecycleProfile {
+	profile, _ := domain.FixedRuntimeComponentLifecycleProfile(role)
+	return &runtimev1.RuntimeComponentLifecycleProfile{
+		Uid: int64(profile.ProcessIdentity.UID), Gid: int64(profile.ProcessIdentity.GID), User: profile.ProcessIdentity.User,
+		UsernsMode: profile.UsernsMode, CapDrop: append([]string(nil), profile.CapDrop...), NoNewPrivileges: profile.NoNewPrivileges,
+		GenerationVolumeOptions: append([]string(nil), profile.GenerationVolumeOptions...),
+	}
 }
 
 func protoTestIdentity(id string, requestedAt time.Time) *runtimev1.RuntimeCommandIdentity {

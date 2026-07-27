@@ -126,6 +126,9 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 		if !validComponentLifecycleTarget(command) {
 			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle target is not Gordon-owned")
 		}
+		if command.LifecycleAction != domain.RuntimeComponentLifecycleEnsureNetwork && !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
+			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
+		}
 		if strings.TrimSpace(command.DesiredImage) != "" {
 			if err := p.checkImage(command.DesiredImage, command.RuntimeCommandIdentity, ""); err != nil {
 				return err
@@ -140,6 +143,10 @@ func (p RuntimePolicy) CheckSelfUpdate(command domain.RuntimeSelfUpdateCommand) 
 		return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "self-update target role is not authorized")
 	}
 	return nil
+}
+
+func validRuntimeComponentLifecycleProfile(role domain.ComponentRole, actual domain.RuntimeComponentLifecycleProfile) bool {
+	return actual.IsFixedFor(role)
 }
 
 func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
@@ -169,9 +176,9 @@ func (p RuntimePolicy) checkComponentProcessIdentity(identity domain.RuntimeComm
 		return nil
 	}
 	role := domain.ComponentRole(cfg.Labels[domain.LabelComponentRole])
-	expected, ok := domain.FixedComponentProcessIdentity(role)
-	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) ||
-		!slices.Equal(cfg.CapDrop, []string{"ALL"}) || len(cfg.CapAdd) != 0 || cfg.NoNewPrivileges == nil || !*cfg.NoNewPrivileges {
+	expected, ok := domain.FixedRuntimeComponentLifecycleProfile(role)
+	if !ok || cfg.User != expected.ProcessIdentity.User || cfg.UsernsMode != expected.UsernsMode ||
+		!slices.Equal(cfg.CapDrop, expected.CapDrop) || len(cfg.CapAdd) != 0 || cfg.NoNewPrivileges == nil || *cfg.NoNewPrivileges != expected.NoNewPrivileges {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnmanagedMutation, "component process identity is not allowed")
 	}
 	return nil

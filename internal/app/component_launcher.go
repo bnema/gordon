@@ -125,11 +125,11 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
 		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
-		identity, ok := domain.FixedComponentProcessIdentity(role)
+		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(role)
 		if !ok {
-			return ComponentLaunchPlan{}, fmt.Errorf("component process identity is required")
+			return ComponentLaunchPlan{}, fmt.Errorf("component runtime profile is required")
 		}
-		hash := componentRoleLaunchHash(componentID, image, plan.InternalNetwork, identity)
+		hash := componentRoleLaunchHash(componentID, image, plan.InternalNetwork, profile)
 		labels, err := BuildComponentLabels(ComponentLabelRequest{Role: role, Version: version, Generation: checkpoint.ComponentGeneration, MigrationID: checkpoint.MigrationID, Owner: "migration", DesiredStateHash: hash})
 		if err != nil {
 			return ComponentLaunchPlan{}, err
@@ -167,8 +167,9 @@ func componentLaunchHash(componentID, image, network string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func componentRoleLaunchHash(componentID, image, network string, identity domain.ComponentProcessIdentity) string {
-	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User + "\x00" + domain.ContainerVolumeOptionChown))
+func componentRoleLaunchHash(componentID, image, network string, profile domain.RuntimeComponentLifecycleProfile) string {
+	contract := strings.Join(profile.CapDrop, ",") + "\x00" + fmt.Sprint(profile.NoNewPrivileges) + "\x00" + strings.Join(profile.GenerationVolumeOptions, ",")
+	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + profile.ProcessIdentity.User + "\x00" + profile.UsernsMode + "\x00" + contract))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -273,13 +274,13 @@ func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, h
 
 func (l *RuntimeComponentLauncher) CreateInternalNetwork(ctx context.Context, plan ComponentLaunchPlan) error {
 	componentID := fmt.Sprintf("gordon-network-%s-g%d", plan.MigrationID, plan.Generation)
-	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: componentID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.Generation, plan.MigrationID, "network")
+	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: componentID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.MigrationID, "network")
 }
 func (l *RuntimeComponentLauncher) StartComponent(ctx context.Context, component ComponentLaunchComponent) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleStart, component, componentGeneration(component), componentMigrationID(component), "start")
+	return l.send(ctx, domain.RuntimeComponentLifecycleStart, component, componentMigrationID(component), "start")
 }
 func (l *RuntimeComponentLauncher) StopComponent(ctx context.Context, component ComponentLaunchComponent) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleStop, component, componentGeneration(component), componentMigrationID(component), "stop")
+	return l.send(ctx, domain.RuntimeComponentLifecycleStop, component, componentMigrationID(component), "stop")
 }
 
 // SelfUpdateRuntime forwards a cutover command to the currently proven runtime
@@ -316,7 +317,7 @@ func (l *RuntimeComponentLauncher) TransferRuntimeCommandChannel(ctx context.Con
 	}
 	// This acknowledgement is deliberately sent through the old authority. It
 	// authorizes bootstrap but does not claim the handoff succeeded.
-	if err := l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentGeneration(component), componentMigrationID(component), "transfer-channel"); err != nil {
+	if err := l.send(ctx, domain.RuntimeComponentLifecycleTransferChannel, component, componentMigrationID(component), "transfer-channel"); err != nil {
 		return err
 	}
 	target, err := l.handoff(ctx, component)
@@ -474,19 +475,40 @@ func runtimeHandoffContainerSummary(containers []domain.RuntimeContainerState) s
 	return strings.Join(states, ",")
 }
 func (l *RuntimeComponentLauncher) CheckComponentHealth(ctx context.Context, component ComponentLaunchComponent) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleHealth, component, componentGeneration(component), componentMigrationID(component), "health")
+	return l.send(ctx, domain.RuntimeComponentLifecycleHealth, component, componentMigrationID(component), "health")
 }
 func (l *RuntimeComponentLauncher) ConnectEdgeToAppNetwork(ctx context.Context, component ComponentLaunchComponent, network string) error {
 	component.InternalNetwork = network
-	return l.send(ctx, domain.RuntimeComponentLifecycleConnect, component, componentGeneration(component), componentMigrationID(component), "connect")
+	return l.send(ctx, domain.RuntimeComponentLifecycleConnect, component, componentMigrationID(component), "connect")
 }
 func (l *RuntimeComponentLauncher) RemovePreparedComponent(ctx context.Context, component ComponentLaunchComponent) error {
-	return l.send(ctx, domain.RuntimeComponentLifecycleRemove, component, componentGeneration(component), componentMigrationID(component), "remove")
+	return l.send(ctx, domain.RuntimeComponentLifecycleRemove, component, componentMigrationID(component), "remove")
 }
 
-func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.RuntimeComponentLifecycleAction, component ComponentLaunchComponent, generation uint64, migrationID, operation string) error {
+func newComponentLifecycleCommand(component ComponentLaunchComponent, action domain.RuntimeComponentLifecycleAction, migrationID, operation string, requestedAt time.Time) (domain.RuntimeSelfUpdateCommand, error) {
+	generation := componentGeneration(component)
 	if generation == 0 || strings.TrimSpace(migrationID) == "" {
-		return fmt.Errorf("component lifecycle identity is required")
+		return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle identity is required")
+	}
+	var profile domain.RuntimeComponentLifecycleProfile
+	if action != domain.RuntimeComponentLifecycleEnsureNetwork {
+		var ok bool
+		profile, ok = domain.FixedRuntimeComponentLifecycleProfile(component.Role)
+		if !ok {
+			return domain.RuntimeSelfUpdateCommand{}, fmt.Errorf("component lifecycle profile is required")
+		}
+	}
+	return domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: requestedAt.UTC()},
+		TargetComponentID:      component.ComponentID, TargetComponentRole: component.Role, TargetVersion: component.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
+		LifecycleAction: action, LifecycleProfile: profile, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PortPublishes: append([]domain.ContainerPortPublish(nil), component.PortPublishes...), PreserveVolumes: true,
+	}, nil
+}
+
+func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.RuntimeComponentLifecycleAction, component ComponentLaunchComponent, migrationID, operation string) error {
+	command, err := newComponentLifecycleCommand(component, action, migrationID, operation, l.now())
+	if err != nil {
+		return err
 	}
 	l.mu.RLock()
 	runtime := l.runtime
@@ -494,11 +516,7 @@ func (l *RuntimeComponentLauncher) send(ctx context.Context, action domain.Runti
 	if runtime == nil {
 		return fmt.Errorf("runtime self-update client is required")
 	}
-	result, err := runtime.SelfUpdateRuntime(ctx, domain.RuntimeSelfUpdateCommand{
-		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("migration:" + migrationID + ":" + operation + ":" + component.ComponentID), IdempotencyKey: "migration:" + migrationID + ":" + operation + ":" + component.ComponentID, Generation: generation, SourceComponentID: "gordon-control", RequestedAt: l.now().UTC()},
-		TargetComponentID:      component.ComponentID, TargetComponentRole: component.Role, TargetVersion: component.Labels[domain.LabelComponentVersion], Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:" + migrationID,
-		LifecycleAction: action, DesiredImage: component.Image, DesiredStateHash: component.DesiredStateHash, InternalNetwork: component.InternalNetwork, EnvironmentFile: component.EnvironmentFile, ConfigFile: component.ConfigFile, PortPublishes: append([]domain.ContainerPortPublish(nil), component.PortPublishes...), PreserveVolumes: true,
-	})
+	result, err := runtime.SelfUpdateRuntime(ctx, command)
 	if err != nil {
 		return fmt.Errorf("send component %s command: %w", operation, err)
 	}

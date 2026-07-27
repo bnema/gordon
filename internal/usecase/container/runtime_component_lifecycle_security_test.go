@@ -104,7 +104,7 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 			runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{&container}, nil).Once()
 			runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(&container, nil).Once()
 			manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-			require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
+			require.ErrorIs(t, applyTestComponentLifecycle(manager, t.Context(), command), ErrRuntimePolicyDenied)
 		})
 	}
 }
@@ -269,7 +269,7 @@ func TestRuntimeComponentLifecycleRejectsCrossRoleGenerationVolume(t *testing.T)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
+	require.ErrorIs(t, applyTestComponentLifecycle(manager, t.Context(), command), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHash(t *testing.T) {
@@ -289,7 +289,7 @@ func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHa
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{container}, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, container.ID).Return(container, nil).Once()
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	require.ErrorIs(t, manager.ApplyComponentLifecycle(t.Context(), command), ErrRuntimePolicyDenied)
+	require.ErrorIs(t, applyTestComponentLifecycle(manager, t.Context(), command), ErrRuntimePolicyDenied)
 }
 
 func TestRuntimeComponentLifecycleRejectsUnlabeledGordonNamedWorkload(t *testing.T) {
@@ -298,7 +298,7 @@ func TestRuntimeComponentLifecycleRejectsUnlabeledGordonNamedWorkload(t *testing
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{workload}, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, workload.ID).Return(workload, nil).Once()
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
+	err := applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: testRuntimeCommandIdentity("component-security"), TargetComponentID: "gordon-edge-fixture-g1", TargetComponentRole: domain.ComponentRoleEdge,
 		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStop, PreserveVolumes: true,
 	})
@@ -317,7 +317,7 @@ func TestRuntimeComponentLifecycleStartUsesRoleConfigAndPersistentStorage(t *tes
 	})).Return(&domain.Container{ID: "edge"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "edge").Return(nil).Once()
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
+	err := applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "test", IdempotencyKey: "test", Generation: 2, SourceComponentID: "gordon-control"}, TargetComponentID: "gordon-edge-fixture-g2", TargetComponentRole: domain.ComponentRoleEdge,
 		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g2", ConfigFile: configPath, PortPublishes: []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 18080, ContainerPort: 8081, Protocol: domain.NetworkProtocolTCP}}, PreserveVolumes: true,
 	})
@@ -482,7 +482,7 @@ func TestRuntimeComponentLifecycleRejectsAnotherRolesGeneratedFiles(t *testing.T
 func TestRuntimeComponentLifecycleStartRejectsMissingRoleConfig(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	manager := NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce})
-	err := manager.ApplyComponentLifecycle(context.Background(), domain.RuntimeSelfUpdateCommand{
+	err := applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{
 		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{ID: "test", IdempotencyKey: "test", Generation: 2, SourceComponentID: "gordon-control"}, TargetComponentID: "gordon-edge-fixture-g2", TargetComponentRole: domain.ComponentRoleEdge,
 		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g2", PreserveVolumes: true,
 	})

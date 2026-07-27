@@ -582,7 +582,10 @@ func protoStandaloneServiceState(service *runtimev1.RuntimeStandaloneServiceStat
 }
 
 func domainSelfUpdate(command domain.RuntimeSelfUpdateCommand) *runtimev1.RuntimeSelfUpdateCommand {
-	result := &runtimev1.RuntimeSelfUpdateCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID, TargetComponentRole: string(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: string(command.Policy), PolicyDecisionId: command.PolicyDecisionID, ApprovedBy: command.ApprovedBy, LifecycleAction: string(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentId: command.OldServingComponentID, PreserveVolumes: command.PreserveVolumes}
+	profile := command.LifecycleProfile
+	result := &runtimev1.RuntimeSelfUpdateCommand{Identity: domainIdentity(command.RuntimeCommandIdentity), TargetComponentId: command.TargetComponentID, TargetComponentRole: string(command.TargetComponentRole), CurrentVersion: command.CurrentVersion, TargetVersion: command.TargetVersion, Policy: string(command.Policy), PolicyDecisionId: command.PolicyDecisionID, ApprovedBy: command.ApprovedBy, LifecycleAction: string(command.LifecycleAction), DesiredImage: command.DesiredImage, DesiredStateHash: command.DesiredStateHash, InternalNetwork: command.InternalNetwork, EnvironmentFile: command.EnvironmentFile, ConfigFile: command.ConfigFile, OldServingComponentId: command.OldServingComponentID, PreserveVolumes: command.PreserveVolumes,
+		LifecycleProfile: &runtimev1.RuntimeComponentLifecycleProfile{Uid: int64(profile.ProcessIdentity.UID), Gid: int64(profile.ProcessIdentity.GID), User: profile.ProcessIdentity.User, UsernsMode: profile.UsernsMode, CapDrop: append([]string(nil), profile.CapDrop...), NoNewPrivileges: profile.NoNewPrivileges, GenerationVolumeOptions: append([]string(nil), profile.GenerationVolumeOptions...)},
+	}
 	for _, port := range command.PortPublishes {
 		if !validProtoComponentPort(port) {
 			continue
