@@ -217,7 +217,19 @@ func createPrivateRuntimeCommandClientWithCredentials(target string, dial func(c
 // The application-level bootstrap barrier is the sole owner of transport
 // readiness. It retries only connectability failures; validation and permission
 // failures retain a terminal status and fail closed.
-var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable")
+type privateRuntimeTransportErrorCategory string
+
+const (
+	privateRuntimeTransportInvalidShape       privateRuntimeTransportErrorCategory = "invalid_shape"
+	privateRuntimeTransportSymlinkAncestor    privateRuntimeTransportErrorCategory = "symlink_ancestor"
+	privateRuntimeTransportInvalidNode        privateRuntimeTransportErrorCategory = "invalid_node"
+	privateRuntimeTransportInspectionFailure  privateRuntimeTransportErrorCategory = "inspection_failure"
+	privateRuntimeTransportConnectPermission  privateRuntimeTransportErrorCategory = "connect_permission"
+	privateRuntimeTransportConnectUnavailable privateRuntimeTransportErrorCategory = "connect_unavailable"
+	privateRuntimeTransportUnvalidatedFailure privateRuntimeTransportErrorCategory = "unvalidated_failure"
+)
+
+var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable [category=" + string(privateRuntimeTransportConnectUnavailable) + "]")
 
 func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) error {
 	for {
@@ -228,8 +240,11 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 			}
 			return nil
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if errors.Is(ctxErr, context.DeadlineExceeded) && isTransientPrivateRuntimeTransportError(err) {
+				return boundedPrivateRuntimeTransportUnavailable(ctxErr)
+			}
+			return ctxErr
 		}
 		if errors.Is(err, context.Canceled) {
 			return context.Canceled
@@ -238,12 +253,18 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 			return context.DeadlineExceeded
 		}
 		if !isTransientPrivateRuntimeTransportError(err) {
-			if status.Code(err) == codes.PermissionDenied {
+			if _, ok := errors.AsType[*privateRuntimeTransportValidationStatus](err); ok {
 				return err
 			}
-			return status.Error(codes.PermissionDenied, "private runtime transport is invalid")
+			if errors.Is(err, os.ErrPermission) {
+				return privateRuntimeTransportValidationError(privateRuntimeTransportConnectPermission)
+			}
+			return privateRuntimeTransportValidationError(privateRuntimeTransportUnvalidatedFailure)
 		}
 		if err := retry(ctx); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return boundedPrivateRuntimeTransportUnavailable(err)
+			}
 			return err
 		}
 	}
@@ -251,6 +272,10 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 
 func isTransientPrivateRuntimeTransportError(err error) bool {
 	return errors.Is(err, errPrivateRuntimeTransportUnavailable)
+}
+
+func boundedPrivateRuntimeTransportUnavailable(cause error) error {
+	return fmt.Errorf("%w: %w", errPrivateRuntimeTransportUnavailable, cause)
 }
 
 func waitRuntimeHandoffRetry(ctx context.Context) error {
@@ -273,12 +298,8 @@ func dialValidatedRuntimeSocket(ctx context.Context, path string) (net.Conn, err
 // after the canonical path and socket inode have been validated. This keeps
 // startup retries from widening authority to a missing or replaced node.
 func dialValidatedRuntimeSocketWithDialer(ctx context.Context, path string, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName || pathContainsSymlink(filepath.Dir(path)) {
-		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
-	}
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
-		return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
+	if err := validatePrivateRuntimeSocketPath(path, os.Lstat); err != nil {
+		return nil, err
 	}
 	connection, err := dial(ctx, "unix", path)
 	if err == nil {
@@ -295,7 +316,63 @@ func dialValidatedRuntimeSocketWithDialer(ctx context.Context, path string, dial
 	case validatedRuntimeConnectRetryable:
 		return nil, errPrivateRuntimeTransportUnavailable
 	}
-	return nil, status.Error(codes.PermissionDenied, "private runtime transport is invalid")
+	return nil, privateRuntimeTransportValidationError(privateRuntimeTransportConnectPermission)
+}
+
+// validatePrivateRuntimeSocketPath maps each Lstat result to a value-free
+// category. It deliberately discards path, ownership, and mode details.
+func validatePrivateRuntimeSocketPath(path string, lstat func(string) (os.FileInfo, error)) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName {
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInvalidShape)
+	}
+	if err := validatePrivateRuntimeSocketAncestors(filepath.Dir(path), lstat); err != nil {
+		return err
+	}
+	info, err := lstat(path)
+	if err != nil {
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || info.Mode()&os.ModeSocket == 0 {
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInvalidNode)
+	}
+	return nil
+}
+
+func validatePrivateRuntimeSocketAncestors(path string, lstat func(string) (os.FileInfo, error)) error {
+	current := string(filepath.Separator)
+	for part := range strings.SplitSeq(strings.TrimPrefix(path, string(filepath.Separator)), string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return privateRuntimeTransportValidationError(privateRuntimeTransportSymlinkAncestor)
+		}
+	}
+	return nil
+}
+
+type privateRuntimeTransportValidationStatus struct {
+	category privateRuntimeTransportErrorCategory
+}
+
+func (e *privateRuntimeTransportValidationStatus) Error() string {
+	return e.GRPCStatus().Err().Error()
+}
+
+func (e *privateRuntimeTransportValidationStatus) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, fmt.Sprintf("private runtime transport is invalid [category=%s]", e.category))
+}
+
+func privateRuntimeTransportValidationError(category privateRuntimeTransportErrorCategory) error {
+	return &privateRuntimeTransportValidationStatus{category: category}
 }
 
 type validatedRuntimeConnectErrorCategory uint8

@@ -286,6 +286,171 @@ func TestWaitForPrivateRuntimeTransportStopsPromptlyWhenCanceled(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+func TestDialValidatedRuntimeSocketReportsValueFreeValidationCategories(t *testing.T) {
+	tests := []struct {
+		name         string
+		category     string
+		prepare      func(*testing.T) string
+		connectError error
+		code         codes.Code
+	}{
+		{
+			name:     "relative shape",
+			category: "invalid_shape",
+			prepare: func(*testing.T) string {
+				return filepath.Join("private-fixture", bootstrapRuntimeSocketName)
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "non-canonical shape",
+			category: "invalid_shape",
+			prepare: func(t *testing.T) string {
+				return t.TempDir() + string(filepath.Separator) + "nested" + string(filepath.Separator) + ".." + string(filepath.Separator) + bootstrapRuntimeSocketName
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "invalid basename",
+			category: "invalid_shape",
+			prepare: func(t *testing.T) string {
+				return filepath.Join(t.TempDir(), "wrong.sock")
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "symlink ancestor",
+			category: "symlink_ancestor",
+			prepare: func(t *testing.T) string {
+				root := t.TempDir()
+				ancestor := filepath.Join(root, "private-ancestor")
+				realDirectory := t.TempDir()
+				require.NoError(t, os.Symlink(realDirectory, ancestor))
+				return filepath.Join(ancestor, bootstrapRuntimeSocketName)
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "missing node inspection",
+			category: "inspection_failure",
+			prepare: func(t *testing.T) string {
+				return filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "symlink node",
+			category: "invalid_node",
+			prepare: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+				require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "outside.sock"), path))
+				return path
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:     "non-socket node",
+			category: "invalid_node",
+			prepare: func(t *testing.T) string {
+				path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+				require.NoError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
+				return path
+			},
+			code: codes.PermissionDenied,
+		},
+		{
+			name:         "connect permission",
+			category:     "connect_permission",
+			prepare:      newValidatedRuntimeSocketPath,
+			connectError: os.ErrPermission,
+			code:         codes.PermissionDenied,
+		},
+		{
+			name:         "connect unavailable",
+			category:     "connect_unavailable",
+			prepare:      newValidatedRuntimeSocketPath,
+			connectError: syscall.ECONNREFUSED,
+			code:         codes.Unknown,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.prepare(t)
+			dialCalls := 0
+			_, err := dialValidatedRuntimeSocketWithDialer(t.Context(), path, func(context.Context, string, string) (net.Conn, error) {
+				dialCalls++
+				if tc.category == "connect_permission" {
+					return nil, fmt.Errorf("endpoint=%s uid=12345 mode=0777 value=private-value: %w", path, tc.connectError)
+				}
+				return nil, tc.connectError
+			})
+			require.Error(t, err)
+			assert.Equal(t, tc.code, status.Code(err))
+			assert.Contains(t, err.Error(), "category="+tc.category)
+			assert.NotContains(t, err.Error(), path)
+			assert.NotContains(t, err.Error(), "uid=12345")
+			assert.NotContains(t, err.Error(), "mode=0777")
+			assert.NotContains(t, err.Error(), "value=private-value")
+			if tc.connectError == nil {
+				assert.Zero(t, dialCalls)
+			} else {
+				assert.Equal(t, 1, dialCalls)
+			}
+		})
+	}
+}
+
+func TestValidatePrivateRuntimeSocketPathReportsValueFreeInspectionFailures(t *testing.T) {
+	rootInfo, err := os.Lstat(string(filepath.Separator))
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		path   string
+		failAt string
+	}{
+		{
+			name:   "ancestor permission failure",
+			path:   filepath.Join(string(filepath.Separator), "private-ancestor", bootstrapRuntimeSocketName),
+			failAt: filepath.Join(string(filepath.Separator), "private-ancestor"),
+		},
+		{
+			name:   "node permission failure",
+			path:   filepath.Join(string(filepath.Separator), bootstrapRuntimeSocketName),
+			failAt: filepath.Join(string(filepath.Separator), bootstrapRuntimeSocketName),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePrivateRuntimeSocketPath(tc.path, func(path string) (os.FileInfo, error) {
+				if path == tc.failAt {
+					return nil, os.ErrPermission
+				}
+				return rootInfo, nil
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Contains(t, err.Error(), "category=inspection_failure")
+			assert.NotContains(t, err.Error(), tc.path)
+		})
+	}
+}
+
+func TestPrivateBootstrapRuntimeClientReportsBoundedConnectUnavailable(t *testing.T) {
+	path := newValidatedRuntimeSocketPath(t)
+	_, err := createPrivateBootstrapRuntimeCommandClientWithRetry(t.Context(), RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+		return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
+			return nil, wrappedUnixConnectError(syscall.ECONNREFUSED)
+		})
+	}, func(context.Context) error {
+		return context.DeadlineExceeded
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Contains(t, err.Error(), "wait for private runtime transport")
+	assert.Contains(t, err.Error(), "category=connect_unavailable")
+	assert.NotContains(t, err.Error(), path)
+}
+
 func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *testing.T) {
 	root := t.TempDir()
 	for _, tc := range []struct {
@@ -326,15 +491,44 @@ func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *t
 	}
 }
 
-func TestWaitForPrivateRuntimeTransportRejectsPermissionFailureWithoutRetry(t *testing.T) {
-	err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
-		return nil, os.ErrPermission
-	}, func(context.Context) error {
-		t.Fatal("permission failure must fail closed without retry")
-		return nil
-	})
-	require.Error(t, err)
-	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+func TestWaitForPrivateRuntimeTransportReportsValueFreeTerminalCategories(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		dialErr  error
+		category string
+	}{
+		{
+			name:     "permission failure",
+			dialErr:  fmt.Errorf("endpoint=private uid=12345 mode=0777 value=secret: %w", os.ErrPermission),
+			category: "connect_permission",
+		},
+		{
+			name:     "unvalidated failure",
+			dialErr:  fmt.Errorf("endpoint=private uid=12345 mode=0777 value=secret: %w", syscall.EIO),
+			category: "unvalidated_failure",
+		},
+		{
+			name:     "unclassified permission status",
+			dialErr:  status.Error(codes.PermissionDenied, "endpoint=private uid=12345 mode=0777 value=secret"),
+			category: "unvalidated_failure",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := waitForPrivateRuntimeTransport(t.Context(), func(context.Context) (net.Conn, error) {
+				return nil, tc.dialErr
+			}, func(context.Context) error {
+				t.Fatal("terminal failure must fail closed without retry")
+				return nil
+			})
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Contains(t, err.Error(), "category="+tc.category)
+			assert.NotContains(t, err.Error(), "endpoint=private")
+			assert.NotContains(t, err.Error(), "uid=12345")
+			assert.NotContains(t, err.Error(), "mode=0777")
+			assert.NotContains(t, err.Error(), "value=secret")
+		})
+	}
 }
 
 func TestWaitForPrivateRuntimeTransportDoesNotRetryUnvalidatedConnectErrors(t *testing.T) {
