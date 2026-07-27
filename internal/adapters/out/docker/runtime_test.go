@@ -96,15 +96,29 @@ func TestInspectVolumeOptionsRejectsUntrustedChownBindEvidence(t *testing.T) {
 		mount container.MountPoint
 		binds []string
 	}{
-		"missing":              {mount: mountPoint},
-		"malformed":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U:extra"}},
-		"duplicate":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:U"}},
-		"conflicting":          {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw"}},
-		"bind source":          {mount: mountPoint, binds: []string{"/srv/gordon:/var/lib/gordon:U"}},
-		"unknown option":       {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U,z"}},
-		"destination mismatch": {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other:U"}},
-		"source mismatch":      {mount: mountPoint, binds: []string{"other-volume:/var/lib/gordon:U"}},
-		"read only":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:ro,U"}},
+		"missing":                     {mount: mountPoint},
+		"malformed":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U:extra"}},
+		"duplicate":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:U"}},
+		"conflicting":                 {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw"}},
+		"malformed duplicate":         {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/gordon:rw:extra"}},
+		"alias duplicate":             {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U", "gordon-runtime-migration-g1:/var/lib/other/../gordon:rw"}},
+		"bind source":                 {mount: mountPoint, binds: []string{"/srv/gordon:/var/lib/gordon:U"}},
+		"source traversal":            {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1/../other:/var/lib/gordon:U"}},
+		"unknown option":              {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U,z"}},
+		"destination mismatch":        {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other:U"}},
+		"destination dot alias":       {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/./gordon:U"}},
+		"destination traversal alias": {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/other/../gordon:U"}},
+		"destination slash alias":     {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon/:U"}},
+		"source mismatch":             {mount: mountPoint, binds: []string{"other-volume:/var/lib/gordon:U"}},
+		"read only":                   {mount: mountPoint, binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:ro,U"}},
+		"mount destination alias": {
+			mount: func() container.MountPoint {
+				aliased := mountPoint
+				aliased.Destination = "/var/lib/./gordon"
+				return aliased
+			}(),
+			binds: []string{"gordon-runtime-migration-g1:/var/lib/gordon:U"},
+		},
 		"mount conflict": {
 			mount: func() container.MountPoint {
 				conflicting := mountPoint
@@ -119,6 +133,33 @@ func TestInspectVolumeOptionsRejectsUntrustedChownBindEvidence(t *testing.T) {
 			assert.Nil(t, inspectVolumeOptions(test.mount, test.binds))
 		})
 	}
+}
+
+func TestInspectVolumeOptionsRequiresBindEvidenceForMountModeChown(t *testing.T) {
+	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "U", RW: true}
+
+	assert.Nil(t, inspectVolumeOptions(mountPoint, nil))
+	assert.Nil(t, inspectVolumeOptions(mountPoint, []string{"app-data:/data:rw"}))
+}
+
+func TestInspectVolumeOptionsReconcilesEachMountWithoutDroppingOtherOptions(t *testing.T) {
+	binds := []string{
+		"app-data:/data:U",
+		"config-data:/config:ro",
+		"unrelated:/other:U:malformed",
+	}
+	owned := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", Mode: "delegated", RW: true}
+	unrelated := container.MountPoint{Type: mount.TypeBind, Source: "/host/config", Destination: "/config", Mode: "ro,z", RW: false}
+
+	assert.Equal(t, []string{"delegated", domain.ContainerVolumeOptionChown}, inspectVolumeOptions(owned, binds))
+	assert.Equal(t, []string{"z"}, inspectVolumeOptions(unrelated, binds))
+}
+
+func TestInspectVolumeOptionsIgnoresMalformedChownEvidenceForAnotherDestination(t *testing.T) {
+	mountPoint := container.MountPoint{Type: mount.TypeVolume, Name: "app-data", Destination: "/data", RW: true}
+	binds := []string{"app-data:/data:U", "other:/other:U:malformed"}
+
+	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspectVolumeOptions(mountPoint, binds))
 }
 
 func TestInspectVolumeOptionsLeavesDockerMountWithoutChownUnchanged(t *testing.T) {

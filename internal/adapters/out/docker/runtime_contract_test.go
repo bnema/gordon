@@ -179,6 +179,7 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 			"Created":"2026-05-05T00:00:00Z",
 			"Config":{"Image":"gordon@sha256:fixture","User":"21001:21001","Labels":{"gordon.component.role":"runtime"}},
 			"HostConfig":{
+				"Binds":["gordon-runtime-data-generation-7:/var/lib/gordon:U"],
 				"UsernsMode":"keep-id",
 				"CapDrop":["ALL"],
 				"CapAdd":["NET_BIND_SERVICE"],
@@ -188,7 +189,7 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 			"Mounts":[{
 				"Type":"volume","Name":"gordon-runtime-data-generation-7",
 				"Source":"/rootless-storage/volumes/runtime/_data",
-				"Destination":"/var/lib/gordon","Driver":"local","Mode":"U",
+				"Destination":"/var/lib/gordon","Driver":"local","Mode":"",
 				"RW":true,"Propagation":"rprivate"
 			}],
 			"NetworkSettings":{"Ports":{}}
@@ -214,7 +215,7 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 		Source:      "/rootless-storage/volumes/runtime/_data",
 		Destination: "/var/lib/gordon",
 		Driver:      "local",
-		Mode:        "U",
+		Mode:        "",
 		Propagation: "rprivate",
 		Options:     []string{domain.ContainerVolumeOptionChown},
 		ReadOnly:    false,

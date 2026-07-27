@@ -659,7 +659,15 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 			require.NoError(f.t, bindsErr)
 			var binds []string
 			require.NoError(f.t, json.Unmarshal([]byte(strings.TrimSpace(bindsJSON)), &binds))
-			require.Contains(f.t, binds, volumeName+":/var/lib/gordon:"+domain.ContainerVolumeOptionChown, "%s authoritative create intent must retain exact Podman U", role)
+			expectedBind := volumeName + ":/var/lib/gordon:" + domain.ContainerVolumeOptionChown
+			var stateBinds []string
+			for _, bind := range binds {
+				parts := strings.Split(bind, ":")
+				if len(parts) >= 2 && filepath.Clean(strings.TrimSpace(parts[1])) == "/var/lib/gordon" {
+					stateBinds = append(stateBinds, bind)
+				}
+			}
+			require.Equal(f.t, []string{expectedBind}, stateBinds, "%s authoritative create intent must contain one exact canonical Podman U bind", role)
 			stateProbe := "test \"$(stat -c '%u:%g' /var/lib/gordon)\" = \"" + identity.User + "\"; chmod 0700 /var/lib/gordon; test \"$(stat -c '%a' /var/lib/gordon)\" = 700; state_probe=/var/lib/gordon/.identity-write-check; : >$state_probe; test -r $state_probe; rm $state_probe; test ! -e $state_probe; "
 			if role == "runtime" {
 				accessCommand = stateProbe + "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"

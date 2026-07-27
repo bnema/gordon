@@ -269,10 +269,16 @@ func TestRuntimeComponentLifecycleRejectsUntrustedPodmanHostBindChown(t *testing
 	require.True(t, ok)
 	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 
-	for name, binds := range map[string][]string{
-		"missing U despite owned writable mount": {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:rw"},
-		"malformed U":                            {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,unknown"},
-		"conflicting duplicate":                  {configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U", volumeName + ":/var/lib/gordon:rw"},
+	for name, test := range map[string]struct {
+		binds     []string
+		mountMode string
+	}{
+		"missing U despite owned writable mount": {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:rw"}},
+		"mount mode U without bind evidence":     {binds: []string{configPath + ":/etc/gordon/role.toml:ro"}, mountMode: domain.ContainerVolumeOptionChown},
+		"malformed U":                            {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,unknown"}},
+		"destination traversal alias":            {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/other/../gordon:U"}},
+		"duplicate destination alias":            {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U", volumeName + ":/var/lib/./gordon:rw"}},
+		"conflicting duplicate":                  {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U", volumeName + ":/var/lib/gordon:rw"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
@@ -281,11 +287,11 @@ func TestRuntimeComponentLifecycleRejectsUntrustedPodmanHostBindChown(t *testing
 				require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
 					"Id": "existing", "Name": "/" + command.TargetComponentID, "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
 					"Config":     map[string]any{"Image": "gordon:fixture", "User": identity.User, "Labels": componentLifecycleLabels(command)},
-					"HostConfig": map[string]any{"Binds": binds, "UsernsMode": componentKeepIDMode(identity), "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+					"HostConfig": map[string]any{"Binds": test.binds, "UsernsMode": componentKeepIDMode(identity), "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 					"State":      map[string]any{"Status": "running", "ExitCode": 0},
 					"Mounts": []map[string]any{
 						{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false},
-						{"Type": "volume", "Name": volumeName, "Source": "/home/fixture/.local/share/containers/storage/volumes/" + volumeName + "/_data", "Destination": "/var/lib/gordon", "Mode": "", "RW": true},
+						{"Type": "volume", "Name": volumeName, "Source": "/home/fixture/.local/share/containers/storage/volumes/" + volumeName + "/_data", "Destination": "/var/lib/gordon", "Mode": test.mountMode, "RW": true},
 					},
 					"NetworkSettings": map[string]any{"Ports": map[string]any{}},
 				}))
