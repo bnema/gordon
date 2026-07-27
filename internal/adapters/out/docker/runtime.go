@@ -146,14 +146,15 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if err != nil {
 		return nil, err
 	}
-	volumeOptions, err := canonicalVolumeOptions(config)
+	binds, err := buildVolumeBinds(config, log)
 	if err != nil {
 		return nil, err
 	}
-	if err := r.preflightVolumeOptions(ctx, volumeOptions); err != nil {
-		return nil, err
+	if len(config.VolumeOptions) > 0 {
+		if err := r.preflightVolumeChown(ctx); err != nil {
+			return nil, err
+		}
 	}
-	binds := buildVolumeBindsWithOptions(config, volumeOptions, log)
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -274,55 +275,30 @@ func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPor
 	return nil
 }
 
-func canonicalVolumeOptions(config *domain.ContainerConfig) (map[string][]string, error) {
-	if len(config.VolumeOptions) == 0 {
-		return nil, nil
-	}
-	canonical := make(map[string][]string, len(config.VolumeOptions))
+func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) ([]string, error) {
 	for destination, options := range config.VolumeOptions {
-		if _, writable := config.Volumes[destination]; !writable {
+		if _, writable := config.Volumes[destination]; !writable || !domain.IsContainerVolumeChownOptions(options) {
 			return nil, fmt.Errorf("invalid container volume options")
 		}
-		normalized, ok := domain.CanonicalContainerVolumeOptions(options)
-		if !ok {
-			return nil, fmt.Errorf("invalid container volume options")
-		}
-		canonical[destination] = normalized
 	}
-	return canonical, nil
-}
 
-func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []string {
-	options, err := canonicalVolumeOptions(config)
-	if err != nil {
-		return nil
-	}
-	return buildVolumeBindsWithOptions(config, options, log)
-}
-
-func buildVolumeBindsWithOptions(config *domain.ContainerConfig, volumeOptions map[string][]string, log zerowrap.Logger) []string {
 	binds := make([]string, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
 	for containerPath, volumeName := range config.Volumes {
 		bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
-		if options := volumeOptions[containerPath]; len(options) > 0 {
-			bind += ":" + strings.Join(options, ",")
+		if _, chown := config.VolumeOptions[containerPath]; chown {
+			bind += ":" + domain.ContainerVolumeOptionChown
 		}
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
 	}
 	for containerPath, volumeName := range config.ReadOnlyVolumes {
-		options := append([]string{"ro"}, volumeOptions[containerPath]...)
-		bind := fmt.Sprintf("%s:%s:%s", volumeName, containerPath, strings.Join(options, ","))
-		binds = append(binds, bind)
+		binds = append(binds, fmt.Sprintf("%s:%s:ro", volumeName, containerPath))
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
 	}
-	return binds
+	return binds, nil
 }
 
-func (r *Runtime) preflightVolumeOptions(ctx context.Context, volumeOptions map[string][]string) error {
-	if !containerUsesVolumeOption(volumeOptions, domain.ContainerVolumeOptionChown) {
-		return nil
-	}
+func (r *Runtime) preflightVolumeChown(ctx context.Context) error {
 	version, err := r.runtimeVersion(ctx)
 	if err != nil || runtimeEngineKind(version.Components) != "podman" {
 		return fmt.Errorf("volume ownership option requires rootless Podman")
@@ -332,15 +308,6 @@ func (r *Runtime) preflightVolumeOptions(ctx context.Context, volumeOptions map[
 		return fmt.Errorf("volume ownership option requires rootless Podman")
 	}
 	return nil
-}
-
-func containerUsesVolumeOption(volumeOptions map[string][]string, wanted string) bool {
-	for _, options := range volumeOptions {
-		if slices.Contains(options, wanted) {
-			return true
-		}
-	}
-	return false
 }
 
 func parseVolumeOptions(mode string) []string {

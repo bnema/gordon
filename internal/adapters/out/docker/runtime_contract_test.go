@@ -62,7 +62,9 @@ func TestRuntimeAdapterSerializesExplicitVolumeOptionsWithoutChangingSourceName(
 		VolumeOptions: map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}},
 	}
 
-	assert.Equal(t, []string{"gordon-runtime-fixture-g1:/var/lib/gordon:U"}, buildVolumeBinds(config, zerowrap.FromCtx(t.Context())))
+	binds, err := buildVolumeBinds(config, zerowrap.FromCtx(t.Context()))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gordon-runtime-fixture-g1:/var/lib/gordon:U"}, binds)
 	assert.Equal(t, "gordon-runtime-fixture-g1", config.Volumes["/var/lib/gordon"], "mount options must never be encoded into the volume name")
 }
 

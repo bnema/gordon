@@ -200,7 +200,7 @@ func (p RuntimePolicy) checkContainerVolumeOptions(identity domain.RuntimeComman
 		}
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "registry storage volume options are not allowed")
 	}
-	if !ok || !mounted || actualName != expectedName || len(cfg.VolumeOptions) != 1 || !slices.Equal(cfg.VolumeOptions["/var/lib/gordon"], []string{domain.ContainerVolumeOptionChown}) {
+	if !ok || !mounted || actualName != expectedName || len(cfg.VolumeOptions) != 1 || !domain.IsContainerVolumeChownOptions(cfg.VolumeOptions["/var/lib/gordon"]) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "component generation volume options are not allowed")
 	}
 	return nil
@@ -219,7 +219,7 @@ func expectedComponentGenerationVolume(cfg domain.ContainerConfig, role domain.C
 	if err != nil || parsedGeneration == 0 {
 		return "", false
 	}
-	name := "gordon-" + string(role) + "-" + migrationID + "-g" + generation
+	name := componentGenerationVolumeName(role, migrationID, parsedGeneration)
 	return name, cfg.Name == name
 }
 

@@ -23,6 +23,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+func TestComponentGenerationVolumeNameUsesRoleMigrationAndGeneration(t *testing.T) {
+	assert.Equal(t, "gordon-control-fixture-g7", componentGenerationVolumeName(domain.ComponentRoleControl, "fixture", 7))
+}
+
 func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
@@ -217,7 +221,7 @@ func TestRuntimeComponentLifecycleAcceptsAdapterInspectionMountOptions(t *testin
 			"State": map[string]any{"Status": "running", "ExitCode": 0},
 			"Mounts": []map[string]any{
 				{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false, "Propagation": "rprivate"},
-				{"Type": "volume", "Name": componentGenerationVolumeName(command), "Source": "/rootless/volume", "Destination": "/var/lib/gordon", "Driver": "local", "Mode": domain.ContainerVolumeOptionChown, "RW": true, "Propagation": "rprivate"},
+				{"Type": "volume", "Name": componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation), "Source": "/rootless/volume", "Destination": "/var/lib/gordon", "Driver": "local", "Mode": domain.ContainerVolumeOptionChown, "RW": true, "Propagation": "rprivate"},
 			},
 			"NetworkSettings": map[string]any{"Ports": map[string]any{}},
 		}))

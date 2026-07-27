@@ -67,6 +67,18 @@ func TestParseVolumeOptionsSeparatesAccessFromEngineOptions(t *testing.T) {
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("rw,U"))
 }
 
+func TestBuildVolumeBindsReturnsVolumeOptionValidationErrors(t *testing.T) {
+	config := &domain.ContainerConfig{
+		Volumes:       map[string]string{"/var/lib/gordon": "gordon-runtime-fixture-g1"},
+		VolumeOptions: map[string][]string{"/var/lib/gordon": {"z"}},
+	}
+
+	binds, err := buildVolumeBinds(config, zerowrap.FromCtx(t.Context()))
+
+	require.Error(t, err)
+	assert.Nil(t, binds)
+}
+
 func TestRuntimeVolumeOptionsRequireCanonicalSingletonChown(t *testing.T) {
 	engines := []struct {
 		name            string

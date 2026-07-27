@@ -1229,7 +1229,7 @@ func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command do
 	if command.TargetComponentRole == domain.ComponentRoleEdge {
 		return nil
 	}
-	volumes := map[string]string{"/var/lib/gordon": componentGenerationVolumeName(command)}
+	volumes := map[string]string{"/var/lib/gordon": componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)}
 	if command.TargetComponentRole == domain.ComponentRoleControl && validManagedControlSecretsVolume(strings.TrimSpace(m.policy.ManagedControlSecretsVolume)) {
 		// This name deliberately excludes migration and generation identifiers so
 		// replacing control cannot replace its keyring or password store.
@@ -1238,12 +1238,13 @@ func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command do
 	return volumes
 }
 
-func componentGenerationVolumeName(command domain.RuntimeSelfUpdateCommand) string {
-	return "gordon-" + string(command.TargetComponentRole) + "-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
+func componentGenerationVolumeName(role domain.ComponentRole, migrationID string, generation uint64) string {
+	return "gordon-" + string(role) + "-" + migrationID + "-g" + strconv.FormatUint(generation, 10)
 }
 
 func componentGenerationVolumeOptions(command domain.RuntimeSelfUpdateCommand, volumes map[string]string) map[string][]string {
-	if volumes["/var/lib/gordon"] != componentGenerationVolumeName(command) {
+	name := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	if volumes["/var/lib/gordon"] != name {
 		return nil
 	}
 	return map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}}
