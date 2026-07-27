@@ -135,24 +135,16 @@ func (s *MigrationService) ResumePostHandoff(ctx context.Context) (*MigrationChe
 	return s.Switch(ctx)
 }
 
-// validatePostHandoffRuntimeEndpoint converts the component-visible data-dir
-// path in the checkpoint to the invoking CLI's host data directory. Both the
-// source and translated paths must be the exact migration runtime socket; a
-// checkpoint can therefore never redirect recovery to Docker or Podman.
+// validatePostHandoffRuntimeEndpoint reconstructs the same private endpoint
+// pair used during prepare, then returns only the host side to the recovery
+// transport. The component endpoint remains the durable, non-host-specific
+// checkpoint fact and can never redirect recovery to Docker or Podman.
 func validatePostHandoffRuntimeEndpoint(checkpoint MigrationCheckpoint, dataDir string) (string, error) {
-	componentPath, ok := runtimeBootstrapSocketPath(checkpoint.BootstrapRuntimeEndpoint, componentDataDirectory)
-	if !ok || filepath.Base(filepath.Dir(componentPath)) != checkpoint.MigrationID {
+	endpoints, err := newRuntimeBootstrapEndpoints(checkpoint.BootstrapRuntimeEndpoint, dataDir, checkpoint.MigrationID)
+	if err != nil {
 		return "", fmt.Errorf("invalid post-handoff runtime transport")
 	}
-	root := resolveDataDir(dataDir)
-	if !filepath.IsAbs(root) || strings.TrimSpace(checkpoint.MigrationID) == "" {
-		return "", fmt.Errorf("invalid post-handoff runtime transport")
-	}
-	endpoint := "unix://" + filepath.Join(root, "migration", checkpoint.MigrationID, bootstrapRuntimeSocketName)
-	if _, ok := runtimeBootstrapSocketPath(endpoint, root); !ok {
-		return "", fmt.Errorf("invalid post-handoff runtime transport")
-	}
-	return endpoint, nil
+	return "unix://" + endpoints.hostDialPath(), nil
 }
 
 const maxRecoveryRuntimeEnvBytes int64 = 64 << 10

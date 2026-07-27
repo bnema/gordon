@@ -57,6 +57,33 @@ type MigrationPortBinding struct {
 	Protocol      string `json:"protocol"`
 }
 
+// RuntimeBootstrapEndpoints keeps the component listener and host dial target
+// as separate capabilities. Its fields are deliberately private: the host
+// path must never enter a checkpoint, status response, log, or lifecycle
+// command. Descriptors are reconstructed from validated configuration on each
+// prepare/recovery process.
+type RuntimeBootstrapEndpoints struct {
+	componentEndpointValue string
+	hostMigrationRootValue string
+	hostDialPathValue      string
+	migrationID            string
+}
+
+func (e RuntimeBootstrapEndpoints) componentEndpoint() string { return e.componentEndpointValue }
+func (e RuntimeBootstrapEndpoints) hostDialPath() string      { return e.hostDialPathValue }
+
+func (e RuntimeBootstrapEndpoints) valid() bool {
+	componentPath, ok := runtimeBootstrapSocketPath(e.componentEndpointValue, componentDataDirectory)
+	if !ok || filepath.Base(filepath.Dir(componentPath)) != e.migrationID || !componentLabelValue.MatchString(e.migrationID) {
+		return false
+	}
+	hostRoot := filepath.Clean(e.hostMigrationRootValue)
+	hostPath := filepath.Clean(e.hostDialPathValue)
+	return filepath.IsAbs(hostRoot) && hostRoot == e.hostMigrationRootValue && filepath.Base(hostRoot) == "migration" &&
+		filepath.IsAbs(hostPath) && hostPath == e.hostDialPathValue && hostPath == filepath.Join(hostRoot, e.migrationID, bootstrapRuntimeSocketName) &&
+		!pathContainsSymlink(filepath.Dir(hostPath))
+}
+
 type MigrationCheckpoint struct {
 	MigrationID         string         `json:"migration_id"`
 	SourceVersion       string         `json:"source_version,omitempty"`
@@ -77,6 +104,9 @@ type MigrationCheckpoint struct {
 	BootstrapControlEndpoint   string `json:"bootstrap_control_endpoint,omitempty"`
 	BootstrapRuntimeEndpoint   string `json:"bootstrap_runtime_endpoint,omitempty"`
 	BootstrapEdgeProbeEndpoint string `json:"bootstrap_edge_probe_endpoint,omitempty"`
+	// bootstrapRuntimeEndpoints is process-local and intentionally omitted from
+	// JSON so a host filesystem path cannot become status-visible.
+	bootstrapRuntimeEndpoints RuntimeBootstrapEndpoints
 	// OldServingProbeEndpoint is a fixed literal-loopback endpoint for proving
 	// the retained monolith path. It is metadata only; no dynamic runtime
 	// address or credential is persisted.
@@ -660,7 +690,11 @@ func validCheckpointTopology(checkpoint MigrationCheckpoint) bool {
 			return false
 		}
 	}
-	return checkpoint.BootstrapRuntimeEndpoint == "" || validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings)
+	if checkpoint.BootstrapRuntimeEndpoint == "" {
+		return true
+	}
+	path, ok := runtimeBootstrapSocketPath(checkpoint.BootstrapRuntimeEndpoint, componentDataDirectory)
+	return ok && filepath.Base(filepath.Dir(path)) == checkpoint.MigrationID
 }
 
 func validCheckpointAppliedEdge(checkpoint MigrationCheckpoint) bool {
@@ -743,6 +777,54 @@ func runtimeBootstrapSocketPath(endpoint, dataDir string) (string, bool) {
 	}
 	return path, true
 }
+
+// newRuntimeBootstrapEndpoints translates only the fixed component endpoint
+// into the exact host bind source below <configured data_dir>/migration/<id>.
+// No endpoint text is accepted from status/checkpoint input for the host side.
+func newRuntimeBootstrapEndpoints(componentEndpoint, dataDir, migrationID string) (RuntimeBootstrapEndpoints, error) {
+	componentPath, ok := runtimeBootstrapSocketPath(componentEndpoint, componentDataDirectory)
+	if !ok || filepath.Base(filepath.Dir(componentPath)) != migrationID || !componentLabelValue.MatchString(migrationID) {
+		return RuntimeBootstrapEndpoints{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	dataRoot := strings.TrimSpace(resolveDataDir(dataDir))
+	cleanRoot := filepath.Clean(dataRoot)
+	if dataRoot == "" || !filepath.IsAbs(dataRoot) || dataRoot != cleanRoot || pathContainsSymlink(cleanRoot) {
+		return RuntimeBootstrapEndpoints{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	hostMigrationRoot := filepath.Join(cleanRoot, "migration")
+	hostPath := filepath.Join(hostMigrationRoot, migrationID, bootstrapRuntimeSocketName)
+	endpoints := RuntimeBootstrapEndpoints{componentEndpointValue: componentEndpoint, hostMigrationRootValue: hostMigrationRoot, hostDialPathValue: hostPath, migrationID: migrationID}
+	if !endpoints.valid() {
+		return RuntimeBootstrapEndpoints{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	return endpoints, nil
+}
+
+// pathContainsSymlink rejects every existing symlink in a descriptor path.
+// Missing trailing components are allowed during prepare and are checked again
+// by the dialer after the replacement runtime creates its socket.
+func pathContainsSymlink(path string) bool {
+	clean := filepath.Clean(path)
+	if !filepath.IsAbs(clean) {
+		return true
+	}
+	current := string(filepath.Separator)
+	for part := range strings.SplitSeq(strings.TrimPrefix(clean, string(filepath.Separator)), string(filepath.Separator)) {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			return false
+		}
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func phaseRank(phase MigrationPhase) int {
 	switch phase {
 	case MigrationPhasePlanned:

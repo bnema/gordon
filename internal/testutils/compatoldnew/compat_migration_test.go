@@ -48,6 +48,8 @@ func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
 	for _, removedSharedGroupGate := range []string{"gordon-" + "data", "21" + "900", "--group-" + "add"} {
 		require.NotContains(t, text, removedSharedGroupGate, "rootless migration must not restore shared supplementary group %q", removedSharedGroupGate)
 	}
+	legacySameNamespaceMount := `filepath.Join(f.root, "` + "data" + `") + ":/var/lib/gordon"`
+	require.NotContains(t, text, legacySameNamespaceMount, "authentic handoff fixture must keep host and component data roots distinct")
 }
 
 func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
@@ -187,7 +189,7 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	fixture.assertPreparedEdgeProbeListener()
 	fixture.assertRuntimeBootstrapTransport()
 	fixture.assertRuntimeSocketExclusive()
-	fixture.assertOldMonolithSeesPrivateRuntimeSocket()
+	fixture.assertOldCoordinatorUsesHostRuntimeSocket()
 	fixture.assertAuthenticatedEdgeAttestation()
 
 	// A second prepare is an interruption/retry at the persisted checkpoint
@@ -431,7 +433,7 @@ func (f *realMigrationFixture) startOldMonolith(labels map[string]string) {
 	// Publish every configured legacy listener. The authenticated runtime probe
 	// must recognize these as owned by the running managed monolith rather than
 	// attempting a bind inside the monolith's own network namespace.
-	args := []string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", filepath.Join(f.root, "data") + ":/var/lib/gordon", "--volume", f.socket + ":" + f.socket}
+	args := []string{"run", "--detach", "--replace", "--name", f.old, "--user", "0:0", "--network", f.network, "--publish", fmt.Sprintf("%d:%d", f.port, f.port), "--publish", "15000:15000", "--volume", f.root + ":" + f.root, "--volume", f.socket + ":" + f.socket}
 	for _, variable := range migrationAuthDisabledEnvironment(f.root) {
 		args = append(args, "--env", variable)
 	}
@@ -828,10 +830,13 @@ func (f *realMigrationFixture) assertAuthenticatedEdgeAttestation() {
 	}, 10*time.Second, 50*time.Millisecond, "authenticated edge RPC must persist its matching generation and identity in shared attestation")
 }
 
-func (f *realMigrationFixture) assertOldMonolithSeesPrivateRuntimeSocket() {
+func (f *realMigrationFixture) assertOldCoordinatorUsesHostRuntimeSocket() {
 	f.t.Helper()
-	_, err := podmanOutput(f.ctx, "exec", f.old, "test", "-S", "/var/lib/gordon/migration/migration/runtime-control.sock")
-	require.NoError(f.t, err, "old monolith must see the private Gordon socket at the same in-container path used by the handoff client")
+	hostPath := filepath.Join(f.root, "data", "migration", "migration", "runtime-control.sock")
+	_, err := podmanOutput(f.ctx, "exec", f.old, "test", "-S", hostPath)
+	require.NoError(f.t, err, "old coordinator must dial the configured host migration bind source")
+	_, err = podmanOutput(f.ctx, "exec", f.old, "test", "!", "-e", "/var/lib/gordon/migration/migration/runtime-control.sock")
+	require.NoError(f.t, err, "old coordinator must not see the component namespace socket")
 }
 
 func (f *realMigrationFixture) assertRuntimeSocketExclusive() {

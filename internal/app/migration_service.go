@@ -162,6 +162,11 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 	if checkpoint.BootstrapRuntimeEndpoint == "" {
 		checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("unix://%s", filepath.Join(componentDataDirectory, "migration", checkpoint.MigrationID, bootstrapRuntimeSocketName))
 	}
+	endpoints, err := newRuntimeBootstrapEndpoints(checkpoint.BootstrapRuntimeEndpoint, s.config.Server.DataDir, checkpoint.MigrationID)
+	if err != nil {
+		return err
+	}
+	checkpoint.bootstrapRuntimeEndpoints = endpoints
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
 	}

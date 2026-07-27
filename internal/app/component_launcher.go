@@ -78,8 +78,11 @@ type ComponentLaunchComponent struct {
 	// PortPublishes contains only checkpointed deterministic bindings. During
 	// prepare these are loopback bootstrap/probe bindings; final public
 	// bindings are supplied only by the separately authorized activate action.
-	PortPublishes     []domain.ContainerPortPublish
-	BootstrapEndpoint string
+	PortPublishes []domain.ContainerPortPublish
+	// BootstrapEndpoints is populated only for the replacement runtime. The
+	// component listener and host coordinator dial target cannot be reused as
+	// interchangeable strings.
+	BootstrapEndpoints RuntimeBootstrapEndpoints
 }
 
 func (p ComponentLaunchPlan) Roles() []domain.ComponentRole {
@@ -129,7 +132,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		}
 		component := ComponentLaunchComponent{Role: role, ComponentID: componentID, Image: image, InternalNetwork: plan.InternalNetwork, EnvironmentFile: envByRole[role], ConfigFile: configByRole[role], Labels: labels, DesiredStateHash: hash}
 		if role == domain.ComponentRoleRuntime {
-			component.BootstrapEndpoint = checkpoint.BootstrapRuntimeEndpoint
+			component.BootstrapEndpoints = checkpoint.bootstrapRuntimeEndpoints
 		}
 		if role == domain.ComponentRoleEdge {
 			component.PortPublishes = componentPreparedPorts(checkpoint.PreparedPortBindings, role)
