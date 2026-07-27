@@ -215,7 +215,8 @@ func createPrivateRuntimeCommandClientWithCredentials(target string, dial func(c
 }
 
 // The application-level bootstrap barrier is the sole owner of transport
-// readiness. It retries only connectability failures; validation and permission
+// readiness. It retries connectability failures and the value-free inspection
+// category emitted during socket publication. Structural and connect-permission
 // failures retain a terminal status and fail closed.
 type privateRuntimeTransportErrorCategory string
 
@@ -242,7 +243,7 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			if errors.Is(ctxErr, context.DeadlineExceeded) && isTransientPrivateRuntimeTransportError(err) {
-				return boundedPrivateRuntimeTransportUnavailable()
+				return boundedPrivateRuntimeTransportDeadlineError(err)
 			}
 			if errors.Is(ctxErr, context.DeadlineExceeded) {
 				return context.DeadlineExceeded
@@ -265,24 +266,50 @@ func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Conte
 			return privateRuntimeTransportValidationError(privateRuntimeTransportUnvalidatedFailure)
 		}
 		if retryErr := retry(ctx); retryErr != nil {
-			return canonicalPrivateRuntimeRetryError(retryErr)
+			return canonicalPrivateRuntimeRetryError(retryErr, err)
 		}
 	}
 }
 
 func isTransientPrivateRuntimeTransportError(err error) bool {
-	return errors.Is(err, errPrivateRuntimeTransportUnavailable)
+	if errors.Is(err, errPrivateRuntimeTransportUnavailable) {
+		return true
+	}
+	category, ok := privateRuntimeTransportValidationCategory(err)
+	return ok && category == privateRuntimeTransportInspectionFailure
 }
 
-func canonicalPrivateRuntimeRetryError(err error) error {
+func canonicalPrivateRuntimeRetryError(retryErr, transportErr error) error {
 	switch {
-	case errors.Is(err, context.DeadlineExceeded):
-		return boundedPrivateRuntimeTransportUnavailable()
-	case errors.Is(err, context.Canceled):
+	case errors.Is(retryErr, context.DeadlineExceeded):
+		return boundedPrivateRuntimeTransportDeadlineError(transportErr)
+	case errors.Is(retryErr, context.Canceled):
 		return context.Canceled
 	default:
 		return privateRuntimeTransportValidationError(privateRuntimeTransportUnvalidatedFailure)
 	}
+}
+
+func boundedPrivateRuntimeTransportDeadlineError(err error) error {
+	category, ok := privateRuntimeTransportValidationCategory(err)
+	if ok && category == privateRuntimeTransportInspectionFailure {
+		return boundedPrivateRuntimeInspectionError{}
+	}
+	return boundedPrivateRuntimeTransportUnavailable()
+}
+
+type boundedPrivateRuntimeInspectionError struct{}
+
+func (boundedPrivateRuntimeInspectionError) Error() string {
+	return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure).Error()
+}
+
+func (boundedPrivateRuntimeInspectionError) GRPCStatus() *status.Status {
+	return (&privateRuntimeTransportValidationStatus{category: privateRuntimeTransportInspectionFailure}).GRPCStatus()
+}
+
+func (boundedPrivateRuntimeInspectionError) Unwrap() error {
+	return context.DeadlineExceeded
 }
 
 type boundedPrivateRuntimeTransportError struct{}

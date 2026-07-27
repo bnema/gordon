@@ -254,6 +254,186 @@ func TestWaitForPrivateRuntimeTransportClosesReadinessProbe(t *testing.T) {
 	require.ErrorIs(t, <-closed, io.EOF)
 }
 
+func TestWaitForPrivateRuntimeTransportRetriesInspectionUntilSocketIsPublished(t *testing.T) {
+	root, err := os.MkdirTemp("/tmp", "gordon-inspection-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
+	dataDir := filepath.Join(root, "data")
+	migrationDir := filepath.Join(dataDir, "migration")
+	candidateDir := filepath.Join(migrationDir, "fixture")
+	for _, dir := range []string{dataDir, migrationDir, candidateDir} {
+		require.NoError(t, os.Mkdir(dir, 0o700))
+	}
+	path := filepath.Join(candidateDir, bootstrapRuntimeSocketName)
+	_, initialErr := dialValidatedRuntimeSocket(t.Context(), path)
+	require.Error(t, initialErr)
+	assert.Equal(t, codes.PermissionDenied, status.Code(initialErr))
+	assert.Contains(t, initialErr.Error(), "category=inspection_failure")
+	assert.NotContains(t, initialErr.Error(), path)
+
+	var listener net.Listener
+	t.Cleanup(func() {
+		if listener != nil {
+			_ = listener.Close()
+		}
+	})
+	dialCalls := 0
+	retryCalls := 0
+	err = waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+		dialCalls++
+		return dialValidatedRuntimeSocket(ctx, path)
+	}, func(context.Context) error {
+		retryCalls++
+		if retryCalls < 3 {
+			return nil
+		}
+		var listenErr error
+		listener, listenErr = net.Listen("unix", path)
+		require.NoError(t, listenErr)
+		require.NoError(t, os.Chmod(path, 0o600))
+		info, statErr := os.Lstat(path)
+		require.NoError(t, statErr)
+		assert.NotZero(t, info.Mode()&os.ModeSocket)
+		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+		assert.Equal(t, uint32(os.Geteuid()), info.Sys().(*syscall.Stat_t).Uid)
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
+	assert.Equal(t, 4, dialCalls)
+	assert.Equal(t, 3, retryCalls)
+
+	for _, dir := range []string{dataDir, migrationDir, candidateDir} {
+		info, statErr := os.Lstat(dir)
+		require.NoError(t, statErr)
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+		assert.Equal(t, uint32(os.Geteuid()), info.Sys().(*syscall.Stat_t).Uid)
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportPersistentInspectionStopsWithCanonicalCategory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+	dialCalls := 0
+	retryCalls := 0
+	err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+		dialCalls++
+		return dialValidatedRuntimeSocket(ctx, path)
+	}, func(context.Context) error {
+		retryCalls++
+		if retryCalls == 3 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Contains(t, err.Error(), "category=inspection_failure")
+	assert.NotContains(t, err.Error(), path)
+	assert.Equal(t, 3, dialCalls)
+	assert.Equal(t, 3, retryCalls)
+}
+
+func TestWaitForPrivateRuntimeTransportRerunsSecurityValidationAfterInspection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		category string
+		publish  func(*testing.T, string) string
+	}{
+		{
+			name:     "non-canonical shape",
+			category: "invalid_shape",
+			publish: func(_ *testing.T, root string) string {
+				return filepath.Join(root, "wrong.sock")
+			},
+		},
+		{
+			name:     "symlink ancestor",
+			category: "symlink_ancestor",
+			publish: func(t *testing.T, root string) string {
+				realDir := filepath.Join(root, "real")
+				require.NoError(t, os.Mkdir(realDir, 0o700))
+				linkDir := filepath.Join(root, "linked")
+				require.NoError(t, os.Symlink(realDir, linkDir))
+				return filepath.Join(linkDir, bootstrapRuntimeSocketName)
+			},
+		},
+		{
+			name:     "symlink node",
+			category: "invalid_node",
+			publish: func(t *testing.T, root string) string {
+				candidateDir := filepath.Join(root, "symlink-node")
+				require.NoError(t, os.Mkdir(candidateDir, 0o700))
+				path := filepath.Join(candidateDir, bootstrapRuntimeSocketName)
+				require.NoError(t, os.Symlink(filepath.Join(root, "outside.sock"), path))
+				return path
+			},
+		},
+		{
+			name:     "non-socket node",
+			category: "invalid_node",
+			publish: func(t *testing.T, root string) string {
+				candidateDir := filepath.Join(root, "regular-node")
+				require.NoError(t, os.Mkdir(candidateDir, 0o700))
+				path := filepath.Join(candidateDir, bootstrapRuntimeSocketName)
+				require.NoError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
+				return path
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			initialDir := filepath.Join(root, "initial")
+			require.NoError(t, os.Mkdir(initialDir, 0o700))
+			path := filepath.Join(initialDir, bootstrapRuntimeSocketName)
+			dialCalls := 0
+			retryCalls := 0
+
+			err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+				dialCalls++
+				return dialValidatedRuntimeSocket(ctx, path)
+			}, func(context.Context) error {
+				retryCalls++
+				path = tc.publish(t, root)
+				return nil
+			})
+
+			require.Error(t, err)
+			assert.Equal(t, codes.PermissionDenied, status.Code(err))
+			assert.Contains(t, err.Error(), "category="+tc.category)
+			assert.NotContains(t, err.Error(), root)
+			assert.Equal(t, 2, dialCalls)
+			assert.Equal(t, 1, retryCalls)
+		})
+	}
+}
+
+func TestWaitForPrivateRuntimeTransportInspectionCancellationIsPrompt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), bootstrapRuntimeSocketName)
+	ctx, cancel := context.WithCancel(t.Context())
+	waitStarted := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- waitForPrivateRuntimeTransport(ctx, func(ctx context.Context) (net.Conn, error) {
+			return dialValidatedRuntimeSocket(ctx, path)
+		}, func(waitCtx context.Context) error {
+			close(waitStarted)
+			<-waitCtx.Done()
+			return waitCtx.Err()
+		})
+	}()
+
+	<-waitStarted
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NotContains(t, err.Error(), path)
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("inspection retry did not stop promptly after cancellation")
+	}
+}
+
 func TestWaitForPrivateRuntimeTransportMissingUntilDeadline(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -462,9 +642,6 @@ func TestWaitForPrivateRuntimeTransportRejectsInvalidTransportsWithoutRetry(t *t
 		prepare func(string) error
 	}{
 		{name: "invalid path", path: filepath.Join(root, "wrong.sock")},
-		{name: "missing socket", path: filepath.Join(root, "missing", bootstrapRuntimeSocketName), prepare: func(path string) error {
-			return os.MkdirAll(filepath.Dir(path), 0o700)
-		}},
 		{name: "regular file", path: filepath.Join(root, "regular", bootstrapRuntimeSocketName), prepare: func(path string) error {
 			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return err
