@@ -188,7 +188,7 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 		// expose an unauthenticated listener on a host network interface.
 		checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "127.0.0.1", HostPort: s.config.Server.Port, ContainerPort: s.config.Server.Port, Protocol: "tcp"}, {Role: "edge", HostIP: "127.0.0.1", HostPort: s.config.Server.RegistryPort, ContainerPort: s.config.Server.RegistryPort, Protocol: "tcp"}}
 	}
-	if !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, checkpoint.PreparedPortBindings) {
+	if !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint) {
 		return fmt.Errorf("invalid runtime bootstrap transport")
 	}
 	return nil

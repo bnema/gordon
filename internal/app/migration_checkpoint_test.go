@@ -55,6 +55,24 @@ func TestMigrationCheckpointLoadAndSaveRejectAlternateRuntimeEndpointSpellings(t
 	}
 }
 
+func TestMigrationCheckpointRejectsDeadBootstrapControlEndpointField(t *testing.T) {
+	checkpoint := testMigrationCheckpoint()
+	encoded, err := json.Marshal(checkpoint)
+	require.NoError(t, err)
+	var document map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &document))
+	document["bootstrap_control_endpoint"] = "127.0.0.1:9000"
+	encoded, err = json.Marshal(document)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "checkpoint.json")
+	require.NoError(t, os.WriteFile(path, encoded, 0o600))
+	store, err := NewMigrationCheckpointStore(path)
+	require.NoError(t, err)
+	_, err = store.Load()
+	assert.Error(t, err, "removed checkpoint fields must be rejected rather than silently retained")
+}
+
 func TestMigrationCheckpointDeleteRemovesDurableStateAndIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "private", "checkpoint.json")
 	store, err := NewMigrationCheckpointStore(path)

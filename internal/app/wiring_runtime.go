@@ -89,7 +89,7 @@ type migrationBootstrapTokenValidator struct {
 }
 
 func migrationRuntimeBootstrapConfigured(cfg RuntimeControlConfig) bool {
-	return validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.ListenAddress), nil) || validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.Endpoint), nil)
+	return validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.ListenAddress)) || validBootstrapRuntimeEndpoint(strings.TrimSpace(cfg.Endpoint))
 }
 
 func (v migrationBootstrapTokenValidator) ValidateToken(ctx context.Context, token string, required domain.ComponentScope) (*domain.ComponentIdentity, error) {

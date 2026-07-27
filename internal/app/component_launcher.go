@@ -113,7 +113,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	if err := validateComponentLaunchReferences(checkpoint, envByRole, configByRole); err != nil {
 		return ComponentLaunchPlan{}, err
 	}
-	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint, nil) {
+	if checkpoint.BootstrapRuntimeEndpoint != "" && !validBootstrapRuntimeEndpoint(checkpoint.BootstrapRuntimeEndpoint) {
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid runtime bootstrap transport")
 	}
 	if len(checkpoint.PreparedPortBindings) != 0 && !validPreparedEdgeProbeBindings(checkpoint.BootstrapEdgeProbeEndpoint, checkpoint.PreparedPortBindings) {

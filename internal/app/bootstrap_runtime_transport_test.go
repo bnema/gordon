@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -76,6 +77,21 @@ func TestPostHandoffRecoveryRejectsAlternateRuntimeEndpointSpellings(t *testing.
 			assert.Error(t, err, "recovery must reject %q", alternate.value)
 		})
 	}
+}
+
+func TestRuntimeBootstrapDescriptorStoresOnlyCanonicalRootAndIdentity(t *testing.T) {
+	hostDataDir := t.TempDir()
+	endpoints, err := newRuntimeBootstrapEndpoints("unix:///var/lib/gordon/migration/fixture/runtime-control.sock", hostDataDir, "fixture")
+	require.NoError(t, err)
+
+	descriptorType := reflect.TypeFor[RuntimeBootstrapEndpoints]()
+	fields := make([]string, 0, descriptorType.NumField())
+	for field := range descriptorType.Fields() {
+		fields = append(fields, field.Name)
+	}
+	assert.ElementsMatch(t, []string{"hostDataRootValue", "migrationID"}, fields)
+	assert.Equal(t, "unix:///var/lib/gordon/migration/fixture/runtime-control.sock", endpoints.componentEndpoint())
+	assert.Equal(t, filepath.Join(hostDataDir, "migration", "fixture", bootstrapRuntimeSocketName), endpoints.hostDialPath())
 }
 
 func TestMigrationBootstrapTransportSeparatesHostDialAndComponentEndpoints(t *testing.T) {
