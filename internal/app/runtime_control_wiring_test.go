@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,6 +152,83 @@ func TestPrivateBootstrapRuntimeClientWaitsForConnectableSocketBeforeConstructio
 	require.NoError(t, err)
 	assert.True(t, result.APIReachable)
 	assert.True(t, result.Rootless)
+}
+
+func TestPrivateBootstrapRuntimeClientDoesNotRetryTransportAfterReadinessBarrier(t *testing.T) {
+	var dialCalls atomic.Int32
+	var readinessPeer net.Conn
+	dial := func(context.Context) (net.Conn, error) {
+		if dialCalls.Add(1) == 1 {
+			server, client := net.Pipe()
+			readinessPeer = server
+			return client, nil
+		}
+		return nil, errPrivateRuntimeTransportUnavailable
+	}
+
+	client, err := createPrivateBootstrapRuntimeCommandClientWithRetry(t.Context(), RuntimeControlConfig{Token: "bootstrap-token"}, "passthrough:///runtime-bootstrap", dial, func(context.Context) error {
+		t.Fatal("the connectable endpoint must satisfy the application readiness barrier")
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, readinessPeer.Close())
+	closer := client.(io.Closer)
+	t.Cleanup(func() { require.NoError(t, closer.Close()) })
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err = client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(ctx)
+	require.Error(t, err)
+	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.Less(t, time.Since(started), 500*time.Millisecond, "gRPC calls must not own a second transport-readiness retry loop")
+}
+
+func TestPrivateBootstrapRuntimeClientRejectsMissingTokenBeforeTransportWait(t *testing.T) {
+	_, err := createPrivateBootstrapRuntimeCommandClientWithRetry(t.Context(), RuntimeControlConfig{}, "passthrough:///runtime-bootstrap", func(context.Context) (net.Conn, error) {
+		t.Fatal("invalid credentials must fail before transport readiness")
+		return nil, nil
+	}, func(context.Context) error {
+		t.Fatal("invalid credentials must not enter readiness retries")
+		return nil
+	})
+	require.EqualError(t, err, "private runtime authentication token is required")
+}
+
+func TestPrivateBootstrapRuntimeClientResolvesTokenBeforeTransportWait(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, bootstrapRuntimeSocketName)
+	const (
+		tokenEnv = "GORDON_TEST_RUNTIME_TOKEN"
+		token    = "resolved-bootstrap-token"
+	)
+	t.Setenv(tokenEnv, token)
+	var listener net.Listener
+	var server *grpc.Server
+	retry := func(context.Context) error {
+		t.Setenv(tokenEnv, "")
+		var err error
+		listener, err = net.Listen("unix", path)
+		require.NoError(t, err)
+		server = newAuthenticatedBootstrapRuntimeServer(token)
+		go func() { _ = server.Serve(listener) }()
+		return nil
+	}
+
+	client, err := createPrivateBootstrapRuntimeCommandClientWithRetry(t.Context(), RuntimeControlConfig{TokenEnv: tokenEnv}, "passthrough:///runtime-bootstrap", func(ctx context.Context) (net.Conn, error) {
+		return dialValidatedRuntimeSocket(ctx, path)
+	}, retry)
+	require.NoError(t, err, "client construction must retain the token resolved before transport readiness")
+	closer := client.(io.Closer)
+	t.Cleanup(func() {
+		require.NoError(t, closer.Close())
+		server.Stop()
+		_ = listener.Close()
+	})
+
+	result, err := client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(t.Context())
+	require.NoError(t, err, "the retained token must authenticate protocol calls")
+	assert.True(t, result.APIReachable)
 }
 
 func TestWaitForPrivateRuntimeTransportClosesReadinessProbe(t *testing.T) {

@@ -17,7 +17,6 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -167,7 +166,11 @@ func newRuntimeHandoffDialer(cfg RuntimeControlConfig) RuntimeHandoffDialer {
 }
 
 func createPrivateRuntimeCommandClient(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
-	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial)
+	creds, err := resolvePrivateRuntimeCredentials(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return createPrivateRuntimeCommandClientWithCredentials(target, dial, creds)
 }
 
 func createPrivateBootstrapRuntimeCommandClient(ctx context.Context, cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error)) (out.RuntimeCommandClient, error) {
@@ -175,27 +178,17 @@ func createPrivateBootstrapRuntimeCommandClient(ctx context.Context, cfg Runtime
 }
 
 func createPrivateBootstrapRuntimeCommandClientWithRetry(ctx context.Context, cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) (out.RuntimeCommandClient, error) {
-	if runtimeControlToken(cfg) == "" {
-		return nil, fmt.Errorf("private runtime authentication token is required")
+	creds, err := resolvePrivateRuntimeCredentials(cfg)
+	if err != nil {
+		return nil, err
 	}
 	if err := waitForPrivateRuntimeTransport(ctx, dial, retry); err != nil {
 		return nil, fmt.Errorf("wait for private runtime transport: %w", err)
 	}
-	return createPrivateRuntimeCommandClientWithOptions(cfg, target, dial,
-		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
-		grpc.WithConnectParams(grpc.ConnectParams{
-			Backoff: backoff.Config{
-				BaseDelay:  25 * time.Millisecond,
-				Multiplier: 1.4,
-				Jitter:     0.2,
-				MaxDelay:   100 * time.Millisecond,
-			},
-			MinConnectTimeout: 100 * time.Millisecond,
-		}),
-	)
+	return createPrivateRuntimeCommandClientWithCredentials(target, dial, creds)
 }
 
-func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, target string, dial func(context.Context) (net.Conn, error), extraOptions ...grpc.DialOption) (out.RuntimeCommandClient, error) {
+func resolvePrivateRuntimeCredentials(cfg RuntimeControlConfig) (credentials.PerRPCCredentials, error) {
 	token := runtimeControlToken(cfg)
 	if token == "" {
 		return nil, fmt.Errorf("private runtime authentication token is required")
@@ -204,13 +197,15 @@ func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, targ
 	if err != nil {
 		return nil, fmt.Errorf("create private runtime credentials: %w", err)
 	}
-	dialOptions := []grpc.DialOption{
+	return creds, nil
+}
+
+func createPrivateRuntimeCommandClientWithCredentials(target string, dial func(context.Context) (net.Conn, error), creds credentials.PerRPCCredentials) (out.RuntimeCommandClient, error) {
+	conn, err := grpc.NewClient(target,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return dial(ctx) }),
 		grpc.WithPerRPCCredentials(creds),
-	}
-	dialOptions = append(dialOptions, extraOptions...)
-	conn, err := grpc.NewClient(target, dialOptions...)
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create private runtime client: %w", err)
 	}
@@ -220,9 +215,9 @@ func createPrivateRuntimeCommandClientWithOptions(cfg RuntimeControlConfig, targ
 	return outruntime.NewOwnedClient(context.Background(), conn), nil
 }
 
-// WaitForReady retries ordinary picker errors but deliberately fails gRPC
-// status errors. Keep only ENOENT and ECONNREFUSED transient; validation and
-// permission failures retain a terminal status and fail closed.
+// The application-level bootstrap barrier is the sole owner of transport
+// readiness. It retries only connectability failures; validation and permission
+// failures retain a terminal status and fail closed.
 var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable")
 
 func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) error {

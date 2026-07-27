@@ -388,10 +388,11 @@ const (
 	runtimeHandoffRetryInterval  = 50 * time.Millisecond
 )
 
-// proveRuntimeHandoff retries protocol proof within the startup context shared
-// with handoff target creation and transport readiness. A lifecycle Start
-// acknowledgement means only that Podman started the process; it does not prove
-// gRPC is accepting yet.
+// proveRuntimeHandoff retries post-connect protocol proof within the startup
+// context shared with handoff target creation. Transport connectability has
+// already been established by the application bootstrap barrier; these retries
+// prove the authenticated environment, health service, and actual-state stream
+// are ready. A lifecycle Start acknowledgement proves none of those properties.
 func proveRuntimeHandoff(ctx context.Context, target RuntimeHandoffClient, component ComponentLaunchComponent) error {
 	if target == nil {
 		return fmt.Errorf("replacement runtime client is required")
@@ -441,9 +442,10 @@ func isTransientRuntimeHandoffError(err error) bool {
 	if err == nil {
 		return false
 	}
-	// A gRPC status is the authoritative signal: a replacement runtime that has
-	// not yet bound its bootstrap listener reports codes.Unavailable. Any other
-	// status code is a real failure and must not be retried, even if its message
+	// A gRPC status is the authoritative post-connect service signal. The
+	// bootstrap transport is already connectable, but its RPC services may still
+	// report codes.Unavailable while initialization completes. Any other status
+	// code is a real protocol failure and must not be retried, even if its message
 	// happens to contain a fallback keyword.
 	if st, ok := status.FromError(err); ok {
 		return st.Code() == codes.Unavailable
