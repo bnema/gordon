@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,6 +51,17 @@ func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) 
 	}
 	_, err := NewComponentLaunchPlan(checkpoint)
 	require.Error(t, err)
+}
+
+func TestComponentRoleLaunchHashIncludesGenerationVolumeOwnershipOption(t *testing.T) {
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
+	require.True(t, ok)
+	const componentID = "gordon-runtime-fixture-g1"
+	const image = "example.invalid/gordon:v2"
+	const network = "gordon-internal-fixture-g1"
+	sum := sha256.Sum256([]byte(componentID + "\x00" + image + "\x00" + network + "\x00" + identity.User + "\x00" + domain.ContainerVolumeOptionChown))
+
+	assert.Equal(t, hex.EncodeToString(sum[:]), componentRoleLaunchHash(componentID, image, network, identity))
 }
 
 func TestComponentLauncherPlanIsOrderedAndNoCutover(t *testing.T) {

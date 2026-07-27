@@ -146,6 +146,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if err != nil {
 		return nil, err
 	}
+	if err := r.preflightVolumeOptions(ctx, config); err != nil {
+		return nil, err
+	}
 	binds := buildVolumeBinds(config, log)
 
 	// Create container configuration
@@ -186,7 +189,6 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Resources:      resources,
 		SecurityOpt:    containerSecurityOptions(config.NoNewPrivileges),
 		UsernsMode:     container.UsernsMode(config.UsernsMode),
-		GroupAdd:       config.GroupAdd,
 		CapDrop:        capDrop,
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
@@ -272,15 +274,54 @@ func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []str
 	binds := make([]string, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
 	for containerPath, volumeName := range config.Volumes {
 		bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
+		if options := config.VolumeOptions[containerPath]; len(options) > 0 {
+			bind += ":" + strings.Join(options, ",")
+		}
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
 	}
 	for containerPath, volumeName := range config.ReadOnlyVolumes {
-		bind := fmt.Sprintf("%s:%s:ro", volumeName, containerPath)
+		options := append([]string{"ro"}, config.VolumeOptions[containerPath]...)
+		bind := fmt.Sprintf("%s:%s:%s", volumeName, containerPath, strings.Join(options, ","))
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
 	}
 	return binds
+}
+
+func (r *Runtime) preflightVolumeOptions(ctx context.Context, config *domain.ContainerConfig) error {
+	if !containerUsesVolumeOption(config, domain.ContainerVolumeOptionChown) {
+		return nil
+	}
+	version, err := r.runtimeVersion(ctx)
+	if err != nil || runtimeEngineKind(version.Components) != "podman" {
+		return fmt.Errorf("volume ownership option requires rootless Podman")
+	}
+	info, err := r.runtimeInfo(ctx)
+	if err != nil || !runtimeIsRootless(info.Rootless, info.SecurityOptions) {
+		return fmt.Errorf("volume ownership option requires rootless Podman")
+	}
+	return nil
+}
+
+func containerUsesVolumeOption(config *domain.ContainerConfig, wanted string) bool {
+	for _, options := range config.VolumeOptions {
+		if slices.Contains(options, wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseVolumeOptions(mode string) []string {
+	if strings.TrimSpace(mode) == "" {
+		return nil
+	}
+	options := strings.Split(mode, ",")
+	for index := range options {
+		options[index] = strings.TrimSpace(options[index])
+	}
+	return options
 }
 
 // StartContainer starts a container.
@@ -449,6 +490,7 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 				Driver:      m.Driver,
 				Mode:        m.Mode,
 				Propagation: string(m.Propagation),
+				Options:     parseVolumeOptions(m.Mode),
 				ReadOnly:    !m.RW,
 			})
 		}
@@ -512,6 +554,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 			Driver:      m.Driver,
 			Mode:        m.Mode,
 			Propagation: string(m.Propagation),
+			Options:     parseVolumeOptions(m.Mode),
 			ReadOnly:    !m.RW,
 		})
 	}
@@ -531,7 +574,6 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	}
 	if resp.HostConfig != nil {
 		inspected.UsernsMode = string(resp.HostConfig.UsernsMode)
-		inspected.GroupAdd = slices.Clone(resp.HostConfig.GroupAdd)
 		inspected.CapDrop = slices.Clone(resp.HostConfig.CapDrop)
 		inspected.CapAdd = slices.Clone(resp.HostConfig.CapAdd)
 		inspected.NoNewPrivileges = hasNoNewPrivileges(resp.HostConfig.SecurityOpt)

@@ -103,7 +103,6 @@ func TestRuntime_CreateContainerMapsExplicitIdentityAndSecurity(t *testing.T) {
 		Name:            "gordon-runtime-generation-1",
 		User:            "21001:21001",
 		UsernsMode:      "keep-id",
-		GroupAdd:        []string{"21005"},
 		CapDrop:         []string{"ALL"},
 		CapAdd:          []string{"NET_BIND_SERVICE"},
 		NoNewPrivileges: &noNewPrivileges,
@@ -113,7 +112,6 @@ func TestRuntime_CreateContainerMapsExplicitIdentityAndSecurity(t *testing.T) {
 	hostConfig, ok := createBody["HostConfig"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "keep-id", hostConfig["UsernsMode"])
-	assert.Equal(t, []any{"21005"}, hostConfig["GroupAdd"])
 	assert.Equal(t, []any{"ALL"}, hostConfig["CapDrop"])
 	assert.Equal(t, []any{"CAP_NET_BIND_SERVICE"}, hostConfig["CapAdd"])
 	assert.Equal(t, []any{"no-new-privileges:true"}, hostConfig["SecurityOpt"])
@@ -142,7 +140,6 @@ func TestRuntime_CreateContainerKeepsOrdinaryIdentityDefaults(t *testing.T) {
 	hostConfig, ok := createBody["HostConfig"].(map[string]any)
 	require.True(t, ok)
 	assert.Empty(t, hostConfig["UsernsMode"])
-	assert.Nil(t, hostConfig["GroupAdd"])
 	// Preserve Gordon's existing ordinary-workload hardening default.
 	assert.Equal(t, []any{"no-new-privileges:true"}, hostConfig["SecurityOpt"])
 }

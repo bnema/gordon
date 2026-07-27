@@ -4,15 +4,34 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/bnema/zerowrap"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestContainerDomainCarriesExplicitVolumeOptions(t *testing.T) {
+	configField, ok := reflect.TypeFor[domain.ContainerConfig]().FieldByName("VolumeOptions")
+	require.True(t, ok, "container create config must transport mount options separately from volume names")
+	assert.Equal(t, reflect.TypeFor[map[string][]string](), configField.Type)
+
+	mountField, ok := reflect.TypeFor[domain.ContainerVolumeMount]().FieldByName("Options")
+	require.True(t, ok, "authoritative inspect mounts must expose parsed options")
+	assert.Equal(t, reflect.TypeFor[[]string](), mountField.Type)
+}
+
+func TestContainerDomainHasNoSharedSupplementaryGroupTransport(t *testing.T) {
+	_, configHasGroupAdd := reflect.TypeFor[domain.ContainerConfig]().FieldByName("GroupAdd")
+	assert.False(t, configHasGroupAdd)
+	_, inspectedHasGroupAdd := reflect.TypeFor[domain.Container]().FieldByName("GroupAdd")
+	assert.False(t, inspectedHasGroupAdd)
+}
 
 func TestFixedComponentProcessIdentities(t *testing.T) {
 	tests := []struct {
@@ -35,6 +54,59 @@ func TestFixedComponentProcessIdentities(t *testing.T) {
 	}
 	_, ok := domain.FixedComponentProcessIdentity(domain.ComponentRole("monolith"))
 	assert.False(t, ok)
+}
+
+func TestRuntimeAdapterSerializesExplicitVolumeOptionsWithoutChangingSourceName(t *testing.T) {
+	config := &domain.ContainerConfig{
+		Volumes:       map[string]string{"/var/lib/gordon": "gordon-runtime-fixture-g1"},
+		VolumeOptions: map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}},
+	}
+
+	assert.Equal(t, []string{"gordon-runtime-fixture-g1:/var/lib/gordon:U"}, buildVolumeBinds(config, zerowrap.FromCtx(t.Context())))
+	assert.Equal(t, "gordon-runtime-fixture-g1", config.Volumes["/var/lib/gordon"], "mount options must never be encoded into the volume name")
+}
+
+func TestRuntimeRejectsPodmanVolumeOwnershipOptionBeforeDockerCreate(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		version string
+		info    string
+	}{
+		{name: "Docker", version: `{"Components":[{"Name":"Docker Engine"}]}`, info: `{"Rootless":true,"SecurityOptions":["name=rootless"]}`},
+		{name: "rootful Podman", version: `{"Components":[{"Name":"Podman Engine"}]}`, info: `{"Rootless":false,"SecurityOptions":[]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			created := false
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/version":
+					_, _ = w.Write([]byte(test.version))
+				case "/v1.41/info":
+					_, _ = w.Write([]byte(test.info))
+				case "/v1.41/containers/create":
+					created = true
+					_, _ = w.Write([]byte(`{"Id":"unexpected"}`))
+				case "/v1.41/containers/unexpected/json":
+					_, _ = w.Write([]byte(`{"Id":"unexpected","Config":{},"State":{},"NetworkSettings":{}}`))
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			defer server.Close()
+
+			host := strings.TrimPrefix(server.URL, "http://")
+			cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			_, err = NewRuntimeWithClient(cli).CreateContainer(t.Context(), &domain.ContainerConfig{
+				Image: "gordon:fixture", Name: "gordon-runtime-fixture-g1",
+				Volumes:       map[string]string{"/var/lib/gordon": "gordon-runtime-fixture-g1"},
+				VolumeOptions: map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}},
+			})
+			require.Error(t, err)
+			assert.False(t, created, "unsupported engines must never receive Podman's U option")
+		})
+	}
 }
 
 func TestRuntimeAdapterContractCreateContainer(t *testing.T) {
@@ -106,7 +178,6 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 			"Config":{"Image":"gordon@sha256:fixture","User":"21001:21001","Labels":{"gordon.component.role":"runtime"}},
 			"HostConfig":{
 				"UsernsMode":"keep-id",
-				"GroupAdd":["21005"],
 				"CapDrop":["ALL"],
 				"CapAdd":["NET_BIND_SERVICE"],
 				"SecurityOpt":["no-new-privileges:true"]
@@ -115,8 +186,8 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 			"Mounts":[{
 				"Type":"volume","Name":"gordon-runtime-data-generation-7",
 				"Source":"/rootless-storage/volumes/runtime/_data",
-				"Destination":"/var/lib/gordon","Driver":"local","Mode":"Z",
-				"RW":false,"Propagation":"rprivate"
+				"Destination":"/var/lib/gordon","Driver":"local","Mode":"U",
+				"RW":true,"Propagation":"rprivate"
 			}],
 			"NetworkSettings":{"Ports":{}}
 		}`))
@@ -131,7 +202,6 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "21001:21001", inspected.User)
 	assert.Equal(t, "keep-id", inspected.UsernsMode)
-	assert.Equal(t, []string{"21005"}, inspected.GroupAdd)
 	assert.Equal(t, []string{"ALL"}, inspected.CapDrop)
 	assert.Equal(t, []string{"NET_BIND_SERVICE"}, inspected.CapAdd)
 	assert.True(t, inspected.NoNewPrivileges)
@@ -142,8 +212,9 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 		Source:      "/rootless-storage/volumes/runtime/_data",
 		Destination: "/var/lib/gordon",
 		Driver:      "local",
-		Mode:        "Z",
+		Mode:        "U",
 		Propagation: "rprivate",
-		ReadOnly:    true,
+		Options:     []string{domain.ContainerVolumeOptionChown},
+		ReadOnly:    false,
 	}, inspected.VolumeMounts[0])
 }

@@ -217,7 +217,6 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		Volumes:         m.componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
 		User:            identity.User,
 		UsernsMode:      componentKeepIDMode(identity),
-		GroupAdd:        []string{strconv.Itoa(domain.ComponentDataGID)},
 		CapDrop:         []string{"ALL"},
 		CapAdd:          []string{},
 		NoNewPrivileges: &noNewPrivileges,
@@ -240,6 +239,7 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if err := m.mountMigrationComponentConfigState(command, config); err != nil {
 		return nil, err
 	}
+	config.VolumeOptions = componentGenerationVolumeOptions(command, config.Volumes)
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return nil, err
 	}
@@ -1091,6 +1091,7 @@ func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(conta
 
 type expectedLifecycleMount struct {
 	source   string
+	options  []string
 	readOnly bool
 }
 
@@ -1100,8 +1101,10 @@ func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domai
 		return nil, err
 	}
 	expected := map[string]expectedLifecycleMount{"/etc/gordon/role.toml": {source: configFile, readOnly: true}}
-	for destination, source := range m.componentPersistentVolumes(command) {
-		expected[destination] = expectedLifecycleMount{source: source}
+	persistentVolumes := m.componentPersistentVolumes(command)
+	volumeOptions := componentGenerationVolumeOptions(command, persistentVolumes)
+	for destination, source := range persistentVolumes {
+		expected[destination] = expectedLifecycleMount{source: source, options: volumeOptions[destination]}
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRegistry && strings.TrimSpace(m.policy.RegistryStorageRoot) != "" {
 		expected = map[string]expectedLifecycleMount{
@@ -1152,7 +1155,7 @@ func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[str
 	seen := make(map[string]struct{}, len(actual))
 	for _, mount := range actual {
 		wanted, ok := expected[mount.Destination]
-		if !ok || mount.ReadOnly != wanted.readOnly {
+		if !ok || mount.ReadOnly != wanted.readOnly || !slices.Equal(mount.Options, wanted.options) {
 			return false
 		}
 		if _, duplicate := seen[mount.Destination]; duplicate {
@@ -1173,7 +1176,7 @@ func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[str
 func validExistingComponentIdentity(container *domain.Container, role domain.ComponentRole) bool {
 	identity, ok := domain.FixedComponentProcessIdentity(role)
 	return ok && container != nil && container.User == identity.User && container.UsernsMode == componentKeepIDMode(identity) &&
-		slices.Equal(container.GroupAdd, []string{strconv.Itoa(domain.ComponentDataGID)}) && slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
+		slices.Equal(container.CapDrop, []string{"ALL"}) && len(container.CapAdd) == 0 && container.NoNewPrivileges
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
@@ -1223,20 +1226,27 @@ const managedControlSecretsPath = "/var/lib/gordon/secrets" // #nosec G101 -- fi
 func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[string]string {
 	// Persistent state belongs to explicit named volumes. Edge is stateless;
 	// registry storage is distinct so it can never be removed with a component.
-	name := "gordon-" + string(command.TargetComponentRole) + "-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
 	if command.TargetComponentRole == domain.ComponentRoleEdge {
 		return nil
 	}
-	if command.TargetComponentRole == domain.ComponentRoleRegistry {
-		name = "gordon-registry-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
-	}
-	volumes := map[string]string{"/var/lib/gordon": name}
+	volumes := map[string]string{"/var/lib/gordon": componentGenerationVolumeName(command)}
 	if command.TargetComponentRole == domain.ComponentRoleControl && validManagedControlSecretsVolume(strings.TrimSpace(m.policy.ManagedControlSecretsVolume)) {
 		// This name deliberately excludes migration and generation identifiers so
 		// replacing control cannot replace its keyring or password store.
 		volumes[managedControlSecretsPath] = strings.TrimSpace(m.policy.ManagedControlSecretsVolume)
 	}
 	return volumes
+}
+
+func componentGenerationVolumeName(command domain.RuntimeSelfUpdateCommand) string {
+	return "gordon-" + string(command.TargetComponentRole) + "-" + strings.TrimPrefix(command.PolicyDecisionID, "migration:") + "-g" + strconv.FormatUint(command.Generation, 10)
+}
+
+func componentGenerationVolumeOptions(command domain.RuntimeSelfUpdateCommand, volumes map[string]string) map[string][]string {
+	if volumes["/var/lib/gordon"] != componentGenerationVolumeName(command) {
+		return nil
+	}
+	return map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}}
 }
 
 // componentLifecycleConfigFile permits the dedicated final edge manifest only

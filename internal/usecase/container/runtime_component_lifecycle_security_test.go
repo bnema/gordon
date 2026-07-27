@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,7 +39,16 @@ func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testi
 			require.True(t, ok)
 			assert.Equal(t, identity.User, config.User)
 			assert.Equal(t, "keep-id:uid="+strconv.Itoa(identity.UID)+",gid="+strconv.Itoa(identity.GID), config.UsernsMode)
-			assert.Equal(t, []string{strconv.Itoa(domain.ComponentDataGID)}, config.GroupAdd)
+			if role == domain.ComponentRoleEdge {
+				assert.Empty(t, config.VolumeOptions)
+			} else {
+				assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, config.VolumeOptions["/var/lib/gordon"])
+				assert.Len(t, config.VolumeOptions, 1, "only the role generation named volume may receive U")
+			}
+			for destination := range config.ReadOnlyVolumes {
+				assert.NotContains(t, config.VolumeOptions, destination)
+			}
+			assert.NotContains(t, config.VolumeOptions, managedControlSecretsPath)
 			assert.Equal(t, []string{"ALL"}, config.CapDrop)
 			assert.Empty(t, config.CapAdd)
 			require.NotNil(t, config.NoNewPrivileges)
@@ -56,16 +66,13 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	valid := domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: "keep-id:uid=21003,gid=21003", GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: "keep-id:uid=21003,gid=21003", CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
 	}
 	for name, forge := range map[string]func(*domain.Container){
 		"root user":                 func(c *domain.Container) { c.User = "0:0" },
 		"generic user":              func(c *domain.Container) { c.User = "gordon" },
 		"wrong user namespace":      func(c *domain.Container) { c.UsernsMode = "keep-id" },
-		"missing data group":        func(c *domain.Container) { c.GroupAdd = nil },
-		"wrong data group":          func(c *domain.Container) { c.GroupAdd = []string{"21001"} },
-		"extra supplemental group":  func(c *domain.Container) { c.GroupAdd = []string{strconv.Itoa(domain.ComponentDataGID), "21001"} },
 		"missing capability drop":   func(c *domain.Container) { c.CapDrop = nil },
 		"added capability":          func(c *domain.Container) { c.CapAdd = []string{"NET_BIND_SERVICE"} },
 		"missing no-new-privileges": func(c *domain.Container) { c.NoNewPrivileges = false },
@@ -79,7 +86,6 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			container := valid
-			container.GroupAdd = append([]string(nil), valid.GroupAdd...)
 			container.CapDrop = append([]string(nil), valid.CapDrop...)
 			container.CapAdd = append([]string(nil), valid.CapAdd...)
 			container.VolumeMounts = append([]domain.ContainerVolumeMount(nil), valid.VolumeMounts...)
@@ -93,6 +99,94 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 	}
 }
 
+func TestRuntimePolicyAllowsUOnlyOnExactRoleGenerationVolume(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	identity := testRuntimeCommandIdentity("volume-options")
+	identity.SourceComponentID = "gordon-control"
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedControlSecretsVolume: "gordon-control-secrets-0123456789abcdef"}
+	manager := &runtimeComponentLifecycleManager{policy: policy}
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleStart, configPath)
+	valid, err := manager.componentConfig(command, nil)
+	require.NoError(t, err)
+	require.NoError(t, policy.CheckContainerConfig(identity, "", *valid))
+
+	for name, mutate := range map[string]func(*domain.ContainerConfig){
+		"missing option": func(config *domain.ContainerConfig) { config.VolumeOptions = nil },
+		"wrong option": func(config *domain.ContainerConfig) {
+			config.VolumeOptions["/var/lib/gordon"] = []string{"z"}
+		},
+		"extra option": func(config *domain.ContainerConfig) {
+			config.VolumeOptions["/var/lib/gordon"] = []string{domain.ContainerVolumeOptionChown, "z"}
+		},
+		"option on secret volume": func(config *domain.ContainerConfig) {
+			config.VolumeOptions[managedControlSecretsPath] = []string{domain.ContainerVolumeOptionChown}
+		},
+		"cross-role volume": func(config *domain.ContainerConfig) {
+			config.Volumes["/var/lib/gordon"] = "gordon-runtime-fixture-g1"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := *valid
+			config.Volumes = maps.Clone(valid.Volumes)
+			config.VolumeOptions = cloneVolumeOptions(valid.VolumeOptions)
+			mutate(&config)
+			require.ErrorIs(t, policy.CheckContainerConfig(identity, "", config), ErrRuntimePolicyDenied)
+		})
+	}
+
+	for name, config := range map[string]domain.ContainerConfig{
+		"ordinary workload": {Name: "gordon-app-example", Volumes: map[string]string{"/data": "app-data"}, VolumeOptions: map[string][]string{"/data": {domain.ContainerVolumeOptionChown}}},
+		"monolith":          {Name: "gordon", Volumes: map[string]string{"/var/lib/gordon": "monolith-data"}, VolumeOptions: map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}}},
+		"host bind":         {Volumes: map[string]string{"/data": "/var/lib/gordon/data"}, VolumeOptions: map[string][]string{"/data": {domain.ContainerVolumeOptionChown}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.ErrorIs(t, policy.CheckContainerConfig(identity, "", config), ErrRuntimePolicyDenied)
+		})
+	}
+}
+
+func TestRuntimeComponentLifecycleExistingGenerationVolumeRequiresExactU(t *testing.T) {
+	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
+	require.NoError(t, os.MkdirAll(configDir, 0o700))
+	configPath := filepath.Join(configDir, "control.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[control]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
+	valid := &domain.Container{
+		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		VolumeMounts: []domain.ContainerVolumeMount{
+			{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true},
+			{Type: "volume", Name: "gordon-control-fixture-g1", Destination: "/var/lib/gordon", Options: []string{domain.ContainerVolumeOptionChown}},
+		},
+	}
+	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{Mode: RuntimePolicyModeEnforce}}
+	require.NoError(t, manager.validateExistingLifecycleMounts(valid, command))
+	for name, options := range map[string][]string{
+		"missing": nil,
+		"wrong":   {"z"},
+		"extra":   {domain.ContainerVolumeOptionChown, "z"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			container := *valid
+			container.VolumeMounts = append([]domain.ContainerVolumeMount(nil), valid.VolumeMounts...)
+			container.VolumeMounts[1].Options = options
+			require.ErrorIs(t, manager.validateExistingLifecycleMounts(&container, command), ErrRuntimePolicyDenied)
+		})
+	}
+}
+
+func cloneVolumeOptions(options map[string][]string) map[string][]string {
+	cloned := make(map[string][]string, len(options))
+	for destination, values := range options {
+		cloned[destination] = append([]string(nil), values...)
+	}
+	return cloned
+}
+
 func TestRuntimeComponentLifecycleRejectsCrossRoleGenerationVolume(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
@@ -102,10 +196,10 @@ func TestRuntimeComponentLifecycleRejectsCrossRoleGenerationVolume(t *testing.T)
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
 	container := &domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{
 			{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true},
-			{Type: "volume", Name: "gordon-control-fixture-g1", Destination: "/var/lib/gordon"},
+			{Type: "volume", Name: "gordon-control-fixture-g1", Destination: "/var/lib/gordon", Options: []string{domain.ContainerVolumeOptionChown}},
 		},
 	}
 	runtime := outmocks.NewMockContainerRuntime(t)
@@ -124,7 +218,7 @@ func TestRuntimeComponentLifecycleRejectsExistingContainerWithDifferentDesiredHa
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	container := &domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
 	}
 	container.Labels[domain.LabelComponentDesiredStateHash] = "different"
@@ -199,10 +293,10 @@ func TestRuntimeComponentLifecycleMountsExactSelectedSocketAndValidatesExistingC
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleRuntime)
 	existing := &domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: componentKeepIDMode(identity), GroupAdd: []string{strconv.Itoa(domain.ComponentDataGID)}, CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 	}
 	for destination, source := range config.Volumes {
-		existing.VolumeMounts = append(existing.VolumeMounts, domain.ContainerVolumeMount{Type: "volume", Name: source, Destination: destination})
+		existing.VolumeMounts = append(existing.VolumeMounts, domain.ContainerVolumeMount{Type: "volume", Name: source, Destination: destination, Options: config.VolumeOptions[destination]})
 	}
 	for destination, source := range config.ReadOnlyVolumes {
 		existing.VolumeMounts = append(existing.VolumeMounts, domain.ContainerVolumeMount{Type: "bind", Source: source, Destination: destination, ReadOnly: true})

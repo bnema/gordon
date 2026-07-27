@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,9 +42,50 @@ func TestCompatibilityMigrationProtocolFixture(t *testing.T) {
 	for _, command := range []string{"migrate plan", "migrate prepare", "migrate status", "migrate switch"} {
 		require.Contains(t, text, command, "the real fixture must execute %q", command)
 	}
-	for _, managedPassGate := range []string{"secrets_backend = \"pass\"", "USER gordon", "gordon-data", "21900", "--group-add", "secrets doctor", "--write-check", "gordon-control-secrets-"} {
-		require.Contains(t, text, managedPassGate, "rootless migration must retain authentic managed-pass gate %q", managedPassGate)
+	for _, managedPassGate := range []string{"secrets_backend = \"pass\"", "USER gordon", "ContainerVolumeOptionChown", "chmod 0700", "secrets doctor", "--write-check", "gordon-control-secrets-"} {
+		require.Contains(t, text, managedPassGate, "rootless migration must retain authentic role-owned volume gate %q", managedPassGate)
 	}
+	for _, removedSharedGroupGate := range []string{"gordon-" + "data", "21" + "900", "--group-" + "add"} {
+		require.NotContains(t, text, removedSharedGroupGate, "rootless migration must not restore shared supplementary group %q", removedSharedGroupGate)
+	}
+}
+
+func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+	require.NoError(t, err)
+	makefile := string(contents)
+	podmanStart := strings.Index(makefile, "release-podman-managed-pass-smoke:")
+	dockerStart := strings.Index(makefile, "release-image-smoke:")
+	require.Greater(t, podmanStart, -1)
+	require.Greater(t, dockerStart, podmanStart)
+	podmanGate := makefile[podmanStart:dockerStart]
+	dockerGate := makefile[dockerStart:]
+
+	require.Contains(t, podmanGate, `$$state_volume:/var/lib/gordon:U`)
+	require.Contains(t, podmanGate, "chmod 0700 /var/lib/gordon")
+	require.Contains(t, podmanGate, "identity-write-check")
+	require.Contains(t, podmanGate, `$$tmp/runtime.sock:/run/gordon/runtime.sock:ro`)
+	require.NotContains(t, podmanGate, `$$tmp/runtime.sock:/run/gordon/runtime.sock:ro,U`)
+	require.NotContains(t, podmanGate, `$$volume:/var/lib/gordon/secrets:U`)
+	for _, removed := range []string{"--group-" + "add", "21" + "900"} {
+		require.NotContains(t, podmanGate, removed)
+		require.NotContains(t, dockerGate, removed)
+	}
+	require.NotContains(t, dockerGate, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
+}
+
+func TestSplitImageContractKeepsDistinctRolesWithoutSharedDataGroup(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Dockerfile"))
+	require.NoError(t, err)
+	dockerfile := string(contents)
+	for _, identity := range []string{"21001", "21002", "21003", "21004"} {
+		require.Contains(t, dockerfile, identity)
+	}
+	for _, removed := range []string{"gordon-" + "data", "21" + "900"} {
+		require.NotContains(t, dockerfile, removed)
+	}
+	require.NotContains(t, dockerfile, "addgroup gordon-runtime")
+	require.Contains(t, dockerfile, "chown 21002:21002 /var/lib/gordon/secrets")
 }
 
 // TestMigrationInterruptedRetry documents the release invariant in a stable,
@@ -362,7 +402,7 @@ func (f *realMigrationFixture) componentContainers() ([]PodmanResource, error) {
 func (f *realMigrationFixture) buildCandidateImage() {
 	binary := filepath.Join(f.root, "gordon")
 	require.NoError(f.t, securityBuildCandidate(f.ctx, projectRoot(f.t), binary))
-	containerfile := "FROM docker.io/library/alpine:3.20\nRUN apk add --no-cache ca-certificates pass gnupg && adduser -D -s /bin/sh gordon && addgroup -S -g 21900 gordon-data && mkdir -p /app /data /var/lib/gordon/secrets && chown -R gordon:gordon /app /data && chown root:gordon-data /var/lib/gordon && chmod 0770 /var/lib/gordon && chown 21002:21002 /var/lib/gordon/secrets && chmod 0700 /var/lib/gordon/secrets\nWORKDIR /data\nUSER gordon\nCOPY --chown=gordon:gordon gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
+	containerfile := "FROM docker.io/library/alpine:3.20\nRUN apk add --no-cache ca-certificates pass gnupg && adduser -D -s /bin/sh gordon && mkdir -p /app /data /var/lib/gordon/secrets && chown -R gordon:gordon /app /data && chown 21002:21002 /var/lib/gordon/secrets && chmod 0700 /var/lib/gordon/secrets\nWORKDIR /data\nUSER gordon\nCOPY --chown=gordon:gordon gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
 	require.NoError(f.t, os.WriteFile(filepath.Join(f.root, "Containerfile"), []byte(containerfile), 0o600))
 	policy := filepath.Join(f.root, "policy.json")
 	require.NoError(f.t, os.WriteFile(policy, []byte(`{"default":[{"type":"insecureAcceptAnything"}]}`), 0o600))
@@ -590,10 +630,6 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 		uidGID, execErr := podmanOutput(f.ctx, "exec", name, "sh", "-ec", "printf '%s:%s' \"$(id -u)\" \"$(id -g)\"")
 		require.NoError(f.t, execErr)
 		require.Equal(f.t, identity.User, strings.TrimSpace(uidGID), "%s must execute as its fixed role identity", role)
-		groups, execErr := podmanOutput(f.ctx, "exec", name, "id", "-G")
-		require.NoError(f.t, execErr)
-		require.Contains(f.t, strings.Fields(groups), strconv.Itoa(domain.ComponentDataGID), "%s must receive the shared data group", role)
-
 		user, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{.Config.User}}", name)
 		require.NoError(f.t, inspectErr)
 		require.Equal(f.t, identity.User, strings.TrimSpace(user))
@@ -606,9 +642,6 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 		capAdd, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .HostConfig.CapAdd}}{{.}}{{end}}", name)
 		require.NoError(f.t, inspectErr)
 		require.Empty(f.t, strings.TrimSpace(capAdd), "%s must not add capabilities", role)
-		groupAdd, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .HostConfig.GroupAdd}}", name)
-		require.NoError(f.t, inspectErr)
-		require.JSONEq(f.t, `["21900"]`, strings.TrimSpace(groupAdd))
 		securityOpts, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{json .HostConfig.SecurityOpt}}", name)
 		require.NoError(f.t, inspectErr)
 		require.Contains(f.t, securityOpts, "no-new-privileges", "%s must set no-new-privileges", role)
@@ -616,10 +649,10 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 		var accessCommand string
 		switch role {
 		case "runtime", "control":
-			volume, volumeErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{.Name}}{{end}}{{end}}", name)
+			volume, volumeErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{.Name}}:{{.Mode}}{{end}}{{end}}", name)
 			require.NoError(f.t, volumeErr)
-			require.Equal(f.t, "gordon-"+role+"-migration-g1", strings.TrimSpace(volume), "%s must receive only its generation-scoped state volume", role)
-			stateProbe := "state_probe=/var/lib/gordon/.identity-write-check; : >$state_probe; test -r $state_probe; rm $state_probe; test ! -e $state_probe; "
+			require.Equal(f.t, "gordon-"+role+"-migration-g1:"+domain.ContainerVolumeOptionChown, strings.TrimSpace(volume), "%s generation state must use exact Podman U", role)
+			stateProbe := "test \"$(stat -c '%u:%g' /var/lib/gordon)\" = \"" + identity.User + "\"; chmod 0700 /var/lib/gordon; test \"$(stat -c '%a' /var/lib/gordon)\" = 700; state_probe=/var/lib/gordon/.identity-write-check; : >$state_probe; test -r $state_probe; rm $state_probe; test ! -e $state_probe; "
 			if role == "runtime" {
 				accessCommand = stateProbe + "test -S /var/lib/gordon/migration/migration/runtime-control.sock; test -w /var/lib/gordon/migration/migration"
 			} else {
@@ -629,6 +662,15 @@ func (f *realMigrationFixture) assertPreparedRoleSecurityAndPrivateAccess() {
 			accessCommand = "probe=/var/lib/gordon/registry/.identity-write-check; : >$probe; test -r $probe; rm $probe; test ! -e $probe"
 		case "edge":
 			accessCommand = "test -r /etc/gordon/role.toml; test ! -w /etc/gordon/role.toml; test ! -e /run/gordon/runtime.sock"
+		}
+		mountModes, inspectErr := podmanOutput(f.ctx, "inspect", "--format", "{{range .Mounts}}{{println .Destination .Mode}}{{end}}", name)
+		require.NoError(f.t, inspectErr)
+		for _, line := range strings.Split(strings.TrimSpace(mountModes), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[1] == domain.ContainerVolumeOptionChown {
+				require.Equal(f.t, "/var/lib/gordon", fields[0], "%s must not apply U outside its generation volume", role)
+				require.Contains(f.t, []string{"runtime", "control"}, role)
+			}
 		}
 		require.NoError(f.t, migrationPodman(f.ctx, "exec", name, "sh", "-ec", accessCommand), "%s must have exactly its role-private access", role)
 	}
@@ -975,7 +1017,7 @@ func (f *realMigrationFixture) assertManagedPassVolumePersistence() {
 		f.t.Helper()
 		args := []string{
 			"run", "--rm", "--user", controlIdentity.User, "--userns", controlUserNS,
-			"--group-add", strconv.Itoa(domain.ComponentDataGID), "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 			"--volume", volume + ":/var/lib/gordon/secrets",
 			"--volume", doctorConfig + ":/tmp/gordon-doctor.toml:ro",
 			"--env", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
@@ -986,7 +1028,7 @@ func (f *realMigrationFixture) assertManagedPassVolumePersistence() {
 	}
 
 	require.NoError(f.t, migrationPodman(f.ctx, "stop", control.resourceName()))
-	require.NoError(f.t, migrationPodman(f.ctx, "run", "--rm", "--user", controlIdentity.User, "--userns", controlUserNS, "--group-add", strconv.Itoa(domain.ComponentDataGID), "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", volume+":/var/lib/gordon/secrets:ro", "--entrypoint", "sh", f.image, "-ec", "test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg"), "control startup must initialize the fresh managed-pass volume before doctor runs")
+	require.NoError(f.t, migrationPodman(f.ctx, "run", "--rm", "--user", controlIdentity.User, "--userns", controlUserNS, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--volume", volume+":/var/lib/gordon/secrets:ro", "--entrypoint", "sh", f.image, "-ec", "test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg"), "control startup must initialize the fresh managed-pass volume before doctor runs")
 	runDoctor()
 	require.NoError(f.t, migrationPodman(f.ctx, "start", control.resourceName()))
 	require.Eventually(f.t, func() bool {

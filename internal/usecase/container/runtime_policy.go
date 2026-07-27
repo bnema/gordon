@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/gordon/internal/domain"
@@ -146,6 +147,9 @@ func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdenti
 	if err := p.checkComponentProcessIdentity(identity, routeDomain, cfg); err != nil {
 		return err
 	}
+	if err := p.checkContainerVolumeOptions(identity, routeDomain, cfg); err != nil {
+		return err
+	}
 	if cfg.Privileged {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonPrivilegedDenied, "privileged containers are not allowed")
 	}
@@ -166,11 +170,57 @@ func (p RuntimePolicy) checkComponentProcessIdentity(identity domain.RuntimeComm
 	}
 	role := domain.ComponentRole(cfg.Labels[domain.LabelComponentRole])
 	expected, ok := domain.FixedComponentProcessIdentity(role)
-	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) || !slices.Equal(cfg.GroupAdd, []string{fmt.Sprintf("%d", domain.ComponentDataGID)}) ||
+	if !ok || cfg.User != expected.User || cfg.UsernsMode != componentKeepIDMode(expected) ||
 		!slices.Equal(cfg.CapDrop, []string{"ALL"}) || len(cfg.CapAdd) != 0 || cfg.NoNewPrivileges == nil || !*cfg.NoNewPrivileges {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnmanagedMutation, "component process identity is not allowed")
 	}
 	return nil
+}
+
+func (p RuntimePolicy) checkContainerVolumeOptions(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
+	if cfg.Labels[domain.LabelComponent] != "true" || cfg.Labels[domain.LabelComponentDesiredStateHash] == "" {
+		if len(cfg.VolumeOptions) == 0 {
+			return nil
+		}
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "container volume options are not allowed")
+	}
+	role := domain.ComponentRole(cfg.Labels[domain.LabelComponentRole])
+	if role == domain.ComponentRoleEdge {
+		if len(cfg.VolumeOptions) == 0 {
+			return nil
+		}
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "component volume options are not allowed")
+	}
+
+	expectedName, ok := expectedComponentGenerationVolume(cfg, role)
+	actualName, mounted := cfg.Volumes["/var/lib/gordon"]
+	if role == domain.ComponentRoleRegistry && !mounted {
+		if len(cfg.VolumeOptions) == 0 {
+			return nil
+		}
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "registry storage volume options are not allowed")
+	}
+	if !ok || !mounted || actualName != expectedName || len(cfg.VolumeOptions) != 1 || !slices.Equal(cfg.VolumeOptions["/var/lib/gordon"], []string{domain.ContainerVolumeOptionChown}) {
+		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "component generation volume options are not allowed")
+	}
+	return nil
+}
+
+func expectedComponentGenerationVolume(cfg domain.ContainerConfig, role domain.ComponentRole) (string, bool) {
+	if role != domain.ComponentRoleRuntime && role != domain.ComponentRoleControl && role != domain.ComponentRoleRegistry {
+		return "", false
+	}
+	migrationID := cfg.Labels[domain.LabelComponentMigrationID]
+	generation := cfg.Labels[domain.LabelComponentGeneration]
+	if !componentMigrationID(migrationID) {
+		return "", false
+	}
+	parsedGeneration, err := strconv.ParseUint(generation, 10, 64)
+	if err != nil || parsedGeneration == 0 {
+		return "", false
+	}
+	name := "gordon-" + string(role) + "-" + migrationID + "-g" + generation
+	return name, cfg.Name == name
 }
 
 func (p RuntimePolicy) checkContainerMounts(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {

@@ -546,6 +546,7 @@ func TestRuntimeComponentLifecycleRegistryReusesCanonicalStorage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, storage, component.Volumes["/var/lib/gordon/registry"])
 	assert.Len(t, component.Volumes, 1, "registry must not receive an empty generation volume")
+	assert.Empty(t, component.VolumeOptions, "canonical registry storage is a host bind and must never receive U")
 }
 
 func edgeLifecycleFixture(config string, container *domain.Container) *domain.Container {
@@ -554,7 +555,6 @@ func edgeLifecycleFixture(config string, container *domain.Container) *domain.Co
 	}
 	container.User = "21003:21003"
 	container.UsernsMode = "keep-id:uid=21003,gid=21003"
-	container.GroupAdd = []string{"21900"}
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
 	container.VolumeMounts = []domain.ContainerVolumeMount{{Type: "bind", Source: config, Destination: "/etc/gordon/role.toml", ReadOnly: true}}

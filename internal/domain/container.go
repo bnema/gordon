@@ -14,9 +14,9 @@ type ComponentProcessIdentity struct {
 	User string
 }
 
-// ComponentDataGID is the fixed supplementary group shared by split roles for
-// their explicitly mounted Gordon data volumes.
-const ComponentDataGID = 21900
+// ContainerVolumeOptionChown is Podman's named-volume ownership option. It is
+// authorized only for rootless split-role generation volumes.
+const ContainerVolumeOptionChown = "U"
 
 // FixedComponentProcessIdentity returns the immutable non-root identity for a split role.
 // These identities are used only by rootless split deployments; monolith and ordinary
@@ -52,7 +52,6 @@ type Container struct {
 	VolumeMounts    []ContainerVolumeMount
 	User            string
 	UsernsMode      string
-	GroupAdd        []string
 	CapDrop         []string
 	CapAdd          []string
 	NoNewPrivileges bool
@@ -68,6 +67,7 @@ type ContainerVolumeMount struct {
 	Driver      string
 	Mode        string
 	Propagation string
+	Options     []string
 	ReadOnly    bool
 }
 
@@ -128,22 +128,22 @@ type ContainerConfig struct {
 	Cmd             []string
 	AutoRemove      bool
 	RestartPolicy   string
-	Volumes         map[string]string // map[containerPath]volumeName
-	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
-	NetworkMode     string            // Network to join
-	Hostname        string            // Container hostname for DNS
-	Aliases         []string          // Additional network aliases
-	MemoryLimit     int64             // Memory limit in bytes (0 = no limit)
-	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
-	PidsLimit       int64             // Max number of PIDs (0 = no limit)
-	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
-	Privileged      bool              // Run container with elevated host privileges
-	User            string            // User to run as
-	UsernsMode      string            // User namespace mode; keep-id is only for rootless split roles
-	GroupAdd        []string          // Supplementary groups for explicitly shared mounted data
-	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
-	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults
-	NoNewPrivileges *bool             // nil preserves the runtime hardening default (enabled)
+	Volumes         map[string]string   // map[containerPath]volumeName
+	ReadOnlyVolumes map[string]string   // containerPath -> volumeName (mounted read-only)
+	VolumeOptions   map[string][]string // containerPath -> explicit engine mount options
+	NetworkMode     string              // Network to join
+	Hostname        string              // Container hostname for DNS
+	Aliases         []string            // Additional network aliases
+	MemoryLimit     int64               // Memory limit in bytes (0 = no limit)
+	NanoCPUs        int64               // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit       int64               // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS  bool                // Mount container root filesystem read-only
+	Privileged      bool                // Run container with elevated host privileges
+	User            string              // User to run as
+	UsernsMode      string              // User namespace mode; keep-id is only for rootless split roles
+	CapDrop         []string            // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd          []string            // Linux capabilities to add; nil uses runtime compat defaults
+	NoNewPrivileges *bool               // nil preserves the runtime hardening default (enabled)
 }
 
 // ContainerStatus represents the current state of a container.

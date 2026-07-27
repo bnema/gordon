@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -231,14 +230,13 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 	require.True(t, ok)
 	container.User = identity.User
 	container.UsernsMode = componentKeepIDMode(identity)
-	container.GroupAdd = []string{strconv.Itoa(domain.ComponentDataGID)}
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
 	expected, err := manager.expectedLifecycleMounts(command, command.PortPublishes)
 	require.NoError(t, err)
 	container.VolumeMounts = nil
 	for destination, mount := range expected {
-		actual := domain.ContainerVolumeMount{Destination: destination, ReadOnly: mount.readOnly}
+		actual := domain.ContainerVolumeMount{Destination: destination, Options: mount.options, ReadOnly: mount.readOnly}
 		if filepath.IsAbs(mount.source) {
 			actual.Type, actual.Source = "bind", mount.source
 		} else {
@@ -288,7 +286,7 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 					_ = json.NewEncoder(w).Encode(map[string]any{
 						"Id": "existing", "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
 						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": "21003:21003", "Labels": componentLifecycleLabels(command)},
-						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "GroupAdd": []string{"21900"}, "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "CapDrop": []string{"ALL"}, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 						"State":           map[string]any{"Status": "running", "ExitCode": 0},
 						"Mounts":          []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "RW": false}},
 						"NetworkSettings": map[string]any{"Ports": map[string]any{}},
