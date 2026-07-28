@@ -16,11 +16,102 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestInspectNamedVolumeChownEvidenceAcceptsOnlyCanonicalPodmanMode(t *testing.T) {
+	assert.True(t, inspectNamedVolumeChownEvidence("gordon-runtime-migration-g1", []string{
+		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
+	}))
+}
+
+func TestInspectNamedVolumeChownEvidenceRejectsModeVariants(t *testing.T) {
+	expected := "gordon-runtime-migration-g1"
+	variants := map[string][]string{
+		"missing":                 nil,
+		"bare create mode":        {expected + ":/var/lib/gordon:U"},
+		"subset":                  {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev"},
+		"superset":                {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
+		"reordered":               {expected + ":/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"},
+		"duplicate token":         {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"},
+		"lowercase alias":         {expected + ":/var/lib/gordon:u,rprivate,nosuid,nodev,rbind"},
+		"extra access flag":       {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"},
+		"bind source":             {"/srv/gordon:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other volume":            {"other-volume:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other destination":       {expected + ":/data:U,rprivate,nosuid,nodev,rbind"},
+		"destination alias":       {expected + ":/var/lib/./gordon:U,rprivate,nosuid,nodev,rbind"},
+		"duplicate bind":          {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"conflicting destination": {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", expected + ":/var/lib/gordon:rw"},
+	}
+	for name, binds := range variants {
+		t.Run(name, func(t *testing.T) {
+			assert.False(t, inspectNamedVolumeChownEvidence(expected, binds))
+		})
+	}
+}
+
+func TestExactInspectedGenerationMountRequiresCanonicalGenerationVolume(t *testing.T) {
+	tests := map[string]func(*domain.Container){
+		"non-generation name": func(container *domain.Container) {
+			container.Name = "gordon-runtime-other-g1"
+		},
+		"wrong volume": func(container *domain.Container) {
+			container.VolumeMounts[0].Name = "other-volume"
+		},
+		"bind mount": func(container *domain.Container) {
+			container.VolumeMounts[0].Type = string(mount.TypeBind)
+		},
+		"read only": func(container *domain.Container) {
+			container.VolumeMounts[0].ReadOnly = true
+		},
+		"wrong destination": func(container *domain.Container) {
+			container.VolumeMounts[0].Destination = "/data"
+		},
+		"existing mount option": func(container *domain.Container) {
+			container.VolumeMounts[0].Options = []string{"delegated"}
+		},
+		"edge role": func(container *domain.Container) {
+			container.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleEdge)
+			container.Name = "gordon-edge-migration-g1"
+			container.VolumeMounts[0].Name = container.Name
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			inspected := nativeIdentityGenerationContainer()
+			mutate(inspected)
+			expectedName, ok := inspectedGenerationVolumeName(inspected)
+			if !ok {
+				assert.False(t, inspectNamedVolumeChownEvidence("unused", []string{
+					inspected.VolumeMounts[0].Name + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
+				}))
+				return
+			}
+			_, ok = exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func nativeIdentityGenerationContainer() *domain.Container {
+	return &domain.Container{
+		ID:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Name: "gordon-runtime-migration-g1",
+		Labels: map[string]string{
+			domain.LabelComponent:            "true",
+			domain.LabelComponentRole:        string(domain.ComponentRoleRuntime),
+			domain.LabelComponentMigrationID: "migration",
+			domain.LabelComponentGeneration:  "1",
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Type: string(mount.TypeVolume), Name: "gordon-runtime-migration-g1", Destination: "/var/lib/gordon",
+		}},
+	}
+}
 
 func TestRuntimeInspectTrustsNativeBoundingCapsNullDespiteCompatibleSubset(t *testing.T) {
 	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

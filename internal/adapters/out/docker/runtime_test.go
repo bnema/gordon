@@ -69,90 +69,28 @@ func TestParseVolumeOptionsSeparatesAccessFromEngineOptions(t *testing.T) {
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, parseVolumeOptions("rw,U"))
 }
 
-func TestNormalizeInspectedGenerationVolumeChownAcceptsOnlyCanonicalPodmanMode(t *testing.T) {
+func TestNormalizeInspectedGenerationVolumeChownAppliesColocatedProof(t *testing.T) {
 	inspected := canonicalGenerationContainer()
-	normalizeInspectedGenerationVolumeChown(inspected, []string{
-		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
-	}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
+	normalizeInspectedGenerationVolumeChown(inspected, nativePodmanIdentityResult{
+		boundingCapsNull:        true,
+		generationVolumeChownOK: true,
+	}, true)
 
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
 }
 
-func TestNormalizeInspectedGenerationVolumeChownRejectsModeVariants(t *testing.T) {
-	variants := map[string][]string{
-		"missing":                 nil,
-		"bare create mode":        {"gordon-runtime-migration-g1:/var/lib/gordon:U"},
-		"subset":                  {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev"},
-		"superset":                {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
-		"reordered":               {"gordon-runtime-migration-g1:/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"},
-		"duplicate token":         {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"},
-		"lowercase alias":         {"gordon-runtime-migration-g1:/var/lib/gordon:u,rprivate,nosuid,nodev,rbind"},
-		"extra access flag":       {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"},
-		"bind source":             {"/srv/gordon:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
-		"other volume":            {"other-volume:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
-		"other destination":       {"gordon-runtime-migration-g1:/data:U,rprivate,nosuid,nodev,rbind"},
-		"destination alias":       {"gordon-runtime-migration-g1:/var/lib/./gordon:U,rprivate,nosuid,nodev,rbind"},
-		"duplicate bind":          {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", "gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
-		"conflicting destination": {"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", "gordon-runtime-migration-g1:/var/lib/gordon:rw"},
+func TestNormalizeInspectedGenerationVolumeChownRequiresColocatedProof(t *testing.T) {
+	tests := map[string]nativePodmanIdentityResult{
+		"proof absent": {boundingCapsNull: true, generationVolumeChownOK: true},
+		"bounding caps unproved": {generationVolumeChownOK: true},
+		"bind proof absent": {boundingCapsNull: true},
 	}
-	for name, binds := range variants {
+	for name, proof := range tests {
 		t.Run(name, func(t *testing.T) {
 			inspected := canonicalGenerationContainer()
-			normalizeInspectedGenerationVolumeChown(inspected, binds, nativePodmanSecurityProof{boundingCapsNull: true}, true)
+			ok := name != "proof absent"
+			normalizeInspectedGenerationVolumeChown(inspected, proof, ok)
 			assert.Nil(t, inspected.VolumeMounts[0].Options)
-		})
-	}
-}
-
-func TestNormalizeInspectedGenerationVolumeChownRequiresNativeProofAndExactGenerationMount(t *testing.T) {
-	tests := map[string]func(*domain.Container) (nativePodmanSecurityProof, bool){
-		"proof absent": func(_ *domain.Container) (nativePodmanSecurityProof, bool) { return nativePodmanSecurityProof{}, false },
-		"bounding caps unproved": func(_ *domain.Container) (nativePodmanSecurityProof, bool) {
-			return nativePodmanSecurityProof{}, true
-		},
-		"noncanonical container ID": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.ID = "existing"
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"non-generation name": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.Name = "gordon-runtime-other-g1"
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"wrong volume": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.VolumeMounts[0].Name = "other-volume"
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"bind mount": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.VolumeMounts[0].Type = string(mount.TypeBind)
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"read only": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.VolumeMounts[0].ReadOnly = true
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"wrong destination": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.VolumeMounts[0].Destination = "/data"
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"existing mount option": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.VolumeMounts[0].Options = []string{"delegated"}
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-		"edge role": func(container *domain.Container) (nativePodmanSecurityProof, bool) {
-			container.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleEdge)
-			container.Name = "gordon-edge-migration-g1"
-			container.VolumeMounts[0].Name = container.Name
-			return nativePodmanSecurityProof{boundingCapsNull: true}, true
-		},
-	}
-	for name, mutate := range tests {
-		t.Run(name, func(t *testing.T) {
-			inspected := canonicalGenerationContainer()
-			proof, ok := mutate(inspected)
-			normalizeInspectedGenerationVolumeChown(inspected, []string{
-				inspected.VolumeMounts[0].Name + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
-			}, proof, ok)
-			assert.NotEqual(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
 		})
 	}
 }
@@ -162,10 +100,10 @@ func TestNormalizeInspectedGenerationVolumeChownPreservesOtherMountOptions(t *te
 	inspected.VolumeMounts = append(inspected.VolumeMounts, domain.ContainerVolumeMount{
 		Type: string(mount.TypeBind), Source: "/host/config", Destination: "/config", Mode: "ro,z", Options: []string{"z"}, ReadOnly: true,
 	})
-	normalizeInspectedGenerationVolumeChown(inspected, []string{
-		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
-		"/host/config:/config:ro",
-	}, nativePodmanSecurityProof{boundingCapsNull: true}, true)
+	normalizeInspectedGenerationVolumeChown(inspected, nativePodmanIdentityResult{
+		boundingCapsNull:        true,
+		generationVolumeChownOK: true,
+	}, true)
 
 	assert.Equal(t, []string{domain.ContainerVolumeOptionChown}, inspected.VolumeMounts[0].Options)
 	assert.Equal(t, []string{"z"}, inspected.VolumeMounts[1].Options)

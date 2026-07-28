@@ -64,9 +64,18 @@ func (caps nativePodmanBoundingCaps) provesExplicitNull() bool {
 	return caps.present && caps.explicitNull && !caps.duplicate
 }
 
-type nativePodmanSecurityProof struct {
-	usernsMode       string
-	boundingCapsNull bool
+type nativePodmanIdentityResult struct {
+	usernsMode              string
+	boundingCapsNull        bool
+	generationVolumeChownOK bool
+}
+
+const canonicalPodmanInspectedChownMode = "U,rprivate,nosuid,nodev,rbind"
+
+type inspectBindSpec struct {
+	source      string
+	destination string
+	hasChown    bool
 }
 
 type nativePodmanIDMappings struct {
@@ -136,23 +145,131 @@ func knownLinuxCapability(capabilityName string) bool {
 	}
 }
 
-func inspectNativePodmanSecurity(
+func inspectNativePodmanIdentity(
 	ctx context.Context,
 	apiClient nativePodmanClient,
 	inspected *domain.Container,
-) (nativePodmanSecurityProof, bool) {
+	binds []string,
+) (nativePodmanIdentityResult, bool) {
 	identity, ok := inspectedComponentIdentity(inspected)
 	if !ok || !canonicalContainerID(inspected.ID) || !localUnixDaemon(apiClient.DaemonHost()) {
-		return nativePodmanSecurityProof{}, false
+		return nativePodmanIdentityResult{}, false
 	}
 	native, ok := fetchNativePodmanInspect(ctx, apiClient, inspected.ID)
 	if !ok || native.HostConfig.IDMappings == nil || !validNativeKeepIDMappings(*native.HostConfig.IDMappings, identity) {
-		return nativePodmanSecurityProof{}, false
+		return nativePodmanIdentityResult{}, false
 	}
-	return nativePodmanSecurityProof{
+	result := nativePodmanIdentityResult{
 		usernsMode:       fmt.Sprintf("keep-id:uid=%d,gid=%d", identity.UID, identity.GID),
 		boundingCapsNull: native.BoundingCaps.provesExplicitNull(),
-	}, true
+	}
+	if expectedName, ok := inspectedGenerationVolumeName(inspected); ok {
+		_, mountOK := exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
+		result.generationVolumeChownOK = mountOK && inspectNamedVolumeChownEvidence(expectedName, binds)
+	}
+	return result, true
+}
+
+func inspectedGenerationVolumeName(inspected *domain.Container) (string, bool) {
+	if _, ok := inspectedComponentIdentity(inspected); !ok {
+		return "", false
+	}
+	expected, ok := domain.MatchComponentGenerationVolume(inspected)
+	if !ok || !canonicalInspectVolumeName(expected) {
+		return "", false
+	}
+	return expected, true
+}
+
+func exactInspectedGenerationMount(mounts []domain.ContainerVolumeMount, expectedName string) (int, bool) {
+	matched := -1
+	for index, mountPoint := range mounts {
+		if !inspectDestinationMayTarget(mountPoint.Destination, "/var/lib/gordon") {
+			continue
+		}
+		if matched >= 0 || mountPoint.Type != "volume" || mountPoint.Name != expectedName ||
+			mountPoint.Destination != "/var/lib/gordon" || mountPoint.ReadOnly || mountPoint.Mode != "" || len(mountPoint.Options) != 0 {
+			return 0, false
+		}
+		matched = index
+	}
+	return matched, matched >= 0
+}
+
+func inspectNamedVolumeChownEvidence(expectedName string, binds []string) bool {
+	matched := false
+	for _, raw := range binds {
+		if !inspectBindMayTarget(raw, "/var/lib/gordon") {
+			continue
+		}
+		if matched {
+			return false
+		}
+		matched = true
+
+		spec, valid := parseInspectBindSpec(raw)
+		if !valid || spec.source != expectedName || spec.destination != "/var/lib/gordon" || !spec.hasChown {
+			return false
+		}
+	}
+	return matched
+}
+
+func inspectBindMayTarget(raw, destination string) bool {
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 {
+		return false
+	}
+	return inspectDestinationMayTarget(parts[1], destination)
+}
+
+func inspectDestinationMayTarget(candidate, destination string) bool {
+	if candidate == destination {
+		return true
+	}
+	candidate = strings.TrimSpace(candidate)
+	return candidate == destination || (path.IsAbs(candidate) && path.Clean(candidate) == destination)
+}
+
+func canonicalInspectVolumeName(name string) bool {
+	if len(name) < 2 || !inspectVolumeNameInitial(name[0]) {
+		return false
+	}
+	for index := 1; index < len(name); index++ {
+		character := name[index]
+		if !inspectVolumeNameInitial(character) && character != '_' && character != '.' && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func inspectVolumeNameInitial(character byte) bool {
+	return character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9'
+}
+
+func canonicalInspectDestination(destination string) bool {
+	return path.IsAbs(destination) && destination != "/" && !strings.Contains(destination, `\`) && path.Clean(destination) == destination
+}
+
+func parseInspectBindSpec(raw string) (inspectBindSpec, bool) {
+	parts := strings.Split(raw, ":")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || !canonicalInspectDestination(parts[1]) {
+		return inspectBindSpec{}, false
+	}
+	if strings.TrimSpace(parts[0]) != parts[0] {
+		return inspectBindSpec{}, false
+	}
+
+	spec := inspectBindSpec{source: parts[0], destination: parts[1]}
+	if len(parts) == 2 {
+		return spec, true
+	}
+	if parts[2] != canonicalPodmanInspectedChownMode {
+		return inspectBindSpec{}, false
+	}
+	spec.hasChown = true
+	return spec, true
 }
 
 func fetchNativePodmanInspect(
