@@ -230,7 +230,66 @@ const (
 	privateRuntimeTransportUnvalidatedFailure privateRuntimeTransportErrorCategory = "unvalidated_failure"
 )
 
-var errPrivateRuntimeTransportUnavailable = errors.New("private runtime transport is unavailable [category=" + string(privateRuntimeTransportConnectUnavailable) + "]")
+// errPrivateRuntimeTransportUnavailable is the canonical transient
+// connect-unavailable marker used by validated-socket dials and errors.Is.
+var errPrivateRuntimeTransportUnavailable = &privateRuntimeTransportError{
+	category: privateRuntimeTransportConnectUnavailable,
+}
+
+type privateRuntimeTransportError struct {
+	category        privateRuntimeTransportErrorCategory
+	deadlineBounded bool
+}
+
+// privateRuntimeTransportGRPCStatus exports PermissionDenied for validation and
+// bounded-inspection errors. Transient connect-unavailable markers intentionally
+// omit gRPC status so direct status.Code stays Unknown while RPC dial failures
+// remain Unavailable.
+type privateRuntimeTransportGRPCStatus struct {
+	*privateRuntimeTransportError
+}
+
+func (e *privateRuntimeTransportGRPCStatus) Unwrap() error {
+	return e.privateRuntimeTransportError
+}
+
+func (e *privateRuntimeTransportGRPCStatus) GRPCStatus() *status.Status {
+	return status.New(codes.PermissionDenied, e.Error())
+}
+
+func (e *privateRuntimeTransportError) Error() string {
+	if e.category == privateRuntimeTransportConnectUnavailable {
+		return fmt.Sprintf("private runtime transport is unavailable [category=%s]", e.category)
+	}
+	return fmt.Sprintf("private runtime transport is invalid [category=%s]", e.category)
+}
+
+func (e *privateRuntimeTransportError) Unwrap() []error {
+	if !e.deadlineBounded {
+		return nil
+	}
+	if e.category == privateRuntimeTransportConnectUnavailable {
+		return []error{errPrivateRuntimeTransportUnavailable, context.DeadlineExceeded}
+	}
+	return []error{context.DeadlineExceeded}
+}
+
+func (e *privateRuntimeTransportError) Is(target error) bool {
+	other, ok := target.(*privateRuntimeTransportError)
+	if !ok {
+		return false
+	}
+	return e.category == other.category && e.deadlineBounded == other.deadlineBounded
+}
+
+func privateRuntimeTransportErrorWithGRPCStatus(category privateRuntimeTransportErrorCategory, deadlineBounded bool) error {
+	return &privateRuntimeTransportGRPCStatus{
+		privateRuntimeTransportError: &privateRuntimeTransportError{
+			category:        canonicalPrivateRuntimeTransportCategory(category),
+			deadlineBounded: deadlineBounded,
+		},
+	}
+}
 
 func waitForPrivateRuntimeTransport(ctx context.Context, dial func(context.Context) (net.Conn, error), retry func(context.Context) error) error {
 	for {
@@ -293,37 +352,20 @@ func canonicalPrivateRuntimeRetryError(retryErr, transportErr error) error {
 func boundedPrivateRuntimeTransportDeadlineError(err error) error {
 	category, ok := privateRuntimeTransportValidationCategory(err)
 	if ok && category == privateRuntimeTransportInspectionFailure {
-		return boundedPrivateRuntimeInspectionError{}
+		return privateRuntimeTransportBoundedDeadlineError(privateRuntimeTransportInspectionFailure)
 	}
-	return boundedPrivateRuntimeTransportUnavailable()
+	return privateRuntimeTransportBoundedDeadlineError(privateRuntimeTransportConnectUnavailable)
 }
 
-type boundedPrivateRuntimeInspectionError struct{}
-
-func (boundedPrivateRuntimeInspectionError) Error() string {
-	return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure).Error()
-}
-
-func (boundedPrivateRuntimeInspectionError) GRPCStatus() *status.Status {
-	return (&privateRuntimeTransportValidationStatus{category: privateRuntimeTransportInspectionFailure}).GRPCStatus()
-}
-
-func (boundedPrivateRuntimeInspectionError) Unwrap() error {
-	return context.DeadlineExceeded
-}
-
-type boundedPrivateRuntimeTransportError struct{}
-
-func (boundedPrivateRuntimeTransportError) Error() string {
-	return errPrivateRuntimeTransportUnavailable.Error()
-}
-
-func (boundedPrivateRuntimeTransportError) Unwrap() []error {
-	return []error{errPrivateRuntimeTransportUnavailable, context.DeadlineExceeded}
-}
-
-func boundedPrivateRuntimeTransportUnavailable() error {
-	return boundedPrivateRuntimeTransportError{}
+func privateRuntimeTransportBoundedDeadlineError(category privateRuntimeTransportErrorCategory) error {
+	category = canonicalPrivateRuntimeTransportCategory(category)
+	if category == privateRuntimeTransportInspectionFailure {
+		return privateRuntimeTransportErrorWithGRPCStatus(category, true)
+	}
+	return &privateRuntimeTransportError{
+		category:        category,
+		deadlineBounded: true,
+	}
 }
 
 func waitRuntimeHandoffRetry(ctx context.Context) error {
@@ -399,28 +441,16 @@ func validatePrivateRuntimeSocketPath(path string, lstat func(string) (os.FileIn
 	return nil
 }
 
-type privateRuntimeTransportValidationStatus struct {
-	category privateRuntimeTransportErrorCategory
-}
-
-func (e *privateRuntimeTransportValidationStatus) Error() string {
-	return e.GRPCStatus().Err().Error()
-}
-
-func (e *privateRuntimeTransportValidationStatus) GRPCStatus() *status.Status {
-	return status.New(codes.PermissionDenied, fmt.Sprintf("private runtime transport is invalid [category=%s]", e.category))
-}
-
 func privateRuntimeTransportValidationError(category privateRuntimeTransportErrorCategory) error {
-	return &privateRuntimeTransportValidationStatus{category: canonicalPrivateRuntimeTransportCategory(category)}
+	return privateRuntimeTransportErrorWithGRPCStatus(category, false)
 }
 
 func privateRuntimeTransportValidationCategory(err error) (privateRuntimeTransportErrorCategory, bool) {
-	validation, ok := errors.AsType[*privateRuntimeTransportValidationStatus](err)
-	if !ok || validation == nil {
+	var transportErr *privateRuntimeTransportError
+	if !errors.As(err, &transportErr) || transportErr == nil {
 		return "", false
 	}
-	return canonicalPrivateRuntimeTransportCategory(validation.category), true
+	return canonicalPrivateRuntimeTransportCategory(transportErr.category), true
 }
 
 func canonicalPrivateRuntimeTransportCategory(category privateRuntimeTransportErrorCategory) privateRuntimeTransportErrorCategory {
