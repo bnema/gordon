@@ -158,6 +158,71 @@ func TestEventDispatcherSingleflightsConcurrentDelivery(t *testing.T) {
 	}
 	require.EqualValues(t, 1, h.calls.Load())
 }
+
+// TestEventDispatcherNoSecondDispatchAfterStaleCompletionRead forces the race where a
+// concurrent delivery observes isCompleted=false, then the first flight marks complete
+// and deletes itself before the second acquires d.mu. Without a recheck under that lock,
+// the second call creates a duplicate flight and redelivers.
+func TestEventDispatcherNoSecondDispatchAfterStaleCompletionRead(t *testing.T) {
+	h := &countingHandler{}
+	firstEnteredEffect := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	secondPassedPreflight := make(chan struct{})
+	secondMayAcquireFlight := make(chan struct{})
+	secondDone := make(chan error, 1)
+
+	blocking := &blockingCountingHandler{
+		countingHandler: h,
+		onFirst: func() {
+			close(firstEnteredEffect)
+			<-releaseFirst
+		},
+	}
+	d := NewEventDispatcher(EventDispatcherOptions{ImagePushed: []out.EventHandler{blocking}})
+	event := componentEvent(domain.ComponentEventTypeRegistryImagePushed, domain.RegistryImagePushedPayload{Repository: "app", Reference: "v1", Digest: "sha256:abc"})
+	event.Origin = domain.ComponentRoleRegistry
+
+	var preflightPass atomic.Int32
+	d.afterCompletedCheck = func() {
+		switch preflightPass.Add(1) {
+		case 1:
+			// First delivery continues into flight creation and parks in the effect.
+			return
+		case 2:
+			// Second delivery saw a stale incomplete preflight read. Park here until the
+			// first flight has marked complete and deleted itself, then continue to mu.
+			close(secondPassedPreflight)
+			<-secondMayAcquireFlight
+		}
+	}
+
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- d.HandleComponentEvent(context.Background(), event) }()
+
+	<-firstEnteredEffect
+	go func() { secondDone <- d.HandleComponentEvent(context.Background(), event) }()
+	<-secondPassedPreflight
+	close(releaseFirst)
+	require.NoError(t, <-firstErr)
+	close(secondMayAcquireFlight)
+	require.NoError(t, <-secondDone)
+	require.EqualValues(t, 1, h.calls.Load(), "stale preflight must not create a second dispatch")
+}
+
+type blockingCountingHandler struct {
+	*countingHandler
+	onFirst func()
+	once    sync.Once
+}
+
+func (h *blockingCountingHandler) Handle(ctx context.Context, event domain.Event) error {
+	h.once.Do(func() {
+		if h.onFirst != nil {
+			h.onFirst()
+		}
+	})
+	return h.countingHandler.Handle(ctx, event)
+}
 func TestEventDispatcherManualIntentSurvivesControlRestart(t *testing.T) {
 	store, err := filesystem.NewComponentEventStore(t.TempDir()+"/component-events.json", 16)
 	require.NoError(t, err)
