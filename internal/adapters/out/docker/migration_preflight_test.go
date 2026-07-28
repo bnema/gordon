@@ -103,7 +103,7 @@ func TestRuntimeProbePublicListenersAcceptsOnlyManagedMonolithAndRejectsRaces(t 
 		responses []string
 		want      bool
 	}{
-		{name: "managed monolith", responses: []string{managed}, want: true},
+		{name: "managed monolith", responses: []string{managed}, want: false},
 		{name: "managed route is not monolith", responses: []string{fmt.Sprintf(`[{"Id":"route","Names":["/gordon-app-example-test"],"State":"running","Labels":{"gordon.managed":"true","gordon.route":"app.example.test"},"Ports":[{"PublicPort":%d,"Type":"tcp"}]}]`, port)}, want: false},
 		{name: "unrelated container", responses: []string{unrelated}, want: false},
 		{name: "container bind race", responses: []string{"[]", unrelated}, want: false},

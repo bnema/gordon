@@ -413,8 +413,9 @@ func secretBackendHealthProbe(cfg Config) func(context.Context) error {
 }
 
 // publicListenerProbe delegates listener ownership to runtime. Control never
-// reads /proc or a container socket: every configured port must be free or be
-// confirmed by runtime as held by a running Gordon-managed monolith.
+// reads /proc or a container socket: every configured port must be free for
+// cold migration. Occupied listeners fail closed even when a managed monolith
+// still holds them; cutover compensation handles a managed old owner later.
 func publicListenerProbe(runtime out.RuntimeEnvironmentProbe, cfg Config) func(context.Context) error {
 	ports := configuredPublicPorts(cfg)
 	return func(ctx context.Context) error {

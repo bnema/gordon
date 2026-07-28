@@ -51,7 +51,7 @@ func NewPostHandoffMigrationRecovery(configPath string) (*MigrationService, erro
 		runtime, ok := client.(RuntimeHandoffClient)
 		if !ok {
 			if closeErr := closeOwnedRuntimeCommandClient(client); closeErr != nil {
-				return nil, fmt.Errorf("replacement Gordon runtime does not support recovery (close failed: %v)", closeErr)
+				return nil, fmt.Errorf("replacement Gordon runtime does not support recovery: %w", closeErr)
 			}
 			return nil, fmt.Errorf("replacement Gordon runtime does not support recovery")
 		}

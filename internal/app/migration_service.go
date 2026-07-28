@@ -178,13 +178,19 @@ func (s *MigrationService) setBootstrapListeners(checkpoint *MigrationCheckpoint
 		return fmt.Errorf("migration checkpoint is required")
 	}
 	if checkpoint.BootstrapRuntimeEndpoint == "" {
-		checkpoint.BootstrapRuntimeEndpoint = fmt.Sprintf("unix://%s", filepath.Join(componentDataDirectory, "migration", checkpoint.MigrationID, bootstrapRuntimeSocketName))
+		endpoints, err := bootstrapRuntimeEndpointsForMigration(s.config.Server.DataDir, checkpoint.MigrationID)
+		if err != nil {
+			return err
+		}
+		checkpoint.BootstrapRuntimeEndpoint = endpoints.componentEndpoint()
+		checkpoint.bootstrapRuntimeEndpoints = endpoints
+	} else {
+		endpoints, err := newRuntimeBootstrapEndpoints(checkpoint.BootstrapRuntimeEndpoint, s.config.Server.DataDir, checkpoint.MigrationID)
+		if err != nil {
+			return err
+		}
+		checkpoint.bootstrapRuntimeEndpoints = endpoints
 	}
-	endpoints, err := newRuntimeBootstrapEndpoints(checkpoint.BootstrapRuntimeEndpoint, s.config.Server.DataDir, checkpoint.MigrationID)
-	if err != nil {
-		return err
-	}
-	checkpoint.bootstrapRuntimeEndpoints = endpoints
 	if checkpoint.BootstrapEdgeProbeEndpoint == "" {
 		checkpoint.BootstrapEdgeProbeEndpoint = "127.0.0.1:18080"
 	}
@@ -345,6 +351,9 @@ func (s *MigrationService) Switch(ctx context.Context) (*MigrationCheckpoint, er
 	// replacement CLI must therefore complete the persisted prepare plan through
 	// the replacement runtime before it attempts any public listener change.
 	if checkpoint.RuntimeChannelTransferred && !checkpoint.PrepareComplete {
+		if err := s.setBootstrapListeners(checkpoint); err != nil {
+			return nil, fmt.Errorf("rebuild post-handoff bootstrap transport: %w", err)
+		}
 		checkpoint, err = s.orchestrator.Prepare(ctx, *checkpoint)
 		if err != nil {
 			return nil, fmt.Errorf("complete post-handoff prepare: %w", err)

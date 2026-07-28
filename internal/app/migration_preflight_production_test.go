@@ -49,7 +49,7 @@ func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
 	runtime := productionPreflightRuntime{report: out.RuntimeEnvironment{
 		Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true,
 		ImagePullable: true, NetworkFeasible: true, DiskSufficient: true,
-	}, listeners: []bool{true}}
+	}, listeners: []bool{false, false}}
 	state := productionPreflightState{snapshot: domain.RuntimeActualStateSnapshot{
 		Generation: 1, StateVersion: "fixture-state", SourceComponentID: "fixture-runtime",
 	}}
@@ -70,6 +70,18 @@ func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
 	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestColdPublicListenerProbeRejectsManagedMonolithOccupiedPorts(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.Port = 18443
+	cfg.Server.RegistryPort = 15000
+	for _, listeners := range [][]bool{{false, false}, {true, false}, {false, true}} {
+		runtime := productionPreflightRuntime{listeners: listeners}
+		assert.Error(t, publicListenerProbe(runtime, cfg)(context.Background()), "occupied listeners must fail cold preflight")
+	}
+	runtime := productionPreflightRuntime{listeners: []bool{true, true}}
+	assert.NoError(t, publicListenerProbe(runtime, cfg)(context.Background()))
+}
+
 func TestProductionPreflightProbesFailClosed(t *testing.T) {
 	dataDir := t.TempDir()
 	registry := filepath.Join(dataDir, "registry")
@@ -88,11 +100,11 @@ func TestProductionPreflightProbesFailClosed(t *testing.T) {
 		assert.Error(t, environmentDirectoryProbe(envDir)(context.Background()))
 		require.NoError(t, os.Remove(link))
 	})
-	t.Run("accepts only runtime-confirmed managed monolith listener", func(t *testing.T) {
+	t.Run("rejects runtime-confirmed managed monolith listener", func(t *testing.T) {
 		cfg := Config{}
 		cfg.Server.Port = 18443
-		runtime := productionPreflightRuntime{listeners: []bool{true}}
-		assert.NoError(t, publicListenerProbe(runtime, cfg)(context.Background()))
+		runtime := productionPreflightRuntime{listeners: []bool{false}}
+		assert.Error(t, publicListenerProbe(runtime, cfg)(context.Background()))
 	})
 	t.Run("rejects unrelated owner and incomplete runtime response", func(t *testing.T) {
 		cfg := Config{}

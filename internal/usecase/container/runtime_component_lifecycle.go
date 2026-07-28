@@ -440,6 +440,9 @@ func (m *runtimeComponentLifecycleManager) completedFinalCutover(ctx context.Con
 	if target == nil || oldRunning || !containerPortsMatch(target, command.FinalPortPublishes) || m.healthContainer(ctx, target) != nil {
 		return false
 	}
+	if err := m.ensureEdgeAppNetworksAttached(ctx, command, target.Name); err != nil {
+		return false
+	}
 	if m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeCommit) != nil {
 		return false
 	}
@@ -503,6 +506,11 @@ func (m *runtimeComponentLifecycleManager) proveRollbackInventory(ctx context.Co
 	old, prepared, err := m.cutoverInventory(ctx, command, containers)
 	if err != nil || prepared == nil || !containerPortsMatch(prepared, command.PortPublishes) {
 		return errors.New("rollback inventory proof failed")
+	}
+	if len(command.EdgeAppNetworks) > 0 {
+		if err := m.ensureEdgeAppNetworksAttached(ctx, command, prepared.Name); err != nil {
+			return errors.New("rollback inventory proof failed")
+		}
 	}
 	if old != nil {
 		if !containerPortsMatch(old, command.FinalPortPublishes) {
@@ -658,6 +666,9 @@ func (m *runtimeComponentLifecycleManager) transferEdgeListener(ctx context.Cont
 	if err := m.healthContainer(ctx, final); err != nil {
 		return failCutover(err)
 	}
+	if err := m.ensureEdgeAppNetworksAttached(ctx, command, command.TargetComponentID); err != nil {
+		return failCutover(err)
+	}
 	// The replacement runtime may continue this handler after stopping a managed
 	// old monolith, whose CLI process can consequently disappear before receiving
 	// a reply. Commit only once the final listener is healthy; a failed commit
@@ -771,6 +782,26 @@ func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx conte
 	return nil
 }
 
+func (m *runtimeComponentLifecycleManager) ensureEdgeAppNetworksAttached(ctx context.Context, command domain.RuntimeSelfUpdateCommand, containerName string) error {
+	if len(command.EdgeAppNetworks) == 0 {
+		return nil
+	}
+	if err := m.connectFinalEdgeAppNetworks(ctx, command, command.EdgeAppNetworks); err != nil {
+		return err
+	}
+	networks, err := m.runtime.ListNetworks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range command.EdgeAppNetworks {
+		network := namedNetwork(networks, name)
+		if !validManagedAppNetwork(network, name, m.policy.ManagedNetworkPrefix) || !slices.Contains(network.Containers, containerName) {
+			return errors.New("edge app network attachment proof failed")
+		}
+	}
+	return nil
+}
+
 func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand, activation edgeActivation, preparedPorts []domain.ContainerPortPublish, final *domain.Container, oldStopped, preparedStopped, preparedRemoved bool) error {
 	var restoreErr error
 	if final != nil {
@@ -785,9 +816,7 @@ func (m *runtimeComponentLifecycleManager) rollbackEdgeActivation(ctx context.Co
 	if oldStopped {
 		restoreErr = errors.Join(restoreErr, m.runtime.StartContainer(ctx, activation.old.ID))
 	}
-	if activation.old == nil {
-		restoreErr = errors.Join(restoreErr, m.proveRollbackInventory(ctx, command))
-	}
+	restoreErr = errors.Join(restoreErr, m.proveRollbackInventory(ctx, command))
 	return restoreErr
 }
 
@@ -800,7 +829,10 @@ func (m *runtimeComponentLifecycleManager) restorePreparedEdge(ctx context.Conte
 	if err != nil {
 		return err
 	}
-	return m.runtime.StartContainer(ctx, restored.ID)
+	if err := m.runtime.StartContainer(ctx, restored.ID); err != nil {
+		return err
+	}
+	return m.connectFinalEdgeAppNetworks(ctx, command, command.EdgeAppNetworks)
 }
 
 func (m *runtimeComponentLifecycleManager) managedOldServingContainer(ctx context.Context, command domain.RuntimeSelfUpdateCommand) (*domain.Container, error) {

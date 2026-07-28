@@ -81,9 +81,14 @@ func TestTrafficSwitchDoesNotRequireOldServingPathHealth(t *testing.T) {
 	runtime := &recordingTrafficRuntime{}
 	switcher, err := NewTrafficSwitch(runtime, fixtureTrafficChecks{fail: "old-path"})
 	require.NoError(t, err)
-	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 7, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 7, OldServingPath: "monolith"}
+	checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 7, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2", Phase: MigrationPhasePrepared, RouteSnapshotGeneration: 7, OldServingPath: "monolith", PublicPortBindings: []MigrationPortBinding{{Role: "edge", HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}, {Role: "edge", HostIP: "127.0.0.1", HostPort: 5000, ContainerPort: 5000, Protocol: "tcp"}}}
 	require.NoError(t, switcher.Switch(context.Background(), checkpoint, fixtureSwitchPlan(t)))
-	assert.Len(t, runtime.commands, 1)
+	require.Len(t, runtime.commands, 1)
+	command := runtime.commands[0]
+	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, command.LifecycleAction)
+	assert.Equal(t, "monolith", command.OldServingComponentID)
+	assert.Equal(t, []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}, {HostIP: "127.0.0.1", HostPort: 5000, ContainerPort: 5000, Protocol: domain.NetworkProtocolTCP}}, command.FinalPortPublishes)
+	assert.Equal(t, []string{"gordon-app-fixture"}, command.EdgeAppNetworks)
 }
 
 func TestTrafficSwitchRejectsGenerationMismatchAndSwitchesOnlyViaRuntime(t *testing.T) {

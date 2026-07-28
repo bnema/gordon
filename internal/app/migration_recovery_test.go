@@ -124,6 +124,77 @@ func TestPostHandoffRecoveryRuntimeEnvValidationFailsClosed(t *testing.T) {
 	}
 }
 
+func TestResumePostHandoffTable(t *testing.T) {
+	cases := []struct {
+		name       string
+		checkpoint MigrationCheckpoint
+		wantErr    bool
+	}{
+		{name: "already switched", checkpoint: MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhaseSwitched, RuntimeChannelTransferred: true}, wantErr: false},
+		{name: "missing handoff", checkpoint: MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared}, wantErr: true},
+		{name: "planned phase", checkpoint: MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, StartedAt: time.Now().UTC(), Phase: MigrationPhasePlanned, RuntimeChannelTransferred: true}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dataDir := t.TempDir()
+			store, err := NewMigrationCheckpointStore(filepath.Join(dataDir, "checkpoint.json"))
+			require.NoError(t, err)
+			runtime := &recordingTrafficRuntime{}
+			switcher, err := NewTrafficSwitch(runtime, fixtureTrafficChecks{})
+			require.NoError(t, err)
+			orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, &recordingComponentLauncher{})
+			require.NoError(t, err)
+			orchestrator.WithTrafficSwitcher(switcher)
+			service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store, MigrationEnvOptions{Config: Config{}})
+			require.NoError(t, err)
+			service.WithMigrationOrchestrator(orchestrator)
+			require.NoError(t, store.Save(tc.checkpoint))
+			result, err := service.ResumePostHandoff(context.Background())
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrMigrationNotReady)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, MigrationPhaseSwitched, result.Phase)
+		})
+	}
+}
+
+func TestResumePostHandoffComposedCutover(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := NewMigrationCheckpointStore(filepath.Join(dataDir, "checkpoint.json"))
+	require.NoError(t, err)
+	launcher := &recordingComponentLauncher{}
+	runtime := &recordingTrafficRuntime{}
+	switcher, err := NewTrafficSwitch(runtime, fixtureTrafficChecks{})
+	require.NoError(t, err)
+	orchestrator, err := NewMigrationOrchestrator(NewMigrationPreflight(passingMigrationProbes(nil)), store, launcher)
+	require.NoError(t, err)
+	orchestrator.WithTrafficSwitcher(switcher)
+	service, err := NewMigrationService(NewMigrationPreflight(passingMigrationProbes(nil)), store, MigrationEnvOptions{Config: Config{}})
+	require.NoError(t, err)
+	service.WithMigrationOrchestrator(orchestrator)
+	checkpoint := MigrationCheckpoint{
+		MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2",
+		StartedAt: time.Now().UTC(), Phase: MigrationPhasePrepared, RuntimeChannelTransferred: true, PrepareComplete: true, OldServingPath: "monolith",
+		RouteSnapshotGeneration: 7, EdgeAppNetworks: []string{"gordon-app-fixture"},
+		PublicPortBindings: []MigrationPortBinding{{Role: "edge", HostIP: "127.0.0.1", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}, {Role: "edge", HostIP: "127.0.0.1", HostPort: 5000, ContainerPort: 5000, Protocol: "tcp"}},
+	}
+	require.NoError(t, store.Save(checkpoint))
+
+	switched, err := service.ResumePostHandoff(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, MigrationPhaseSwitched, switched.Phase)
+	require.Len(t, runtime.commands, 1)
+	assert.Equal(t, domain.RuntimeComponentLifecycleActivate, runtime.commands[0].LifecycleAction)
+	assert.Empty(t, launcher.calls, "post-handoff resume must not recreate components through prepare")
+
+	again, err := service.ResumePostHandoff(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, MigrationPhaseSwitched, again.Phase)
+	assert.Len(t, runtime.commands, 1, "resume must not repeat activation after durable switch")
+}
+
 func TestPostHandoffRecoveryDoesNotLeakRuntimeTokenInDialError(t *testing.T) {
 	dataDir := t.TempDir()
 	checkpoint := recoveryCheckpoint()

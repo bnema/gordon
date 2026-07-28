@@ -803,6 +803,18 @@ func canonicalUnixURL(parsed *url.URL) bool {
 		parsed.RawPath == "" && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && parsed.RawFragment == ""
 }
 
+// bootstrapRuntimeEndpointsForMigration reconstructs the process-local bootstrap
+// transport from the configured host data root and migration identity.
+func bootstrapRuntimeEndpointsForMigration(dataDir, migrationID string) (RuntimeBootstrapEndpoints, error) {
+	dataRoot := strings.TrimSpace(resolveDataDir(dataDir))
+	cleanRoot := filepath.Clean(dataRoot)
+	endpoints := RuntimeBootstrapEndpoints{hostDataRootValue: cleanRoot, migrationID: migrationID}
+	if dataRoot == "" || dataRoot != cleanRoot || !endpoints.valid() {
+		return RuntimeBootstrapEndpoints{}, fmt.Errorf("invalid runtime bootstrap transport")
+	}
+	return endpoints, nil
+}
+
 // newRuntimeBootstrapEndpoints validates the durable component endpoint, then
 // reconstructs both endpoint views from the configured host data root and
 // migration identity. No endpoint text is retained in the process-local model.

@@ -56,9 +56,10 @@ func (r *Runtime) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnvir
 }
 
 // ProbePublicListeners returns one sanitized availability boolean per port.
-// A port is accepted only when it is bindable or held by a running, labelled
-// Gordon monolith; all ambiguous owners fail closed. Runtime checks the engine
-// again after each free-port bind probe so a container bind race is rejected.
+// Cold migration requires every configured public port to be free on the host;
+// occupied listeners fail closed even when a running Gordon monolith owns them.
+// Runtime checks the engine again after each bind probe so a container bind
+// race is rejected.
 func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error) {
 	if r == nil || r.client == nil {
 		return nil, fmt.Errorf("runtime client is not configured")
@@ -73,7 +74,6 @@ func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool
 			return nil, fmt.Errorf("inspect public listener: %w", err)
 		}
 		if owner.occupied {
-			available[i] = owner.managedMonolith
 			continue
 		}
 		if !runtimePortBindable(port) {

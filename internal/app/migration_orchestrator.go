@@ -285,14 +285,13 @@ func (o *MigrationOrchestrator) connectEdgeAppNetworks(ctx context.Context, plan
 		if component.Role != domain.ComponentRoleEdge {
 			continue
 		}
+		connected := make([]string, 0, len(plan.AppNetworks))
 		for _, network := range plan.AppNetworks {
-			if slices.Contains(checkpoint.ConnectedEdgeNetworks, network) {
-				continue
-			}
 			if err := o.launcher.ConnectEdgeToAppNetwork(ctx, component, network); err != nil {
 				return fmt.Errorf("connect edge to app network: %w", err)
 			}
-			checkpoint.ConnectedEdgeNetworks = append(checkpoint.ConnectedEdgeNetworks, network)
+			connected = append(connected, network)
+			checkpoint.ConnectedEdgeNetworks = append([]string(nil), connected...)
 			if err := o.store.Save(*checkpoint); err != nil {
 				return fmt.Errorf("checkpoint edge network connection: %w", err)
 			}
