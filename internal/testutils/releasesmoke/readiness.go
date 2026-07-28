@@ -73,8 +73,24 @@ func startManagedPassOwner(ctx context.Context, cmd *exec.Cmd) (readiness string
 	defer cancel()
 	readiness, err = waitManagedPassReadiness(waitCtx, stdout)
 	if err != nil {
-		terminate()
-		return "", func() {}, err
+		return "", terminate, err
 	}
 	return readiness, terminate, nil
+}
+
+// managedPassOwnerCleanup returns an idempotent cleanup that removes the named owner
+// container via the engine CLI using a bounded background context, then terminates the
+// attached owner process. Safe when the owner never existed or was already removed.
+func managedPassOwnerCleanup(runner CommandRunner, owner string, terminate func()) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(ReadinessPollAttempts)*time.Second)
+			defer cancel()
+			_ = runQuiet(bgCtx, runner, "rm", "-f", owner)
+			if terminate != nil {
+				terminate()
+			}
+		})
+	}
 }

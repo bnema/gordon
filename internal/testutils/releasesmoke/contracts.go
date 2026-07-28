@@ -45,6 +45,7 @@ var HarnessContracts = []HarnessContract{
 			"waitManagedPassReadiness",
 			"StdoutPipe",
 			"ReadinessPollAttempts",
+			"managedPassOwnerCleanup",
 			"Process.Kill",
 		},
 		NotContains: []string{
@@ -96,6 +97,7 @@ var HarnessContracts = []HarnessContract{
 			`"secrets", "doctor"`,
 			`"--write-check"`,
 			"StdoutPipe",
+			"managedPassOwnerCleanup",
 		},
 		NotContains: []string{
 			"mkfifo",

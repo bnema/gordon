@@ -358,10 +358,11 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 		"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
 		image, "secrets", "lock", "--config", "/tmp/gordon.toml")
 	readiness, terminateOwner, err := startManagedPassOwner(ctx, ownerCmd)
+	cleanupOwner := managedPassOwnerCleanup(h.Podman, owner, terminateOwner)
+	defer cleanupOwner()
 	if err != nil {
 		return err
 	}
-	defer terminateOwner()
 
 	if readiness != ManagedPassLockMessage {
 		return fmt.Errorf("unexpected readiness %q", readiness)
@@ -384,8 +385,7 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 		return fmt.Errorf("expected %q in doctor output", LeaseConflictMessage)
 	}
 
-	_ = runQuiet(ctx, h.Podman, "rm", "-f", owner)
-	terminateOwner()
+	cleanupOwner()
 
 	if err := runQuiet(ctx, h.Podman, doctorArgs...); err != nil {
 		return fmt.Errorf("post-lease doctor: %w", err)

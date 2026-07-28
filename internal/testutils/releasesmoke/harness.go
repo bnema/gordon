@@ -249,10 +249,11 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 		"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
 		image, "secrets", "lock", "--config", "/tmp/gordon.toml")
 	readiness, terminateOwner, err := startManagedPassOwner(ctx, ownerCmd)
+	cleanupOwner := managedPassOwnerCleanup(h.Docker, owner, terminateOwner)
+	defer cleanupOwner()
 	if err != nil {
 		return err
 	}
-	defer terminateOwner()
 
 	if readiness != ManagedPassLockMessage {
 		return fmt.Errorf("unexpected readiness %q", readiness)
@@ -273,8 +274,7 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 		return fmt.Errorf("expected %q in doctor output, got: %s", LeaseConflictMessage, string(doctorOut))
 	}
 
-	_ = runQuiet(ctx, h.Docker, "rm", "-f", owner)
-	terminateOwner()
+	cleanupOwner()
 
 	for range 2 {
 		if err := runQuiet(ctx, h.Docker, "run", "--rm",
