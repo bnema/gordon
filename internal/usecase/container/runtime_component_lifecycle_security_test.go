@@ -28,7 +28,7 @@ import (
 )
 
 func TestComponentGenerationVolumeNameUsesRoleMigrationAndGeneration(t *testing.T) {
-	assert.Equal(t, "gordon-control-fixture-g7", componentGenerationVolumeName(domain.ComponentRoleControl, "fixture", 7))
+	assert.Equal(t, "gordon-control-fixture-g7", domain.FormatComponentGenerationVolumeName(domain.ComponentRoleControl, "fixture", 7))
 }
 
 func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testing.T) {
@@ -203,7 +203,7 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)
 
-	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	volumeName := domain.FormatComponentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 	allCapabilities := cap.Known()
 	inspectFixture := map[string]any{
 		"Id":      containerID,
@@ -358,7 +358,7 @@ func TestRuntimeComponentLifecycleRejectsMalformedOrUnprovedPodmanHostBindChown(
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)
-	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	volumeName := domain.FormatComponentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 
 	for name, test := range map[string]struct {
 		binds        []string

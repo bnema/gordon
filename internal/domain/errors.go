@@ -115,4 +115,7 @@ var (
 
 	// Traffic errors
 	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
+
+	// Runtime component lifecycle errors
+	ErrUnsupportedComponentLifecycleAction = errors.New("unsupported component lifecycle action")
 )

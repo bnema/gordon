@@ -153,7 +153,7 @@ func (p RuntimePolicy) checkComponentLifecycle(command domain.RuntimeSelfUpdateC
 		}
 		return nil
 	case domain.RuntimeComponentLifecycleProfileFull:
-		if !validRuntimeComponentLifecycleProfile(command.TargetComponentRole, command.LifecycleProfile) {
+		if !command.LifecycleProfile.IsFixedFor(command.TargetComponentRole) {
 			return p.denied(command.RuntimeCommandIdentity, "", RuntimePolicyReasonUnmanagedMutation, "component lifecycle process identity is not allowed")
 		}
 	default:
@@ -163,10 +163,6 @@ func (p RuntimePolicy) checkComponentLifecycle(command domain.RuntimeSelfUpdateC
 		return nil
 	}
 	return p.checkImage(command.DesiredImage, command.RuntimeCommandIdentity, "")
-}
-
-func validRuntimeComponentLifecycleProfile(role domain.ComponentRole, actual domain.RuntimeComponentLifecycleProfile) bool {
-	return actual.IsFixedFor(role)
 }
 
 func (p RuntimePolicy) CheckContainerConfig(identity domain.RuntimeCommandIdentity, routeDomain string, cfg domain.ContainerConfig) error {
@@ -239,14 +235,14 @@ func expectedComponentGenerationVolume(cfg domain.ContainerConfig, role domain.C
 	}
 	migrationID := cfg.Labels[domain.LabelComponentMigrationID]
 	generation := cfg.Labels[domain.LabelComponentGeneration]
-	if !componentMigrationID(migrationID) {
+	if !domain.ValidComponentMigrationID(migrationID) {
 		return "", false
 	}
 	parsedGeneration, err := strconv.ParseUint(generation, 10, 64)
 	if err != nil || parsedGeneration == 0 {
 		return "", false
 	}
-	name := componentGenerationVolumeName(role, migrationID, parsedGeneration)
+	name := domain.FormatComponentGenerationVolumeName(role, migrationID, parsedGeneration)
 	return name, cfg.Name == name
 }
 
@@ -291,44 +287,31 @@ func (p RuntimePolicy) checkManagedControlSecretsMount(identity domain.RuntimeCo
 	reserved := strings.TrimSpace(p.ManagedControlSecretsVolume)
 	controlLifecycle := cfg.Labels[domain.LabelComponent] == "true" && cfg.Labels[domain.LabelComponentRole] == string(domain.ComponentRoleControl) &&
 		cfg.Labels[domain.LabelComponentOwner] == "runtime" && strings.HasPrefix(cfg.Name, "gordon-control-")
-	if controlLifecycle && !validManagedControlSecretsVolume(reserved) {
+	if controlLifecycle && !domain.ValidManagedControlSecretsVolume(reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is not configured")
 	}
 	destinationUsed, managedSourceUsed := managedControlSecretsMountUsage(cfg)
-	if reserved != "" && !validManagedControlSecretsVolume(reserved) {
+	if reserved != "" && !domain.ValidManagedControlSecretsVolume(reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is invalid")
 	}
 	if !destinationUsed && !managedSourceUsed {
 		return nil
 	}
-	if !validManagedControlSecretsVolume(reserved) || !authorizedManagedControlSecretsMount(identity, cfg, reserved) {
+	if !domain.ValidManagedControlSecretsVolume(reserved) || !authorizedManagedControlSecretsMount(identity, cfg, reserved) {
 		return p.denied(identity, routeDomain, RuntimePolicyReasonUnsafeHostBindDenied, "managed control secret volume is reserved")
 	}
 	return nil
-}
-
-func validManagedControlSecretsVolume(value string) bool {
-	const prefix = "gordon-control-secrets-"
-	if !strings.HasPrefix(value, prefix) || len(value) != len(prefix)+16 {
-		return false
-	}
-	for _, char := range strings.TrimPrefix(value, prefix) {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 func managedControlSecretsMountUsage(cfg domain.ContainerConfig) (bool, bool) {
 	_, destinationUsed := cfg.Volumes[managedControlSecretsPath]
 	managedSourceUsed := false
 	for _, mountedSource := range cfg.Volumes {
-		managedSourceUsed = managedSourceUsed || validManagedControlSecretsVolume(mountedSource)
+		managedSourceUsed = managedSourceUsed || domain.ValidManagedControlSecretsVolume(mountedSource)
 	}
 	for destination, mountedSource := range cfg.ReadOnlyVolumes {
 		destinationUsed = destinationUsed || destination == managedControlSecretsPath
-		managedSourceUsed = managedSourceUsed || validManagedControlSecretsVolume(mountedSource)
+		managedSourceUsed = managedSourceUsed || domain.ValidManagedControlSecretsVolume(mountedSource)
 	}
 	return destinationUsed, managedSourceUsed
 }
@@ -340,12 +323,12 @@ func authorizedManagedControlSecretsMount(identity domain.RuntimeCommandIdentity
 		return false
 	}
 	for destination, source := range cfg.Volumes {
-		if validManagedControlSecretsVolume(source) && (source != reserved || destination != managedControlSecretsPath) {
+		if domain.ValidManagedControlSecretsVolume(source) && (source != reserved || destination != managedControlSecretsPath) {
 			return false
 		}
 	}
 	for destination, source := range cfg.ReadOnlyVolumes {
-		if validManagedControlSecretsVolume(source) || destination == managedControlSecretsPath {
+		if domain.ValidManagedControlSecretsVolume(source) || destination == managedControlSecretsPath {
 			return false
 		}
 	}
@@ -450,7 +433,7 @@ func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.Contai
 		return false
 	}
 	id := filepath.Base(state)
-	if !componentMigrationID(id) {
+	if !domain.ValidComponentMigrationID(id) {
 		return false
 	}
 	destination := filepath.Join("/var/lib/gordon/migration", id)
@@ -476,18 +459,6 @@ func isApprovedRegistryStorageBind(policy RuntimePolicy, cfg domain.ContainerCon
 func isMigrationStateComponent(cfg domain.ContainerConfig) bool {
 	role := cfg.Labels[domain.LabelComponentRole]
 	return cfg.Labels[domain.LabelComponent] == "true" && (role == string(domain.ComponentRoleRuntime) || role == string(domain.ComponentRoleControl))
-}
-
-func componentMigrationID(id string) bool {
-	if id == "" || len(id) > 128 {
-		return false
-	}
-	for _, char := range id {
-		if (char < 'a' || char > 'z') && (char < '0' || char > '9') && char != '-' {
-			return false
-		}
-	}
-	return true
 }
 
 func isApprovedMigrationEnvironmentBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string) bool {

@@ -199,20 +199,38 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 
 func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
 	const volume = "gordon-control-secrets-0123456789abcdef"
-	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{ManagedControlSecretsVolume: volume}}
-	base := domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:first"}
-	base.Generation = 1
-	base.TargetComponentRole = domain.ComponentRoleControl
-	controlFirst := manager.componentPersistentVolumes(base)
-	assert.Equal(t, volume, controlFirst[managedControlSecretsPath])
+	base := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{Generation: 1},
+		PolicyDecisionID:       "migration:first",
+		TargetComponentRole:    domain.ComponentRoleControl,
+	}
+	controlFirst, err := buildComponentMountPlan(componentMountPlanInput{
+		command:        base,
+		configFile:     "/tmp/gordon-role.toml",
+		managedSecrets: volume,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, volume, controlFirst.expectedMounts()[managedControlSecretsPath].source)
 
 	base.PolicyDecisionID = "migration:second"
 	base.Generation = 9
-	assert.Equal(t, volume, manager.componentPersistentVolumes(base)[managedControlSecretsPath], "managed secret volume must survive generation updates")
+	controlSecond, err := buildComponentMountPlan(componentMountPlanInput{
+		command:        base,
+		configFile:     "/tmp/gordon-role.toml",
+		managedSecrets: volume,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, volume, controlSecond.expectedMounts()[managedControlSecretsPath].source, "managed secret volume must survive generation updates")
 
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
 		base.TargetComponentRole = role
-		assert.NotContains(t, manager.componentPersistentVolumes(base), managedControlSecretsPath)
+		plan, planErr := buildComponentMountPlan(componentMountPlanInput{
+			command:        base,
+			configFile:     "/tmp/gordon-role.toml",
+			managedSecrets: volume,
+		})
+		require.NoError(t, planErr)
+		assert.NotContains(t, plan.expectedMounts(), managedControlSecretsPath)
 	}
 }
 
@@ -264,8 +282,9 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 	container.UsernsMode = componentKeepIDMode(identity)
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
-	expected, err := manager.expectedLifecycleMounts(command, command.PortPublishes)
+	plan, err := manager.componentMountPlanForCreate(command, command.PortPublishes)
 	require.NoError(t, err)
+	expected := plan.expectedMounts()
 	container.VolumeMounts = nil
 	for destination, mount := range expected {
 		actual := domain.ContainerVolumeMount{Destination: destination, Options: mount.options, ReadOnly: mount.readOnly}

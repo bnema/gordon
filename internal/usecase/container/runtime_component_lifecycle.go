@@ -103,7 +103,7 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 		return errRuntimeSelfUpdateUnavailable
 	}
 	if _, ok := domain.RuntimeComponentLifecycleRequirement(command.LifecycleAction); !ok {
-		return fmt.Errorf("unsupported component lifecycle action")
+		return domain.ErrUnsupportedComponentLifecycleAction
 	}
 	if err := m.policy.CheckSelfUpdate(command); err != nil {
 		return err
@@ -138,7 +138,7 @@ func (m *runtimeComponentLifecycleManager) ApplyComponentLifecycle(ctx context.C
 		// in the activate transaction below.
 		return m.health(ctx, command)
 	default:
-		return fmt.Errorf("unsupported component lifecycle action")
+		return domain.ErrUnsupportedComponentLifecycleAction
 	}
 }
 
@@ -202,10 +202,6 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	if command.TargetComponentRole != domain.ComponentRoleRuntime && componentEnvironmentHasRuntimeEndpoint(env) {
 		return nil, fmt.Errorf("component role cannot receive a runtime endpoint")
 	}
-	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
-	if err != nil {
-		return nil, err
-	}
 	profile := command.LifecycleProfile
 	noNewPrivileges := profile.NoNewPrivileges
 	config := &domain.ContainerConfig{
@@ -213,8 +209,7 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		Labels: componentLifecycleLabels(command), NetworkMode: command.InternalNetwork,
 		PortPublishes: append([]domain.ContainerPortPublish(nil), ports...), RestartPolicy: domain.RestartPolicyAlways,
 		Cmd:             []string{"serve", "--role", string(command.TargetComponentRole), "--config", "/etc/gordon/role.toml"},
-		ReadOnlyVolumes: map[string]string{"/etc/gordon/role.toml": configFile},
-		Volumes:         m.componentPersistentVolumes(command), Aliases: []string{"gordon-" + string(command.TargetComponentRole)},
+		Aliases:         []string{"gordon-" + string(command.TargetComponentRole)},
 		User:            profile.ProcessIdentity.User,
 		UsernsMode:      profile.UsernsMode,
 		CapDrop:         append([]string(nil), profile.CapDrop...),
@@ -223,23 +218,20 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	}
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
 		config.Env = append(config.Env, "GORDON_COMPONENT_ID="+command.TargetComponentID)
-		source, rewritten, socketErr := runtimeComponentSocketMount(config.Env)
+		rewritten, socketErr := runtimeComponentSocketMountEnv(config.Env)
 		if socketErr != nil {
 			return nil, socketErr
 		}
 		config.Env = rewritten
-		config.ReadOnlyVolumes["/run/gordon/runtime.sock"] = source
 	}
-	if err := m.mountCanonicalRegistryStorage(command, config); err != nil {
+	mountPlan, err := m.componentMountPlanForCreate(command, ports)
+	if err != nil {
 		return nil, err
 	}
-	if err := m.mountMigrationRuntimeSocketState(command, config); err != nil {
+	mountPlan.applyToConfig(config)
+	if err := m.prepareComponentMountFilesystem(command, mountPlan); err != nil {
 		return nil, err
 	}
-	if err := m.mountMigrationComponentConfigState(command, config); err != nil {
-		return nil, err
-	}
-	config.VolumeOptions = componentGenerationVolumeOptions(command, config.Volumes)
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
 		return nil, err
 	}
@@ -250,66 +242,25 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 // directory and control a read-only view for Unix socket connect. Other roles
 // receive neither. The directory is a generated immediate child of the
 // configured migration root and contains no engine socket.
-// mountCanonicalRegistryStorage reuses the old monolith's configured registry
-// directory. It is deliberately not a generation-named volume: registry blobs
-// and manifests survive cutover and are writable only by the runtime-created
-// registry role. The policy allowlists the exact configured host directory.
-func (m *runtimeComponentLifecycleManager) mountCanonicalRegistryStorage(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
-	if command.TargetComponentRole != domain.ComponentRoleRegistry || strings.TrimSpace(m.policy.RegistryStorageRoot) == "" {
-		return nil
+// prepareComponentMountFilesystem creates private migration directories required before engine create.
+func (m *runtimeComponentLifecycleManager) prepareComponentMountFilesystem(command domain.RuntimeSelfUpdateCommand, plan componentMountPlan) error {
+	if command.TargetComponentRole == domain.ComponentRoleRuntime || command.TargetComponentRole == domain.ComponentRoleControl {
+		if strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
+			return nil
+		}
+		migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+		root := filepath.Clean(m.policy.MigrationStateRoot)
+		if !filepath.IsAbs(root) {
+			return fmt.Errorf("migration runtime socket root is not configured")
+		}
+		if !domain.ValidComponentMigrationID(migrationID) {
+			return fmt.Errorf("invalid migration runtime socket identity")
+		}
+		source := filepath.Join(root, migrationID)
+		if err := prepareMigrationSocketStateDirectory(root, source); err != nil {
+			return err
+		}
 	}
-	root := filepath.Clean(m.policy.RegistryStorageRoot)
-	// The replacement runtime runs in a container and cannot stat arbitrary
-	// host paths. The old monolith preflight already validates this configured
-	// directory; runtime policy then permits only this exact absolute source
-	// when asking the engine to bind it into the registry component.
-	if !filepath.IsAbs(root) || root == string(filepath.Separator) {
-		return fmt.Errorf("canonical registry storage is not configured")
-	}
-	config.Volumes = map[string]string{"/var/lib/gordon/registry": root}
-	return nil
-}
-
-func (m *runtimeComponentLifecycleManager) mountMigrationRuntimeSocketState(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
-	if command.TargetComponentRole != domain.ComponentRoleRuntime && command.TargetComponentRole != domain.ComponentRoleControl {
-		return nil
-	}
-	if strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
-		// Legacy unit-only policy fixtures do not model migration state. Production
-		// runtime wiring always sets this root before lifecycle is available.
-		return nil
-	}
-	root := filepath.Clean(m.policy.MigrationStateRoot)
-	if !filepath.IsAbs(root) {
-		return fmt.Errorf("migration runtime socket root is not configured")
-	}
-	id := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
-	if !componentMigrationID(id) {
-		return fmt.Errorf("invalid migration runtime socket identity")
-	}
-	source := filepath.Join(root, id)
-	if err := prepareMigrationSocketStateDirectory(root, source); err != nil {
-		return err
-	}
-	destination := filepath.Join("/var/lib/gordon/migration", id)
-	if command.TargetComponentRole == domain.ComponentRoleRuntime {
-		config.Volumes[destination] = source
-		return nil
-	}
-	// Control can connect to the private Gordon runtime socket but cannot
-	// modify its parent directory. It receives a separate writable child only
-	// for atomically checkpointing authenticated edge attestation.
-	config.ReadOnlyVolumes[destination] = source
-	config.Volumes[filepath.Join(destination, "attestation")] = filepath.Join(source, "attestation")
-	return nil
-}
-
-// mountMigrationComponentConfigState gives only the replacement runtime a
-// read-only view of generated role manifests at their host paths. The runtime
-// validates these paths before asking the engine to bind them into registry or
-// edge; without this view it cannot safely continue after handoff. No other
-// role receives the directory and it contains no runtime or engine socket.
-func (m *runtimeComponentLifecycleManager) mountMigrationComponentConfigState(command domain.RuntimeSelfUpdateCommand, config *domain.ContainerConfig) error {
 	if command.TargetComponentRole != domain.ComponentRoleRuntime || strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
 		return nil
 	}
@@ -326,8 +277,8 @@ func (m *runtimeComponentLifecycleManager) mountMigrationComponentConfigState(co
 		if err := os.Chmod(path, 0o700); err != nil { // #nosec G302 -- private migration component directory.
 			return fmt.Errorf("restrict migration component %s root: %w", name, err)
 		}
-		config.ReadOnlyVolumes[path] = path
 	}
+	_ = plan
 	return nil
 }
 
@@ -1146,7 +1097,12 @@ func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(conta
 		if containerPortsMatch(container, command.FinalPortPublishes) {
 			ports = command.FinalPortPublishes
 		}
-		expected, err = m.expectedLifecycleMounts(command, ports)
+		plan, planErr := m.componentMountPlanForCreate(command, ports)
+		if planErr != nil {
+			err = planErr
+		} else {
+			expected = plan.expectedMounts()
+		}
 	}
 	if err == nil && lifecycleMountsMatch(container.VolumeMounts, expected) {
 		return nil
@@ -1162,32 +1118,22 @@ func (m *runtimeComponentLifecycleManager) expectedReadLifecycleMounts(container
 	if !ok || approvedComponentConfigFile(command, configSource, m.policy.MigrationStateRoot) != nil {
 		return nil, fmt.Errorf("invalid existing component configuration mount")
 	}
-	expected := map[string]expectedLifecycleMount{
-		"/etc/gordon/role.toml": {source: configSource, readOnly: true},
-	}
 	profileCommand := command
 	profileCommand.LifecycleProfile = profile
-	persistentVolumes := m.componentPersistentVolumes(profileCommand)
-	volumeOptions := componentGenerationVolumeOptions(profileCommand, persistentVolumes)
-	for destination, source := range persistentVolumes {
-		expected[destination] = expectedLifecycleMount{source: source, options: volumeOptions[destination]}
-	}
-	if command.TargetComponentRole == domain.ComponentRoleRegistry && strings.TrimSpace(m.policy.RegistryStorageRoot) != "" {
-		expected = map[string]expectedLifecycleMount{
-			"/etc/gordon/role.toml":    {source: configSource, readOnly: true},
-			"/var/lib/gordon/registry": {source: filepath.Clean(m.policy.RegistryStorageRoot)},
-		}
-	}
+	runtimeSocketSource := ""
 	if command.TargetComponentRole == domain.ComponentRoleRuntime {
 		socketSource, mounted := existingLifecycleMountSource(container.VolumeMounts, "/run/gordon/runtime.sock")
 		clean := filepath.Clean(strings.TrimSpace(socketSource))
 		if !mounted || !filepath.IsAbs(clean) || clean == string(filepath.Separator) {
 			return nil, fmt.Errorf("invalid existing runtime socket mount")
 		}
-		expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: clean, readOnly: true}
+		runtimeSocketSource = clean
 	}
-	m.addExpectedMigrationMounts(command, expected)
-	return expected, nil
+	plan, err := m.componentMountPlanForAttestation(profileCommand, command.PortPublishes, configSource, runtimeSocketSource)
+	if err != nil {
+		return nil, err
+	}
+	return plan.expectedMounts(), nil
 }
 
 func existingLifecycleMountSource(mounts []domain.ContainerVolumeMount, destination string) (string, bool) {
@@ -1202,65 +1148,6 @@ func existingLifecycleMountSource(mounts []domain.ContainerVolumeMount, destinat
 		source = mount.Source
 	}
 	return source, source != ""
-}
-
-type expectedLifecycleMount struct {
-	source   string
-	options  []string
-	readOnly bool
-}
-
-func (m *runtimeComponentLifecycleManager) expectedLifecycleMounts(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (map[string]expectedLifecycleMount, error) {
-	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
-	if err != nil {
-		return nil, err
-	}
-	expected := map[string]expectedLifecycleMount{"/etc/gordon/role.toml": {source: configFile, readOnly: true}}
-	persistentVolumes := m.componentPersistentVolumes(command)
-	volumeOptions := componentGenerationVolumeOptions(command, persistentVolumes)
-	for destination, source := range persistentVolumes {
-		expected[destination] = expectedLifecycleMount{source: source, options: volumeOptions[destination]}
-	}
-	if command.TargetComponentRole == domain.ComponentRoleRegistry && strings.TrimSpace(m.policy.RegistryStorageRoot) != "" {
-		expected = map[string]expectedLifecycleMount{
-			"/etc/gordon/role.toml":    {source: configFile, readOnly: true},
-			"/var/lib/gordon/registry": {source: filepath.Clean(m.policy.RegistryStorageRoot)},
-		}
-	}
-	if command.TargetComponentRole == domain.ComponentRoleRuntime {
-		environment, envErr := componentLifecycleEnvironment(command, command.EnvironmentFile, m.policy.MigrationStateRoot)
-		if envErr != nil {
-			return nil, envErr
-		}
-		source, _, socketErr := runtimeComponentSocketMount(environment)
-		if socketErr != nil {
-			return nil, socketErr
-		}
-		expected["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: source, readOnly: true}
-	}
-	m.addExpectedMigrationMounts(command, expected)
-	return expected, nil
-}
-
-func (m *runtimeComponentLifecycleManager) addExpectedMigrationMounts(command domain.RuntimeSelfUpdateCommand, expected map[string]expectedLifecycleMount) {
-	root := filepath.Clean(strings.TrimSpace(m.policy.MigrationStateRoot))
-	if root == "." || !filepath.IsAbs(root) {
-		return
-	}
-	id := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
-	state := filepath.Join(root, id)
-	destination := filepath.Join("/var/lib/gordon/migration", id)
-	switch command.TargetComponentRole {
-	case domain.ComponentRoleRuntime:
-		expected[destination] = expectedLifecycleMount{source: state}
-		for _, name := range []string{"config", "env"} {
-			path := filepath.Join(root, name)
-			expected[path] = expectedLifecycleMount{source: path, readOnly: true}
-		}
-	case domain.ComponentRoleControl:
-		expected[destination] = expectedLifecycleMount{source: state, readOnly: true}
-		expected[filepath.Join(destination, "attestation")] = expectedLifecycleMount{source: filepath.Join(state, "attestation")}
-	}
 }
 
 func lifecycleMountsMatch(actual []domain.ContainerVolumeMount, expected map[string]expectedLifecycleMount) bool {
@@ -1294,20 +1181,8 @@ func validExistingComponentIdentity(container *domain.Container, profile domain.
 }
 
 func validComponentLifecycleTarget(command domain.RuntimeSelfUpdateCommand) bool {
-	generation := "-g" + strconv.FormatUint(command.Generation, 10)
 	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
-	if migrationID == "" || command.Generation == 0 {
-		return false
-	}
-	if command.LifecycleAction == domain.RuntimeComponentLifecycleEnsureNetwork {
-		prefix := "gordon-network-"
-		return command.TargetComponentRole == domain.ComponentRoleRuntime && strings.HasPrefix(command.TargetComponentID, prefix) && strings.TrimSuffix(strings.TrimPrefix(command.TargetComponentID, prefix), generation) == migrationID && strings.HasSuffix(command.TargetComponentID, generation)
-	}
-	if (command.LifecycleAction == domain.RuntimeComponentLifecycleActivate || command.LifecycleAction == domain.RuntimeComponentLifecycleDrain) && command.TargetComponentRole != domain.ComponentRoleEdge {
-		return false
-	}
-	prefix := "gordon-" + string(command.TargetComponentRole) + "-"
-	return strings.HasPrefix(command.TargetComponentID, prefix) && strings.TrimSuffix(strings.TrimPrefix(command.TargetComponentID, prefix), generation) == migrationID && strings.HasSuffix(command.TargetComponentID, generation)
+	return domain.MatchComponentLifecycleTarget(command.LifecycleAction, command.TargetComponentID, command.TargetComponentRole, migrationID, command.Generation)
 }
 
 func componentLifecycleLabels(command domain.RuntimeSelfUpdateCommand) map[string]string {
@@ -1340,31 +1215,10 @@ func isManagedLifecycleComponent(container *domain.Container, command domain.Run
 	return container.Labels[domain.LabelComponentOwner] == "runtime" || container.Labels[domain.LabelComponentOwner] == "migration"
 }
 
-// componentLifecycleEnvironment reads only a runtime-owned generated env file.
-// It returns generic errors and never includes values in failures or logs.
 const managedControlSecretsPath = "/var/lib/gordon/secrets" // #nosec G101 -- fixed mount destination, not credential material.
 
-func (m *runtimeComponentLifecycleManager) componentPersistentVolumes(command domain.RuntimeSelfUpdateCommand) map[string]string {
-	// Persistent state belongs to explicit named volumes. Edge is stateless;
-	// registry storage is distinct so it can never be removed with a component.
-	if command.TargetComponentRole == domain.ComponentRoleEdge {
-		return nil
-	}
-	volumes := map[string]string{"/var/lib/gordon": componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)}
-	if command.TargetComponentRole == domain.ComponentRoleControl && validManagedControlSecretsVolume(strings.TrimSpace(m.policy.ManagedControlSecretsVolume)) {
-		// This name deliberately excludes migration and generation identifiers so
-		// replacing control cannot replace its keyring or password store.
-		volumes[managedControlSecretsPath] = strings.TrimSpace(m.policy.ManagedControlSecretsVolume)
-	}
-	return volumes
-}
-
-func componentGenerationVolumeName(role domain.ComponentRole, migrationID string, generation uint64) string {
-	return "gordon-" + string(role) + "-" + migrationID + "-g" + strconv.FormatUint(generation, 10)
-}
-
 func componentGenerationVolumeOptions(command domain.RuntimeSelfUpdateCommand, volumes map[string]string) map[string][]string {
-	name := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	name := domain.FormatComponentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 	if volumes["/var/lib/gordon"] != name || len(command.LifecycleProfile.GenerationVolumeOptions) == 0 {
 		return nil
 	}
@@ -1391,7 +1245,7 @@ func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path, 
 	if command.TargetComponentRole == domain.ComponentRoleEdge && filepath.Base(clean) == "edge-final.toml" {
 		name = "edge-final.toml"
 	}
-	if !approvedGeneratedRolePath(clean, migrationRoot, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
+	if !domain.ApprovedGeneratedRolePath(clean, migrationRoot, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
 		return fmt.Errorf("invalid component configuration file")
 	}
 	info, err := os.Lstat(clean)
@@ -1401,24 +1255,8 @@ func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path, 
 	return nil
 }
 
-func approvedGeneratedRolePath(path, migrationRoot, kind, migrationID string, generation uint64, name string) bool {
-	if !filepath.IsAbs(path) || migrationID == "" || generation == 0 || filepath.Base(path) != name {
-		return false
-	}
-	if strings.TrimSpace(migrationRoot) != "" {
-		root := filepath.Clean(migrationRoot)
-		expected := filepath.Join(root, kind, migrationID, strconv.FormatUint(generation, 10), name)
-		if !filepath.IsAbs(root) || path != expected {
-			return false
-		}
-	}
-	generationDir := filepath.Dir(path)
-	migrationDir := filepath.Dir(generationDir)
-	kindDir := filepath.Dir(migrationDir)
-	return filepath.Base(generationDir) == strconv.FormatUint(generation, 10) && filepath.Base(migrationDir) == migrationID &&
-		filepath.Base(kindDir) == kind && filepath.Base(filepath.Dir(kindDir)) == "migration"
-}
-
+// componentLifecycleEnvironment reads only a runtime-owned generated env file.
+// It returns generic errors and never includes values in failures or logs.
 const maxComponentLifecycleEnvironmentBytes int64 = 64 << 10
 
 func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path, migrationRoot string) ([]string, error) {
@@ -1426,7 +1264,7 @@ func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path
 		return nil, nil
 	}
 	clean := filepath.Clean(strings.TrimSpace(path))
-	if !approvedGeneratedRolePath(clean, migrationRoot, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
+	if !domain.ApprovedGeneratedRolePath(clean, migrationRoot, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
 		return nil, fmt.Errorf("invalid component environment file")
 	}
 	file, err := openPrivateComponentEnvironmentFile(clean, migrationRoot)
@@ -1501,6 +1339,11 @@ func componentEnvironmentHasRuntimeEndpoint(environment []string) bool {
 		}
 	}
 	return false
+}
+
+func runtimeComponentSocketMountEnv(environment []string) ([]string, error) {
+	_, rewritten, err := runtimeComponentSocketMount(environment)
+	return rewritten, err
 }
 
 func runtimeComponentSocketMount(environment []string) (string, []string, error) {

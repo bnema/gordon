@@ -373,20 +373,14 @@ func normalizeInspectedGenerationVolumeChown(
 }
 
 func inspectedGenerationVolumeName(inspected *domain.Container) (string, bool) {
-	_, ok := inspectedComponentIdentity(inspected)
-	role := domain.ComponentRole(inspected.Labels[domain.LabelComponentRole])
-	if !ok || role == domain.ComponentRoleEdge {
+	if _, ok := inspectedComponentIdentity(inspected); !ok {
 		return "", false
 	}
-	migrationID := inspected.Labels[domain.LabelComponentMigrationID]
-	generation := inspected.Labels[domain.LabelComponentGeneration]
-	parsedGeneration, err := strconv.ParseUint(generation, 10, 64)
-	if err != nil || parsedGeneration == 0 || strconv.FormatUint(parsedGeneration, 10) != generation ||
-		migrationID == "" || strings.TrimSpace(migrationID) != migrationID {
+	expected, ok := domain.MatchComponentGenerationVolume(inspected)
+	if !ok || !canonicalInspectVolumeName(expected) {
 		return "", false
 	}
-	expected := fmt.Sprintf("gordon-%s-%s-g%s", role, migrationID, generation)
-	return expected, inspected.Name == expected && canonicalInspectVolumeName(expected)
+	return expected, true
 }
 
 func exactInspectedGenerationMount(mounts []domain.ContainerVolumeMount, expectedName string) (int, bool) {
