@@ -282,7 +282,7 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 	container.UsernsMode = componentKeepIDMode(identity)
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
-	plan, err := manager.componentMountPlanForCreate(command)
+	plan, err := manager.componentMountPlanForCreate(command, command.PortPublishes)
 	require.NoError(t, err)
 	expected := plan.expectedMounts()
 	container.VolumeMounts = nil

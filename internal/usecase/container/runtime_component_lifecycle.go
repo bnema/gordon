@@ -224,7 +224,7 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		}
 		config.Env = rewritten
 	}
-	mountPlan, err := m.componentMountPlanForCreate(command)
+	mountPlan, err := m.componentMountPlanForCreate(command, ports)
 	if err != nil {
 		return nil, err
 	}
@@ -1093,7 +1093,11 @@ func (m *runtimeComponentLifecycleManager) validateExistingLifecycleMounts(conta
 	if domain.IsRuntimeComponentLifecycleReadAction(command.LifecycleAction) {
 		expected, err = m.expectedReadLifecycleMounts(container, command, expectedProfile)
 	} else {
-		plan, planErr := m.componentMountPlanForCreate(command)
+		ports := command.PortPublishes
+		if containerPortsMatch(container, command.FinalPortPublishes) {
+			ports = command.FinalPortPublishes
+		}
+		plan, planErr := m.componentMountPlanForCreate(command, ports)
 		if planErr != nil {
 			err = planErr
 		} else {

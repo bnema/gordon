@@ -174,8 +174,8 @@ func (m *runtimeComponentLifecycleManager) componentMountPlanInput(
 	}
 }
 
-func (m *runtimeComponentLifecycleManager) componentMountPlanForCreate(command domain.RuntimeSelfUpdateCommand) (componentMountPlan, error) {
-	configFile, err := componentLifecycleConfigFile(command, command.PortPublishes, m.policy.MigrationStateRoot)
+func (m *runtimeComponentLifecycleManager) componentMountPlanForCreate(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (componentMountPlan, error) {
+	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
 	if err != nil {
 		return componentMountPlan{}, err
 	}
