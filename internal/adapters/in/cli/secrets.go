@@ -191,11 +191,6 @@ func runManagedPassWriteCheck(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if deleteErr := store.Delete(domainName, key); deleteErr != nil {
-		written = false
-		return fmt.Errorf("remove managed pass check: %w", deleteErr)
-	}
-	written = false
 	return nil
 }
 

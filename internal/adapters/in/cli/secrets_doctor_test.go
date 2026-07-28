@@ -81,6 +81,7 @@ func TestRunManagedPassWriteCheckJoinsPrimaryAndCleanupErrors(t *testing.T) {
 
 	err := runManagedPassWriteCheck(context.Background())
 	require.Error(t, err)
+	assert.Equal(t, 1, store.deleteAttempts)
 	assert.Contains(t, err.Error(), "read managed pass check failed")
 	assert.Contains(t, err.Error(), "cleanup failed")
 	assert.NotContains(t, err.Error(), "secret=")
@@ -108,6 +109,18 @@ func TestRunManagedPassWriteCheckJoinsCleanupOnlyErrors(t *testing.T) {
 	assert.NotContains(t, err.Error(), store.lastValue)
 }
 
+func TestRunManagedPassWriteCheckDeletesExactlyOnceOnSuccess(t *testing.T) {
+	original := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = original })
+
+	store := &fakeManagedPassWriteCheckStore{values: map[string]string{}}
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	require.NoError(t, runManagedPassWriteCheck(context.Background()))
+	assert.Equal(t, 1, store.deleteAttempts)
+	assert.NotContains(t, store.lastValue, "secret=")
+}
+
 func TestRunManagedPassWriteCheckDeletesExactlyOnceWhenFinalDeleteFails(t *testing.T) {
 	original := openManagedPassWriteCheckStore
 	t.Cleanup(func() { openManagedPassWriteCheckStore = original })
@@ -121,7 +134,6 @@ func TestRunManagedPassWriteCheckDeletesExactlyOnceWhenFinalDeleteFails(t *testi
 	err := runManagedPassWriteCheck(context.Background())
 	require.Error(t, err)
 	assert.Equal(t, 1, store.deleteAttempts)
-	assert.Contains(t, err.Error(), "remove managed pass check")
 	assert.Contains(t, err.Error(), "cleanup failed")
 	assert.NotContains(t, err.Error(), "secret=")
 	assert.NotContains(t, err.Error(), store.lastValue)
