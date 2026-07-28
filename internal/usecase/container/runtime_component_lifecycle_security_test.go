@@ -518,7 +518,7 @@ func TestRuntimeComponentLifecycleMountsExactSelectedSocketAndValidatesExistingC
 	require.NoError(t, os.MkdirAll(envDir, 0o700))
 	configPath := filepath.Join(configDir, "runtime.toml")
 	envPath := filepath.Join(envDir, "runtime.env")
-	const sourcePath = "/run/user/1000/podman/native-api"
+	const sourcePath = "/run/user/1000/podman/podman.sock"
 	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
 	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix://"+sourcePath+"\n"), 0o600))
 
