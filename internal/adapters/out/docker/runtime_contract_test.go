@@ -1,7 +1,6 @@
 package docker
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -169,8 +168,16 @@ func TestRuntimeAdapterContractCreateContainer(t *testing.T) {
 
 func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodGet, r.Method)
-		require.Equal(t, "/v1.41/containers/component-fixture/json", r.URL.Path)
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected method: %s", r.Method)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path != "/v1.41/containers/component-fixture/json" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"Id":"component-fixture",
@@ -201,7 +208,7 @@ func TestRuntimeAdapterContractInspectIdentitySecurityAndMounts(t *testing.T) {
 	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
 	require.NoError(t, err)
 
-	inspected, err := NewRuntimeWithClient(cli).InspectContainer(context.Background(), "component-fixture")
+	inspected, err := NewRuntimeWithClient(cli).InspectContainer(t.Context(), "component-fixture")
 	require.NoError(t, err)
 	assert.Equal(t, "21001:21001", inspected.User)
 	assert.Equal(t, "keep-id", inspected.UsernsMode)

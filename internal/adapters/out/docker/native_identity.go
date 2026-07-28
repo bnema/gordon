@@ -2,6 +2,7 @@ package docker
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -181,17 +182,21 @@ func fetchNativePodmanInspect(
 
 func nativePodmanHTTPClient(apiClient nativePodmanClient) (*http.Client, *http.Transport) {
 	dial := apiClient.Dialer()
-	httpClient := apiClient.HTTPClient()
-	httpClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
-		return http.ErrUseLastResponse
-	}
+	shared := apiClient.HTTPClient()
 	transport := &http.Transport{
 		DisableCompression: true,
 		DialContext: func(dialCtx context.Context, _, _ string) (net.Conn, error) {
 			return dial(dialCtx)
 		},
 	}
-	httpClient.Transport = transport
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   shared.Timeout,
+		Jar:       shared.Jar,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return httpClient, transport
 }
 
@@ -316,7 +321,7 @@ func parseCanonicalNativeID(encoded string) (uint64, bool) {
 func validateNativeIDMap(mappings []nativePodmanIDMap, roleID uint64) ([]nativePodmanIDMap, bool) {
 	sorted := slices.Clone(mappings)
 	slices.SortFunc(sorted, func(left, right nativePodmanIDMap) int {
-		return intCompare(left.ContainerID, right.ContainerID)
+		return cmp.Compare(left.ContainerID, right.ContainerID)
 	})
 	roleEntries := 0
 	var containerEnd uint64
@@ -357,7 +362,7 @@ func validNativeIDMapRange(mapping nativePodmanIDMap) bool {
 func nativeHostRangesCoherent(mappings []nativePodmanIDMap, expectedEnd uint64) bool {
 	byHost := slices.Clone(mappings)
 	slices.SortFunc(byHost, func(left, right nativePodmanIDMap) int {
-		return intCompare(left.HostID, right.HostID)
+		return cmp.Compare(left.HostID, right.HostID)
 	})
 	var hostEnd uint64
 	for _, mapping := range byHost {
@@ -367,15 +372,4 @@ func nativeHostRangesCoherent(mappings []nativePodmanIDMap, expectedEnd uint64) 
 		hostEnd = mapping.HostID + mapping.Size
 	}
 	return hostEnd == expectedEnd
-}
-
-func intCompare(left, right uint64) int {
-	switch {
-	case left < right:
-		return -1
-	case left > right:
-		return 1
-	default:
-		return 0
-	}
 }

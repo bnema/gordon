@@ -219,6 +219,39 @@ func TestRuntimePolicyAllowsSocketOnlyForRuntimeComponent(t *testing.T) {
 	require.ErrorIs(t, (RuntimePolicy{Mode: RuntimePolicyModeEnforce}).CheckContainerConfig(identity, "", config), ErrRuntimePolicyDenied)
 }
 
+func TestIsApprovedRuntimeSocketBindRejectsNonEnginePath(t *testing.T) {
+	identity := testRuntimeCommandIdentity("runtime-socket-containment")
+	approved := domain.ContainerConfig{
+		Name:   "gordon-runtime-fixture-g1",
+		Labels: map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: string(domain.ComponentRoleRuntime)},
+		ReadOnlyVolumes: map[string]string{
+			"/run/gordon/runtime.sock": "/run/user/1000/podman/podman.sock",
+		},
+	}
+	policy := RuntimePolicy{Mode: RuntimePolicyModeEnforce}
+	require.NoError(t, policy.CheckContainerConfig(identity, "", approved))
+
+	denied := []string{
+		"/private/other/podman.sock",
+		"/tmp/docker.sock",
+		"/run/user/not-a-uid/podman/podman.sock",
+		"/run/user/1000/private/podman.sock",
+		"/var/run/not-docker.sock",
+	}
+	for _, source := range denied {
+		t.Run(source, func(t *testing.T) {
+			config := approved
+			config.ReadOnlyVolumes = map[string]string{"/run/gordon/runtime.sock": source}
+			err := policy.CheckContainerConfig(identity, "", config)
+			require.ErrorIs(t, err, ErrRuntimePolicyDenied)
+			var deniedErr RuntimePolicyDeniedError
+			require.True(t, errors.As(err, &deniedErr))
+			assert.Equal(t, RuntimePolicyReasonSocketMountDenied, deniedErr.Reason)
+			assert.NotContains(t, deniedErr.Message, source)
+		})
+	}
+}
+
 func TestRuntimePolicy(t *testing.T) {
 	identity := testRuntimeCommandIdentity("cmd-policy")
 

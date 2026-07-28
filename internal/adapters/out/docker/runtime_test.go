@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -267,11 +268,62 @@ func TestRuntimeRejectsChownOptionOnReadOnlyMount(t *testing.T) {
 	assert.False(t, created, "read-only mounts must never serialize U")
 }
 
+func TestPreflightVolumeChownWrapsProbeErrors(t *testing.T) {
+	tests := []struct {
+		name         string
+		version      string
+		info         string
+		versionOK    bool
+		infoOK       bool
+		wantContains string
+	}{
+		{name: "version probe", versionOK: false, wantContains: "inspect runtime version"},
+		{name: "info probe", version: `{"Components":[{"Name":"Podman Engine"}]}`, versionOK: true, infoOK: false, wantContains: "inspect runtime"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch request.URL.Path {
+				case "/version":
+					if !test.versionOK {
+						http.Error(w, "unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					_, _ = w.Write([]byte(test.version))
+				case "/v1.41/info":
+					if !test.infoOK {
+						http.Error(w, "unavailable", http.StatusServiceUnavailable)
+						return
+					}
+					_, _ = w.Write([]byte(test.info))
+				default:
+					http.NotFound(w, request)
+				}
+			}))
+			t.Cleanup(server.Close)
+
+			host := strings.TrimPrefix(server.URL, "http://")
+			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			require.NoError(t, err)
+			_, err = NewRuntimeWithClient(apiClient).CreateContainer(t.Context(), &domain.ContainerConfig{
+				Image: "gordon:fixture", Name: "gordon-runtime-fixture-g1",
+				Volumes:       map[string]string{"/var/lib/gordon": "gordon-runtime-fixture-g1"},
+				VolumeOptions: map[string][]string{"/var/lib/gordon": {domain.ContainerVolumeOptionChown}},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.wantContains)
+			assert.NotContains(t, err.Error(), "volume ownership option requires rootless Podman")
+		})
+	}
+}
+
 func createContainerWithVolumeOptions(t *testing.T, version, info string, options []string, readOnly bool) (bool, bool, []string, error) {
 	t.Helper()
 	var created atomic.Bool
 	var probed atomic.Bool
 	var binds []string
+	var bindsMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
@@ -288,8 +340,14 @@ func createContainerWithVolumeOptions(t *testing.T, version, info string, option
 					Binds []string
 				}
 			}
-			require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Errorf("decode create payload: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			bindsMu.Lock()
 			binds = payload.HostConfig.Binds
+			bindsMu.Unlock()
 			_, _ = w.Write([]byte(`{"Id":"created"}`))
 		case "/v1.41/containers/created/json":
 			_, _ = w.Write([]byte(`{"Id":"created","Name":"/gordon-runtime-fixture-g1","Image":"sha256:fixture","Created":"2026-05-05T00:00:00Z","Config":{"Image":"gordon:fixture"},"State":{"Status":"created","ExitCode":0},"NetworkSettings":{"Ports":{}}}`))

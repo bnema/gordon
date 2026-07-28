@@ -301,11 +301,17 @@ func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) ([]st
 
 func (r *Runtime) preflightVolumeChown(ctx context.Context) error {
 	version, err := r.runtimeVersion(ctx)
-	if err != nil || runtimeEngineKind(version.Components) != "podman" {
+	if err != nil {
+		return fmt.Errorf("inspect runtime version: %w", err)
+	}
+	if runtimeEngineKind(version.Components) != "podman" {
 		return fmt.Errorf("volume ownership option requires rootless Podman")
 	}
 	info, err := r.runtimeInfo(ctx)
-	if err != nil || !runtimeIsRootless(info.Rootless, info.SecurityOptions) {
+	if err != nil {
+		return fmt.Errorf("inspect runtime: %w", err)
+	}
+	if !runtimeIsRootless(info.Rootless, info.SecurityOptions) {
 		return fmt.Errorf("volume ownership option requires rootless Podman")
 	}
 	return nil

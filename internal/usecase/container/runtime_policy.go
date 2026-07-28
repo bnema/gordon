@@ -394,8 +394,46 @@ func isApprovedRuntimeSocketBind(cfg domain.ContainerConfig, source string) bool
 	// A lifecycle-generated runtime container may receive exactly the engine
 	// socket source selected by the active adapter. The destination is fixed by
 	// the lifecycle manager; no filename convention is part of this capability.
-	clean := filepath.Clean(strings.TrimSpace(source))
-	return filepath.IsAbs(clean) && clean != string(filepath.Separator)
+	return isApprovedEngineSocketSource(source)
+}
+
+func isApprovedEngineSocketSource(source string) bool {
+	trimmed := strings.TrimSpace(source)
+	if trimmed == "" || trimmed != source || !filepath.IsAbs(trimmed) {
+		return false
+	}
+	clean := filepath.Clean(trimmed)
+	if clean == string(filepath.Separator) || clean != trimmed {
+		return false
+	}
+	switch filepath.Base(clean) {
+	case "docker.sock":
+		return isApprovedDockerEngineSocket(filepath.Dir(clean))
+	case "podman.sock":
+		return isApprovedPodmanEngineSocket(filepath.Dir(clean))
+	default:
+		return false
+	}
+}
+
+func isApprovedDockerEngineSocket(dir string) bool {
+	return dir == "/var/run" || dir == "/run"
+}
+
+func isApprovedPodmanEngineSocket(dir string) bool {
+	if dir == "/run/podman" {
+		return true
+	}
+	parts := strings.Split(dir, string(filepath.Separator))
+	if len(parts) != 5 || parts[1] != "run" || parts[2] != "user" || parts[4] != "podman" {
+		return false
+	}
+	for _, character := range parts[3] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return parts[3] != ""
 }
 
 func isApprovedMigrationRuntimeStateBind(policy RuntimePolicy, cfg domain.ContainerConfig, source string, readOnly bool) bool {
