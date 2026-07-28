@@ -183,6 +183,7 @@ func TestPrivateBootstrapRuntimeClientDoesNotRetryTransportAfterReadinessBarrier
 	_, err = client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(ctx)
 	require.Error(t, err)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.Equal(t, int32(2), dialCalls.Load(), "post-barrier RPCs must dial once without a second transport-readiness retry loop")
 }
 
 func TestPrivateBootstrapRuntimeClientRejectsMissingTokenBeforeTransportWait(t *testing.T) {
@@ -863,14 +864,23 @@ func TestWaitForPrivateRuntimeTransportNormalizesRetryContextCauses(t *testing.T
 
 func TestWaitForPrivateRuntimeTransportValidatedConnectFailureStopsAtDeadline(t *testing.T) {
 	path := newValidatedRuntimeSocketPath(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
-	defer cancel()
-	err := waitForPrivateRuntimeTransport(ctx, func(ctx context.Context) (net.Conn, error) {
+	dialCalls := 0
+	retryCalls := 0
+	err := waitForPrivateRuntimeTransport(t.Context(), func(ctx context.Context) (net.Conn, error) {
+		dialCalls++
 		return dialValidatedRuntimeSocketWithDialer(ctx, path, func(context.Context, string, string) (net.Conn, error) {
 			return nil, wrappedUnixConnectError(syscall.EAGAIN)
 		})
-	}, waitRuntimeHandoffRetry)
+	}, func(context.Context) error {
+		retryCalls++
+		if retryCalls == 3 {
+			return context.DeadlineExceeded
+		}
+		return nil
+	})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, 3, dialCalls)
+	assert.Equal(t, 3, retryCalls)
 }
 
 func newValidatedRuntimeSocketPath(t *testing.T) string {
@@ -910,7 +920,9 @@ func wrappedUnixConnectError(err error) error {
 
 func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
 	path := newStaleValidatedRuntimeSocketPath(t)
+	dialCalls := 0
 	client, err := createPrivateRuntimeCommandClient(RuntimeControlConfig{Token: "runtime-token"}, "passthrough:///runtime", func(ctx context.Context) (net.Conn, error) {
+		dialCalls++
 		return dialValidatedRuntimeSocket(ctx, path)
 	})
 	require.NoError(t, err)
@@ -922,6 +934,7 @@ func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
 	_, err = client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(ctx)
 	require.Error(t, err)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
+	assert.Equal(t, 1, dialCalls, "non-bootstrap clients must retain a single fail-fast dial")
 }
 
 func TestPostHandoffRuntimeClientRejectsMissingRegularAndSymlinkSockets(t *testing.T) {

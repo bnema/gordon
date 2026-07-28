@@ -95,11 +95,13 @@ func (c *Client) Close() error {
 	c.closeMu.Lock()
 	if c.closed {
 		done := c.closeDone
-		err := c.closeErr
 		c.closeMu.Unlock()
 		if done != nil {
 			<-done
 		}
+		c.closeMu.Lock()
+		err := c.closeErr
+		c.closeMu.Unlock()
 		return err
 	}
 	c.closed = true

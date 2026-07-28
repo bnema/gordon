@@ -115,6 +115,14 @@ func TestAssertCleanedRejectsManagedPassSecretVolumeLeaks(t *testing.T) {
 	require.Empty(t, leakedManagedPassSecretVolumes("gordon-control-migration-g1\ngordon-control-fixture-g1\n"))
 }
 
+func TestManagedPassSecretVolumeListingErrorIsNotTreatedAsEmpty(t *testing.T) {
+	installPodmanInfoFixture(t, `printf 'volume listing failed\n' >&2; exit 1`)
+	listing, err := managedPassSecretVolumeNames(context.Background())
+	require.Error(t, err, "volume listing failures must fail closed")
+	require.Empty(t, listing)
+	require.Empty(t, leakedManagedPassSecretVolumes(listing), "ignoring listing errors would treat failure as an empty clean volume list")
+}
+
 // TestMigrationMissingEnvFailsPreflight documents that the real fixture uses
 // an explicit missing environment preflight before it mutates the runtime.
 func TestMigrationMissingEnvFailsPreflight(t *testing.T) {
@@ -315,12 +323,8 @@ func leakedManagedPassSecretVolumes(volumeListing string) []string {
 	return leaked
 }
 
-func managedPassSecretVolumeNames(ctx context.Context) string {
-	output, err := podmanOutput(ctx, "volume", "ls", "--format", "{{.Name}}")
-	if err != nil {
-		return ""
-	}
-	return output
+func managedPassSecretVolumeNames(ctx context.Context) (string, error) {
+	return podmanOutput(ctx, "volume", "ls", "--format", "{{.Name}}")
 }
 
 func (f *realMigrationFixture) assertCleaned() {
@@ -341,7 +345,9 @@ func (f *realMigrationFixture) assertCleaned() {
 	require.Error(f.t, err, "candidate image must be removed by fixture cleanup")
 	_, err = os.Stat(f.root)
 	require.ErrorIs(f.t, err, os.ErrNotExist, "fixture root and private API socket must be removed")
-	for _, name := range leakedManagedPassSecretVolumes(managedPassSecretVolumeNames(context.Background())) {
+	listing, err := managedPassSecretVolumeNames(context.Background())
+	require.NoError(f.t, err, "managed pass secret volume listing must succeed before asserting cleanup")
+	for _, name := range leakedManagedPassSecretVolumes(listing) {
 		require.Fail(f.t, "managed pass secret volume must be removed by fixture cleanup", "leaked volume %s", name)
 	}
 }
