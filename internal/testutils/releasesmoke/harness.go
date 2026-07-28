@@ -3,7 +3,6 @@ package releasesmoke
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -240,11 +239,7 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 	defer func() { _ = runQuiet(context.Background(), h.Docker, "volume", "rm", "-f", volume) }()
 
 	owner := fmt.Sprintf("gordon-release-smoke-secrets-owner-%s-%d", arch, os.Getpid())
-	readyPath := filepath.Join(leaseDir, "ready")
-	if err := mkfifo(readyPath); err != nil {
-		return err
-	}
-	defer os.Remove(readyPath)
+	_ = leaseDir // retained for callers that stage a per-arch workspace; readiness uses StdoutPipe.
 
 	ownerCmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", owner, // #nosec G204 -- release gate invokes docker with artifact-derived image names.
 		"--platform", "linux/"+arch, "--user", "21002:21002",
@@ -253,30 +248,15 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 		"-e", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
 		"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
 		image, "secrets", "lock", "--config", "/tmp/gordon.toml")
-	ownerCmd.Stdout, _ = os.OpenFile(readyPath, os.O_WRONLY, 0)
-	ownerCmd.Stderr = os.Stderr
-	if err := ownerCmd.Start(); err != nil {
-		return fmt.Errorf("start lease owner: %w", err)
-	}
-	ownerPID := ownerCmd.Process.Pid
-
-	readiness, err := waitManagedPassReadiness(readyPath, ReadinessPollAttempts)
+	readiness, terminateOwner, err := startManagedPassOwner(ctx, ownerCmd)
 	if err != nil {
-		_ = ownerCmd.Process.Kill()
-		_, _ = ownerCmd.Process.Wait()
 		return err
 	}
+	defer terminateOwner()
+
 	if readiness != ManagedPassLockMessage {
 		return fmt.Errorf("unexpected readiness %q", readiness)
 	}
-
-	leaseErrorFile, err := os.CreateTemp("", "gordon-lease-error-")
-	if err != nil {
-		return err
-	}
-	leaseError := leaseErrorFile.Name()
-	leaseErrorFile.Close()
-	defer os.Remove(leaseError)
 
 	doctorCmd := exec.CommandContext(ctx, "docker", "run", "--rm", // #nosec G204 -- release gate invokes docker with artifact-derived image names.
 		"--platform", "linux/"+arch, "--user", "21002:21002",
@@ -294,9 +274,7 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 	}
 
 	_ = runQuiet(ctx, h.Docker, "rm", "-f", owner)
-	_ = ownerCmd.Process.Kill()
-	_, _ = ownerCmd.Process.Wait()
-	_ = ownerPID
+	terminateOwner()
 
 	for range 2 {
 		if err := runQuiet(ctx, h.Docker, "run", "--rm",
@@ -352,43 +330,4 @@ func requireRootlessPodman(ctx context.Context, podman CommandRunner) error {
 		return fmt.Errorf("PRODUCTION GATE BLOCKED: Podman is not running rootless")
 	}
 	return nil
-}
-
-func mkfifo(path string) error {
-	return exec.Command("mkfifo", path).Run() // #nosec G204 -- release gate creates a named pipe for lease readiness.
-}
-
-func waitManagedPassReadiness(readyPath string, attempts int) (string, error) {
-	done := make(chan struct{})
-	var readiness string
-	var readErr error
-	go func() {
-		defer close(done)
-		file, err := os.Open(readyPath)
-		if err != nil {
-			readErr = err
-			return
-		}
-		defer file.Close()
-		buf := make([]byte, 512)
-		n, err := file.Read(buf)
-		if err != nil && err != io.EOF {
-			readErr = err
-			return
-		}
-		readiness = strings.TrimSpace(string(buf[:n]))
-	}()
-
-	for range attempts {
-		select {
-		case <-done:
-			if readErr != nil {
-				return "", readErr
-			}
-			return readiness, nil
-		default:
-			time.Sleep(time.Second)
-		}
-	}
-	return "", fmt.Errorf("timed out waiting for managed pass backend lock")
 }

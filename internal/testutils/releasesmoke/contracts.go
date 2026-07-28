@@ -43,8 +43,13 @@ var HarnessContracts = []HarnessContract{
 			"ManagedPassLockMessage",
 			"LeaseConflictMessage",
 			"waitManagedPassReadiness",
+			"StdoutPipe",
 			"ReadinessPollAttempts",
-			"ownerCmd.Process",
+			"Process.Kill",
+		},
+		NotContains: []string{
+			"mkfifo",
+			"O_WRONLY",
 		},
 	},
 	{
@@ -65,6 +70,8 @@ var HarnessContracts = []HarnessContract{
 			"no-new-privileges",
 			"identity-write-check",
 			"/var/lib/gordon:U",
+			"assertExclusiveGenerationVolumeU",
+			"assertResourcesUninspectable",
 		},
 		NotContains: []string{
 			"secrets:U",
@@ -88,6 +95,10 @@ var HarnessContracts = []HarnessContract{
 			"LeaseConflictMessage",
 			`"secrets", "doctor"`,
 			`"--write-check"`,
+			"StdoutPipe",
+		},
+		NotContains: []string{
+			"mkfifo",
 		},
 	},
 	{
@@ -98,6 +109,9 @@ var HarnessContracts = []HarnessContract{
 			`"volume", "rm"`,
 			"Process.Kill",
 			"Process.Wait",
+			"cleanupOnce",
+			`"volume", "inspect"`,
+			`"container", "inspect"`,
 		},
 	},
 }

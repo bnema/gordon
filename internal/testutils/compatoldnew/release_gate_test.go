@@ -39,10 +39,13 @@ func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
 	require.Contains(t, harnessSource, "waitManagedPassReadiness")
 	require.Contains(t, harnessSource, "ReadinessPollAttempts")
 	require.Equal(t, 30, releasesmoke.ReadinessPollAttempts)
-	require.Contains(t, harnessSource, "ownerCmd.Process.Kill")
-	require.Contains(t, harnessSource, "ownerCmd.Process.Wait")
+	require.Contains(t, harnessSource, "Process.Kill")
+	require.Contains(t, harnessSource, "Process.Wait")
+	require.Contains(t, harnessSource, "StdoutPipe")
 	require.Contains(t, harnessSource, "ManagedPassLockMessage")
 	require.NotContains(t, harnessSource, `IFS= read -r readiness`)
+	require.NotContains(t, harnessSource, "mkfifo")
+	require.NotContains(t, harnessSource, "O_WRONLY")
 
 	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
 	require.NoError(t, err)
@@ -82,6 +85,7 @@ func readReleaseSmokeHarnessSource(t *testing.T) string {
 	for _, name := range []string{
 		"internal/testutils/releasesmoke/harness.go",
 		"internal/testutils/releasesmoke/podman.go",
+		"internal/testutils/releasesmoke/readiness.go",
 	} {
 		data, err := os.ReadFile(filepath.Join(root, name))
 		require.NoError(t, err)

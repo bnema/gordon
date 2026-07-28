@@ -81,6 +81,7 @@ func readReleaseSmokeSources(t *testing.T) string {
 	for _, name := range []string{
 		"internal/testutils/releasesmoke/harness.go",
 		"internal/testutils/releasesmoke/podman.go",
+		"internal/testutils/releasesmoke/readiness.go",
 	} {
 		path := filepath.Join(root, name)
 		data, err := os.ReadFile(path)
