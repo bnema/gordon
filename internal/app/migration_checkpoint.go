@@ -391,7 +391,8 @@ func validCutoverFailureCode(code string) bool {
 func matchesRuntimeCutover(checkpoint MigrationCheckpoint, command domain.RuntimeSelfUpdateCommand, migrationID string) bool {
 	return checkpoint.MigrationID == migrationID && checkpoint.ComponentGeneration == command.Generation && checkpoint.RouteSnapshotGeneration != 0 &&
 		checkpoint.AppliedEdgeComponentID == command.TargetComponentID && checkpoint.OldServingPath == command.OldServingComponentID &&
-		slices.Equal(componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge), command.FinalPortPublishes)
+		slices.Equal(componentPublicPorts(checkpoint.PublicPortBindings, domain.ComponentRoleEdge), command.FinalPortPublishes) &&
+		slices.Equal(checkpoint.EdgeAppNetworks, command.EdgeAppNetworks)
 }
 
 // withLock uses a persistent, owner-only lock file rather than the checkpoint

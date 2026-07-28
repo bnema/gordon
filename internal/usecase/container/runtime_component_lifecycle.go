@@ -406,6 +406,9 @@ func (m *runtimeComponentLifecycleManager) activateEdge(ctx context.Context, com
 // already healthy final listener or proves the prepared rollback (and the old
 // owner when one is present) before returning a retryable, sanitized outcome.
 func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	if err := m.authorizeRecoveryEdgeAppNetworks(ctx, command); err != nil {
+		return err
+	}
 	containers, err := m.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return componentLifecycleError("list cutover inventory", err)
@@ -438,6 +441,9 @@ func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ct
 
 func (m *runtimeComponentLifecycleManager) completedFinalCutover(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target *domain.Container, oldRunning bool) bool {
 	if target == nil || oldRunning || !containerPortsMatch(target, command.FinalPortPublishes) || m.healthContainer(ctx, target) != nil {
+		return false
+	}
+	if err := m.connectFinalEdgeAppNetworks(ctx, command, command.EdgeAppNetworks); err != nil {
 		return false
 	}
 	if err := m.ensureEdgeAppNetworksAttached(ctx, command, target.Name); err != nil {
@@ -573,6 +579,33 @@ func (m *runtimeComponentLifecycleManager) validateEdgeActivation(ctx context.Co
 // activation to join an arbitrary network and makes the later replacement
 // retain exactly the routing connectivity which passed the prepared probes.
 func (m *runtimeComponentLifecycleManager) preparedEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand, prepared *domain.Container) ([]string, error) {
+	networks, err := m.listAuthorizedEdgeAppNetworks(ctx, command)
+	if err != nil {
+		return nil, err
+	}
+	if len(command.EdgeAppNetworks) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(command.EdgeAppNetworks))
+	for _, name := range command.EdgeAppNetworks {
+		network := namedNetwork(networks, name)
+		if network == nil || !slices.Contains(network.Containers, prepared.Name) {
+			return nil, m.deniedAppNetwork(command)
+		}
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// authorizeRecoveryEdgeAppNetworks rejects forged or untrusted recovery
+// networks before any Stop/Remove/Connect/Commit. Unlike prepared activation,
+// recovery may reconnect a missing attachment after this inventory proof.
+func (m *runtimeComponentLifecycleManager) authorizeRecoveryEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand) error {
+	_, err := m.listAuthorizedEdgeAppNetworks(ctx, command)
+	return err
+}
+
+func (m *runtimeComponentLifecycleManager) listAuthorizedEdgeAppNetworks(ctx context.Context, command domain.RuntimeSelfUpdateCommand) ([]*domain.NetworkInfo, error) {
 	if len(command.EdgeAppNetworks) == 0 {
 		return nil, nil
 	}
@@ -583,7 +616,6 @@ func (m *runtimeComponentLifecycleManager) preparedEdgeAppNetworks(ctx context.C
 	if err != nil {
 		return nil, componentLifecycleError("list edge networks", err)
 	}
-	names := make([]string, 0, len(command.EdgeAppNetworks))
 	seen := make(map[string]struct{}, len(command.EdgeAppNetworks))
 	for _, name := range command.EdgeAppNetworks {
 		if !safeManagedAppNetworkName(name, m.policy.ManagedNetworkPrefix) {
@@ -593,13 +625,11 @@ func (m *runtimeComponentLifecycleManager) preparedEdgeAppNetworks(ctx context.C
 			return nil, m.deniedAppNetwork(command)
 		}
 		seen[name] = struct{}{}
-		network := namedNetwork(networks, name)
-		if !validManagedAppNetwork(network, name, m.policy.ManagedNetworkPrefix) || !slices.Contains(network.Containers, prepared.Name) {
+		if !validManagedAppNetwork(namedNetwork(networks, name), name, m.policy.ManagedNetworkPrefix) {
 			return nil, m.deniedAppNetwork(command)
 		}
-		names = append(names, name)
 	}
-	return names, nil
+	return networks, nil
 }
 
 func namedNetwork(networks []*domain.NetworkInfo, name string) *domain.NetworkInfo {
@@ -782,20 +812,21 @@ func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx conte
 	return nil
 }
 
-// ensureEdgeAppNetworksAttached attests inventory only. Callers that must join
-// networks (final create, prepared restore) connect first; this proof never
-// issues a redundant Connect when the exact target is already attached.
+// ensureEdgeAppNetworksAttached re-authorizes requested networks from current
+// managed inventory, then attests attachment. Callers that must join networks
+// (final create, prepared restore, interrupted recovery) connect first; this
+// proof never issues a redundant Connect when the exact target is already attached.
 func (m *runtimeComponentLifecycleManager) ensureEdgeAppNetworksAttached(ctx context.Context, command domain.RuntimeSelfUpdateCommand, containerName string) error {
-	if len(command.EdgeAppNetworks) == 0 {
-		return nil
-	}
-	networks, err := m.runtime.ListNetworks(ctx)
+	networks, err := m.listAuthorizedEdgeAppNetworks(ctx, command)
 	if err != nil {
 		return err
 	}
+	if len(command.EdgeAppNetworks) == 0 {
+		return nil
+	}
 	for _, name := range command.EdgeAppNetworks {
 		network := namedNetwork(networks, name)
-		if !validManagedAppNetwork(network, name, m.policy.ManagedNetworkPrefix) || !slices.Contains(network.Containers, containerName) {
+		if network == nil || !slices.Contains(network.Containers, containerName) {
 			return errors.New("edge app network attachment proof failed")
 		}
 	}
