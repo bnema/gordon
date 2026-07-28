@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 type fakePassCommandRunner struct {
@@ -184,4 +185,50 @@ func TestEnsureManagedPassStoreRedactsCommandFailures(t *testing.T) {
 	assert.NotContains(t, err.Error(), "secret=value")
 	assert.NotContains(t, err.Error(), root)
 	assert.NotContains(t, err.Error(), "/private")
+}
+
+func TestRunManagedPassDoctorHoldsLeaseDuringCallback(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "secrets")
+	runner := &fakePassCommandRunner{root: root, fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567"}
+	require.NoError(t, ensureManagedPassStore(context.Background(), root, runner))
+
+	checkStarted := make(chan struct{})
+	releaseCheck := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- runManagedPassDoctor(context.Background(), root, runner, func() error {
+			close(checkStarted)
+			<-releaseCheck
+			return nil
+		})
+	}()
+
+	select {
+	case <-checkStarted:
+	case <-time.After(time.Second):
+		t.Fatal("managed pass doctor callback did not start")
+	}
+	second, err := acquireManagedPassLease(root)
+	require.Error(t, err)
+	assert.Nil(t, second)
+	close(releaseCheck)
+	require.NoError(t, <-done)
+	require.NoError(t, ensureManagedPassStore(context.Background(), root, runner))
+}
+
+func TestSyncManagedPassTreeSkipsNonRegular(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "regular"), []byte("data"), 0o600))
+	fifo := filepath.Join(root, "agent.sock")
+	require.NoError(t, unix.Mkfifo(fifo, 0o600))
+	require.NoError(t, syncManagedPassTree(root))
+}
+
+func TestSyncManagedPassTreeRejectsSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	require.NoError(t, os.WriteFile(target, []byte("data"), 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "link")))
+	err := syncManagedPassTree(root)
+	require.Error(t, err)
 }

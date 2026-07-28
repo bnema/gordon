@@ -96,6 +96,30 @@ func ValidateManagedPassBackend(ctx context.Context) error {
 	return ensureManagedPassStore(ctx, managedPassRoot, execPassCommandRunner{})
 }
 
+// RunManagedPassDoctor validates the managed pass store while holding its
+// exclusive lease for the duration of the optional check callback.
+func RunManagedPassDoctor(ctx context.Context, check func() error) error {
+	if !managedPassEnvironment() {
+		return fmt.Errorf("managed pass environment is not configured")
+	}
+	return runManagedPassDoctor(ctx, managedPassRoot, execPassCommandRunner{}, check)
+}
+
+func runManagedPassDoctor(ctx context.Context, root string, runner passCommandRunner, check func() error) error {
+	lease, err := acquireManagedPassLease(root)
+	if err != nil {
+		return err
+	}
+	defer releaseManagedPassLease(lease)
+	if err := ensureManagedPassStoreLocked(ctx, root, runner); err != nil {
+		return err
+	}
+	if check != nil {
+		return check()
+	}
+	return nil
+}
+
 // HoldManagedPassBackend validates the control-owned pass backend, signals
 // readiness, and retains its production lease until the context is canceled.
 func HoldManagedPassBackend(ctx context.Context, ready func() error) error {
@@ -154,14 +178,18 @@ func ensureProcessManagedPassStore(ctx context.Context, root string, runner pass
 }
 
 func acquireManagedPassLease(root string) (*os.File, error) {
+	log := zerowrap.Default()
 	if err := os.MkdirAll(root, 0o700); err != nil {
+		log.Debug().Err(err).Msg("failed to prepare managed pass root")
 		return nil, fmt.Errorf("prepare managed pass root")
 	}
 	if err := os.Chmod(root, 0o700); err != nil { // #nosec G302 -- private state directory.
+		log.Debug().Err(err).Msg("failed to restrict managed pass root")
 		return nil, fmt.Errorf("restrict managed pass root")
 	}
 	fd, err := unix.Open(filepath.Join(root, managedPassLockName), unix.O_CREAT|unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
+		log.Debug().Err(err).Msg("failed to open managed pass lease")
 		return nil, fmt.Errorf("open managed pass lease")
 	}
 	file := os.NewFile(uintptr(fd), managedPassLockName)
@@ -171,10 +199,12 @@ func acquireManagedPassLease(root string) (*os.File, error) {
 	}
 	if err := file.Chmod(0o600); err != nil {
 		_ = file.Close()
+		log.Debug().Err(err).Msg("failed to restrict managed pass lease")
 		return nil, fmt.Errorf("restrict managed pass lease")
 	}
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
+		log.Debug().Err(err).Msg("managed pass lease unavailable")
 		return nil, fmt.Errorf("managed pass store is already in use")
 	}
 	return file, nil
@@ -303,22 +333,7 @@ func syncManagedPassTree(root string) error {
 			directories = append(directories, path)
 			return nil
 		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return fmt.Errorf("resolve managed pass staging state")
-		}
-		file, err := scopedRoot.Open(relative)
-		if err != nil {
-			return fmt.Errorf("open managed pass staging state")
-		}
-		if err := file.Sync(); err != nil {
-			_ = file.Close()
-			return fmt.Errorf("sync managed pass staging state")
-		}
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close managed pass staging state")
-		}
-		return nil
+		return syncManagedPassRegularFile(scopedRoot, root, path, entry)
 	}); err != nil {
 		return err
 	}
@@ -334,6 +349,29 @@ func syncManagedPassTree(root string) error {
 		if err := directory.Close(); err != nil {
 			return fmt.Errorf("close managed pass staging directory")
 		}
+	}
+	return nil
+}
+
+func syncManagedPassRegularFile(scopedRoot *os.Root, root, path string, entry os.DirEntry) error {
+	info, err := entry.Info()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil
+	}
+	relative, err := filepath.Rel(root, path)
+	if err != nil {
+		return fmt.Errorf("resolve managed pass staging state")
+	}
+	file, err := scopedRoot.Open(relative)
+	if err != nil {
+		return fmt.Errorf("open managed pass staging state")
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync managed pass staging state")
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close managed pass staging state")
 	}
 	return nil
 }

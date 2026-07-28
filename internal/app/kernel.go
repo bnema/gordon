@@ -41,6 +41,7 @@ type Kernel struct {
 	// composed around the already-running monolith runtime worker, never a
 	// second Docker/Podman adapter owned by the CLI.
 	migrationOnce   sync.Once
+	migrationMu     sync.Mutex
 	migrationSvc    *MigrationService
 	migrationErr    error
 	migrationInit   func() (*MigrationService, error)
@@ -113,8 +114,10 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		}
 		kernel.migrationInit = func() (*MigrationService, error) {
 			migration, launcher, migrationErr := newMonolithMigrationService(configPath, cfg, svc)
-			if migrationErr == nil {
+			if migrationErr == nil && launcher != nil {
+				kernel.migrationMu.Lock()
 				kernel.migrationCloser = launcher
+				kernel.migrationMu.Unlock()
 			}
 			return migration, migrationErr
 		}
@@ -154,8 +157,11 @@ func (k *Kernel) Close() error {
 		return nil
 	}
 	var closeErr error
-	if k.migrationCloser != nil {
-		closeErr = k.migrationCloser.Close()
+	k.migrationMu.Lock()
+	closer := k.migrationCloser
+	k.migrationMu.Unlock()
+	if closer != nil {
+		closeErr = closer.Close()
 	}
 	if k.cleanup != nil {
 		k.cleanup()

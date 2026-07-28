@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -35,4 +37,41 @@ secrets_backend = "unsafe"
 
 	require.NotNil(t, kernel.Config())
 	require.NotNil(t, kernel.Secrets())
+}
+
+type testMigrationCloser struct {
+	closed chan struct{}
+}
+
+func (c *testMigrationCloser) Close() error {
+	close(c.closed)
+	return nil
+}
+
+func TestKernelMigrationCloserMutex(t *testing.T) {
+	t.Parallel()
+
+	kernel := &Kernel{}
+	kernel.migrationInit = func() (*MigrationService, error) {
+		time.Sleep(20 * time.Millisecond)
+		closer := &testMigrationCloser{closed: make(chan struct{})}
+		kernel.migrationMu.Lock()
+		kernel.migrationCloser = closer
+		kernel.migrationMu.Unlock()
+		return nil, nil
+	}
+
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = kernel.Migration()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = kernel.Close()
+		}()
+	}
+	wg.Wait()
 }

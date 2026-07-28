@@ -201,3 +201,13 @@ func TestPassProvider_GetSecret_PathValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestPassProvider_GetSecret_PreservesContextCancellation(t *testing.T) {
+	provider := NewPassProvider(testLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := provider.GetSecret(ctx, "github.com/bnema/gordon/test/secret")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled))
+}
