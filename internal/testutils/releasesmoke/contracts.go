@@ -14,11 +14,15 @@ const ReadinessPollAttempts = 30
 // ImageArchitectures verified by release-image-smoke.
 var ImageArchitectures = []string{"amd64", "arm64"}
 
-// RoleIdentities exercised by podman managed-pass smoke.
-var RoleIdentities = []struct {
+// ReleaseSmokeRoleIdentity pairs a split serve role with its fixed non-root UID/GID string.
+type ReleaseSmokeRoleIdentity struct {
 	Role     domain.ComponentRole
 	Identity string
-}{
+}
+
+// RoleIdentities is the canonical release-smoke role/identity table for Docker serve checks
+// and Podman role inspection.
+var RoleIdentities = []ReleaseSmokeRoleIdentity{
 	{domain.ComponentRoleRuntime, "21001"},
 	{domain.ComponentRoleControl, "21002"},
 	{domain.ComponentRoleEdge, "21003"},

@@ -84,96 +84,88 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 	}
 	_ = os.Chmod(socketPath, 0o600)
 
-	roleSpecs := []struct {
-		role     string
-		identity string
-	}{
-		{"runtime", "21001"},
-		{"control", "21002"},
-		{"edge", "21003"},
-		{"registry", "21004"},
-	}
-
-	for _, spec := range roleSpecs {
-		name := fmt.Sprintf("gordon-release-podman-%s-%d", spec.role, os.Getpid())
+	for _, spec := range RoleIdentities {
+		roleName := string(spec.Role)
+		containerUser := spec.Identity + ":" + spec.Identity
+		name := fmt.Sprintf("gordon-release-podman-%s-%d", roleName, os.Getpid())
 		roleNames = append(roleNames, name)
-		rolePrivate := filepath.Join(rolesDir, spec.role)
+		rolePrivate := filepath.Join(rolesDir, roleName)
 		if err = os.MkdirAll(rolePrivate, 0o700); err != nil {
 			return cleanup, err
 		}
 		mounts := []string{"-v", rolePrivate + ":/private"}
 		var stateVolume string
-		if spec.role != "edge" {
-			stateVolume = fmt.Sprintf("gordon-release-podman-%s-%d-g1", spec.role, os.Getpid())
+		if spec.Role != domain.ComponentRoleEdge {
+			stateVolume = fmt.Sprintf("gordon-release-podman-%s-%d-g1", roleName, os.Getpid())
 			generationVolumes = append(generationVolumes, stateVolume)
 			if err = runQuiet(ctx, h.Podman, "volume", "create", stateVolume); err != nil {
 				return cleanup, err
 			}
 			mounts = append(mounts, "-v", stateVolume+":/var/lib/gordon:U")
 		}
-		if spec.role == "runtime" {
+		if spec.Role == domain.ComponentRoleRuntime {
 			mounts = append(mounts, "-v", socketPath+":/run/gordon/runtime.sock:ro")
 		}
 
 		args := []string{
 			"run", "--detach", "--name", name,
-			"--user", spec.identity + ":" + spec.identity,
-			"--userns", "keep-id:uid=" + spec.identity + ",gid=" + spec.identity,
+			"--user", containerUser,
+			"--userns", "keep-id:uid=" + spec.Identity + ",gid=" + spec.Identity,
 			"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		}
 		args = append(args, mounts...)
 		args = append(args, "--entrypoint", "sh", image, "-ec", `trap "exit 0" TERM INT; while :; do sleep 1; done`)
 		if err = runQuiet(ctx, h.Podman, args...); err != nil {
-			return cleanup, fmt.Errorf("start role %s: %w", spec.role, err)
+			return cleanup, fmt.Errorf("start role %s: %w", roleName, err)
 		}
 
 		idOut, err := runOutput(ctx, h.Podman, "exec", name, "sh", "-ec", `printf "%s:%s" "$(id -u)" "$(id -g)"`)
 		if err != nil {
 			return cleanup, err
 		}
-		if strings.TrimSpace(idOut) != spec.identity+":"+spec.identity {
-			return cleanup, fmt.Errorf("role %s identity mismatch: %q", spec.role, strings.TrimSpace(idOut))
+		if strings.TrimSpace(idOut) != containerUser {
+			return cleanup, fmt.Errorf("role %s identity mismatch: %q", roleName, strings.TrimSpace(idOut))
 		}
 		userOut, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{.Config.User}}", name)
 		if err != nil {
 			return cleanup, err
 		}
-		if strings.TrimSpace(userOut) != spec.identity+":"+spec.identity {
-			return cleanup, fmt.Errorf("role %s config user mismatch", spec.role)
+		if strings.TrimSpace(userOut) != containerUser {
+			return cleanup, fmt.Errorf("role %s config user mismatch", roleName)
 		}
 		usernsOut, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{.HostConfig.UsernsMode}}", name)
 		if err != nil {
 			return cleanup, err
 		}
-		expectedUserns := fmt.Sprintf("keep-id:uid=%s,gid=%s", spec.identity, spec.identity)
+		expectedUserns := fmt.Sprintf("keep-id:uid=%s,gid=%s", spec.Identity, spec.Identity)
 		if strings.TrimSpace(usernsOut) != expectedUserns {
-			return cleanup, fmt.Errorf("role %s userns mismatch: %q", spec.role, strings.TrimSpace(usernsOut))
+			return cleanup, fmt.Errorf("role %s userns mismatch: %q", roleName, strings.TrimSpace(usernsOut))
 		}
 		capDrop, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{json .HostConfig.CapDrop}}", name)
 		if err != nil {
 			return cleanup, err
 		}
 		if strings.TrimSpace(capDrop) != `["ALL"]` {
-			return cleanup, fmt.Errorf("role %s cap drop mismatch", spec.role)
+			return cleanup, fmt.Errorf("role %s cap drop mismatch", roleName)
 		}
 		capAdd, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{range .HostConfig.CapAdd}}{{.}}{{end}}", name)
 		if err != nil {
 			return cleanup, err
 		}
 		if strings.TrimSpace(capAdd) != "" {
-			return cleanup, fmt.Errorf("role %s must not add capabilities", spec.role)
+			return cleanup, fmt.Errorf("role %s must not add capabilities", roleName)
 		}
 		secOpt, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{json .HostConfig.SecurityOpt}}", name)
 		if err != nil {
 			return cleanup, err
 		}
 		if !strings.Contains(secOpt, "no-new-privileges") {
-			return cleanup, fmt.Errorf("role %s missing no-new-privileges", spec.role)
+			return cleanup, fmt.Errorf("role %s missing no-new-privileges", roleName)
 		}
 
 		privateProbe := `probe=/private/.write-check; : >"$probe"; test -r "$probe"; rm "$probe"; test ! -e "$probe"`
 		if err = runQuiet(ctx, h.Podman, "exec", name, "sh", "-ec", privateProbe); err != nil {
-			return cleanup, fmt.Errorf("role %s private write check: %w", spec.role, err)
+			return cleanup, fmt.Errorf("role %s private write check: %w", roleName, err)
 		}
 
 		mountModes, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{range .Mounts}}{{println .Destination .Mode}}{{end}}", name)
@@ -188,18 +180,18 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 		if err != nil {
 			return cleanup, err
 		}
-		if err = assertExclusiveGenerationVolumeU(spec.role, stateVolume, mountModes, gordonProjection, bindsJSON); err != nil {
+		if err = assertExclusiveGenerationVolumeU(roleName, stateVolume, mountModes, gordonProjection, bindsJSON); err != nil {
 			return cleanup, err
 		}
 
 		if stateVolume != "" {
-			stateProbe := fmt.Sprintf(`test "$(stat -c "%%u:%%g" /var/lib/gordon)" = "%s:%s"; chmod 0700 /var/lib/gordon; test "$(stat -c "%%a" /var/lib/gordon)" = 700; probe=/var/lib/gordon/.identity-write-check; : >"$probe"; test -r "$probe"; rm "$probe"; test ! -e "$probe"`, spec.identity, spec.identity)
+			stateProbe := fmt.Sprintf(`test "$(stat -c "%%u:%%g" /var/lib/gordon)" = "%s:%s"; chmod 0700 /var/lib/gordon; test "$(stat -c "%%a" /var/lib/gordon)" = 700; probe=/var/lib/gordon/.identity-write-check; : >"$probe"; test -r "$probe"; rm "$probe"; test ! -e "$probe"`, spec.Identity, spec.Identity)
 			if err = runQuiet(ctx, h.Podman, "exec", name, "sh", "-ec", stateProbe); err != nil {
-				return cleanup, fmt.Errorf("role %s state write check: %w", spec.role, err)
+				return cleanup, fmt.Errorf("role %s state write check: %w", roleName, err)
 			}
 		}
 
-		if spec.role == "runtime" {
+		if spec.Role == domain.ComponentRoleRuntime {
 			if err = runQuiet(ctx, h.Podman, "exec", name, "test", "-S", "/run/gordon/runtime.sock"); err != nil {
 				return cleanup, fmt.Errorf("runtime socket mount: %w", err)
 			}
@@ -210,7 +202,7 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 			}
 			for _, line := range strings.Split(strings.TrimSpace(mountsOut), "\n") {
 				if strings.TrimSpace(line) == "/run/gordon/runtime.sock" {
-					return cleanup, fmt.Errorf("role %s must not mount runtime socket", spec.role)
+					return cleanup, fmt.Errorf("role %s must not mount runtime socket", roleName)
 				}
 			}
 		}

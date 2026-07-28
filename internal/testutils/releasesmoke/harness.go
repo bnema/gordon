@@ -41,6 +41,16 @@ func (h *Harness) artifactsPath() string {
 	return filepath.Join(h.DistDir, "artifacts.json")
 }
 
+func dockerImageSmokeServeRoleChecks(ctx context.Context, runner CommandRunner, image, arch string) error {
+	for _, spec := range RoleIdentities {
+		role := spec.Role
+		if err := runQuiet(ctx, runner, "run", "--rm", "--platform", "linux/"+arch, image, "serve", "--role", string(role), "--help"); err != nil {
+			return fmt.Errorf("%s serve --role %s: %w", arch, role, err)
+		}
+	}
+	return nil
+}
+
 // RunImageSmoke verifies artifact-derived amd64/arm64 images under Docker/QEMU.
 func (h *Harness) RunImageSmoke(ctx context.Context) error {
 	info, err := os.Stat(h.DockerSocket)
@@ -66,10 +76,8 @@ func (h *Harness) RunImageSmoke(ctx context.Context) error {
 		if err := h.dockerManagedPassLease(ctx, image, arch, secretsConfig, leaseDir); err != nil {
 			return fmt.Errorf("%s managed pass: %w", arch, err)
 		}
-		for _, role := range []string{"control", "runtime", "edge", "registry"} {
-			if err := runQuiet(ctx, h.Docker, "run", "--rm", "--platform", "linux/"+arch, image, "serve", "--role", role, "--help"); err != nil {
-				return fmt.Errorf("%s serve --role %s: %w", arch, role, err)
-			}
+		if err := dockerImageSmokeServeRoleChecks(ctx, h.Docker, image, arch); err != nil {
+			return err
 		}
 		if err := h.dockerMonolithProbe(ctx, image, arch, smokeConfig); err != nil {
 			return fmt.Errorf("%s monolith: %w", arch, err)
