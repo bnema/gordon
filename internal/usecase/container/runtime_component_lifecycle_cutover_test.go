@@ -151,7 +151,7 @@ func TestRuntimeComponentLifecycleActivateColdNetworkFailureRestoresAndProvesPre
 	runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, prepared.Name, "gordon-app-fixture").Return(nil).Twice()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, prepared.Name, "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{restored}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
@@ -343,10 +343,10 @@ func TestRuntimeComponentLifecycleActivatePreservesManagedAppNetwork(t *testing.
 	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, "gordon-edge-fixture-g1", "gordon-app-fixture").Return(nil).Twice()
-	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", prepared.Name}}}, nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, "gordon-edge-fixture-g1", "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", "gordon-edge-fixture-g1"}}}, nil).Once()
 
 	command := cutoverCommand(config)
 	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
@@ -544,7 +544,6 @@ func TestCompletedFinalCutoverRequiresAllEdgeAppNetworks(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{final}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, final.Name, "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", final.Name}}}, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforeCommit}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
@@ -564,7 +563,6 @@ func TestCompletedFinalCutoverRejectsMissingEdgeAppNetworks(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{final}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, final.Name, "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test"}}}, nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
@@ -572,10 +570,9 @@ func TestCompletedFinalCutoverRejectsMissingEdgeAppNetworks(t *testing.T) {
 	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
 	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{restored}, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", restored.Name}}}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Once()
-	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", restored.Name}}}, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforeCommit}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
 	command := cutoverCommand(config)
@@ -594,11 +591,11 @@ func TestRestorePreparedEdgeReattachesAppNetworks(t *testing.T) {
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
-	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Twice()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Once()
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{restored}, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", restored.Name}}}, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "restored").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "restored").Return("healthy", true, nil).Once()
-	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", restored.Name}}}, nil).Once()
 	committer := &recoveringMigrationCutoverCommitter{subphase: domain.MigrationCutoverSubphaseBeforePreparedRemove}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
 	command := cutoverCommand(config)
@@ -606,6 +603,87 @@ func TestRestorePreparedEdgeReattachesAppNetworks(t *testing.T) {
 	err := applyTestComponentLifecycle(manager, context.Background(), command)
 	require.Error(t, err)
 	assert.Equal(t, []bool{true}, committer.failureRetries)
+}
+
+func TestTransferEdgeListenerRejectsMissingNetworkAttachmentBeforeCommit(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")})
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().InspectContainer(mock.Anything, prepared.ID).Return(prepared, nil).Maybe()
+	runtime.EXPECT().InspectContainer(mock.Anything, restored.ID).Return(restored, nil).Maybe()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", prepared.Name}}}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, prepared.Name, "gordon-app-fixture").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test"}}}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
+	expectEdgeRollbackInventoryProof(runtime, old, restored, []string{"gordon-app-fixture"})
+
+	command := cutoverCommand(config)
+	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
+	committer := &recordingMigrationCutoverCommitter{}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
+	err := applyTestComponentLifecycle(manager, context.Background(), command)
+	require.Error(t, err)
+	assert.Empty(t, committer.commands)
+	assert.Equal(t, []bool{true}, committer.failureRetries)
+}
+
+func TestRollbackWithOldPresentProvesRestoredEdgeNetworksAndOldListener(t *testing.T) {
+	config := cutoverConfig(t)
+	prepared := edgeLifecycleFixture(config, &domain.Container{ID: "prepared", Name: "gordon-edge-fixture-g1", Ports: []int{18080}, Labels: componentLabels("edge")})
+	old := &domain.Container{ID: "old", Name: "old-monolith", Ports: []int{8080, 5000}, Labels: map[string]string{domain.LabelManaged: "true"}}
+	restored := edgeLifecycleFixture(config, &domain.Container{ID: "restored", Name: prepared.Name, Ports: []int{18080}, Labels: componentLabels("edge")})
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().InspectContainer(mock.Anything, prepared.ID).Return(prepared, nil).Maybe()
+	runtime.EXPECT().InspectContainer(mock.Anything, restored.ID).Return(restored, nil).Maybe()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared}, nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "prepared").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "prepared").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{prepared, old}, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", prepared.Name}}}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, prepared.Name, "gordon-app-fixture").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "final").Return(true, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "final").Return("healthy", true, nil).Once()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{{Name: "gordon-app-fixture", Labels: map[string]string{domain.LabelManaged: "true"}, Containers: []string{"gordon-target-app-example-test", prepared.Name}}}, nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "final").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "final", true).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, "gordon-app-fixture").Return(nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
+	expectEdgeRollbackInventoryProof(runtime, old, restored, []string{"gordon-app-fixture"})
+
+	command := cutoverCommand(config)
+	command.EdgeAppNetworks = []string{"gordon-app-fixture"}
+	committer := &recordingMigrationCutoverCommitter{err: errors.New("injected durable write failure")}
+	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce, ManagedNetworkPrefix: "gordon"}), committer)
+	err := applyTestComponentLifecycle(manager, context.Background(), command)
+	require.Error(t, err)
+	require.Len(t, committer.commands, 1)
+	assert.Equal(t, []bool{true}, committer.failureRetries)
+	assert.NotContains(t, err.Error(), "injected durable write failure")
 }
 
 func expectRollbackInventoryProofWithoutNetworks(runtime *outmocks.MockContainerRuntime, old, prepared *domain.Container) {
@@ -628,9 +706,6 @@ func expectEdgeRollbackInventoryProof(runtime *outmocks.MockContainerRuntime, ol
 		containers = append(containers, old)
 	}
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return(containers, nil).Once()
-	for _, name := range networkNames {
-		runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, restored.Name, name).Return(nil).Once()
-	}
 	networks := make([]*domain.NetworkInfo, 0, len(networkNames))
 	for _, name := range networkNames {
 		networks = append(networks, &domain.NetworkInfo{

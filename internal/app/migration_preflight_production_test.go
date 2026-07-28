@@ -49,7 +49,7 @@ func TestControlMigrationPreflightUsesReadOnlyProductionProbes(t *testing.T) {
 	runtime := productionPreflightRuntime{report: out.RuntimeEnvironment{
 		Engine: "podman", Rootless: true, APIReachable: true, ImageAvailable: true,
 		ImagePullable: true, NetworkFeasible: true, DiskSufficient: true,
-	}, listeners: []bool{false, false}}
+	}, listeners: []bool{true, true}}
 	state := productionPreflightState{snapshot: domain.RuntimeActualStateSnapshot{
 		Generation: 1, StateVersion: "fixture-state", SourceComponentID: "fixture-runtime",
 	}}

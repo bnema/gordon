@@ -782,12 +782,12 @@ func (m *runtimeComponentLifecycleManager) connectFinalEdgeAppNetworks(ctx conte
 	return nil
 }
 
+// ensureEdgeAppNetworksAttached attests inventory only. Callers that must join
+// networks (final create, prepared restore) connect first; this proof never
+// issues a redundant Connect when the exact target is already attached.
 func (m *runtimeComponentLifecycleManager) ensureEdgeAppNetworksAttached(ctx context.Context, command domain.RuntimeSelfUpdateCommand, containerName string) error {
 	if len(command.EdgeAppNetworks) == 0 {
 		return nil
-	}
-	if err := m.connectFinalEdgeAppNetworks(ctx, command, command.EdgeAppNetworks); err != nil {
-		return err
 	}
 	networks, err := m.runtime.ListNetworks(ctx)
 	if err != nil {
