@@ -161,6 +161,21 @@ func TestRuntimeSelfUpdateCommandValidateRequiresNoProfileForEnsureNetwork(t *te
 	require.ErrorIs(t, command.Validate(), ErrInvalidRuntimeCommand)
 }
 
+func TestValidateRejectsLifecycleProfileWhenActionEmpty(t *testing.T) {
+	profile, ok := FixedRuntimeComponentLifecycleProfile(ComponentRoleEdge)
+	require.True(t, ok)
+	command := RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: RuntimeCommandIdentity{ID: "cmd-1", IdempotencyKey: "self-update:edge:1", Generation: 1, SourceComponentID: "control-1"},
+		TargetComponentID:      "gordon-edge-fixture-g1",
+		TargetComponentRole:    ComponentRoleEdge,
+		TargetVersion:          "v2",
+		Policy:                 RuntimeSelfUpdatePolicyManualApproval,
+		PolicyDecisionID:       "migration:fixture",
+		LifecycleProfile:       profile,
+	}
+	require.ErrorIs(t, command.Validate(), ErrInvalidRuntimeCommand)
+}
+
 func TestRuntimeSelfUpdateCommandValidateBoundsAndSanitizesEdgeAppNetworks(t *testing.T) {
 	profile, ok := FixedRuntimeComponentLifecycleProfile(ComponentRoleEdge)
 	require.True(t, ok)

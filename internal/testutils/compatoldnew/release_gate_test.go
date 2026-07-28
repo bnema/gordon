@@ -3,7 +3,7 @@ package compatoldnew
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -27,9 +27,7 @@ func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Dockerfile"))
 	require.NoError(t, err)
 	dockerfile := string(contents)
-	require.Contains(t, dockerfile, "pass")
-	require.Contains(t, dockerfile, "gnupg")
-	require.Contains(t, dockerfile, "/var/lib/gordon/secrets")
+	require.Contains(t, dockerfile, "apk add --no-cache ca-certificates docker-cli curl wget tzdata pass gnupg")
 }
 
 func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
@@ -62,11 +60,14 @@ func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
 
 func makeTargetRecipe(t *testing.T, makefile, target, nextTarget string) string {
 	t.Helper()
-	start := strings.Index(makefile, target+":")
-	require.NotEqual(t, -1, start, "missing Make target %s", target)
-	end := strings.Index(makefile[start:], "\n"+nextTarget+":")
-	require.NotEqual(t, -1, end, "missing target boundary %s", nextTarget)
-	return makefile[start : start+end]
+	startPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `:`)
+	startLoc := startPattern.FindStringIndex(makefile)
+	require.NotNil(t, startLoc, "missing Make target %s", target)
+	start := startLoc[0]
+	endPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(nextTarget) + `:`)
+	endLoc := endPattern.FindStringIndex(makefile[start:])
+	require.NotNil(t, endLoc, "missing target boundary %s", nextTarget)
+	return makefile[start : start+endLoc[0]]
 }
 
 func TestMigrationInvocationReportFailsClosed(t *testing.T) {

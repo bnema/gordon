@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -90,9 +91,8 @@ func TestSplitImageContractKeepsDistinctRolesWithoutSharedDataGroup(t *testing.T
 	require.Contains(t, dockerfile, "chown 21002:21002 /var/lib/gordon/secrets")
 }
 
-// TestMigrationInterruptedRetry documents the release invariant in a stable,
-// engine-free way. The real interruption is performed through the candidate
-// CLI in TestCompatibilityMigrationRootlessPodmanOldToSplit.
+// TestMigrationAuthDisabledEnvironmentNeedsOnlyRootlessSessionInputs documents
+// that migration auth-disabled mode requires only rootless session inputs.
 func TestMigrationAuthDisabledEnvironmentNeedsOnlyRootlessSessionInputs(t *testing.T) {
 	environment := migrationAuthDisabledEnvironment("/run/user/1000")
 	require.ElementsMatch(t, []string{
@@ -105,7 +105,14 @@ func TestMigrationAuthDisabledEnvironmentNeedsOnlyRootlessSessionInputs(t *testi
 }
 
 func TestMigrationInterruptedRetry(t *testing.T) {
+	// The real interruption is performed through the candidate CLI in
+	// TestCompatibilityMigrationRootlessPodmanOldToSplit.
 	require.True(t, strings.Contains(migrationScenarioOperations, "migrate prepare") && strings.Contains(migrationScenarioOperations, "migrate status"))
+}
+
+func TestAssertCleanedRejectsManagedPassSecretVolumeLeaks(t *testing.T) {
+	require.Equal(t, []string{"gordon-control-secrets-0123456789abcdef"}, leakedManagedPassSecretVolumes("app-data\ngordon-control-secrets-0123456789abcdef\n"))
+	require.Empty(t, leakedManagedPassSecretVolumes("gordon-control-migration-g1\ngordon-control-fixture-g1\n"))
 }
 
 // TestMigrationMissingEnvFailsPreflight documents that the real fixture uses
@@ -295,6 +302,27 @@ func (f *realMigrationFixture) cleanup() {
 	_ = os.RemoveAll(f.root)
 }
 
+var managedPassSecretVolumePattern = regexp.MustCompile(`^gordon-control-secrets-[0-9a-f]{16}$`)
+
+func leakedManagedPassSecretVolumes(volumeListing string) []string {
+	var leaked []string
+	for _, line := range strings.FieldsFunc(volumeListing, func(r rune) bool { return r == '\n' }) {
+		name := strings.TrimSpace(line)
+		if managedPassSecretVolumePattern.MatchString(name) {
+			leaked = append(leaked, name)
+		}
+	}
+	return leaked
+}
+
+func managedPassSecretVolumeNames(ctx context.Context) string {
+	output, err := podmanOutput(ctx, "volume", "ls", "--format", "{{.Name}}")
+	if err != nil {
+		return ""
+	}
+	return output
+}
+
 func (f *realMigrationFixture) assertCleaned() {
 	f.t.Helper()
 	for _, name := range []string{f.old, f.app, "gordon-control-migration-g1", "gordon-runtime-migration-g1", "gordon-edge-migration-g1", "gordon-registry-migration-g1"} {
@@ -313,6 +341,9 @@ func (f *realMigrationFixture) assertCleaned() {
 	require.Error(f.t, err, "candidate image must be removed by fixture cleanup")
 	_, err = os.Stat(f.root)
 	require.ErrorIs(f.t, err, os.ErrNotExist, "fixture root and private API socket must be removed")
+	for _, name := range leakedManagedPassSecretVolumes(managedPassSecretVolumeNames(context.Background())) {
+		require.Fail(f.t, "managed pass secret volume must be removed by fixture cleanup", "leaked volume %s", name)
+	}
 }
 
 func (f *realMigrationFixture) failureDiagnostics() string {

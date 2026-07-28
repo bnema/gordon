@@ -514,3 +514,29 @@ func (r *recordingRouteDrainAckReceiver) AcknowledgeRouteDrain(_ context.Context
 	r.acks = append(r.acks, ack)
 	return nil
 }
+
+type blockingCloser struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (c *blockingCloser) Close() error {
+	close(c.started)
+	<-c.release
+	return nil
+}
+
+func TestClientCloseIsReentrant(t *testing.T) {
+	blocker := &blockingCloser{started: make(chan struct{}), release: make(chan struct{})}
+	client := newClient(runtimev1.NewRuntimeServiceClient(nil), nil)
+	require.NoError(t, client.AddOwnedCloser(blocker))
+
+	done := make(chan error, 2)
+	go func() { done <- client.Close() }()
+	<-blocker.started
+	go func() { done <- client.Close() }()
+
+	close(blocker.release)
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+}

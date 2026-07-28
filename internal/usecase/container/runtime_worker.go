@@ -796,7 +796,7 @@ func looksLikeRuntimeEngineID(value string) bool {
 
 func safeRuntimeVolumeName(name string) bool {
 	trimmed := strings.TrimSpace(name)
-	return trimmed != "" && !strings.ContainsAny(trimmed, `/\\`) && !strings.Contains(trimmed, "://")
+	return trimmed != "" && !strings.ContainsAny(trimmed, `/\`) && !strings.Contains(trimmed, "://")
 }
 
 var _ runtimeWorkerService = (*Service)(nil)

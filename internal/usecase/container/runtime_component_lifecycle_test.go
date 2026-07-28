@@ -3,12 +3,12 @@ package container
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/v2/pkg/cap"
@@ -363,31 +363,48 @@ func TestRuntimeComponentLifecycleUsesAuthoritativeInspectForSparseHealthyRetry(
 }
 
 func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testing.T) {
+	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	configPath := testLifecycleConfig(t, domain.ComponentRoleEdge)
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
 
 	for _, test := range []struct {
 		name          string
 		inspectedName string
 		wantDenied    bool
+		nativeProof   bool
 	}{
 		{name: "plausible inspect lacks native proof", inspectedName: command.TargetComponentID, wantDenied: true},
 		{name: "forged inspect mismatch", inspectedName: "foreign", wantDenied: true},
+		{name: "authentic native proof", inspectedName: command.TargetComponentID, nativeProof: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
 				case "/v1.41/containers/json":
-					_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": "existing", "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
-				case "/v1.41/containers/existing/json":
+					_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
+				case "/v1.41/containers/" + containerID + "/json":
 					_ = json.NewEncoder(w).Encode(map[string]any{
-						"Id": "existing", "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
-						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": "21003:21003", "Labels": componentLifecycleLabels(command)},
-						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+						"Id": containerID, "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
+						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": identity.User, "Labels": componentLifecycleLabels(command)},
+						"HostConfig":      map[string]any{"UsernsMode": "private", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 						"State":           map[string]any{"Status": "running", "ExitCode": 0},
 						"Mounts":          []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "RW": false}},
 						"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+					})
+				case "/v4.0.0/libpod/containers/" + containerID + "/json":
+					if !test.nativeProof {
+						http.NotFound(w, request)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"BoundingCaps":  nil,
+						"EffectiveCaps": nil,
+						"HostConfig": map[string]any{"IDMappings": map[string]any{
+							"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
+						}},
 					})
 				default:
 					http.NotFound(w, request)
@@ -395,8 +412,11 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "http://")
-			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+			}}
+			defer transport.CloseIdleConnections()
+			apiClient, err := client.NewClientWithOpts(client.WithHost("unix:///run/user/fixture/podman.sock"), client.WithVersion("1.41"), client.WithHTTPClient(&http.Client{Transport: transport}))
 			require.NoError(t, err)
 			manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
 			err = applyTestComponentLifecycle(manager, context.Background(), command)

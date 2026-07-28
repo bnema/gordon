@@ -367,18 +367,27 @@ func dialValidatedRuntimeSocketWithDialer(ctx context.Context, path string, dial
 	return nil, privateRuntimeTransportValidationError(privateRuntimeTransportConnectPermission)
 }
 
+func privateRuntimeTransportErrorForSocketAncestors(result runtimeSocketAncestorResult) error {
+	switch result {
+	case runtimeSocketAncestorsValid:
+		return nil
+	case runtimeSocketAncestorSymlink:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportSymlinkAncestor)
+	case runtimeSocketAncestorMissing, runtimeSocketAncestorInspectionFailure, runtimeSocketAncestorInvalidPath:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
+	default:
+		return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
+	}
+}
+
 // validatePrivateRuntimeSocketPath maps each Lstat result to a value-free
 // category. It deliberately discards path, ownership, and mode details.
 func validatePrivateRuntimeSocketPath(path string, lstat func(string) (os.FileInfo, error)) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Base(path) != bootstrapRuntimeSocketName {
 		return privateRuntimeTransportValidationError(privateRuntimeTransportInvalidShape)
 	}
-	switch inspectRuntimeSocketAncestors(filepath.Dir(path), lstat) {
-	case runtimeSocketAncestorsValid:
-	case runtimeSocketAncestorSymlink:
-		return privateRuntimeTransportValidationError(privateRuntimeTransportSymlinkAncestor)
-	case runtimeSocketAncestorMissing, runtimeSocketAncestorInspectionFailure, runtimeSocketAncestorInvalidPath:
-		return privateRuntimeTransportValidationError(privateRuntimeTransportInspectionFailure)
+	if err := privateRuntimeTransportErrorForSocketAncestors(inspectRuntimeSocketAncestors(filepath.Dir(path), lstat)); err != nil {
+		return err
 	}
 	info, err := lstat(path)
 	if err != nil {
