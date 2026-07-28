@@ -4,10 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/testutils/releasesmoke"
 )
 
 // TestReleaseGateExampleConfigTOML is invoked by pre-release-acceptance. It
@@ -31,31 +34,60 @@ func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
 }
 
 func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
-	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
-	require.NoError(t, err)
-	makefile := string(contents)
+	harnessSource := readReleaseSmokeHarnessSource(t)
 
-	for _, target := range []struct {
-		name string
-		next string
-	}{
-		{name: "release-podman-managed-pass-smoke", next: "release-image-smoke"},
-		{name: "release-image-smoke", next: "build-push"},
-	} {
-		t.Run(target.name, func(t *testing.T) {
-			recipe := makeTargetRecipe(t, makefile, target.name, target.next)
-			require.Contains(t, recipe, "readiness_pid=$$!")
-			require.Contains(t, recipe, "for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30")
-			require.Contains(t, recipe, "kill -0 \"$$readiness_pid\"")
-			require.Contains(t, recipe, "kill \"$$readiness_pid\"")
-			require.Contains(t, recipe, "wait \"$$readiness_pid\"")
-			require.Contains(t, recipe, "kill \"$$owner_pid\"")
-			require.Contains(t, recipe, "wait \"$$owner_pid\"")
-			require.Contains(t, recipe, "test \"$$readiness\" = 'Managed pass backend lock acquired'")
-			require.NotContains(t, recipe, "IFS= read -r readiness <\"$$tmp/ready\"; test")
-			require.NotContains(t, recipe, "IFS= read -r readiness <\"$$lease_dir/ready\"; test")
-		})
+	require.Contains(t, harnessSource, "waitManagedPassReadiness")
+	require.Contains(t, harnessSource, "ReadinessPollAttempts")
+	require.Equal(t, 30, releasesmoke.ReadinessPollAttempts)
+	require.Contains(t, harnessSource, "ownerCmd.Process.Kill")
+	require.Contains(t, harnessSource, "ownerCmd.Process.Wait")
+	require.Contains(t, harnessSource, "ManagedPassLockMessage")
+	require.NotContains(t, harnessSource, `IFS= read -r readiness`)
+
+	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+	require.NoError(t, err)
+	for _, target := range []string{"release-podman-managed-pass-smoke", "release-image-smoke"} {
+		next := "build-push"
+		if target == "release-podman-managed-pass-smoke" {
+			next = "release-image-smoke"
+		}
+		recipe := makeTargetRecipe(t, string(makefile), target, next)
+		require.Contains(t, recipe, "go run ./cmd/release-smoke")
+		require.NotContains(t, recipe, "readiness_pid=$$!")
 	}
+}
+
+func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
+	harnessSource := readReleaseSmokeHarnessSource(t)
+
+	require.Contains(t, harnessSource, "/var/lib/gordon:U")
+	require.Contains(t, harnessSource, "identity-write-check")
+	require.Contains(t, harnessSource, "/run/gordon/runtime.sock:ro")
+	require.NotContains(t, harnessSource, "runtime.sock:ro,U")
+	require.NotContains(t, harnessSource, "/var/lib/gordon/secrets:U")
+	for _, removed := range []string{"--group-add", "21900"} {
+		require.NotContains(t, harnessSource, removed)
+	}
+
+	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+	require.NoError(t, err)
+	dockerGate := makeTargetRecipe(t, string(makefile), "release-image-smoke", "build-push")
+	require.NotContains(t, dockerGate, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
+}
+
+func readReleaseSmokeHarnessSource(t *testing.T) string {
+	t.Helper()
+	root := projectRoot(t)
+	var b strings.Builder
+	for _, name := range []string{
+		"internal/testutils/releasesmoke/harness.go",
+		"internal/testutils/releasesmoke/podman.go",
+	} {
+		data, err := os.ReadFile(filepath.Join(root, name))
+		require.NoError(t, err)
+		b.Write(data)
+	}
+	return b.String()
 }
 
 func makeTargetRecipe(t *testing.T, makefile, target, nextTarget string) string {

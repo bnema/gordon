@@ -1,0 +1,394 @@
+package releasesmoke
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+)
+
+// Harness runs release artifact smoke checks previously encoded in the Makefile.
+type Harness struct {
+	DistDir      string
+	Docker       CommandRunner
+	Podman       CommandRunner
+	HostArch     string
+	DockerSocket string
+}
+
+// NewHarness constructs a harness with default engine runners.
+func NewHarness(distDir string) *Harness {
+	socket := os.Getenv("DOCKER_HOST")
+	if strings.HasPrefix(socket, "unix://") {
+		socket = strings.TrimPrefix(socket, "unix://")
+	} else if socket == "" {
+		socket = "/var/run/docker.sock"
+	}
+	return &Harness{
+		DistDir:      distDir,
+		Docker:       DockerRunner(),
+		Podman:       PodmanRunner(),
+		HostArch:     runtime.GOARCH,
+		DockerSocket: socket,
+	}
+}
+
+func (h *Harness) artifactsPath() string {
+	return filepath.Join(h.DistDir, "artifacts.json")
+}
+
+// RunImageSmoke verifies artifact-derived amd64/arm64 images under Docker/QEMU.
+func (h *Harness) RunImageSmoke(ctx context.Context) error {
+	info, err := os.Stat(h.DockerSocket)
+	if err != nil || info.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("docker socket %q is not available", h.DockerSocket)
+	}
+	smokeConfig, secretsConfig, leaseDir, err := h.writeTempConfigs()
+	if err != nil {
+		return err
+	}
+	defer os.Remove(smokeConfig)
+	defer os.Remove(secretsConfig)
+	defer os.RemoveAll(leaseDir)
+
+	for _, arch := range ImageArchitectures {
+		image, err := ImageForArch(h.artifactsPath(), arch)
+		if err != nil {
+			return err
+		}
+		if err := h.verifyDockerImage(ctx, image, arch); err != nil {
+			return fmt.Errorf("%s: %w", arch, err)
+		}
+		if err := h.dockerManagedPassLease(ctx, image, arch, secretsConfig, leaseDir); err != nil {
+			return fmt.Errorf("%s managed pass: %w", arch, err)
+		}
+		for _, role := range []string{"control", "runtime", "edge", "registry"} {
+			if err := runQuiet(ctx, h.Docker, "run", "--rm", "--platform", "linux/"+arch, image, "serve", "--role", role, "--help"); err != nil {
+				return fmt.Errorf("%s serve --role %s: %w", arch, role, err)
+			}
+		}
+		if err := h.dockerMonolithProbe(ctx, image, arch, smokeConfig); err != nil {
+			return fmt.Errorf("%s monolith: %w", arch, err)
+		}
+	}
+	return nil
+}
+
+// RunPodmanManagedPassSmoke validates the host-architecture artifact under rootless Podman.
+//
+//nolint:gocyclo // release gate orchestrates many sequential engine checks by design.
+func (h *Harness) RunPodmanManagedPassSmoke(ctx context.Context) error {
+	if err := requireRootlessPodman(ctx, h.Podman); err != nil {
+		return err
+	}
+	image, err := ImageForArch(h.artifactsPath(), h.HostArch)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "gordon-release-podman-smoke-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+
+	configPath := filepath.Join(tmp, "gordon.toml")
+	if err := os.WriteFile(configPath, []byte("[auth]\nenabled = false\nsecrets_backend = \"pass\"\n"), 0o644); err != nil { //nolint:gosec // release smoke config is intentionally world-readable like the Makefile recipe.
+		return err
+	}
+
+	if err := runQuiet(ctx, h.Docker, "image", "inspect", image); err != nil {
+		return fmt.Errorf("docker image inspect: %w", err)
+	}
+	archOut, err := runOutput(ctx, h.Docker, "image", "inspect", "--format", "{{.Architecture}}", image)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(archOut) != h.HostArch {
+		return fmt.Errorf("docker image architecture %q != host %q", strings.TrimSpace(archOut), h.HostArch)
+	}
+
+	archive := filepath.Join(tmp, "artifact.tar")
+	if err := runQuiet(ctx, h.Docker, "save", "-o", archive, image); err != nil {
+		return fmt.Errorf("docker save: %w", err)
+	}
+	if err := runQuiet(ctx, h.Podman, "load", "-i", archive); err != nil {
+		return fmt.Errorf("podman load: %w", err)
+	}
+	podmanArch, err := runOutput(ctx, h.Podman, "image", "inspect", "--format", "{{.Architecture}}", image)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(podmanArch) != h.HostArch {
+		return fmt.Errorf("podman image architecture %q != host %q", strings.TrimSpace(podmanArch), h.HostArch)
+	}
+	if err := runQuiet(ctx, h.Podman, "run", "--rm", "--entrypoint", "sh", image, "-ec",
+		`test "$(id -u)" -ne 0; grep -Eq "^3\.24\." /etc/alpine-release`); err != nil {
+		return fmt.Errorf("non-root alpine gate: %w", err)
+	}
+
+	cleanup, err := h.podmanRoleInspection(ctx, tmp, image)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	volume := fmt.Sprintf("gordon-release-podman-secrets-%d", os.Getpid())
+	if err := runQuiet(ctx, h.Podman, "volume", "create", volume); err != nil {
+		return fmt.Errorf("create secrets volume: %w", err)
+	}
+	defer func() { _ = runQuiet(context.Background(), h.Podman, "volume", "rm", "-f", volume) }()
+
+	if err := h.podmanManagedPassLease(ctx, image, configPath, volume); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (h *Harness) writeTempConfigs() (smokeConfig, secretsConfig, leaseDir string, err error) {
+	smokeFile, err := os.CreateTemp("", "gordon-release-smoke-*.toml")
+	if err != nil {
+		return "", "", "", err
+	}
+	smokeConfig = smokeFile.Name()
+	smokeContents := `[server]
+runtime = "docker"
+port = 8088
+data_dir = "/tmp/gordon"
+[auth]
+enabled = false
+secrets_backend = "unsafe"
+`
+	if _, err := smokeFile.WriteString(smokeContents); err != nil {
+		smokeFile.Close()
+		return "", "", "", err
+	}
+	if err := smokeFile.Close(); err != nil {
+		return "", "", "", err
+	}
+	if err := os.Chmod(smokeConfig, 0o644); err != nil { //nolint:gosec // matches prior release-image-smoke recipe permissions.
+		return "", "", "", err
+	}
+
+	secretsFile, err := os.CreateTemp("", "gordon-release-secrets-*.toml")
+	if err != nil {
+		return "", "", "", err
+	}
+	secretsConfig = secretsFile.Name()
+	if _, err := secretsFile.WriteString("[auth]\nenabled = false\nsecrets_backend = \"pass\"\n"); err != nil {
+		secretsFile.Close()
+		return "", "", "", err
+	}
+	if err := secretsFile.Close(); err != nil {
+		return "", "", "", err
+	}
+	if err := os.Chmod(secretsConfig, 0o644); err != nil { //nolint:gosec // matches prior release-image-smoke recipe permissions.
+		return "", "", "", err
+	}
+
+	leaseDir, err = os.MkdirTemp("", "gordon-release-lease-")
+	return smokeConfig, secretsConfig, leaseDir, err
+}
+
+func (h *Harness) verifyDockerImage(ctx context.Context, image, arch string) error {
+	if err := runQuiet(ctx, h.Docker, "image", "inspect", image); err != nil {
+		return err
+	}
+	got, err := runOutput(ctx, h.Docker, "image", "inspect", "--format", "{{.Architecture}}", image)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(got) != arch {
+		return fmt.Errorf("image architecture %q != %q", strings.TrimSpace(got), arch)
+	}
+	entrypoint, err := runOutput(ctx, h.Docker, "image", "inspect", "--format", "{{json .Config.Entrypoint}}", image)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(entrypoint) != `["/app/gordon"]` {
+		return fmt.Errorf("unexpected entrypoint %s", strings.TrimSpace(entrypoint))
+	}
+	platform := "linux/" + arch
+	for _, spec := range []struct {
+		name string
+		args []string
+	}{
+		{"help", []string{"run", "--rm", "--platform", platform, image, "--help"}},
+		{"pass", []string{"run", "--rm", "--platform", platform, "--entrypoint", "pass", image, "version"}},
+		{"gpg", []string{"run", "--rm", "--platform", platform, "--entrypoint", "gpg", image, "--version"}},
+	} {
+		if err := runQuiet(ctx, h.Docker, spec.args...); err != nil {
+			return fmt.Errorf("%s: %w", spec.name, err)
+		}
+	}
+	permCheck := `test "$(stat -c %u:%g:%a /var/lib/gordon)" = 0:0:755; test "$(stat -c %u:%g:%a /var/lib/gordon/secrets)" = 21002:21002:700`
+	if err := runQuiet(ctx, h.Docker, "run", "--rm", "--platform", platform, "--user", "0:0", "--entrypoint", "sh", image, "-ec", permCheck); err != nil {
+		return fmt.Errorf("permission layout: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secretsConfig, leaseDir string) error {
+	volume := fmt.Sprintf("gordon-release-smoke-secrets-%s-%d", arch, os.Getpid())
+	if err := runQuiet(ctx, h.Docker, "volume", "create", volume); err != nil {
+		return err
+	}
+	defer func() { _ = runQuiet(context.Background(), h.Docker, "volume", "rm", "-f", volume) }()
+
+	owner := fmt.Sprintf("gordon-release-smoke-secrets-owner-%s-%d", arch, os.Getpid())
+	readyPath := filepath.Join(leaseDir, "ready")
+	if err := mkfifo(readyPath); err != nil {
+		return err
+	}
+	defer os.Remove(readyPath)
+
+	ownerCmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--name", owner, // #nosec G204 -- release gate invokes docker with artifact-derived image names.
+		"--platform", "linux/"+arch, "--user", "21002:21002",
+		"-v", volume+":/var/lib/gordon/secrets",
+		"-v", secretsConfig+":/tmp/gordon.toml:ro",
+		"-e", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
+		"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
+		image, "secrets", "lock", "--config", "/tmp/gordon.toml")
+	ownerCmd.Stdout, _ = os.OpenFile(readyPath, os.O_WRONLY, 0)
+	ownerCmd.Stderr = os.Stderr
+	if err := ownerCmd.Start(); err != nil {
+		return fmt.Errorf("start lease owner: %w", err)
+	}
+	ownerPID := ownerCmd.Process.Pid
+
+	readiness, err := waitManagedPassReadiness(readyPath, ReadinessPollAttempts)
+	if err != nil {
+		_ = ownerCmd.Process.Kill()
+		_, _ = ownerCmd.Process.Wait()
+		return err
+	}
+	if readiness != ManagedPassLockMessage {
+		return fmt.Errorf("unexpected readiness %q", readiness)
+	}
+
+	leaseErrorFile, err := os.CreateTemp("", "gordon-lease-error-")
+	if err != nil {
+		return err
+	}
+	leaseError := leaseErrorFile.Name()
+	leaseErrorFile.Close()
+	defer os.Remove(leaseError)
+
+	doctorCmd := exec.CommandContext(ctx, "docker", "run", "--rm", // #nosec G204 -- release gate invokes docker with artifact-derived image names.
+		"--platform", "linux/"+arch, "--user", "21002:21002",
+		"-v", volume+":/var/lib/gordon/secrets",
+		"-v", secretsConfig+":/tmp/gordon.toml:ro",
+		"-e", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
+		"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
+		image, "secrets", "doctor", "--config", "/tmp/gordon.toml")
+	doctorOut, doctorErr := doctorCmd.CombinedOutput()
+	if doctorErr == nil {
+		return fmt.Errorf("expected lease conflict, doctor succeeded")
+	}
+	if !strings.Contains(string(doctorOut), LeaseConflictMessage) {
+		return fmt.Errorf("expected %q in doctor output, got: %s", LeaseConflictMessage, string(doctorOut))
+	}
+
+	_ = runQuiet(ctx, h.Docker, "rm", "-f", owner)
+	_ = ownerCmd.Process.Kill()
+	_, _ = ownerCmd.Process.Wait()
+	_ = ownerPID
+
+	for range 2 {
+		if err := runQuiet(ctx, h.Docker, "run", "--rm",
+			"--platform", "linux/"+arch, "--user", "21002:21002",
+			"-v", volume+":/var/lib/gordon/secrets",
+			"-v", secretsConfig+":/tmp/gordon.toml:ro",
+			"-e", "GNUPGHOME=/var/lib/gordon/secrets/current/gnupg",
+			"-e", "PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store",
+			image, "secrets", "doctor", "--config", "/tmp/gordon.toml", "--write-check"); err != nil {
+			return fmt.Errorf("post-lease doctor: %w", err)
+		}
+	}
+	artifactCheck := `test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg`
+	if err := runQuiet(ctx, h.Docker, "run", "--rm",
+		"--platform", "linux/"+arch, "--user", "21002:21002",
+		"-v", volume+":/var/lib/gordon/secrets:ro",
+		"--entrypoint", "sh", image, "-ec", artifactCheck); err != nil {
+		return fmt.Errorf("artifact check: %w", err)
+	}
+	return nil
+}
+
+func (h *Harness) dockerMonolithProbe(ctx context.Context, image, arch, smokeConfig string) error {
+	name := fmt.Sprintf("gordon-release-smoke-%s-monolith-%d", arch, os.Getpid())
+	if err := runQuiet(ctx, h.Docker, "run", "--detach", "--rm", "--name", name,
+		"--platform", "linux/"+arch, "--user", "0:0",
+		"-v", h.DockerSocket+":/var/run/docker.sock",
+		"-v", smokeConfig+":/tmp/gordon.toml:ro",
+		image, "serve", "--role", "monolith", "--config", "/tmp/gordon.toml"); err != nil {
+		return err
+	}
+	defer func() { _ = runQuiet(context.Background(), h.Docker, "rm", "-f", name) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := runQuiet(ctx, h.Docker, "exec", name, "wget", "-q", "-T", "2", "-O", "/dev/null", "http://127.0.0.1:5000/v2/"); err == nil {
+			return nil
+		}
+		time.Sleep(time.Second)
+	}
+	return fmt.Errorf("monolith registry probe timed out")
+}
+
+func requireRootlessPodman(ctx context.Context, podman CommandRunner) error {
+	if _, err := exec.LookPath("podman"); err != nil {
+		return fmt.Errorf("PRODUCTION GATE BLOCKED: rootless Podman is required for the managed-pass artifact smoke")
+	}
+	rootless, err := runOutput(ctx, podman, "info", "--format", "{{.Host.Security.Rootless}}")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(rootless) != "true" {
+		return fmt.Errorf("PRODUCTION GATE BLOCKED: Podman is not running rootless")
+	}
+	return nil
+}
+
+func mkfifo(path string) error {
+	return exec.Command("mkfifo", path).Run() // #nosec G204 -- release gate creates a named pipe for lease readiness.
+}
+
+func waitManagedPassReadiness(readyPath string, attempts int) (string, error) {
+	done := make(chan struct{})
+	var readiness string
+	var readErr error
+	go func() {
+		defer close(done)
+		file, err := os.Open(readyPath)
+		if err != nil {
+			readErr = err
+			return
+		}
+		defer file.Close()
+		buf := make([]byte, 512)
+		n, err := file.Read(buf)
+		if err != nil && err != io.EOF {
+			readErr = err
+			return
+		}
+		readiness = strings.TrimSpace(string(buf[:n]))
+	}()
+
+	for range attempts {
+		select {
+		case <-done:
+			if readErr != nil {
+				return "", readErr
+			}
+			return readiness, nil
+		default:
+			time.Sleep(time.Second)
+		}
+	}
+	return "", fmt.Errorf("timed out waiting for managed pass backend lock")
+}
