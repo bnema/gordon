@@ -15,8 +15,8 @@ import (
 	"testing"
 
 	"github.com/bnema/zerowrap"
-	"github.com/docker/docker/client"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 

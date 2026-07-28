@@ -81,9 +81,9 @@ func TestNormalizeInspectedGenerationVolumeChownAppliesColocatedProof(t *testing
 
 func TestNormalizeInspectedGenerationVolumeChownRequiresColocatedProof(t *testing.T) {
 	tests := map[string]nativePodmanIdentityResult{
-		"proof absent": {boundingCapsNull: true, generationVolumeChownOK: true},
+		"proof absent":           {boundingCapsNull: true, generationVolumeChownOK: true},
 		"bounding caps unproved": {generationVolumeChownOK: true},
-		"bind proof absent": {boundingCapsNull: true},
+		"bind proof absent":      {boundingCapsNull: true},
 	}
 	for name, proof := range tests {
 		t.Run(name, func(t *testing.T) {
