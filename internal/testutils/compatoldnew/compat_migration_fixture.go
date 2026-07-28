@@ -233,7 +233,7 @@ func (f *realMigrationFixture) componentContainers() ([]PodmanResource, error) {
 
 func (f *realMigrationFixture) buildCandidateImage() {
 	binary := filepath.Join(f.root, "gordon")
-	require.NoError(f.t, securityBuildCandidate(f.ctx, projectRoot(f.t), binary))
+	require.NoError(f.t, securityBuildCandidate(f.ctx, RepositoryRoot(), binary))
 	containerfile := "FROM docker.io/library/alpine:3.20\nRUN apk add --no-cache ca-certificates pass gnupg && adduser -D -s /bin/sh gordon && mkdir -p /app /data /var/lib/gordon/secrets && chown -R gordon:gordon /app /data && chown 21002:21002 /var/lib/gordon/secrets && chmod 0700 /var/lib/gordon/secrets\nWORKDIR /data\nUSER gordon\nCOPY --chown=gordon:gordon gordon /usr/local/bin/gordon\nENTRYPOINT [\"/usr/local/bin/gordon\"]\n"
 	require.NoError(f.t, os.WriteFile(filepath.Join(f.root, "Containerfile"), []byte(containerfile), 0o600))
 	policy := filepath.Join(f.root, "policy.json")

@@ -29,5 +29,5 @@ func TestCompatibilityConfigShowJSON(t *testing.T) {
 
 func projectRoot(t *testing.T) string {
 	t.Helper()
-	return filepath.Clean(filepath.Join(FixtureRoot(), "..", "..", "..", ".."))
+	return RepositoryRoot()
 }
