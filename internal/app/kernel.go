@@ -46,6 +46,7 @@ type Kernel struct {
 	migrationErr    error
 	migrationInit   func() (*MigrationService, error)
 	migrationCloser io.Closer
+	migrationClosed bool
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -115,9 +116,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		kernel.migrationInit = func() (*MigrationService, error) {
 			migration, launcher, migrationErr := newMonolithMigrationService(configPath, cfg, svc)
 			if migrationErr == nil && launcher != nil {
-				kernel.migrationMu.Lock()
-				kernel.migrationCloser = launcher
-				kernel.migrationMu.Unlock()
+				kernel.installMigrationCloser(launcher)
 			}
 			return migration, migrationErr
 		}
@@ -158,15 +157,35 @@ func (k *Kernel) Close() error {
 	}
 	var closeErr error
 	k.migrationMu.Lock()
+	k.migrationClosed = true
 	closer := k.migrationCloser
+	k.migrationCloser = nil
+	cleanup := k.cleanup
+	k.cleanup = nil
 	k.migrationMu.Unlock()
 	if closer != nil {
 		closeErr = closer.Close()
 	}
-	if k.cleanup != nil {
-		k.cleanup()
+	if cleanup != nil {
+		cleanup()
 	}
 	return closeErr
+}
+
+// installMigrationCloser records the migration launcher for later Close, or
+// closes it immediately when the kernel lifecycle has already ended.
+func (k *Kernel) installMigrationCloser(closer io.Closer) {
+	if k == nil || closer == nil {
+		return
+	}
+	k.migrationMu.Lock()
+	if k.migrationClosed {
+		k.migrationMu.Unlock()
+		_ = closer.Close()
+		return
+	}
+	k.migrationCloser = closer
+	k.migrationMu.Unlock()
 }
 
 func (k *Kernel) Config() in.ConfigService { return k.configSvc }

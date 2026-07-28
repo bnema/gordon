@@ -67,3 +67,77 @@ func TestRunManagedPassWriteCheckCancelsBeforeWrite(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled))
 }
+
+func TestRunManagedPassWriteCheckJoinsPrimaryAndCleanupErrors(t *testing.T) {
+	original := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = original })
+
+	store := &fakeManagedPassWriteCheckStore{
+		values:    map[string]string{},
+		getAllErr: errors.New("read failed"),
+		deleteErr: errors.New("cleanup failed"),
+	}
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	err := runManagedPassWriteCheck(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read managed pass check failed")
+	assert.Contains(t, err.Error(), "cleanup failed")
+	assert.NotContains(t, err.Error(), "secret=")
+	assert.NotContains(t, err.Error(), store.lastValue)
+}
+
+func TestRunManagedPassWriteCheckJoinsCleanupOnlyErrors(t *testing.T) {
+	original := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = original })
+
+	store := &fakeManagedPassWriteCheckStore{
+		values:    map[string]string{},
+		deleteErr: errors.New("cleanup failed"),
+	}
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	store.afterSet = cancel
+
+	err := runManagedPassWriteCheck(ctx)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
+	assert.Contains(t, err.Error(), "cleanup failed")
+	assert.NotContains(t, err.Error(), "secret=")
+	assert.NotContains(t, err.Error(), store.lastValue)
+}
+
+type fakeManagedPassWriteCheckStore struct {
+	values    map[string]string
+	lastValue string
+	getAllErr error
+	deleteErr error
+	afterSet  func()
+}
+
+func (f *fakeManagedPassWriteCheckStore) Set(_ string, secretsMap map[string]string) error {
+	for _, value := range secretsMap {
+		f.lastValue = value
+		f.values["GORDON_DOCTOR_MARKER"] = value
+	}
+	if f.afterSet != nil {
+		f.afterSet()
+	}
+	return nil
+}
+
+func (f *fakeManagedPassWriteCheckStore) GetAll(string) (map[string]string, error) {
+	if f.getAllErr != nil {
+		return nil, f.getAllErr
+	}
+	out := make(map[string]string, len(f.values))
+	for k, v := range f.values {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (f *fakeManagedPassWriteCheckStore) Delete(string, string) error {
+	return f.deleteErr
+}

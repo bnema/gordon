@@ -3,7 +3,6 @@ package secrets
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -82,8 +81,8 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); arguments are validated secret paths
 	output, err := cmd.Output()
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return "", err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
 		}
 		return "", fmt.Errorf("pass command failed")
 	}

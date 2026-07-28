@@ -3,7 +3,10 @@ package secrets
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -210,4 +213,47 @@ func TestPassProvider_GetSecret_PreservesContextCancellation(t *testing.T) {
 	_, err := provider.GetSecret(ctx, "github.com/bnema/gordon/test/secret")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled))
+}
+
+func TestPassProvider_GetSecret_InFlightCancellationPreservesContextError(t *testing.T) {
+	installSlowPass(t)
+	provider := NewPassProvider(testLogger())
+	provider.timeout = 5 * time.Second
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := provider.GetSecret(ctx, "github.com/bnema/gordon/test/secret")
+		errCh <- err
+	}()
+
+	time.Sleep(50 * time.Millisecond) // command must be running before cancel
+	cancel()
+
+	err := <-errCh
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
+	assert.NotContains(t, err.Error(), "secret=")
+}
+
+func TestPassProvider_GetSecret_InFlightDeadlinePreservesContextError(t *testing.T) {
+	installSlowPass(t)
+	provider := NewPassProvider(testLogger())
+	provider.timeout = 5 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+
+	_, err := provider.GetSecret(ctx, "github.com/bnema/gordon/test/secret")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
+	assert.NotContains(t, err.Error(), "secret=")
+}
+
+func installSlowPass(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "pass")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }

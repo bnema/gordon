@@ -51,9 +51,18 @@ these commands operate on the remote server.`,
 const managedPassLockReadyLine = "Managed pass backend lock acquired"
 
 var (
-	holdManagedPassBackend = app.HoldManagedPassBackend
-	runManagedPassDoctor   = app.RunManagedPassDoctor
+	holdManagedPassBackend         = app.HoldManagedPassBackend
+	runManagedPassDoctor           = app.RunManagedPassDoctor
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) {
+		return domainsecrets.NewPassStore(zerowrap.New(cliLogConfig))
+	}
 )
+
+type managedPassWriteCheckStore interface {
+	Set(domainName string, secretsMap map[string]string) error
+	GetAll(domainName string) (map[string]string, error)
+	Delete(domainName, key string) error
+}
 
 func newSecretsLockCmd() *cobra.Command {
 	var configFile string
@@ -155,32 +164,28 @@ func runManagedPassWriteCheck(ctx context.Context) error {
 	domainName := "doctor-" + fmt.Sprint(time.Now().UnixNano()) + ".invalid"
 	const key = "GORDON_DOCTOR_MARKER"
 	value := hex.EncodeToString(marker)
-	store, err := domainsecrets.NewPassStore(zerowrap.New(cliLogConfig))
+	store, err := openManagedPassWriteCheckStore()
 	if err != nil {
 		return fmt.Errorf("open managed pass backend: %w", err)
 	}
-	cleanup := func() {
-		_ = store.Delete(domainName, key)
+	cleanup := func() error {
+		return store.Delete(domainName, key)
 	}
 	if err := store.Set(domainName, map[string]string{key: value}); err != nil {
 		return fmt.Errorf("write managed pass check: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
-		cleanup()
-		return err
+		return errors.Join(err, cleanup())
 	}
 	values, err := store.GetAll(domainName)
 	if err != nil || values[key] != value {
-		cleanup()
-		return fmt.Errorf("read managed pass check failed")
+		return errors.Join(fmt.Errorf("read managed pass check failed"), cleanup())
 	}
 	if err := ctx.Err(); err != nil {
-		cleanup()
-		return err
+		return errors.Join(err, cleanup())
 	}
 	if err := store.Delete(domainName, key); err != nil {
-		cleanup()
-		return fmt.Errorf("remove managed pass check: %w", err)
+		return errors.Join(fmt.Errorf("remove managed pass check: %w", err), cleanup())
 	}
 	return nil
 }

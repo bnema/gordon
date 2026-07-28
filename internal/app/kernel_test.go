@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,6 +49,24 @@ func (c *testMigrationCloser) Close() error {
 	return nil
 }
 
+type countingMigrationCloser struct {
+	mu     sync.Mutex
+	closes int
+}
+
+func (c *countingMigrationCloser) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closes++
+	return nil
+}
+
+func (c *countingMigrationCloser) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closes
+}
+
 func TestKernelMigrationCloserMutex(t *testing.T) {
 	t.Parallel()
 
@@ -55,9 +74,7 @@ func TestKernelMigrationCloserMutex(t *testing.T) {
 	kernel.migrationInit = func() (*MigrationService, error) {
 		time.Sleep(20 * time.Millisecond)
 		closer := &testMigrationCloser{closed: make(chan struct{})}
-		kernel.migrationMu.Lock()
-		kernel.migrationCloser = closer
-		kernel.migrationMu.Unlock()
+		kernel.installMigrationCloser(closer)
 		return nil, nil
 	}
 
@@ -74,4 +91,72 @@ func TestKernelMigrationCloserMutex(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestKernelMigrationCloserCannotInstallAfterClose(t *testing.T) {
+	t.Parallel()
+
+	closer := &countingMigrationCloser{}
+	releaseInit := make(chan struct{})
+	initStarted := make(chan struct{})
+
+	kernel := &Kernel{}
+	kernel.migrationInit = func() (*MigrationService, error) {
+		close(initStarted)
+		<-releaseInit
+		kernel.installMigrationCloser(closer)
+		return nil, nil
+	}
+
+	go func() { _, _ = kernel.Migration() }()
+	<-initStarted
+	require.NoError(t, kernel.Close())
+	close(releaseInit)
+
+	require.Eventually(t, func() bool {
+		kernel.migrationMu.Lock()
+		defer kernel.migrationMu.Unlock()
+		return kernel.migrationCloser == nil && kernel.migrationClosed
+	}, time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, 1, closer.count(), "orphan closer created after Close must be closed exactly once")
+	require.NoError(t, kernel.Close())
+	assert.Equal(t, 1, closer.count(), "repeated Close must stay idempotent")
+}
+
+func TestKernelMigrationCloserClosesExactlyOnceUnderRace(t *testing.T) {
+	t.Parallel()
+
+	closer := &countingMigrationCloser{}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	kernel := &Kernel{}
+	kernel.migrationInit = func() (*MigrationService, error) {
+		<-start
+		kernel.installMigrationCloser(closer)
+		return nil, nil
+	}
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, _ = kernel.Migration()
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		_ = kernel.Close()
+	}()
+	close(start)
+	wg.Wait()
+
+	for range 5 {
+		require.NoError(t, kernel.Close())
+	}
+	assert.Equal(t, 1, closer.count())
+	kernel.migrationMu.Lock()
+	assert.Nil(t, kernel.migrationCloser)
+	assert.True(t, kernel.migrationClosed)
+	kernel.migrationMu.Unlock()
 }
