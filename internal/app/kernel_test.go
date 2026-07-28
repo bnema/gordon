@@ -116,7 +116,7 @@ func TestKernelMigrationCloserCannotInstallAfterClose(t *testing.T) {
 	require.Eventually(t, func() bool {
 		kernel.migrationMu.Lock()
 		defer kernel.migrationMu.Unlock()
-		return kernel.migrationCloser == nil && kernel.migrationClosed
+		return kernel.migrationCloser == nil && kernel.migrationClosed && closer.count() == 1
 	}, time.Second, 5*time.Millisecond)
 
 	assert.Equal(t, 1, closer.count(), "orphan closer created after Close must be closed exactly once")
