@@ -111,7 +111,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	if image == "" {
 		return ComponentLaunchPlan{}, fmt.Errorf("target image is required")
 	}
-	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
+	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: domain.FormatComponentInternalNetwork(checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
 	if err := validateComponentLaunchReferences(checkpoint, envByRole, configByRole); err != nil {
@@ -124,7 +124,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid edge bootstrap port binding")
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
-		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
+		componentID := domain.FormatComponentID(role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
 		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(role)
 		if !ok {
 			return ComponentLaunchPlan{}, fmt.Errorf("component runtime profile is required")
@@ -269,7 +269,7 @@ func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, h
 }
 
 func (l *RuntimeComponentLauncher) CreateInternalNetwork(ctx context.Context, plan ComponentLaunchPlan) error {
-	componentID := fmt.Sprintf("gordon-network-%s-g%d", plan.MigrationID, plan.Generation)
+	componentID := domain.FormatComponentNetworkID(plan.MigrationID, plan.Generation)
 	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: componentID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.MigrationID, "network")
 }
 func (l *RuntimeComponentLauncher) StartComponent(ctx context.Context, component ComponentLaunchComponent) error {

@@ -50,11 +50,11 @@ func TestComponentMountPlanAttestationParity(t *testing.T) {
 	config, err := manager.componentConfig(command, ports)
 	require.NoError(t, err)
 
-	createPlan, err := manager.componentMountPlanForCreate(command, ports)
+	createPlan, err := manager.componentMountPlanForCreate(command)
 	require.NoError(t, err)
 	expected := createPlan.expectedMounts()
 
-	attestPlan, err := manager.componentMountPlanForAttestation(command, ports, configPath, "")
+	attestPlan, err := manager.componentMountPlanForAttestation(command, configPath, "")
 	require.NoError(t, err)
 	assert.Equal(t, expected, attestPlan.expectedMounts(), "create and attestation mount plans must match")
 

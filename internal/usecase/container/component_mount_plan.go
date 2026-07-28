@@ -73,9 +73,7 @@ func buildComponentMountPlan(input componentMountPlanInput) (componentMountPlan,
 	plan := componentMountPlan{mounts: map[string]expectedLifecycleMount{
 		"/etc/gordon/role.toml": {source: input.configFile, readOnly: true},
 	}}
-	if err := addPersistentComponentMounts(&plan, input); err != nil {
-		return componentMountPlan{}, err
-	}
+	addPersistentComponentMounts(&plan, input)
 	if input.command.TargetComponentRole == domain.ComponentRoleRuntime && strings.TrimSpace(input.runtimeSocketSource) != "" {
 		plan.mounts["/run/gordon/runtime.sock"] = expectedLifecycleMount{source: input.runtimeSocketSource, readOnly: true}
 	}
@@ -91,9 +89,9 @@ func buildComponentMountPlan(input componentMountPlanInput) (componentMountPlan,
 	return plan, nil
 }
 
-func addPersistentComponentMounts(plan *componentMountPlan, input componentMountPlanInput) error {
+func addPersistentComponentMounts(plan *componentMountPlan, input componentMountPlanInput) {
 	if input.command.TargetComponentRole == domain.ComponentRoleEdge {
-		return nil
+		return
 	}
 	volumeName := domain.FormatComponentGenerationVolumeName(
 		input.command.TargetComponentRole,
@@ -107,7 +105,6 @@ func addPersistentComponentMounts(plan *componentMountPlan, input componentMount
 	if input.command.TargetComponentRole == domain.ComponentRoleControl && domain.ValidManagedControlSecretsVolume(strings.TrimSpace(input.managedSecrets)) {
 		plan.mounts[managedControlSecretsPath] = expectedLifecycleMount{source: strings.TrimSpace(input.managedSecrets)}
 	}
-	return nil
 }
 
 func addRegistryStorageMount(plan *componentMountPlan, input componentMountPlanInput) error {
@@ -164,7 +161,6 @@ func addMigrationComponentConfigStateMounts(plan *componentMountPlan, input comp
 
 func (m *runtimeComponentLifecycleManager) componentMountPlanInput(
 	command domain.RuntimeSelfUpdateCommand,
-	ports []domain.ContainerPortPublish,
 	configFile string,
 	runtimeSocketSource string,
 ) componentMountPlanInput {
@@ -178,8 +174,8 @@ func (m *runtimeComponentLifecycleManager) componentMountPlanInput(
 	}
 }
 
-func (m *runtimeComponentLifecycleManager) componentMountPlanForCreate(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish) (componentMountPlan, error) {
-	configFile, err := componentLifecycleConfigFile(command, ports, m.policy.MigrationStateRoot)
+func (m *runtimeComponentLifecycleManager) componentMountPlanForCreate(command domain.RuntimeSelfUpdateCommand) (componentMountPlan, error) {
+	configFile, err := componentLifecycleConfigFile(command, command.PortPublishes, m.policy.MigrationStateRoot)
 	if err != nil {
 		return componentMountPlan{}, err
 	}
@@ -195,9 +191,9 @@ func (m *runtimeComponentLifecycleManager) componentMountPlanForCreate(command d
 		}
 		runtimeSocketSource = source
 	}
-	return buildComponentMountPlan(m.componentMountPlanInput(command, ports, configFile, runtimeSocketSource))
+	return buildComponentMountPlan(m.componentMountPlanInput(command, configFile, runtimeSocketSource))
 }
 
-func (m *runtimeComponentLifecycleManager) componentMountPlanForAttestation(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish, configFile string, runtimeSocketSource string) (componentMountPlan, error) {
-	return buildComponentMountPlan(m.componentMountPlanInput(command, ports, configFile, runtimeSocketSource))
+func (m *runtimeComponentLifecycleManager) componentMountPlanForAttestation(command domain.RuntimeSelfUpdateCommand, configFile string, runtimeSocketSource string) (componentMountPlan, error) {
+	return buildComponentMountPlan(m.componentMountPlanInput(command, configFile, runtimeSocketSource))
 }
