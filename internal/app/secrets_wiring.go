@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -51,15 +52,10 @@ func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.Se
 	}
 }
 
-var managedPassStoreInstance = func() func() *domainsecrets.ManagedPassStore {
-	var store *domainsecrets.ManagedPassStore
-	return func() *domainsecrets.ManagedPassStore {
-		if store == nil {
-			store = domainsecrets.NewManagedPassStore(managedPassPaths(), domainsecrets.ExecPassCommandRunner{})
-		}
-		return store
-	}
-}()
+var (
+	managedPassStoreMu       sync.RWMutex
+	managedPassStoreInstance = domainsecrets.NewManagedPassStore(managedPassPaths(), domainsecrets.ExecPassCommandRunner{})
+)
 
 func managedPassPaths() domainsecrets.ManagedPassPaths {
 	return domainsecrets.ManagedPassPaths{
@@ -70,7 +66,21 @@ func managedPassPaths() domainsecrets.ManagedPassPaths {
 }
 
 func managedPassStore() *domainsecrets.ManagedPassStore {
-	return managedPassStoreInstance()
+	managedPassStoreMu.RLock()
+	defer managedPassStoreMu.RUnlock()
+	return managedPassStoreInstance
+}
+
+func setManagedPassStoreForTest(store *domainsecrets.ManagedPassStore) func() {
+	managedPassStoreMu.Lock()
+	original := managedPassStoreInstance
+	managedPassStoreInstance = store
+	managedPassStoreMu.Unlock()
+	return func() {
+		managedPassStoreMu.Lock()
+		managedPassStoreInstance = original
+		managedPassStoreMu.Unlock()
+	}
 }
 
 // ValidateManagedPassBackend initializes or validates the control-owned pass

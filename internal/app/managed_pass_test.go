@@ -32,9 +32,8 @@ func TestRunManagedPassDoctorHoldsLeaseDuringCallback(t *testing.T) {
 	runner := &appFakePassCommandRunner{fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567"}
 	store := domainsecrets.NewManagedPassStore(paths, runner)
 
-	original := managedPassStoreInstance
-	managedPassStoreInstance = func() *domainsecrets.ManagedPassStore { return store }
-	t.Cleanup(func() { managedPassStoreInstance = original })
+	restore := setManagedPassStoreForTest(store)
+	t.Cleanup(restore)
 
 	t.Setenv("GNUPGHOME", paths.GPGHome)
 	t.Setenv("PASSWORD_STORE_DIR", paths.StoreDir)
@@ -62,6 +61,49 @@ func TestRunManagedPassDoctorHoldsLeaseDuringCallback(t *testing.T) {
 	close(releaseCheck)
 	require.NoError(t, <-done)
 	require.NoError(t, ValidateManagedPassBackend(context.Background()))
+}
+
+func TestManagedPassStoreAccessorIsRaceFree(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "secrets")
+	current := filepath.Join(root, "current")
+	paths := domainsecrets.ManagedPassPaths{
+		Root:     root,
+		GPGHome:  filepath.Join(current, "gnupg"),
+		StoreDir: filepath.Join(current, "password-store"),
+	}
+	store := domainsecrets.NewManagedPassStore(paths, &appFakePassCommandRunner{fingerprint: "0123456789ABCDEF0123456789ABCDEF01234567"})
+	restore := setManagedPassStoreForTest(store)
+	t.Cleanup(restore)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 100 {
+			_ = managedPassStore()
+		}
+	}()
+	for range 100 {
+		_ = managedPassStore()
+	}
+	<-done
+	require.Same(t, store, managedPassStore())
+}
+
+func TestManagedPassStoreInstanceIsRaceFree(t *testing.T) {
+	start := make(chan struct{})
+	done := make(chan struct{})
+	for range 32 {
+		go func() {
+			<-start
+			_ = managedPassStore()
+			done <- struct{}{}
+		}()
+	}
+	close(start)
+	for range 32 {
+		<-done
+	}
+	require.NotNil(t, managedPassStore())
 }
 
 type appFakePassCommandRunner struct {
