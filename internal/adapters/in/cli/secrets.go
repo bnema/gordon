@@ -153,7 +153,7 @@ func validateManagedPassConfig(configFile string) error {
 	return nil
 }
 
-func runManagedPassWriteCheck(ctx context.Context) error {
+func runManagedPassWriteCheck(ctx context.Context) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -168,25 +168,34 @@ func runManagedPassWriteCheck(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open managed pass backend: %w", err)
 	}
-	cleanup := func() error {
-		return store.Delete(domainName, key)
-	}
+	written := false
+	defer func() {
+		if !written {
+			return
+		}
+		if cleanupErr := store.Delete(domainName, key); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 	if err := store.Set(domainName, map[string]string{key: value}); err != nil {
 		return fmt.Errorf("write managed pass check: %w", err)
 	}
+	written = true
 	if err := ctx.Err(); err != nil {
-		return errors.Join(err, cleanup())
+		return err
 	}
-	values, err := store.GetAll(domainName)
-	if err != nil || values[key] != value {
-		return errors.Join(fmt.Errorf("read managed pass check failed"), cleanup())
+	values, getErr := store.GetAll(domainName)
+	if getErr != nil || values[key] != value {
+		return fmt.Errorf("read managed pass check failed")
 	}
 	if err := ctx.Err(); err != nil {
-		return errors.Join(err, cleanup())
+		return err
 	}
-	if err := store.Delete(domainName, key); err != nil {
-		return errors.Join(fmt.Errorf("remove managed pass check: %w", err), cleanup())
+	if deleteErr := store.Delete(domainName, key); deleteErr != nil {
+		written = false
+		return fmt.Errorf("remove managed pass check: %w", deleteErr)
 	}
+	written = false
 	return nil
 }
 

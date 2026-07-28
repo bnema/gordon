@@ -108,12 +108,32 @@ func TestRunManagedPassWriteCheckJoinsCleanupOnlyErrors(t *testing.T) {
 	assert.NotContains(t, err.Error(), store.lastValue)
 }
 
+func TestRunManagedPassWriteCheckDeletesExactlyOnceWhenFinalDeleteFails(t *testing.T) {
+	original := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = original })
+
+	store := &fakeManagedPassWriteCheckStore{
+		values:    map[string]string{},
+		deleteErr: errors.New("cleanup failed"),
+	}
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	err := runManagedPassWriteCheck(context.Background())
+	require.Error(t, err)
+	assert.Equal(t, 1, store.deleteAttempts)
+	assert.Contains(t, err.Error(), "remove managed pass check")
+	assert.Contains(t, err.Error(), "cleanup failed")
+	assert.NotContains(t, err.Error(), "secret=")
+	assert.NotContains(t, err.Error(), store.lastValue)
+}
+
 type fakeManagedPassWriteCheckStore struct {
-	values    map[string]string
-	lastValue string
-	getAllErr error
-	deleteErr error
-	afterSet  func()
+	values         map[string]string
+	lastValue      string
+	getAllErr      error
+	deleteErr      error
+	deleteAttempts int
+	afterSet       func()
 }
 
 func (f *fakeManagedPassWriteCheckStore) Set(_ string, secretsMap map[string]string) error {
@@ -139,5 +159,6 @@ func (f *fakeManagedPassWriteCheckStore) GetAll(string) (map[string]string, erro
 }
 
 func (f *fakeManagedPassWriteCheckStore) Delete(string, string) error {
+	f.deleteAttempts++
 	return f.deleteErr
 }
