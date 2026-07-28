@@ -415,13 +415,12 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 	if err := runQuiet(ctx, h.Podman, doctorArgs...); err != nil {
 		return fmt.Errorf("post-lease doctor: %w", err)
 	}
-	artifactCheck := `test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg`
 	if err := runQuiet(ctx, h.Podman, "run", "--rm",
 		"--user", "21002:21002",
 		"--userns", "keep-id:uid=21002,gid=21002",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets:ro",
-		"--entrypoint", "sh", image, "-ec", artifactCheck); err != nil {
+		"--entrypoint", "sh", image, "-ec", ManagedPassArtifactShellCheck); err != nil {
 		return fmt.Errorf("artifact check: %w", err)
 	}
 	if err := runQuiet(ctx, h.Podman, "volume", "rm", volume); err != nil {

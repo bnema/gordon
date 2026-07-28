@@ -3,8 +3,6 @@ package compatoldnew
 import (
 	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
@@ -34,7 +32,8 @@ func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
 }
 
 func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
-	harnessSource := readReleaseSmokeHarnessSource(t)
+	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
+	require.NoError(t, err)
 
 	require.Contains(t, harnessSource, "waitManagedPassReadiness")
 	require.Contains(t, harnessSource, "ReadinessPollAttempts")
@@ -49,19 +48,16 @@ func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
 
 	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
 	require.NoError(t, err)
-	for _, target := range []string{"release-podman-managed-pass-smoke", "release-image-smoke"} {
-		next := "build-push"
-		if target == "release-podman-managed-pass-smoke" {
-			next = "release-image-smoke"
-		}
-		recipe := makeTargetRecipe(t, string(makefile), target, next)
-		require.Contains(t, recipe, "go run ./cmd/release-smoke")
-		require.NotContains(t, recipe, "readiness_pid=$$!")
+	for _, tc := range releasesmoke.MakeDelegationTargets {
+		recipe, err := releasesmoke.MakeTargetRecipe(string(makefile), tc.Target, tc.Next)
+		require.NoError(t, err, tc.Target)
+		require.NoError(t, releasesmoke.ValidateMakeDelegationRecipe(recipe), tc.Target)
 	}
 }
 
 func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
-	harnessSource := readReleaseSmokeHarnessSource(t)
+	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
+	require.NoError(t, err)
 
 	require.Contains(t, harnessSource, "/var/lib/gordon:U")
 	require.Contains(t, harnessSource, "identity-write-check")
@@ -74,36 +70,9 @@ func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
 
 	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
 	require.NoError(t, err)
-	dockerGate := makeTargetRecipe(t, string(makefile), "release-image-smoke", "build-push")
+	dockerGate, err := releasesmoke.MakeTargetRecipe(string(makefile), "release-image-smoke", "build-push")
+	require.NoError(t, err)
 	require.NotContains(t, dockerGate, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
-}
-
-func readReleaseSmokeHarnessSource(t *testing.T) string {
-	t.Helper()
-	root := projectRoot(t)
-	var b strings.Builder
-	for _, name := range []string{
-		"internal/testutils/releasesmoke/harness.go",
-		"internal/testutils/releasesmoke/podman.go",
-		"internal/testutils/releasesmoke/readiness.go",
-	} {
-		data, err := os.ReadFile(filepath.Join(root, name))
-		require.NoError(t, err)
-		b.Write(data)
-	}
-	return b.String()
-}
-
-func makeTargetRecipe(t *testing.T, makefile, target, nextTarget string) string {
-	t.Helper()
-	startPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `:`)
-	startLoc := startPattern.FindStringIndex(makefile)
-	require.NotNil(t, startLoc, "missing Make target %s", target)
-	start := startLoc[0]
-	endPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(nextTarget) + `:`)
-	endLoc := endPattern.FindStringIndex(makefile[start:])
-	require.NotNil(t, endLoc, "missing target boundary %s", nextTarget)
-	return makefile[start : start+endLoc[0]]
 }
 
 func TestMigrationInvocationReportFailsClosed(t *testing.T) {

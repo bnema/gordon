@@ -4,9 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,7 +13,8 @@ import (
 )
 
 func TestReleaseArtifactSmokeHarnessTable(t *testing.T) {
-	harnessSource := readReleaseSmokeSources(t)
+	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
+	require.NoError(t, err)
 
 	for _, contract := range releasesmoke.HarnessContracts {
 		t.Run(contract.Name, func(t *testing.T) {
@@ -37,18 +36,12 @@ func TestReleaseArtifactSmokeHarnessTable(t *testing.T) {
 	})
 
 	t.Run("makefile-delegates-to-harness", func(t *testing.T) {
-		makefile := readMakefile(t)
-		for _, tc := range []struct {
-			target string
-			next   string
-		}{
-			{target: "release-podman-managed-pass-smoke", next: "release-image-smoke"},
-			{target: "release-image-smoke", next: "build-push"},
-		} {
-			recipe := makeTargetRecipe(t, makefile, tc.target, tc.next)
-			require.Contains(t, recipe, "go run ./cmd/release-smoke", tc.target)
-			require.NotContains(t, recipe, "readiness_pid=$$!")
-			require.NotContains(t, recipe, "podman system service")
+		makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+		require.NoError(t, err)
+		for _, tc := range releasesmoke.MakeDelegationTargets {
+			recipe, err := releasesmoke.MakeTargetRecipe(string(makefile), tc.Target, tc.Next)
+			require.NoError(t, err, tc.Target)
+			require.NoError(t, releasesmoke.ValidateMakeDelegationRecipe(recipe), tc.Target)
 		}
 	})
 }
@@ -70,48 +63,6 @@ func TestReleaseArtifactSmokeIntegration(t *testing.T) {
 			t.Fatalf("podman managed pass smoke: %v", err)
 		}
 	}
-}
-
-func readReleaseSmokeSources(t *testing.T) string {
-	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	root := filepath.Join(filepath.Dir(file), "..", "..", "..")
-	var b strings.Builder
-	for _, name := range []string{
-		"internal/testutils/releasesmoke/harness.go",
-		"internal/testutils/releasesmoke/podman.go",
-		"internal/testutils/releasesmoke/readiness.go",
-	} {
-		path := filepath.Join(root, name)
-		data, err := os.ReadFile(path)
-		if os.IsNotExist(err) {
-			continue
-		}
-		require.NoError(t, err)
-		b.Write(data)
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func readMakefile(t *testing.T) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
-	require.NoError(t, err)
-	return string(data)
-}
-
-func makeTargetRecipe(t *testing.T, makefile, target, nextTarget string) string {
-	t.Helper()
-	startPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(target) + `:`)
-	startLoc := startPattern.FindStringIndex(makefile)
-	require.NotNil(t, startLoc, "missing Make target %s", target)
-	start := startLoc[0]
-	endPattern := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(nextTarget) + `:`)
-	endLoc := endPattern.FindStringIndex(makefile[start:])
-	require.NotNil(t, endLoc, "missing target boundary %s", nextTarget)
-	return makefile[start : start+endLoc[0]]
 }
 
 func projectRoot(t *testing.T) string {

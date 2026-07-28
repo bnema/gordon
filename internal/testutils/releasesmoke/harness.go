@@ -287,11 +287,10 @@ func (h *Harness) dockerManagedPassLease(ctx context.Context, image, arch, secre
 			return fmt.Errorf("post-lease doctor: %w", err)
 		}
 	}
-	artifactCheck := `test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg`
 	if err := runQuiet(ctx, h.Docker, "run", "--rm",
 		"--platform", "linux/"+arch, "--user", "21002:21002",
 		"-v", volume+":/var/lib/gordon/secrets:ro",
-		"--entrypoint", "sh", image, "-ec", artifactCheck); err != nil {
+		"--entrypoint", "sh", image, "-ec", ManagedPassArtifactShellCheck); err != nil {
 		return fmt.Errorf("artifact check: %w", err)
 	}
 	return nil
