@@ -180,11 +180,15 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 		if err != nil {
 			return cleanup, err
 		}
+		gordonProjection, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{ .Name }}:{{ .Mode }}{{end}}{{end}}", name)
+		if err != nil {
+			return cleanup, err
+		}
 		bindsJSON, err := runOutput(ctx, h.Podman, "inspect", "--format", "{{json .HostConfig.Binds}}", name)
 		if err != nil {
 			return cleanup, err
 		}
-		if err = assertExclusiveGenerationVolumeU(spec.role, stateVolume, mountModes, bindsJSON); err != nil {
+		if err = assertExclusiveGenerationVolumeU(spec.role, stateVolume, mountModes, gordonProjection, bindsJSON); err != nil {
 			return cleanup, err
 		}
 
@@ -230,27 +234,53 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 	return func() {}, nil
 }
 
+// canonicalReleaseSmokeInspectedChownBindMode is Podman's canonical HostConfig.Binds
+// projection for release smoke containers created with :/var/lib/gordon:U.
+const canonicalReleaseSmokeInspectedChownBindMode = "U,rprivate"
+
 // assertExclusiveGenerationVolumeU requires exact U only on non-edge /var/lib/gordon.
-func assertExclusiveGenerationVolumeU(role, stateVolume, mountModes, bindsJSON string) error {
-	if err := assertNoUnrelatedMountU(role, mountModes); err != nil {
-		return err
-	}
+func assertExclusiveGenerationVolumeU(role, stateVolume, mountModes, gordonProjection, bindsJSON string) error {
 	if role == "edge" {
+		if err := assertEdgeHasNoGenerationMountU(mountModes, gordonProjection); err != nil {
+			return err
+		}
 		return assertEdgeHasNoGenerationVolumeU(bindsJSON)
 	}
-	return assertNonEdgeHasExactGenerationVolumeU(role, stateVolume, bindsJSON)
+	if err := assertNonEdgeHasExactGenerationMountProjection(role, stateVolume, mountModes, gordonProjection); err != nil {
+		return err
+	}
+	return assertNonEdgeHasExactGenerationVolumeBind(role, stateVolume, bindsJSON)
 }
 
-func assertNoUnrelatedMountU(role, mountModes string) error {
+func assertNonEdgeHasExactGenerationMountProjection(role, stateVolume, mountModes, gordonProjection string) error {
+	expectedProjection := stateVolume + ":" + domain.ContainerVolumeOptionChown
+	actualProjection := strings.TrimSpace(gordonProjection)
+	if actualProjection != expectedProjection {
+		return fmt.Errorf("role %s /var/lib/gordon mount projection must be %s, got %q", role, expectedProjection, actualProjection)
+	}
 	for _, line := range strings.Split(strings.TrimSpace(mountModes), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 || !mountModeHasU(fields[1]) {
+		if len(fields) < 2 {
 			continue
 		}
-		if fields[0] != "/var/lib/gordon" {
-			return fmt.Errorf("role %s must not apply U outside its generation volume (saw %s %s)", role, fields[0], fields[1])
+		dest, mode := fields[0], fields[1]
+		if mode == domain.ContainerVolumeOptionChown && dest != "/var/lib/gordon" {
+			return fmt.Errorf("role %s must not apply U outside its generation volume (saw %s %s)", role, dest, mode)
 		}
-		if role == "edge" {
+		if dest == "/var/lib/gordon" && mode != domain.ContainerVolumeOptionChown {
+			return fmt.Errorf("role %s /var/lib/gordon mount mode must be exact U, got %q", role, mode)
+		}
+	}
+	return nil
+}
+
+func assertEdgeHasNoGenerationMountU(mountModes, gordonProjection string) error {
+	if strings.TrimSpace(gordonProjection) != "" {
+		return fmt.Errorf("edge must not mount /var/lib/gordon")
+	}
+	for _, line := range strings.Split(strings.TrimSpace(mountModes), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == domain.ContainerVolumeOptionChown {
 			return fmt.Errorf("edge must not have a U mount")
 		}
 	}
@@ -263,41 +293,36 @@ func assertEdgeHasNoGenerationVolumeU(bindsJSON string) error {
 		if len(parts) >= 2 && filepath.Clean(parts[1]) == "/var/lib/gordon" {
 			return fmt.Errorf("edge must not mount /var/lib/gordon")
 		}
-		if len(parts) >= 3 && mountModeHasU(parts[2]) {
+		if len(parts) >= 3 && bindModeHasUToken(parts[2]) {
 			return fmt.Errorf("edge must not have a U bind: %q", bind)
 		}
 	}
 	return nil
 }
 
-func assertNonEdgeHasExactGenerationVolumeU(role, stateVolume, bindsJSON string) error {
-	found := false
+func assertNonEdgeHasExactGenerationVolumeBind(role, stateVolume, bindsJSON string) error {
+	expectedBind := stateVolume + ":/var/lib/gordon:" + canonicalReleaseSmokeInspectedChownBindMode
+	var generationBinds []string
 	for _, bind := range parseJSONStringList(bindsJSON) {
 		parts := strings.Split(bind, ":")
-		if len(parts) < 3 {
-			continue
-		}
-		if filepath.Clean(parts[1]) != "/var/lib/gordon" {
-			if mountModeHasU(parts[2]) {
+		if len(parts) < 2 || filepath.Clean(parts[1]) != "/var/lib/gordon" {
+			if len(parts) >= 3 && bindModeHasUToken(parts[2]) {
 				return fmt.Errorf("role %s must not apply U outside its generation volume: %q", role, bind)
 			}
 			continue
 		}
-		if parts[0] != stateVolume {
-			return fmt.Errorf("role %s unexpected /var/lib/gordon volume %q", role, parts[0])
-		}
-		if !mountModeHasU(parts[2]) {
-			return fmt.Errorf("role %s /var/lib/gordon bind must include exact U: %q", role, bind)
-		}
-		found = true
+		generationBinds = append(generationBinds, bind)
 	}
-	if !found {
-		return fmt.Errorf("role %s missing exclusive /var/lib/gordon:U bind (binds=%s)", role, bindsJSON)
+	if len(generationBinds) != 1 {
+		return fmt.Errorf("role %s must have exactly one /var/lib/gordon bind, got %d (binds=%s)", role, len(generationBinds), bindsJSON)
+	}
+	if generationBinds[0] != expectedBind {
+		return fmt.Errorf("role %s /var/lib/gordon bind must be exact %q, got %q", role, expectedBind, generationBinds[0])
 	}
 	return nil
 }
 
-func mountModeHasU(mode string) bool {
+func bindModeHasUToken(mode string) bool {
 	for _, option := range strings.Split(mode, ",") {
 		if strings.TrimSpace(option) == domain.ContainerVolumeOptionChown {
 			return true

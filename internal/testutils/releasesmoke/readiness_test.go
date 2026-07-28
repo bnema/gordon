@@ -66,36 +66,185 @@ func TestStartManagedPassOwnerAvoidsFIFODeadlock(t *testing.T) {
 
 func TestAssertExclusiveGenerationVolumeU(t *testing.T) {
 	t.Parallel()
-	require.NoError(t, assertExclusiveGenerationVolumeU(
-		"control",
-		"gordon-vol",
-		"/var/lib/gordon U\n/private \n",
-		`["gordon-vol:/var/lib/gordon:U,rprivate"]`,
-	))
-	require.Error(t, assertExclusiveGenerationVolumeU(
-		"control",
-		"gordon-vol",
-		"/private U\n",
-		`["gordon-vol:/var/lib/gordon:U"]`,
-	))
-	require.NoError(t, assertExclusiveGenerationVolumeU(
-		"edge",
-		"",
-		"/private \n",
-		`["/tmp/roles/edge:/private"]`,
-	))
-	require.Error(t, assertExclusiveGenerationVolumeU(
-		"edge",
-		"",
-		"/var/lib/gordon U\n",
-		`[]`,
-	))
-	require.Error(t, assertExclusiveGenerationVolumeU(
-		"runtime",
-		"gordon-vol",
-		"/var/lib/gordon \n",
-		`["gordon-vol:/var/lib/gordon:rw"]`,
-	))
+
+	const (
+		vol          = "gordon-vol"
+		mountOK      = "/var/lib/gordon U\n/private \n"
+		projectionOK = "gordon-vol:U"
+		bindOK       = `["gordon-vol:/var/lib/gordon:U,rprivate"]`
+	)
+
+	t.Run("green", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, assertExclusiveGenerationVolumeU(
+			"control", vol, mountOK, projectionOK, bindOK,
+		))
+		require.NoError(t, assertExclusiveGenerationVolumeU(
+			"edge", "", "/private \n", "", `["/tmp/roles/edge:/private"]`,
+		))
+	})
+
+	invalid := []struct {
+		name          string
+		role          string
+		stateVolume   string
+		mountModes    string
+		gordonProject string
+		bindsJSON     string
+	}{
+		{
+			name:          "unrelated mount U",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    "/private U\n/var/lib/gordon U\n",
+			gordonProject: projectionOK,
+			bindsJSON:     bindOK,
+		},
+		{
+			name:          "mount mode U,z",
+			role:          "runtime",
+			stateVolume:   vol,
+			mountModes:    "/var/lib/gordon U,z\n/private \n",
+			gordonProject: vol + ":U,z",
+			bindsJSON:     bindOK,
+		},
+		{
+			name:          "projection wrong volume",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: "other-vol:U",
+			bindsJSON:     bindOK,
+		},
+		{
+			name:          "projection missing mode",
+			role:          "registry",
+			stateVolume:   vol,
+			mountModes:    "/var/lib/gordon \n/private \n",
+			gordonProject: vol + ":",
+			bindsJSON:     bindOK,
+		},
+		{
+			name:          "bind bare U",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:U"]`,
+		},
+		{
+			name:          "bind U,z",
+			role:          "runtime",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:U,z"]`,
+		},
+		{
+			name:          "bind rw,U",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:rw,U"]`,
+		},
+		{
+			name:          "bind reordered extra tokens",
+			role:          "registry",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:rprivate,U"]`,
+		},
+		{
+			name:          "bind duplicate U token",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:U,rprivate,U"]`,
+		},
+		{
+			name:          "bind missing mode",
+			role:          "runtime",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon"]`,
+		},
+		{
+			name:          "duplicate gordon bind",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["gordon-vol:/var/lib/gordon:U,rprivate","gordon-vol:/var/lib/gordon:U,rprivate"]`,
+		},
+		{
+			name:          "wrong volume bind",
+			role:          "registry",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["other-vol:/var/lib/gordon:U,rprivate"]`,
+		},
+		{
+			name:          "unrelated bind U",
+			role:          "control",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["/tmp/private:/private:U","gordon-vol:/var/lib/gordon:U,rprivate"]`,
+		},
+		{
+			name:          "missing gordon bind",
+			role:          "runtime",
+			stateVolume:   vol,
+			mountModes:    mountOK,
+			gordonProject: projectionOK,
+			bindsJSON:     `["/tmp/private:/private"]`,
+		},
+		{
+			name:          "edge gordon mount projection",
+			role:          "edge",
+			stateVolume:   "",
+			mountModes:    "/var/lib/gordon U\n",
+			gordonProject: "edge-vol:U",
+			bindsJSON:     `[]`,
+		},
+		{
+			name:          "edge gordon bind",
+			role:          "edge",
+			stateVolume:   "",
+			mountModes:    "/private \n",
+			gordonProject: "",
+			bindsJSON:     `["edge-vol:/var/lib/gordon:U,rprivate"]`,
+		},
+		{
+			name:          "edge unrelated U bind",
+			role:          "edge",
+			stateVolume:   "",
+			mountModes:    "/private \n",
+			gordonProject: "",
+			bindsJSON:     `["/tmp/roles/edge:/private:U"]`,
+		},
+		{
+			name:          "edge unrelated U mount",
+			role:          "edge",
+			stateVolume:   "",
+			mountModes:    "/private U\n",
+			gordonProject: "",
+			bindsJSON:     `["/tmp/roles/edge:/private"]`,
+		},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Error(t, assertExclusiveGenerationVolumeU(
+				tc.role, tc.stateVolume, tc.mountModes, tc.gordonProject, tc.bindsJSON,
+			))
+		})
+	}
 }
 
 func TestAssertResourcesUninspectable(t *testing.T) {
