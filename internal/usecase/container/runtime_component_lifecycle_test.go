@@ -119,6 +119,23 @@ func TestRuntimeComponentLifecycleRejectsNonCanonicalGeneratedReferences(t *test
 	require.Error(t, err)
 }
 
+func TestComponentLifecycleConfigFileRejectsNonCanonicalEdgeActivationConfig(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	configPath := filepath.Join(root, "config", "fixture", "1", "edge.toml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(configPath), "edge-final.toml"), []byte("[edge]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleActivate, configPath)
+
+	finalPath, err := componentLifecycleConfigFile(command, command.FinalPortPublishes, root)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(filepath.Dir(configPath), "edge-final.toml"), finalPath)
+
+	command.ConfigFile = root + "/config/fixture/1/../1/edge.toml"
+	_, err = componentLifecycleConfigFile(command, command.FinalPortPublishes, root)
+	require.EqualError(t, err, "invalid component configuration file")
+}
+
 func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppNetwork(t *testing.T) {
 	identity := testRuntimeCommandIdentity("component-connect")
 	command := domain.RuntimeSelfUpdateCommand{

@@ -1228,6 +1228,9 @@ func componentGenerationVolumeOptions(command domain.RuntimeSelfUpdateCommand, v
 // retain edge.toml, preserving the authenticated probe configuration.
 func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports []domain.ContainerPortPublish, migrationRoot string) (string, error) {
 	path := command.ConfigFile
+	if filepath.Clean(path) != path {
+		return "", fmt.Errorf("invalid component configuration file")
+	}
 	if command.TargetComponentRole == domain.ComponentRoleEdge && command.LifecycleAction == domain.RuntimeComponentLifecycleActivate && approvedFinalPortPublishes(ports) && slices.Equal(ports, command.FinalPortPublishes) && filepath.Base(path) == "edge.toml" {
 		path = filepath.Join(filepath.Dir(path), "edge-final.toml")
 	}
