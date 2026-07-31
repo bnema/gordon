@@ -176,6 +176,34 @@ func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) 
 	require.Error(t, err)
 }
 
+func TestComponentLaunchPlanRejectsNonCanonicalGeneratedReferences(t *testing.T) {
+	for name, references := range map[string][]string{
+		"config": {
+			"/private/migration/config/fixture/1/../1/control.toml",
+			"/private/migration/config/fixture/1/runtime.toml",
+			"/private/migration/config/fixture/1/registry.toml",
+			"/private/migration/config/fixture/1/edge.toml",
+		},
+		"env": {
+			"/private/migration/env/fixture/1/../1/control.env",
+			"/private/migration/env/fixture/1/runtime.env",
+			"/private/migration/env/fixture/1/registry.env",
+			"/private/migration/env/fixture/1/edge.env",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"}
+			if name == "config" {
+				checkpoint.ConfigFileReferences = references
+			} else {
+				checkpoint.EnvFileReferences = references
+			}
+			_, err := NewComponentLaunchPlan(checkpoint)
+			require.Error(t, err)
+		})
+	}
+}
+
 func TestComponentRoleLaunchHashIncludesExactRuntimeProfile(t *testing.T) {
 	profile, ok := domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleRuntime)
 	require.True(t, ok)

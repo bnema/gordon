@@ -3,6 +3,7 @@ package releasesmoke
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -87,8 +88,12 @@ func TestCharacterizationHelpersMatchRepositoryContracts(t *testing.T) {
 
 	source, err := LoadHarnessSource(root)
 	require.NoError(t, err)
-	require.Contains(t, source, "ManagedPassArtifactShellCheck")
-	require.NotEmpty(t, ManagedPassArtifactShellCheck)
+	require.Equal(t, 1, strings.Count(source, "const ManagedPassArtifactShellCheck ="))
+	for engine, paths := range HarnessEngineSourceRelPaths {
+		engineSource, err := os.ReadFile(filepath.Join(root, paths[0]))
+		require.NoError(t, err, engine)
+		require.Contains(t, string(engineSource), "ManagedPassArtifactShellCheck", engine)
+	}
 
 	makefile, err := os.ReadFile(filepath.Join(root, "Makefile"))
 	require.NoError(t, err)

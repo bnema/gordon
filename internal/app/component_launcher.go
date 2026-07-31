@@ -198,8 +198,7 @@ func validateComponentLaunchReferences(checkpoint MigrationCheckpoint, envByRole
 }
 
 func approvedLaunchReference(path, kind string, checkpoint MigrationCheckpoint, name string) bool {
-	clean := filepath.Clean(strings.TrimSpace(path))
-	return domain.ApprovedGeneratedRolePath(clean, "", kind, checkpoint.MigrationID, checkpoint.ComponentGeneration, name)
+	return domain.ApprovedGeneratedRolePath(path, "", kind, checkpoint.MigrationID, checkpoint.ComponentGeneration, name)
 }
 
 func componentPreparedPorts(bindings []MigrationPortBinding, role domain.ComponentRole) []domain.ContainerPortPublish {

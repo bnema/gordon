@@ -49,8 +49,9 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", "GNUPGHOME", "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
-	assert.Equal(t, managedPassGPGHome, manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
-	assert.Equal(t, managedPassStoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
+	paths := managedPassPaths()
+	assert.Equal(t, paths.GPGHome, manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
+	assert.Equal(t, paths.StoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.NotEqual(t, "/host/gnupg", manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
 	assert.NotEqual(t, "/host/password-store", manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))

@@ -1238,14 +1238,14 @@ func componentLifecycleConfigFile(command domain.RuntimeSelfUpdateCommand, ports
 }
 
 func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path, migrationRoot string) error {
-	clean := filepath.Clean(strings.TrimSpace(path))
 	name := string(command.TargetComponentRole) + ".toml"
-	if command.TargetComponentRole == domain.ComponentRoleEdge && filepath.Base(clean) == "edge-final.toml" {
+	if command.TargetComponentRole == domain.ComponentRoleEdge && filepath.Base(path) == "edge-final.toml" {
 		name = "edge-final.toml"
 	}
-	if !domain.ApprovedGeneratedRolePath(clean, migrationRoot, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
+	if !domain.ApprovedGeneratedRolePath(path, migrationRoot, "config", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, name) {
 		return fmt.Errorf("invalid component configuration file")
 	}
+	clean := filepath.Clean(path)
 	info, err := os.Lstat(clean)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
 		return fmt.Errorf("invalid component configuration file")
@@ -1261,10 +1261,10 @@ func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	clean := filepath.Clean(strings.TrimSpace(path))
-	if !domain.ApprovedGeneratedRolePath(clean, migrationRoot, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
+	if !domain.ApprovedGeneratedRolePath(path, migrationRoot, "env", strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation, string(command.TargetComponentRole)+".env") {
 		return nil, fmt.Errorf("invalid component environment file")
 	}
+	clean := filepath.Clean(path)
 	file, err := openPrivateComponentEnvironmentFile(clean, migrationRoot)
 	if err != nil {
 		return nil, err

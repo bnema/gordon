@@ -237,12 +237,6 @@ func (f fakeInspectRunner) Run(_ context.Context, args ...string) (string, error
 	return "{}", nil
 }
 
-func TestReadinessHelpersAreCoLocatedWithHarness(t *testing.T) {
-	require.NotNil(t, waitManagedPassReadiness)
-	require.NotNil(t, startManagedPassOwner)
-	require.NotNil(t, managedPassOwnerCleanup)
-}
-
 type fakeOwnerRMRunner struct {
 	engine  string
 	mu      sync.Mutex

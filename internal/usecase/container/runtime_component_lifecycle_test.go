@@ -101,6 +101,24 @@ func TestRuntimeComponentLifecycleUsesRuntimeOnlyContainerProtocol(t *testing.T)
 	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}))
 }
 
+func TestRuntimeComponentLifecycleRejectsNonCanonicalGeneratedReferences(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	configPath := filepath.Join(root, "config", "fixture", "1", "runtime.toml")
+	envPath := filepath.Join(root, "env", "fixture", "1", "runtime.env")
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(envPath), 0o700))
+	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
+	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix:///run/user/1000/podman/podman.sock\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleStart, configPath)
+
+	configAlias := root + "/config/fixture/1/../1/runtime.toml"
+	require.Error(t, approvedComponentConfigFile(command, configAlias, root))
+
+	envAlias := root + "/env/fixture/1/../1/runtime.env"
+	_, err := componentLifecycleEnvironment(command, envAlias, root)
+	require.Error(t, err)
+}
+
 func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppNetwork(t *testing.T) {
 	identity := testRuntimeCommandIdentity("component-connect")
 	command := domain.RuntimeSelfUpdateCommand{
