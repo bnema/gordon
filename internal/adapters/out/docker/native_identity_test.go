@@ -23,10 +23,15 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestInspectNamedVolumeChownEvidenceAcceptsOnlyCanonicalPodmanMode(t *testing.T) {
-	assert.True(t, inspectNamedVolumeChownEvidence("gordon-runtime-migration-g1", []string{
-		"gordon-runtime-migration-g1:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
-	}))
+func TestInspectNamedVolumeChownEvidenceAcceptsCanonicalPodmanOptionsInAnyOrder(t *testing.T) {
+	for _, mode := range []string{
+		"U,rprivate,nosuid,nodev,rbind",
+		"U,nosuid,rprivate,nodev,rbind",
+	} {
+		assert.True(t, inspectNamedVolumeChownEvidence("gordon-runtime-migration-g1", []string{
+			"gordon-runtime-migration-g1:/var/lib/gordon:" + mode,
+		}))
+	}
 }
 
 func TestInspectNamedVolumeChownEvidenceRejectsModeVariants(t *testing.T) {
@@ -36,7 +41,6 @@ func TestInspectNamedVolumeChownEvidenceRejectsModeVariants(t *testing.T) {
 		"bare create mode":        {expected + ":/var/lib/gordon:U"},
 		"subset":                  {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev"},
 		"superset":                {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
-		"reordered":               {expected + ":/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"},
 		"duplicate token":         {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"},
 		"lowercase alias":         {expected + ":/var/lib/gordon:u,rprivate,nosuid,nodev,rbind"},
 		"extra access flag":       {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"},
@@ -86,9 +90,7 @@ func TestExactInspectedGenerationMountRequiresCanonicalGenerationVolume(t *testi
 			mutate(inspected)
 			expectedName, ok := inspectedGenerationVolumeName(inspected)
 			if !ok {
-				assert.False(t, inspectNamedVolumeChownEvidence("unused", []string{
-					inspected.VolumeMounts[0].Name + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind",
-				}))
+				assert.False(t, ok)
 				return
 			}
 			_, ok = exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)

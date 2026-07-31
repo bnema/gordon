@@ -229,7 +229,7 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 		return nil, err
 	}
 	mountPlan.applyToConfig(config)
-	if err := m.prepareComponentMountFilesystem(command, mountPlan); err != nil {
+	if err := m.prepareComponentMountFilesystem(command); err != nil {
 		return nil, err
 	}
 	if err := m.policy.CheckContainerConfig(command.RuntimeCommandIdentity, "", *config); err != nil {
@@ -238,35 +238,27 @@ func (m *runtimeComponentLifecycleManager) componentConfig(command domain.Runtim
 	return config, nil
 }
 
-// mountMigrationRuntimeSocketState gives runtime a writable private state
-// directory and control a read-only view for Unix socket connect. Other roles
-// receive neither. The directory is a generated immediate child of the
-// configured migration root and contains no engine socket.
 // prepareComponentMountFilesystem creates private migration directories required before engine create.
-func (m *runtimeComponentLifecycleManager) prepareComponentMountFilesystem(command domain.RuntimeSelfUpdateCommand, plan componentMountPlan) error {
-	if command.TargetComponentRole == domain.ComponentRoleRuntime || command.TargetComponentRole == domain.ComponentRoleControl {
-		if strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
-			return nil
-		}
-		migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
-		root := filepath.Clean(m.policy.MigrationStateRoot)
-		if !filepath.IsAbs(root) {
-			return fmt.Errorf("migration runtime socket root is not configured")
-		}
-		if !domain.ValidComponentMigrationID(migrationID) {
-			return fmt.Errorf("invalid migration runtime socket identity")
-		}
-		source := filepath.Join(root, migrationID)
-		if err := prepareMigrationSocketStateDirectory(root, source); err != nil {
-			return err
-		}
+func (m *runtimeComponentLifecycleManager) prepareComponentMountFilesystem(command domain.RuntimeSelfUpdateCommand) error {
+	if command.TargetComponentRole != domain.ComponentRoleRuntime && command.TargetComponentRole != domain.ComponentRoleControl {
+		return nil
 	}
-	if command.TargetComponentRole != domain.ComponentRoleRuntime || strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
+	if strings.TrimSpace(m.policy.MigrationStateRoot) == "" {
 		return nil
 	}
 	root := filepath.Clean(m.policy.MigrationStateRoot)
 	if !filepath.IsAbs(root) {
-		return fmt.Errorf("migration component configuration root is not configured")
+		return fmt.Errorf("migration component root is not configured")
+	}
+	migrationID := strings.TrimPrefix(command.PolicyDecisionID, "migration:")
+	if !domain.ValidComponentMigrationID(migrationID) {
+		return fmt.Errorf("invalid migration runtime socket identity")
+	}
+	if err := prepareMigrationSocketStateDirectory(root, filepath.Join(root, migrationID)); err != nil {
+		return err
+	}
+	if command.TargetComponentRole != domain.ComponentRoleRuntime {
+		return nil
 	}
 	for _, name := range []string{"config", "env"} {
 		path := filepath.Join(root, name)
@@ -278,7 +270,6 @@ func (m *runtimeComponentLifecycleManager) prepareComponentMountFilesystem(comma
 			return fmt.Errorf("restrict migration component %s root: %w", name, err)
 		}
 	}
-	_ = plan
 	return nil
 }
 
@@ -375,35 +366,42 @@ func (m *runtimeComponentLifecycleManager) reconcileInterruptedEdgeActivation(ct
 			return componentLifecycleError("inspect old serving", err)
 		}
 	}
-	if m.completedFinalCutover(ctx, command, target, oldRunning) {
+	completed, finishErr := m.finishInterruptedCutover(ctx, command, target, oldRunning)
+	if completed {
 		return nil
 	}
 
 	restoreErr := m.restoreInterruptedEdgeInventory(ctx, command, target, old, oldRunning)
 	retryable := restoreErr == nil
 	if recordErr := m.recordCutoverFailure(ctx, command, "cutover_failed", retryable); recordErr != nil {
-		return componentLifecycleError("record cutover failure", recordErr)
+		return componentLifecycleError("record cutover failure", errors.Join(finishErr, recordErr))
 	}
 	if !retryable {
-		return componentLifecycleError("restore", restoreErr)
+		return componentLifecycleError("restore", errors.Join(finishErr, restoreErr))
+	}
+	if finishErr != nil {
+		return componentLifecycleError("finish interrupted cutover", finishErr)
 	}
 	return componentLifecycleError("recovered", errors.New("cutover rollback completed"))
 }
 
-func (m *runtimeComponentLifecycleManager) completedFinalCutover(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target *domain.Container, oldRunning bool) bool {
+func (m *runtimeComponentLifecycleManager) finishInterruptedCutover(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target *domain.Container, oldRunning bool) (bool, error) {
 	if target == nil || oldRunning || !containerPortsMatch(target, command.FinalPortPublishes) || m.healthContainer(ctx, target) != nil {
-		return false
+		return false, nil
 	}
 	if err := m.connectFinalEdgeAppNetworks(ctx, command, command.EdgeAppNetworks); err != nil {
-		return false
+		return false, err
 	}
 	if err := m.ensureEdgeAppNetworksAttached(ctx, command, target.Name); err != nil {
-		return false
+		return false, err
 	}
-	if m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeCommit) != nil {
-		return false
+	if err := m.recordCutoverSubphase(ctx, command, domain.MigrationCutoverSubphaseBeforeCommit); err != nil {
+		return false, err
 	}
-	return m.committer.CommitMigrationCutover(ctx, command) == nil
+	if err := m.committer.CommitMigrationCutover(ctx, command); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m *runtimeComponentLifecycleManager) restoreInterruptedEdgeInventory(ctx context.Context, command domain.RuntimeSelfUpdateCommand, target, old *domain.Container, oldRunning bool) error {
@@ -1255,10 +1253,10 @@ func approvedComponentConfigFile(command domain.RuntimeSelfUpdateCommand, path, 
 	return nil
 }
 
-// componentLifecycleEnvironment reads only a runtime-owned generated env file.
-// It returns generic errors and never includes values in failures or logs.
 const maxComponentLifecycleEnvironmentBytes int64 = 64 << 10
 
+// componentLifecycleEnvironment reads only a runtime-owned generated env file.
+// It returns generic errors and never includes values in failures or logs.
 func componentLifecycleEnvironment(command domain.RuntimeSelfUpdateCommand, path, migrationRoot string) ([]string, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil

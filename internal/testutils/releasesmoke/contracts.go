@@ -1,6 +1,10 @@
 package releasesmoke
 
-import "github.com/bnema/gordon/internal/domain"
+import (
+	"time"
+
+	"github.com/bnema/gordon/internal/domain"
+)
 
 // ManagedPassLockMessage is printed when secrets lock is acquired.
 const ManagedPassLockMessage = "Managed pass backend lock acquired"
@@ -8,8 +12,8 @@ const ManagedPassLockMessage = "Managed pass backend lock acquired"
 // LeaseConflictMessage is printed when a second doctor run hits an active lease.
 const LeaseConflictMessage = "managed pass store is already in use"
 
-// ReadinessPollAttempts bounds managed-pass lock acquisition waits.
-const ReadinessPollAttempts = 30
+// ReadinessTimeout bounds managed-pass lock acquisition waits and owner cleanup.
+const ReadinessTimeout = 30 * time.Second
 
 // ImageArchitectures verified by release-image-smoke.
 var ImageArchitectures = []string{"amd64", "arm64"}
@@ -48,7 +52,7 @@ var HarnessContracts = []HarnessContract{
 			"LeaseConflictMessage",
 			"waitManagedPassReadiness",
 			"StdoutPipe",
-			"ReadinessPollAttempts",
+			"ReadinessTimeout",
 			"managedPassOwnerCleanup",
 			"Process.Kill",
 		},
@@ -61,7 +65,7 @@ var HarnessContracts = []HarnessContract{
 		Name:   "docker-image-permissions",
 		Engine: "docker",
 		Contains: []string{
-			"21002:21002:700",
+			"ControlUser",
 			".gordon-managed-pass-fingerprint",
 			"password-store/.gpg-id",
 		},
@@ -114,7 +118,7 @@ var HarnessContracts = []HarnessContract{
 			`"rm", "-f"`,
 			`"volume", "rm"`,
 			"Process.Kill",
-			"Process.Wait",
+			"cmd.Wait",
 			"cleanupOnce",
 			`"volume", "inspect"`,
 			`"container", "inspect"`,

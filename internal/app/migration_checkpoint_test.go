@@ -143,7 +143,7 @@ func TestMigrationCheckpointBindsEdgeAppNetworksIntoCutoverIdentity(t *testing.T
 	checkpoint.OldServingPath = "old-monolith"
 	checkpoint.RouteSnapshotGeneration = 7
 	checkpoint.AppliedEdgeComponentID = "gordon-edge-migration-1-g1"
-	checkpoint.EdgeAppNetworks = []string{"gordon-app-fixture"}
+	checkpoint.EdgeAppNetworks = []string{"gordon-app-fixture", "gordon-app-other"}
 	checkpoint.PublicPortBindings = []MigrationPortBinding{{Role: "edge", HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: "tcp"}}
 	require.NoError(t, store.Save(checkpoint))
 	command := domain.RuntimeSelfUpdateCommand{
@@ -154,17 +154,17 @@ func TestMigrationCheckpointBindsEdgeAppNetworksIntoCutoverIdentity(t *testing.T
 		PolicyDecisionID:       "migration:" + checkpoint.MigrationID,
 		OldServingComponentID:  checkpoint.OldServingPath,
 		FinalPortPublishes:     []domain.ContainerPortPublish{{HostIP: "0.0.0.0", HostPort: 8080, ContainerPort: 8080, Protocol: domain.NetworkProtocolTCP}},
-		EdgeAppNetworks:        []string{"gordon-app-fixture"},
+		EdgeAppNetworks:        []string{"gordon-app-fixture", "gordon-app-other"},
 	}
-	require.NoError(t, store.CommitMigrationCutover(context.Background(), command))
-
-	forged := command
-	forged.EdgeAppNetworks = []string{"gordon-app-forged"}
-	assert.Error(t, store.CommitMigrationCutover(context.Background(), forged), "forged edge app networks cannot match durable cutover identity")
 
 	reordered := command
 	reordered.EdgeAppNetworks = []string{"gordon-app-other", "gordon-app-fixture"}
 	assert.Error(t, store.RecordMigrationCutoverSubphase(context.Background(), reordered, domain.MigrationCutoverSubphaseBeforeCommit), "cutover identity requires exact checkpoint network order")
+
+	require.NoError(t, store.CommitMigrationCutover(context.Background(), command))
+	forged := command
+	forged.EdgeAppNetworks = []string{"gordon-app-forged"}
+	assert.Error(t, store.CommitMigrationCutover(context.Background(), forged), "forged edge app networks cannot match durable cutover identity")
 }
 
 func TestMigrationCheckpointPersistsOnlyAllowlistedCutoverIntent(t *testing.T) {

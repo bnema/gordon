@@ -117,6 +117,11 @@ func TestComponentMountPlanFinalEdgeUsesFinalManifest(t *testing.T) {
 	assert.True(t, lifecycleMountsMatch(volumeMountsFromConfig(config), finalPlan.expectedMounts()))
 }
 
+func TestComponentMountPlanValidationUsesSentinel(t *testing.T) {
+	_, err := buildComponentMountPlan(componentMountPlanInput{command: domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:INVALID"}})
+	require.ErrorIs(t, err, domain.ErrInvalidComponentMountPlan)
+}
+
 func volumeMountsFromConfig(config *domain.ContainerConfig) []domain.ContainerVolumeMount {
 	mounts := make([]domain.ContainerVolumeMount, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
 	for destination, source := range config.Volumes {
@@ -131,7 +136,7 @@ func volumeMountsFromConfig(config *domain.ContainerConfig) []domain.ContainerVo
 	}
 	for destination, source := range config.ReadOnlyVolumes {
 		mount := domain.ContainerVolumeMount{Type: "bind", Source: source, Destination: destination, ReadOnly: true}
-		if filepath.IsAbs(source) == false {
+		if !filepath.IsAbs(source) {
 			mount.Type = "volume"
 			mount.Name = source
 		}

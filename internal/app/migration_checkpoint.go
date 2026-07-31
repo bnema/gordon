@@ -807,13 +807,8 @@ func canonicalUnixURL(parsed *url.URL) bool {
 // bootstrapRuntimeEndpointsForMigration reconstructs the process-local bootstrap
 // transport from the configured host data root and migration identity.
 func bootstrapRuntimeEndpointsForMigration(dataDir, migrationID string) (RuntimeBootstrapEndpoints, error) {
-	dataRoot := strings.TrimSpace(resolveDataDir(dataDir))
-	cleanRoot := filepath.Clean(dataRoot)
-	endpoints := RuntimeBootstrapEndpoints{hostDataRootValue: cleanRoot, migrationID: migrationID}
-	if dataRoot == "" || dataRoot != cleanRoot || !endpoints.valid() {
-		return RuntimeBootstrapEndpoints{}, fmt.Errorf("invalid runtime bootstrap transport")
-	}
-	return endpoints, nil
+	componentEndpoint := (RuntimeBootstrapEndpoints{migrationID: migrationID}).componentEndpoint()
+	return newRuntimeBootstrapEndpoints(componentEndpoint, dataDir, migrationID)
 }
 
 // newRuntimeBootstrapEndpoints validates the durable component endpoint, then

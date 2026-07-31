@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/bnema/gordon/internal/testutils/releasesmoke"
 )
@@ -18,7 +20,8 @@ func main() {
 	}
 
 	h := releasesmoke.NewHarness(*dist)
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	var err error
 	switch flag.Arg(0) {
 	case "image":

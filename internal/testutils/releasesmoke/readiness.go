@@ -9,8 +9,11 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"time"
 )
+
+// ManagedPassArtifactShellCheck is the exact shell predicate used by Docker and
+// Podman release smokes to verify managed-pass store artifacts after doctor.
+const ManagedPassArtifactShellCheck = `test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg` //nolint:gosec // G101: path fragment "password-store", not a credential.
 
 // waitManagedPassReadiness reads the first readiness line from r, honoring ctx.
 // Prefer StdoutPipe over a FIFO: open the reader before Start so the owner cannot
@@ -64,17 +67,18 @@ func startManagedPassOwner(ctx context.Context, cmd *exec.Cmd) (readiness string
 		once.Do(func() {
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
-				_, _ = cmd.Process.Wait()
+				_ = cmd.Wait()
 			}
 		})
 	}
 
-	waitCtx, cancel := context.WithTimeout(ctx, time.Duration(ReadinessPollAttempts)*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, ReadinessTimeout)
 	defer cancel()
 	readiness, err = waitManagedPassReadiness(waitCtx, stdout)
 	if err != nil {
 		return "", terminate, err
 	}
+	go func() { _, _ = io.Copy(io.Discard, stdout) }()
 	return readiness, terminate, nil
 }
 
@@ -85,7 +89,7 @@ func managedPassOwnerCleanup(runner CommandRunner, owner string, terminate func(
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			bgCtx, cancel := context.WithTimeout(context.Background(), time.Duration(ReadinessPollAttempts)*time.Second)
+			bgCtx, cancel := context.WithTimeout(context.Background(), ReadinessTimeout)
 			defer cancel()
 			_ = runQuiet(bgCtx, runner, "rm", "-f", owner)
 			if terminate != nil {

@@ -2,7 +2,6 @@ package container
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -302,7 +301,7 @@ func TestRuntimeComponentLifecycleReadUsesAuthoritativeExistingProfile(t *testin
 	root := filepath.Join(t.TempDir(), "migration")
 	configPath := filepath.Join(root, "config", "fixture", "1", "edge.toml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
-	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	require.True(t, ok)
 	command := domain.RuntimeSelfUpdateCommand{
@@ -403,9 +402,9 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 				w.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
 				case "/v1.41/containers/json":
-					_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
+					writeLifecycleJSON(t, w, []map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
 				case "/v1.41/containers/" + containerID + "/json":
-					_ = json.NewEncoder(w).Encode(map[string]any{
+					writeLifecycleJSON(t, w, map[string]any{
 						"Id": containerID, "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
 						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": identity.User, "Labels": componentLifecycleLabels(command)},
 						"HostConfig":      map[string]any{"UsernsMode": "private", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
@@ -418,7 +417,7 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 						http.NotFound(w, request)
 						return
 					}
-					_ = json.NewEncoder(w).Encode(map[string]any{
+					writeLifecycleJSON(t, w, map[string]any{
 						"BoundingCaps":  nil,
 						"EffectiveCaps": nil,
 						"HostConfig": map[string]any{"IDMappings": map[string]any{
@@ -601,7 +600,7 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleEdge)
 	command.TargetComponentID = "gordon-edge-fixture-g1"
 	command.ConfigFile = filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(command.ConfigFile, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	config, err = manager.componentConfig(command, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, config.Volumes, "/var/lib/gordon/migration/fixture")

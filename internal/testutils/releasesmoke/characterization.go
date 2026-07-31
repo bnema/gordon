@@ -8,17 +8,23 @@ import (
 	"strings"
 )
 
-// ManagedPassArtifactShellCheck is the exact shell predicate used by Docker and
-// Podman release smokes to verify managed-pass store artifacts after doctor.
-const ManagedPassArtifactShellCheck = `test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg` //nolint:gosec // G101: path fragment "password-store", not a credential.
+// HarnessEngineSourceRelPaths maps each engine to the sources that prove its contracts.
+var HarnessEngineSourceRelPaths = map[string][]string{
+	"docker": {
+		"internal/testutils/releasesmoke/harness.go",
+		"internal/testutils/releasesmoke/readiness.go",
+	},
+	"podman": {
+		"internal/testutils/releasesmoke/podman.go",
+		"internal/testutils/releasesmoke/readiness.go",
+	},
+}
 
-// HarnessSourceRelPaths lists repo-relative sources concatenated for release-smoke
-// behavioral/characterization contracts shared by releasesmoke and compatoldnew.
+// HarnessSourceRelPaths is the union used by whole-harness proofs.
 var HarnessSourceRelPaths = []string{
 	"internal/testutils/releasesmoke/harness.go",
 	"internal/testutils/releasesmoke/podman.go",
 	"internal/testutils/releasesmoke/readiness.go",
-	"internal/testutils/releasesmoke/characterization.go",
 }
 
 // MakeDelegationTarget documents a Makefile target that must delegate to the Go harness.
@@ -38,11 +44,24 @@ const releaseSmokeHarnessInvocation = "go run ./cmd/release-smoke"
 // LoadHarnessSource concatenates the release-smoke source files used by
 // characterization and release-gate proofs. Missing files fail closed.
 func LoadHarnessSource(root string) (string, error) {
+	return loadHarnessSource(root, HarnessSourceRelPaths)
+}
+
+// LoadEngineHarnessSource concatenates only sources relevant to engine contracts.
+func LoadEngineHarnessSource(root, engine string) (string, error) {
+	paths, ok := HarnessEngineSourceRelPaths[engine]
+	if !ok {
+		return "", fmt.Errorf("unsupported harness engine %q", engine)
+	}
+	return loadHarnessSource(root, paths)
+}
+
+func loadHarnessSource(root string, paths []string) (string, error) {
 	if strings.TrimSpace(root) == "" {
 		return "", fmt.Errorf("harness source root must not be empty")
 	}
 	var b strings.Builder
-	for _, rel := range HarnessSourceRelPaths {
+	for _, rel := range paths {
 		path := filepath.Join(root, rel)
 		data, err := os.ReadFile(path)
 		if err != nil {

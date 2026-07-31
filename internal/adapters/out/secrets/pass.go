@@ -84,12 +84,12 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return "", ctxErr
 		}
-		return "", fmt.Errorf("pass command failed")
+		return "", domain.ErrPassCommandFailed
 	}
 
 	secret := strings.TrimSpace(string(output))
 	if secret == "" {
-		return "", fmt.Errorf("empty secret returned from pass")
+		return "", domain.ErrPassSecretEmpty
 	}
 
 	p.log.Debug().

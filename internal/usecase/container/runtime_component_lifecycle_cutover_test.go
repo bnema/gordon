@@ -413,7 +413,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackWhenDurableCutoverCommitFails
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
-	expectRollbackInventoryProofWithoutNetworks(runtime, old, restored)
+	expectEdgeRollbackInventoryProof(runtime, old, restored, nil)
 
 	committer := &recordingMigrationCutoverCommitter{err: errors.New("injected durable write failure")}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
@@ -437,7 +437,7 @@ func TestRuntimeComponentLifecycleActivateMarksRollbackNonretryableWhenRestoreFa
 	runtime.EXPECT().StopContainer(mock.Anything, "old").Return(nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(errors.New("injected prepared stop failure")).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "old").Return(errors.New("injected old restore failure")).Once()
-	expectRollbackInventoryProofWithoutNetworks(runtime, old, prepared)
+	expectEdgeRollbackInventoryProof(runtime, old, prepared, nil)
 
 	committer := &recordingMigrationCutoverCommitter{}
 	manager := WithMigrationCutoverCommitter(NewRuntimeComponentLifecycleManager(runtime, RuntimePolicy{Mode: RuntimePolicyModeEnforce}), committer)
@@ -468,14 +468,14 @@ func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testi
 				if failure == "stop-prepared" {
 					runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(errors.New("injected stop failure")).Once()
 					runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
-					expectRollbackInventoryProofWithoutNetworks(runtime, old, prepared)
+					expectEdgeRollbackInventoryProof(runtime, old, prepared, nil)
 				} else {
 					runtime.EXPECT().StopContainer(mock.Anything, "prepared").Return(nil).Once()
 					if failure == "remove-prepared" {
 						runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(errors.New("injected remove failure")).Once()
 						runtime.EXPECT().StartContainer(mock.Anything, "prepared").Return(nil).Once()
 						runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
-						expectRollbackInventoryProofWithoutNetworks(runtime, old, prepared)
+						expectEdgeRollbackInventoryProof(runtime, old, prepared, nil)
 					} else {
 						runtime.EXPECT().RemoveContainer(mock.Anything, "prepared", true).Return(nil).Once()
 						if failure == "create-final" {
@@ -483,7 +483,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testi
 							runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
 							runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
 							runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
-							expectRollbackInventoryProofWithoutNetworks(runtime, old, restored)
+							expectEdgeRollbackInventoryProof(runtime, old, restored, nil)
 						} else {
 							runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "final"}, nil).Once()
 							if failure == "start-final" {
@@ -497,7 +497,7 @@ func TestRuntimeComponentLifecycleActivateRollsBackEveryMutationFailure(t *testi
 							runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(restored, nil).Once()
 							runtime.EXPECT().StartContainer(mock.Anything, "restored").Return(nil).Once()
 							runtime.EXPECT().StartContainer(mock.Anything, "old").Return(nil).Once()
-							expectRollbackInventoryProofWithoutNetworks(runtime, old, restored)
+							expectEdgeRollbackInventoryProof(runtime, old, restored, nil)
 						}
 					}
 				}
@@ -694,20 +694,6 @@ func TestRollbackWithOldPresentProvesRestoredEdgeNetworksAndOldListener(t *testi
 	assert.NotContains(t, err.Error(), "injected durable write failure")
 }
 
-func expectRollbackInventoryProofWithoutNetworks(runtime *outmocks.MockContainerRuntime, old, prepared *domain.Container) {
-	containers := []*domain.Container{prepared}
-	if old != nil {
-		containers = append(containers, old)
-	}
-	runtime.EXPECT().ListContainers(mock.Anything, true).Return(containers, nil).Once()
-	if old != nil {
-		runtime.EXPECT().IsContainerRunning(mock.Anything, old.ID).Return(true, nil).Once()
-		runtime.EXPECT().GetContainerHealthStatus(mock.Anything, old.ID).Return("healthy", true, nil).Once()
-	}
-	runtime.EXPECT().IsContainerRunning(mock.Anything, prepared.ID).Return(true, nil).Once()
-	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, prepared.ID).Return("healthy", true, nil).Once()
-}
-
 func expectEdgeRollbackInventoryProof(runtime *outmocks.MockContainerRuntime, old, restored *domain.Container, networkNames []string) {
 	containers := []*domain.Container{restored}
 	if old != nil {
@@ -722,7 +708,9 @@ func expectEdgeRollbackInventoryProof(runtime *outmocks.MockContainerRuntime, ol
 			Containers: []string{"gordon-target-app-example-test", restored.Name},
 		})
 	}
-	runtime.EXPECT().ListNetworks(mock.Anything).Return(networks, nil).Once()
+	if len(networkNames) > 0 {
+		runtime.EXPECT().ListNetworks(mock.Anything).Return(networks, nil).Once()
+	}
 	if old != nil {
 		runtime.EXPECT().IsContainerRunning(mock.Anything, old.ID).Return(true, nil).Once()
 		runtime.EXPECT().GetContainerHealthStatus(mock.Anything, old.ID).Return("healthy", true, nil).Once()

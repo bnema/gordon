@@ -2,6 +2,7 @@ package releasesmoke
 
 import (
 	"context"
+	"os/exec"
 	"strconv"
 	"testing"
 
@@ -40,6 +41,10 @@ type recordingServeRunner struct {
 
 func (r *recordingServeRunner) serveRoles() []string {
 	return append([]string(nil), r.roles...)
+}
+
+func (r *recordingServeRunner) Command(ctx context.Context, _ ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "true")
 }
 
 func (r *recordingServeRunner) Run(_ context.Context, args ...string) (string, error) {

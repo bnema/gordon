@@ -4,20 +4,20 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/testutils/compatoldnew"
 	"github.com/bnema/gordon/internal/testutils/releasesmoke"
 )
 
 func TestReleaseArtifactSmokeHarnessTable(t *testing.T) {
-	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
-	require.NoError(t, err)
-
 	for _, contract := range releasesmoke.HarnessContracts {
 		t.Run(contract.Name, func(t *testing.T) {
+			harnessSource, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), contract.Engine)
+			require.NoError(t, err)
 			for _, fragment := range contract.Contains {
 				require.Contains(t, harnessSource, fragment, "harness must retain contract %q for %s", fragment, contract.Engine)
 			}
@@ -28,7 +28,7 @@ func TestReleaseArtifactSmokeHarnessTable(t *testing.T) {
 	}
 
 	t.Run("constants", func(t *testing.T) {
-		require.Equal(t, 30, releasesmoke.ReadinessPollAttempts)
+		require.Equal(t, 30*time.Second, releasesmoke.ReadinessTimeout)
 		require.Equal(t, "Managed pass backend lock acquired", releasesmoke.ManagedPassLockMessage)
 		require.Equal(t, "managed pass store is already in use", releasesmoke.LeaseConflictMessage)
 		require.Equal(t, []string{"amd64", "arm64"}, releasesmoke.ImageArchitectures)
@@ -67,7 +67,7 @@ func TestReleaseArtifactSmokeIntegration(t *testing.T) {
 
 func projectRoot(t *testing.T) string {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", ".."))
+	root := compatoldnew.RepositoryRoot()
+	require.NotEmpty(t, root)
+	return root
 }

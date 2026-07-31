@@ -68,7 +68,7 @@ type componentMountPlanInput struct {
 func buildComponentMountPlan(input componentMountPlanInput) (componentMountPlan, error) {
 	migrationID := strings.TrimPrefix(input.command.PolicyDecisionID, "migration:")
 	if !domain.ValidComponentMigrationID(migrationID) {
-		return componentMountPlan{}, fmt.Errorf("invalid component migration identity")
+		return componentMountPlan{}, fmt.Errorf("invalid component migration identity: %w", domain.ErrInvalidComponentMountPlan)
 	}
 	plan := componentMountPlan{mounts: map[string]expectedLifecycleMount{
 		"/etc/gordon/role.toml": {source: input.configFile, readOnly: true},
@@ -113,7 +113,7 @@ func addRegistryStorageMount(plan *componentMountPlan, input componentMountPlanI
 	}
 	root := filepath.Clean(input.registryStorageRoot)
 	if !filepath.IsAbs(root) || root == string(filepath.Separator) {
-		return fmt.Errorf("canonical registry storage is not configured")
+		return fmt.Errorf("canonical registry storage is not configured: %w", domain.ErrInvalidComponentMountPlan)
 	}
 	plan.mounts = map[string]expectedLifecycleMount{
 		"/etc/gordon/role.toml":    {source: input.configFile, readOnly: true},
@@ -131,7 +131,7 @@ func addMigrationRuntimeSocketStateMounts(plan *componentMountPlan, input compon
 	}
 	root := filepath.Clean(input.migrationStateRoot)
 	if !filepath.IsAbs(root) {
-		return fmt.Errorf("migration runtime socket root is not configured")
+		return fmt.Errorf("migration runtime socket root is not configured: %w", domain.ErrInvalidComponentMountPlan)
 	}
 	state := filepath.Join(root, migrationID)
 	destination := filepath.Join("/var/lib/gordon/migration", migrationID)
@@ -150,7 +150,7 @@ func addMigrationComponentConfigStateMounts(plan *componentMountPlan, input comp
 	}
 	root := filepath.Clean(input.migrationStateRoot)
 	if !filepath.IsAbs(root) {
-		return fmt.Errorf("migration component configuration root is not configured")
+		return fmt.Errorf("migration component configuration root is not configured: %w", domain.ErrInvalidComponentMountPlan)
 	}
 	for _, name := range []string{"config", "env"} {
 		path := filepath.Join(root, name)

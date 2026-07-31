@@ -91,8 +91,7 @@ func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool
 }
 
 type publicListenerOwner struct {
-	occupied        bool
-	managedMonolith bool
+	occupied bool
 }
 
 func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicListenerOwner, error) {
@@ -102,13 +101,10 @@ func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicLi
 	}
 	owner := publicListenerOwner{}
 	for _, candidate := range containers {
-		// A legacy monolith may own its listener through host networking rather
-		// than a published-port record. It is still an unambiguous Gordon owner
-		// when its managed identity is present; rejecting it would make the
-		// required in-place migration impossible before any mutation occurs.
+		// Host networking does not expose published-port records, so a running
+		// managed monolith still makes every configured listener unavailable.
 		if candidate.HostConfig.NetworkMode == "host" && runningManagedMonolith(candidate) {
 			owner.occupied = true
-			owner.managedMonolith = true
 			continue
 		}
 		for _, binding := range candidate.Ports {
@@ -119,7 +115,6 @@ func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicLi
 			if !runningManagedMonolith(candidate) {
 				return owner, nil
 			}
-			owner.managedMonolith = true
 		}
 	}
 	return owner, nil

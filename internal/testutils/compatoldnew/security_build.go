@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // RepositoryRoot returns the Gordon repository root derived from FixtureRoot
 // without requiring testing.T. Production fixtures and tests share this path.
 func RepositoryRoot() string {
-	return filepath.Clean(filepath.Join(FixtureRoot(), "..", "..", "..", ".."))
+	fixtureRoot := FixtureRoot()
+	if !filepath.IsAbs(fixtureRoot) {
+		return ""
+	}
+	return filepath.Clean(filepath.Join(fixtureRoot, "..", "..", "..", ".."))
 }
 
 // securityBuildCandidate builds the candidate Gordon binary into output.
@@ -19,9 +24,12 @@ func securityBuildCandidate(ctx context.Context, repoRoot, output string) error 
 	if err != nil {
 		return fmt.Errorf("prepare go build: %w", err)
 	}
+	if strings.TrimSpace(repoRoot) == "" {
+		return fmt.Errorf("go build repository root is unavailable")
+	}
 	cmd.Dir = repoRoot
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build failed")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build in %s failed: %w: %s", repoRoot, err, strings.TrimSpace(string(output)))
 	}
 	return nil
 }

@@ -12,14 +12,19 @@ import (
 // CommandRunner executes container engine commands.
 type CommandRunner interface {
 	Run(ctx context.Context, args ...string) (stdout string, err error)
+	Command(ctx context.Context, args ...string) *exec.Cmd
 }
 
 type execRunner struct {
 	name string
 }
 
+func (r execRunner) Command(ctx context.Context, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, r.name, args...) // #nosec G204 -- release gate invokes docker/podman explicitly.
+}
+
 func (r execRunner) Run(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, r.name, args...) // #nosec G204 -- release gate invokes docker/podman explicitly.
+	cmd := r.Command(ctx, args...)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = os.Stderr

@@ -13,5 +13,5 @@ func TestRepositoryRootResolvesWithoutTestingT(t *testing.T) {
 	require.DirExists(t, root)
 	_, err := os.Stat(filepath.Join(root, "go.mod"))
 	require.NoError(t, err)
-	require.Equal(t, root, projectRoot(t))
+	require.DirExists(t, filepath.Join(root, "internal", "testutils", "compatoldnew", "fixtures"))
 }

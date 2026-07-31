@@ -74,7 +74,7 @@ func newSecretsLockCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return runSecretsLock(ctx, configFile, jsonOut, cmd.OutOrStdout())
+			return runSecretsLock(ctx, configFile, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
@@ -82,7 +82,7 @@ func newSecretsLockCmd() *cobra.Command {
 	return cmd
 }
 
-func runSecretsLock(ctx context.Context, configFile string, jsonOut bool, out io.Writer) error {
+func runSecretsLock(ctx context.Context, configFile string, out io.Writer, jsonOut bool) error {
 	if err := validateManagedPassConfig(configFile); err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func newSecretsDoctorCmd() *cobra.Command {
 		Short: "Initialize and validate the configured managed pass backend",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSecretsDoctor(cmd.Context(), configFile, writeCheck, jsonOut, cmd.OutOrStdout())
+			return runSecretsDoctor(cmd.Context(), configFile, writeCheck, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
@@ -115,7 +115,7 @@ func newSecretsDoctorCmd() *cobra.Command {
 	return cmd
 }
 
-func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, jsonOut bool, out io.Writer) error {
+func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, out io.Writer, jsonOut bool) error {
 	if err := validateManagedPassConfig(configFile); err != nil {
 		return err
 	}

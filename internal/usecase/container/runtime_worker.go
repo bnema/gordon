@@ -388,7 +388,7 @@ func (w *RuntimeWorker) rememberCompletedResultLocked(key string, result domain.
 }
 
 func statusForError(err error) domain.RuntimeCommandStatus {
-	if errors.Is(err, ErrRuntimePolicyDenied) || errors.Is(err, errRuntimeSelfUpdateUnavailable) {
+	if errors.Is(err, ErrRuntimePolicyDenied) || errors.Is(err, errRuntimeSelfUpdateUnavailable) || errors.Is(err, domain.ErrUnsupportedComponentLifecycleAction) {
 		return domain.RuntimeCommandStatusDenied
 	}
 	return domain.RuntimeCommandStatusFailed
@@ -404,6 +404,8 @@ func sanitizeRuntimeCommandError(err error) *domain.RuntimeCommandError {
 		code = formatPolicyReason(policyDenied.Reason)
 	} else if errors.Is(err, errRuntimeSelfUpdateUnavailable) {
 		code = "self_update_unavailable"
+	} else if errors.Is(err, domain.ErrUnsupportedComponentLifecycleAction) {
+		code = "unsupported_component_lifecycle_action"
 	} else if errors.Is(err, context.Canceled) {
 		code = "context_canceled"
 	} else if errors.Is(err, context.DeadlineExceeded) {
@@ -420,6 +422,8 @@ func sanitizeRuntimeErrorMessage(err error) string {
 		return "runtime command failed"
 	case errors.Is(err, errRuntimeSelfUpdateUnavailable):
 		return "runtime self-update is unavailable"
+	case errors.Is(err, domain.ErrUnsupportedComponentLifecycleAction):
+		return domain.ErrUnsupportedComponentLifecycleAction.Error()
 	case errors.Is(err, context.Canceled):
 		return "context canceled"
 	case errors.Is(err, context.DeadlineExceeded):

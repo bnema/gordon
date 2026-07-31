@@ -2,6 +2,7 @@ package domain
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +46,33 @@ func TestApprovedGeneratedRolePathMatchesMigrationLayout(t *testing.T) {
 	root := filepath.Join("/var/lib/gordon", "migration")
 	path := filepath.Join(root, "config", "fixture", "7", "control.toml")
 	assert.True(t, ApprovedGeneratedRolePath(path, root, "config", "fixture", 7, "control.toml"))
+	assert.True(t, ApprovedGeneratedRolePath(path, "", "config", "fixture", 7, "control.toml"))
 	assert.False(t, ApprovedGeneratedRolePath(path, root, "env", "fixture", 7, "control.toml"))
+	assert.False(t, ApprovedGeneratedRolePath("migration/config/fixture/7/control.toml", root, "config", "fixture", 7, "control.toml"))
+	assert.False(t, ApprovedGeneratedRolePath(root+"/config/fixture/7/../7/control.toml", root, "config", "fixture", 7, "control.toml"))
+}
+
+func TestMatchComponentGenerationVolumeRejectsMalformedLabels(t *testing.T) {
+	for _, tc := range []struct{ generation, migrationID string }{
+		{"x", "fixture"}, {"0", "fixture"}, {"07", "fixture"}, {"7", " fixture "},
+	} {
+		inspected := &Container{
+			Name: FormatComponentID(ComponentRoleControl, "fixture", 7),
+			Labels: map[string]string{
+				LabelComponentRole:        string(ComponentRoleControl),
+				LabelComponentMigrationID: tc.migrationID,
+				LabelComponentGeneration:  tc.generation,
+			},
+		}
+		_, ok := MatchComponentGenerationVolume(inspected)
+		assert.False(t, ok, "generation %q migration ID %q", tc.generation, tc.migrationID)
+	}
+}
+
+func TestValidComponentMigrationIDRejectsUnsafeInput(t *testing.T) {
+	for _, id := range []string{"Fixture", "fix_ture", strings.Repeat("a", 129)} {
+		assert.False(t, ValidComponentMigrationID(id), "id %q", id)
+	}
 }
 
 func TestValidManagedControlSecretsVolumeCentralized(t *testing.T) {

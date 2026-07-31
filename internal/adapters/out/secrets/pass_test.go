@@ -201,6 +201,9 @@ func TestPassProvider_GetSecret_PathValidation(t *testing.T) {
 			if tt.path == "secret;whoami" {
 				assert.Contains(t, err.Error(), "invalid path")
 			}
+			if tt.path == "github.com/bnema/gordon/test/secret" {
+				assert.ErrorIs(t, err, domain.ErrPassCommandFailed)
+			}
 		})
 	}
 }
@@ -233,7 +236,7 @@ func TestPassProvider_GetSecret_InFlightCancellationPreservesContextError(t *tes
 	err := <-errCh
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.Canceled), "got %v", err)
-	assert.NotContains(t, err.Error(), "secret=")
+	assert.NotContains(t, err.Error(), "github.com/bnema/gordon/test/secret")
 }
 
 func TestPassProvider_GetSecret_InFlightDeadlinePreservesContextError(t *testing.T) {
@@ -247,7 +250,16 @@ func TestPassProvider_GetSecret_InFlightDeadlinePreservesContextError(t *testing
 	_, err := provider.GetSecret(ctx, "github.com/bnema/gordon/test/secret")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "got %v", err)
-	assert.NotContains(t, err.Error(), "secret=")
+	assert.NotContains(t, err.Error(), "github.com/bnema/gordon/test/secret")
+}
+
+func TestPassProvider_GetSecret_ClassifiesEmptySecret(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pass"), []byte("#!/bin/sh\nexit 0\n"), 0o755))
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	_, err := NewPassProvider(testLogger()).GetSecret(t.Context(), "fixture")
+	require.ErrorIs(t, err, domain.ErrPassSecretEmpty)
 }
 
 func installSlowPass(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -59,9 +60,9 @@ func (closer signalCloser) Close() error {
 
 func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
 	path := newStaleValidatedRuntimeSocketPath(t)
-	dialCalls := 0
+	var dialCalls atomic.Int32
 	client, err := createPrivateRuntimeCommandClient(RuntimeControlConfig{Token: "runtime-token"}, "passthrough:///runtime", func(ctx context.Context) (net.Conn, error) {
-		dialCalls++
+		dialCalls.Add(1)
 		return dialValidatedRuntimeSocket(ctx, path)
 	})
 	require.NoError(t, err)
@@ -73,7 +74,7 @@ func TestPrivateNonBootstrapRuntimeClientRemainsFailFast(t *testing.T) {
 	_, err = client.(out.RuntimeEnvironmentProbe).ProbeRuntimeEnvironment(ctx)
 	require.Error(t, err)
 	assert.Equal(t, codes.Unavailable, status.Code(err))
-	assert.Equal(t, 1, dialCalls, "non-bootstrap clients must retain a single fail-fast dial")
+	assert.Equal(t, int32(1), dialCalls.Load(), "non-bootstrap clients must retain a single fail-fast dial")
 }
 
 func TestPostHandoffRuntimeClientRejectsMissingRegularAndSymlinkSockets(t *testing.T) {

@@ -24,8 +24,8 @@ func ImageForArch(artifactsPath, arch string) (string, error) {
 	if err := json.Unmarshal(data, &entries); err != nil {
 		return "", fmt.Errorf("decode artifacts.json: %w", err)
 	}
-	suffix := "-" + arch + "$"
-	pattern := regexp.MustCompile(dockerImageNamePattern.String() + arch + `$`)
+	suffix := "-" + arch
+	pattern := regexp.MustCompile(dockerImageNamePattern.String() + regexp.QuoteMeta(arch) + `$`)
 	var matches []string
 	for _, entry := range entries {
 		if entry.Type != "Docker Image" {

@@ -143,6 +143,7 @@ func TestRuntimeWorkerSafeErrorMessagesAreControlled(t *testing.T) {
 		{name: "context deadline", err: context.DeadlineExceeded, wantCode: "context_deadline_exceeded", wantMessage: "context deadline exceeded", wantRetryable: true},
 		{name: "invalid command", err: domain.ErrInvalidRuntimeCommand, wantCode: "invalid_runtime_command", wantMessage: "invalid runtime command"},
 		{name: "self update unavailable", err: errRuntimeSelfUpdateUnavailable, wantCode: "self_update_unavailable", wantMessage: "runtime self-update is unavailable"},
+		{name: "unsupported lifecycle action", err: domain.ErrUnsupportedComponentLifecycleAction, wantCode: "unsupported_component_lifecycle_action", wantMessage: "unsupported component lifecycle action"},
 	}
 
 	for _, tt := range tests {

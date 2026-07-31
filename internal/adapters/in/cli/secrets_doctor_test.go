@@ -28,7 +28,7 @@ func TestRunSecretsDoctorInvokesWriteCheckInsideDoctorLease(t *testing.T) {
 	require.NoError(t, os.WriteFile(configFile, []byte("[auth]\nsecrets_backend = \"pass\"\n"), 0o600))
 
 	var output bytes.Buffer
-	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, false, &output))
+	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, &output, false))
 	assert.True(t, writeCheckRan)
 	assert.Equal(t, "Managed pass backend is healthy\n", output.String())
 }
@@ -42,7 +42,7 @@ func TestRunSecretsDoctorJSONOutput(t *testing.T) {
 	require.NoError(t, os.WriteFile(configFile, []byte("[auth]\nsecrets_backend = \"pass\"\n"), 0o600))
 
 	var output bytes.Buffer
-	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, true, &output))
+	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, &output, true))
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(output.Bytes(), &payload))

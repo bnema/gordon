@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
@@ -32,19 +33,17 @@ func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
 }
 
 func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
-	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
-	require.NoError(t, err)
-
-	require.Contains(t, harnessSource, "waitManagedPassReadiness")
-	require.Contains(t, harnessSource, "ReadinessPollAttempts")
-	require.Equal(t, 30, releasesmoke.ReadinessPollAttempts)
-	require.Contains(t, harnessSource, "Process.Kill")
-	require.Contains(t, harnessSource, "Process.Wait")
-	require.Contains(t, harnessSource, "StdoutPipe")
-	require.Contains(t, harnessSource, "ManagedPassLockMessage")
-	require.NotContains(t, harnessSource, `IFS= read -r readiness`)
-	require.NotContains(t, harnessSource, "mkfifo")
-	require.NotContains(t, harnessSource, "O_WRONLY")
+	for _, contract := range releasesmoke.HarnessContracts {
+		source, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), contract.Engine)
+		require.NoError(t, err)
+		for _, fragment := range contract.Contains {
+			require.Contains(t, source, fragment, contract.Name)
+		}
+		for _, fragment := range contract.NotContains {
+			require.NotContains(t, source, fragment, contract.Name)
+		}
+	}
+	require.Equal(t, 30*time.Second, releasesmoke.ReadinessTimeout)
 
 	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
 	require.NoError(t, err)
@@ -56,23 +55,13 @@ func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
 }
 
 func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
-	harnessSource, err := releasesmoke.LoadHarnessSource(projectRoot(t))
+	podmanSource, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), "podman")
 	require.NoError(t, err)
+	require.NotContains(t, podmanSource, "runtime.sock:ro,U")
 
-	require.Contains(t, harnessSource, "/var/lib/gordon:U")
-	require.Contains(t, harnessSource, "identity-write-check")
-	require.Contains(t, harnessSource, "/run/gordon/runtime.sock:ro")
-	require.NotContains(t, harnessSource, "runtime.sock:ro,U")
-	require.NotContains(t, harnessSource, "/var/lib/gordon/secrets:U")
-	for _, removed := range []string{"--group-add", "21900"} {
-		require.NotContains(t, harnessSource, removed)
-	}
-
-	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+	dockerSource, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), "docker")
 	require.NoError(t, err)
-	dockerGate, err := releasesmoke.MakeTargetRecipe(string(makefile), "release-image-smoke", "build-push")
-	require.NoError(t, err)
-	require.NotContains(t, dockerGate, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
+	require.NotContains(t, dockerSource, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
 }
 
 func TestMigrationInvocationReportFailsClosed(t *testing.T) {

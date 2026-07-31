@@ -11,6 +11,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"golang.org/x/sys/unix"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const (
@@ -169,7 +171,7 @@ func (s *ManagedPassStore) acquireLease() (*os.File, error) {
 	if err := unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		_ = file.Close()
 		log.Debug().Err(err).Msg("managed pass lease unavailable")
-		return nil, fmt.Errorf("managed pass store is already in use")
+		return nil, fmt.Errorf("acquire managed pass lease: %w", domain.ErrManagedPassLeaseUnavailable)
 	}
 	return file, nil
 }
@@ -320,7 +322,10 @@ func (s *ManagedPassStore) syncTree(root string) error {
 
 func (s *ManagedPassStore) syncRegularFile(scopedRoot *os.Root, root, path string, entry os.DirEntry) error {
 	info, err := entry.Info()
-	if err != nil || !info.Mode().IsRegular() {
+	if err != nil {
+		return fmt.Errorf("inspect managed pass staging state: %w", err)
+	}
+	if !info.Mode().IsRegular() {
 		return nil
 	}
 	relative, err := filepath.Rel(root, path)

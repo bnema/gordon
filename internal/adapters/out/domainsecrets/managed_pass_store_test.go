@@ -12,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 type fakePassCommandRunner struct {
@@ -149,7 +151,7 @@ func TestHoldManagedPassStoreRejectsDoctorUntilCancellationThenReleases(t *testi
 		t.Fatal("managed pass holder did not become ready")
 	}
 	err := store.Ensure(context.Background())
-	require.ErrorContains(t, err, "managed pass store is already in use")
+	require.ErrorIs(t, err, domain.ErrManagedPassLeaseUnavailable)
 
 	cancel()
 	require.NoError(t, <-done)

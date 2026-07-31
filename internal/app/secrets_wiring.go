@@ -60,8 +60,8 @@ var (
 func managedPassPaths() domainsecrets.ManagedPassPaths {
 	return domainsecrets.ManagedPassPaths{
 		Root:     managedPassRoot,
-		GPGHome:  managedPassGPGHome,
-		StoreDir: managedPassStoreDir,
+		GPGHome:  filepath.Join(managedPassRoot, "current", "gnupg"),
+		StoreDir: filepath.Join(managedPassRoot, "current", "password-store"),
 	}
 }
 

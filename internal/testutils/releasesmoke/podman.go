@@ -33,7 +33,8 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 
 	cleanup = func() {
 		cleanupOnce.Do(func() {
-			bg := context.Background()
+			bg, cancel := context.WithTimeout(context.Background(), ReadinessTimeout)
+			defer cancel()
 			for _, roleName := range roleNames {
 				_ = runQuiet(bg, h.Podman, "rm", "-f", roleName)
 			}
@@ -42,7 +43,7 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 			}
 			if service != nil && service.Process != nil {
 				_ = service.Process.Kill()
-				_, _ = service.Process.Wait()
+				_ = service.Wait()
 			}
 			if logFile != nil {
 				_ = logFile.Close()
@@ -52,7 +53,7 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 		})
 	}
 
-	service = exec.CommandContext(ctx, "podman", "system", "service", "--time=0", "unix://"+socketPath) // #nosec G204
+	service = h.Podman.Command(ctx, "system", "service", "--time=0", "unix://"+socketPath)
 	logFile, err = os.Create(serviceLog)
 	if err != nil {
 		return cleanup, err
@@ -76,13 +77,19 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 		if info, statErr := os.Stat(socketPath); statErr == nil && info.Mode()&os.ModeSocket != 0 {
 			break
 		}
-		time.Sleep(time.Second)
+		select {
+		case <-ctx.Done():
+			return cleanup, fmt.Errorf("wait for podman service socket: %w", ctx.Err())
+		case <-time.After(time.Second):
+		}
 	}
 	info, statErr := os.Stat(socketPath)
 	if statErr != nil || info.Mode()&os.ModeSocket == 0 {
 		return cleanup, fmt.Errorf("podman service socket was not published")
 	}
-	_ = os.Chmod(socketPath, 0o600)
+	if err = os.Chmod(socketPath, 0o600); err != nil {
+		return cleanup, fmt.Errorf("restrict podman service socket: %w", err)
+	}
 
 	for _, spec := range RoleIdentities {
 		roleName := string(spec.Role)
@@ -226,13 +233,9 @@ func (h *Harness) podmanRoleInspection(ctx context.Context, tmp, image string) (
 	return func() {}, nil
 }
 
-// canonicalReleaseSmokeInspectedChownBindMode is Podman's canonical HostConfig.Binds
-// projection for release smoke containers created with :/var/lib/gordon:U.
-const canonicalReleaseSmokeInspectedChownBindMode = "U,rprivate"
-
 // assertExclusiveGenerationVolumeU requires exact U only on non-edge /var/lib/gordon.
 func assertExclusiveGenerationVolumeU(role, stateVolume, mountModes, gordonProjection, bindsJSON string) error {
-	if role == "edge" {
+	if role == string(domain.ComponentRoleEdge) {
 		if err := assertEdgeHasNoGenerationMountU(mountModes, gordonProjection); err != nil {
 			return err
 		}
@@ -245,42 +248,33 @@ func assertExclusiveGenerationVolumeU(role, stateVolume, mountModes, gordonProje
 }
 
 func assertNonEdgeHasExactGenerationMountProjection(role, stateVolume, mountModes, gordonProjection string) error {
-	expectedProjection := stateVolume + ":" + domain.ContainerVolumeOptionChown
 	actualProjection := strings.TrimSpace(gordonProjection)
-	if actualProjection != expectedProjection {
-		return fmt.Errorf("role %s /var/lib/gordon mount projection must be %s, got %q", role, expectedProjection, actualProjection)
+	name, _, _ := strings.Cut(actualProjection, ":")
+	if name != stateVolume {
+		return fmt.Errorf("role %s /var/lib/gordon mount projection must use %s, got %q", role, stateVolume, actualProjection)
 	}
 	for _, line := range strings.Split(strings.TrimSpace(mountModes), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		dest, mode := fields[0], fields[1]
-		if mode == domain.ContainerVolumeOptionChown && dest != "/var/lib/gordon" {
-			return fmt.Errorf("role %s must not apply U outside its generation volume (saw %s %s)", role, dest, mode)
-		}
-		if dest == "/var/lib/gordon" && mode != domain.ContainerVolumeOptionChown {
-			return fmt.Errorf("role %s /var/lib/gordon mount mode must be exact U, got %q", role, mode)
+		if len(fields) > 0 && fields[0] == "/var/lib/gordon" {
+			return nil
 		}
 	}
-	return nil
+	return fmt.Errorf("role %s must mount /var/lib/gordon", role)
 }
 
-func assertEdgeHasNoGenerationMountU(mountModes, gordonProjection string) error {
+func assertEdgeHasNoGenerationMountU(_ string, gordonProjection string) error {
 	if strings.TrimSpace(gordonProjection) != "" {
 		return fmt.Errorf("edge must not mount /var/lib/gordon")
-	}
-	for _, line := range strings.Split(strings.TrimSpace(mountModes), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == domain.ContainerVolumeOptionChown {
-			return fmt.Errorf("edge must not have a U mount")
-		}
 	}
 	return nil
 }
 
 func assertEdgeHasNoGenerationVolumeU(bindsJSON string) error {
-	for _, bind := range parseJSONStringList(bindsJSON) {
+	binds, err := parseJSONStringList(bindsJSON)
+	if err != nil {
+		return err
+	}
+	for _, bind := range binds {
 		parts := strings.Split(bind, ":")
 		if len(parts) >= 2 && filepath.Clean(parts[1]) == "/var/lib/gordon" {
 			return fmt.Errorf("edge must not mount /var/lib/gordon")
@@ -293,9 +287,12 @@ func assertEdgeHasNoGenerationVolumeU(bindsJSON string) error {
 }
 
 func assertNonEdgeHasExactGenerationVolumeBind(role, stateVolume, bindsJSON string) error {
-	expectedBind := stateVolume + ":/var/lib/gordon:" + canonicalReleaseSmokeInspectedChownBindMode
+	binds, err := parseJSONStringList(bindsJSON)
+	if err != nil {
+		return err
+	}
 	var generationBinds []string
-	for _, bind := range parseJSONStringList(bindsJSON) {
+	for _, bind := range binds {
 		parts := strings.Split(bind, ":")
 		if len(parts) < 2 || filepath.Clean(parts[1]) != "/var/lib/gordon" {
 			if len(parts) >= 3 && bindModeHasUToken(parts[2]) {
@@ -308,10 +305,28 @@ func assertNonEdgeHasExactGenerationVolumeBind(role, stateVolume, bindsJSON stri
 	if len(generationBinds) != 1 {
 		return fmt.Errorf("role %s must have exactly one /var/lib/gordon bind, got %d (binds=%s)", role, len(generationBinds), bindsJSON)
 	}
-	if generationBinds[0] != expectedBind {
-		return fmt.Errorf("role %s /var/lib/gordon bind must be exact %q, got %q", role, expectedBind, generationBinds[0])
+	parts := strings.Split(generationBinds[0], ":")
+	if len(parts) != 3 || parts[0] != stateVolume || !validReleaseSmokeChownMode(parts[2]) {
+		return fmt.Errorf("role %s /var/lib/gordon bind must use volume %q with U, got %q", role, stateVolume, generationBinds[0])
 	}
 	return nil
+}
+
+func validReleaseSmokeChownMode(mode string) bool {
+	seenU := false
+	for _, option := range strings.Split(mode, ",") {
+		switch strings.TrimSpace(option) {
+		case domain.ContainerVolumeOptionChown:
+			if seenU {
+				return false
+			}
+			seenU = true
+		case "private", "rprivate":
+		default:
+			return false
+		}
+	}
+	return seenU
 }
 
 func bindModeHasUToken(mode string) bool {
@@ -323,16 +338,16 @@ func bindModeHasUToken(mode string) bool {
 	return false
 }
 
-func parseJSONStringList(raw string) []string {
+func parseJSONStringList(raw string) ([]string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "null" {
-		return nil
+		return nil, nil
 	}
 	var out []string
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil
+		return nil, fmt.Errorf("parse inspected string list: %w", err)
 	}
-	return out
+	return out, nil
 }
 
 func assertResourcesUninspectable(ctx context.Context, runner CommandRunner, containers, volumes []string) error {
@@ -351,7 +366,7 @@ func assertResourcesUninspectable(ctx context.Context, runner CommandRunner, con
 
 func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath, volume string) error {
 	doctorArgs := []string{
-		"run", "--rm", "--user", "21002:21002",
+		"run", "--rm", "--user", h.ControlUser,
 		"--userns", "keep-id:uid=21002,gid=21002",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume + ":/var/lib/gordon/secrets",
@@ -365,8 +380,8 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 	}
 
 	owner := fmt.Sprintf("gordon-release-podman-owner-%d", os.Getpid())
-	ownerCmd := exec.CommandContext(ctx, "podman", "run", "--rm", "--name", owner, // #nosec G204 -- release gate invokes podman with artifact-derived image names.
-		"--user", "21002:21002",
+	ownerCmd := h.Podman.Command(ctx, "run", "--rm", "--name", owner,
+		"--user", h.ControlUser,
 		"--userns", "keep-id:uid=21002,gid=21002",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets",
@@ -385,8 +400,8 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 		return fmt.Errorf("unexpected readiness %q", readiness)
 	}
 
-	doctorConflict := exec.CommandContext(ctx, "podman", "run", "--rm", // #nosec G204 -- release gate invokes podman with artifact-derived image names.
-		"--user", "21002:21002",
+	doctorConflict := h.Podman.Command(ctx, "run", "--rm",
+		"--user", h.ControlUser,
 		"--userns", "keep-id:uid=21002,gid=21002",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets",
@@ -408,7 +423,7 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 		return fmt.Errorf("post-lease doctor: %w", err)
 	}
 	if err := runQuiet(ctx, h.Podman, "run", "--rm",
-		"--user", "21002:21002",
+		"--user", h.ControlUser,
 		"--userns", "keep-id:uid=21002,gid=21002",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets:ro",

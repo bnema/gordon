@@ -68,7 +68,7 @@ func MatchComponentLifecycleTarget(action RuntimeComponentLifecycleAction, targe
 
 // ApprovedGeneratedRolePath validates an approved generated config or env manifest path.
 func ApprovedGeneratedRolePath(path, migrationRoot, kind, migrationID string, generation uint64, name string) bool {
-	if !filepath.IsAbs(path) || migrationID == "" || generation == 0 || filepath.Base(path) != name {
+	if !filepath.IsAbs(path) || path != filepath.Clean(path) || migrationID == "" || generation == 0 || filepath.Base(path) != name {
 		return false
 	}
 	if strings.TrimSpace(migrationRoot) != "" {

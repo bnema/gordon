@@ -216,7 +216,7 @@ func TestPreflightVolumeChownWrapsProbeErrors(t *testing.T) {
 		wantContains string
 	}{
 		{name: "version probe", versionOK: false, wantContains: "inspect runtime version"},
-		{name: "info probe", version: `{"Components":[{"Name":"Podman Engine"}]}`, versionOK: true, infoOK: false, wantContains: "inspect runtime"},
+		{name: "info probe", version: `{"Components":[{"Name":"Podman Engine"}]}`, versionOK: true, infoOK: false, wantContains: "inspect runtime:"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -310,7 +310,9 @@ func createContainerWithVolumeOptions(t *testing.T, version, info string, option
 		ReadOnlyVolumes: readOnlyVolumes,
 		VolumeOptions:   map[string][]string{"/var/lib/gordon": options},
 	})
-	return created.Load(), probed.Load(), binds, err
+	bindsMu.Lock()
+	defer bindsMu.Unlock()
+	return created.Load(), probed.Load(), append([]string(nil), binds...), err
 }
 
 func TestWaitForVolumeArchiveContainerIgnoresNilErrorBeforeStatus(t *testing.T) {

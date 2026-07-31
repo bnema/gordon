@@ -70,8 +70,6 @@ type nativePodmanIdentityResult struct {
 	generationVolumeChownOK bool
 }
 
-const canonicalPodmanInspectedChownMode = "U,rprivate,nosuid,nodev,rbind"
-
 type inspectBindSpec struct {
 	source      string
 	destination string
@@ -265,7 +263,9 @@ func parseInspectBindSpec(raw string) (inspectBindSpec, bool) {
 	if len(parts) == 2 {
 		return spec, true
 	}
-	if parts[2] != canonicalPodmanInspectedChownMode {
+	options := strings.Split(parts[2], ",")
+	slices.Sort(options)
+	if !slices.Equal(options, []string{"U", "nodev", "nosuid", "rbind", "rprivate"}) {
 		return inspectBindSpec{}, false
 	}
 	spec.hasChown = true

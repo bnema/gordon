@@ -52,8 +52,9 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 	require.NoError(t, err)
 	fixture := &realMigrationFixture{
 		t: t, ctx: ctx, runID: runID, root: root,
-		image: "localhost/gordon-compat-migration-cli-" + sanitizePart(runID),
-		old:   "monolith", app: ContainerPrefix(runID, SideOld) + "-app",
+		image:   "localhost/gordon-compat-migration-cli-" + sanitizePart(runID),
+		old:     ContainerPrefix(runID, SideOld) + "-monolith",
+		app:     ContainerPrefix(runID, SideOld) + "-app",
 		network: NetworkPrefix(runID, SideOld), volume: VolumePrefix(runID, SideOld),
 		config: filepath.Join(root, "gordon.toml"), port: 18081,
 	}
@@ -103,6 +104,21 @@ func (f *realMigrationFixture) cleanup() {
 
 var managedPassSecretVolumePattern = regexp.MustCompile(`^gordon-control-secrets-[0-9a-f]{16}$`)
 
+var migrationComponentRoles = []domain.ComponentRole{
+	domain.ComponentRoleControl,
+	domain.ComponentRoleRuntime,
+	domain.ComponentRoleEdge,
+	domain.ComponentRoleRegistry,
+}
+
+func migrationComponentName(role domain.ComponentRole) string {
+	return domain.FormatComponentID(role, "migration", 1)
+}
+
+func migrationInternalNetworkName() string {
+	return domain.FormatComponentInternalNetwork("migration", 1)
+}
+
 func leakedManagedPassSecretVolumes(volumeListing string) []string {
 	var leaked []string
 	for _, line := range strings.FieldsFunc(volumeListing, func(r rune) bool { return r == '\n' }) {
@@ -120,15 +136,19 @@ func managedPassSecretVolumeNames(ctx context.Context) (string, error) {
 
 func (f *realMigrationFixture) assertCleaned() {
 	f.t.Helper()
-	for _, name := range []string{f.old, f.app, "gordon-control-migration-g1", "gordon-runtime-migration-g1", "gordon-edge-migration-g1", "gordon-registry-migration-g1"} {
+	names := []string{f.old, f.app}
+	for _, role := range migrationComponentRoles {
+		names = append(names, migrationComponentName(role))
+	}
+	for _, name := range names {
 		_, err := podmanOutput(context.Background(), "container", "inspect", name)
 		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
 	}
-	for _, name := range []string{f.network, "gordon-internal-migration-g1"} {
+	for _, name := range []string{f.network, migrationInternalNetworkName()} {
 		_, err := podmanOutput(context.Background(), "network", "inspect", name)
 		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
 	}
-	for _, name := range []string{f.volume, "gordon-control-migration-g1", "gordon-runtime-migration-g1", "gordon-registry-migration-g1"} {
+	for _, name := range []string{f.volume, migrationComponentName(domain.ComponentRoleControl), migrationComponentName(domain.ComponentRoleRuntime), migrationComponentName(domain.ComponentRoleRegistry)} {
 		_, err := podmanOutput(context.Background(), "volume", "inspect", name)
 		require.Error(f.t, err, "%s must be removed by fixture cleanup", name)
 	}
@@ -154,35 +174,42 @@ func (f *realMigrationFixture) failureDiagnostics() string {
 		if !found || strings.TrimSpace(name) == "" || (name != f.old && !strings.Contains(name, "-migration-g")) {
 			continue
 		}
-		logs, logsErr := podmanOutput(f.ctx, "logs", name)
-		state, stateErr := podmanOutput(f.ctx, "inspect", "--format", "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} mounts={{range .Mounts}}{{.Source}}:{{.Destination}};{{end}}", name)
-		networks, networksErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", name)
-		identity, identityErr := podmanOutput(f.ctx, "exec", name, "sh", "-c", "for key in GORDON_COMPONENT_ID GORDON_MIGRATION_EDGE_COMPONENT_ID GORDON_COMPONENT_EDGE_TOKEN GORDON_COMPONENT_RUNTIME_TOKEN; do if printenv \"$key\" >/dev/null; then printf '%s=set\\n' \"$key\"; else printf '%s=unset\\n' \"$key\"; fi; done")
-		edgeHealth, edgeHealthErr := "", error(nil)
-		if strings.HasPrefix(name, "gordon-edge-") {
-			edgeHealth, edgeHealthErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "wget -S -O /dev/null http://127.0.0.1:18081/healthz; wget -S -O /dev/null http://gordon-control:9443")
-		}
-		role := ""
-		for _, candidateRole := range []string{"control", "runtime", "edge", "registry"} {
-			if strings.Contains(name, "gordon-"+candidateRole+"-") {
-				role = candidateRole
-				break
-			}
-		}
-		configKeys := ""
-		processes, processesErr := "", error(nil)
-		listeners, listenersErr := "", error(nil)
-		if role != "" {
-			configKeys = componentConfigKeyNames(filepath.Join(f.root, "data", "migration", "config", "migration", "1", role+".toml"))
-			processes, processesErr = podmanOutput(f.ctx, "exec", name, "ps", "-o", "pid,stat,args")
-			listeners, listenersErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6")
-		}
-		diagnostics = append(diagnostics, fmt.Sprintf("%s state=%q state_err=%v networks=%q networks_err=%v identity_and_token_presence=%q identity_err=%v config_keys=%q processes=%q processes_err=%v listeners=%q listeners_err=%v edge_health=%q edge_health_err=%v logs=%q logs_err=%v", name, state, stateErr, networks, networksErr, identity, identityErr, configKeys, processes, processesErr, listeners, listenersErr, edgeHealth, edgeHealthErr, logs, logsErr))
+		diagnostics = append(diagnostics, f.containerDiagnostics(name))
 	}
 	if len(diagnostics) == 0 {
 		return "no candidate containers remain; state=" + strings.TrimSpace(containers)
 	}
 	return strings.Join(diagnostics, "\n")
+}
+
+func (f *realMigrationFixture) containerDiagnostics(name string) string {
+	logs, logsErr := podmanOutput(f.ctx, "logs", name)
+	state, stateErr := podmanOutput(f.ctx, "inspect", "--format", "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} mounts={{range .Mounts}}{{.Source}}:{{.Destination}};{{end}}", name)
+	networks, networksErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", name)
+	identity, identityErr := podmanOutput(f.ctx, "exec", name, "sh", "-c", "for key in GORDON_COMPONENT_ID GORDON_MIGRATION_EDGE_COMPONENT_ID GORDON_COMPONENT_EDGE_TOKEN GORDON_COMPONENT_RUNTIME_TOKEN; do if printenv \"$key\" >/dev/null; then printf '%s=set\\n' \"$key\"; else printf '%s=unset\\n' \"$key\"; fi; done")
+	edgeHealth, edgeHealthErr := "", error(nil)
+	if strings.HasPrefix(name, "gordon-edge-") {
+		edgeHealth, edgeHealthErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "wget -S -O /dev/null http://127.0.0.1:18081/healthz; wget -S -O /dev/null http://gordon-control:9443")
+	}
+	role := ""
+	for _, candidateRole := range migrationComponentRoles {
+		if strings.Contains(name, "gordon-"+string(candidateRole)+"-") {
+			role = string(candidateRole)
+			break
+		}
+	}
+	configKeys := ""
+	processes, processesErr := "", error(nil)
+	listeners, listenersErr := "", error(nil)
+	if role != "" {
+		configKeys = componentConfigKeyNames(filepath.Join(f.root, "data", "migration", "config", "migration", "1", role+".toml"))
+		processes, processesErr = podmanOutput(f.ctx, "exec", name, "ps", "-o", "pid,stat,args")
+		listeners, listenersErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6")
+	}
+	redact := func(value string) string {
+		return redactCapturedOutput(value, "fixture-runtime-handoff-token", "migration-fixture-signing-secret-at-least-32-bytes")
+	}
+	return fmt.Sprintf("%s state=%q state_err=%v networks=%q networks_err=%v identity_and_token_presence=%q identity_err=%v config_keys=%q processes=%q processes_err=%v listeners=%q listeners_err=%v edge_health=%q edge_health_err=%v logs=%q logs_err=%v", name, redact(state), stateErr, networks, networksErr, identity, identityErr, configKeys, redact(processes), processesErr, listeners, listenersErr, edgeHealth, edgeHealthErr, redact(logs), logsErr)
 }
 
 func componentConfigKeyNames(path string) string {
@@ -205,12 +232,12 @@ func componentConfigKeyNames(path string) string {
 }
 
 func cleanupMigrationCandidates(ctx context.Context) {
-	for _, role := range []string{"control", "runtime", "registry", "edge"} {
-		_ = migrationPodman(ctx, "rm", "--force", "gordon-"+role+"-migration-g1")
+	for _, role := range migrationComponentRoles {
+		_ = migrationPodman(ctx, "rm", "--force", migrationComponentName(role))
 	}
-	_ = migrationPodman(ctx, "network", "rm", "gordon-internal-migration-g1")
-	for _, role := range []string{"control", "runtime", "registry"} {
-		_ = migrationPodman(ctx, "volume", "rm", "--force", "gordon-"+role+"-migration-g1")
+	_ = migrationPodman(ctx, "network", "rm", migrationInternalNetworkName())
+	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry} {
+		_ = migrationPodman(ctx, "volume", "rm", "--force", migrationComponentName(role))
 	}
 }
 
@@ -435,7 +462,7 @@ func (f *realMigrationFixture) assertPreparedTargets() {
 	require.Equal(f.t, "edge", edgeID)
 	identity, identityErr := podmanOutput(f.ctx, "exec", roles["edge"].resourceName(), "printenv", "GORDON_COMPONENT_ID")
 	require.NoError(f.t, identityErr)
-	require.Equal(f.t, "gordon-edge-migration-g1", strings.TrimSpace(identity))
+	require.Equal(f.t, migrationComponentName(domain.ComponentRoleEdge), strings.TrimSpace(identity))
 	controlIdentity, controlIdentityErr := podmanOutput(f.ctx, "exec", roles["control"].resourceName(), "printenv", "GORDON_MIGRATION_EDGE_COMPONENT_ID")
 	require.NoError(f.t, controlIdentityErr)
 	require.Equal(f.t, strings.TrimSpace(identity), strings.TrimSpace(controlIdentity))
@@ -670,7 +697,7 @@ func (f *realMigrationFixture) assertAuthenticatedEdgeAttestation() {
 			RouteSnapshotGeneration uint64 `json:"route_snapshot_generation"`
 			AppliedEdgeComponentID  string `json:"applied_edge_component_id"`
 		}
-		return json.Unmarshal(data, &checkpoint) == nil && checkpoint.RouteSnapshotGeneration > 0 && checkpoint.AppliedEdgeComponentID == "gordon-edge-migration-g1"
+		return json.Unmarshal(data, &checkpoint) == nil && checkpoint.RouteSnapshotGeneration > 0 && checkpoint.AppliedEdgeComponentID == migrationComponentName(domain.ComponentRoleEdge)
 	}, 10*time.Second, 50*time.Millisecond, "authenticated edge RPC must persist its matching generation and identity in shared attestation")
 }
 
@@ -774,7 +801,7 @@ func (f *realMigrationFixture) assertFinalEdgeBindingsAndNetwork() {
 		}, bindings, "final edge listeners must be confined to the host TLS terminator on loopback")
 		networks, networkErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", container.resourceName())
 		require.NoError(f.t, networkErr)
-		require.Equal(f.t, []string{f.network, "gordon-internal-migration-g1"}, normalizeNetworkSet(networks), "final edge must retain exactly the managed app and internal networks")
+		require.Equal(f.t, []string{f.network, migrationInternalNetworkName()}, normalizeNetworkSet(networks), "final edge must retain exactly the managed app and internal networks")
 		return
 	}
 	f.t.Fatal("final edge was not found")
