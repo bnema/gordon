@@ -366,7 +366,13 @@ func (f *realMigrationFixture) rawOldRegistryRequest(method, target, contentType
 	request.WriteString("\r\n")
 	request.Write(body)
 
-	command := exec.CommandContext(f.ctx, "podman", "exec", "--interactive", f.old, "busybox", "nc", "127.0.0.1", "15000") // #nosec G204 -- fixture-owned container and fixed registry endpoint.
+	// Every other Podman call in this harness runs through newIsolatedCommand,
+	// which replaces HOME and XDG_DATA_HOME with the isolated subprocess paths.
+	// Rootless Podman derives its graph root from those, so a command built with
+	// the inherited environment addresses a different container store and cannot
+	// see the fixture's own containers.
+	command, err := newIsolatedCommand(f.ctx, "podman", []string{"exec", "--interactive", f.old, "busybox", "nc", "127.0.0.1", "15000"}, nil, nil, false)
+	require.NoError(f.t, err, "prepare old monolith registry request")
 	command.Stdin = &request
 	output, err := command.CombinedOutput()
 	require.NoError(f.t, err, "old monolith registry request must complete: %s", redactCapturedOutput(string(output), "migration-fixture-signing-secret-at-least-32-bytes"))
@@ -980,8 +986,12 @@ func migrationStartPodmanService(t *testing.T, ctx context.Context, root string)
 	require.NoError(t, os.MkdirAll(filepath.Dir(socket), 0o700))
 	// The test's user-local Podman wrapper is a CLI client, not a socket mount
 	// source. Start a private rootless API service so the old monolith receives
-	// the only engine socket and the target runtime can inherit it.
-	service := exec.CommandContext(ctx, "podman", "system", "service", "--time=0", "unix://"+socket) // #nosec G204 -- fixed Podman compatibility service.
+	// the only engine socket and the target runtime can inherit it. It must use
+	// the same isolated environment as every other harness Podman call, or it
+	// serves a different container store than the one the fixture created its
+	// old monolith and app in.
+	service, err := newIsolatedCommand(ctx, "podman", []string{"system", "service", "--time=0", "unix://" + socket}, nil, nil, false)
+	require.NoError(t, err, "prepare private rootless Podman API service")
 	service.Stdout = os.Stderr
 	service.Stderr = os.Stderr
 	require.NoError(t, service.Start())
