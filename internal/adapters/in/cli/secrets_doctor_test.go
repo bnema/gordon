@@ -17,20 +17,74 @@ func TestRunSecretsDoctorInvokesWriteCheckInsideDoctorLease(t *testing.T) {
 	original := runManagedPassDoctor
 	t.Cleanup(func() { runManagedPassDoctor = original })
 
-	writeCheckRan := false
+	store := &fakeManagedPassWriteCheckStore{values: map[string]string{}}
+	originalStore := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = originalStore })
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	leaseHeld := false
 	runManagedPassDoctor = func(_ context.Context, check func() error) error {
 		require.NotNil(t, check)
-		writeCheckRan = true
-		return nil
+		leaseHeld = true
+		defer func() { leaseHeld = false }()
+		return check()
+	}
+
+	configFile := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configFile, []byte("[auth]\nsecrets_backend = \"pass\"\n"), 0o600))
+
+	store.afterSet = func() { assert.True(t, leaseHeld, "the write check must run while the doctor lease is held") }
+
+	var output bytes.Buffer
+	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, &output, false))
+	assert.Equal(t, 1, store.deleteAttempts, "the write check must run and clean up its marker")
+	assert.Equal(t, "Managed pass backend is healthy\n", output.String())
+}
+
+func TestRunSecretsDoctorSkipsWriteCheckWhenDisabled(t *testing.T) {
+	original := runManagedPassDoctor
+	t.Cleanup(func() { runManagedPassDoctor = original })
+
+	store := &fakeManagedPassWriteCheckStore{values: map[string]string{}}
+	originalStore := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = originalStore })
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	runManagedPassDoctor = func(_ context.Context, check func() error) error {
+		require.NotNil(t, check)
+		return check()
 	}
 
 	configFile := filepath.Join(t.TempDir(), "gordon.toml")
 	require.NoError(t, os.WriteFile(configFile, []byte("[auth]\nsecrets_backend = \"pass\"\n"), 0o600))
 
 	var output bytes.Buffer
-	require.NoError(t, runSecretsDoctor(context.Background(), configFile, true, &output, false))
-	assert.True(t, writeCheckRan)
+	require.NoError(t, runSecretsDoctor(context.Background(), configFile, false, &output, false))
+	assert.Equal(t, 0, store.deleteAttempts, "the write check must not touch the backend when disabled")
+	assert.Empty(t, store.lastValue)
 	assert.Equal(t, "Managed pass backend is healthy\n", output.String())
+}
+
+func TestRunSecretsDoctorPropagatesWriteCheckFailure(t *testing.T) {
+	original := runManagedPassDoctor
+	t.Cleanup(func() { runManagedPassDoctor = original })
+
+	store := &fakeManagedPassWriteCheckStore{values: map[string]string{}, getAllErr: errors.New("read failed")}
+	originalStore := openManagedPassWriteCheckStore
+	t.Cleanup(func() { openManagedPassWriteCheckStore = originalStore })
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) { return store, nil }
+
+	runManagedPassDoctor = func(_ context.Context, check func() error) error { return check() }
+
+	configFile := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configFile, []byte("[auth]\nsecrets_backend = \"pass\"\n"), 0o600))
+
+	var output bytes.Buffer
+	err := runSecretsDoctor(context.Background(), configFile, true, &output, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validate managed pass backend")
+	assert.NotContains(t, err.Error(), store.lastValue)
+	assert.Empty(t, output.String())
 }
 
 func TestRunSecretsDoctorJSONOutput(t *testing.T) {
