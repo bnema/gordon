@@ -152,8 +152,9 @@ func TestCompatibilityMigrationRootlessPodmanOldToSplit(t *testing.T) {
 	defer cancel()
 	requireRootlessPodman(t, ctx)
 
+	// newRealMigrationFixture registers its own cleanup, so a failure inside the
+	// constructor still reports diagnostics and removes its resources.
 	fixture := newRealMigrationFixture(t, ctx)
-	defer fixture.cleanup()
 
 	fixture.runCLI("migrate", "plan", "--json")
 	fixture.runMissingEnvPlan()

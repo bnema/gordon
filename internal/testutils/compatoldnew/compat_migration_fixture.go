@@ -40,6 +40,7 @@ type realMigrationFixture struct {
 	socket  string
 	service *exec.Cmd
 	port    int
+	cleaned bool
 }
 
 func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFixture {
@@ -58,6 +59,10 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 		network: NetworkPrefix(runID, SideOld), volume: VolumePrefix(runID, SideOld),
 		config: filepath.Join(root, "gordon.toml"), port: 18081,
 	}
+	// Register cleanup before the first resource exists. A failure inside this
+	// constructor is still a test failure, so it must emit the same diagnostics
+	// and remove the same resources as a failure in the test body.
+	t.Cleanup(fixture.cleanup)
 	fixture.socket, fixture.service = migrationStartPodmanService(t, ctx, root)
 	fixture.buildCandidateImage()
 
@@ -84,8 +89,16 @@ func newRealMigrationFixture(t *testing.T, ctx context.Context) *realMigrationFi
 }
 
 func (f *realMigrationFixture) cleanup() {
+	if f.cleaned {
+		return
+	}
+	f.cleaned = true
 	if f.t.Failed() {
-		f.t.Logf("migration failure diagnostics (container state and Gordon component logs only):\n%s", f.failureDiagnostics())
+		// The test context is already cancelled once cleanup runs from
+		// t.Cleanup, so diagnostics need their own bounded context.
+		diagnosticsCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		f.t.Logf("migration failure diagnostics (container state and Gordon component logs only):\n%s", f.failureDiagnostics(diagnosticsCtx))
+		cancel()
 	}
 	if f.service != nil && f.service.Process != nil {
 		_ = f.service.Process.Kill()
@@ -163,8 +176,8 @@ func (f *realMigrationFixture) assertCleaned() {
 	}
 }
 
-func (f *realMigrationFixture) failureDiagnostics() string {
-	containers, err := podmanOutput(f.ctx, "ps", "--all", "--format", "{{.Names}} {{.Status}}")
+func (f *realMigrationFixture) failureDiagnostics(ctx context.Context) string {
+	containers, err := podmanOutput(ctx, "ps", "--all", "--format", "{{.Names}} {{.Status}}")
 	if err != nil {
 		return "list candidate containers: " + err.Error()
 	}
@@ -174,7 +187,7 @@ func (f *realMigrationFixture) failureDiagnostics() string {
 		if !found || strings.TrimSpace(name) == "" || (name != f.old && !strings.Contains(name, "-migration-g")) {
 			continue
 		}
-		diagnostics = append(diagnostics, f.containerDiagnostics(name))
+		diagnostics = append(diagnostics, f.containerDiagnostics(ctx, name))
 	}
 	if len(diagnostics) == 0 {
 		return "no candidate containers remain; state=" + strings.TrimSpace(containers)
@@ -182,14 +195,14 @@ func (f *realMigrationFixture) failureDiagnostics() string {
 	return strings.Join(diagnostics, "\n")
 }
 
-func (f *realMigrationFixture) containerDiagnostics(name string) string {
-	logs, logsErr := podmanOutput(f.ctx, "logs", name)
-	state, stateErr := podmanOutput(f.ctx, "inspect", "--format", "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} mounts={{range .Mounts}}{{.Source}}:{{.Destination}};{{end}}", name)
-	networks, networksErr := podmanOutput(f.ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", name)
-	identity, identityErr := podmanOutput(f.ctx, "exec", name, "sh", "-c", "for key in GORDON_COMPONENT_ID GORDON_MIGRATION_EDGE_COMPONENT_ID GORDON_COMPONENT_EDGE_TOKEN GORDON_COMPONENT_RUNTIME_TOKEN; do if printenv \"$key\" >/dev/null; then printf '%s=set\\n' \"$key\"; else printf '%s=unset\\n' \"$key\"; fi; done")
+func (f *realMigrationFixture) containerDiagnostics(ctx context.Context, name string) string {
+	logs, logsErr := podmanOutput(ctx, "logs", name)
+	state, stateErr := podmanOutput(ctx, "inspect", "--format", "state={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{.State.Error}} mounts={{range .Mounts}}{{.Source}}:{{.Destination}};{{end}}", name)
+	networks, networksErr := podmanOutput(ctx, "inspect", "--format", "{{range $name, $_ := .NetworkSettings.Networks}}{{$name}};{{end}}", name)
+	identity, identityErr := podmanOutput(ctx, "exec", name, "sh", "-c", "for key in GORDON_COMPONENT_ID GORDON_MIGRATION_EDGE_COMPONENT_ID GORDON_COMPONENT_EDGE_TOKEN GORDON_COMPONENT_RUNTIME_TOKEN; do if printenv \"$key\" >/dev/null; then printf '%s=set\\n' \"$key\"; else printf '%s=unset\\n' \"$key\"; fi; done")
 	edgeHealth, edgeHealthErr := "", error(nil)
 	if strings.HasPrefix(name, "gordon-edge-") {
-		edgeHealth, edgeHealthErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "wget -S -O /dev/null http://127.0.0.1:18081/healthz; wget -S -O /dev/null http://gordon-control:9443")
+		edgeHealth, edgeHealthErr = podmanOutput(ctx, "exec", name, "sh", "-c", "wget -S -O /dev/null http://127.0.0.1:18081/healthz; wget -S -O /dev/null http://gordon-control:9443")
 	}
 	role := ""
 	for _, candidateRole := range migrationComponentRoles {
@@ -203,8 +216,8 @@ func (f *realMigrationFixture) containerDiagnostics(name string) string {
 	listeners, listenersErr := "", error(nil)
 	if role != "" {
 		configKeys = componentConfigKeyNames(filepath.Join(f.root, "data", "migration", "config", "migration", "1", role+".toml"))
-		processes, processesErr = podmanOutput(f.ctx, "exec", name, "ps", "-o", "pid,stat,args")
-		listeners, listenersErr = podmanOutput(f.ctx, "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6")
+		processes, processesErr = podmanOutput(ctx, "exec", name, "ps", "-o", "pid,stat,args")
+		listeners, listenersErr = podmanOutput(ctx, "exec", name, "sh", "-c", "cat /proc/net/tcp /proc/net/tcp6")
 	}
 	redact := func(value string) string {
 		return redactCapturedOutput(value, "fixture-runtime-handoff-token", "migration-fixture-signing-secret-at-least-32-bytes")
