@@ -104,7 +104,8 @@ jobs:
         run: |
           docker ps -aq --filter label=gordon.compat.run | xargs -r docker rm -f
           podman ps -aq --filter label=gordon.compat.run | xargs -r podman rm -f
-          podman pod ps -aq --filter label=gordon.compat.run | xargs -r podman pod rm -f
+          # podman pod ps lists every pod by default and rejects -a.
+          podman pod ps -q --filter label=gordon.compat.run | xargs -r podman pod rm -f
 
       - name: Upload exactly the authenticated rootless migration reports
         if: always()
