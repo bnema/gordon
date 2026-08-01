@@ -56,9 +56,10 @@ func (r *Runtime) ProbeRuntimeEnvironment(ctx context.Context) (out.RuntimeEnvir
 }
 
 // ProbePublicListeners returns one sanitized availability boolean per port.
-// A port is accepted only when it is bindable or held by a running, labelled
-// Gordon monolith; all ambiguous owners fail closed. Runtime checks the engine
-// again after each free-port bind probe so a container bind race is rejected.
+// Cold migration requires every configured public port to be free on the host;
+// occupied listeners fail closed even when a running Gordon monolith owns them.
+// Runtime checks the engine again after each bind probe so a container bind
+// race is rejected.
 func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool, error) {
 	if r == nil || r.client == nil {
 		return nil, fmt.Errorf("runtime client is not configured")
@@ -73,7 +74,6 @@ func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool
 			return nil, fmt.Errorf("inspect public listener: %w", err)
 		}
 		if owner.occupied {
-			available[i] = owner.managedMonolith
 			continue
 		}
 		if !runtimePortBindable(port) {
@@ -91,8 +91,7 @@ func (r *Runtime) ProbePublicListeners(ctx context.Context, ports []int) ([]bool
 }
 
 type publicListenerOwner struct {
-	occupied        bool
-	managedMonolith bool
+	occupied bool
 }
 
 func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicListenerOwner, error) {
@@ -102,13 +101,10 @@ func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicLi
 	}
 	owner := publicListenerOwner{}
 	for _, candidate := range containers {
-		// A legacy monolith may own its listener through host networking rather
-		// than a published-port record. It is still an unambiguous Gordon owner
-		// when its managed identity is present; rejecting it would make the
-		// required in-place migration impossible before any mutation occurs.
+		// Host networking does not expose published-port records, so a running
+		// managed monolith still makes every configured listener unavailable.
 		if candidate.HostConfig.NetworkMode == "host" && runningManagedMonolith(candidate) {
 			owner.occupied = true
-			owner.managedMonolith = true
 			continue
 		}
 		for _, binding := range candidate.Ports {
@@ -119,7 +115,6 @@ func (r *Runtime) publicListenerOwner(ctx context.Context, wanted int) (publicLi
 			if !runningManagedMonolith(candidate) {
 				return owner, nil
 			}
-			owner.managedMonolith = true
 		}
 	}
 	return owner, nil

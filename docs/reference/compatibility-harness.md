@@ -13,11 +13,9 @@ make compat-harness-traffic
 make compat-harness-runtime
 make compat-harness-registry
 make compat-harness-security
-GORDON_COMPAT_PODMAN=1 make compat-harness-migration
-GORDON_COMPAT_PODMAN=1 make count2
 ```
 
-`config` and `cli` do not require an engine. API/proxy/traffic/registry/security targets perform Docker preflight and parse JSON test output so required scenarios cannot pass by skipping. Migration always runs deterministic protocol checks; `GORDON_COMPAT_PODMAN=1` additionally makes the authentic rootless-Podman old-to-split scenario mandatory. `count2` repeats the complete migration gate.
+`config` and `cli` do not require an engine. API/proxy/traffic/registry/security targets perform Docker preflight and parse JSON test output so required scenarios cannot pass by skipping. 
 
 Override the comparison baseline only deliberately:
 
@@ -46,4 +44,3 @@ Use generic domains, credentials, and paths. Isolate state. Declare runtime requ
 ## Related
 
 - [Release gates](./release-gates.md)
-- [Migration](../operations/migration.md)

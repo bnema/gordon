@@ -514,3 +514,51 @@ func (r *recordingRouteDrainAckReceiver) AcknowledgeRouteDrain(_ context.Context
 	r.acks = append(r.acks, ack)
 	return nil
 }
+
+type blockingCloser struct {
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (c *blockingCloser) Close() error {
+	close(c.started)
+	<-c.release
+	return c.err
+}
+
+func TestClientCloseIsReentrant(t *testing.T) {
+	blocker := &blockingCloser{started: make(chan struct{}), release: make(chan struct{})}
+	client := newClient(runtimev1.NewRuntimeServiceClient(nil), nil)
+	require.NoError(t, client.AddOwnedCloser(blocker))
+
+	done := make(chan error, 2)
+	go func() { done <- client.Close() }()
+	<-blocker.started
+	go func() { done <- client.Close() }()
+
+	close(blocker.release)
+	require.NoError(t, <-done)
+	require.NoError(t, <-done)
+}
+
+func TestClientClosePublishesErrorToConcurrentCallers(t *testing.T) {
+	closeErr := errors.New("owned closer failed")
+	blocker := &blockingCloser{started: make(chan struct{}), release: make(chan struct{}), err: closeErr}
+	client := newClient(runtimev1.NewRuntimeServiceClient(nil), nil)
+	require.NoError(t, client.AddOwnedCloser(blocker))
+
+	const callers = 8
+	done := make(chan error, callers)
+	go func() { done <- client.Close() }()
+	<-blocker.started
+	for i := 1; i < callers; i++ {
+		go func() { done <- client.Close() }()
+	}
+
+	close(blocker.release)
+	for i := 0; i < callers; i++ {
+		require.ErrorIs(t, <-done, closeErr)
+	}
+	require.ErrorIs(t, client.Close(), closeErr)
+}

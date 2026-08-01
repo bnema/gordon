@@ -64,11 +64,14 @@ var (
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
 	// Environment errors
-	ErrEnvFileNotFound      = errors.New("environment file not found")
-	ErrSecretNotFound       = errors.New("secret not found")
-	ErrSecretsAlreadyExist  = errors.New("secrets already exist")
-	ErrProviderNotFound     = errors.New("secret provider not found")
-	ErrInvalidContainerName = errors.New("invalid container name")
+	ErrEnvFileNotFound             = errors.New("environment file not found")
+	ErrSecretNotFound              = errors.New("secret not found")
+	ErrSecretsAlreadyExist         = errors.New("secrets already exist")
+	ErrProviderNotFound            = errors.New("secret provider not found")
+	ErrInvalidContainerName        = errors.New("invalid container name")
+	ErrManagedPassLeaseUnavailable = errors.New("managed pass store is already in use")
+	ErrPassCommandFailed           = errors.New("pass command failed")
+	ErrPassSecretEmpty             = errors.New("empty secret returned from pass")
 
 	// Authentication errors
 	ErrInvalidToken       = errors.New("invalid token")
@@ -115,4 +118,9 @@ var (
 
 	// Traffic errors
 	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
+
+	// Runtime component lifecycle errors
+	ErrUnsupportedComponentLifecycleAction = errors.New("unsupported component lifecycle action")
+	ErrInvalidComponentMountPlan           = errors.New("invalid component mount plan")
+	ErrPostHandoffRuntimeUnsupported       = errors.New("replacement Gordon runtime does not support recovery")
 )

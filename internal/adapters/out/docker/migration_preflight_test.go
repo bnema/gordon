@@ -93,7 +93,7 @@ func TestRuntimeProbeEnvironmentRootlessPodmanService(t *testing.T) {
 	assert.True(t, report.Rootless)
 }
 
-func TestRuntimeProbePublicListenersAcceptsOnlyManagedMonolithAndRejectsRaces(t *testing.T) {
+func TestRuntimeProbePublicListenersFailsClosedForOccupiedListenersAndRaces(t *testing.T) {
 	port := freeFixturePort(t)
 	managed := fmt.Sprintf(`[{"Id":"managed","Names":["/gordon-monolith"],"State":"running","Labels":{"gordon.managed":"true"},"Ports":[{"PublicPort":%d,"Type":"tcp"}]}]`, port)
 	unrelated := fmt.Sprintf(`[{"Id":"other","Names":["/other"],"State":"running","Labels":{},"Ports":[{"PublicPort":%d,"Type":"tcp"}]}]`, port)
@@ -103,7 +103,8 @@ func TestRuntimeProbePublicListenersAcceptsOnlyManagedMonolithAndRejectsRaces(t 
 		responses []string
 		want      bool
 	}{
-		{name: "managed monolith", responses: []string{managed}, want: true},
+		{name: "no container owns listener", responses: []string{"[]"}, want: true},
+		{name: "managed monolith", responses: []string{managed}, want: false},
 		{name: "managed route is not monolith", responses: []string{fmt.Sprintf(`[{"Id":"route","Names":["/gordon-app-example-test"],"State":"running","Labels":{"gordon.managed":"true","gordon.route":"app.example.test"},"Ports":[{"PublicPort":%d,"Type":"tcp"}]}]`, port)}, want: false},
 		{name: "unrelated container", responses: []string{unrelated}, want: false},
 		{name: "container bind race", responses: []string{"[]", unrelated}, want: false},

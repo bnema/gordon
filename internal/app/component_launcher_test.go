@@ -135,33 +135,6 @@ func TestRuntimeHandoffStartupBudgetCoversFactoryAndProtocolProof(t *testing.T) 
 	assert.Equal(t, factoryDeadline, target.proofDeadline, "factory readiness and protocol proof must share one budget")
 }
 
-type recordingComponentLauncher struct{ calls []string }
-
-func (l *recordingComponentLauncher) CreateInternalNetwork(context.Context, ComponentLaunchPlan) error {
-	l.calls = append(l.calls, "network")
-	return nil
-}
-func (l *recordingComponentLauncher) StartComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "start:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) StopComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "stop:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) CheckComponentHealth(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "health:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) ConnectEdgeToAppNetwork(_ context.Context, component ComponentLaunchComponent, network string) error {
-	l.calls = append(l.calls, "connect:"+network)
-	return nil
-}
-func (l *recordingComponentLauncher) RemovePreparedComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "remove:"+string(component.Role))
-	return nil
-}
-
 func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) {
 	checkpoint := MigrationCheckpoint{
 		MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2",
@@ -174,6 +147,34 @@ func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) 
 	}
 	_, err := NewComponentLaunchPlan(checkpoint)
 	require.Error(t, err)
+}
+
+func TestComponentLaunchPlanRejectsNonCanonicalGeneratedReferences(t *testing.T) {
+	for name, references := range map[string][]string{
+		"config": {
+			"/private/migration/config/fixture/1/../1/control.toml",
+			"/private/migration/config/fixture/1/runtime.toml",
+			"/private/migration/config/fixture/1/registry.toml",
+			"/private/migration/config/fixture/1/edge.toml",
+		},
+		"env": {
+			"/private/migration/env/fixture/1/../1/control.env",
+			"/private/migration/env/fixture/1/runtime.env",
+			"/private/migration/env/fixture/1/registry.env",
+			"/private/migration/env/fixture/1/edge.env",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			checkpoint := MigrationCheckpoint{MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2"}
+			if name == "config" {
+				checkpoint.ConfigFileReferences = references
+			} else {
+				checkpoint.EnvFileReferences = references
+			}
+			_, err := NewComponentLaunchPlan(checkpoint)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestComponentRoleLaunchHashIncludesExactRuntimeProfile(t *testing.T) {

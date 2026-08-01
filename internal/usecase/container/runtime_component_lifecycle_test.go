@@ -2,13 +2,12 @@ package container
 
 import (
 	"context"
-	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/v2/pkg/cap"
@@ -100,6 +99,41 @@ func TestRuntimeComponentLifecycleUsesRuntimeOnlyContainerProtocol(t *testing.T)
 	identity.SourceComponentID = "gordon-control"
 	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-network-fixture-g1", TargetComponentRole: domain.ComponentRoleRuntime, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleEnsureNetwork, InternalNetwork: "gordon-internal-fixture-g1", PreserveVolumes: true}))
 	require.NoError(t, applyTestComponentLifecycle(manager, context.Background(), domain.RuntimeSelfUpdateCommand{RuntimeCommandIdentity: identity, TargetComponentID: "gordon-control-fixture-g1", TargetComponentRole: domain.ComponentRoleControl, TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture-hash", InternalNetwork: "gordon-internal-fixture-g1", ConfigFile: configPath, PreserveVolumes: true}))
+}
+
+func TestRuntimeComponentLifecycleRejectsNonCanonicalGeneratedReferences(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	configPath := filepath.Join(root, "config", "fixture", "1", "runtime.toml")
+	envPath := filepath.Join(root, "env", "fixture", "1", "runtime.env")
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Dir(envPath), 0o700))
+	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
+	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix:///run/user/1000/podman/podman.sock\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleRuntime, domain.RuntimeComponentLifecycleStart, configPath)
+
+	configAlias := root + "/config/fixture/1/../1/runtime.toml"
+	require.Error(t, approvedComponentConfigFile(command, configAlias, root))
+
+	envAlias := root + "/env/fixture/1/../1/runtime.env"
+	_, err := componentLifecycleEnvironment(command, envAlias, root)
+	require.Error(t, err)
+}
+
+func TestComponentLifecycleConfigFileRejectsNonCanonicalEdgeActivationConfig(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "migration")
+	configPath := filepath.Join(root, "config", "fixture", "1", "edge.toml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
+	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(configPath), "edge-final.toml"), []byte("[edge]\n"), 0o600))
+	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleActivate, configPath)
+
+	finalPath, err := componentLifecycleConfigFile(command, command.FinalPortPublishes, root)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(filepath.Dir(configPath), "edge-final.toml"), finalPath)
+
+	command.ConfigFile = root + "/config/fixture/1/../1/edge.toml"
+	_, err = componentLifecycleConfigFile(command, command.FinalPortPublishes, root)
+	require.EqualError(t, err, "invalid component configuration file")
 }
 
 func TestRuntimeComponentLifecycleConnectsPreparedEdgeOnlyToValidatedManagedAppNetwork(t *testing.T) {
@@ -199,20 +233,38 @@ func TestRuntimeComponentLifecycleConnectIsIdempotentWhenEdgeAlreadyAttached(t *
 
 func TestComponentPersistentVolumesGiveOnlyControlStableManagedSecrets(t *testing.T) {
 	const volume = "gordon-control-secrets-0123456789abcdef"
-	manager := &runtimeComponentLifecycleManager{policy: RuntimePolicy{ManagedControlSecretsVolume: volume}}
-	base := domain.RuntimeSelfUpdateCommand{PolicyDecisionID: "migration:first"}
-	base.Generation = 1
-	base.TargetComponentRole = domain.ComponentRoleControl
-	controlFirst := manager.componentPersistentVolumes(base)
-	assert.Equal(t, volume, controlFirst[managedControlSecretsPath])
+	base := domain.RuntimeSelfUpdateCommand{
+		RuntimeCommandIdentity: domain.RuntimeCommandIdentity{Generation: 1},
+		PolicyDecisionID:       "migration:first",
+		TargetComponentRole:    domain.ComponentRoleControl,
+	}
+	controlFirst, err := buildComponentMountPlan(componentMountPlanInput{
+		command:        base,
+		configFile:     "/tmp/gordon-role.toml",
+		managedSecrets: volume,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, volume, controlFirst.expectedMounts()[managedControlSecretsPath].source)
 
 	base.PolicyDecisionID = "migration:second"
 	base.Generation = 9
-	assert.Equal(t, volume, manager.componentPersistentVolumes(base)[managedControlSecretsPath], "managed secret volume must survive generation updates")
+	controlSecond, err := buildComponentMountPlan(componentMountPlanInput{
+		command:        base,
+		configFile:     "/tmp/gordon-role.toml",
+		managedSecrets: volume,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, volume, controlSecond.expectedMounts()[managedControlSecretsPath].source, "managed secret volume must survive generation updates")
 
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
 		base.TargetComponentRole = role
-		assert.NotContains(t, manager.componentPersistentVolumes(base), managedControlSecretsPath)
+		plan, planErr := buildComponentMountPlan(componentMountPlanInput{
+			command:        base,
+			configFile:     "/tmp/gordon-role.toml",
+			managedSecrets: volume,
+		})
+		require.NoError(t, planErr)
+		assert.NotContains(t, plan.expectedMounts(), managedControlSecretsPath)
 	}
 }
 
@@ -264,8 +316,9 @@ func exactLifecycleContainer(t *testing.T, manager *runtimeComponentLifecycleMan
 	container.UsernsMode = componentKeepIDMode(identity)
 	container.CapDrop = []string{"ALL"}
 	container.NoNewPrivileges = true
-	expected, err := manager.expectedLifecycleMounts(command, command.PortPublishes)
+	plan, err := manager.componentMountPlanForCreate(command, command.PortPublishes)
 	require.NoError(t, err)
+	expected := plan.expectedMounts()
 	container.VolumeMounts = nil
 	for destination, mount := range expected {
 		actual := domain.ContainerVolumeMount{Destination: destination, Options: mount.options, ReadOnly: mount.readOnly}
@@ -283,7 +336,7 @@ func TestRuntimeComponentLifecycleReadUsesAuthoritativeExistingProfile(t *testin
 	root := filepath.Join(t.TempDir(), "migration")
 	configPath := filepath.Join(root, "config", "fixture", "1", "edge.toml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o700))
-	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	require.True(t, ok)
 	command := domain.RuntimeSelfUpdateCommand{
@@ -363,31 +416,48 @@ func TestRuntimeComponentLifecycleUsesAuthoritativeInspectForSparseHealthyRetry(
 }
 
 func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testing.T) {
+	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	configPath := testLifecycleConfig(t, domain.ComponentRoleEdge)
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
+	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
+	require.True(t, ok)
 
 	for _, test := range []struct {
 		name          string
 		inspectedName string
 		wantDenied    bool
+		nativeProof   bool
 	}{
 		{name: "plausible inspect lacks native proof", inspectedName: command.TargetComponentID, wantDenied: true},
 		{name: "forged inspect mismatch", inspectedName: "foreign", wantDenied: true},
+		{name: "authentic native proof", inspectedName: command.TargetComponentID, nativeProof: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
 				case "/v1.41/containers/json":
-					_ = json.NewEncoder(w).Encode([]map[string]any{{"Id": "existing", "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
-				case "/v1.41/containers/existing/json":
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"Id": "existing", "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
-						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": "21003:21003", "Labels": componentLifecycleLabels(command)},
-						"HostConfig":      map[string]any{"UsernsMode": "keep-id:uid=21003,gid=21003", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
+					writeLifecycleJSON(t, w, []map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "State": "running"}})
+				case "/v1.41/containers/" + containerID + "/json":
+					writeLifecycleJSON(t, w, map[string]any{
+						"Id": containerID, "Name": "/" + test.inspectedName, "Created": "2026-05-05T00:00:00Z",
+						"Config":          map[string]any{"Image": "example.invalid/gordon:v2", "User": identity.User, "Labels": componentLifecycleLabels(command)},
+						"HostConfig":      map[string]any{"UsernsMode": "private", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 						"State":           map[string]any{"Status": "running", "ExitCode": 0},
 						"Mounts":          []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "RW": false}},
 						"NetworkSettings": map[string]any{"Ports": map[string]any{}},
+					})
+				case "/v4.0.0/libpod/containers/" + containerID + "/json":
+					if !test.nativeProof {
+						http.NotFound(w, request)
+						return
+					}
+					writeLifecycleJSON(t, w, map[string]any{
+						"BoundingCaps":  nil,
+						"EffectiveCaps": nil,
+						"HostConfig": map[string]any{"IDMappings": map[string]any{
+							"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
+						}},
 					})
 				default:
 					http.NotFound(w, request)
@@ -395,8 +465,11 @@ func TestRuntimeComponentLifecycleDockerAdapterInspectsSparseCandidates(t *testi
 			}))
 			defer server.Close()
 
-			host := strings.TrimPrefix(server.URL, "http://")
-			apiClient, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+			transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+			}}
+			defer transport.CloseIdleConnections()
+			apiClient, err := client.NewClientWithOpts(client.WithHost("unix:///run/user/fixture/podman.sock"), client.WithVersion("1.41"), client.WithHTTPClient(&http.Client{Transport: transport}))
 			require.NoError(t, err)
 			manager := NewRuntimeComponentLifecycleManager(dockeradapter.NewRuntimeWithClient(apiClient), RuntimePolicy{Mode: RuntimePolicyModeEnforce})
 			err = applyTestComponentLifecycle(manager, context.Background(), command)
@@ -562,7 +635,7 @@ func TestComponentLifecycleMountsOnlyPrivateMigrationSocketStateForRuntimeAndCon
 	command.LifecycleProfile, _ = domain.FixedRuntimeComponentLifecycleProfile(domain.ComponentRoleEdge)
 	command.TargetComponentID = "gordon-edge-fixture-g1"
 	command.ConfigFile = filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(command.ConfigFile, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(command.ConfigFile, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	config, err = manager.componentConfig(command, nil)
 	require.NoError(t, err)
 	assert.NotContains(t, config.Volumes, "/var/lib/gordon/migration/fixture")

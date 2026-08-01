@@ -20,14 +20,13 @@ const (
 type Surface string
 
 const (
-	SurfaceConfig    Surface = "config"
-	SurfaceCLI       Surface = "cli"
-	SurfaceAPI       Surface = "api"
-	SurfaceRegistry  Surface = "registry"
-	SurfaceProxy     Surface = "proxy"
-	SurfaceRuntime   Surface = "runtime"
-	SurfaceMigration Surface = "migration"
-	SurfaceSecurity  Surface = "security"
+	SurfaceConfig   Surface = "config"
+	SurfaceCLI      Surface = "cli"
+	SurfaceAPI      Surface = "api"
+	SurfaceRegistry Surface = "registry"
+	SurfaceProxy    Surface = "proxy"
+	SurfaceRuntime  Surface = "runtime"
+	SurfaceSecurity Surface = "security"
 )
 
 var allSurfaces = []Surface{
@@ -37,7 +36,6 @@ var allSurfaces = []Surface{
 	SurfaceRegistry,
 	SurfaceProxy,
 	SurfaceRuntime,
-	SurfaceMigration,
 	SurfaceSecurity,
 }
 
@@ -177,7 +175,6 @@ func ConfigFixtures() []Fixture {
 				SurfaceConfig,
 				SurfaceCLI,
 				SurfaceAPI,
-				SurfaceMigration,
 			},
 		},
 		{
@@ -185,7 +182,6 @@ func ConfigFixtures() []Fixture {
 			ConfigPath: filepath.Join(root, "configs", "invalid.toml"),
 			ExpectedSurfaces: []Surface{
 				SurfaceConfig,
-				SurfaceMigration,
 			},
 		},
 	}

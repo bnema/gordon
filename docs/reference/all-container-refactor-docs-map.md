@@ -7,7 +7,6 @@ Gordon's current product supports monolith operation and an orchestrated four-ro
 | Install and initial service | [Installation](../installation.md) | Docs | `go test ./...` |
 | First deploy | [Getting started](../getting-started.md) | Docs | `go test ./...` |
 | Split architecture and trust boundaries | [Split mode](../operations/split-mode.md) | Architecture | `make compat-harness-security` |
-| Rootless migration and resume | [Migration runbook](../operations/migration.md) | Runtime | `GORDON_COMPAT_PODMAN=1 make compat-harness-migration` and `make count2` |
 | Split update and rollback boundary | [Split updates and rollback](../operations/split-updates-and-rollback.md) | Runtime | `make compat-harness-proxy` |
 | Current config | [Configuration reference](../config/reference.md) and `gordon.toml.example` | Config | `make proto-check` and config compatibility gate |
 | Runtime/environment ownership | [Environment variables](./env-variables.md) | Runtime | `make compat-harness-security` |

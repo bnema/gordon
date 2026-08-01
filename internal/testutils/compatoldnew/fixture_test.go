@@ -77,7 +77,6 @@ func TestFixtureMetadata(t *testing.T) {
 		require.Contains(t, minimal.ExpectedSurfaces, SurfaceAPI)
 
 		invalid := byName["invalid"]
-		require.Contains(t, invalid.ExpectedSurfaces, SurfaceMigration)
 		require.False(t, invalid.PodmanRequired)
 	})
 }

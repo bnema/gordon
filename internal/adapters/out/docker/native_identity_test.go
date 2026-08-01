@@ -10,15 +10,110 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bnema/zerowrap"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestInspectNamedVolumeChownEvidenceAcceptsCanonicalPodmanOptionsInAnyOrder(t *testing.T) {
+	for _, mode := range []string{
+		"U,rprivate,nosuid,nodev,rbind",
+		"U,nosuid,rprivate,nodev,rbind",
+	} {
+		assert.True(t, inspectNamedVolumeChownEvidence("gordon-runtime-migration-g1", []string{
+			"gordon-runtime-migration-g1:/var/lib/gordon:" + mode,
+		}))
+	}
+}
+
+func TestInspectNamedVolumeChownEvidenceRejectsModeVariants(t *testing.T) {
+	expected := "gordon-runtime-migration-g1"
+	variants := map[string][]string{
+		"missing":                 nil,
+		"bare create mode":        {expected + ":/var/lib/gordon:U"},
+		"subset":                  {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev"},
+		"superset":                {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"},
+		"duplicate token":         {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"},
+		"lowercase alias":         {expected + ":/var/lib/gordon:u,rprivate,nosuid,nodev,rbind"},
+		"extra access flag":       {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"},
+		"bind source":             {"/srv/gordon:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other volume":            {"other-volume:/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"other destination":       {expected + ":/data:U,rprivate,nosuid,nodev,rbind"},
+		"destination alias":       {expected + ":/var/lib/./gordon:U,rprivate,nosuid,nodev,rbind"},
+		"duplicate bind":          {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind"},
+		"conflicting destination": {expected + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind", expected + ":/var/lib/gordon:rw"},
+	}
+	for name, binds := range variants {
+		t.Run(name, func(t *testing.T) {
+			assert.False(t, inspectNamedVolumeChownEvidence(expected, binds))
+		})
+	}
+}
+
+func TestExactInspectedGenerationMountRequiresCanonicalGenerationVolume(t *testing.T) {
+	tests := map[string]func(*domain.Container){
+		"non-generation name": func(container *domain.Container) {
+			container.Name = "gordon-runtime-other-g1"
+		},
+		"wrong volume": func(container *domain.Container) {
+			container.VolumeMounts[0].Name = "other-volume"
+		},
+		"bind mount": func(container *domain.Container) {
+			container.VolumeMounts[0].Type = string(mount.TypeBind)
+		},
+		"read only": func(container *domain.Container) {
+			container.VolumeMounts[0].ReadOnly = true
+		},
+		"wrong destination": func(container *domain.Container) {
+			container.VolumeMounts[0].Destination = "/data"
+		},
+		"existing mount option": func(container *domain.Container) {
+			container.VolumeMounts[0].Options = []string{"delegated"}
+		},
+		"edge role": func(container *domain.Container) {
+			container.Labels[domain.LabelComponentRole] = string(domain.ComponentRoleEdge)
+			container.Name = "gordon-edge-migration-g1"
+			container.VolumeMounts[0].Name = container.Name
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			inspected := nativeIdentityGenerationContainer()
+			mutate(inspected)
+			expectedName, ok := inspectedGenerationVolumeName(inspected)
+			if !ok {
+				assert.Empty(t, expectedName, "an unresolved generation volume must not yield a name")
+				return
+			}
+			_, ok = exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
+			assert.False(t, ok)
+		})
+	}
+}
+
+func nativeIdentityGenerationContainer() *domain.Container {
+	return &domain.Container{
+		ID:   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Name: "gordon-runtime-migration-g1",
+		Labels: map[string]string{
+			domain.LabelComponent:            "true",
+			domain.LabelComponentRole:        string(domain.ComponentRoleRuntime),
+			domain.LabelComponentMigrationID: "migration",
+			domain.LabelComponentGeneration:  "1",
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Type: string(mount.TypeVolume), Name: "gordon-runtime-migration-g1", Destination: "/var/lib/gordon",
+		}},
+	}
+}
 
 func TestRuntimeInspectTrustsNativeBoundingCapsNullDespiteCompatibleSubset(t *testing.T) {
 	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -174,28 +269,111 @@ func TestRuntimeInspectDoesNotExtendNativeAuthority(t *testing.T) {
 	assert.NotContains(t, (*requests)[0], "libpod")
 }
 
-func newNativeInspectTestRuntime(t *testing.T, responseID string, capDrop, capAdd []string, nativeStatus int, nativeBody any) (*Runtime, *[]string) {
-	t.Helper()
-	var requests []string
+func TestNativePodmanHTTPClientDoesNotMutateSharedClient(t *testing.T) {
+	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var nativeCalls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		requests = append(requests, request.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasPrefix(request.URL.Path, "/v1.41/containers/"):
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			_, _ = w.Write([]byte(`{
+				"Id":"` + containerID + `",
+				"Name":"/gordon-control-fixture-g1",
+				"Image":"sha256:fixture",
+				"Created":"2026-05-05T00:00:00Z",
+				"Config":{"Image":"gordon:fixture","User":"21002:21002","Labels":{"gordon.component":"true","gordon.component.role":"control"}},
+				"HostConfig":{"UsernsMode":"private","CapDrop":["chown"],"SecurityOpt":["no-new-privileges:true"]},
+				"State":{"Status":"running","ExitCode":0},
+				"NetworkSettings":{"Ports":{}}
+			}`))
+		case strings.HasPrefix(request.URL.Path, "/v4.0.0/libpod/containers/"):
+			nativeCalls.Add(1)
+			if err := json.NewEncoder(w).Encode(validNativeSecurityInspect(21002)); err != nil {
+				t.Errorf("encode native inspect: %v", err)
+			}
+		default:
+			http.NotFound(w, request)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	shared := &http.Client{Transport: transport}
+	apiClient, err := client.NewClientWithOpts(
+		client.WithHost("unix:///run/user/fixture/podman.sock"),
+		client.WithVersion("1.41"),
+		client.WithHTTPClient(shared),
+	)
+	require.NoError(t, err)
+	baselineTransport := shared.Transport
+	baselineRedirect := shared.CheckRedirect
+	runtime := NewRuntimeWithClient(apiClient)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for range workers {
+		go func() {
+			defer wg.Done()
+			_, inspectErr := runtime.InspectContainer(t.Context(), containerID)
+			assert.NoError(t, inspectErr)
+		}()
+	}
+	wg.Wait()
+
+	assert.Same(t, baselineTransport, shared.Transport)
+	assertSharedCheckRedirectUnchanged(t, baselineRedirect, shared.CheckRedirect)
+	assert.GreaterOrEqual(t, nativeCalls.Load(), int32(workers))
+}
+
+func assertSharedCheckRedirectUnchanged(
+	t *testing.T,
+	baseline, current func(*http.Request, []*http.Request) error,
+) {
+	t.Helper()
+	if baseline == nil {
+		assert.Nil(t, current)
+		return
+	}
+	require.NotNil(t, current)
+	req, err := http.NewRequest(http.MethodGet, "http://example.com", nil)
+	require.NoError(t, err)
+	assert.Equal(t, baseline(req, nil), current(req, nil))
+}
+
+func newNativeInspectTestRuntime(t *testing.T, responseID string, capDrop, capAdd []string, nativeStatus int, nativeBody any) (*Runtime, *[]string) {
+	t.Helper()
+	var requests []string
+	var requestsMu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requestsMu.Lock()
+		requests = append(requests, request.URL.Path)
+		requestsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasPrefix(request.URL.Path, "/v1.41/containers/"):
+			if err := json.NewEncoder(w).Encode(map[string]any{
 				"Id": responseID, "Name": "/gordon-control-fixture-g1", "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
 				"Config":     map[string]any{"Image": "gordon:fixture", "User": "21002:21002", "Labels": map[string]string{domain.LabelComponent: "true", domain.LabelComponentRole: "control"}},
 				"HostConfig": map[string]any{"UsernsMode": "private", "CapDrop": capDrop, "CapAdd": capAdd, "SecurityOpt": []string{"no-new-privileges:true"}},
 				"State":      map[string]any{"Status": "running", "ExitCode": 0}, "NetworkSettings": map[string]any{"Ports": map[string]any{}},
-			}))
+			}); err != nil {
+				t.Errorf("encode compatible inspect: %v", err)
+			}
 		case strings.HasPrefix(request.URL.Path, "/v4.0.0/libpod/containers/"):
 			w.WriteHeader(nativeStatus)
 			if raw, ok := nativeBody.(nativeRawInspect); ok {
-				_, err := w.Write([]byte(raw))
-				require.NoError(t, err)
+				if _, err := w.Write([]byte(raw)); err != nil {
+					t.Errorf("write native inspect: %v", err)
+				}
 				return
 			}
-			require.NoError(t, json.NewEncoder(w).Encode(nativeBody))
+			if err := json.NewEncoder(w).Encode(nativeBody); err != nil {
+				t.Errorf("encode native inspect: %v", err)
+			}
 		default:
 			http.NotFound(w, request)
 		}

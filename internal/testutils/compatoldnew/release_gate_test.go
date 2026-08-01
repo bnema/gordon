@@ -3,11 +3,13 @@ package compatoldnew
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/testutils/releasesmoke"
 )
 
 // TestReleaseGateExampleConfigTOML is invoked by pre-release-acceptance. It
@@ -27,66 +29,37 @@ func TestReleaseGateArtifactImageIncludesManagedPassTools(t *testing.T) {
 	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Dockerfile"))
 	require.NoError(t, err)
 	dockerfile := string(contents)
-	require.Contains(t, dockerfile, "pass")
-	require.Contains(t, dockerfile, "gnupg")
-	require.Contains(t, dockerfile, "/var/lib/gordon/secrets")
+	require.Contains(t, dockerfile, "apk add --no-cache ca-certificates docker-cli curl wget tzdata pass gnupg")
 }
 
 func TestReleaseManagedPassSmokeReadinessIsBoundedAndReaped(t *testing.T) {
-	contents, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
-	require.NoError(t, err)
-	makefile := string(contents)
+	for _, contract := range releasesmoke.HarnessContracts {
+		source, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), contract.Engine)
+		require.NoError(t, err)
+		for _, fragment := range contract.Contains {
+			require.Contains(t, source, fragment, contract.Name)
+		}
+		for _, fragment := range contract.NotContains {
+			require.NotContains(t, source, fragment, contract.Name)
+		}
+	}
+	require.Equal(t, 30*time.Second, releasesmoke.ReadinessTimeout)
 
-	for _, target := range []struct {
-		name string
-		next string
-	}{
-		{name: "release-podman-managed-pass-smoke", next: "release-image-smoke"},
-		{name: "release-image-smoke", next: "build-push"},
-	} {
-		t.Run(target.name, func(t *testing.T) {
-			recipe := makeTargetRecipe(t, makefile, target.name, target.next)
-			require.Contains(t, recipe, "readiness_pid=$$!")
-			require.Contains(t, recipe, "for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30")
-			require.Contains(t, recipe, "kill -0 \"$$readiness_pid\"")
-			require.Contains(t, recipe, "kill \"$$readiness_pid\"")
-			require.Contains(t, recipe, "wait \"$$readiness_pid\"")
-			require.Contains(t, recipe, "kill \"$$owner_pid\"")
-			require.Contains(t, recipe, "wait \"$$owner_pid\"")
-			require.Contains(t, recipe, "test \"$$readiness\" = 'Managed pass backend lock acquired'")
-			require.NotContains(t, recipe, "IFS= read -r readiness <\"$$tmp/ready\"; test")
-			require.NotContains(t, recipe, "IFS= read -r readiness <\"$$lease_dir/ready\"; test")
-		})
+	makefile, err := os.ReadFile(filepath.Join(projectRoot(t), "Makefile"))
+	require.NoError(t, err)
+	for _, tc := range releasesmoke.MakeDelegationTargets {
+		recipe, err := releasesmoke.MakeTargetRecipe(string(makefile), tc.Target, tc.Next)
+		require.NoError(t, err, tc.Target)
+		require.NoError(t, releasesmoke.ValidateMakeDelegationRecipe(recipe), tc.Target)
 	}
 }
 
-func makeTargetRecipe(t *testing.T, makefile, target, nextTarget string) string {
-	t.Helper()
-	start := strings.Index(makefile, target+":")
-	require.NotEqual(t, -1, start, "missing Make target %s", target)
-	end := strings.Index(makefile[start:], "\n"+nextTarget+":")
-	require.NotEqual(t, -1, end, "missing target boundary %s", nextTarget)
-	return makefile[start : start+end]
-}
-
-func TestMigrationInvocationReportFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "migration-report.json")
-	require.NoError(t, writeMigrationInvocationReport(path, migrationInvocationReport{
-		Scenario: "rootless-podman-old-to-split",
-		Skipped:  false,
-		Passed:   true,
-		Probes: migrationProbeAssertions{
-			Application: true,
-			Registry:    true,
-			Listeners:   true,
-			Resume:      true,
-		},
-	}))
-
-	report, err := readMigrationInvocationReport(path)
+func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
+	podmanSource, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), "podman")
 	require.NoError(t, err)
-	require.True(t, validMigrationInvocationReport(report))
+	require.NotContains(t, podmanSource, "runtime.sock:ro,U")
 
-	report.Skipped = true
-	require.False(t, validMigrationInvocationReport(report))
+	dockerSource, err := releasesmoke.LoadEngineHarnessSource(projectRoot(t), "docker")
+	require.NoError(t, err)
+	require.NotContains(t, dockerSource, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
 }

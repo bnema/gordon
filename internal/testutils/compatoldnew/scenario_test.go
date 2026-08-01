@@ -93,14 +93,6 @@ func TestScenarioDefinitions(t *testing.T) {
 			"runtime/route-removal-cleanup",
 			"runtime/startup-recovery",
 		}},
-		SurfaceMigration: {MigrationScenarios(), []string{
-			"migration/monolith-existing-deployment-inventory",
-			"migration/monolith-to-split-preflight",
-			"migration/component-startup-health",
-			"migration/no-unsafe-traffic-switch",
-			"migration/env-transfer",
-			"migration/interrupted-retry",
-		}},
 		SurfaceSecurity: {SecurityScenarios(), []string{
 			"security/edge-no-podman-socket",
 			"security/registry-no-podman-socket",
@@ -138,38 +130,32 @@ func TestScenarioDefinitions(t *testing.T) {
 
 func TestImplementedScenarioAllowlistIsExact(t *testing.T) {
 	expected := map[string]struct{}{
-		"cli/config-show-json":                             {},
-		"cli/routes-list-json":                             {},
-		"api/auth-missing-invalid":                         {},
-		"api/route-list-detail":                            {},
-		"api/route-add-update-remove":                      {},
-		"registry/v2-ping":                                 {},
-		"registry/auth-challenge":                          {},
-		"registry/push-image":                              {},
-		"registry/pull-image":                              {},
-		"registry/tag-list":                                {},
-		"registry/upload-too-large":                        {},
-		"registry/invalid-name-reference":                  {},
-		"registry/image-push-event":                        {},
-		"proxy/managed-http-route":                         {},
-		"proxy/external-route":                             {},
-		"proxy/zero-downtime-drain":                        {},
-		"proxy/distributed-drain-protocol":                 {},
-		"proxy/edge-traffic-protocol-matrix":               {},
-		"proxy/edge-traffic-graph-stream-matrix":           {},
-		"security/edge-no-podman-socket":                   {},
-		"security/registry-no-podman-socket":               {},
-		"security/control-no-podman-socket-after-split":    {},
-		"security/missing-component-token-rejected":        {},
-		"security/wrong-component-token-rejected":          {},
-		"security/wrong-scope-component-token-rejected":    {},
-		"security/unsafe-runtime-request-denied":           {},
-		"migration/monolith-existing-deployment-inventory": {},
-		"migration/monolith-to-split-preflight":            {},
-		"migration/component-startup-health":               {},
-		"migration/no-unsafe-traffic-switch":               {},
-		"migration/env-transfer":                           {},
-		"migration/interrupted-retry":                      {},
+		"cli/config-show-json":                          {},
+		"cli/routes-list-json":                          {},
+		"api/auth-missing-invalid":                      {},
+		"api/route-list-detail":                         {},
+		"api/route-add-update-remove":                   {},
+		"registry/v2-ping":                              {},
+		"registry/auth-challenge":                       {},
+		"registry/push-image":                           {},
+		"registry/pull-image":                           {},
+		"registry/tag-list":                             {},
+		"registry/upload-too-large":                     {},
+		"registry/invalid-name-reference":               {},
+		"registry/image-push-event":                     {},
+		"proxy/managed-http-route":                      {},
+		"proxy/external-route":                          {},
+		"proxy/zero-downtime-drain":                     {},
+		"proxy/distributed-drain-protocol":              {},
+		"proxy/edge-traffic-protocol-matrix":            {},
+		"proxy/edge-traffic-graph-stream-matrix":        {},
+		"security/edge-no-podman-socket":                {},
+		"security/registry-no-podman-socket":            {},
+		"security/control-no-podman-socket-after-split": {},
+		"security/missing-component-token-rejected":     {},
+		"security/wrong-component-token-rejected":       {},
+		"security/wrong-scope-component-token-rejected": {},
+		"security/unsafe-runtime-request-denied":        {},
 	}
 	require.Equal(t, expected, implementedScenarioNames())
 }
@@ -186,7 +172,7 @@ func implementedScenarioNames() map[string]struct{} {
 
 func TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe(t *testing.T) {
 	implemented := implementedScenario("cli/config-show-json", SurfaceCLI, "6.2 CLI compatibility", false)
-	pending := pendingScenario("migration/not-ready", SurfaceMigration, "6.4 migration", false, "requires migration harness")
+	pending := pendingScenario("proxy/not-ready", SurfaceProxy, "6.4 proxy", false, "requires proxy harness")
 	unknown := Scenario{Name: "unknown", Surface: SurfaceCLI}
 
 	require.Equal(t, ScenarioStatusImplemented, implemented.Status)
@@ -225,9 +211,6 @@ func TestScenarioPodmanRequirements(t *testing.T) {
 	for _, scenario := range RuntimeScenarios() {
 		require.True(t, scenario.PodmanRequired, scenario.Name)
 	}
-	for _, scenario := range MigrationScenarios() {
-		require.True(t, scenario.PodmanRequired, scenario.Name)
-	}
 
 	podmanByName := make(map[string]bool)
 	for _, scenario := range append(CLIScenarios(), SecurityScenarios()...) {
@@ -261,11 +244,7 @@ func TestPendingProxyScenariosDoNotSilentlyPass(t *testing.T) {
 	}
 }
 
-func TestMigrationAndSecurityScenariosDoNotSilentlyPass(t *testing.T) {
-	for _, scenario := range MigrationScenarios() {
-		require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
-		require.Empty(t, scenario.BlockReason, scenario.Name)
-	}
+func TestSecurityScenariosDoNotSilentlyPass(t *testing.T) {
 	for _, scenario := range SecurityScenarios() {
 		require.Equal(t, ScenarioStatusImplemented, scenario.Status, scenario.Name)
 		require.Empty(t, scenario.BlockReason, scenario.Name)

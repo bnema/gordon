@@ -354,11 +354,11 @@ func (c RuntimeSelfUpdateCommand) validateSelfUpdateTarget() error {
 	if !IsKnownComponentRole(c.TargetComponentRole) {
 		return fmt.Errorf("%w: self-update target component role is invalid", ErrInvalidRuntimeCommand)
 	}
-	requirement, lifecycleAction := RuntimeComponentLifecycleRequirement(c.LifecycleAction)
-	if c.LifecycleAction != "" && !lifecycleAction {
+	requirement, knownAction := RuntimeComponentLifecycleRequirement(c.LifecycleAction)
+	if c.LifecycleAction != "" && !knownAction {
 		return fmt.Errorf("%w: component lifecycle action is invalid", ErrInvalidRuntimeCommand)
 	}
-	identityOnly := lifecycleAction && requirement.ProfileMode == RuntimeComponentLifecycleProfileIdentityOnly
+	identityOnly := knownAction && requirement.ProfileMode == RuntimeComponentLifecycleProfileIdentityOnly
 	if !identityOnly && strings.TrimSpace(c.TargetVersion) == "" {
 		return fmt.Errorf("%w: target version is required", ErrInvalidRuntimeCommand)
 	}
@@ -373,6 +373,9 @@ func (c RuntimeSelfUpdateCommand) validateSelfUpdateTarget() error {
 
 func (c RuntimeSelfUpdateCommand) validateLifecycleProfile() error {
 	if c.LifecycleAction == "" {
+		if !c.LifecycleProfile.IsEmpty() {
+			return fmt.Errorf("%w: component lifecycle profile must be empty when lifecycle action is unset", ErrInvalidRuntimeCommand)
+		}
 		return nil
 	}
 	requirement, ok := RuntimeComponentLifecycleRequirement(c.LifecycleAction)

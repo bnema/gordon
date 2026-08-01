@@ -65,7 +65,13 @@ func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 }
 
 func TestPassStoreMutationsWaitForStoreLock(t *testing.T) {
-	store := &PassStore{timeout: time.Second, log: testLogger()}
+	store := &PassStore{
+		timeout: time.Second,
+		log:     testLogger(),
+		runPass: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+			return nil, nil
+		},
+	}
 	mutations := []struct {
 		name string
 		run  func() error
@@ -99,7 +105,7 @@ func TestPassStoreMutationsWaitForStoreLock(t *testing.T) {
 func TestPassStoreDeleteRollbackIsSerializedAgainstConcurrentSet(t *testing.T) {
 	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
 	require.NoError(t, err)
-	basePath := "gordon/env/" + safeDomain
+	basePath := PassDomainSecretsPath + "/" + safeDomain
 	entries := map[string]string{
 		basePath + "/TOKEN": "original",
 		basePath + "/.keys": "TOKEN",

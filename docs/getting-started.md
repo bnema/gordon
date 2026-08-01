@@ -191,7 +191,7 @@ Gordon automatically:
 
 ## Deployment mode
 
-The steps above start monolith mode. Gordon can later migrate the same installation to generated `control`, `runtime`, `edge`, and `registry` containers. Only runtime receives the engine socket; follow the [split migration runbook](./operations/migration.md) rather than creating role services manually.
+The steps above start monolith mode. Gordon can also run as generated `control`, `runtime`, `edge`, and `registry` containers. Only runtime receives the engine socket; follow the [split bootstrap guide](./operations/split-bootstrap.md) rather than creating role services manually.
 
 ## Next Steps
 
@@ -200,7 +200,6 @@ The steps above start monolith mode. Gordon can later migrate the same installat
 - [Authentication](./config/auth.md) - Secure your registry
 - [Environment Variables](./config/env.md) - Configure per-app settings
 - [Split Mode](./operations/split-mode.md) - Component responsibilities and trust boundaries
-- [Migration](./operations/migration.md) - Rootless Podman migration and recovery
 
 ## Related
 

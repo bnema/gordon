@@ -524,18 +524,6 @@ func securitySocketReference(value string) bool {
 	return strings.Contains(value, "docker") || strings.Contains(value, "podman") || strings.Contains(value, "containerd") || strings.Contains(value, "cri-dockerd") || strings.Contains(value, "crio") || strings.Contains(value, "/cri.sock") || strings.Contains(value, "/cri/")
 }
 
-func securityBuildCandidate(ctx context.Context, repoRoot, output string) error {
-	cmd, err := newIsolatedCommand(ctx, "go", []string{"build", "-o", output, "./main.go"}, []string{"CGO_ENABLED=0"}, nil, false)
-	if err != nil {
-		return fmt.Errorf("prepare go build: %w", err)
-	}
-	cmd.Dir = repoRoot
-	if _, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build failed")
-	}
-	return nil
-}
-
 func securityCommand(ctx context.Context, dir, name string, args ...string) error {
 	cmd, err := newIsolatedCommand(ctx, name, args, nil, nil, false)
 	if err != nil {

@@ -7,7 +7,7 @@ package remotemanagement
 // listener gate consume it.
 var Families = []string{
 	"attachments", "autoroute", "backups", "bootstrap", "config",
-	"deploy", "images", "logs", "migrate", "networks", "pin", "preview",
+	"deploy", "images", "logs", "networks", "pin", "preview",
 	"push", "reload", "restart", "routes", "secrets", "status",
 	"tls", "traffic", "volumes",
 }

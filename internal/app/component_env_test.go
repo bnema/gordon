@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -49,8 +48,9 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 	require.NoError(t, err)
 
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "GORDON_SERVER_PORT", "GNUPGHOME", "OTEL_EXPORTER_OTLP_HEADERS", "PASSWORD_STORE_DIR", "SAFE_FEATURE_FLAG"}, manifest.KeysForRole(domain.ComponentRoleControl))
-	assert.Equal(t, managedPassGPGHome, manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
-	assert.Equal(t, managedPassStoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
+	paths := managedPassPaths()
+	assert.Equal(t, paths.GPGHome, manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
+	assert.Equal(t, paths.StoreDir, manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.NotEqual(t, "/host/gnupg", manifest.values[domain.ComponentRoleControl]["GNUPGHOME"])
 	assert.NotEqual(t, "/host/password-store", manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"])
 	assert.ElementsMatch(t, []string{"GORDON_COMPONENT_RUNTIME_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "OTEL_EXPORTER_OTLP_HEADERS"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
@@ -73,36 +73,6 @@ func TestComponentEnvManifestDetectsConfigDrivenVariablesAndMinimizesRoles(t *te
 		body, readErr := os.ReadFile(file.Path)
 		require.NoError(t, readErr)
 		assert.NotContains(t, body, "WORKLOAD_DATABASE_PASSWORD")
-	}
-}
-
-func TestAuthDisabledMigrationDoesNotTransferJWTOrManagedPassEnvironment(t *testing.T) {
-	cfg := Config{}
-	cfg.Auth.Enabled = false
-	cfg.Auth.Type = "token"
-	cfg.Auth.SecretsBackend = string(domain.SecretsBackendPass)
-	endpoint, err := newSelectedLocalRuntimeEndpoint("/run/user/1000/podman/podman.sock")
-	require.NoError(t, err)
-
-	manifest, err := BuildMigrationComponentEnvManifest(MigrationEnvOptions{
-		Config: cfg,
-		Environment: map[string]string{
-			"XDG_RUNTIME_DIR":          "/run/user/1000",
-			"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
-			TokenSecretEnvVar:          "unused-auth-disabled-signing-secret-at-least-32-bytes",
-		},
-		runtimeEndpoint: endpoint,
-	})
-	require.NoError(t, err)
-
-	for _, role := range componentRoles {
-		assert.NotContains(t, manifest.KeysForRole(role), TokenSecretEnvVar)
-	}
-	assert.ElementsMatch(t, []string{"GNUPGHOME", "PASSWORD_STORE_DIR"}, manifest.KeysForRole(domain.ComponentRoleControl))
-	assert.Equal(t, []string{"DOCKER_HOST"}, manifest.KeysForRole(domain.ComponentRoleRuntime))
-	for _, role := range []domain.ComponentRole{domain.ComponentRoleRuntime, domain.ComponentRoleEdge, domain.ComponentRoleRegistry} {
-		assert.NotContains(t, manifest.KeysForRole(role), "GNUPGHOME")
-		assert.NotContains(t, manifest.KeysForRole(role), "PASSWORD_STORE_DIR")
 	}
 }
 
@@ -159,113 +129,6 @@ func TestAuthEnabledMigrationRequiresEnvironmentSigningSecretAndScopesItsValue(t
 		}
 		assert.Contains(t, string(body), TokenSecretEnvVar+"="+secret)
 	}
-}
-
-func TestAuthEnabledMissingSigningSecretFailsPlanBeforeComponentLaunchWithoutValueLeak(t *testing.T) {
-	cfg := Config{}
-	cfg.Auth.Enabled = true
-	cfg.Auth.Type = "token"
-	cfg.Auth.SecretsBackend = "unsafe"
-	cfg.Auth.TokenSecret = "legacy-signing-reference-never-transfer-or-report"
-	preflight := NewMigrationPreflight(passingMigrationProbes(nil))
-	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
-	require.NoError(t, err)
-	launcher := &recordingComponentLauncher{}
-	orchestrator, err := NewMigrationOrchestrator(preflight, store, launcher)
-	require.NoError(t, err)
-	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config: cfg,
-		Environment: map[string]string{
-			"XDG_RUNTIME_DIR":          "/run/user/1000",
-			"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
-		},
-		Directory: filepath.Join(t.TempDir(), "env"),
-	})
-	require.NoError(t, err)
-	service.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage("example.invalid/gordon:v3")
-
-	report, err := service.Plan(context.Background())
-	require.NoError(t, err)
-	assert.False(t, report.Ready)
-	check := findPreflightCheck(t, report, "component_environment")
-	assert.Equal(t, PreflightFail, check.Status)
-	assert.Contains(t, check.Remediation, TokenSecretEnvVar)
-	assert.NotContains(t, check.Remediation, cfg.Auth.TokenSecret)
-
-	_, err = service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), TokenSecretEnvVar)
-	assert.NotContains(t, err.Error(), cfg.Auth.TokenSecret)
-	assert.Empty(t, launcher.calls)
-	assert.NoFileExists(t, store.Path())
-}
-
-func TestAuthEnabledShortSigningSecretFailsBeforeComponentLaunchWithKeyOnlyDiagnostic(t *testing.T) {
-	cfg := Config{}
-	cfg.Auth.Enabled = true
-	cfg.Auth.Type = "token"
-	secret := "short-private-fixture"
-	preflight := NewMigrationPreflight(passingMigrationProbes(nil))
-	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
-	require.NoError(t, err)
-	launcher := &recordingComponentLauncher{}
-	orchestrator, err := NewMigrationOrchestrator(preflight, store, launcher)
-	require.NoError(t, err)
-	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:      cfg,
-		Environment: map[string]string{TokenSecretEnvVar: secret},
-		Directory:   filepath.Join(t.TempDir(), "env"),
-	})
-	require.NoError(t, err)
-	service.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage("example.invalid/gordon:v3")
-
-	report, err := service.Plan(context.Background())
-	require.NoError(t, err)
-	require.False(t, report.Ready)
-	check := findPreflightCheck(t, report, "component_environment")
-	assert.Equal(t, "component environment variable is invalid: "+TokenSecretEnvVar, check.Remediation)
-	assert.NotContains(t, check.Remediation, secret)
-	assert.NotContains(t, check.Remediation, "32")
-
-	_, err = service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration"})
-	require.Error(t, err)
-	assert.Equal(t, "component environment variable is invalid: "+TokenSecretEnvVar, err.Error())
-	assert.Empty(t, launcher.calls)
-	assert.NoFileExists(t, store.Path())
-}
-
-func TestAuthSigningSecretNeverAppearsInMigrationReportsOrCheckpoint(t *testing.T) {
-	cfg := Config{}
-	cfg.Auth.Enabled = true
-	cfg.Auth.Type = "token"
-	cfg.Auth.SecretsBackend = "unsafe"
-	secret := "checkpoint-private-signing-secret-at-least-32-bytes"
-	preflight := NewMigrationPreflight(passingMigrationProbes(nil))
-	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
-	require.NoError(t, err)
-	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:      cfg,
-		Environment: map[string]string{TokenSecretEnvVar: secret},
-		Directory:   filepath.Join(t.TempDir(), "env"),
-	})
-	require.NoError(t, err)
-
-	report, err := service.Plan(context.Background())
-	require.NoError(t, err)
-	require.True(t, report.Ready)
-	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})
-	require.NoError(t, err)
-	status, err := service.Status()
-	require.NoError(t, err)
-
-	for _, value := range []any{report, checkpoint, status} {
-		serialized, marshalErr := json.Marshal(value)
-		require.NoError(t, marshalErr)
-		assert.NotContains(t, string(serialized), secret)
-	}
-	stored, err := os.ReadFile(store.Path())
-	require.NoError(t, err)
-	assert.NotContains(t, string(stored), secret)
 }
 
 func TestRegistryForwardCredentialIsDomainSeparatedAndRoleMinimized(t *testing.T) {
@@ -423,91 +286,4 @@ func TestMigrationEnvOptionsAcceptOnlyAllowlistedExplicitEnvFile(t *testing.T) {
 	_, err = BuildMigrationComponentEnvManifest(MigrationEnvOptions{ExplicitAllowlist: []string{"CUSTOM_TOKEN"}, ExplicitEnvFile: path})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "fixture-value-not-reported")
-}
-
-func TestMigrationPrepareCanonicalizesEnvOnlyAuthConfigAcrossConsumingRoles(t *testing.T) {
-	cfg := Config{}
-	cfg.Auth.Enabled = true
-	cfg.Auth.Type = "token"
-	cfg.Auth.SecretsBackend = "unsafe"
-	cfg.Auth.Username = "operator"
-	cfg.Auth.TokenExpiry = "48h"
-	secret := "migration-canonical-auth-secret-at-least-32-bytes"
-	t.Setenv(TokenSecretEnvVar, secret)
-	preflight := NewMigrationPreflight(passingMigrationProbes(nil))
-	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
-	require.NoError(t, err)
-	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config: cfg,
-		Environment: map[string]string{
-			"GORDON_AUTH_ACCESS_TOKEN_TTL": "37m",
-			TokenSecretEnvVar:              secret,
-		},
-		Directory: filepath.Join(t.TempDir(), "env"),
-	})
-	require.NoError(t, err)
-
-	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})
-	require.NoError(t, err)
-	configs := componentConfigReferences(checkpoint.ConfigFileReferences)
-
-	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime} {
-		_, roleConfig, configErr := initConfig(configs[role])
-		require.NoError(t, configErr)
-		assert.Equal(t, "37m", roleConfig.Auth.AccessTokenTTL, "%s must use the effective env-only access token TTL", role)
-		assert.Equal(t, cfg.Auth.TokenExpiry, roleConfig.Auth.TokenExpiry)
-		assert.Equal(t, cfg.Auth.Username, roleConfig.Auth.Username)
-	}
-	registryConfig, err := initRegistryConfig(configs[domain.ComponentRoleRegistry])
-	require.NoError(t, err)
-	assert.Equal(t, "37m", registryConfig.Auth.AccessTokenTTL)
-	assert.Equal(t, cfg.Auth.TokenExpiry, registryConfig.Auth.TokenExpiry)
-	assert.Equal(t, cfg.Auth.Username, registryConfig.Auth.Username)
-
-	for _, reference := range checkpoint.ConfigFileReferences {
-		contents, readErr := os.ReadFile(reference)
-		require.NoError(t, readErr)
-		assert.NotContains(t, string(contents), secret)
-	}
-	for _, reference := range checkpoint.EnvFileReferences {
-		contents, readErr := os.ReadFile(reference)
-		require.NoError(t, readErr)
-		if filepath.Base(reference) == "edge.env" {
-			assert.NotContains(t, string(contents), TokenSecretEnvVar)
-			continue
-		}
-		assert.Contains(t, string(contents), TokenSecretEnvVar+"="+secret)
-	}
-}
-
-func TestMigrationPrepareWritesOnlyRoleScopedReferences(t *testing.T) {
-	preflight := NewMigrationPreflight(MigrationPreflightProbes{
-		Runtime: func(_ context.Context) (RuntimePreflightTarget, error) {
-			return RuntimePreflightTarget{Engine: "podman", Rootless: true, APIReachable: true}, nil
-		},
-		Image: func(context.Context) error { return nil }, Config: func(context.Context) error { return nil }, SplitTopology: func(context.Context) error { return nil }, DataDir: func(context.Context) error { return nil }, Registry: func(context.Context) error { return nil }, Env: func(context.Context) error { return nil }, Secrets: func(context.Context) error { return nil }, Ports: func(context.Context) error { return nil }, Network: func(context.Context) error { return nil }, Inventory: func(context.Context) error { return nil }, Disk: func(context.Context) error { return nil }, Credentials: func(context.Context) error { return nil },
-	})
-	store, err := NewMigrationCheckpointStore(filepath.Join(t.TempDir(), "checkpoint.json"))
-	require.NoError(t, err)
-	service, err := NewMigrationService(preflight, store, MigrationEnvOptions{
-		Config:         Config{},
-		Environment:    map[string]string{"GORDON_SERVER_PORT": "8080"},
-		Directory:      filepath.Join(t.TempDir(), "env"),
-		ExternalRoutes: map[string]any{"public.example.test": "198.51.100.10:8443"},
-	})
-	require.NoError(t, err)
-	checkpoint, err := service.Prepare(context.Background(), MigrationCheckpoint{MigrationID: "fixture-migration", ComponentGeneration: 1})
-	require.NoError(t, err)
-	require.NotEmpty(t, checkpoint.EnvFileReferences)
-	require.Len(t, checkpoint.ConfigFileReferences, 4)
-	assert.NotContains(t, strings.Join(checkpoint.EnvFileReferences, " "), "8080")
-	controlConfig := componentConfigReferences(checkpoint.ConfigFileReferences)[domain.ComponentRoleControl]
-	controlContents, readErr := os.ReadFile(controlConfig)
-	require.NoError(t, readErr)
-	assert.Contains(t, string(controlContents), "public.example.test")
-	for _, reference := range checkpoint.ConfigFileReferences {
-		info, statErr := os.Stat(reference)
-		require.NoError(t, statErr)
-		assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
-	}
 }

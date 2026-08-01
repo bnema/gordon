@@ -5,11 +5,11 @@ Gordon exposes migration lifecycle commands, not a general `components update` o
 ## Before updating
 
 - Pass all [release gates](../reference/release-gates.md) for the candidate.
-- Take a verified backup of config, `server.data_dir`, registry storage, migration checkpoint, and component volumes.
-- Confirm no retry/outbox backlog and record `gordon migrate status --json`.
+- Take a verified backup of config, `server.data_dir`, registry storage, the component cutover checkpoint, and component volumes.
+- Confirm no retry/outbox backlog.
 - Keep exactly one runtime owner.
 
-## During migration
+## During the update
 
 Use a maintenance window for the v2-to-split migration. Take and verify a mutually consistent snapshot, prepare an executable restoration script, stop the host `gordon.service`, and keep it stopped while running `migrate plan`, `prepare`, and `switch`.
 

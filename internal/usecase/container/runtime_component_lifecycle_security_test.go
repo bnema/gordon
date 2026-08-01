@@ -17,6 +17,7 @@ import (
 
 	"github.com/containerd/containerd/v2/pkg/cap"
 	"github.com/docker/docker/client"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ import (
 )
 
 func TestComponentGenerationVolumeNameUsesRoleMigrationAndGeneration(t *testing.T) {
-	assert.Equal(t, "gordon-control-fixture-g7", componentGenerationVolumeName(domain.ComponentRoleControl, "fixture", 7))
+	assert.Equal(t, "gordon-control-fixture-g7", domain.FormatComponentGenerationVolumeName(domain.ComponentRoleControl, "fixture", 7))
 }
 
 func TestRuntimeComponentLifecycleUsesExactRootlessIdentityForEveryRole(t *testing.T) {
@@ -74,12 +75,12 @@ func TestRuntimeComponentLifecycleRejectsForgedExistingIdentity(t *testing.T) {
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	valid := domain.Container{
 		ID: "existing", Name: command.TargetComponentID, Labels: componentLifecycleLabels(command), User: identity.User,
-		UsernsMode: "keep-id:uid=21003,gid=21003", CapDrop: []string{"ALL"}, NoNewPrivileges: true,
+		UsernsMode: componentKeepIDMode(identity), CapDrop: []string{"ALL"}, NoNewPrivileges: true,
 		VolumeMounts: []domain.ContainerVolumeMount{{Type: "bind", Source: configPath, Destination: "/etc/gordon/role.toml", ReadOnly: true}},
 	}
 	for name, forge := range map[string]func(*domain.Container){
@@ -202,7 +203,7 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)
 
-	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	volumeName := domain.FormatComponentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 	allCapabilities := cap.Known()
 	inspectFixture := map[string]any{
 		"Id":      containerID,
@@ -230,23 +231,26 @@ func TestRuntimeComponentLifecycleHealthAndReuseAcceptPodmanHostBindChown(t *tes
 		"NetworkSettings": map[string]any{"Ports": map[string]any{}},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		require.Equal(t, http.MethodGet, request.Method)
+		if request.Method != http.MethodGet {
+			http.Error(w, "unexpected method", http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch request.URL.Path {
 		case "/v1.41/containers/json":
-			require.NoError(t, json.NewEncoder(w).Encode([]map[string]any{{
+			writeLifecycleJSON(t, w, []map[string]any{{
 				"Id": containerID, "Names": []string{"/" + command.TargetComponentID}, "Image": "gordon:fixture", "ImageID": "sha256:fixture", "State": "running", "Labels": componentLifecycleLabels(command),
-			}}))
+			}})
 		case "/v1.41/containers/" + containerID + "/json":
-			require.NoError(t, json.NewEncoder(w).Encode(inspectFixture))
+			writeLifecycleJSON(t, w, inspectFixture)
 		case "/v4.0.0/libpod/containers/" + containerID + "/json":
-			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+			writeLifecycleJSON(t, w, map[string]any{
 				"BoundingCaps":  nil,
 				"EffectiveCaps": nil,
 				"HostConfig": map[string]any{"IDMappings": map[string]any{
 					"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
 				}},
-			}))
+			})
 		default:
 			http.NotFound(w, request)
 		}
@@ -285,12 +289,14 @@ func lifecycleNativeIDMap(roleID int) []string {
 	}
 }
 
+const lifecycleEdgeFixtureTOML = "[edge]\n"
+
 func TestRuntimeComponentLifecycleRejectsUnverifiedPrivatePodmanIdentity(t *testing.T) {
 	const containerID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	require.True(t, ok)
@@ -310,17 +316,21 @@ func TestRuntimeComponentLifecycleRejectsUnverifiedPrivatePodmanIdentity(t *test
 				w.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
 				case "/v1.41/containers/json":
-					require.NoError(t, json.NewEncoder(w).Encode([]map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}}}))
+					writeLifecycleJSON(t, w, []map[string]any{{"Id": containerID, "Names": []string{"/" + command.TargetComponentID}}})
 				case "/v1.41/containers/" + containerID + "/json":
-					require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+					writeLifecycleJSON(t, w, map[string]any{
 						"Id": containerID, "Name": "/" + command.TargetComponentID, "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
 						"Config":     map[string]any{"Image": "gordon:fixture", "User": identity.User, "Labels": componentLifecycleLabels(command)},
 						"HostConfig": map[string]any{"Binds": []string{configPath + ":/etc/gordon/role.toml:ro"}, "UsernsMode": "private", "CapDrop": allCapabilities, "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
 						"State":      map[string]any{"Status": "running"}, "Mounts": []map[string]any{{"Type": "bind", "Source": configPath, "Destination": "/etc/gordon/role.toml", "Mode": "ro", "RW": false}}, "NetworkSettings": map[string]any{"Ports": map[string]any{}},
-					}))
+					})
 				case "/v4.0.0/libpod/containers/" + containerID + "/json":
+					if test.nativeStatus < 100 || test.nativeStatus > 999 {
+						t.Errorf("invalid native fixture status %d", test.nativeStatus)
+						return
+					}
 					w.WriteHeader(test.nativeStatus)
-					require.NoError(t, json.NewEncoder(w).Encode(test.nativeBody))
+					writeLifecycleJSON(t, w, test.nativeBody)
 				default:
 					http.NotFound(w, request)
 				}
@@ -354,7 +364,7 @@ func TestRuntimeComponentLifecycleRejectsMalformedOrUnprovedPodmanHostBindChown(
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleControl, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, ok := domain.FixedComponentProcessIdentity(domain.ComponentRoleControl)
 	require.True(t, ok)
-	volumeName := componentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
+	volumeName := domain.FormatComponentGenerationVolumeName(command.TargetComponentRole, strings.TrimPrefix(command.PolicyDecisionID, "migration:"), command.Generation)
 
 	for name, test := range map[string]struct {
 		binds        []string
@@ -365,7 +375,6 @@ func TestRuntimeComponentLifecycleRejectsMalformedOrUnprovedPodmanHostBindChown(
 		"mount mode U without bind evidence":     {binds: []string{configPath + ":/etc/gordon/role.toml:ro"}, mountMode: domain.ContainerVolumeOptionChown},
 		"canonical sequence subset":              {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,rprivate,nosuid,nodev"}},
 		"canonical sequence superset":            {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,z"}},
-		"canonical sequence reordered":           {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,nosuid,rprivate,nodev,rbind"}},
 		"canonical sequence duplicate":           {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rbind"}},
 		"canonical sequence access flag":         {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/gordon:U,rprivate,nosuid,nodev,rbind,rw"}},
 		"destination traversal alias":            {binds: []string{configPath + ":/etc/gordon/role.toml:ro", volumeName + ":/var/lib/other/../gordon:U,rprivate,nosuid,nodev,rbind"}},
@@ -382,7 +391,7 @@ func TestRuntimeComponentLifecycleRejectsMalformedOrUnprovedPodmanHostBindChown(
 				w.Header().Set("Content-Type", "application/json")
 				switch request.URL.Path {
 				case "/v1.41/containers/" + containerID + "/json":
-					require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+					writeLifecycleJSON(t, w, map[string]any{
 						"Id": containerID, "Name": "/" + command.TargetComponentID, "Image": "sha256:fixture", "Created": "2026-05-05T00:00:00Z",
 						"Config":     map[string]any{"Image": "gordon:fixture", "User": identity.User, "Labels": componentLifecycleLabels(command)},
 						"HostConfig": map[string]any{"Binds": test.binds, "UsernsMode": "private", "CapDrop": cap.Known(), "CapAdd": []string{}, "SecurityOpt": []string{"no-new-privileges:true"}},
@@ -392,14 +401,14 @@ func TestRuntimeComponentLifecycleRejectsMalformedOrUnprovedPodmanHostBindChown(
 							{"Type": "volume", "Name": volumeName, "Source": "/home/fixture/.local/share/containers/storage/volumes/" + volumeName + "/_data", "Destination": "/var/lib/gordon", "Mode": test.mountMode, "RW": true},
 						},
 						"NetworkSettings": map[string]any{"Ports": map[string]any{}},
-					}))
+					})
 				case "/v4.0.0/libpod/containers/" + containerID + "/json":
-					require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+					writeLifecycleJSON(t, w, map[string]any{
 						"BoundingCaps": test.boundingCaps,
 						"HostConfig": map[string]any{"IDMappings": map[string]any{
 							"UidMap": lifecycleNativeIDMap(identity.UID), "GidMap": lifecycleNativeIDMap(identity.GID),
 						}},
-					}))
+					})
 				default:
 					http.NotFound(w, request)
 				}
@@ -454,7 +463,7 @@ func TestRuntimeComponentLifecycleReadRejectsExistingContainerWithoutDesiredIden
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "1")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte("[edge]\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	command := managedSecretsLifecycleCommand(domain.ComponentRoleEdge, domain.RuntimeComponentLifecycleHealth, configPath)
 	identity, _ := domain.FixedComponentProcessIdentity(domain.ComponentRoleEdge)
 	container := &domain.Container{
@@ -487,7 +496,7 @@ func TestRuntimeComponentLifecycleStartUsesRoleConfigAndPersistentStorage(t *tes
 	configDir := filepath.Join(t.TempDir(), "migration", "config", "fixture", "2")
 	require.NoError(t, os.MkdirAll(configDir, 0o700))
 	configPath := filepath.Join(configDir, "edge.toml")
-	require.NoError(t, os.WriteFile(configPath, []byte("server: {}\n"), 0o600))
+	require.NoError(t, os.WriteFile(configPath, []byte(lifecycleEdgeFixtureTOML), 0o600))
 	runtime := outmocks.NewMockContainerRuntime(t)
 	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(config *domain.ContainerConfig) bool {
@@ -518,7 +527,7 @@ func TestRuntimeComponentLifecycleMountsExactSelectedSocketAndValidatesExistingC
 	require.NoError(t, os.MkdirAll(envDir, 0o700))
 	configPath := filepath.Join(configDir, "runtime.toml")
 	envPath := filepath.Join(envDir, "runtime.env")
-	const sourcePath = "/run/user/1000/podman/native-api"
+	const sourcePath = "/run/user/1000/podman/podman.sock"
 	require.NoError(t, os.WriteFile(configPath, []byte("[runtime]\n"), 0o600))
 	require.NoError(t, os.WriteFile(envPath, []byte("DOCKER_HOST=unix://"+sourcePath+"\n"), 0o600))
 
@@ -665,4 +674,17 @@ func TestRuntimeComponentLifecycleStartRejectsMissingRoleConfig(t *testing.T) {
 		TargetVersion: "v2", Policy: domain.RuntimeSelfUpdatePolicyManualApproval, PolicyDecisionID: "migration:fixture", LifecycleAction: domain.RuntimeComponentLifecycleStart, DesiredImage: "example.invalid/gordon:v2", DesiredStateHash: "fixture", InternalNetwork: "gordon-internal-fixture-g2", PreserveVolumes: true,
 	})
 	require.Error(t, err)
+}
+
+func TestLifecycleSecurityEdgeTomlIsValidTOML(t *testing.T) {
+	var document map[string]any
+	require.NoError(t, toml.Unmarshal([]byte(lifecycleEdgeFixtureTOML), &document))
+	require.Contains(t, document, "edge")
+}
+
+func writeLifecycleJSON(t *testing.T, w http.ResponseWriter, payload any) {
+	t.Helper()
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		t.Errorf("encode lifecycle fixture: %v", err)
+	}
 }

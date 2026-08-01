@@ -21,7 +21,6 @@ import (
 type Client struct {
 	client runtimev1.RuntimeServiceClient
 
-	closeOnce sync.Once
 	closeMu   sync.Mutex
 	closeDone chan struct{}
 	closeErr  error
@@ -93,36 +92,45 @@ func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
-	c.closeOnce.Do(func() {
-		c.closeMu.Lock()
-		c.closed = true
-		owned := append([]io.Closer(nil), c.owned...)
-		c.owned = nil
-		conn := c.conn
-		c.conn = nil
-		stopClose := c.stopClose
-		c.stopClose = nil
-		c.closeMu.Unlock()
-
-		if stopClose != nil {
-			stopClose()
-		}
-		var closeErr error
-		for i := len(owned) - 1; i >= 0; i-- {
-			closeErr = errors.Join(closeErr, owned[i].Close())
-		}
-		if conn != nil {
-			closeErr = errors.Join(closeErr, conn.Close())
-		}
-		c.closeMu.Lock()
-		c.closeErr = closeErr
-		close(c.closeDone)
-		c.closeMu.Unlock()
-	})
-	<-c.closeDone
 	c.closeMu.Lock()
-	defer c.closeMu.Unlock()
-	return c.closeErr
+	if c.closed {
+		done := c.closeDone
+		c.closeMu.Unlock()
+		if done != nil {
+			<-done
+		}
+		c.closeMu.Lock()
+		err := c.closeErr
+		c.closeMu.Unlock()
+		return err
+	}
+	c.closed = true
+	owned := append([]io.Closer(nil), c.owned...)
+	c.owned = nil
+	conn := c.conn
+	c.conn = nil
+	stopClose := c.stopClose
+	c.stopClose = nil
+	done := c.closeDone
+	c.closeMu.Unlock()
+
+	if stopClose != nil {
+		stopClose()
+	}
+	var closeErr error
+	for i := len(owned) - 1; i >= 0; i-- {
+		closeErr = errors.Join(closeErr, owned[i].Close())
+	}
+	if conn != nil {
+		closeErr = errors.Join(closeErr, conn.Close())
+	}
+	c.closeMu.Lock()
+	c.closeErr = closeErr
+	if done != nil {
+		close(done)
+	}
+	c.closeMu.Unlock()
+	return closeErr
 }
 
 func (c *Client) DeployRoute(ctx context.Context, command domain.DeployRouteCommand) (domain.RuntimeCommandResult, error) {

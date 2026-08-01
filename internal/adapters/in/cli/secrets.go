@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -49,10 +50,23 @@ these commands operate on the remote server.`,
 
 const managedPassLockReadyLine = "Managed pass backend lock acquired"
 
-var holdManagedPassBackend = app.HoldManagedPassBackend
+var (
+	holdManagedPassBackend         = app.HoldManagedPassBackend
+	runManagedPassDoctor           = app.RunManagedPassDoctor
+	openManagedPassWriteCheckStore = func() (managedPassWriteCheckStore, error) {
+		return domainsecrets.NewPassStore(zerowrap.New(cliLogConfig))
+	}
+)
+
+type managedPassWriteCheckStore interface {
+	Set(domainName string, secretsMap map[string]string) error
+	GetAll(domainName string) (map[string]string, error)
+	Delete(domainName, key string) error
+}
 
 func newSecretsLockCmd() *cobra.Command {
 	var configFile string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "lock",
 		Short: "Hold the managed pass backend lease for offline maintenance",
@@ -60,70 +74,89 @@ func newSecretsLockCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return runSecretsLock(ctx, configFile, cmd.OutOrStdout())
+			return runSecretsLock(ctx, configFile, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runSecretsLock(ctx context.Context, configFile string, out io.Writer) error {
+func runSecretsLock(ctx context.Context, configFile string, out io.Writer, jsonOut bool) error {
 	if err := validateManagedPassConfig(configFile); err != nil {
 		return err
 	}
 	return holdManagedPassBackend(ctx, func() error {
-		_, err := fmt.Fprintln(out, managedPassLockReadyLine)
-		return err
+		if jsonOut {
+			return writeJSON(out, map[string]string{
+				"status":  "locked",
+				"message": managedPassLockReadyLine,
+			})
+		}
+		return cliWriteLine(out, managedPassLockReadyLine)
 	})
 }
 
 func newSecretsDoctorCmd() *cobra.Command {
 	var configFile string
 	var writeCheck bool
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Initialize and validate the configured managed pass backend",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runSecretsDoctor(cmd.Context(), configFile, writeCheck, cmd.OutOrStdout())
+			return runSecretsDoctor(cmd.Context(), configFile, writeCheck, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVarP(&configFile, "config", "c", "", "Path to config file")
 	cmd.Flags().BoolVar(&writeCheck, "write-check", false, "Verify an application-level write/read/delete without displaying values")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, out io.Writer) error {
+func runSecretsDoctor(ctx context.Context, configFile string, writeCheck bool, out io.Writer, jsonOut bool) error {
 	if err := validateManagedPassConfig(configFile); err != nil {
 		return err
 	}
-	if err := app.ValidateManagedPassBackend(ctx); err != nil {
+	if err := runManagedPassDoctor(ctx, func() error {
+		if writeCheck {
+			return runManagedPassWriteCheck(ctx)
+		}
+		return nil
+	}); err != nil {
 		return fmt.Errorf("validate managed pass backend: %w", err)
 	}
-	if writeCheck {
-		if err := runManagedPassWriteCheck(); err != nil {
-			return err
+	if jsonOut {
+		payload := map[string]any{"status": "healthy"}
+		if writeCheck {
+			payload["write_check"] = true
 		}
+		return writeJSON(out, payload)
 	}
-	_, err := fmt.Fprintln(out, "Managed pass backend is healthy")
-	return err
+	return cliWriteLine(out, "Managed pass backend is healthy")
 }
 
 func validateManagedPassConfig(configFile string) error {
 	v := viper.New()
 	app.ConfigureViper(v, configFile)
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return fmt.Errorf("read configuration: %w", err)
 		}
 	}
-	if resolveLocalSecretsBackend(v) != domain.SecretsBackendPass {
-		return fmt.Errorf("configured secrets backend is not pass")
+	backend := resolveLocalSecretsBackend(v)
+	if backend != domain.SecretsBackendPass {
+		return fmt.Errorf("configured secrets backend is not pass (resolved %q)", backend)
 	}
 	return nil
 }
 
-func runManagedPassWriteCheck() error {
+func runManagedPassWriteCheck(ctx context.Context) (err error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	marker := make([]byte, 16)
 	if _, err := rand.Read(marker); err != nil {
 		return fmt.Errorf("generate managed pass write check")
@@ -131,20 +164,32 @@ func runManagedPassWriteCheck() error {
 	domainName := "doctor-" + fmt.Sprint(time.Now().UnixNano()) + ".invalid"
 	const key = "GORDON_DOCTOR_MARKER"
 	value := hex.EncodeToString(marker)
-	store, err := domainsecrets.NewPassStore(zerowrap.New(cliLogConfig))
+	store, err := openManagedPassWriteCheckStore()
 	if err != nil {
 		return fmt.Errorf("open managed pass backend: %w", err)
 	}
+	written := false
+	defer func() {
+		if !written {
+			return
+		}
+		if cleanupErr := store.Delete(domainName, key); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
 	if err := store.Set(domainName, map[string]string{key: value}); err != nil {
 		return fmt.Errorf("write managed pass check: %w", err)
 	}
-	values, err := store.GetAll(domainName)
-	if err != nil || values[key] != value {
-		_ = store.Delete(domainName, key)
+	written = true
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	values, getErr := store.GetAll(domainName)
+	if getErr != nil || values[key] != value {
 		return fmt.Errorf("read managed pass check failed")
 	}
-	if err := store.Delete(domainName, key); err != nil {
-		return fmt.Errorf("remove managed pass check: %w", err)
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return nil
 }

@@ -61,6 +61,9 @@ type EventDispatcher struct {
 	intents      map[string]manualIntent
 	intentsOnce  sync.Once
 	intentsError error
+	// afterCompletedCheck is a test-only barrier invoked after the unlocked
+	// preflight completion check and before flight inspection/creation.
+	afterCompletedCheck func()
 }
 type completedEvent struct {
 	key string
@@ -101,8 +104,16 @@ func (d *EventDispatcher) HandleComponentEvent(ctx context.Context, event domain
 	if completed {
 		return nil
 	}
+	if d.afterCompletedCheck != nil {
+		d.afterCompletedCheck()
+	}
 
 	d.mu.Lock()
+	if e := d.complete[key]; e != nil {
+		d.lru.MoveToFront(e)
+		d.mu.Unlock()
+		return nil
+	}
 	if flight := d.flights[key]; flight != nil {
 		d.mu.Unlock()
 		select {

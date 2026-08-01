@@ -310,20 +310,16 @@ func addMigrationJWTSigningSecret(cfg Config, environment map[string]string, man
 	return &InvalidEnvVarError{Key: TokenSecretEnvVar}
 }
 
-const (
-	managedPassRoot       = "/var/lib/gordon/secrets" // #nosec G101 -- fixed container state path, not credential material.
-	managedPassCurrentDir = managedPassRoot + "/current"
-	managedPassGPGHome    = managedPassCurrentDir + "/gnupg"
-	managedPassStoreDir   = managedPassCurrentDir + "/password-store"
-)
+const managedPassRoot = "/var/lib/gordon/secrets" // #nosec G101 -- fixed container state path, not credential material.
 
 func addSecretProviderEnv(cfg Config, manifest *ComponentEnvManifest, add componentEnvAdd) {
 	control := []domain.ComponentRole{domain.ComponentRoleControl}
 	switch strings.TrimSpace(cfg.Auth.SecretsBackend) {
 	case string(domain.SecretsBackendPass):
 		// Managed pass state is container-owned. Never copy host provider paths.
-		manifest.values[domain.ComponentRoleControl]["GNUPGHOME"] = managedPassGPGHome
-		manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"] = managedPassStoreDir
+		paths := managedPassPaths()
+		manifest.values[domain.ComponentRoleControl]["GNUPGHOME"] = paths.GPGHome
+		manifest.values[domain.ComponentRoleControl]["PASSWORD_STORE_DIR"] = paths.StoreDir
 	case string(domain.SecretsBackendSops):
 		add("SOPS_AGE_KEY_FILE", control, false)
 		add("SOPS_KMS_ARN", control, false)
@@ -404,17 +400,6 @@ func addExplicitComponentEnv(allowlist []string, add componentEnvAdd) error {
 		add(key, []domain.ComponentRole{domain.ComponentRoleControl}, true)
 	}
 	return nil
-}
-
-func componentEnvironmentFromEnviron(environ []string) map[string]string {
-	environment := make(map[string]string, len(environ))
-	for _, entry := range environ {
-		key, value, found := strings.Cut(entry, "=")
-		if found && key != "" {
-			environment[key] = value
-		}
-	}
-	return environment
 }
 
 func sortedEnvironmentKeys(environment map[string]string, include func(string) bool) []string {

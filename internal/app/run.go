@@ -308,7 +308,6 @@ type services struct {
 	publicTLSRuntime      publicTLSRuntime
 	runtimeCommandClient  out.RuntimeCommandClient
 	runtimeControl        *runtimecontrol.Service
-	migrationSvc          *MigrationService
 	appliedStateTracker   *edgesnapshot.AppliedStateTracker
 	appliedStateReceiver  edgesnapshot.AppliedStateReceiver
 	trafficManager        *trafficadapter.Manager

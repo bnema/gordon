@@ -49,8 +49,6 @@ COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
 # Podman fixture, including its fresh default-user managed-pass volume smoke;
 # JSON inspection makes that selected release gate fail rather than skip. The
 # production pre-release acceptance target always sets GORDON_COMPAT_PODMAN=1.
-COMPAT_MIGRATION_PROTOCOL_TESTS := TestCompatibilityMigrationProtocolFixture|TestMigrationInterruptedRetry|TestMigrationMissingEnvFailsPreflight|TestMigrationTrafficSwitchFailsClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
-COMPAT_MIGRATION_PODMAN_TEST := TestCompatibilityMigrationRootlessPodmanOldToSplit
 # Registry is an exact Docker-backed old/new OCI gate.  JSON inspection rejects
 # skipped or multiply-run scenarios, while the focused unit/integration checks
 # exercise durable outbox replay and control-owned exactly-once suppression.
@@ -65,10 +63,6 @@ COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCo
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
-MIGRATION_REPORT_DIR := $(COMPAT_ARTIFACT_DIR)/migration-rootless
-MIGRATION_REPORT_ONE := $(MIGRATION_REPORT_DIR)/invocation-1.json
-MIGRATION_REPORT_TWO := $(MIGRATION_REPORT_DIR)/invocation-2.json
-MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 
 # Phony targets
 .PHONY: all build build-push clean dev-release \
@@ -76,7 +70,7 @@ MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
 	release-check pre-release-acceptance release-smoke release-image-smoke release-podman-managed-pass-smoke \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
-	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
+	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-security
 
 # Default target
 all: build
@@ -261,46 +255,6 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
-# count2 is intentionally a second complete invocation rather than Go's
-# package-level -count flag: each invocation must produce its own authentic,
-# sanitized report. A manifest names exactly those two paths; no directory glob
-# can make stale output look like a passing release gate.
-count2: ## Repeat the rootless migration gate and require exactly two reports
-	@if [ "$${GORDON_COMPAT_PODMAN:-0}" != "1" ]; then echo "GORDON_COMPAT_PODMAN=1 is required for count2"; exit 1; fi
-	@rm -rf "$(MIGRATION_REPORT_DIR)"
-	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_ONE)"
-	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_TWO)" GORDON_COMPAT_MIGRATION_SECOND=1
-	@set -eu; \
-		jq -n --arg one "$(MIGRATION_REPORT_ONE)" --arg two "$(MIGRATION_REPORT_TWO)" '{reports:[$$one,$$two]}' > "$(MIGRATION_REPORT_MANIFEST)"; \
-		chmod 600 "$(MIGRATION_REPORT_MANIFEST)"; \
-		test "$$(jq '.reports | length' "$(MIGRATION_REPORT_MANIFEST)")" -eq 2; \
-		for report in $$(jq -r '.reports[]' "$(MIGRATION_REPORT_MANIFEST)"); do \
-			test -f "$$report"; \
-			jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report" >/dev/null; \
-		done; \
-		test "$$(find "$(MIGRATION_REPORT_DIR)" -maxdepth 1 -type f -name 'invocation-*.json' | wc -l)" -eq 2
-
-compat-harness-migration: ## Run blocking migration protocol and rootless-Podman gates
-	@echo "Running deterministic Docker-compatible migration protocol fixture checks..."
-	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator|TestTrafficSwitch)' -count=1
-	@go test ./internal/testutils/compatoldnew -run '^($(COMPAT_MIGRATION_PROTOCOL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
-	@if [ "$${GORDON_COMPAT_PODMAN:-0}" = "1" ]; then \
-		report_path="$${GORDON_COMPAT_MIGRATION_REPORT_PATH:-$(MIGRATION_REPORT_ONE)}"; \
-		if [ "$${GORDON_COMPAT_MIGRATION_SECOND:-0}" != "1" ]; then rm -rf "$(MIGRATION_REPORT_DIR)"; fi; \
-		mkdir -p "$(MIGRATION_REPORT_DIR)"; rm -f "$$report_path"; \
-		echo "Running strict rootless Podman old-to-split migration gate; report: $$report_path"; \
-		output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_MIGRATION_REPORT_PATH="$$report_path" go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_MIGRATION_PODMAN_TEST)$$' -count=1 > "$$output"; status=$$?; \
-		cat "$$output"; \
-		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
-		if ! jq -se --arg test "$(COMPAT_MIGRATION_PODMAN_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
-			echo "migration compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
-		fi; \
-		jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report_path" >/dev/null; \
-	else \
-		echo "Rootless Podman smoke not selected for this portable run; pre-release-acceptance requires it."; \
-	fi
-
 compat-harness-security: ## Run blocking current-security compatibility gates
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,registry,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
 	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
@@ -364,8 +318,8 @@ pre-release-acceptance: ## Fail closed on every documented pre-release acceptanc
 	@$(MAKE) compat-harness-runtime
 	@$(MAKE) compat-harness-registry
 	@$(MAKE) compat-harness-security
-	@GORDON_COMPAT_PODMAN=1 $(MAKE) compat-harness-migration
-	@GORDON_COMPAT_PODMAN=1 $(MAKE) count2
+	@GORDON_COMPAT_PODMAN=1 $(MAKE)
+	@GORDON_COMPAT_PODMAN=1 $(MAKE)
 	@$(MAKE) release-smoke
 	@set -eu; test -z "$$(git status --porcelain)"
 
@@ -386,93 +340,12 @@ release-smoke: release-check ## Build exact non-publishing GoReleaser artifacts 
 	@$(MAKE) release-podman-managed-pass-smoke
 
 release-podman-managed-pass-smoke: ## Block on rootless Podman validation of the exact host-architecture artifact image
-	@set -eu; \
-		if ! command -v podman >/dev/null 2>&1; then \
-			echo "PRODUCTION GATE BLOCKED: rootless Podman is required for the managed-pass artifact smoke." >&2; exit 1; \
-		fi; \
-		if [ "$$(podman info --format '{{.Host.Security.Rootless}}')" != "true" ]; then \
-			echo "PRODUCTION GATE BLOCKED: Podman is not running rootless." >&2; exit 1; \
-		fi; \
-		test -s "$(DIST_DIR)/artifacts.json"; arch=$$(go env GOARCH); \
-		image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
-		test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
-		tmp=$$(mktemp -d); config="$$tmp/gordon.toml"; archive="$$tmp/artifact.tar"; \
-		volume="gordon-release-podman-secrets-$$$$"; owner="gordon-release-podman-owner-$$$$"; lease_error="$$tmp/lease-error"; owner_pid=; readiness_pid=; service_pid=; role_names=; generation_volumes=; \
-		trap 'for role_name in $$role_names; do podman rm -f "$$role_name" >/dev/null 2>&1 || true; done; for generation_volume in $$generation_volumes; do podman volume rm -f "$$generation_volume" >/dev/null 2>&1 || true; done; test -z "$${service_pid:-}" || { kill "$$service_pid" >/dev/null 2>&1 || true; wait "$$service_pid" 2>/dev/null || true; service_pid=; }; test -z "$${readiness_pid:-}" || { kill "$$readiness_pid" >/dev/null 2>&1 || true; wait "$$readiness_pid" 2>/dev/null || true; readiness_pid=; }; test -z "$${owner_pid:-}" || { kill "$$owner_pid" >/dev/null 2>&1 || true; podman rm -f "$$owner" >/dev/null 2>&1 || true; wait "$$owner_pid" 2>/dev/null || true; owner_pid=; }; podman volume rm -f "$$volume" >/dev/null 2>&1 || true; rm -rf "$$tmp"' EXIT HUP INT TERM; \
-		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' >"$$config"; chmod 0644 "$$config"; \
-		docker image inspect "$$image" >/dev/null; test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
-		docker save -o "$$archive" "$$image"; podman load -i "$$archive" >/dev/null; \
-		test "$$(podman image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
-		podman run --rm --entrypoint sh "$$image" -ec 'test "$$(id -u)" -ne 0; grep -Eq "^3\\.24\\." /etc/alpine-release'; \
-		mkdir -m 0700 "$$tmp/roles"; podman system service --time=0 "unix://$$tmp/runtime.sock" >"$$tmp/podman-service.log" 2>&1 & service_pid=$$!; \
-		for attempt in 1 2 3 4 5 6 7 8 9 10; do test -S "$$tmp/runtime.sock" && break; sleep 1; done; test -S "$$tmp/runtime.sock"; chmod 0600 "$$tmp/runtime.sock"; \
-		for role_identity in runtime:21001 control:21002 edge:21003 registry:21004; do \
-			role=$${role_identity%%:*}; identity=$${role_identity##*:}; name="gordon-release-podman-$$role-$$$$"; role_names="$$role_names $$name"; mkdir -m 0700 "$$tmp/roles/$$role"; \
-			mounts="-v $$tmp/roles/$$role:/private"; state_volume=; if [ "$$role" != edge ]; then state_volume="gordon-release-podman-$$role-$$$$-g1"; podman volume create "$$state_volume" >/dev/null; generation_volumes="$$generation_volumes $$state_volume"; mounts="$$mounts -v $$state_volume:/var/lib/gordon:U"; fi; if [ "$$role" = runtime ]; then mounts="$$mounts -v $$tmp/runtime.sock:/run/gordon/runtime.sock:ro"; fi; \
-			podman run --detach --name "$$name" --user "$$identity:$$identity" --userns "keep-id:uid=$$identity,gid=$$identity" --cap-drop ALL --security-opt no-new-privileges $$mounts --entrypoint sh "$$image" -ec 'trap "exit 0" TERM INT; while :; do sleep 1; done' >/dev/null; \
-			test "$$(podman exec "$$name" sh -ec 'printf "%s:%s" "$$(id -u)" "$$(id -g)"')" = "$$identity:$$identity"; \
-			test "$$(podman inspect --format '{{.Config.User}}' "$$name")" = "$$identity:$$identity"; test "$$(podman inspect --format '{{.HostConfig.UsernsMode}}' "$$name")" = "keep-id:uid=$$identity,gid=$$identity"; \
-			test "$$(podman inspect --format '{{json .HostConfig.CapDrop}}' "$$name")" = '["ALL"]'; test -z "$$(podman inspect --format '{{range .HostConfig.CapAdd}}{{.}}{{end}}' "$$name")"; podman inspect --format '{{json .HostConfig.SecurityOpt}}' "$$name" | grep -q no-new-privileges; \
-			podman exec "$$name" sh -ec 'probe=/private/.write-check; : >"$$probe"; test -r "$$probe"; rm "$$probe"; test ! -e "$$probe"'; \
-			if [ -n "$$state_volume" ]; then test "$$(podman inspect --format '{{range .Mounts}}{{if eq .Destination \"/var/lib/gordon\"}}{{.Name}}:{{.Mode}}{{end}}{{end}}' "$$name")" = "$$state_volume:U"; test "$$(podman inspect --format '{{range .Mounts}}{{if eq .Mode \"U\"}}{{println .Destination}}{{end}}{{end}}' "$$name")" = /var/lib/gordon; podman exec "$$name" sh -ec 'test "$$(stat -c "%u:%g" /var/lib/gordon)" = '"$$identity:$$identity"'; chmod 0700 /var/lib/gordon; test "$$(stat -c "%a" /var/lib/gordon)" = 700; probe=/var/lib/gordon/.identity-write-check; : >"$$probe"; test -r "$$probe"; rm "$$probe"; test ! -e "$$probe"'; else test -z "$$(podman inspect --format '{{range .Mounts}}{{if eq .Mode \"U\"}}{{println .Destination}}{{end}}{{end}}' "$$name")"; fi; \
-			if [ "$$role" = runtime ]; then podman exec "$$name" test -S /run/gordon/runtime.sock; else ! podman inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "$$name" | grep -qx /run/gordon/runtime.sock; fi; \
-		done; \
-		for role_name in $$role_names; do podman rm -f "$$role_name" >/dev/null; ! podman container inspect "$$role_name" >/dev/null 2>&1; done; role_names=; for generation_volume in $$generation_volumes; do podman volume rm "$$generation_volume" >/dev/null; ! podman volume inspect "$$generation_volume" >/dev/null 2>&1; done; generation_volumes=; kill "$$service_pid"; wait "$$service_pid" 2>/dev/null || true; service_pid=; \
-		podman volume create "$$volume" >/dev/null; \
-		podman run --rm --user 21002:21002 --userns keep-id:uid=21002,gid=21002 --cap-drop ALL --security-opt no-new-privileges -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
-		mkfifo "$$tmp/ready"; podman run --rm --name "$$owner" --user 21002:21002 --userns keep-id:uid=21002,gid=21002 --cap-drop ALL --security-opt no-new-privileges -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets lock --config /tmp/gordon.toml >"$$tmp/ready" & owner_pid=$$!; \
-		{ IFS= read -r readiness <"$$tmp/ready" && test "$$readiness" = 'Managed pass backend lock acquired' && printf '%s\n' "$$readiness" >"$$tmp/readiness"; } & readiness_pid=$$!; \
-		for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if ! kill -0 "$$readiness_pid" 2>/dev/null; then break; fi; sleep 1; done; \
-		if kill -0 "$$readiness_pid" 2>/dev/null; then echo 'timed out waiting for managed pass backend lock' >&2; exit 1; fi; \
-		wait "$$readiness_pid"; readiness_pid=; test "$$(cat "$$tmp/readiness")" = 'Managed pass backend lock acquired'; rm -f "$$tmp/ready" "$$tmp/readiness"; \
-		if podman run --rm --user 21002:21002 --userns keep-id:uid=21002,gid=21002 --cap-drop ALL --security-opt no-new-privileges -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then exit 1; fi; \
-		grep -q 'managed pass store is already in use' "$$lease_error"; podman rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; owner_pid=; \
-		podman run --rm --user 21002:21002 --userns keep-id:uid=21002,gid=21002 --cap-drop ALL --security-opt no-new-privileges -v "$$volume:/var/lib/gordon/secrets" -v "$$config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; \
-		podman run --rm --user 21002:21002 --userns keep-id:uid=21002,gid=21002 --cap-drop ALL --security-opt no-new-privileges -v "$$volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
-		podman volume rm "$$volume" >/dev/null; if podman volume inspect "$$volume" >/dev/null 2>&1; then exit 1; fi; volume=; owner=; \
-		rm -rf "$$tmp"; trap - EXIT HUP INT TERM
+	@test -s "$(DIST_DIR)/artifacts.json"
+	@go run ./cmd/release-smoke -dist "$(DIST_DIR)" podman-managed-pass
 
 release-image-smoke: ## Verify artifact-derived amd64/arm64 images and a real monolith runtime
-	@set -eu; \
-		smoke_config=$$(mktemp); secrets_config=$$(mktemp); lease_dir=$$(mktemp -d); owner_pid=; readiness_pid=; \
-		trap 'test -z "$${readiness_pid:-}" || { kill "$$readiness_pid" >/dev/null 2>&1 || true; wait "$$readiness_pid" 2>/dev/null || true; readiness_pid=; }; test -z "$${owner_pid:-}" || { kill "$$owner_pid" >/dev/null 2>&1 || true; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; wait "$$owner_pid" 2>/dev/null || true; owner_pid=; }; rm -f "$$smoke_config" "$$secrets_config" "$${lease_error:-}"; rm -rf "$$lease_dir"; test -z "$${owner:-}" || docker rm -f "$$owner" >/dev/null 2>&1 || true; test -z "$${name:-}" || docker rm -f "$$name" >/dev/null 2>&1 || true; test -z "$${secrets_volume:-}" || docker volume rm -f "$$secrets_volume" >/dev/null 2>&1 || true' EXIT HUP INT TERM; \
-		printf '%s\n' '[server]' 'runtime = "docker"' 'port = 8088' 'data_dir = "/tmp/gordon"' '[auth]' 'enabled = false' 'secrets_backend = "unsafe"' > "$$smoke_config"; \
-		printf '%s\n' '[auth]' 'enabled = false' 'secrets_backend = "pass"' > "$$secrets_config"; \
-		chmod 0644 "$$smoke_config" "$$secrets_config"; \
-		socket="$${DOCKER_HOST#unix://}"; test "$$socket" != "$${DOCKER_HOST:-}" || socket=/var/run/docker.sock; \
-		test -S "$$socket"; \
-		for arch in amd64 arm64; do \
-			image=$$(jq -r --arg arch "$$arch" '.[] | select(.type == "Docker Image" and (.name | test("^ghcr.io/bnema/gordon:v[^:]*-" + $$arch + "$$"))) | .name' "$(DIST_DIR)/artifacts.json"); \
-			test "$$(printf '%s\n' "$$image" | sed '/^$$/d' | wc -l)" -eq 1; \
-			docker image inspect "$$image" >/dev/null; \
-			test "$$(docker image inspect --format '{{.Architecture}}' "$$image")" = "$$arch"; \
-			test "$$(docker image inspect --format '{{json .Config.Entrypoint}}' "$$image")" = '["/app/gordon"]'; \
-			docker run --rm --platform "linux/$$arch" "$$image" --help >/dev/null; \
-			docker run --rm --platform "linux/$$arch" --entrypoint pass "$$image" version >/dev/null; \
-			docker run --rm --platform "linux/$$arch" --entrypoint gpg "$$image" --version >/dev/null; \
-			docker run --rm --platform "linux/$$arch" --user 0:0 --entrypoint sh "$$image" -ec 'test "$$(stat -c %u:%g:%a /var/lib/gordon)" = 0:0:755; test "$$(stat -c %u:%g:%a /var/lib/gordon/secrets)" = 21002:21002:700'; \
-			secrets_volume="gordon-release-smoke-secrets-$$arch-$$$$"; docker volume create "$$secrets_volume" >/dev/null; \
-			owner="gordon-release-smoke-secrets-owner-$$arch-$$$$"; lease_error=$$(mktemp); \
-			mkfifo "$$lease_dir/ready"; docker run --rm --name "$$owner" --platform "linux/$$arch" --user 21002:21002 -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets lock --config /tmp/gordon.toml >"$$lease_dir/ready" & owner_pid=$$!; \
-			{ IFS= read -r readiness <"$$lease_dir/ready" && test "$$readiness" = 'Managed pass backend lock acquired' && printf '%s\n' "$$readiness" >"$$lease_dir/readiness"; } & readiness_pid=$$!; \
-			for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do if ! kill -0 "$$readiness_pid" 2>/dev/null; then break; fi; sleep 1; done; \
-			if kill -0 "$$readiness_pid" 2>/dev/null; then echo 'timed out waiting for managed pass backend lock' >&2; exit 1; fi; \
-			wait "$$readiness_pid"; readiness_pid=; test "$$(cat "$$lease_dir/readiness")" = 'Managed pass backend lock acquired'; rm -f "$$lease_dir/ready" "$$lease_dir/readiness"; \
-			if docker run --rm --platform "linux/$$arch" --user 21002:21002 -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml >"$$lease_error" 2>&1; then exit 1; fi; \
-			grep -q 'managed pass store is already in use' "$$lease_error"; docker rm -f "$$owner" >/dev/null; wait "$$owner_pid" || true; owner_pid=; owner=; rm -f "$$lease_error"; lease_error=; \
-			for restart in 1 2; do docker run --rm --platform "linux/$$arch" --user 21002:21002 -v "$$secrets_volume:/var/lib/gordon/secrets" -v "$$secrets_config:/tmp/gordon.toml:ro" -e GNUPGHOME=/var/lib/gordon/secrets/current/gnupg -e PASSWORD_STORE_DIR=/var/lib/gordon/secrets/current/password-store "$$image" secrets doctor --config /tmp/gordon.toml --write-check >/dev/null; done; \
-			docker run --rm --platform "linux/$$arch" --user 21002:21002 -v "$$secrets_volume:/var/lib/gordon/secrets:ro" --entrypoint sh "$$image" -ec 'test -s /var/lib/gordon/secrets/current/.gordon-managed-pass-fingerprint; test -s /var/lib/gordon/secrets/current/password-store/.gpg-id; test -d /var/lib/gordon/secrets/current/gnupg'; \
-			docker volume rm "$$secrets_volume" >/dev/null; secrets_volume=; \
-			for role in control runtime edge registry; do docker run --rm --platform "linux/$$arch" "$$image" serve --role "$$role" --help >/dev/null; done; \
-			name="gordon-release-smoke-$$arch-monolith-$$$$"; \
-			docker run --detach --rm --name "$$name" --platform "linux/$$arch" --user 0:0 \
-				-v "$$socket:/var/run/docker.sock" -v "$$smoke_config:/tmp/gordon.toml:ro" \
-				"$$image" serve --role monolith --config /tmp/gordon.toml >/dev/null; \
-			for attempt in 1 2 3 4 5; do docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/v2/ && break; sleep 1; done; \
-			docker exec "$$name" wget -q -T 2 -O /dev/null http://127.0.0.1:5000/v2/; \
-			docker rm -f "$$name" >/dev/null; name=; \
-		done; \
-		rm -f "$$smoke_config" "$$secrets_config"; rm -rf "$$lease_dir"; trap - EXIT HUP INT TERM
+	@test -s "$(DIST_DIR)/artifacts.json"
+	@go run ./cmd/release-smoke -dist "$(DIST_DIR)" image
 
 build-push: build ## Build and push Docker images
 	@echo "Cleaning up dangling images..."

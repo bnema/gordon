@@ -34,7 +34,7 @@ func TestRunSecretsLockPrintsFixedReadinessAndWaitsForCancellation(t *testing.T)
 	var runErr error
 	go func() {
 		defer wg.Done()
-		runErr = runSecretsLock(ctx, configFile, &output)
+		runErr = runSecretsLock(ctx, configFile, &output, false)
 	}()
 
 	select {

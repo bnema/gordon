@@ -111,7 +111,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 	if image == "" {
 		return ComponentLaunchPlan{}, fmt.Errorf("target image is required")
 	}
-	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: fmt.Sprintf("gordon-internal-%s-g%d", checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
+	plan := ComponentLaunchPlan{MigrationID: checkpoint.MigrationID, Generation: checkpoint.ComponentGeneration, Version: version, Image: image, InternalNetwork: domain.FormatComponentInternalNetwork(checkpoint.MigrationID, checkpoint.ComponentGeneration), AppNetworks: safeAppNetworks(checkpoint.EdgeAppNetworks)}
 	envByRole := componentEnvReferences(checkpoint.EnvFileReferences)
 	configByRole := componentConfigReferences(checkpoint.ConfigFileReferences)
 	if err := validateComponentLaunchReferences(checkpoint, envByRole, configByRole); err != nil {
@@ -124,7 +124,7 @@ func NewComponentLaunchPlan(checkpoint MigrationCheckpoint) (ComponentLaunchPlan
 		return ComponentLaunchPlan{}, fmt.Errorf("invalid edge bootstrap port binding")
 	}
 	for _, role := range []domain.ComponentRole{domain.ComponentRoleControl, domain.ComponentRoleRuntime, domain.ComponentRoleRegistry, domain.ComponentRoleEdge} {
-		componentID := fmt.Sprintf("gordon-%s-%s-g%d", role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
+		componentID := domain.FormatComponentID(role, checkpoint.MigrationID, checkpoint.ComponentGeneration)
 		profile, ok := domain.FixedRuntimeComponentLifecycleProfile(role)
 		if !ok {
 			return ComponentLaunchPlan{}, fmt.Errorf("component runtime profile is required")
@@ -185,11 +185,11 @@ func validateComponentLaunchReferences(checkpoint MigrationCheckpoint, envByRole
 		}
 	}
 	if len(checkpoint.EnvFileReferences) != 0 {
-		if len(envByRole) != len(checkpoint.EnvFileReferences) {
-			return fmt.Errorf("component environment references must have distinct roles")
+		if len(envByRole) != len(componentRoles) || len(checkpoint.EnvFileReferences) != len(componentRoles) {
+			return fmt.Errorf("component environment references must cover every role")
 		}
-		for role, path := range envByRole {
-			if !approvedLaunchReference(path, "env", checkpoint, string(role)+".env") {
+		for _, role := range componentRoles {
+			if !approvedLaunchReference(envByRole[role], "env", checkpoint, string(role)+".env") {
 				return fmt.Errorf("invalid %s component environment reference", role)
 			}
 		}
@@ -198,12 +198,7 @@ func validateComponentLaunchReferences(checkpoint MigrationCheckpoint, envByRole
 }
 
 func approvedLaunchReference(path, kind string, checkpoint MigrationCheckpoint, name string) bool {
-	clean := filepath.Clean(strings.TrimSpace(path))
-	generation := filepath.Dir(clean)
-	migration := filepath.Dir(generation)
-	kindDir := filepath.Dir(migration)
-	return filepath.IsAbs(clean) && filepath.Base(clean) == name && filepath.Base(generation) == fmt.Sprint(checkpoint.ComponentGeneration) &&
-		filepath.Base(migration) == checkpoint.MigrationID && filepath.Base(kindDir) == kind && filepath.Base(filepath.Dir(kindDir)) == "migration"
+	return domain.ApprovedGeneratedRolePath(path, "", kind, checkpoint.MigrationID, checkpoint.ComponentGeneration, name)
 }
 
 func componentPreparedPorts(bindings []MigrationPortBinding, role domain.ComponentRole) []domain.ContainerPortPublish {
@@ -273,7 +268,7 @@ func NewRuntimeComponentLauncherWithHandoff(oldRuntime out.RuntimeSelfUpdater, h
 }
 
 func (l *RuntimeComponentLauncher) CreateInternalNetwork(ctx context.Context, plan ComponentLaunchPlan) error {
-	componentID := fmt.Sprintf("gordon-network-%s-g%d", plan.MigrationID, plan.Generation)
+	componentID := domain.FormatComponentNetworkID(plan.MigrationID, plan.Generation)
 	return l.send(ctx, domain.RuntimeComponentLifecycleEnsureNetwork, ComponentLaunchComponent{Role: domain.ComponentRoleRuntime, ComponentID: componentID, InternalNetwork: plan.InternalNetwork, DesiredStateHash: componentLaunchHash(plan.InternalNetwork, plan.Image, plan.MigrationID), Labels: map[string]string{domain.LabelComponentVersion: plan.Version, domain.LabelComponentGeneration: fmt.Sprintf("%d", plan.Generation), domain.LabelComponentMigrationID: plan.MigrationID}}, plan.MigrationID, "network")
 }
 func (l *RuntimeComponentLauncher) StartComponent(ctx context.Context, component ComponentLaunchComponent) error {
@@ -561,4 +556,14 @@ func StablePreparedComponents(plan ComponentLaunchPlan) []string {
 	}
 	sort.Strings(components)
 	return components
+}
+
+// componentForRole returns the planned component owning role.
+func componentForRole(plan ComponentLaunchPlan, role domain.ComponentRole) (ComponentLaunchComponent, bool) {
+	for _, component := range plan.Components {
+		if component.Role == role {
+			return component, true
+		}
+	}
+	return ComponentLaunchComponent{}, false
 }

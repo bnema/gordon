@@ -26,18 +26,11 @@ gordon push app:latest --domain app.example.com --build --no-confirm
 gordon status
 ```
 
-## Rootless split migration
+## Rootless split deployment
 
-Production migration targets rootless Podman and is resumable:
-
-```bash
-gordon migrate plan --config ~/.config/gordon/gordon.toml --json
-gordon migrate prepare --config ~/.config/gordon/gordon.toml --json
-gordon migrate switch --config ~/.config/gordon/gordon.toml --json
-gordon migrate status --config ~/.config/gordon/gordon.toml --json
-```
-
-If the old monolith exits while transferring runtime authority, run `gordon migrate resume` from a fresh host process. There is no migration `rollback` command; before switch the old serving path is retained, while post-switch restoration is a backup-based disaster-recovery operation.
+Split mode runs `control`, `runtime`, `edge`, and `registry` as separate containers on
+rootless Podman; only runtime receives the engine socket. Set one up from scratch with
+the [split bootstrap guide](./docs/operations/split-bootstrap.md).
 
 ## Main commands
 
@@ -46,7 +39,6 @@ If the old monolith exits while transferring runtime authority, run `gordon migr
 | Server | `gordon serve`, `gordon status`, `gordon config show` |
 | Deploy | `gordon bootstrap`, `gordon push`, `gordon deploy`, `gordon restart`, `gordon pin` |
 | Manage | `gordon routes`, `gordon attachments`, `gordon secrets`, `gordon networks`, `gordon volumes`, `gordon images` |
-| Migration | `gordon migrate plan|prepare|status|switch|resume` |
 | Remote | `gordon remotes`, `gordon auth` |
 
 Use `gordon <command> --help` as the command/options source of truth.
@@ -55,7 +47,6 @@ Use `gordon <command> --help` as the command/options source of truth.
 
 - [Installation](docs/installation.md)
 - [Split mode](docs/operations/split-mode.md)
-- [Migration runbook](docs/operations/migration.md)
 - [Configuration](docs/config/index.md)
 - [Security hardening](docs/config/security-hardening.md)
 - [Troubleshooting](docs/reference/troubleshooting.md)
