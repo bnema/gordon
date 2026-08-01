@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestManagedControlSecretsVolumeNameIsStableAndInstallationScoped(t *testing.T) {
@@ -57,7 +58,7 @@ func TestRunManagedPassDoctorHoldsLeaseDuringCallback(t *testing.T) {
 		t.Fatal("managed pass doctor callback did not start")
 	}
 	err := ValidateManagedPassBackend(context.Background())
-	require.ErrorContains(t, err, "managed pass store is already in use")
+	require.ErrorIs(t, err, domain.ErrManagedPassLeaseUnavailable)
 	close(releaseCheck)
 	require.NoError(t, <-done)
 	require.NoError(t, ValidateManagedPassBackend(context.Background()))
