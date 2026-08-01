@@ -84,7 +84,6 @@ func TestRemoteControlCobraSmoke(t *testing.T) {
 		{"autoroute JSON", []string{"autoroute", "allow", "list", "--json"}, `"*.example.com"`, ""},
 		{"TLS JSON", []string{"tls", "status", "--json"}, `"acme_enabled"`, ""},
 		{"traffic JSON", []string{"traffic", "status", "--json"}, `"last_reload_status"`, ""},
-		{"migration plan JSON", []string{"migrate", "plan", "--json"}, `"ready": true`, ""},
 		// The split control listener does not own these runtime/registry services.
 		// Their capability response is part of the command contract, not a skip.
 		{"volumes capability", []string{"volumes", "list", "--json"}, "", "503"},

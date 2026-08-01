@@ -51,7 +51,6 @@ func AllScenarios() []Scenario {
 		RegistryScenarios(),
 		ProxyScenarios(),
 		RuntimeScenarios(),
-		MigrationScenarios(),
 		SecurityScenarios(),
 	} {
 		scenarios = append(scenarios, group...)

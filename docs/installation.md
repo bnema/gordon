@@ -244,13 +244,9 @@ sudo systemctl enable --now gordon
 
 ## Split deployment
 
-Install and validate Gordon as a monolith first. Production split migration requires rootless Podman and generates scoped role manifests automatically:
+Split mode requires rootless Podman and generates scoped role manifests automatically.
 
-```bash
-gordon migrate plan --config ~/.config/gordon/gordon.toml --json
-```
-
-Do not hand-copy the monolith config into role services. See [Split mode](./operations/split-mode.md) and the [migration runbook](./operations/migration.md).
+Do not hand-copy the monolith config into role services. See [Split mode](./operations/split-mode.md) and the [split bootstrap guide](./operations/split-bootstrap.md).
 
 ## DNS Configuration
 
@@ -346,4 +342,4 @@ Gordon stores data in the following locations:
 - [Configuration Reference](./config/index.md)
 - [Podman Rootless Setup](/wiki/guides/podman-rootless.md)
 - [Split Mode](./operations/split-mode.md)
-- [Migration Runbook](./operations/migration.md)
+- [Split bootstrap](./operations/split-bootstrap.md)

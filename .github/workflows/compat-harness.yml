@@ -91,14 +91,6 @@ jobs:
           XDG_RUNTIME_DIR="$runtime_dir" podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
           XDG_RUNTIME_DIR="$runtime_dir" podman version
 
-      - name: Run rootless Podman migration gate twice
-        env:
-          GORDON_COMPAT_PODMAN: "1"
-          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
-        run: |
-          make compat-harness-migration
-          make count2
-
       - name: Clean runtime fixtures
         if: always()
         run: |
@@ -106,14 +98,3 @@ jobs:
           podman ps -aq --filter label=gordon.compat.run | xargs -r podman rm -f
           # podman pod ps lists every pod by default and rejects -a.
           podman pod ps -q --filter label=gordon.compat.run | xargs -r podman pod rm -f
-
-      - name: Upload exactly the authenticated rootless migration reports
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: rootless-migration-authentic-reports
-          path: |
-            artifacts/compat/migration-rootless/manifest.json
-            artifacts/compat/migration-rootless/invocation-1.json
-            artifacts/compat/migration-rootless/invocation-2.json
-          if-no-files-found: error

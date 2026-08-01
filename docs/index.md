@@ -41,7 +41,6 @@ Gordon runs on your VPS and provides:
 - [Installation](./installation.md) - Detailed installation instructions
 - [Upgrading](./upgrading.md) - Safe binary and deployment-mode upgrades
 - [Split Mode](./operations/split-mode.md) - Component topology and trust boundaries
-- [Migration](./operations/migration.md) - Rootless Podman migration and resume runbook
 - [Concepts](./concepts.md) - Core concepts and architecture
 
 ### Configuration

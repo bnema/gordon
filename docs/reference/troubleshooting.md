@@ -2,18 +2,7 @@
 
 Common issues and solutions when using Gordon.
 
-## Split migration and components
-
-### Migration stopped during switch
-
-A runtime handoff can stop the old monolith before its in-container CLI returns. From a fresh host process run:
-
-```bash
-gordon migrate status --config ~/.config/gordon/gordon.toml --json
-gordon migrate resume --config ~/.config/gordon/gordon.toml --json
-```
-
-Do not delete the checkpoint or generated role environment. Durable retries depend on that state.
+## Split components
 
 ### Edge cannot reach registry
 

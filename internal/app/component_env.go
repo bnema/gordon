@@ -402,17 +402,6 @@ func addExplicitComponentEnv(allowlist []string, add componentEnvAdd) error {
 	return nil
 }
 
-func componentEnvironmentFromEnviron(environ []string) map[string]string {
-	environment := make(map[string]string, len(environ))
-	for _, entry := range environ {
-		key, value, found := strings.Cut(entry, "=")
-		if found && key != "" {
-			environment[key] = value
-		}
-	}
-	return environment
-}
-
 func sortedEnvironmentKeys(environment map[string]string, include func(string) bool) []string {
 	keys := make([]string, 0, len(environment))
 	for key := range environment {

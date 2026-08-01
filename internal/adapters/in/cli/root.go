@@ -158,10 +158,6 @@ Commands are organized by where they run:
 	trafficCmd.GroupID = groupManage
 	rootCmd.AddCommand(trafficCmd)
 
-	migrateCmd := newMigrateCmd()
-	migrateCmd.GroupID = groupManage
-	rootCmd.AddCommand(migrateCmd)
-
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
 	remotesCmd.GroupID = groupClient

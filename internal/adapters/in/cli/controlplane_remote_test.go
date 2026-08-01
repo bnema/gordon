@@ -24,12 +24,6 @@ func TestRemoteControlPlane_ImplementsInterface(t *testing.T) {
 	}
 }
 
-func TestDecodeMigrationCheckpointPreservesAbsentStatus(t *testing.T) {
-	checkpoint, err := decodeMigrationCheckpoint([]byte("null"), nil)
-	require.NoError(t, err)
-	assert.Nil(t, checkpoint)
-}
-
 func TestRemoteControlPlane_RunVolumeBackupsPreservesPartialResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

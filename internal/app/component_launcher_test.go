@@ -135,33 +135,6 @@ func TestRuntimeHandoffStartupBudgetCoversFactoryAndProtocolProof(t *testing.T) 
 	assert.Equal(t, factoryDeadline, target.proofDeadline, "factory readiness and protocol proof must share one budget")
 }
 
-type recordingComponentLauncher struct{ calls []string }
-
-func (l *recordingComponentLauncher) CreateInternalNetwork(context.Context, ComponentLaunchPlan) error {
-	l.calls = append(l.calls, "network")
-	return nil
-}
-func (l *recordingComponentLauncher) StartComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "start:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) StopComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "stop:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) CheckComponentHealth(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "health:"+string(component.Role))
-	return nil
-}
-func (l *recordingComponentLauncher) ConnectEdgeToAppNetwork(_ context.Context, component ComponentLaunchComponent, network string) error {
-	l.calls = append(l.calls, "connect:"+network)
-	return nil
-}
-func (l *recordingComponentLauncher) RemovePreparedComponent(_ context.Context, component ComponentLaunchComponent) error {
-	l.calls = append(l.calls, "remove:"+string(component.Role))
-	return nil
-}
-
 func TestComponentLaunchPlanRejectsRoleSwappedGeneratedReferences(t *testing.T) {
 	checkpoint := MigrationCheckpoint{
 		MigrationID: "fixture", ComponentGeneration: 1, TargetVersion: "v2", TargetImage: "example.invalid/gordon:v2",

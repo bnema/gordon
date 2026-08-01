@@ -11,22 +11,11 @@ Do not start two runtime owners against the same engine and data directory.
 
 ## Moving from monolith to split mode
 
-The supported production path is the checkpointed rootless-Podman migration. Do not manually create four services from the monolith TOML. Gordon generates strict role manifests and scoped environment files.
+There is no in-place monolith-to-split conversion command. Set up a fresh v3 split
+deployment and move workloads onto it: see [Split bootstrap](./operations/split-bootstrap.md).
 
-```bash
-gordon migrate plan --config ~/.config/gordon/gordon.toml --json
-gordon migrate prepare --config ~/.config/gordon/gordon.toml --json
-gordon migrate switch --config ~/.config/gordon/gordon.toml --json
-```
-
-If the invoking monolith exits during runtime transfer, use a fresh shell:
-
-```bash
-gordon migrate status --config ~/.config/gordon/gordon.toml --json
-gordon migrate resume --config ~/.config/gordon/gordon.toml --json
-```
-
-See the [migration runbook](./operations/migration.md) for requirements, failure handling, and the rollback boundary.
+Do not hand-write four role services from the monolith TOML; follow the bootstrap
+guide so role manifests and scoped environment files are generated correctly.
 
 ## Configuration checks
 
@@ -35,7 +24,6 @@ Current public application listeners use `[entrypoints.<name>]`; `server.gordon_
 ```bash
 gordon config show --json
 gordon serve --help
-gordon migrate --help
 ```
 
 Route keys must be hostnames, for example:
@@ -49,10 +37,11 @@ Password authentication is not supported. Use scoped tokens and a production sec
 
 ## Recovery
 
-Before split switch succeeds, repair the failed preflight/probe and rerun `switch` or `resume`; the old serving path remains retained. After `switched`, there is no automatic reverse-migration command. Restore monolith only as disaster recovery from a verified backup after stopping split public and runtime owners.
+Restore monolith only as disaster recovery from a verified backup, after stopping
+any split public and runtime owners.
 
 ## Related
 
-- [Migration](./operations/migration.md)
+- [Split bootstrap](./operations/split-bootstrap.md)
 - [Split mode](./operations/split-mode.md)
 - [Release gates](./reference/release-gates.md)

@@ -63,25 +63,3 @@ func TestReleaseRoleOwnerSmokeContract(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, dockerSource, ":/var/lib/gordon:U", "Docker must never receive Podman's U option")
 }
-
-func TestMigrationInvocationReportFailsClosed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "migration-report.json")
-	require.NoError(t, writeMigrationInvocationReport(path, migrationInvocationReport{
-		Scenario: "rootless-podman-old-to-split",
-		Skipped:  false,
-		Passed:   true,
-		Probes: migrationProbeAssertions{
-			Application: true,
-			Registry:    true,
-			Listeners:   true,
-			Resume:      true,
-		},
-	}))
-
-	report, err := readMigrationInvocationReport(path)
-	require.NoError(t, err)
-	require.True(t, validMigrationInvocationReport(report))
-
-	report.Skipped = true
-	require.False(t, validMigrationInvocationReport(report))
-}

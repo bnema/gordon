@@ -1,6 +1,6 @@
 # Split bootstrap (from scratch)
 
-This guide sets up a fresh **v3 split** Gordon deployment without `gordon migrate`.
+This guide sets up a fresh **v3 split** Gordon deployment.
 Use it for new installs. `migrate` only converts a running v2 monolith and is
 transitional; see [Migration runbook](./migration.md).
 

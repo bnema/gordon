@@ -49,8 +49,6 @@ COMPAT_RUNTIME_REAL_TESTS := TestCompatibilityDistributedDrainProtocol
 # Podman fixture, including its fresh default-user managed-pass volume smoke;
 # JSON inspection makes that selected release gate fail rather than skip. The
 # production pre-release acceptance target always sets GORDON_COMPAT_PODMAN=1.
-COMPAT_MIGRATION_PROTOCOL_TESTS := TestCompatibilityMigrationProtocolFixture|TestMigrationInterruptedRetry|TestMigrationMissingEnvFailsPreflight|TestMigrationTrafficSwitchFailsClosed|TestSplitEdgeTLSCompatibilityExceptionIsExplicit
-COMPAT_MIGRATION_PODMAN_TEST := TestCompatibilityMigrationRootlessPodmanOldToSplit
 # Registry is an exact Docker-backed old/new OCI gate.  JSON inspection rejects
 # skipped or multiply-run scenarios, while the focused unit/integration checks
 # exercise durable outbox replay and control-owned exactly-once suppression.
@@ -65,10 +63,6 @@ COMPAT_SECURITY_REAL_TESTS := TestCompatibilitySecurityEdgeNoPodmanSocket|TestCo
 COMPAT_SECURITY_HARNESS_GUARDS := TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestReportOutputs
 COMPAT_PROXY_HARNESS_GUARDS := TestCompatibilityManagedHTTPRoutePreflight|TestManagedHTTPRouteScenarioDefinition|TestExternalRouteScenarioDefinition|TestExternalRouteSubnetIsSafeCGNAT|TestZeroDowntimeDrainScenarioDefinition|TestManagedHTTPRoutePublishedAddressRejectsNonLoopback|TestPendingProxyScenariosDoNotSilentlyPass|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestImplementedScenarioFilteringIsExplicitAndPendingIsFailSafe|TestMigrationAndSecurityScenariosDoNotSilentlyPass|TestBuildOldAndNewUsesBaselineAndCurrentWorkingTreeWithoutBranchMutation|TestGoBuilderBuildsCandidateFromCurrentWorkingTree|TestGoBuilderSurfacesBoundedWorktreeCleanupFailures|TestGoBuilderBaselineUsesDetachedWorktreeAndDoesNotCheckoutCurrentBranch|TestCompareSidesAlwaysWritesActionableReportOnDiff|TestCompareSideResultsSerializesValidationFailuresBeforeReturningError|TestCompareSideResultsRedactsNestedEmbeddedJSONInEveryArtifact|TestNewReportNeverHasMoreFailuresThanChecks|TestReportOutputs
 COMPAT_ARTIFACT_DIR ?= $(or $(GORDON_COMPAT_ARTIFACT_DIR),artifacts/compat)
-MIGRATION_REPORT_DIR := $(COMPAT_ARTIFACT_DIR)/migration-rootless
-MIGRATION_REPORT_ONE := $(MIGRATION_REPORT_DIR)/invocation-1.json
-MIGRATION_REPORT_TWO := $(MIGRATION_REPORT_DIR)/invocation-2.json
-MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 
 # Phony targets
 .PHONY: all build build-push clean dev-release \
@@ -76,7 +70,7 @@ MIGRATION_REPORT_MANIFEST := $(MIGRATION_REPORT_DIR)/manifest.json
 	lint fmt check mocks proto proto-check clean-test gitleaks help \
 	release-check pre-release-acceptance release-smoke release-image-smoke release-podman-managed-pass-smoke \
 	compat-harness-config compat-harness-cli compat-harness-api compat-harness-registry \
-	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-migration compat-harness-security count2
+	compat-harness-proxy compat-harness-traffic compat-harness-runtime compat-harness-security
 
 # Default target
 all: build
@@ -261,46 +255,6 @@ compat-harness-runtime: ## Run runtime compatibility harness checks
 	@go test ./internal/usecase/container -run 'TestRuntimeContract' -count=1
 	@go test ./internal/adapters/out/docker -run 'TestRuntimeAdapterContract' -count=1
 
-# count2 is intentionally a second complete invocation rather than Go's
-# package-level -count flag: each invocation must produce its own authentic,
-# sanitized report. A manifest names exactly those two paths; no directory glob
-# can make stale output look like a passing release gate.
-count2: ## Repeat the rootless migration gate and require exactly two reports
-	@if [ "$${GORDON_COMPAT_PODMAN:-0}" != "1" ]; then echo "GORDON_COMPAT_PODMAN=1 is required for count2"; exit 1; fi
-	@rm -rf "$(MIGRATION_REPORT_DIR)"
-	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_ONE)"
-	@$(MAKE) compat-harness-migration GORDON_COMPAT_MIGRATION_REPORT_PATH="$(MIGRATION_REPORT_TWO)" GORDON_COMPAT_MIGRATION_SECOND=1
-	@set -eu; \
-		jq -n --arg one "$(MIGRATION_REPORT_ONE)" --arg two "$(MIGRATION_REPORT_TWO)" '{reports:[$$one,$$two]}' > "$(MIGRATION_REPORT_MANIFEST)"; \
-		chmod 600 "$(MIGRATION_REPORT_MANIFEST)"; \
-		test "$$(jq '.reports | length' "$(MIGRATION_REPORT_MANIFEST)")" -eq 2; \
-		for report in $$(jq -r '.reports[]' "$(MIGRATION_REPORT_MANIFEST)"); do \
-			test -f "$$report"; \
-			jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report" >/dev/null; \
-		done; \
-		test "$$(find "$(MIGRATION_REPORT_DIR)" -maxdepth 1 -type f -name 'invocation-*.json' | wc -l)" -eq 2
-
-compat-harness-migration: ## Run blocking migration protocol and rootless-Podman gates
-	@echo "Running deterministic Docker-compatible migration protocol fixture checks..."
-	@go test ./internal/app -run '^(TestComponentLauncherPlan|TestRuntimeComponentLauncher|TestMigrationOrchestrator|TestTrafficSwitch)' -count=1
-	@go test ./internal/testutils/compatoldnew -run '^($(COMPAT_MIGRATION_PROTOCOL_TESTS)|TestScenarioDefinitions|TestScenarioPodmanRequirements|TestImplementedScenarioAllowlistIsExact|TestMigrationAndSecurityScenariosDoNotSilentlyPass)$$' -count=1
-	@if [ "$${GORDON_COMPAT_PODMAN:-0}" = "1" ]; then \
-		report_path="$${GORDON_COMPAT_MIGRATION_REPORT_PATH:-$(MIGRATION_REPORT_ONE)}"; \
-		if [ "$${GORDON_COMPAT_MIGRATION_SECOND:-0}" != "1" ]; then rm -rf "$(MIGRATION_REPORT_DIR)"; fi; \
-		mkdir -p "$(MIGRATION_REPORT_DIR)"; rm -f "$$report_path"; \
-		echo "Running strict rootless Podman old-to-split migration gate; report: $$report_path"; \
-		output=$$(mktemp); trap 'rm -f "$$output"' EXIT HUP INT TERM; \
-		GORDON_COMPAT_MIGRATION_REPORT_PATH="$$report_path" go test -json ./internal/testutils/compatoldnew -run '^$(COMPAT_MIGRATION_PODMAN_TEST)$$' -count=1 > "$$output"; status=$$?; \
-		cat "$$output"; \
-		if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
-		if ! jq -se --arg test "$(COMPAT_MIGRATION_PODMAN_TEST)" '([.[] | select(.Test == $$test and .Action == "pass")] | length == 1) and ([.[] | select(.Test == $$test and .Action == "skip")] | length == 0)' "$$output" >/dev/null; then \
-			echo "migration compatibility test $$test did not pass exactly once or was skipped; refusing to pass the gate"; exit 1; \
-		fi; \
-		jq -e '.scenario == "rootless-podman-old-to-split" and .skipped == false and .passed == true and (.probes.application and .probes.registry and .probes.listeners and .probes.resume)' "$$report_path" >/dev/null; \
-	else \
-		echo "Rootless Podman smoke not selected for this portable run; pre-release-acceptance requires it."; \
-	fi
-
 compat-harness-security: ## Run blocking current-security compatibility gates
 	@echo "Report paths: $(COMPAT_ARTIFACT_DIR)/security-{edge,registry,auth-missing,auth-wrong-component,auth-scope}/compat-report.json"
 	@echo "Rerun: GORDON_COMPAT_ARTIFACT_DIR=$(COMPAT_ARTIFACT_DIR) GORDON_COMPAT_RUN_REAL=1 GORDON_COMPAT_REQUIRE_RUNTIME=1 GORDON_COMPAT_BASELINE_REF="$(COMPAT_BASELINE_REF)" go test ./internal/testutils/compatoldnew -run '^($(COMPAT_SECURITY_REAL_TESTS))$$' -count=2"
@@ -364,8 +318,8 @@ pre-release-acceptance: ## Fail closed on every documented pre-release acceptanc
 	@$(MAKE) compat-harness-runtime
 	@$(MAKE) compat-harness-registry
 	@$(MAKE) compat-harness-security
-	@GORDON_COMPAT_PODMAN=1 $(MAKE) compat-harness-migration
-	@GORDON_COMPAT_PODMAN=1 $(MAKE) count2
+	@GORDON_COMPAT_PODMAN=1 $(MAKE)
+	@GORDON_COMPAT_PODMAN=1 $(MAKE)
 	@$(MAKE) release-smoke
 	@set -eu; test -z "$$(git status --porcelain)"
 

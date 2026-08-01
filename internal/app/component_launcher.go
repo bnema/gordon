@@ -557,3 +557,13 @@ func StablePreparedComponents(plan ComponentLaunchPlan) []string {
 	sort.Strings(components)
 	return components
 }
+
+// componentForRole returns the planned component owning role.
+func componentForRole(plan ComponentLaunchPlan, role domain.ComponentRole) (ComponentLaunchComponent, bool) {
+	for _, component := range plan.Components {
+		if component.Role == role {
+			return component, true
+		}
+	}
+	return ComponentLaunchComponent{}, false
+}

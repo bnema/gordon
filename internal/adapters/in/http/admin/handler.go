@@ -55,31 +55,25 @@ type networkService interface {
 
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
-	configSvc           in.ConfigService
-	authSvc             in.AuthService
-	containerSvc        in.ContainerService
-	backupSvc           in.BackupService
-	volumeBackupSvc     in.VolumeBackupService
-	imageSvc            in.ImageService
-	healthSvc           in.HealthService
-	secretSvc           in.SecretService
-	logSvc              in.LogService
-	volumeSvc           in.VolumeService
-	registrySvc         registryDeployService
-	previewSvc          previewService
-	reloadTrigger       reloadTrigger
-	publicTLSSvc        in.PublicTLSService
-	trafficSvc          in.TrafficStatusService
-	runtimeControl      runtimeControlService
-	networkSvc          networkService
-	componentEvents     in.ComponentEventHandler
-	migrationPlan       func(context.Context) (any, error)
-	migrationPlanFailed func(any) bool
-	migrationPrepare    func(context.Context) (any, error)
-	migrationSwitch     func(context.Context) (any, error)
-	migrationStatus     func(context.Context) (any, error)
-	migrationResume     func(context.Context) (any, error)
-	log                 zerowrap.Logger
+	configSvc       in.ConfigService
+	authSvc         in.AuthService
+	containerSvc    in.ContainerService
+	backupSvc       in.BackupService
+	volumeBackupSvc in.VolumeBackupService
+	imageSvc        in.ImageService
+	healthSvc       in.HealthService
+	secretSvc       in.SecretService
+	logSvc          in.LogService
+	volumeSvc       in.VolumeService
+	registrySvc     registryDeployService
+	previewSvc      previewService
+	reloadTrigger   reloadTrigger
+	publicTLSSvc    in.PublicTLSService
+	trafficSvc      in.TrafficStatusService
+	runtimeControl  runtimeControlService
+	networkSvc      networkService
+	componentEvents in.ComponentEventHandler
+	log             zerowrap.Logger
 }
 
 // Type aliases for API responses using shared DTO types.
@@ -231,44 +225,30 @@ type HandlerDeps struct {
 	RuntimeControl  runtimeControlService
 	NetworkSvc      networkService
 	ComponentEvents in.ComponentEventHandler
-	// Migration callbacks are deliberately DTO-free function boundaries so the
-	// HTTP adapter never receives a runtime client or socket capability.
-	MigrationPlan       func(context.Context) (any, error)
-	MigrationPlanFailed func(any) bool
-	MigrationPrepare    func(context.Context) (any, error)
-	MigrationSwitch     func(context.Context) (any, error)
-	MigrationStatus     func(context.Context) (any, error)
-	MigrationResume     func(context.Context) (any, error)
 }
 
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
-		configSvc:           deps.ConfigSvc,
-		authSvc:             deps.AuthSvc,
-		containerSvc:        deps.ContainerSvc,
-		backupSvc:           deps.BackupSvc,
-		volumeBackupSvc:     deps.VolumeBackupSvc,
-		imageSvc:            deps.ImageSvc,
-		healthSvc:           deps.HealthSvc,
-		secretSvc:           deps.SecretSvc,
-		logSvc:              deps.LogSvc,
-		volumeSvc:           deps.VolumeSvc,
-		registrySvc:         deps.RegistrySvc,
-		previewSvc:          deps.PreviewSvc,
-		reloadTrigger:       deps.ReloadTrigger,
-		publicTLSSvc:        deps.PublicTLSSvc,
-		trafficSvc:          deps.TrafficSvc,
-		runtimeControl:      deps.RuntimeControl,
-		networkSvc:          deps.NetworkSvc,
-		componentEvents:     deps.ComponentEvents,
-		migrationPlan:       deps.MigrationPlan,
-		migrationPlanFailed: deps.MigrationPlanFailed,
-		migrationPrepare:    deps.MigrationPrepare,
-		migrationSwitch:     deps.MigrationSwitch,
-		migrationStatus:     deps.MigrationStatus,
-		migrationResume:     deps.MigrationResume,
-		log:                 deps.Log,
+		configSvc:       deps.ConfigSvc,
+		authSvc:         deps.AuthSvc,
+		containerSvc:    deps.ContainerSvc,
+		backupSvc:       deps.BackupSvc,
+		volumeBackupSvc: deps.VolumeBackupSvc,
+		imageSvc:        deps.ImageSvc,
+		healthSvc:       deps.HealthSvc,
+		secretSvc:       deps.SecretSvc,
+		logSvc:          deps.LogSvc,
+		volumeSvc:       deps.VolumeSvc,
+		registrySvc:     deps.RegistrySvc,
+		previewSvc:      deps.PreviewSvc,
+		reloadTrigger:   deps.ReloadTrigger,
+		publicTLSSvc:    deps.PublicTLSSvc,
+		trafficSvc:      deps.TrafficSvc,
+		runtimeControl:  deps.RuntimeControl,
+		networkSvc:      deps.NetworkSvc,
+		componentEvents: deps.ComponentEvents,
+		log:             deps.Log,
 	}
 }
 
@@ -322,21 +302,6 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/attachments/prune":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentPrune(w, r) },
 		"/tls/status":          func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
 		"/traffic/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTrafficStatus(w, r) },
-		"/migration/plan": func(w http.ResponseWriter, r *http.Request, _ string) {
-			h.handleMigration(w, r, http.MethodGet, domain.AdminActionRead, h.migrationPlan)
-		},
-		"/migration/prepare": func(w http.ResponseWriter, r *http.Request, _ string) {
-			h.handleMigration(w, r, http.MethodPost, domain.AdminActionWrite, h.migrationPrepare)
-		},
-		"/migration/switch": func(w http.ResponseWriter, r *http.Request, _ string) {
-			h.handleMigration(w, r, http.MethodPost, domain.AdminActionWrite, h.migrationSwitch)
-		},
-		"/migration/status": func(w http.ResponseWriter, r *http.Request, _ string) {
-			h.handleMigration(w, r, http.MethodGet, domain.AdminActionRead, h.migrationStatus)
-		},
-		"/migration/resume": func(w http.ResponseWriter, r *http.Request, _ string) {
-			h.handleMigration(w, r, http.MethodPost, domain.AdminActionWrite, h.migrationResume)
-		},
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true

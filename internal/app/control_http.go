@@ -8,8 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,7 +35,7 @@ import (
 // newControlRoleServices constructs only control-owned services. In particular
 // it does not call createOutputAdapters or createStorage: container sockets,
 // registry storage, and public traffic listeners belong to other roles.
-func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger, configPath string, preflightProduction PreflightProductionDependencies) (_ *services, retErr error) {
+func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log zerowrap.Logger) (_ *services, retErr error) {
 	configSvc := configusecase.NewService(v, nil)
 	if err := configSvc.Load(ctx); err != nil {
 		return nil, fmt.Errorf("load control configuration: %w", err)
@@ -78,32 +76,6 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 	if err != nil {
 		return nil, fmt.Errorf("create migration edge applied-state receiver: %w", err)
 	}
-	// Control receives only the sanitized runtime RPC probe. It never opens a
-	// Docker-compatible socket or constructs a local runtime adapter.
-	runtimeProbe, _ := svc.runtimeCommandClient.(out.RuntimeEnvironmentProbe)
-	runtimeInventory, _ := svc.runtimeCommandClient.(out.RuntimeStateSubscriber)
-	preflight, err := preflightProduction.build(configPath, cfg, runtimeProbe, runtimeInventory)
-	if err != nil {
-		return nil, fmt.Errorf("create production migration preflight: %w", err)
-	}
-	svc.migrationSvc, err = NewMigrationService(preflight, checkpointStore, MigrationEnvOptions{
-		Config:         cfg,
-		Environment:    componentEnvironmentFromEnviron(os.Environ()),
-		Directory:      filepath.Join(resolveDataDir(cfg.Server.DataDir), "migration", "env"),
-		ExternalRoutes: v.Get("external_routes"),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create migration service: %w", err)
-	}
-	// A control-only deployment may start before its runtime role exists. Keep
-	// migration operations unavailable in that state; do not prevent the
-	// control snapshot service from starting. Once an authenticated runtime
-	// endpoint is configured, compose the migration lifecycle channel.
-	if svc.runtimeCommandClient != nil {
-		if err := wireControlMigrationRuntime(svc, preflight, checkpointStore, runtimeInventory, cfg.Runtime, cfg); err != nil {
-			return nil, err
-		}
-	}
 	svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
 		ConfigSvc:      svc.configSvc,
 		AuthSvc:        svc.authSvc,
@@ -116,16 +88,7 @@ func newControlRoleServices(ctx context.Context, v *viper.Viper, cfg Config, log
 		RuntimeControl: svc.runtimeControl,
 		NetworkSvc:     controlNetworkService{runtime: controlRuntimeStateSubscriber(svc.runtimeCommandClient)},
 		TrafficSvc:     nil,
-		MigrationPlan:  func(ctx context.Context) (any, error) { return svc.migrationSvc.Plan(ctx) },
-		MigrationPlanFailed: func(result any) bool {
-			report, ok := result.(MigrationPreflightReport)
-			return ok && !report.Ready
-		},
-		MigrationPrepare: func(ctx context.Context) (any, error) { return svc.migrationSvc.Prepare(ctx, MigrationCheckpoint{}) },
-		MigrationSwitch:  func(ctx context.Context) (any, error) { return svc.migrationSvc.Switch(ctx) },
-		MigrationStatus:  func(context.Context) (any, error) { return svc.migrationSvc.Status() },
-		MigrationResume:  func(ctx context.Context) (any, error) { return svc.migrationSvc.Resume(ctx) },
-		Log:              log,
+		Log:            log,
 	})
 	return svc, nil
 }
@@ -215,48 +178,6 @@ func controlHTTPHandler(svc *services, cfg Config, log zerowrap.Logger) http.Han
 	)(svc.adminHandler)
 	mux.Handle("/admin/", otelhttp.NewHandler(adminChain, "gordon.control.admin"))
 	return mux
-}
-
-// wireControlMigrationRuntime composes only authenticated runtime clients. A
-// missing endpoint or WS05 split deploy/drain checker leaves cutover disabled;
-// this function never falls back to a local Docker-compatible adapter/socket.
-func wireControlMigrationRuntime(svc *services, preflight *MigrationPreflight, checkpointStore *MigrationCheckpointStore, runtimeInventory out.RuntimeStateSubscriber, runtimeConfig RuntimeControlConfig, cfg Config) error {
-	updater, ok := svc.runtimeCommandClient.(out.RuntimeSelfUpdater)
-	if !ok {
-		return fmt.Errorf("runtime command client does not provide authenticated self-update lifecycle")
-	}
-	launcher, err := NewRuntimeComponentLauncherWithHandoff(updater, newRuntimeHandoffDialer(runtimeConfig))
-	if err != nil {
-		return fmt.Errorf("create runtime component launcher: %w", err)
-	}
-	orchestrator, err := NewMigrationOrchestrator(preflight, checkpointStore, launcher)
-	if err != nil {
-		return fmt.Errorf("create migration orchestrator: %w", err)
-	}
-	orchestrator.WithRuntimeSnapshotAppNetworks(runtimeInventory)
-	// Compose the switcher from authenticated role state rather than relying on
-	// an optional client type assertion. Missing readiness/probe capabilities
-	// remain explicit failed prerequisites and therefore cannot move traffic.
-	checks, checkErr := newMigrationTrafficChecks(updater, runtimeInventory, checkpointStore, svc.appliedStateTracker, cfg)
-	if checkErr != nil {
-		return fmt.Errorf("create migration traffic checks: %w", checkErr)
-	}
-	// Cutover follows the launcher authority after its authenticated runtime
-	// handoff; it must not be executed by the old control-plane client.
-	switcher, switchErr := NewTrafficSwitch(launcher, checks)
-	if switchErr != nil {
-		return fmt.Errorf("create migration traffic switch: %w", switchErr)
-	}
-	orchestrator.WithTrafficSwitcher(switcher)
-	svc.migrationSvc.WithMigrationOrchestrator(orchestrator).WithMigrationCandidateImage(os.Getenv("GORDON_MIGRATION_IMAGE"))
-	if owner, ok := svc.runtimeCommandClient.(interface{ AddOwnedCloser(io.Closer) error }); ok {
-		if err := owner.AddOwnedCloser(launcher); err != nil {
-			return fmt.Errorf("own runtime component launcher: %w", err)
-		}
-	}
-	// Injected clients without ownership support remain caller-owned and are
-	// deliberately not closed by application wiring.
-	return nil
 }
 
 func closeOwnedRuntimeCommandClient(client out.RuntimeCommandClient) error {

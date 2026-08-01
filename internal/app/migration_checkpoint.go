@@ -804,13 +804,6 @@ func canonicalUnixURL(parsed *url.URL) bool {
 		parsed.RawPath == "" && parsed.RawQuery == "" && !parsed.ForceQuery && parsed.Fragment == "" && parsed.RawFragment == ""
 }
 
-// bootstrapRuntimeEndpointsForMigration reconstructs the process-local bootstrap
-// transport from the configured host data root and migration identity.
-func bootstrapRuntimeEndpointsForMigration(dataDir, migrationID string) (RuntimeBootstrapEndpoints, error) {
-	componentEndpoint := (RuntimeBootstrapEndpoints{migrationID: migrationID}).componentEndpoint()
-	return newRuntimeBootstrapEndpoints(componentEndpoint, dataDir, migrationID)
-}
-
 // newRuntimeBootstrapEndpoints validates the durable component endpoint, then
 // reconstructs both endpoint views from the configured host data root and
 // migration identity. No endpoint text is retained in the process-local model.
@@ -872,4 +865,18 @@ func phaseRank(phase MigrationPhase) int {
 	default:
 		return -1
 	}
+}
+
+// validLoopbackProbeEndpoint rejects any probe target that is not a literal
+// loopback address, so a checkpointed endpoint can never point off-host.
+func validLoopbackProbeEndpoint(endpoint string) error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(endpoint))
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("invalid loopback probe endpoint")
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("probe endpoint must be a literal loopback address")
+	}
+	return nil
 }

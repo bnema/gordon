@@ -1,14 +1,11 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -18,51 +15,6 @@ type remoteControlPlane struct {
 
 func NewRemoteControlPlane(client *remote.Client) ControlPlane {
 	return &remoteControlPlane{client: client}
-}
-
-func (r *remoteControlPlane) MigrationPlan(ctx context.Context) (app.MigrationPreflightReport, error) {
-	body, err := r.client.MigrationPlan(ctx)
-	var result app.MigrationPreflightReport
-	if err != nil {
-		return result, err
-	}
-	return result, json.Unmarshal(body, &result)
-}
-func (r *remoteControlPlane) MigrationPrepare(ctx context.Context, checkpoint app.MigrationCheckpoint) (*app.MigrationCheckpoint, error) {
-	body, err := r.client.MigrationPrepare(ctx, checkpoint)
-	return decodeMigrationCheckpoint(body, err)
-}
-func (r *remoteControlPlane) MigrationSwitch(ctx context.Context) (*app.MigrationCheckpoint, error) {
-	body, err := r.client.MigrationSwitch(ctx)
-	return decodeMigrationCheckpoint(body, err)
-}
-func (r *remoteControlPlane) MigrationStatus(ctx context.Context) (*app.MigrationCheckpoint, error) {
-	body, err := r.client.MigrationStatus(ctx)
-	return decodeMigrationCheckpoint(body, err)
-}
-func (r *remoteControlPlane) MigrationResume(ctx context.Context) (*app.MigrationCheckpoint, error) {
-	body, err := r.client.MigrationResume(ctx)
-	return decodeMigrationCheckpoint(body, err)
-}
-
-// MigrationCleanup is deliberately unavailable over the Admin HTTP transport:
-// tearing down a prepared component generation requires the local runtime
-// authority, which a remote observer does not hold.
-func (r *remoteControlPlane) MigrationCleanup(context.Context) error {
-	return fmt.Errorf("migration is unavailable from this control plane")
-}
-func decodeMigrationCheckpoint(body []byte, err error) (*app.MigrationCheckpoint, error) {
-	if err != nil {
-		return nil, err
-	}
-	if bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
-		return nil, nil
-	}
-	var result app.MigrationCheckpoint
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
 }
 
 func (r *remoteControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {

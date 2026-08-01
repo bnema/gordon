@@ -32,11 +32,11 @@ Each split role has a fixed, distinct non-root UID/GID: runtime `21001:21001`, c
 - Edge forwards registry requests to the `gordon-registry` network alias, never `localhost` or `127.0.0.1`.
 - Generated edge manifests use `edge.tls.mode = "external"`. The external listener or upstream terminator owns public TLS during split migration.
 - Plaintext component gRPC is generated only for the private component network. Do not publish those listeners.
-- Runtime command transport is a Unix socket under Gordon's private migration state. It is authenticated and must not be replaced with an engine endpoint.
+- Runtime command transport is a Unix socket under Gordon's private component state. It is authenticated and must not be replaced with an engine endpoint.
 
 ## Role configuration
 
-`gordon migrate prepare` writes strict role manifests under the configured `server.data_dir` migration directory and private `0600` role environment files. The generated contracts include:
+Split bootstrap writes strict role manifests under the configured `server.data_dir` component directory and private `0600` role environment files. The generated contracts include:
 
 - control: private gRPC listener, runtime Unix endpoint, non-secret route/traffic inputs;
 - runtime: engine endpoint, private runtime listener, volume policy;
