@@ -90,7 +90,7 @@ func TestExactInspectedGenerationMountRequiresCanonicalGenerationVolume(t *testi
 			mutate(inspected)
 			expectedName, ok := inspectedGenerationVolumeName(inspected)
 			if !ok {
-				assert.False(t, ok)
+				assert.Empty(t, expectedName, "an unresolved generation volume must not yield a name")
 				return
 			}
 			_, ok = exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
