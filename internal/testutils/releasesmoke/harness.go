@@ -21,6 +21,7 @@ type Harness struct {
 	HostArch        string
 	DockerSocket    string
 	ControlUser     string
+	ControlUserns   string
 	dockerSocketErr error
 }
 
@@ -45,6 +46,7 @@ func NewHarness(distDir string) *Harness {
 		HostArch:        runtime.GOARCH,
 		DockerSocket:    socket,
 		ControlUser:     control.User,
+		ControlUserns:   fmt.Sprintf("keep-id:uid=%d,gid=%d", control.UID, control.GID),
 		dockerSocketErr: socketErr,
 	}
 }

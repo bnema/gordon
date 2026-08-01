@@ -367,7 +367,7 @@ func assertResourcesUninspectable(ctx context.Context, runner CommandRunner, con
 func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath, volume string) error {
 	doctorArgs := []string{
 		"run", "--rm", "--user", h.ControlUser,
-		"--userns", "keep-id:uid=21002,gid=21002",
+		"--userns", h.ControlUserns,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume + ":/var/lib/gordon/secrets",
 		"-v", configPath + ":/tmp/gordon.toml:ro",
@@ -382,7 +382,7 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 	owner := fmt.Sprintf("gordon-release-podman-owner-%d", os.Getpid())
 	ownerCmd := h.Podman.Command(ctx, "run", "--rm", "--name", owner,
 		"--user", h.ControlUser,
-		"--userns", "keep-id:uid=21002,gid=21002",
+		"--userns", h.ControlUserns,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets",
 		"-v", configPath+":/tmp/gordon.toml:ro",
@@ -402,7 +402,7 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 
 	doctorConflict := h.Podman.Command(ctx, "run", "--rm",
 		"--user", h.ControlUser,
-		"--userns", "keep-id:uid=21002,gid=21002",
+		"--userns", h.ControlUserns,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets",
 		"-v", configPath+":/tmp/gordon.toml:ro",
@@ -424,7 +424,7 @@ func (h *Harness) podmanManagedPassLease(ctx context.Context, image, configPath,
 	}
 	if err := runQuiet(ctx, h.Podman, "run", "--rm",
 		"--user", h.ControlUser,
-		"--userns", "keep-id:uid=21002,gid=21002",
+		"--userns", h.ControlUserns,
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"-v", volume+":/var/lib/gordon/secrets:ro",
 		"--entrypoint", "sh", image, "-ec", ManagedPassArtifactShellCheck); err != nil {
