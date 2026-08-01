@@ -776,7 +776,7 @@ func sanitizedAliases(values []string) []string {
 	aliases := make([]string, 0, len(values))
 	for _, value := range values {
 		trimmed := strings.TrimSpace(value)
-		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" || strings.ContainsAny(trimmed, `/\\`) || looksLikeRuntimeEngineID(trimmed) {
+		if trimmed == "" || strings.EqualFold(trimmed, "localhost") || strings.HasPrefix(trimmed, "127.") || trimmed == "::1" || strings.ContainsAny(trimmed, `/\`) || looksLikeRuntimeEngineID(trimmed) {
 			continue
 		}
 		aliases = append(aliases, trimmed)
