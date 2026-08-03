@@ -90,8 +90,10 @@ type Service struct {
 	logWriter        out.ContainerLogWriter
 	cacheInvalidator out.ProxyCacheInvalidator
 	drainWaiter      out.ProxyDrainWaiter
+	drainDelayWait   func(context.Context, time.Duration)
 	config           Config
 	configProvider   AttachmentConfigProvider // live config reads for attachments/networks (may be nil)
+	runtimePolicy    RuntimePolicy
 	metrics          *telemetry.Metrics
 	containers       map[string]*domain.Container
 	attachments      map[string][]string // ownerDomain → []containerIDs
@@ -160,8 +162,10 @@ func NewService(
 		envLoader:      envLoader,
 		eventBus:       eventBus,
 		logWriter:      logWriter,
+		drainDelayWait: waitDrainDelay,
 		config:         config,
 		configProvider: configProvider,
+		runtimePolicy:  NewRuntimePolicy(RuntimePolicyModeObserve),
 		containers:     make(map[string]*domain.Container),
 		attachments:    make(map[string][]string),
 	}
@@ -170,6 +174,36 @@ func NewService(
 // SetMetrics sets the telemetry metrics for the container service.
 func (s *Service) SetMetrics(m *telemetry.Metrics) {
 	s.metrics = m
+}
+
+// SetRuntimePolicy sets the pre-create runtime policy mode for this service.
+func (s *Service) SetRuntimePolicy(policy RuntimePolicy) {
+	s.mu.Lock()
+	s.runtimePolicy = policy.normalize()
+	s.mu.Unlock()
+}
+
+func (s *Service) checkRuntimeContainerPolicy(routeDomain string, config *domain.ContainerConfig) error {
+	if config == nil {
+		return nil
+	}
+	s.mu.RLock()
+	policy := s.runtimePolicy
+	s.mu.RUnlock()
+	policy = policy.normalize()
+	err := policy.CheckContainerConfig(runtimePolicyIdentity(routeDomain), routeDomain, *config)
+	if err != nil && policy.Enforced() {
+		return err
+	}
+	return nil
+}
+
+func runtimePolicyIdentity(routeDomain string) domain.RuntimeCommandIdentity {
+	trimmed := strings.TrimSpace(routeDomain)
+	if trimmed == "" {
+		trimmed = "unknown"
+	}
+	return domain.RuntimeCommandIdentity{ID: domain.RuntimeCommandID("container-create:" + trimmed), IdempotencyKey: "container-create:" + trimmed, Generation: 1, SourceComponentID: "container-service"}
 }
 
 // SetProxyCacheInvalidator sets the proxy cache invalidator for synchronous
@@ -283,6 +317,7 @@ func (s *Service) buildContainerConfig(in containerConfigInput) *domain.Containe
 		Volumes:       in.Volumes,
 		NetworkMode:   in.NetworkName,
 		Hostname:      in.Domain,
+		Aliases:       routeTargetAliases(in.Domain),
 		Labels:        labels,
 		AutoRemove:    false,
 		RestartPolicy: domain.RestartPolicyAlways,
@@ -357,21 +392,16 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		return nil, err
 	}
 
-	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
-
-	// Post-switch stabilization: verify new container stays running
-	if hasExisting {
-		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
-		if stabilizeErr != nil {
-			// Both old and new containers are dead; assign to named return so
-			// the deferred recordDeployMetrics and span see the failure.
-			err = stabilizeErr
-			return nil, err
-		}
-		if !stable {
-			// Rollback performed — old container is restored
-			return existing, nil
-		}
+	invalidated, stable, preparedDrain, stabilizeErr := s.activateAndStabilizeNewContainer(ctx, route.Domain, newContainer, existing, hasExisting)
+	if stabilizeErr != nil {
+		// Both old and new containers are dead; assign to named return so
+		// the deferred recordDeployMetrics and span see the failure.
+		err = stabilizeErr
+		return nil, err
+	}
+	if !stable {
+		// Rollback performed — old container is restored.
+		return existing, nil
 	}
 
 	// Finalize old container in the background — the new container is already
@@ -381,7 +411,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	s.cleanupWg.Add(1)
 	go func() {
 		defer s.cleanupWg.Done()
-		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, existing, hasExisting, invalidated, preparedDrain, newContainer.ID)
 	}()
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
@@ -641,6 +671,10 @@ func (s *Service) createStartedContainer(ctx context.Context, route domain.Route
 		Existing:     existing,
 	})
 
+	if err := s.checkRuntimeContainerPolicy(route.Domain, containerConfig); err != nil {
+		return nil, err
+	}
+
 	newContainer, err := s.runtime.CreateContainer(ctx, containerConfig)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to create container")
@@ -875,13 +909,18 @@ func (s *Service) activateDeployedContainer(ctx context.Context, domainName stri
 
 	s.mu.RLock()
 	inv := s.cacheInvalidator
+	waiter := s.drainWaiter
+	cfg := s.config
 	s.mu.RUnlock()
 	if inv != nil {
 		inv.InvalidateTarget(ctx, domainName)
 		return true
 	}
 
-	return false
+	// Split runtime has no local edge cache to invalidate. Its prepared remote
+	// waiter pins the old opaque target while the polling state publisher sends
+	// the replacement to control/edge, so it is the traffic-switch boundary.
+	return usesRuntimeRemoteDrainWaiter(waiter, cfg)
 }
 
 // stabilizeNewContainer monitors the new container briefly after traffic switch.
@@ -963,16 +1002,141 @@ func (s *Service) stabilizeNewContainer(ctx context.Context, domainName string, 
 	return true, nil
 }
 
-func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, newContainerID string) {
+func (s *Service) finalizePreviousContainer(ctx context.Context, domainName string, existing *domain.Container, hasExisting, invalidated bool, prepared *preparedDrain, newContainerID string) {
 	if !hasExisting {
 		return
 	}
+	if prepared != nil {
+		defer prepared.cancel(existing.ID)
+	}
 
 	if invalidated {
-		s.waitForDrain(ctx, existing.ID)
+		if prepared != nil {
+			prepared.wait(ctx, existing.ID)
+		} else {
+			s.waitForDrain(ctx, existing.ID)
+		}
 	}
 
 	s.cleanupOldContainer(ctx, existing, newContainerID, domainName)
+}
+
+// activateAndStabilizeNewContainer pins an old target before invalidation can
+// direct requests to its replacement. It releases that pin when the handoff
+// does not reach the background drain wait (failed invalidation or rollback).
+func (s *Service) activateAndStabilizeNewContainer(ctx context.Context, domainName string, newContainer, existing *domain.Container, hasExisting bool) (bool, bool, *preparedDrain, error) {
+	var prepared *preparedDrain
+	if hasExisting {
+		prepared = s.prepareDrain(existing.ID)
+	}
+	invalidated := s.activateDeployedContainer(ctx, domainName, newContainer)
+	if prepared != nil && !invalidated {
+		prepared.cancel(existing.ID)
+	}
+	if !hasExisting {
+		return invalidated, true, nil, nil
+	}
+	stable, err := s.stabilizeNewContainer(ctx, domainName, newContainer, existing)
+	if err != nil || !stable {
+		prepared.cancel(existing.ID)
+	}
+	return invalidated, stable, prepared, err
+}
+
+// preparedDrain owns a pin acquired before cache invalidation. It retains the
+// exact waiter, fallback timer, and timeout used to prepare it so a config
+// reload cannot switch its eventual release to an unrelated delay path.
+type preparedDrain struct {
+	waiter        out.ProxyDrainWaiter
+	timeout       time.Duration
+	fallbackDelay time.Duration
+	delayWait     func(context.Context, time.Duration)
+	registered    bool
+	once          sync.Once
+}
+
+func (d *preparedDrain) cancel(oldContainerID string) {
+	if d == nil || !d.registered {
+		return
+	}
+	d.once.Do(func() {
+		d.waiter.CancelDrain(oldContainerID)
+	})
+}
+
+func (d *preparedDrain) wait(ctx context.Context, oldContainerID string) {
+	if d == nil {
+		return
+	}
+	d.once.Do(func() {
+		if !d.registered {
+			d.waitForFallbackDelay(ctx)
+			return
+		}
+		timeout := d.timeout
+		if timeout == 0 {
+			timeout = 30 * time.Second
+		}
+		if !d.waiter.WaitForNoInFlight(ctx, oldContainerID, timeout) {
+			log := zerowrap.FromCtx(ctx)
+			log.Warn().
+				Str("old_container_id", oldContainerID).
+				Dur("drain_timeout", timeout).
+				Msg("drain wait did not complete; applying drain-delay fallback")
+			d.waitForFallbackDelay(ctx)
+		}
+	})
+}
+
+func (d *preparedDrain) waitForFallbackDelay(ctx context.Context) {
+	wait := d.delayWait
+	if wait == nil {
+		wait = waitDrainDelay
+	}
+	wait(ctx, d.fallbackDelay)
+}
+
+// prepareDrain pins the old target only when this deployment will actually
+// use the in-flight waiter. The pin must be acquired before cache invalidation
+// so snapshot refreshes cannot prune the old target during the handoff.
+func (s *Service) prepareDrain(oldContainerID string) *preparedDrain {
+	s.mu.RLock()
+	cfg := s.config
+	waiter := s.drainWaiter
+	invalidator := s.cacheInvalidator
+	delayWait := s.drainDelayWait
+	s.mu.RUnlock()
+	mode := cfg.DrainMode
+	if mode == "" {
+		mode = "delay"
+	}
+	if waiter == nil || (mode != "inflight" && mode != "auto") {
+		return nil
+	}
+	// A monolith waiter requires a local cache invalidation. The split runtime
+	// waiter instead waits for the remotely observed snapshot handoff.
+	if invalidator == nil && !usesRuntimeRemoteDrainWaiter(waiter, cfg) {
+		return nil
+	}
+	return &preparedDrain{
+		waiter:        waiter,
+		timeout:       cfg.DrainTimeout,
+		fallbackDelay: configuredDrainDelay(cfg),
+		delayWait:     delayWait,
+		registered:    waiter.PrepareDrain(oldContainerID),
+	}
+}
+
+func usesRuntimeRemoteDrainWaiter(waiter out.ProxyDrainWaiter, cfg Config) bool {
+	mode := cfg.DrainMode
+	if mode == "" {
+		mode = "delay"
+	}
+	if mode != "inflight" && mode != "auto" {
+		return false
+	}
+	_, ok := waiter.(runtimeRemoteDrainWaiter)
+	return ok
 }
 
 func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
@@ -1004,15 +1168,32 @@ func (s *Service) waitForDrain(ctx context.Context, oldContainerID string) {
 		return
 	}
 
-	drainDelay := 2 * time.Second
-	if cfg.DrainDelayConfigured {
-		drainDelay = cfg.DrainDelay
+	s.waitForConfiguredDrainDelay(ctx, configuredDrainDelay(cfg))
+}
+
+func (s *Service) waitForConfiguredDrainDelay(ctx context.Context, delay time.Duration) {
+	s.mu.RLock()
+	wait := s.drainDelayWait
+	s.mu.RUnlock()
+	if wait == nil {
+		wait = waitDrainDelay
 	}
-	if drainDelay <= 0 {
+	wait(ctx, delay)
+}
+
+func configuredDrainDelay(cfg Config) time.Duration {
+	if cfg.DrainDelayConfigured {
+		return cfg.DrainDelay
+	}
+	return 2 * time.Second
+}
+
+func waitDrainDelay(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
 		return
 	}
 	select {
-	case <-time.After(drainDelay):
+	case <-time.After(delay):
 	case <-ctx.Done():
 	}
 }
@@ -1490,6 +1671,42 @@ func (s *Service) List(_ context.Context) map[string]*domain.Container {
 	result := make(map[string]*domain.Container, len(s.containers))
 	maps.Copy(result, s.containers)
 	return result
+}
+
+// freshRuntimeContainerInventory is the RuntimeWorker-only authoritative
+// actual-state source. Runtime IDs are map keys strictly within this package;
+// snapshot builders convert them to aliases before crossing a component boundary.
+func (s *Service) freshRuntimeContainerInventory(ctx context.Context) (map[string]*domain.Container, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("list all runtime containers: %w", err)
+	}
+	inventory := make(map[string]*domain.Container, len(containers))
+	for _, container := range containers {
+		if container == nil || container.ID == "" {
+			continue
+		}
+		inventory[container.ID] = container
+	}
+	return inventory, nil
+}
+
+// RuntimeDrainRouteState resolves a private lifecycle ID to the same sanitized
+// managed route state emitted by RuntimeWorker snapshots. The caller derives an
+// opaque TargetKey locally; no backing identity is sent to the edge protocol.
+func (s *Service) RuntimeDrainRouteState(containerID string) (domain.RuntimeRouteState, bool) {
+	if containerID == "" {
+		return domain.RuntimeRouteState{}, false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for routeDomain, candidate := range s.containers {
+		if candidate == nil || candidate.ID != containerID {
+			continue
+		}
+		return runtimeReadyRouteState(1, routeDomain, candidate)
+	}
+	return domain.RuntimeRouteState{}, false
 }
 
 // ListRoutesWithDetails returns routes with network and attachment info.
@@ -2925,6 +3142,10 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 
 	config, err := s.buildAttachmentContainerConfig(ctx, ownerDomain, serviceName, serviceImage, containerName, networkName)
 	if err != nil {
+		return err
+	}
+
+	if err := s.checkRuntimeContainerPolicy(ownerDomain, config); err != nil {
 		return err
 	}
 

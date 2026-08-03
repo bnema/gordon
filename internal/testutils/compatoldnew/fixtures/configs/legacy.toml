@@ -1,0 +1,19 @@
+[server]
+port = 8080
+registry_domain = "registry.test"
+registry_port = 5000
+legacy_registry_domains = ["old-registry.test:5000"]
+
+[registry_auth]
+enabled = false
+
+[auto_route]
+enabled = true
+
+[routes]
+"legacy-app.test" = "registry.test/legacy-app:latest"
+
+[volumes]
+auto_create = true
+prefix = "legacy"
+preserve = true

@@ -1,0 +1,44 @@
+[server]
+port = 8080
+gordon_domain = "gordon.test"
+registry_port = 5000
+
+[auth]
+enabled = false
+secrets_backend = "unsafe"
+
+[auto_route]
+enabled = true
+
+[auto]
+allowed_domains = ["*.apps.test", "preview.test"]
+
+[auto.preview]
+enabled = true
+ttl = "24h"
+separator = "--"
+tag_patterns = ["pr-*", "preview-*"]
+data_copy = false
+env_copy = true
+
+[network_isolation]
+enabled = true
+network_prefix = "gordon"
+
+[volumes]
+auto_create = true
+prefix = "gordon"
+preserve = true
+
+[routes]
+"app.apps.test" = { image = "gordon.test/app:stable", https = true }
+"api.apps.test" = { image = "gordon.test/api:v1", https = true }
+
+[external_routes]
+"docs.apps.test" = "127.0.0.1:9000"
+
+[network_groups]
+frontend = ["app.apps.test", "api.apps.test"]
+
+[attachments]
+"app.apps.test" = ["shared-cache"]

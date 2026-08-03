@@ -1,6 +1,6 @@
 # Network Isolation
 
-Isolate applications in separate Docker networks for enhanced security.
+Isolate applications in separate Docker/Podman networks for enhanced security. Runtime owns network creation and attachment; split edge joins only the app networks required for current routes.
 
 ## Configuration
 
@@ -27,11 +27,11 @@ enabled = false
 |--------|------|---------|-------------|
 | `enabled` | bool | `true` | Enable per-app network isolation (changed from `false`) |
 | `network_prefix` | string | `"gordon"` | Prefix for created networks |
-| `internal` | bool | `false` | Create isolated Docker networks with Docker's `Internal` flag, blocking direct external egress from containers on those networks. Default remains `false` for compatibility. |
+| `internal` | bool | `false` | Create engine-internal networks, blocking direct external egress from containers. Default remains `false` for compatibility. |
 
 ## How It Works
 
-When network isolation is enabled, each application gets its own Docker network:
+When network isolation is enabled, each application gets its own runtime network:
 
 ```
 [network_isolation]

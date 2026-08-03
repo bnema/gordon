@@ -4,6 +4,7 @@ package tokenstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -24,6 +25,8 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // Allows alphanumeric characters, forward slashes, underscores, dots, hyphens, and @.
 // This prevents path traversal (../) and command injection attacks.
 var subjectRegex = regexp.MustCompile(`^[a-zA-Z0-9/_.@-]+$`)
+
+var errPassEntryNotFound = errors.New("pass entry not found")
 
 const (
 	// passTokenPath is the base path for tokens in pass.
@@ -70,6 +73,8 @@ type PassStore struct {
 	tokenCache  map[string]*cachedToken // keyed by subject
 	revokedList []string                // cached revocation list
 	revokedSet  map[string]struct{}     // for O(1) lookup
+
+	componentMu sync.Mutex
 }
 
 // NewPassStore creates a new pass-based token store.
@@ -509,13 +514,36 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	return nil
 }
 
+// isPassEntryNotFound recognizes only pass's documented missing-entry failure.
+// Other command failures, including a locked or unavailable password store, must
+// remain errors rather than being treated as an absent entry.
+func isPassEntryNotFound(err error) bool {
+	return errors.Is(err, errPassEntryNotFound)
+}
+
+func classifyPassEntryNotFound(err error) error {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err
+	}
+
+	// pass emits this exact stderr message when the requested entry or directory
+	// does not exist. Restrict the classifier to that command failure; never turn
+	// arbitrary pass errors into a successful missing lookup.
+	stderr := strings.TrimSpace(string(exitErr.Stderr))
+	if strings.HasPrefix(stderr, "Error: ") && strings.HasSuffix(stderr, " is not in the password store.") {
+		return fmt.Errorf("%w: %w", errPassEntryNotFound, err)
+	}
+	return err
+}
+
 // passInsert inserts a value into pass.
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
 	cmd.Stdin = strings.NewReader(value)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pass insert failed: %s: %w", string(output), err)
+	if _, err := cmd.CombinedOutput(); err != nil {
+		// Do not return pass output: it can be influenced by the stored value.
+		return fmt.Errorf("pass insert failed: %w", err)
 	}
 	return nil
 }
@@ -525,9 +553,19 @@ func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
 	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("pass show failed: %w", err)
+		return "", fmt.Errorf("pass show failed: %w", classifyPassEntryNotFound(err))
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+// passList retrieves the tree listing below a pass path.
+func (s *PassStore) passList(ctx context.Context, path string) (string, error) {
+	cmd := exec.CommandContext(ctx, "pass", "ls", path) //nolint:gosec // The pass path is fixed by callers.
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("pass list failed: %w", classifyPassEntryNotFound(err))
+	}
+	return string(output), nil
 }
 
 // getRevokedList retrieves the current revocation list.

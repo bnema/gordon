@@ -1,6 +1,21 @@
 # Environment Variables Reference
 
-How Gordon handles environment variables for containers.
+How Gordon handles workload and component environment variables.
+
+## Process and component environment
+
+`GORDON_ROLE` selects `monolith`, `control`, `runtime`, `edge`, or `registry`; `gordon serve --role` is the equivalent CLI flag. Source config overrides with the `GORDON_` prefix are control-owned. During migration Gordon writes private `0600` role files and minimizes values by role:
+
+- runtime only: `DOCKER_HOST`, `PODMAN_HOST`, `CONTAINER_HOST`, S3 backup credentials;
+- control only: pass/SOPS provider settings and general config overrides;
+- edge only: Cloudflare DNS credential when configured;
+- all roles: optional telemetry headers when telemetry is enabled.
+
+Generated scoped names include `GORDON_COMPONENT_RUNTIME_TOKEN` (control/runtime), `GORDON_COMPONENT_EDGE_TOKEN` (edge), `GORDON_COMPONENT_REGISTRY_TOKEN` (registry), `GORDON_REGISTRY_FORWARD_TOKEN` (edge/registry), and a prepare-only migration probe token. Operators should configure `[runtime] token_env = "GORDON_RUNTIME_HANDOFF_TOKEN"`; generated names are internal contracts, not values to hand-author or share.
+
+`GORDON_MIGRATION_IMAGE` selects the candidate image for migration and is not propagated to roles. Missing required names are reported without values.
+
+## Workload environment
 
 ## Variable Sources
 

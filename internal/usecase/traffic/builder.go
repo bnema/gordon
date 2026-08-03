@@ -24,6 +24,89 @@ type Input struct {
 	Services        []domain.StandaloneService
 }
 
+// EdgeInput is the complete, sanitized input for a graph consumed by a split
+// edge. HTTP domains come only from RouteSnapshot; external targets are passed
+// separately so control can pin the snapshot to its canonical external routing
+// contract without exposing raw configuration to an edge.
+type EdgeInput struct {
+	EntryPoints          map[string]EntryPointConfig
+	Traffic              Config
+	RouteSnapshot        domain.RouteTargetSnapshot
+	ExternalRouteTargets []domain.RouteTargetEntry
+	NetworkServices      []NetworkServiceConfig
+	Services             []domain.StandaloneService
+}
+
+// BuildEdgeGraph constructs the split-edge graph from a sanitized route
+// snapshot. It intentionally leaves HTTP service backends empty: the edge
+// proxy resolves them exclusively from the route snapshot stream. L4 backends
+// remain control-configured but are validated for split reachability before a
+// graph can be published.
+func BuildEdgeGraph(input EdgeInput) (domain.TrafficGraph, error) {
+	if err := input.RouteSnapshot.ValidateSplitReachability(); err != nil {
+		return domain.TrafficGraph{}, fmt.Errorf("validate route snapshot: %w", err)
+	}
+	if err := validateExternalRouteTargets(input.RouteSnapshot, input.ExternalRouteTargets); err != nil {
+		return domain.TrafficGraph{}, err
+	}
+	routes := make([]domain.Route, 0, len(input.RouteSnapshot.Entries))
+	// A control-only deployment may not own any listeners. It still publishes a
+	// valid empty graph so route streaming remains backward compatible; when an
+	// edge entrypoint is configured every route domain comes from the snapshot.
+	if len(input.EntryPoints) != 0 {
+		for _, entry := range input.RouteSnapshot.Entries {
+			routes = append(routes, domain.Route{Domain: entry.CanonicalDomain})
+		}
+	}
+	graph, err := Build(Input{
+		EntryPoints:     input.EntryPoints,
+		Traffic:         input.Traffic,
+		Routes:          routes,
+		NetworkServices: input.NetworkServices,
+		Services:        input.Services,
+	})
+	if err != nil {
+		return domain.TrafficGraph{}, err
+	}
+	if err := (domain.TrafficGraphSnapshot{Generation: 1, Graph: graph}).ValidateSplitReachability(); err != nil {
+		return domain.TrafficGraph{}, fmt.Errorf("validate split traffic graph: %w", err)
+	}
+	return graph, nil
+}
+
+// BuildEdge is retained as the concise name for callers that do not need to
+// distinguish the graph builder from the graph value.
+func BuildEdge(input EdgeInput) (domain.TrafficGraph, error) { return BuildEdgeGraph(input) }
+
+func validateExternalRouteTargets(snapshot domain.RouteTargetSnapshot, targets []domain.RouteTargetEntry) error {
+	configured := make(map[string]domain.RouteTargetEntry, len(targets))
+	for index, target := range targets {
+		if err := target.ValidateSplitReachability(); err != nil {
+			return fmt.Errorf("external route target %d: %w", index, err)
+		}
+		if target.UpstreamHost == "" || target.Attachment != domain.RouteTargetAttachmentNotRequired {
+			return fmt.Errorf("external route target %q is not an external target", target.CanonicalDomain)
+		}
+		if _, exists := configured[target.CanonicalDomain]; exists {
+			return fmt.Errorf("duplicate external route target %q", target.CanonicalDomain)
+		}
+		configured[target.CanonicalDomain] = target
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.UpstreamHost == "" {
+			continue
+		}
+		target, ok := configured[entry.CanonicalDomain]
+		if !ok {
+			return fmt.Errorf("external route %q is not pinned by control", entry.CanonicalDomain)
+		}
+		if target.TargetHost != entry.TargetHost || target.TargetPort != entry.TargetPort || target.UpstreamHost != entry.UpstreamHost || target.Scheme != entry.Scheme || target.Protocol != entry.Protocol {
+			return fmt.Errorf("external route %q does not match pinned control target", entry.CanonicalDomain)
+		}
+	}
+	return nil
+}
+
 type EntryPointConfig struct {
 	Address                 string                    `mapstructure:"address"`
 	Protocol                domain.EntryPointProtocol `mapstructure:"protocol"`

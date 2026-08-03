@@ -23,7 +23,7 @@ const backupExecTimeout = 30 * time.Minute
 
 // Service orchestrates backup operations.
 type Service struct {
-	runtime      out.ContainerRuntime
+	runtime      out.BackupDatabaseRuntime
 	storage      out.BackupStorage
 	containerSvc in.ContainerService
 	config       domain.BackupConfig
@@ -32,7 +32,7 @@ type Service struct {
 
 // NewService creates a backup service.
 func NewService(
-	runtime out.ContainerRuntime,
+	runtime out.BackupDatabaseRuntime,
 	storage out.BackupStorage,
 	containerSvc in.ContainerService,
 	config domain.BackupConfig,

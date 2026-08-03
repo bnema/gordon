@@ -30,3 +30,13 @@ regexes = [
   '''short-lived-123''',
   '''YXBpLnN1Yi5leGFtcGxlLmNvbQ\.env''',
 ]
+
+# EC256 is a public ACME key-type enum, not credential material. This exception
+# is restricted to the one generic-api-key false positive and its exact line.
+[[allowlists]]
+targetRules = ["generic-api-key"]
+description = "Allow ACME public key-type enum false positive"
+condition = "AND"
+regexTarget = "line"
+paths = ['''internal/adapters/out/acmelego/issuer\.go$''']
+regexes = ['''legoCfg\.Certificate\.KeyType = certcrypto\.EC256 // ECDSA P-256''']

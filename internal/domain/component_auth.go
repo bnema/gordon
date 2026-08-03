@@ -1,0 +1,177 @@
+package domain
+
+import (
+	"slices"
+	"time"
+)
+
+// ComponentRole identifies a Gordon component class that can authenticate to the control plane.
+type ComponentRole string
+
+const (
+	ComponentRoleControl  ComponentRole = "control"
+	ComponentRoleRuntime  ComponentRole = "runtime"
+	ComponentRoleEdge     ComponentRole = "edge"
+	ComponentRoleRegistry ComponentRole = "registry"
+)
+
+// ComponentScope identifies a component RPC permission.
+type ComponentScope string
+
+const (
+	ComponentScopeRoutesWatch          ComponentScope = "routes:watch"
+	ComponentScopeTrafficWatch         ComponentScope = "traffic:watch"
+	ComponentScopeEdgeDrain            ComponentScope = "edge:drain"
+	ComponentScopeEdgeAppliedState     ComponentScope = "edge:applied-state"
+	ComponentScopeRuntimeDeploy        ComponentScope = "runtime:deploy"
+	ComponentScopeRuntimeReconcile     ComponentScope = "runtime:reconcile"
+	ComponentScopeRuntimeLogs          ComponentScope = "runtime:logs"
+	ComponentScopeRuntimeStatus        ComponentScope = "runtime:status"
+	ComponentScopeRuntimeStatePublish  ComponentScope = "runtime:state:publish"
+	ComponentScopeRuntimeEventPublish  ComponentScope = "runtime:event:publish"
+	ComponentScopeRuntimeSelfUpdate    ComponentScope = "runtime:selfupdate"
+	ComponentScopeRuntimeDrainAck      ComponentScope = "runtime:drain:ack"
+	ComponentScopeRegistryEventPublish ComponentScope = "registry:event:publish"
+	ComponentScopeRegistryStatus       ComponentScope = "registry:status"
+	ComponentScopeRegistryInspect      ComponentScope = "registry:inspect"
+	ComponentScopeControlEventPublish  ComponentScope = "control:event:publish"
+	ComponentScopeEventsWatch          ComponentScope = "events:watch"
+	// ComponentScopeAnyEventPublish is an interceptor-only sentinel. It accepts
+	// one of the role-specific publishing scopes and is never grantable itself.
+	ComponentScopeAnyEventPublish ComponentScope = "events:any:publish"
+)
+
+// ComponentRoleEventPublisher is an interceptor-only role selector for RPCs
+// whose authenticated origin may be registry, runtime, edge, or control.
+const ComponentRoleEventPublisher ComponentRole = "event-publisher"
+
+// AllComponentScopes returns every recognized component scope in stable order.
+func AllComponentScopes() []ComponentScope {
+	return []ComponentScope{
+		ComponentScopeRoutesWatch,
+		ComponentScopeTrafficWatch,
+		ComponentScopeEdgeDrain,
+		ComponentScopeEdgeAppliedState,
+		ComponentScopeRuntimeDeploy,
+		ComponentScopeRuntimeReconcile,
+		ComponentScopeRuntimeLogs,
+		ComponentScopeRuntimeStatus,
+		ComponentScopeRuntimeStatePublish,
+		ComponentScopeRuntimeEventPublish,
+		ComponentScopeRuntimeSelfUpdate,
+		ComponentScopeRuntimeDrainAck,
+		ComponentScopeRegistryEventPublish,
+		ComponentScopeRegistryStatus,
+		ComponentScopeRegistryInspect,
+		ComponentScopeControlEventPublish,
+		ComponentScopeEventsWatch,
+	}
+}
+
+// IsKnownComponentRole reports whether role is a recognized Gordon component role.
+func IsKnownComponentRole(role ComponentRole) bool {
+	return len(DefaultComponentScopesForRole(role)) > 0
+}
+
+// IsKnownComponentScope reports whether scope is a recognized component RPC permission.
+func IsKnownComponentScope(scope ComponentScope) bool {
+	return slices.Contains(AllComponentScopes(), scope)
+}
+
+// ComponentRoleAllowsScope reports whether scope may be granted to role.
+func ComponentRoleAllowsScope(role ComponentRole, scope ComponentScope) bool {
+	return slices.Contains(DefaultComponentScopesForRole(role), scope)
+}
+
+// DefaultComponentScopesForRole returns the default permissions for a component role.
+func DefaultComponentScopesForRole(role ComponentRole) []ComponentScope {
+	switch role {
+	case ComponentRoleControl:
+		return []ComponentScope{
+			ComponentScopeRuntimeDeploy,
+			ComponentScopeRuntimeReconcile,
+			ComponentScopeRuntimeLogs,
+			ComponentScopeRuntimeStatus,
+			ComponentScopeRuntimeSelfUpdate,
+			ComponentScopeRuntimeDrainAck,
+			ComponentScopeRegistryInspect,
+			ComponentScopeControlEventPublish,
+			ComponentScopeEventsWatch,
+		}
+	case ComponentRoleRuntime:
+		return []ComponentScope{
+			ComponentScopeRuntimeStatePublish,
+			ComponentScopeRuntimeEventPublish,
+		}
+	case ComponentRoleEdge:
+		return []ComponentScope{
+			ComponentScopeRoutesWatch,
+			ComponentScopeTrafficWatch,
+			ComponentScopeEdgeDrain,
+			ComponentScopeEdgeAppliedState,
+		}
+	case ComponentRoleRegistry:
+		return []ComponentScope{
+			ComponentScopeRegistryEventPublish,
+			ComponentScopeRegistryStatus,
+		}
+	default:
+		return nil
+	}
+}
+
+// ComponentTokenRecord is the persisted component token secret and metadata.
+// TokenHash stores a hash of the token; plaintext tokens must never be persisted.
+type ComponentTokenRecord struct {
+	KeyID      string
+	Prefix     string
+	Name       string
+	Role       ComponentRole
+	Scopes     []ComponentScope
+	TokenHash  string
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	RevokedAt  time.Time
+	LastUsedAt time.Time
+}
+
+// ComponentTokenMetadata is safe-to-list token metadata without token material.
+type ComponentTokenMetadata struct {
+	KeyID      string
+	Prefix     string
+	Name       string
+	Role       ComponentRole
+	Scopes     []ComponentScope
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	RevokedAt  time.Time
+	LastUsedAt time.Time
+}
+
+// Metadata returns the non-secret representation of a component token record.
+func (r ComponentTokenRecord) Metadata() ComponentTokenMetadata {
+	return ComponentTokenMetadata{
+		KeyID:      r.KeyID,
+		Prefix:     r.Prefix,
+		Name:       r.Name,
+		Role:       r.Role,
+		Scopes:     append([]ComponentScope(nil), r.Scopes...),
+		CreatedAt:  r.CreatedAt,
+		ExpiresAt:  r.ExpiresAt,
+		RevokedAt:  r.RevokedAt,
+		LastUsedAt: r.LastUsedAt,
+	}
+}
+
+// ComponentIdentity is returned after successful component token validation.
+type ComponentIdentity struct {
+	KeyID  string
+	Name   string
+	Role   ComponentRole
+	Scopes []ComponentScope
+}
+
+// ComponentScopesContain reports whether scopes includes required.
+func ComponentScopesContain(scopes []ComponentScope, required ComponentScope) bool {
+	return slices.Contains(scopes, required)
+}

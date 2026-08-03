@@ -17,6 +17,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -181,6 +183,74 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 	require.NoError(t, manager.Shutdown(ctx))
 	assert.Less(t, time.Since(started), 250*time.Millisecond)
 	_ = conn.Close()
+}
+
+func TestApplyWithServersRollsBackHandlersAndCandidateListenersOnBindFailure(t *testing.T) {
+	oldGraph := tlsGraph(t, freeTCPAddress(t), nil)
+	manager := NewManager()
+	oldServers := ServerConfigBundle{TLSHTTP: map[string]TLSHTTPServerConfig{
+		"websecure": {Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("old")) }), TLSConfig: testTLSConfig(t, "app.example.com")},
+	}}
+	require.NoError(t, manager.ApplyWithServers(context.Background(), &oldGraph, oldServers))
+	defer shutdownManager(t, manager)
+	assertHTTPSBody(t, oldGraph.EntryPoints[0].Address, "app.example.com", "old")
+
+	candidateAddress := freeTCPAddress(t)
+	blocked, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer blocked.Close()
+	candidate := oldGraph
+	candidate.EntryPoints = append(candidate.EntryPoints,
+		domain.EntryPoint{Name: "candidate", Address: candidateAddress, Protocol: domain.EntryPointProtocolTCP},
+		domain.EntryPoint{Name: "blocked", Address: blocked.Addr().String(), Protocol: domain.EntryPointProtocolTCP},
+	)
+	newServers := ServerConfigBundle{TLSHTTP: map[string]TLSHTTPServerConfig{
+		"websecure": {Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("new")) }), TLSConfig: testTLSConfig(t, "app.example.com")},
+	}}
+	require.Error(t, manager.ApplyWithServers(context.Background(), &candidate, newServers))
+
+	assertHTTPSBody(t, oldGraph.EntryPoints[0].Address, "app.example.com", "old")
+	candidateListener, err := net.Listen("tcp", candidateAddress)
+	require.NoError(t, err, "failed transaction leaked candidate listener")
+	require.NoError(t, candidateListener.Close())
+}
+
+func TestApplyWithServersConcurrentRequestsAndUpdates(t *testing.T) {
+	graph := tlsGraph(t, freeTCPAddress(t), nil)
+	manager := NewManager()
+	defer shutdownManager(t, manager)
+
+	servers := func(marker string) ServerConfigBundle {
+		return ServerConfigBundle{TLSHTTP: map[string]TLSHTTPServerConfig{
+			"websecure": {Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(marker)) }), TLSConfig: testTLSConfig(t, "app.example.com")},
+		}}
+	}
+	require.NoError(t, manager.ApplyWithServers(context.Background(), &graph, servers("initial")))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var requests atomic.Int64
+	var group sync.WaitGroup
+	group.Add(1)
+	go func() {
+		defer group.Done()
+		transport := &http.Transport{TLSClientConfig: &tls.Config{ServerName: "app.example.com", InsecureSkipVerify: true}} // #nosec G402 -- test certificate.
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport, Timeout: 100 * time.Millisecond}
+		for ctx.Err() == nil {
+			response, err := client.Get("https://" + graph.EntryPoints[0].Address)
+			if err == nil {
+				_, _ = io.Copy(io.Discard, response.Body)
+				_ = response.Body.Close()
+				requests.Add(1)
+			}
+		}
+	}()
+	for index := range 20 {
+		require.NoError(t, manager.ApplyWithServers(context.Background(), &graph, servers(fmt.Sprintf("update-%d", index))))
+	}
+	cancel()
+	group.Wait()
+	assert.Positive(t, requests.Load())
 }
 
 func TestTLSMuxHTTPServerRefreshesActiveRuntime(t *testing.T) {

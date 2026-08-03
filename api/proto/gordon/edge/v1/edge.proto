@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package gordon.edge.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/edge/v1;edgev1";
+
+// EdgeService exposes the control-owned routing view to authenticated edges.
+service EdgeService {
+  // WatchRouteSnapshots sends the current snapshot followed by newer snapshots.
+  rpc WatchRouteSnapshots(WatchRouteSnapshotsRequest) returns (stream WatchRouteSnapshotsResponse);
+  // WatchTrafficGraphs sends the complete sanitized traffic graph for an edge.
+  rpc WatchTrafficGraphs(WatchTrafficGraphsRequest) returns (stream WatchTrafficGraphsResponse);
+  // ReportDrainState accepts the narrow, opaque drain state produced by an edge.
+  rpc ReportDrainState(ReportDrainStateRequest) returns (ReportDrainStateResponse);
+  // ReportAppliedState confirms the exact route and traffic generations that an
+  // authenticated edge has transactionally applied. It contains no topology,
+  // credentials, route targets, or runtime state.
+  rpc ReportAppliedState(ReportAppliedStateRequest) returns (ReportAppliedStateResponse);
+}
+
+// WatchRouteSnapshotsRequest deliberately has no routing selectors.
+message WatchRouteSnapshotsRequest {}
+
+// WatchTrafficGraphsRequest deliberately has no selectors: the authenticated
+// edge receives exactly its control-owned sanitized graph.
+message WatchTrafficGraphsRequest {}
+
+// WatchTrafficGraphsResponse carries traffic options, entry points, routers,
+// and backends only. Certificates, keys, ACME state, and control configuration
+// are intentionally absent.
+message WatchTrafficGraphsResponse {
+  uint64 generation = 1;
+  TrafficOptions options = 2;
+  repeated TrafficEntryPoint entry_points = 3;
+  repeated TrafficRouter routers = 4;
+  repeated TrafficService services = 5;
+}
+
+message TrafficOptions {
+  TrafficTCPOptions tcp = 1;
+  TrafficUDPOptions udp = 2;
+}
+
+message TrafficTCPOptions {
+  int64 dial_timeout_nanos = 1;
+  int64 idle_timeout_nanos = 2;
+  int64 drain_timeout_nanos = 3;
+  int64 max_connections = 4;
+}
+
+message TrafficUDPOptions {
+  int64 idle_timeout_nanos = 1;
+  int64 drain_timeout_nanos = 2;
+  int64 max_sessions = 3;
+}
+
+message TrafficEntryPoint {
+  string name = 1;
+  string address = 2;
+  string protocol = 3;
+  repeated string trusted_cidrs = 4;
+  string raw_fallback = 5;
+  repeated string raw_fallback_trusted_cidrs = 6;
+  bool allow_public_raw_fallback = 7;
+}
+
+message TrafficRouter {
+  string name = 1;
+  string entry_point = 2;
+  string protocol = 3;
+  TrafficRule rule = 4;
+  string service = 5;
+}
+
+message TrafficRule {
+  string host = 1;
+  string sni = 2;
+}
+
+message TrafficService {
+  string name = 1;
+  repeated TrafficBackend backends = 2;
+}
+
+message TrafficBackend {
+  string name = 1;
+  string host = 2;
+  int32 port = 3;
+  string protocol = 4;
+}
+
+// WatchRouteSnapshotsResponse is the complete sanitized routing view for an
+// edge.
+message WatchRouteSnapshotsResponse {
+  uint64 generation = 1;
+  repeated RouteTargetEntry entries = 2;
+  RouteTargetEntry registry_forwarding_target = 3;
+}
+
+// RouteTargetEntry contains only the data needed to proxy one route target.
+message RouteTargetEntry {
+  string canonical_domain = 1;
+  string target_host = 2;
+  int32 target_port = 3;
+  string scheme = 4;
+  string protocol = 5;
+  string status = 6;
+  string unavailable_reason = 7;
+  uint64 generation = 8;
+  string upstream_host = 9;
+  string attachment = 10;
+  string target_key = 11;
+}
+
+// DrainTimeoutReason is a closed, sanitised timeout vocabulary. It must never
+// contain raw runtime or network error material.
+enum DrainTimeoutReason {
+  DRAIN_TIMEOUT_REASON_UNSPECIFIED = 0;
+  DRAIN_TIMEOUT_REASON_EDGE = 1;
+  DRAIN_TIMEOUT_REASON_CONTROL = 2;
+}
+
+// ReportDrainStateRequest carries no edge identity; authentication provides it.
+// target_key is opaque and must not be a target alias or backing/container ID.
+message ReportDrainStateRequest {
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
+  uint64 in_flight = 4;
+  // Informational edge time only; control records the trusted receipt time.
+  google.protobuf.Timestamp acknowledged_at = 5;
+  DrainTimeoutReason timeout_reason = 6;
+}
+
+// ReportDrainStateResponse intentionally has no drain orchestration semantics.
+message ReportDrainStateResponse {}
+
+// ReportAppliedStateRequest is deliberately small. component_id must equal the
+// authenticated edge identity; it is not an authority chosen by the caller.
+message ReportAppliedStateRequest {
+  string component_id = 1;
+  uint64 route_generation = 2;
+  uint64 traffic_generation = 3;
+  bool healthy = 4;
+}
+
+message ReportAppliedStateResponse {}

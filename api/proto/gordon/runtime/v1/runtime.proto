@@ -1,0 +1,450 @@
+syntax = "proto3";
+
+package gordon.runtime.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/runtime/v1;runtimev1";
+
+// RuntimeService is the narrow intent surface exposed by gordon-runtime.
+// It must not expose raw Docker/Podman socket operations or full inspect data.
+service RuntimeService {
+  rpc ApplyCommand(ApplyCommandRequest) returns (ApplyCommandResponse);
+  rpc WatchActualState(WatchActualStateRequest) returns (stream WatchActualStateResponse);
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  // ProbeEnvironment returns only migration-safe facts. It never exposes a
+  // socket path, engine configuration, raw daemon payload, or error details.
+  rpc ProbeEnvironment(ProbeEnvironmentRequest) returns (ProbeEnvironmentResponse);
+  rpc StreamLogs(StreamLogsRequest) returns (stream StreamLogsResponse);
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse);
+  rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
+  rpc PruneImages(PruneImagesRequest) returns (PruneImagesResponse);
+  rpc RuntimeSelfUpdate(RuntimeSelfUpdateRequest) returns (RuntimeSelfUpdateResponse);
+
+  // ApplyStandaloneService realizes one sanitized standalone-service spec.
+  // Resolved environment values are accepted only as apply input and are never
+  // returned by this service.
+  rpc ApplyStandaloneService(ApplyStandaloneServiceRequest) returns (ApplyStandaloneServiceResponse);
+  rpc RemoveStandaloneService(RemoveStandaloneServiceRequest) returns (RemoveStandaloneServiceResponse);
+  rpc ListStandaloneServiceState(ListStandaloneServiceStateRequest) returns (ListStandaloneServiceStateResponse);
+
+  // ReportEdgeDrain is called by gordon-control after gordon-edge reports that
+  // a route generation has drained. Edge never calls runtime directly: edge
+  // reports drain state to control, control validates generation and target,
+  // then relays this acknowledgement to runtime. Runtime waits for this ack or
+  // its configured drain timeout before stopping the old route container.
+  rpc ReportEdgeDrain(ReportEdgeDrainRequest) returns (ReportEdgeDrainResponse);
+  // PrepareEdgeDrain registers the exact control transition before edge
+  // acknowledgement delivery. It is control-only and carries opaque data.
+  rpc PrepareEdgeDrain(PrepareEdgeDrainRequest) returns (PrepareEdgeDrainResponse);
+}
+
+message RuntimeCommandIdentity {
+  string id = 1;
+  string idempotency_key = 2;
+  uint64 generation = 3;
+  string source_component_id = 4;
+  google.protobuf.Timestamp requested_at = 5;
+}
+
+message DeployRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  string image = 3;
+  string route_version = 4;
+  repeated string env = 5;
+  bool internal_deploy = 6;
+}
+
+message RestartRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  string reason = 3;
+  bool with_attachments = 4;
+}
+
+message RemoveRouteCommand {
+  RuntimeCommandIdentity identity = 1;
+  string domain = 2;
+  bool force = 3;
+}
+
+message RuntimeRouteDesiredState {
+  string domain = 1;
+  string image = 2;
+  repeated string env = 3;
+}
+
+message ReconcileRuntimeCommand {
+  RuntimeCommandIdentity identity = 1;
+  string reason = 2;
+  int32 expected_route_count = 3;
+  string desired_state_version = 4;
+  repeated RuntimeRouteDesiredState desired_routes = 5;
+}
+
+message RuntimeSelfUpdateCommand {
+  RuntimeCommandIdentity identity = 1;
+  string target_component_id = 2;
+  string target_component_role = 3;
+  string current_version = 4;
+  string target_version = 5;
+  string policy = 6;
+  string policy_decision_id = 7;
+  string approved_by = 8;
+  // Lifecycle is an allowlisted Gordon-component desired-state command, never
+  // a raw engine invocation. The runtime remains the sole socket authority.
+  string lifecycle_action = 9;
+  string desired_image = 10;
+  string desired_state_hash = 11;
+  string internal_network = 12;
+  string environment_file = 13;
+  bool preserve_volumes = 14;
+  // config_file is a runtime-validated role manifest path, never an arbitrary
+  // host mount. It is required for component lifecycle start/replace.
+  string config_file = 15;
+  repeated ComponentPortBinding port_publishes = 16;
+  // Activation-only deterministic old-listener identity and final bindings.
+  // Runtime verifies the old container is Gordon-managed and owns precisely
+  // these ports before stopping it.
+  string old_serving_component_id = 17;
+  repeated ComponentPortBinding final_port_publishes = 18;
+  // edge_app_networks carries only managed application network names that the
+  // prepared edge already uses. Runtime bounds and validates these names; raw
+  // engine network IDs are never accepted by this RPC.
+  repeated string edge_app_networks = 19;
+  // Mutation actions carry the exact split-role process and rootless Podman
+  // profile. Health and logs carry only fixed process identity; runtime
+  // authoritatively inspects the existing security and mount profile.
+  RuntimeComponentLifecycleProfile lifecycle_profile = 20;
+}
+
+// ComponentPortBinding carries a deterministic migration listener binding.
+// Runtime validates the narrow bootstrap/final listener allowlist; it is not
+// a general container-engine port option.
+message ComponentPortBinding {
+  string host_ip = 1;
+  int32 host_port = 2;
+  int32 container_port = 3;
+  string protocol = 4;
+}
+
+message ApplyCommandRequest {
+  oneof command {
+    DeployRouteCommand deploy_route = 1;
+    RestartRouteCommand restart_route = 2;
+    RemoveRouteCommand remove_route = 3;
+    ReconcileRuntimeCommand reconcile = 4;
+  }
+}
+
+message RuntimeSelfUpdateRequest {
+  RuntimeSelfUpdateCommand command = 1;
+}
+
+message RuntimeCommandError {
+  string code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+message RuntimeCommandResult {
+  string command_id = 1;
+  string idempotency_key = 2;
+  uint64 generation = 3;
+  string status = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp completed_at = 6;
+  RuntimeCommandError error = 7;
+}
+
+message ApplyCommandResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message RuntimeSelfUpdateResponse {
+  RuntimeCommandResult result = 1;
+}
+
+// StandaloneServiceSpec contains only runtime-safe standalone-service settings.
+// Environment sources and secret references are resolved by control and are not
+// part of this boundary.
+message StandaloneServiceSpec {
+  string name = 1;
+  string image = 2;
+  bool enabled = 3;
+  repeated StandaloneServicePortSpec ports = 4;
+  repeated StandaloneServiceVolumeSpec volumes = 5;
+  StandaloneServiceReadinessSpec readiness = 6;
+  StandaloneServiceCleanupSpec cleanup = 7;
+}
+
+message StandaloneServicePortSpec {
+  string name = 1;
+  int32 container = 2;
+  string protocol = 3;
+  string publish = 4;
+  bool private = 5;
+  bool public = 6;
+  repeated string trusted_cidrs = 7;
+}
+
+message StandaloneServiceVolumeSpec {
+  string source = 1;
+  string target = 2;
+  bool read_only = 3;
+}
+
+message StandaloneServiceReadinessSpec {
+  string type = 1;
+  string path = 2;
+  string contains = 3;
+  int64 timeout_ns = 4;
+  bool timeout_set = 5;
+}
+
+message StandaloneServiceCleanupSpec {
+  bool preserve_volumes = 1;
+  bool remove_container = 2;
+}
+
+message ApplyStandaloneServiceCommand {
+  RuntimeCommandIdentity identity = 1;
+  StandaloneServiceSpec service = 2;
+  repeated string resolved_env = 3;
+  string config_hash = 4;
+}
+
+message ApplyStandaloneServiceRequest {
+  ApplyStandaloneServiceCommand command = 1;
+}
+
+message ApplyStandaloneServiceResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message RemoveStandaloneServiceCommand {
+  RuntimeCommandIdentity identity = 1;
+  string name = 2;
+  string reason = 3;
+  StandaloneServiceCleanupSpec cleanup = 4;
+}
+
+message RemoveStandaloneServiceRequest {
+  RemoveStandaloneServiceCommand command = 1;
+}
+
+message RemoveStandaloneServiceResponse {
+  RuntimeCommandResult result = 1;
+}
+
+message ListStandaloneServiceStateRequest {}
+
+// RuntimeStandaloneServiceState is the sanitized service state safe for
+// publication to control. It contains no environment or secret material.
+message RuntimeStandaloneServiceState {
+  string name = 1;
+  string container_id = 2;
+  string container_name = 3;
+  string status = 4;
+  string config_hash = 5;
+  StandaloneServiceCleanupSpec cleanup = 6;
+}
+
+message ListStandaloneServiceStateResponse {
+  repeated RuntimeStandaloneServiceState services = 1;
+}
+
+message WatchActualStateRequest {
+  reserved 1;
+  reserved "after_generation";
+}
+
+message RuntimeRouteState {
+  string domain = 1;
+  uint64 generation = 2;
+  string route_version = 3;
+  string container_alias = 4;
+  string edge_target_alias = 5;
+  int32 target_port = 6;
+  string scheme = 7;
+  string protocol = 8;
+  string status = 9;
+  string unavailable_reason = 10;
+  string backing_container_name = 11;
+}
+
+message RuntimeContainerState {
+  string name = 1;
+  string alias = 2;
+  string image = 3;
+  string image_id = 4;
+  string status = 5;
+  google.protobuf.Timestamp started_at = 6;
+  map<string, string> labels = 7;
+  uint64 generation = 8;
+}
+
+message RuntimeNetworkState {
+  string name = 1;
+  string driver = 2;
+  bool internal = 3;
+  repeated string aliases = 4;
+  uint64 generation = 5;
+}
+
+message RuntimeActualVolumeState {
+  string name = 1;
+  repeated string attached_to = 2;
+  uint64 generation = 3;
+}
+
+message RuntimeEdgeNetworkAttachmentState {
+  string route_domain = 1;
+  string network_name = 2;
+  string edge_alias = 3;
+  string runtime_alias = 4;
+  string target_alias = 5;
+  int32 target_port = 6;
+  bool attached = 7;
+  uint64 generation = 8;
+  string source_component = 9;
+}
+
+message WatchActualStateResponse {
+  uint64 generation = 1;
+  string state_version = 2;
+  string source_component_id = 3;
+  google.protobuf.Timestamp observed_at = 4;
+  repeated RuntimeRouteState routes = 5;
+  repeated RuntimeContainerState containers = 6;
+  repeated RuntimeNetworkState networks = 7;
+  repeated RuntimeActualVolumeState volumes = 8;
+  repeated RuntimeEdgeNetworkAttachmentState edge_attachments = 9;
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  bool ok = 1;
+  string component_id = 2;
+  string message = 3;
+}
+
+message ProbeEnvironmentRequest {
+  // Runtime returns only positional availability booleans, never host PIDs,
+  // container IDs, or listener-owner identities.
+  repeated int32 required_public_ports = 1;
+}
+
+message ProbeEnvironmentResponse {
+  string engine = 1;
+  bool rootless = 2;
+  bool api_reachable = 3;
+  bool image_available = 4;
+  bool image_pullable = 5;
+  bool network_feasible = 6;
+  uint64 disk_available_bytes = 7;
+  bool disk_sufficient = 8;
+  repeated bool public_listeners_available = 9;
+}
+
+message StreamLogsRequest {
+  string route_domain = 1;
+  reserved 2;
+  reserved "tail";
+  bool follow = 3;
+}
+
+message StreamLogsResponse {
+  bytes data = 1;
+  google.protobuf.Timestamp observed_at = 2;
+}
+
+message ListVolumesRequest {}
+
+message RuntimeVolumeInfo {
+  string name = 1;
+  string driver = 2;
+  string mount_point = 3;
+  int64 size = 4;
+  google.protobuf.Timestamp created_at = 5;
+  bool in_use = 6;
+  repeated string containers = 7;
+  map<string, string> labels = 8;
+}
+
+message ListVolumesResponse {
+  repeated RuntimeVolumeInfo volumes = 1;
+}
+
+message RemoveVolumeRequest {
+  string name = 1;
+  bool force = 2;
+}
+
+message RemoveVolumeResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message ListImagesRequest {}
+
+message RuntimeImageInfo {
+  string id = 1;
+  repeated string repo_tags = 2;
+  int64 size = 3;
+  google.protobuf.Timestamp created = 4;
+}
+
+message ListImagesResponse {
+  repeated RuntimeImageInfo images = 1;
+}
+
+message PruneImagesRequest {
+  bool dangling_only = 1;
+}
+
+message PruneImagesResponse {
+  int32 deleted_count = 1;
+  int64 space_reclaimed = 2;
+}
+
+// ReportEdgeDrainRequest is emitted by control only after it validates an edge
+// report. old_target_key is opaque; runtime must not receive edge aliases or
+// backing/container identities through this protocol.
+message ReportEdgeDrainRequest {
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
+  google.protobuf.Timestamp acknowledged_at = 4;
+  string timeout_reason = 5;
+}
+
+message ReportEdgeDrainResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+// PrepareEdgeDrainRequest intentionally omits all backing/container identity.
+message PrepareEdgeDrainRequest {
+  string canonical_domain = 1;
+  uint64 transition_generation = 2;
+  string old_target_key = 3;
+}
+
+message PrepareEdgeDrainResponse {
+  bool ok = 1;
+  string message = 2;
+}
+
+message RuntimeComponentLifecycleProfile {
+  int64 uid = 1;
+  int64 gid = 2;
+  string user = 3;
+  string userns_mode = 4;
+  repeated string cap_drop = 5;
+  bool no_new_privileges = 6;
+  repeated string generation_volume_options = 7;
+}

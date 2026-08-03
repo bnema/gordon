@@ -149,6 +149,18 @@ func TestService_FollowProcessLogs(t *testing.T) {
 func TestService_GetContainerLogs(t *testing.T) {
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
 
+	t.Run("uses narrow runtime log reader", func(t *testing.T) {
+		containerSvc := mocks.NewMockContainerService(t)
+		reader := outMocks.NewMockRuntimeLogReader(t)
+		reader.EXPECT().ReadRouteLogs(mock.Anything, "app.local", false).Return(&mockReader{}, nil)
+
+		svc := NewServiceWithRuntimeLogReader("/tmp/test.log", true, containerSvc, reader, log)
+
+		lines, err := svc.GetContainerLogs(context.Background(), "app.local", 10)
+		require.NoError(t, err)
+		assert.Empty(t, lines)
+	})
+
 	t.Run("returns error when container not found", func(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)
 		runtime := outMocks.NewMockContainerRuntime(t)
@@ -186,6 +198,18 @@ func TestService_GetContainerLogs(t *testing.T) {
 
 func TestService_FollowContainerLogs(t *testing.T) {
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
+
+	t.Run("uses narrow runtime log reader", func(t *testing.T) {
+		containerSvc := mocks.NewMockContainerService(t)
+		reader := outMocks.NewMockRuntimeLogReader(t)
+		reader.EXPECT().ReadRouteLogs(mock.Anything, "app.local", true).Return(&mockReader{}, nil)
+
+		svc := NewServiceWithRuntimeLogReader("/tmp/test.log", true, containerSvc, reader, log)
+
+		ch, err := svc.FollowContainerLogs(context.Background(), "app.local", 10)
+		require.NoError(t, err)
+		assert.NotNil(t, ch)
+	})
 
 	t.Run("returns error when container not found", func(t *testing.T) {
 		containerSvc := mocks.NewMockContainerService(t)

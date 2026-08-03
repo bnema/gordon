@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package gordon.events.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/events/v1;eventsv1";
+
+// EventService carries only closed, sanitized component event payloads.
+service EventService {
+  rpc PublishEvent(PublishEventRequest) returns (PublishEventResponse);
+  rpc WatchEvents(WatchEventsRequest) returns (stream WatchEventsResponse);
+}
+
+message PublishEventRequest {
+  EventEnvelope event = 1;
+}
+message PublishEventResponse {
+  EventAck ack = 1;
+}
+message WatchEventsRequest {}
+message WatchEventsResponse {
+  EventEnvelope event = 1;
+}
+message EventAck {
+  string event_id = 1;
+  bool duplicate = 2;
+}
+
+message EventEnvelope {
+  string id = 1;
+  string type = 2;
+  // Origin is optional. When supplied it must equal the authenticated role.
+  string origin = 3;
+  google.protobuf.Timestamp timestamp = 4;
+  uint64 generation = 5;
+  string idempotency_key = 6;
+  uint32 retry_count = 7;
+  string audit_classification = 8;
+  oneof payload {
+    RegistryImagePushedPayload registry_image_pushed = 20;
+    RuntimeStateChangedPayload runtime_state_changed = 21;
+    RuntimeDeployPayload runtime_deploy = 22;
+    ContainerDeployedPayload container_deployed = 23;
+    ConfigReloadPayload config_reload = 24;
+    SecretsChangedPayload secrets_changed = 25;
+    ManualDeployPayload manual_deploy = 26;
+    PolicyDeniedPayload policy_denied = 27;
+    AuditPayload audit = 28;
+    EdgeDrainPayload edge_drain = 29;
+  }
+}
+
+// Bounded at the domain boundary: manifest <= 4 MiB; annotations <= 64
+// entries, 64 KiB total. These are OCI automation inputs, not arbitrary data.
+message RegistryImagePushedPayload {
+  string repository = 1;
+  string reference = 2;
+  string digest = 3;
+  bytes manifest = 4;
+  map<string, string> annotations = 5;
+}
+message RuntimeStateChangedPayload {
+  string component_id = 1;
+  string state = 2;
+}
+message RuntimeDeployPayload {
+  string domain = 1;
+  string image = 2;
+  uint64 generation = 3;
+}
+message ContainerDeployedPayload {
+  string domain = 1;
+  string image = 2;
+  string deployment_id = 3;
+  uint64 generation = 4;
+}
+// Config reload carries a revision only; raw configuration is forbidden.
+message ConfigReloadPayload {
+  string version = 1;
+}
+// Secret changes carry a revision only; secret names and values are forbidden.
+message SecretsChangedPayload {
+  string version = 1;
+}
+message ManualDeployPayload {
+  string domain = 1;
+  string image = 2;
+  string correlation_id = 3;
+}
+message PolicyDeniedPayload {
+  string decision_id = 1;
+  string action = 2;
+  string reason = 3;
+}
+message AuditPayload {
+  string action = 1;
+  string subject = 2;
+  string outcome = 3;
+}
+message EdgeDrainPayload {
+  string domain = 1;
+  uint64 generation = 2;
+}

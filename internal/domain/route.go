@@ -10,13 +10,17 @@ type Route struct {
 
 // ProxyTarget represents the destination for proxying requests.
 type ProxyTarget struct {
-	Host         string
-	Port         int
+	Host string
+	Port int
+	// ContainerID is retained only for legacy callers. Snapshot-derived targets
+	// never populate it; use TargetKey for request/drain accounting.
 	ContainerID  string
+	TargetKey    RouteTargetKey
 	Scheme       string // "http" or "https"
 	Protocol     string // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
 	OriginalHost string // Original hostname before DNS resolution (for external-route Host header)
 	RouteHost    string // Canonical matched route domain for managed-route Host header
+	Registry     bool   // Snapshot-selected registry forwarding target
 }
 
 // RouteMatch represents the result of matching a request to a route.

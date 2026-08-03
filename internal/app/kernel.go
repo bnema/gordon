@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -29,6 +30,9 @@ type Kernel struct {
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
 	cleanup         func()
+	// mu guards the one-shot cleanup handoff so concurrent Close calls run it
+	// exactly once.
+	mu sync.Mutex
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -47,6 +51,9 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 	ctx := context.Background()
 	v, cfg, err := initConfig(configPath)
 	if err != nil {
+		return nil, err
+	}
+	if err := rejectSplitModeKernel(cfg); err != nil {
 		return nil, err
 	}
 
@@ -78,7 +85,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			cleanup()
 		}
 
-		return &Kernel{
+		kernel := &Kernel{
 			authEnabled:     cfg.Auth.Enabled,
 			configSvc:       svc.configSvc,
 			secretSvc:       svc.secretSvc,
@@ -91,7 +98,8 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			volumeSvc:       svc.volumeSvc,
 			publicTLSSvc:    svc.publicTLSSvc,
 			cleanup:         wrappedCleanup,
-		}, nil
+		}
+		return kernel, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
 	}
@@ -123,10 +131,16 @@ func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
 }
 
 func (k *Kernel) Close() error {
-	if k == nil || k.cleanup == nil {
+	if k == nil {
 		return nil
 	}
-	k.cleanup()
+	k.mu.Lock()
+	cleanup := k.cleanup
+	k.cleanup = nil
+	k.mu.Unlock()
+	if cleanup != nil {
+		cleanup()
+	}
 	return nil
 }
 

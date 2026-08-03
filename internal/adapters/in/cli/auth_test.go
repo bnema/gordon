@@ -3,15 +3,179 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestRootRegistersComponentTokenCommands(t *testing.T) {
+	cmd, _, err := NewRootCmd().Find([]string{"auth", "component-token", "create"})
+	require.NoError(t, err)
+	assert.Equal(t, "create", cmd.Name())
+
+	cmd, _, err = NewRootCmd().Find([]string{"auth", "component-token", "list"})
+	require.NoError(t, err)
+	assert.Equal(t, "list", cmd.Name())
+
+	cmd, _, err = NewRootCmd().Find([]string{"auth", "component-token", "revoke"})
+	require.NoError(t, err)
+	assert.Equal(t, "revoke", cmd.Name())
+}
+
+func TestComponentTokenCommands_CreateListRevoke(t *testing.T) {
+	dataDir := t.TempDir()
+	configPath := writeComponentTokenCLIConfig(t, dataDir)
+
+	var createOut bytes.Buffer
+	create := newComponentTokenCmd()
+	create.SetArgs([]string{"create", "--config", configPath, "--name", "runtime-a", "--role", "runtime", "--scope", "runtime:state:publish", "--scope", "runtime:event:publish"})
+	create.SetOut(&createOut)
+	require.NoError(t, create.ExecuteContext(context.Background()))
+
+	output := createOut.String()
+	require.Contains(t, output, "gordon_component.")
+	assert.Equal(t, 1, strings.Count(output, "gordon_component."), "plaintext token must be printed once")
+	assert.Contains(t, output, "cannot be retrieved again")
+	assert.NotContains(t, output, "token_hash")
+
+	var listOut bytes.Buffer
+	list := newComponentTokenCmd()
+	list.SetArgs([]string{"list", "--config", configPath, "--json"})
+	list.SetOut(&listOut)
+	require.NoError(t, list.ExecuteContext(context.Background()))
+
+	var listed []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &listed))
+	require.Len(t, listed, 1)
+	assert.Equal(t, "runtime-a", listed[0]["name"])
+	assert.NotContains(t, listOut.String(), "gordon_component.")
+	assert.NotContains(t, listOut.String(), "token_hash")
+	keyID, ok := listed[0]["key_id"].(string)
+	require.True(t, ok)
+
+	var revokeOut bytes.Buffer
+	revoke := newComponentTokenCmd()
+	revoke.SetArgs([]string{"revoke", "--config", configPath, keyID})
+	revoke.SetOut(&revokeOut)
+	require.NoError(t, revoke.ExecuteContext(context.Background()))
+	assert.Contains(t, revokeOut.String(), keyID)
+
+	var textListOut bytes.Buffer
+	textList := newComponentTokenCmd()
+	textList.SetArgs([]string{"list", "--config", configPath})
+	textList.SetOut(&textListOut)
+	require.NoError(t, textList.ExecuteContext(context.Background()))
+	assert.Contains(t, textListOut.String(), "Revoked:")
+	assert.NotContains(t, textListOut.String(), "gordon_component.")
+	assert.NotContains(t, textListOut.String(), "token_hash")
+}
+
+func TestComponentTokenCreate_JSONDoesNotExposeHash(t *testing.T) {
+	configPath := writeComponentTokenCLIConfig(t, t.TempDir())
+	var out bytes.Buffer
+	cmd := newComponentTokenCmd()
+	cmd.SetArgs([]string{"create", "--config", configPath, "--name", "edge-a", "--role", "edge", "--json"})
+	cmd.SetOut(&out)
+
+	require.NoError(t, cmd.ExecuteContext(context.Background()))
+	assert.Equal(t, 1, strings.Count(out.String(), "gordon_component."))
+	assert.Contains(t, out.String(), "cannot be retrieved again")
+	assert.NotContains(t, out.String(), "token_hash")
+}
+
+func TestComponentTokenCreate_RejectsInvalidArguments(t *testing.T) {
+	configPath := writeComponentTokenCLIConfig(t, t.TempDir())
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "role", args: []string{"create", "--config", configPath, "--name", "x", "--role", "unknown"}, want: "unknown component role"},
+		{name: "scope", args: []string{"create", "--config", configPath, "--name", "x", "--role", "edge", "--scope", "runtime:deploy"}, want: "not allowed"},
+		{name: "expiry", args: []string{"create", "--config", configPath, "--name", "x", "--role", "edge", "--expiry", "-1h"}, want: "expiry must be positive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := newComponentTokenCmd()
+			cmd.SetArgs(tc.args)
+			assert.ErrorContains(t, cmd.ExecuteContext(context.Background()), tc.want)
+		})
+	}
+}
+
+func TestComponentTokenCommands_RejectUnsupportedBackend(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gordon.yaml")
+	contents := "server:\n  data_dir: " + t.TempDir() + "\nauth:\n  secrets_backend: vault\n"
+	require.NoError(t, os.WriteFile(configPath, []byte(contents), 0600))
+
+	cmd := newComponentTokenCmd()
+	cmd.SetArgs([]string{"create", "--config", configPath, "--name", "edge-a", "--role", "edge"})
+
+	assert.ErrorContains(t, cmd.ExecuteContext(context.Background()), `unsupported auth.secrets_backend "vault"`)
+}
+
+func TestLoadComponentAuthConfig_Backends(t *testing.T) {
+	tests := []struct {
+		name       string
+		backend    string
+		configured bool
+		want       domain.SecretsBackend
+		wantErr    string
+	}{
+		{name: "absent defaults to unsafe", want: domain.SecretsBackendUnsafe},
+		{name: "pass", backend: "pass", configured: true, want: domain.SecretsBackendPass},
+		{name: "sops", backend: "sops", configured: true, want: domain.SecretsBackendSops},
+		{name: "unsafe", backend: "unsafe", configured: true, want: domain.SecretsBackendUnsafe},
+		{name: "empty", configured: true, wantErr: "auth.secrets_backend is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configPath := filepath.Join(t.TempDir(), "gordon.yaml")
+			contents := "server:\n  data_dir: " + t.TempDir() + "\n"
+			if tt.configured {
+				contents += "auth:\n  secrets_backend: \"" + tt.backend + "\"\n"
+			}
+			require.NoError(t, os.WriteFile(configPath, []byte(contents), 0600))
+
+			config, err := loadComponentAuthConfig(configPath)
+			if tt.wantErr != "" {
+				require.ErrorContains(t, err, tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, config.Backend)
+		})
+	}
+}
+
+func TestComponentTokenCommands_ReturnBackendErrors(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "not-a-directory")
+	require.NoError(t, os.WriteFile(dataDir, []byte("x"), 0600))
+	configPath := writeComponentTokenCLIConfig(t, dataDir)
+	cmd := newComponentTokenCmd()
+	cmd.SetArgs([]string{"create", "--config", configPath, "--name", "edge-a", "--role", "edge"})
+
+	assert.ErrorContains(t, cmd.ExecuteContext(context.Background()), "create component token")
+}
+
+func writeComponentTokenCLIConfig(t *testing.T, dataDir string) string {
+	t.Helper()
+	configPath := filepath.Join(t.TempDir(), "gordon.yaml")
+	contents := "server:\n  data_dir: " + dataDir + "\nauth:\n  secrets_backend: unsafe\n"
+	require.NoError(t, os.WriteFile(configPath, []byte(contents), 0600))
+	return configPath
+}
 
 func TestRunAuthLoginWithToken_StoresToken(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())

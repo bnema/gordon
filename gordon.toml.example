@@ -2,6 +2,9 @@
 # Copy this file to ~/.config/gordon/gordon.toml and adjust for your domain.
 
 [server]
+# Source value used for the generated split edge listener during migration;
+# monolith public traffic remains configured under [entrypoints].
+port = 8088
 registry_port = 5000
 gordon_domain = "gordon.example.com"
 # legacy_registry_domains = ["registry.example.com:5000"]
@@ -47,6 +50,11 @@ secrets_backend = "pass"
 token_secret = "gordon/auth/token_secret"
 token_expiry = "30d"
 access_token_ttl = "15m"
+
+# Required only for orchestrated monolith-to-split migration. Keep the value in
+# the named environment variable; generated role files receive scoped tokens.
+[runtime]
+token_env = "GORDON_RUNTIME_HANDOFF_TOKEN"
 
 [api.rate_limit]
 enabled = true

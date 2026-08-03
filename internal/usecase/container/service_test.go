@@ -31,6 +31,233 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
+func TestServiceFreshRuntimeContainerInventoryListsAllAndKeepsIDsPrivate(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, mocks.NewMockEnvLoader(t), mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{ID: "runtime-id", Name: "gordon-app.example.test"},
+		{ID: "", Name: "invalid-without-runtime-id"},
+	}, nil).Once()
+
+	inventory, err := svc.freshRuntimeContainerInventory(testContext())
+	require.NoError(t, err)
+	require.Equal(t, map[string]*domain.Container{"runtime-id": {ID: "runtime-id", Name: "gordon-app.example.test"}}, inventory)
+}
+
+func TestServiceFreshRuntimeContainerInventoryReturnsRuntimeFailure(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, mocks.NewMockEnvLoader(t), mocks.NewMockEventPublisher(t), nil, Config{}, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, errors.New("runtime unavailable")).Once()
+
+	_, err := svc.freshRuntimeContainerInventory(testContext())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "list all runtime containers")
+}
+
+type drainDelayGate struct {
+	entered chan time.Duration
+	release chan struct{}
+}
+
+func newDrainDelayGate() *drainDelayGate {
+	return &drainDelayGate{entered: make(chan time.Duration), release: make(chan struct{})}
+}
+
+func (g *drainDelayGate) wait(ctx context.Context, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	select {
+	case g.entered <- delay:
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+	}
+}
+
+func TestService_PrepareDrainPinsBeforeTrafficInvalidation(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	waiter := mocks.NewMockProxyDrainWaiter(t)
+	invalidator := mocks.NewMockProxyCacheInvalidator(t)
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{DrainMode: "inflight"}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+	svc.SetProxyCacheInvalidator(invalidator)
+
+	waiter.EXPECT().PrepareDrain("private-old-id").Return(true).Once()
+	prepared := svc.prepareDrain("private-old-id")
+	require.NotNil(t, prepared)
+	assert.True(t, prepared.registered)
+
+	waiter.EXPECT().CancelDrain("private-old-id").Once()
+	prepared.cancel("private-old-id")
+	prepared.cancel("private-old-id")
+}
+
+func TestService_PrepareDrainRequiresInvalidator(t *testing.T) {
+	waiter := mocks.NewMockProxyDrainWaiter(t)
+	svc := NewService(nil, nil, nil, nil, Config{DrainMode: "inflight"}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+
+	require.Nil(t, svc.prepareDrain("old-container"))
+}
+
+func TestService_FailedSplitDrainPreparationFallsBackToConfiguredDelay(t *testing.T) {
+	t.Run("waits before cleanup", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
+		waiter := NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return domain.RuntimeRouteState{}, false })
+		svc := NewService(runtime, nil, nil, nil, Config{DrainMode: "inflight", DrainDelayConfigured: true, DrainDelay: 75 * time.Millisecond}, nil)
+		gate := newDrainDelayGate()
+		svc.drainDelayWait = gate.wait
+		svc.SetProxyDrainWaiter(waiter)
+		prepared := svc.prepareDrain("old-container")
+		require.NotNil(t, prepared)
+		assert.False(t, prepared.registered)
+
+		stopped := make(chan struct{}, 1)
+		runtime.EXPECT().StopContainer(mock.Anything, "old-container").Run(func(context.Context, string) { close(stopped) }).Return(nil).Once()
+		runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil).Once()
+		runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).Once()
+		done := make(chan struct{})
+		go func() {
+			svc.finalizePreviousContainer(testContext(), "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+			close(done)
+		}()
+
+		// A gate is a deterministic timer: the former 15ms/1s wall-clock checks
+		// observed scheduler timing rather than the cleanup-after-delay ordering.
+		require.Equal(t, 75*time.Millisecond, <-gate.entered, "fallback must use the configured drain delay")
+		select {
+		case <-stopped:
+			t.Fatal("old container stopped before configured drain delay was released")
+		default:
+		}
+		close(gate.release)
+		<-stopped
+		<-done
+	})
+
+	t.Run("honors cancellation and explicit zero", func(t *testing.T) {
+		for _, tt := range []struct {
+			name   string
+			delay  time.Duration
+			cancel bool
+		}{
+			{name: "canceled context", delay: time.Second, cancel: true},
+			{name: "explicit zero", delay: 0},
+		} {
+			t.Run(tt.name, func(t *testing.T) {
+				runtime := mocks.NewMockContainerRuntime(t)
+				waiter := NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return domain.RuntimeRouteState{}, false })
+				svc := NewService(runtime, nil, nil, nil, Config{DrainMode: "auto", DrainDelayConfigured: true, DrainDelay: tt.delay}, nil)
+				svc.SetProxyDrainWaiter(waiter)
+				prepared := svc.prepareDrain("old-container")
+				require.NotNil(t, prepared)
+
+				stopped := make(chan struct{}, 1)
+				runtime.EXPECT().StopContainer(mock.Anything, "old-container").Run(func(context.Context, string) { close(stopped) }).Return(nil).Once()
+				runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil).Once()
+				runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).Once()
+				ctx, cancel := context.WithCancel(testContext())
+				if tt.cancel {
+					cancel()
+				} else {
+					defer cancel()
+				}
+				done := make(chan struct{})
+				go func() {
+					svc.finalizePreviousContainer(ctx, "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+					close(done)
+				}()
+				<-stopped
+				<-done
+			})
+		}
+	})
+}
+
+func TestService_PrepareDrainAllowsSplitRuntimeWithoutLocalInvalidator(t *testing.T) {
+	state := domain.RuntimeRouteState{Domain: "app.example.com", Generation: 1, ContainerAlias: "gordon-target-app-example-com", EdgeTargetAlias: "gordon-target-app-example-com", TargetPort: 8080, Scheme: "http", Protocol: domain.RouteTargetProtocolHTTP1, Status: domain.RouteTargetStatusReady, BackingContainerName: "private-old"}
+	waiter := NewRuntimeDrainRegistry(func(string) (domain.RuntimeRouteState, bool) { return state, true })
+	eventBus := mocks.NewMockEventPublisher(t)
+	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Once()
+	svc := NewService(nil, nil, eventBus, nil, Config{DrainMode: "inflight"}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+
+	prepared := svc.prepareDrain("old-container")
+	require.NotNil(t, prepared)
+	assert.True(t, svc.activateDeployedContainer(testContext(), "app.example.com", &domain.Container{ID: "new-container"}))
+	prepared.cancel("old-container")
+}
+
+func TestService_ActivateAndStabilizeCancelsPreparedDrainOnRollbackOrError(t *testing.T) {
+	tests := []struct {
+		name       string
+		oldRunning bool
+		wantErr    bool
+	}{
+		{name: "rollback", oldRunning: true},
+		{name: "stabilization error", oldRunning: false, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runtime := mocks.NewMockContainerRuntime(t)
+			eventBus := mocks.NewMockEventPublisher(t)
+			waiter := mocks.NewMockProxyDrainWaiter(t)
+			invalidator := mocks.NewMockProxyCacheInvalidator(t)
+			svc := NewService(runtime, nil, eventBus, nil, Config{DrainMode: "inflight", StabilizationDelay: time.Nanosecond}, nil)
+			svc.SetProxyDrainWaiter(waiter)
+			svc.SetProxyCacheInvalidator(invalidator)
+
+			waiter.EXPECT().PrepareDrain("old-container").Return(true).Once()
+			waiter.EXPECT().CancelDrain("old-container").Once()
+			eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil).Once()
+			invalidator.EXPECT().InvalidateTarget(mock.Anything, "app.example.com").Return().Times(map[bool]int{true: 2, false: 1}[tt.oldRunning])
+			runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(false, nil).Once()
+			runtime.EXPECT().IsContainerRunning(mock.Anything, "old-container").Return(tt.oldRunning, nil).Once()
+			runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil).Once()
+			runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil).Once()
+
+			invalidated, stable, prepared, err := svc.activateAndStabilizeNewContainer(testContext(), "app.example.com", &domain.Container{ID: "new-container"}, &domain.Container{ID: "old-container"}, true)
+			require.True(t, invalidated)
+			require.False(t, stable)
+			require.NotNil(t, prepared)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			prepared.cancel("old-container")
+		})
+	}
+}
+
+func TestService_FinalizePreviousContainerReleasesPreparedDrainAfterConfigReload(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	waiter := mocks.NewMockProxyDrainWaiter(t)
+	invalidator := mocks.NewMockProxyCacheInvalidator(t)
+	svc := NewService(runtime, nil, nil, nil, Config{DrainMode: "inflight", DrainTimeout: 5 * time.Second}, nil)
+	svc.SetProxyDrainWaiter(waiter)
+	svc.SetProxyCacheInvalidator(invalidator)
+
+	waiter.EXPECT().PrepareDrain("old-container").Return(true).Once()
+	prepared := svc.prepareDrain("old-container")
+	require.NotNil(t, prepared)
+
+	// Reloading to a non-inflight mode must not strand the already prepared pin.
+	svc.UpdateConfig(Config{DrainMode: "delay", DrainDelayConfigured: true})
+	waiter.EXPECT().WaitForNoInFlight(mock.Anything, "old-container", 5*time.Second).Return(true).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "old-container", true).Return(nil).Once()
+	runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).Once()
+
+	svc.finalizePreviousContainer(testContext(), "app.example.com", &domain.Container{ID: "old-container"}, true, true, prepared, "new-container")
+}
+
 func dockerLogFrames(stream byte, lines ...string) io.ReadCloser {
 	var buf bytes.Buffer
 	for _, line := range lines {
@@ -3717,16 +3944,20 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 	cacheInvalidator := mocks.NewMockProxyCacheInvalidator(t)
+	waiter := mocks.NewMockProxyDrainWaiter(t)
 
 	config := Config{
 		AllowedRegistries:    []string{"docker.io"},
 		ReadinessDelay:       time.Millisecond,
 		DrainDelay:           time.Millisecond,
 		DrainDelayConfigured: true,
+		DrainMode:            "inflight",
+		DrainTimeout:         5 * time.Second,
 		StabilizationDelay:   time.Millisecond,
 	}
 	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
+	svc.SetProxyDrainWaiter(waiter)
 	ctx := testContext()
 
 	// Pre-populate with existing container
@@ -3775,8 +4006,13 @@ func TestService_Deploy_StabilizationSuccess(t *testing.T) {
 	// Publish event
 	eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
 
-	// Cache invalidation (once, during activate)
-	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Return()
+	// The drain must be released by the captured waiter even when reload changes
+	// the current configuration before background finalization starts.
+	waiter.EXPECT().PrepareDrain("old-container").Return(true).Once()
+	cacheInvalidator.EXPECT().InvalidateTarget(mock.Anything, "test.example.com").Run(func(context.Context, string) {
+		svc.UpdateConfig(Config{DrainMode: "off", DrainDelayConfigured: true, StabilizationDelay: time.Millisecond})
+	}).Return()
+	waiter.EXPECT().WaitForNoInFlight(mock.Anything, "old-container", 5*time.Second).Return(true).Once()
 
 	// Old container finalized normally
 	runtime.EXPECT().StopContainer(mock.Anything, "old-container").Return(nil)

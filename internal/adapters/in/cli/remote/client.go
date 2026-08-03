@@ -1355,15 +1355,17 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 			default:
 			}
 
-			n, err := resp.Body.Read(buf)
+			n, readErr := resp.Body.Read(buf)
 			if n > 0 {
 				lineBuffer.Write(buf[:n])
 			}
-			if err != nil {
-				return // EOF or context cancellation — clean exit
+			if readErr != nil && !errors.Is(readErr, io.EOF) {
+				return
 			}
 
-			// Process complete SSE events
+			// Process complete SSE events before handling EOF: an httptest server
+			// (and a real server closing after its final event) may return data and
+			// io.EOF together.
 			for {
 				data := lineBuffer.String()
 				event, remaining, ok := strings.Cut(data, "\n\n")
@@ -1385,6 +1387,9 @@ func (c *Client) streamLogs(ctx context.Context, path string) (<-chan string, er
 						}
 					}
 				}
+			}
+			if readErr != nil {
+				return // EOF or context cancellation — clean exit
 			}
 		}
 	}()

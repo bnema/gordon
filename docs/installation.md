@@ -62,14 +62,16 @@ gordon version
 ### From Source
 
 ```bash
-# Requires Go 1.21+
+# Requires Go 1.26+
 git clone https://github.com/bnema/gordon.git
 cd gordon
-make build
-sudo mv gordon /usr/local/bin/
+make build-local
+sudo install -m 0755 dist/gordon /usr/local/bin/gordon
 ```
 
 ## Container Runtime Setup
+
+A monolith needs runtime access because it includes the runtime responsibility. In split mode, only the `runtime` role receives the engine endpoint/socket; never add it to control, edge, or registry.
 
 ### Docker
 
@@ -240,6 +242,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now gordon
 ```
 
+## Split deployment
+
+Split mode requires rootless Podman and generates scoped role manifests automatically.
+
+Do not hand-copy the monolith config into role services. See [Split mode](./operations/split-mode.md) and the [split bootstrap guide](./operations/split-bootstrap.md).
+
 ## DNS Configuration
 
 Point your domains to your server:
@@ -333,3 +341,5 @@ Gordon stores data in the following locations:
 - [Getting Started](./getting-started.md)
 - [Configuration Reference](./config/index.md)
 - [Podman Rootless Setup](/wiki/guides/podman-rootless.md)
+- [Split Mode](./operations/split-mode.md)
+- [Split bootstrap](./operations/split-bootstrap.md)

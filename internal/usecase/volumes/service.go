@@ -13,11 +13,16 @@ import (
 
 // Service implements the VolumeService interface.
 type Service struct {
-	runtime out.ContainerRuntime
+	runtime out.RuntimeVolumeManager
 }
 
 // NewService creates a new volume service.
 func NewService(runtime out.ContainerRuntime) *Service {
+	return NewServiceWithRuntimeVolumeManager(NewLocalRuntimeVolumeManager(runtime))
+}
+
+// NewServiceWithRuntimeVolumeManager creates a volume service backed by the narrow runtime volume port.
+func NewServiceWithRuntimeVolumeManager(runtime out.RuntimeVolumeManager) *Service {
 	return &Service{runtime: runtime}
 }
 
@@ -28,7 +33,7 @@ func (s *Service) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
 		zerowrap.FieldUseCase: "ListVolumes",
 	})
 
-	vols, err := s.runtime.ListVolumes(ctx)
+	vols, err := s.runtime.ListRuntimeVolumes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes: %w", err)
 	}
@@ -45,7 +50,7 @@ func (s *Service) PruneVolumes(ctx context.Context, dryRun bool) (*domain.Volume
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	vols, err := s.runtime.ListVolumes(ctx)
+	vols, err := s.runtime.ListRuntimeVolumes(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list volumes: %w", err)
 	}
@@ -59,7 +64,7 @@ func (s *Service) PruneVolumes(ctx context.Context, dryRun bool) (*domain.Volume
 		}
 
 		if !dryRun {
-			if err := s.runtime.RemoveVolume(ctx, vol.Name, false); err != nil {
+			if err := s.runtime.RemoveRuntimeVolume(ctx, vol.Name, false); err != nil {
 				log.Warn().Err(err).Str("volume", vol.Name).Msg("failed to remove volume, skipping")
 				continue
 			}

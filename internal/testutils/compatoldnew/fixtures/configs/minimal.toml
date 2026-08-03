@@ -1,0 +1,10 @@
+[server]
+port = 8080
+gordon_domain = "gordon.test"
+registry_port = 5000
+
+[auth]
+enabled = false
+
+[routes]
+"app.test" = "nginx:latest"

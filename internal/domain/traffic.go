@@ -41,6 +41,129 @@ type TrafficGraph struct {
 	Services    []TrafficService
 }
 
+// TrafficGraphGeneration is a control-owned monotonically increasing version.
+type TrafficGraphGeneration uint64
+
+// TrafficGraphSnapshot is the complete, sanitized traffic view consumed by a
+// split edge. It intentionally has no configuration, certificate, key, or
+// runtime identity fields. Values are immutable after publication.
+type TrafficGraphSnapshot struct {
+	Generation TrafficGraphGeneration
+	Graph      TrafficGraph
+}
+
+// Clone returns a deep independent copy of the snapshot.
+func (s TrafficGraphSnapshot) Clone() TrafficGraphSnapshot {
+	clone := s
+	clone.Graph.EntryPoints = cloneEntryPoints(s.Graph.EntryPoints)
+	clone.Graph.Routers = append([]TrafficRouter(nil), s.Graph.Routers...)
+	clone.Graph.Services = cloneTrafficServices(s.Graph.Services)
+	return clone
+}
+
+func cloneEntryPoints(values []EntryPoint) []EntryPoint {
+	cloned := make([]EntryPoint, len(values))
+	for index, value := range values {
+		cloned[index] = value
+		cloned[index].TrustedCIDRs = append([]string(nil), value.TrustedCIDRs...)
+		cloned[index].RawFallbackTrustedCIDRs = append([]string(nil), value.RawFallbackTrustedCIDRs...)
+	}
+	return cloned
+}
+
+func cloneTrafficServices(values []TrafficService) []TrafficService {
+	cloned := make([]TrafficService, len(values))
+	for index, value := range values {
+		cloned[index] = value
+		cloned[index].Backends = append([]TrafficBackend(nil), value.Backends...)
+	}
+	return cloned
+}
+
+// Validate verifies the graph and requires a non-zero snapshot generation.
+func (s TrafficGraphSnapshot) Validate() error {
+	if s.Generation == 0 {
+		return fmt.Errorf("traffic graph generation must be non-zero")
+	}
+	// Bound an untrusted stream before an edge allocates unbounded listeners,
+	// router indexes, or backend dial state.
+	if len(s.Graph.EntryPoints) > 64 || len(s.Graph.Routers) > 4096 || len(s.Graph.Services) > 4096 {
+		return fmt.Errorf("traffic graph exceeds split safety limits")
+	}
+	for _, entry := range s.Graph.EntryPoints {
+		if len(entry.TrustedCIDRs) > 128 || len(entry.RawFallbackTrustedCIDRs) > 128 {
+			return fmt.Errorf("traffic entrypoint exceeds split safety limits")
+		}
+	}
+	for _, service := range s.Graph.Services {
+		if len(service.Backends) > 64 {
+			return fmt.Errorf("traffic service exceeds split safety limits")
+		}
+	}
+	return s.Graph.Validate()
+}
+
+// ValidateSplitReachability fails closed for destinations a separate edge
+// cannot safely use. DNS aliases are allowed because they are explicit
+// control-provided targets; local, unspecified, and link-local IPs and local
+// runtime identities are not.
+func (s TrafficGraphSnapshot) ValidateSplitReachability() error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	for serviceIndex, service := range s.Graph.Services {
+		for backendIndex, backend := range service.Backends {
+			if err := validateSplitTrafficBackend(backend); err != nil {
+				return fmt.Errorf("traffic service %d backend %d: %w", serviceIndex, backendIndex, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateSplitTrafficBackend(backend TrafficBackend) error {
+	host := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(backend.Host)), ".")
+	if host == "" || len(host) > 253 || containsWhitespaceOrControl(host) {
+		return fmt.Errorf("backend host is not a control-safe target")
+	}
+	if forbiddenTrafficRuntimeIdentity(host) {
+		return fmt.Errorf("backend host is a forbidden runtime identity")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ValidateSplitTrafficIP(ip)
+	}
+	if !validTrafficBackendAlias(host) {
+		return fmt.Errorf("backend host is not a control-safe alias")
+	}
+	return nil
+}
+
+func forbiddenTrafficRuntimeIdentity(host string) bool {
+	return host == "localhost" || strings.HasSuffix(host, ".localhost") ||
+		host == "gordon-control" || host == "gordon-runtime" || host == "gordon-edge" || host == "gordon-registry"
+}
+
+// ValidateSplitTrafficIP rejects addresses a separate edge must never dial.
+// Private and routable public addresses are intentionally permitted.
+func ValidateSplitTrafficIP(ip net.IP) error {
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("backend host is not split reachable")
+	}
+	return nil // Private and routable public addresses are explicit control-safe targets.
+}
+
+func validTrafficBackendAlias(host string) bool {
+	if strings.ContainsAny(host, "/\\?#@:") || strings.HasPrefix(host, ".") || strings.Contains(host, "..") {
+		return false
+	}
+	for label := range strings.SplitSeq(host, ".") {
+		if !isValidEndpointHostLabel(label) {
+			return false
+		}
+	}
+	return true
+}
+
 type TrafficOptions struct {
 	TCP TCPOptions
 	UDP UDPOptions

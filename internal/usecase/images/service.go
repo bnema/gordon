@@ -19,7 +19,7 @@ import (
 
 // Service implements image list and prune operations.
 type Service struct {
-	runtime         imageRuntime
+	runtime         out.RuntimeImageManager
 	manifestStorage out.ManifestStorage
 	blobStorage     out.BlobStorage
 	log             zerowrap.Logger
@@ -33,6 +33,16 @@ type imageRuntime interface {
 // NewService creates a new images service.
 func NewService(
 	rt imageRuntime,
+	manifestStorage out.ManifestStorage,
+	blobStorage out.BlobStorage,
+	log zerowrap.Logger,
+) *Service {
+	return NewServiceWithRuntimeImageManager(NewLocalRuntimeImageManager(rt), manifestStorage, blobStorage, log)
+}
+
+// NewServiceWithRuntimeImageManager creates an images service backed by the narrow runtime image port.
+func NewServiceWithRuntimeImageManager(
+	rt out.RuntimeImageManager,
 	manifestStorage out.ManifestStorage,
 	blobStorage out.BlobStorage,
 	log zerowrap.Logger,
@@ -53,7 +63,7 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	details, err := s.runtime.ListImagesDetailed(ctx)
+	details, err := s.runtime.ListRuntimeImages(ctx)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list images")
 	}
@@ -71,7 +81,7 @@ func (s *Service) ListImages(ctx context.Context) ([]domain.ImageInfo, error) {
 	return images, nil
 }
 
-func buildRuntimeImageIndex(details []runtime.ImageDetail) ([]domain.ImageInfo, map[string]struct{}, map[string]string) {
+func buildRuntimeImageIndex(details []domain.RuntimeImageDetail) ([]domain.ImageInfo, map[string]struct{}, map[string]string) {
 	images := make([]domain.ImageInfo, 0, len(details))
 	seenRepoTags := make(map[string]struct{}, len(details))
 	repoDisplayByNormalized := make(map[string]string)
@@ -119,6 +129,11 @@ func (s *Service) appendRegistryImages(
 	seenRepoTags map[string]struct{},
 	repoDisplayByNormalized map[string]string,
 ) ([]domain.ImageInfo, error) {
+	// Split control intentionally has no registry storage. Runtime images
+	// remain useful while registry-only entries are simply unavailable.
+	if s.manifestStorage == nil {
+		return images, nil
+	}
 	repositories, err := s.manifestStorage.ListRepositories()
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list repositories")
@@ -177,23 +192,21 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	pruneReport, err := s.runtime.PruneImages(ctx, true)
+	pruneReport, err := s.runtime.PruneRuntimeImages(ctx, true)
 	if err != nil {
 		return domain.ImagePruneReport{}, log.WrapErr(err, "failed to prune runtime images")
 	}
 
-	return domain.ImagePruneReport{
-		Runtime: domain.RuntimePruneResult{
-			DeletedCount:   len(pruneReport.DeletedIDs),
-			SpaceReclaimed: pruneReport.SpaceReclaimed,
-		},
-	}, nil
+	return domain.ImagePruneReport{Runtime: pruneReport}, nil
 }
 
 // PruneRegistry applies tag retention and blob garbage collection.
 // It keeps the "latest" tag when present and keeps keepLast most-recent
 // non-latest tags from tagInfos.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+	if s.manifestStorage == nil || s.blobStorage == nil {
+		return domain.ImagePruneReport{}, fmt.Errorf("registry image prune: %w", domain.ErrNotImplemented)
+	}
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PruneRegistry",

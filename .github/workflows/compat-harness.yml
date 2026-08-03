@@ -1,0 +1,100 @@
+name: Compatibility Harness
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  compat-harness:
+    name: Required old/new and runtime compatibility gates
+    runs-on: ubuntu-latest
+    env:
+      # Release gates never use a moving branch as their old-side baseline.
+      GORDON_COMPAT_BASELINE_REF: 8f4a170d141b3e6f9ced7632dd5ac76cf7f9f842
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.26.5
+
+      - name: Cache Go modules and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Preflight required Docker runtime
+        run: |
+          docker info
+          docker version
+          jq --version
+
+      - name: Run config compatibility slice
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-config
+
+      - name: Run CLI compatibility slice
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-cli
+
+      - name: Run API compatibility slice
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-api
+
+      - name: Run Linux traffic compatibility gate
+        run: |
+          test "$(uname -s)" = Linux
+          make compat-harness-traffic
+
+      - name: Run runtime compatibility gate
+        run: make compat-harness-runtime
+
+      - name: Run registry compatibility gate
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-registry
+
+      - name: Run proxy compatibility gate
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-proxy
+
+      - name: Run current-security compatibility gate
+        env:
+          GORDON_COMPAT_ARTIFACT_DIR: artifacts/compat
+        run: make compat-harness-security
+
+      - name: Install and preflight rootless Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          test "$(id -u)" -ne 0
+          runtime_dir="/run/user/$(id -u)"
+          sudo install -d -m 700 -o "$(id -u)" -g "$(id -g)" "$runtime_dir"
+          echo "XDG_RUNTIME_DIR=$runtime_dir" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="$runtime_dir" podman info --format '{{.Host.Security.Rootless}}' | grep -qx true
+          XDG_RUNTIME_DIR="$runtime_dir" podman version
+
+      - name: Clean runtime fixtures
+        if: always()
+        run: |
+          docker ps -aq --filter label=gordon.compat.run | xargs -r docker rm -f
+          podman ps -aq --filter label=gordon.compat.run | xargs -r podman rm -f
+          # podman pod ps lists every pod by default and rejects -a.
+          podman pod ps -q --filter label=gordon.compat.run | xargs -r podman pod rm -f

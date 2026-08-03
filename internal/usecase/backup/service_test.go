@@ -19,7 +19,7 @@ import (
 )
 
 func TestService_DetectDatabases_PostgresAttachment(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 
@@ -37,7 +37,7 @@ func TestService_DetectDatabases_PostgresAttachment(t *testing.T) {
 }
 
 func TestService_RunBackup_Postgres(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 
@@ -85,7 +85,7 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 }
 
 func TestService_RunBackup_CleansUpDumpWhenPgDumpFails(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 
@@ -132,7 +132,7 @@ func TestPostgresDumpCommandUsesEnvVar(t *testing.T) {
 }
 
 func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 
@@ -180,7 +180,7 @@ func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testi
 }
 
 func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 
@@ -224,7 +224,7 @@ func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
 }
 
 func TestService_RunForSchedule_RejectsInvalidSchedule(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupDatabaseRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 

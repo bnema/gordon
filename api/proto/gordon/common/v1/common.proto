@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package gordon.common.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/bnema/gordon/api/gordon/common/v1;commonv1";
+
+message ComponentIdentity {
+  string component_id = 1;
+  string component_type = 2;
+  string instance_id = 3;
+  string hostname = 4;
+  map<string, string> labels = 5;
+}
+
+message Generation {
+  uint64 value = 1;
+}
+
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  map<string, string> metadata = 3;
+}
+
+message Ack {
+  bool ok = 1;
+  string message = 2;
+  ErrorDetail error = 3;
+}
+
+message Timestamp {
+  google.protobuf.Timestamp value = 1;
+}

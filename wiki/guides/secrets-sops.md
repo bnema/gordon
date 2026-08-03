@@ -250,62 +250,11 @@ creation_rules:
   - age: age1defaultkey...
 ```
 
-## Running in Containers
+## Running in containers
 
-### Custom Dockerfile
+Install SOPS and age in the Gordon image, then mount the encrypted document, `.sops.yaml`, and age key read-only. Set `SOPS_AGE_KEY_FILE` to the in-container key path.
 
-```dockerfile
-FROM ghcr.io/bnema/gordon:latest
-
-USER root
-RUN apk add --no-cache sops age
-USER gordon
-```
-
-### Mount Secrets and Keys
-
-```bash
-docker run -d \
-  --name gordon \
-  -p 80:8080 \
-  -p 5000:5000 \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v gordon-data:/data \
-  -v $(pwd)/secrets.yaml:/app/secrets.yaml:ro \
-  -v $(pwd)/.sops.yaml:/app/.sops.yaml:ro \
-  -v ~/.config/sops/age/keys.txt:/home/gordon/.config/sops/age/keys.txt:ro \
-  -e SOPS_AGE_KEY_FILE=/home/gordon/.config/sops/age/keys.txt \
-  -v $(pwd)/gordon.toml:/etc/gordon/gordon.toml:ro \
-  gordon-with-sops
-```
-
-### Docker Compose
-
-```yaml
-services:
-  gordon:
-    build:
-      context: .
-      dockerfile: Dockerfile.gordon
-    container_name: gordon
-    restart: unless-stopped
-    ports:
-      - "80:8080"
-      - "5000:5000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - gordon-data:/data
-      - ./gordon.toml:/etc/gordon/gordon.toml:ro
-      - ./secrets.yaml:/app/secrets.yaml:ro
-      - ./.sops.yaml:/app/.sops.yaml:ro
-      - ~/.config/sops/age/keys.txt:/home/gordon/.config/sops/age/keys.txt:ro
-    environment:
-      - SOPS_AGE_KEY_FILE=/home/gordon/.config/sops/age/keys.txt
-      - GORDON_SECRETS_BACKEND=sops
-
-volumes:
-  gordon-data:
-```
+In split mode these provider files and environment belong to **control only**. Do not mount the age key into runtime, edge, or registry. Only runtime receives the Docker/Podman engine socket; secret-provider access does not require engine authority. Use the generated migration role manifests rather than a shared Compose environment.
 
 ## Team Workflows
 

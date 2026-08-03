@@ -16,7 +16,7 @@ import (
 
 // VolumeService orchestrates volume archive backups.
 type VolumeService struct {
-	runtime  out.ContainerRuntime
+	runtime  out.BackupVolumeTargetRuntime
 	exporter out.VolumeArchiveExporter
 	storage  out.VolumeBackupStorage
 	config   domain.VolumeBackupConfig
@@ -27,7 +27,7 @@ type VolumeService struct {
 }
 
 // NewVolumeService creates a volume backup service.
-func NewVolumeService(runtime out.ContainerRuntime, exporter out.VolumeArchiveExporter, storage out.VolumeBackupStorage, config domain.VolumeBackupConfig, log zerowrap.Logger) *VolumeService {
+func NewVolumeService(runtime out.BackupVolumeTargetRuntime, exporter out.VolumeArchiveExporter, storage out.VolumeBackupStorage, config domain.VolumeBackupConfig, log zerowrap.Logger) *VolumeService {
 	return &VolumeService{
 		runtime:  runtime,
 		exporter: exporter,

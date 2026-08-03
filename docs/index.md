@@ -10,7 +10,7 @@ Gordon runs on your VPS and provides:
 - **HTTP Reverse Proxy** - Routes domains to containers automatically
 - **Push-to-Deploy** - Containers deploy when you push new images
 - **Zero-Downtime Updates** - New containers start before old ones stop
-- **Single Binary** - ~15MB RAM footprint
+- **One Binary, Two Modes** - monolith or generated control/runtime/edge/registry roles
 
 ## How It Works
 
@@ -39,7 +39,8 @@ Gordon runs on your VPS and provides:
 
 - [Getting Started](./getting-started.md) - Deploy your first app in minutes
 - [Installation](./installation.md) - Detailed installation instructions
-- [Upgrading](./upgrading.md) - Migration guide for breaking changes
+- [Upgrading](./upgrading.md) - Safe binary and deployment-mode upgrades
+- [Split Mode](./operations/split-mode.md) - Component topology and trust boundaries
 - [Concepts](./concepts.md) - Core concepts and architecture
 
 ### Configuration
@@ -73,6 +74,8 @@ Gordon runs on your VPS and provides:
 - [Docker Labels](./reference/docker-labels.md) - Container and image labels
 - [Environment Variables](./reference/env-variables.md) - Environment variable syntax
 - [Troubleshooting](./reference/troubleshooting.md) - Common issues and solutions
+- [Compatibility Harness](./reference/compatibility-harness.md) - Executable old/new and split checks
+- [Release Gates](./reference/release-gates.md) - Blocking verification commands
 
 ## Requirements
 

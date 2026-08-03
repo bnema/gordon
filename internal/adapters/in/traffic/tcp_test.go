@@ -666,6 +666,19 @@ func TestTCPManagerLifecycle(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTCPManagerShutdownRejectsUpdates(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	manager := NewManager()
+
+	require.NoError(t, manager.Shutdown(context.Background()))
+	require.Error(t, manager.Apply(context.Background(), &graph))
+
+	listener, err := net.Listen("tcp", graph.EntryPoints[0].Address)
+	require.NoError(t, err, "a stopped manager must not rebind listeners after shutdown")
+	require.NoError(t, listener.Close())
+}
+
 func TestTCPManagerRejectsInvalidGraphWithoutReplacingSnapshot(t *testing.T) {
 	backend := startTCPEchoServer(t, 0)
 	graph := tcpGraph(t, freeTCPAddress(t), backend.address)

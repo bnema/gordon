@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bnema/gordon/internal/boundaries/in"
+
 	"github.com/bnema/zerowrap"
+	"github.com/google/uuid"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
@@ -38,6 +40,19 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
+type runtimeControlService interface {
+	DeployRoute(ctx context.Context, route domain.Route) (domain.RuntimeCommandResult, error)
+	RestartRoute(ctx context.Context, domainName string, withAttachments bool) (domain.RuntimeCommandResult, error)
+	RemoveRoute(ctx context.Context, domainName string, force bool) (domain.RuntimeCommandResult, error)
+	RouteStatuses(ctx context.Context, routes []domain.Route) (map[string]string, error)
+}
+
+// networkService is deliberately narrower than ContainerService so split
+// control can query sanitized runtime state without a local runtime adapter.
+type networkService interface {
+	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
+}
+
 // Handler implements the HTTP handler for the admin API.
 type Handler struct {
 	configSvc       in.ConfigService
@@ -55,6 +70,9 @@ type Handler struct {
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
+	runtimeControl  runtimeControlService
+	networkSvc      networkService
+	componentEvents in.ComponentEventHandler
 	log             zerowrap.Logger
 }
 
@@ -204,6 +222,9 @@ type HandlerDeps struct {
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
+	RuntimeControl  runtimeControlService
+	NetworkSvc      networkService
+	ComponentEvents in.ComponentEventHandler
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -224,6 +245,9 @@ func NewHandler(deps HandlerDeps) *Handler {
 		reloadTrigger:   deps.ReloadTrigger,
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
+		runtimeControl:  deps.RuntimeControl,
+		networkSvc:      deps.NetworkSvc,
+		componentEvents: deps.ComponentEvents,
 		log:             deps.Log,
 	}
 }
@@ -326,7 +350,7 @@ func (h *Handler) handleAttachmentOrphans(w http.ResponseWriter, r *http.Request
 	if h.containerSvc == nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Msg("container service not available for orphaned attachment listing")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		h.sendError(w, http.StatusServiceUnavailable, "container service not available")
 		return
 	}
 	attachments, err := h.containerSvc.ListOrphanedAttachments(ctx)
@@ -352,7 +376,7 @@ func (h *Handler) handleAttachmentPrune(w http.ResponseWriter, r *http.Request) 
 	if h.containerSvc == nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Msg("container service not available for orphaned attachment cleanup")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
+		h.sendError(w, http.StatusServiceUnavailable, "container service not available")
 		return
 	}
 	stop := r.URL.Query().Get("stop") == "true"
@@ -640,28 +664,7 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 	}
 
 	if routeDomain == "" {
-		if r.URL.Query().Get("detailed") == "true" {
-			if err := h.containerSvc.SyncContainers(ctx); err != nil {
-				h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
-				h.sendError(w, http.StatusInternalServerError, "failed to list routes")
-				return
-			}
-			configured := h.configSvc.GetRoutes(ctx)
-			routes := mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx))
-			response := make([]routeInfoResponse, 0, len(routes))
-			for _, route := range routes {
-				response = append(response, toRouteInfoResponse(route))
-			}
-			h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
-			return
-		}
-
-		routes := h.configSvc.GetRoutes(ctx)
-		response := make([]routeResponse, 0, len(routes))
-		for _, route := range routes {
-			response = append(response, toRouteResponse(route))
-		}
-		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
+		h.handleRoutesList(w, r)
 		return
 	}
 
@@ -679,6 +682,12 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 			h.sendError(w, http.StatusBadRequest, "domain required in path")
 			return
 		}
+		if h.containerSvc == nil {
+			// Attachment runtime details are intentionally not exposed by the split
+			// runtime protocol. Return the compatible empty detail shape instead.
+			h.sendJSON(w, http.StatusOK, dto.AttachmentsResponse{Attachments: []attachmentResponse{}})
+			return
+		}
 		attachments := h.containerSvc.ListAttachments(ctx, parentDomain)
 		response := make([]attachmentResponse, 0, len(attachments))
 		for _, attachment := range attachments {
@@ -694,6 +703,57 @@ func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeD
 		return
 	}
 	h.sendJSON(w, http.StatusOK, toRouteResponse(*route))
+}
+
+func (h *Handler) handleRoutesList(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if r.URL.Query().Get("detailed") != "true" {
+		routes := h.configSvc.GetRoutes(ctx)
+		response := make([]routeResponse, 0, len(routes))
+		for _, route := range routes {
+			response = append(response, toRouteResponse(route))
+		}
+		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
+		return
+	}
+	configured := h.configSvc.GetRoutes(ctx)
+	routes, err := h.routeDetails(ctx, configured)
+	if err != nil {
+		if h.containerSvc == nil {
+			h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+		} else {
+			h.sendError(w, http.StatusInternalServerError, "failed to list routes")
+		}
+		return
+	}
+	response := make([]routeInfoResponse, 0, len(routes))
+	for _, route := range routes {
+		response = append(response, toRouteInfoResponse(route))
+	}
+	h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
+}
+
+func (h *Handler) routeDetails(ctx context.Context, configured []domain.Route) ([]domain.RouteInfo, error) {
+	if h.containerSvc != nil {
+		if err := h.containerSvc.SyncContainers(ctx); err != nil {
+			h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
+			return nil, err
+		}
+		return mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx)), nil
+	}
+	statuses := map[string]string{}
+	if h.runtimeControl != nil {
+		var err error
+		statuses, err = h.runtimeControl.RouteStatuses(ctx, configured)
+		if err != nil {
+			return nil, err
+		}
+	}
+	routes := make([]domain.RouteInfo, 0, len(configured))
+	for _, route := range configured {
+		routes = append(routes, domain.RouteInfo{Domain: route.Domain, Image: route.Image, ContainerStatus: statuses[route.Domain]})
+	}
+	return routes, nil
 }
 
 func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Request, routeDomain string) {
@@ -714,7 +774,7 @@ func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Reque
 	})
 	if !ok {
 		log.Error().Str("domain", routeDomain).Msg("route cleanup preview unavailable")
-		h.sendError(w, http.StatusInternalServerError, "route cleanup preview unavailable")
+		h.sendError(w, http.StatusNotImplemented, "route cleanup preview unavailable from control")
 		return
 	}
 
@@ -985,7 +1045,12 @@ func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, rou
 	}
 
 	var cleanup *dto.CleanupReport
-	if h.containerSvc != nil {
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.RemoveRoute(ctx, routeDomain, true)
+		if h.handleRuntimeControlResult(w, log, routeDomain, result, err, "remove") {
+			return
+		}
+	} else if h.containerSvc != nil {
 		report, err := h.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
 		if err != nil {
 			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to cleanup removed route runtime state")
@@ -1052,9 +1117,17 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	networks, err := h.containerSvc.ListNetworks(ctx)
+	networkSource := h.networkSvc
+	if networkSource == nil {
+		if h.containerSvc == nil {
+			h.sendError(w, http.StatusServiceUnavailable, "network service unavailable")
+			return
+		}
+		networkSource = h.containerSvc
+	}
+	networks, err := networkSource.ListNetworks(ctx)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, "failed to list networks")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime network service unavailable")
 		return
 	}
 
@@ -1324,15 +1397,26 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	routes := h.configSvc.GetRoutes(ctx)
 
-	// Get container statuses
 	statuses := make(map[string]string)
-	for _, route := range routes {
-		status := "unknown"
-		container, ok := h.containerSvc.Get(ctx, route.Domain)
-		if ok && container != nil {
-			status = container.Status
+	if h.runtimeControl != nil {
+		var err error
+		statuses, err = h.runtimeControl.RouteStatuses(ctx, routes)
+		if err != nil {
+			log := zerowrap.FromCtx(ctx)
+			log.Error().Err(err).Msg("failed to get runtime route statuses")
+			h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+			return
 		}
-		statuses[route.Domain] = status
+	} else {
+		// Get container statuses from the local monolith container service.
+		for _, route := range routes {
+			status := "unknown"
+			container, ok := h.containerSvc.Get(ctx, route.Domain)
+			if ok && container != nil {
+				status = container.Status
+			}
+			statuses[route.Domain] = status
+		}
 	}
 
 	status := dto.StatusResponse{
@@ -1676,6 +1760,34 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploy handles /admin/deploy/:domain endpoint.
 // POST triggers a deployment for the specified domain.
+func (h *Handler) clearDeploySuppression(image string) {
+	if image == "" || h.registrySvc == nil {
+		return
+	}
+	// Use the registry package's image name normaliser so digest-form refs
+	// and multi-segment paths are handled correctly.
+	imageName := registry.ExtractImageName(image)
+	h.registrySvc.ClearDeployEventSuppression(imageName)
+}
+
+func (h *Handler) handleRuntimeControlResult(w http.ResponseWriter, log zerowrap.Logger, routeDomain string, result domain.RuntimeCommandResult, err error, action string) bool {
+	if err != nil {
+		log.Error().Err(err).Str("domain", routeDomain).Str("action", action).Msg("runtime control command failed")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime unavailable")
+		return true
+	}
+	if result.Status == domain.RuntimeCommandStatusSucceeded {
+		return false
+	}
+	if result.Error != nil && strings.HasPrefix(result.Error.Code, "runtime_policy_denied") {
+		h.sendError(w, http.StatusForbidden, result.Error.Message)
+		return true
+	}
+	log.Error().Str("domain", routeDomain).Str("action", action).Str("status", string(result.Status)).Msg("runtime control command did not succeed")
+	h.sendError(w, http.StatusInternalServerError, "runtime command failed")
+	return true
+}
+
 func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodPost {
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1709,6 +1821,27 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 		return
 	}
 
+	if h.componentEvents != nil {
+		if err := h.dispatchManualDeploy(ctx, *route); err != nil {
+			log.Error().Err(err).Str("domain", deployDomain).Msg("manual deploy component event failed")
+			h.sendError(w, http.StatusServiceUnavailable, "deploy unavailable")
+			return
+		}
+		h.sendJSON(w, http.StatusOK, dto.DeployResponse{Status: "deployed", Domain: deployDomain})
+		return
+	}
+
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.DeployRoute(ctx, *route)
+		if h.handleRuntimeControlResult(w, log, deployDomain, result, err, "deploy") {
+			return
+		}
+		h.clearDeploySuppression(route.Image)
+		log.Info().Str("domain", deployDomain).Str("command_id", string(result.CommandID)).Msg("route deploy command applied via runtime control")
+		h.sendJSON(w, http.StatusOK, dto.DeployResponse{Status: "deployed", Domain: deployDomain})
+		return
+	}
+
 	// Deploy is an internal server-side action: pull from local registry path.
 	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
 	if err != nil {
@@ -1731,12 +1864,7 @@ func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path stri
 
 	// Clear deploy event suppression now that the explicit deploy has completed.
 	// This re-enables event-based deploys for future direct docker pushes.
-	if route.Image != "" && h.registrySvc != nil {
-		// Use the registry package's image name normaliser so digest-form refs
-		// and multi-segment paths are handled correctly.
-		imageName := registry.ExtractImageName(route.Image)
-		h.registrySvc.ClearDeployEventSuppression(imageName)
-	}
+	h.clearDeploySuppression(route.Image)
 
 	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
 	h.sendJSON(w, http.StatusOK, dto.DeployResponse{
@@ -1777,6 +1905,16 @@ func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path str
 	// disconnects. Podman restart can take 30+ seconds (SIGTERM + wait + start).
 	restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
+
+	if h.runtimeControl != nil {
+		result, err := h.runtimeControl.RestartRoute(restartCtx, restartDomain, withAttachments)
+		if h.handleRuntimeControlResult(w, log, restartDomain, result, err, "restart") {
+			return
+		}
+		log.Info().Str("domain", restartDomain).Bool("with_attachments", withAttachments).Str("command_id", string(result.CommandID)).Msg("route restart command applied via runtime control")
+		h.sendJSON(w, http.StatusOK, dto.RestartResponse{Status: "restarted", Domain: restartDomain})
+		return
+	}
 
 	if err := h.containerSvc.Restart(restartCtx, restartDomain, withAttachments); err != nil {
 		log.Error().Err(err).Str("domain", restartDomain).Msg("failed to restart container")
@@ -1921,7 +2059,7 @@ func (h *Handler) handleProcessLogs(w http.ResponseWriter, r *http.Request, line
 	logLines, err := h.logSvc.GetProcessLogs(ctx, lines)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to get process logs")
-		h.sendError(w, http.StatusInternalServerError, "failed to get logs")
+		h.sendError(w, http.StatusServiceUnavailable, "process log service unavailable")
 		return
 	}
 
@@ -1943,7 +2081,7 @@ func (h *Handler) handleContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	logLines, err := h.logSvc.GetContainerLogs(ctx, logDomain, lines)
 	if err != nil {
 		log.Warn().Err(err).Str("domain", logDomain).Msg("failed to get container logs")
-		h.sendError(w, http.StatusInternalServerError, "failed to get container logs")
+		h.sendError(w, http.StatusServiceUnavailable, "runtime log service unavailable")
 		return
 	}
 
@@ -2327,4 +2465,20 @@ func (h *Handler) handleTLSStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := h.publicTLSSvc.Status(ctx)
 	h.sendJSON(w, http.StatusOK, dto.TLSStatusFromDomain(status))
+}
+
+// SetComponentEventHandler wires durable control events after the control event
+// dispatcher is constructed. It is intentionally optional for monolith wiring.
+func (h *Handler) SetComponentEventHandler(handler in.ComponentEventHandler) {
+	h.componentEvents = handler
+}
+
+func (h *Handler) dispatchManualDeploy(ctx context.Context, route domain.Route) error {
+	id := "manual-" + uuid.NewString()
+	return h.componentEvents.HandleComponentEvent(ctx, domain.ComponentEventEnvelope{
+		ID: id, Type: domain.ComponentEventTypeManualDeploy, Origin: domain.ComponentRoleControl,
+		Timestamp: time.Now().UTC(), IdempotencyKey: id,
+		AuditClassification: domain.ComponentEventAuditCritical,
+		Payload:             domain.ComponentManualDeployPayload{Domain: route.Domain, Image: route.Image, CorrelationID: id},
+	})
 }

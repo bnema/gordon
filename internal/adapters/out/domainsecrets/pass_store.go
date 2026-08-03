@@ -31,6 +31,7 @@ type PassStore struct {
 	mu      sync.Mutex
 	timeout time.Duration
 	log     zerowrap.Logger
+	runPass func(context.Context, string, ...string) ([]byte, error)
 }
 
 // NewPassStore creates a new pass-based domain secret store.
@@ -51,11 +52,18 @@ func NewPassStore(log zerowrap.Logger) (*PassStore, error) {
 	return &PassStore{
 		timeout: 10 * time.Second,
 		log:     log,
+		runPass: execPass,
 	}, nil
 }
 
 // ListKeys returns the list of secret keys for a domain (not values).
 func (s *PassStore) ListKeys(domainName string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listKeysLocked(domainName)
+}
+
+func (s *PassStore) listKeysLocked(domainName string) ([]string, error) {
 	manifestPath, err := s.manifestPath(domainName)
 	if err != nil {
 		return nil, err
@@ -107,7 +115,10 @@ func (s *PassStore) ListKeys(domainName string) ([]string, error) {
 
 // GetAll returns all secrets for a domain as a key-value map.
 func (s *PassStore) GetAll(domainName string) (map[string]string, error) {
-	keys, err := s.ListKeys(domainName)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	keys, err := s.listKeysLocked(domainName)
 	if err != nil {
 		return nil, err
 	}
@@ -147,14 +158,14 @@ func (s *PassStore) SetIfEmpty(domainName string, secretsMap map[string]string) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existingKeys, err := s.ListKeys(domainName)
+	existingKeys, err := s.listKeysLocked(domainName)
 	if err != nil {
 		return nil, err
 	}
 	if len(existingKeys) > 0 {
 		return nil, fmt.Errorf("%w: pass secrets already exist for %s (found %d keys)", domain.ErrSecretsAlreadyExist, domainName, len(existingKeys))
 	}
-	if err := s.Set(domainName, secretsMap); err != nil {
+	if err := s.setLocked(domainName, secretsMap); err != nil {
 		return nil, err
 	}
 	return sortedMapKeys(secretsMap), nil
@@ -162,117 +173,57 @@ func (s *PassStore) SetIfEmpty(domainName string, secretsMap map[string]string) 
 
 // Set sets or updates multiple secrets for a domain.
 func (s *PassStore) Set(domainName string, secretsMap map[string]string) error {
-	if _, err := s.domainPath(domainName); err != nil {
-		return err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setLocked(domainName, secretsMap)
+}
 
-	existingKeys, err := s.ListKeys(domainName)
-	if err != nil {
-		return err
-	}
-
-	existingSet := make(map[string]struct{}, len(existingKeys))
-	for _, key := range existingKeys {
-		existingSet[key] = struct{}{}
-	}
-
-	insertedNewPaths := make([]string, 0, len(secretsMap))
-	for key, value := range secretsMap {
+func (s *PassStore) setLocked(domainName string, secretsMap map[string]string) error {
+	paths := make(map[string]string, len(secretsMap))
+	for _, key := range sortedMapKeys(secretsMap) {
 		if err := domain.ValidateEnvKey(key); err != nil {
 			return err
 		}
-
-		keyPath, err := s.keyPath(domainName, key)
+		path, err := s.keyPath(domainName, key)
 		if err != nil {
 			return err
 		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-		err = s.passInsert(ctx, keyPath, value)
-		cancel()
-		if err != nil {
-			s.cleanupInsertedPaths(insertedNewPaths)
-			return fmt.Errorf("failed to store secret %s: %w", key, err)
-		}
-
-		if _, exists := existingSet[key]; !exists {
-			insertedNewPaths = append(insertedNewPaths, keyPath)
-		}
+		paths[key] = path
 	}
-
-	keySet := make(map[string]struct{}, len(existingKeys)+len(secretsMap))
-	for _, key := range existingKeys {
-		keySet[key] = struct{}{}
-	}
-	for key := range secretsMap {
-		keySet[key] = struct{}{}
-	}
-
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
 	manifestPath, err := s.manifestPath(domainName)
 	if err != nil {
 		return err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	if err := s.passInsert(ctx, manifestPath, strings.Join(keys, "\n")); err != nil {
-		cancel()
-		s.cleanupInsertedPaths(insertedNewPaths)
-		return fmt.Errorf("failed to update manifest: %w", err)
+	manifestSnapshot, err := s.snapshotPassValue(manifestPath)
+	if err != nil {
+		return err
 	}
-	cancel()
-
-	return nil
+	existingKeys, err := s.listKeysLocked(domainName)
+	if err != nil {
+		return err
+	}
+	return s.commitSecretTransaction(existingKeys, secretsMap, paths, manifestSnapshot)
 }
 
 // Delete removes a specific secret key from a domain.
 func (s *PassStore) Delete(domainName, key string) error {
-	if _, err := s.domainPath(domainName); err != nil {
-		return err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteLocked(domainName, key)
+}
 
+func (s *PassStore) deleteLocked(domainName, key string) error {
 	keyPath, err := s.keyPath(domainName, key)
 	if err != nil {
 		return err
 	}
-
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer rmCancel()
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
-		return err
-	}
-
-	keys, err := s.ListKeys(domainName)
-	if err != nil {
-		return err
-	}
-
-	updated := make([]string, 0, len(keys))
-	for _, existingKey := range keys {
-		if existingKey == key {
-			continue
-		}
-		updated = append(updated, existingKey)
-	}
-	sort.Strings(updated)
-
 	manifestPath, err := s.manifestPath(domainName)
 	if err != nil {
 		return err
 	}
-
-	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer insertCancel()
-	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
-		return fmt.Errorf("failed to update manifest: %w", err)
-	}
-
-	return nil
+	return s.deleteSecretTransaction(key, keyPath, manifestPath, func() ([]string, error) {
+		return s.listKeysLocked(domainName)
+	})
 }
 
 // SetAttachmentIfEmpty sets attachment secrets only when no keys already exist.
@@ -289,7 +240,7 @@ func (s *PassStore) SetAttachmentIfEmpty(containerName string, secretsMap map[st
 	if len(existingKeys) > 0 {
 		return nil, fmt.Errorf("%w: pass secrets already exist for attachment %s (found %d keys)", domain.ErrSecretsAlreadyExist, containerName, len(existingKeys))
 	}
-	if err := s.SetAttachment(containerName, secretsMap); err != nil {
+	if err := s.setAttachmentLocked(containerName, secretsMap); err != nil {
 		return nil, err
 	}
 	return sortedMapKeys(secretsMap), nil
@@ -297,121 +248,64 @@ func (s *PassStore) SetAttachmentIfEmpty(containerName string, secretsMap map[st
 
 // SetAttachment sets or updates multiple secrets for an attachment container.
 func (s *PassStore) SetAttachment(containerName string, secretsMap map[string]string) error {
-	if _, err := s.attachmentPath(containerName); err != nil {
-		return err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.setAttachmentLocked(containerName, secretsMap)
+}
 
-	existingKeys, err := s.listAttachmentKeys(containerName)
-	if err != nil {
-		return err
-	}
-
-	existingSet := make(map[string]struct{}, len(existingKeys))
-	for _, key := range existingKeys {
-		existingSet[key] = struct{}{}
-	}
-
-	insertedNewPaths := make([]string, 0, len(secretsMap))
-	for key, value := range secretsMap {
+func (s *PassStore) setAttachmentLocked(containerName string, secretsMap map[string]string) error {
+	paths := make(map[string]string, len(secretsMap))
+	for _, key := range sortedMapKeys(secretsMap) {
 		if err := domain.ValidateEnvKey(key); err != nil {
 			return err
 		}
-
-		keyPath, err := s.attachmentKeyPath(containerName, key)
+		path, err := s.attachmentKeyPath(containerName, key)
 		if err != nil {
 			return err
 		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-		err = s.passInsert(ctx, keyPath, value)
-		cancel()
-		if err != nil {
-			s.cleanupInsertedPaths(insertedNewPaths)
-			return fmt.Errorf("failed to store attachment secret %s: %w", key, err)
-		}
-
-		if _, exists := existingSet[key]; !exists {
-			insertedNewPaths = append(insertedNewPaths, keyPath)
-		}
+		paths[key] = path
 	}
-
-	keySet := make(map[string]struct{}, len(existingKeys)+len(secretsMap))
-	for _, key := range existingKeys {
-		keySet[key] = struct{}{}
-	}
-	for key := range secretsMap {
-		keySet[key] = struct{}{}
-	}
-
-	keys := make([]string, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
 	manifestPath, err := s.attachmentManifestPath(containerName)
 	if err != nil {
 		return err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-	if err := s.passInsert(ctx, manifestPath, strings.Join(keys, "\n")); err != nil {
-		cancel()
-		s.cleanupInsertedPaths(insertedNewPaths)
-		return fmt.Errorf("failed to update attachment manifest: %w", err)
+	manifestSnapshot, err := s.snapshotPassValue(manifestPath)
+	if err != nil {
+		return err
 	}
-	cancel()
-
-	return nil
+	existingKeys, err := s.listAttachmentKeysRecover(containerName)
+	if err != nil {
+		return err
+	}
+	return s.commitSecretTransaction(existingKeys, secretsMap, paths, manifestSnapshot)
 }
 
 // DeleteAttachment removes a specific secret key from an attachment container.
 func (s *PassStore) DeleteAttachment(containerName, key string) error {
-	if _, err := s.attachmentPath(containerName); err != nil {
-		return err
-	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.deleteAttachmentLocked(containerName, key)
+}
 
+func (s *PassStore) deleteAttachmentLocked(containerName, key string) error {
 	keyPath, err := s.attachmentKeyPath(containerName, key)
 	if err != nil {
 		return err
 	}
-
-	rmCtx, rmCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer rmCancel()
-	if err := s.passRemove(rmCtx, keyPath); err != nil {
-		return err
-	}
-
-	keys, err := s.listAttachmentKeys(containerName)
-	if err != nil {
-		return err
-	}
-
-	updated := make([]string, 0, len(keys))
-	for _, existingKey := range keys {
-		if existingKey == key {
-			continue
-		}
-		updated = append(updated, existingKey)
-	}
-	sort.Strings(updated)
-
 	manifestPath, err := s.attachmentManifestPath(containerName)
 	if err != nil {
 		return err
 	}
-
-	insertCtx, insertCancel := context.WithTimeout(context.Background(), s.timeout)
-	defer insertCancel()
-	if err := s.passInsert(insertCtx, manifestPath, strings.Join(updated, "\n")); err != nil {
-		return fmt.Errorf("failed to update attachment manifest: %w", err)
-	}
-
-	return nil
+	return s.deleteSecretTransaction(key, keyPath, manifestPath, func() ([]string, error) {
+		return s.listAttachmentKeys(containerName)
+	})
 }
 
 // GetAllAttachment returns all secrets for an attachment container as a key-value map.
 func (s *PassStore) GetAllAttachment(containerName string) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	keys, err := s.listAttachmentKeys(containerName)
 	if err != nil {
 		return nil, err
@@ -750,36 +644,46 @@ func (s *PassStore) ManifestExists(domainName string) (bool, error) {
 	return exists, nil
 }
 
+func execPass(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "pass", args...) //nolint:gosec // binary is constant ("pass"); path arguments are validated by secrets path validator
+	cmd.Stdin = strings.NewReader(stdin)
+	return cmd.CombinedOutput()
+}
+
+func (s *PassStore) run(ctx context.Context, stdin string, args ...string) ([]byte, error) {
+	runner := s.runPass
+	if runner == nil {
+		runner = execPass
+	}
+	return runner(ctx, stdin, args...)
+}
+
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	cmd.Stdin = strings.NewReader(value)
-	output, err := cmd.CombinedOutput()
+	_, err := s.run(ctx, value, "insert", "-m", "-f", path)
 	if err != nil {
-		return fmt.Errorf("pass insert failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("pass insert failed")
 	}
 	return nil
 }
 
 func (s *PassStore) passRemove(ctx context.Context, path string) error {
-	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "rm", "-f", path)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return nil
 		}
-		return fmt.Errorf("pass rm failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return fmt.Errorf("pass remove failed")
 	}
 	return nil
 }
 
 func (s *PassStore) passShow(ctx context.Context, path string) (string, bool, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "show", path)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("pass show failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return "", false, fmt.Errorf("pass show failed")
 	}
 
 	clean := ansiRegex.ReplaceAllString(string(output), "")
@@ -792,13 +696,12 @@ func (s *PassStore) listTopLevelEntries(ctx context.Context, basePath string) ([
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, "pass", "ls", basePath) //nolint:gosec // binary is constant ("pass"); path arguments validated by secrets path validator
-	output, err := cmd.CombinedOutput()
+	output, err := s.run(ctx, "", "ls", basePath)
 	if err != nil {
 		if passEntryMissing(string(output)) {
 			return []string{}, nil
 		}
-		return nil, fmt.Errorf("pass ls failed: %s: %w", strings.TrimSpace(string(output)), err)
+		return nil, fmt.Errorf("pass list failed")
 	}
 
 	entries := []string{}
@@ -917,18 +820,141 @@ func mergeUniqueKeys(primary, secondary []string) ([]string, bool) {
 	return merged, false
 }
 
-func (s *PassStore) cleanupInsertedPaths(paths []string) {
-	if len(paths) == 0 {
-		return
+type passValueSnapshot struct {
+	path   string
+	value  string
+	exists bool
+}
+
+func (s *PassStore) commitSecretTransaction(existingKeys []string, values, paths map[string]string, manifestSnapshot passValueSnapshot) error {
+	manifestPath := manifestSnapshot.path
+	keys := sortedMapKeys(values)
+	var err error
+	snapshots := make(map[string]passValueSnapshot, len(keys)+1)
+	for _, key := range keys {
+		snapshot, err := s.snapshotPassValue(paths[key])
+		if err != nil {
+			return err
+		}
+		snapshots[paths[key]] = snapshot
+	}
+	snapshots[manifestPath] = manifestSnapshot
+
+	attempted := make([]string, 0, len(keys)+1)
+	for _, key := range keys {
+		path := paths[key]
+		attempted = append(attempted, path)
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		err = s.passInsert(ctx, path, values[key])
+		cancel()
+		if err != nil {
+			return s.transactionFailure(attempted, snapshots)
+		}
 	}
 
-	for _, path := range paths {
-		// Wrap in a closure so defer cancel() runs at the end of each iteration,
-		// not at the end of cleanupInsertedPaths (which would delay all cancels).
-		func(p string) {
-			ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
-			defer cancel()
-			_ = s.passRemove(ctx, p)
-		}(path)
+	keySet := make(map[string]struct{}, len(existingKeys)+len(keys))
+	for _, key := range existingKeys {
+		keySet[key] = struct{}{}
 	}
+	for _, key := range keys {
+		keySet[key] = struct{}{}
+	}
+	manifestKeys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		manifestKeys = append(manifestKeys, key)
+	}
+	sort.Strings(manifestKeys)
+
+	attempted = append(attempted, manifestPath)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	err = s.passInsert(ctx, manifestPath, strings.Join(manifestKeys, "\n"))
+	cancel()
+	if err != nil {
+		return s.transactionFailure(attempted, snapshots)
+	}
+	return nil
+}
+
+func (s *PassStore) deleteSecretTransaction(key, keyPath, manifestPath string, listKeys func() ([]string, error)) error {
+	keySnapshot, err := s.snapshotPassValue(keyPath)
+	if err != nil {
+		return err
+	}
+	manifestSnapshot, err := s.snapshotPassValue(manifestPath)
+	if err != nil {
+		return err
+	}
+	snapshots := []passValueSnapshot{keySnapshot, manifestSnapshot}
+
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	err = s.passRemove(ctx, keyPath)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	keys, err := listKeys()
+	if err != nil {
+		return s.deleteTransactionFailure(snapshots)
+	}
+	updated := make([]string, 0, len(keys))
+	for _, existingKey := range keys {
+		if existingKey != key {
+			updated = append(updated, existingKey)
+		}
+	}
+	sort.Strings(updated)
+
+	ctx, cancel = context.WithTimeout(context.Background(), s.timeout)
+	err = s.passInsert(ctx, manifestPath, strings.Join(updated, "\n"))
+	cancel()
+	if err != nil {
+		return s.deleteTransactionFailure(snapshots)
+	}
+	return nil
+}
+
+func (s *PassStore) deleteTransactionFailure(snapshots []passValueSnapshot) error {
+	if s.restorePassSnapshots(snapshots) {
+		return fmt.Errorf("secret delete failed and rollback failed")
+	}
+	return fmt.Errorf("secret delete failed")
+}
+
+func (s *PassStore) restorePassSnapshots(snapshots []passValueSnapshot) bool {
+	rollbackFailed := false
+	for index := len(snapshots) - 1; index >= 0; index-- {
+		snapshot := snapshots[index]
+		ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+		var err error
+		if snapshot.exists {
+			err = s.passInsert(ctx, snapshot.path, snapshot.value)
+		} else {
+			err = s.passRemove(ctx, snapshot.path)
+		}
+		cancel()
+		rollbackFailed = rollbackFailed || err != nil
+	}
+	return rollbackFailed
+}
+
+func (s *PassStore) snapshotPassValue(path string) (passValueSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	value, exists, err := s.passShow(ctx, path)
+	if err != nil {
+		return passValueSnapshot{}, err
+	}
+	return passValueSnapshot{path: path, value: value, exists: exists}, nil
+}
+
+func (s *PassStore) transactionFailure(attempted []string, snapshots map[string]passValueSnapshot) error {
+	ordered := make([]passValueSnapshot, 0, len(attempted))
+	for _, path := range attempted {
+		ordered = append(ordered, snapshots[path])
+	}
+	if s.restorePassSnapshots(ordered) {
+		return fmt.Errorf("secret transaction failed and rollback failed")
+	}
+	return fmt.Errorf("secret transaction failed")
 }

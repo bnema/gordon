@@ -12,9 +12,43 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkgruntime "github.com/bnema/gordon/pkg/runtime"
 )
+
+func TestService_ListImages_UsesNarrowRuntimeImageManager(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	blobStorage := noopBlobStorage{}
+	createdAt := time.Date(2026, 2, 8, 12, 0, 0, 0, time.UTC)
+	runtimeManager := outmocks.NewMockRuntimeImageManager(t)
+	runtimeManager.EXPECT().ListRuntimeImages(context.Background()).Return([]domain.RuntimeImageDetail{{
+		ID:       "sha256:111",
+		RepoTags: []string{"gordon/api:latest"},
+		Size:     1234,
+		Created:  createdAt,
+	}}, nil)
+
+	svc := NewServiceWithRuntimeImageManager(runtimeManager, manifestStorage, blobStorage, zerowrap.Default())
+	images, err := svc.ListImages(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	assert.Equal(t, "gordon/api", images[0].Repository)
+	assert.Equal(t, "latest", images[0].Tag)
+}
+
+func TestService_PruneRuntime_UsesNarrowRuntimeImageManager(t *testing.T) {
+	runtimeManager := outmocks.NewMockRuntimeImageManager(t)
+	runtimeManager.EXPECT().PruneRuntimeImages(context.Background(), true).Return(domain.RuntimePruneResult{DeletedCount: 2, SpaceReclaimed: 2048}, nil)
+
+	svc := NewServiceWithRuntimeImageManager(runtimeManager, noopManifestStorage{}, noopBlobStorage{}, zerowrap.Default())
+	report, err := svc.PruneRuntime(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, 2, report.Runtime.DeletedCount)
+	assert.Equal(t, int64(2048), report.Runtime.SpaceReclaimed)
+}
 
 func TestService_ListImages_ReturnsAllImages(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()

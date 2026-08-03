@@ -223,7 +223,7 @@ images to the registry when the route was not yet configured.`,
 				return err
 			}
 			if isRemote {
-				return runReloadRemote(cmd.Context(), client)
+				return runReloadRemote(cmd.Context(), client, cmd.OutOrStdout())
 			}
 			return runReload()
 		},
@@ -257,15 +257,15 @@ func runReload() error {
 }
 
 // runReloadRemote triggers a reload on a remote Gordon instance.
-func runReloadRemote(ctx context.Context, client *remote.Client) error {
+func runReloadRemote(ctx context.Context, client *remote.Client, out io.Writer) error {
 	if err := client.Reload(ctx); err != nil {
 		if shouldFallbackToLocal(err) {
 			localErr := runReload()
 			if localErr == nil {
-				if writeErr := cliWriteLine(os.Stdout, cliRenderWarning(fmt.Sprintf("Remote reload failed (%v), used local signal fallback", err))); writeErr != nil {
+				if writeErr := cliWriteLine(out, cliRenderWarning(fmt.Sprintf("Remote reload failed (%v), used local signal fallback", err))); writeErr != nil {
 					return writeErr
 				}
-				if writeErr := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); writeErr != nil {
+				if writeErr := cliWriteLine(out, cliRenderSuccess("Configuration reloaded successfully")); writeErr != nil {
 					return writeErr
 				}
 				return nil
@@ -274,7 +274,7 @@ func runReloadRemote(ctx context.Context, client *remote.Client) error {
 		}
 		return fmt.Errorf("failed to reload: %w", err)
 	}
-	if err := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); err != nil {
+	if err := cliWriteLine(out, cliRenderSuccess("Configuration reloaded successfully")); err != nil {
 		return err
 	}
 	return nil

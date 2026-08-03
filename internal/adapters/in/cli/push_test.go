@@ -95,6 +95,21 @@ func TestClassifyPushArgument(t *testing.T) {
 	}
 }
 
+func TestTagAndPush_MissingLocalImageIsTypedClientPreflight(t *testing.T) {
+	ops := climocks.NewMockpushImageOps(t)
+	ops.EXPECT().Exists(mock.Anything, "registry.example/app").Return(false, nil)
+
+	err := tagAndPush(context.Background(), ops, imagePush{
+		Registry: "registry.example", ImageName: "app", Version: "v1",
+		VersionRef: "registry.example/app:v1", LatestRef: "registry.example/app:latest",
+	})
+
+	var preflight *localImagePreflightError
+	assert.ErrorAs(t, err, &preflight)
+	assert.Equal(t, "registry.example/app", preflight.ref)
+	assert.Equal(t, "local image registry.example/app not found; build and tag it before pushing", err.Error())
+}
+
 func TestBuildAndPush_BuildArgs(t *testing.T) {
 	// Verify buildImageArgs produces --load instead of --push
 	args := buildImageArgs(context.Background(), "v1.0.0", "linux/amd64", "Dockerfile", []string{"CGO_ENABLED=0"}, "reg.example.com/app:v1.0.0", "reg.example.com/app:latest")

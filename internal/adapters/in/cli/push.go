@@ -43,6 +43,16 @@ type imagePush struct {
 	LatestRef  string
 }
 
+// localImagePreflightError is the intentional client-local push boundary: the
+// image must exist in the caller's Docker daemon before Gordon can tag/upload it.
+type localImagePreflightError struct {
+	ref string
+}
+
+func (e *localImagePreflightError) Error() string {
+	return fmt.Sprintf("local image %s not found; build and tag it before pushing", e.ref)
+}
+
 // pushRequest holds all inputs for the push command.
 type pushRequest struct {
 	ImageArg  string
@@ -313,6 +323,9 @@ func validateBuildArgsList(buildArgs []string) error {
 	return nil
 }
 
+// newPushImageOps deliberately keeps Docker build/tag/upload client-local. The
+// remote control plane supplies route resolution, deploy intent, and registry
+// credentials; the local daemon supplies image layers for the registry manifest.
 func newPushImageOps(inferredRemote *remote.ResolvedRemote) (pushImageOps, error) {
 	if inferredRemote != nil {
 		return newImageOpsForResolvedRemote(inferredRemote)
@@ -740,7 +753,7 @@ func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
 		return fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
 	}
 	if !exists {
-		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
+		return &localImagePreflightError{ref: localImage}
 	}
 
 	fmt.Println("Tagging...")

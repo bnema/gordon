@@ -21,6 +21,7 @@ import (
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	out "github.com/bnema/gordon/internal/boundaries/out"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
@@ -254,9 +255,11 @@ func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
 	cfg.EntryPoints = map[string]traffic.EntryPointConfig{
 		traffic.DefaultEdgeEntryPointName: {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
 	}
-	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com"}, nil)
-	svc := &services{proxySvc: proxyusecase.NewService(nil, nil, configSvc, proxyusecase.Config{})}
+	entry, err := domain.NewReadyRouteTargetEntry("app.example.com", "198.51.100.1", 8080, "http", domain.RouteTargetProtocolHTTP1, 1)
+	require.NoError(t, err)
+	provider := outmocks.NewMockRouteSnapshotProvider(t)
+	provider.EXPECT().CurrentSnapshot(mock.Anything).Return(domain.RouteTargetSnapshot{Generation: 1, Entries: []domain.RouteTargetEntry{entry}}, nil).Once()
+	svc := &services{proxySvc: proxyusecase.NewSnapshotService(provider, proxyusecase.Config{})}
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 

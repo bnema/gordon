@@ -7,10 +7,21 @@ import (
 	"net/http"
 
 	"github.com/bnema/zerowrap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func runtimeImageServiceUnavailable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.FailedPrecondition, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
+}
 
 func toImageResponse(image domain.ImageInfo) dto.Image {
 	return dto.Image{
@@ -68,7 +79,11 @@ func (h *Handler) handleImagesGet(w http.ResponseWriter, r *http.Request) {
 
 	images, err := h.imageSvc.ListImages(ctx)
 	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, "failed to list images")
+		if runtimeImageServiceUnavailable(err) {
+			h.sendError(w, http.StatusServiceUnavailable, "runtime image service unavailable")
+		} else {
+			h.sendError(w, http.StatusInternalServerError, "failed to list images")
+		}
 		return
 	}
 
@@ -118,8 +133,16 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 
 	report, err := h.imageSvc.Prune(ctx, opts)
 	if err != nil {
+		if errors.Is(err, domain.ErrNotImplemented) {
+			h.sendError(w, http.StatusNotImplemented, "registry image prune is not available from control")
+			return
+		}
 		log.Error().Err(err).Int("keep_last", opts.KeepLast).Msg("image prune failed")
-		h.sendError(w, http.StatusInternalServerError, "failed to prune images")
+		if runtimeImageServiceUnavailable(err) {
+			h.sendError(w, http.StatusServiceUnavailable, "runtime image service unavailable")
+		} else {
+			h.sendError(w, http.StatusInternalServerError, "failed to prune images")
+		}
 		return
 	}
 

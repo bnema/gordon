@@ -25,7 +25,7 @@ type Service struct {
 	logFilePath        string
 	fileLoggingEnabled bool
 	containerSvc       in.ContainerService
-	runtime            out.ContainerRuntime
+	runtimeLogReader   out.RuntimeLogReader
 	log                zerowrap.Logger
 }
 
@@ -39,11 +39,22 @@ func NewService(
 	runtime out.ContainerRuntime,
 	log zerowrap.Logger,
 ) *Service {
+	return NewServiceWithRuntimeLogReader(logFilePath, fileLoggingEnabled, containerSvc, NewLocalRuntimeLogReader(containerSvc, runtime), log)
+}
+
+// NewServiceWithRuntimeLogReader creates a log service backed by the narrow runtime log-reader port.
+func NewServiceWithRuntimeLogReader(
+	logFilePath string,
+	fileLoggingEnabled bool,
+	containerSvc in.ContainerService,
+	runtimeLogReader out.RuntimeLogReader,
+	log zerowrap.Logger,
+) *Service {
 	return &Service{
 		logFilePath:        logFilePath,
 		fileLoggingEnabled: fileLoggingEnabled,
 		containerSvc:       containerSvc,
-		runtime:            runtime,
+		runtimeLogReader:   runtimeLogReader,
 		log:                log,
 	}
 }
@@ -357,14 +368,12 @@ func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	if s.runtimeLogReader == nil {
+		return nil, fmt.Errorf("runtime log reader not configured")
 	}
 
-	// Get logs from container runtime (non-follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, false)
+	// Get logs from runtime log reader (non-follow mode)
+	reader, err := s.runtimeLogReader.ReadRouteLogs(ctx, domain, false)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}
@@ -398,14 +407,12 @@ func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initia
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	if s.runtimeLogReader == nil {
+		return nil, fmt.Errorf("runtime log reader not configured")
 	}
 
-	// Get logs from container runtime (follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, true)
+	// Get logs from runtime log reader (follow mode)
+	reader, err := s.runtimeLogReader.ReadRouteLogs(ctx, domain, true)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}

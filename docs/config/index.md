@@ -178,6 +178,7 @@ keep_last = 3
 | `[routes]` | Domain to image mapping | [Routes](./routes.md) |
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
 | `[entrypoints]`, `[traffic]`, `[[network_services]]`, `[[services]]` | L4 and TLS passthrough traffic plane | [Traffic](./traffic.md) |
+| Edge-only config | Strict split-role edge listener and TLS contract | [Edge Role](./edge.md) |
 | `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
 | `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
 | `[backups]` | Database backups | [Backups](./backups.md) |

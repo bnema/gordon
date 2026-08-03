@@ -238,6 +238,54 @@ func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
 	}
 }
 
+func TestStrictDirectPeerCIDRAllowlist(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	tests := []struct {
+		name        string
+		allowedNets []*net.IPNet
+		remoteAddr  string
+		wantStatus  int
+	}{
+		{
+			name:        "localhost is denied when not explicitly configured",
+			allowedNets: httphelper.ParseTrustedProxies([]string{"10.0.0.0/8"}),
+			remoteAddr:  "127.0.0.1:1234",
+			wantStatus:  http.StatusForbidden,
+		},
+		{
+			name:        "explicit loopback CIDR allows localhost",
+			allowedNets: httphelper.ParseTrustedProxies([]string{"127.0.0.0/8"}),
+			remoteAddr:  "127.0.0.1:1234",
+			wantStatus:  http.StatusNoContent,
+		},
+		{
+			name:        "forwarded headers cannot bypass direct peer check",
+			allowedNets: httphelper.ParseTrustedProxies([]string{"10.0.0.0/8"}),
+			remoteAddr:  "192.0.2.5:1234",
+			wantStatus:  http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := StrictDirectPeerCIDRAllowlist(tt.allowedNets, log)(ok)
+			req := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			req.RemoteAddr = tt.remoteAddr
+			req.Header.Set("X-Forwarded-For", "10.1.2.3")
+			req.Header.Set("Forwarded", "for=10.1.2.3")
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			assert.Equal(t, tt.wantStatus, rr.Code)
+		})
+	}
+}
+
 func TestProxyCIDRAllowlist(t *testing.T) {
 	log := testLogger()
 	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

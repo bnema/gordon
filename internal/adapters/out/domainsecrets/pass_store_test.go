@@ -2,6 +2,7 @@ package domainsecrets
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -61,6 +62,356 @@ func cleanupPassDomain(_ *testing.T, domainName string, keys []string) {
 
 	manifestPath := fmt.Sprintf("%s/%s/.keys", PassDomainSecretsPath, safeDomain)
 	_ = passCmd("rm", "-f", manifestPath)
+}
+
+func TestPassStoreMutationsWaitForStoreLock(t *testing.T) {
+	store := &PassStore{
+		timeout: time.Second,
+		log:     testLogger(),
+		runPass: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+			return nil, nil
+		},
+	}
+	mutations := []struct {
+		name string
+		run  func() error
+	}{
+		{"set", func() error { return store.Set("app.example.test", map[string]string{}) }},
+		{"delete", func() error { return store.Delete("app.example.test", "TOKEN") }},
+		{"set attachment", func() error { return store.SetAttachment("app-db", map[string]string{}) }},
+		{"delete attachment", func() error { return store.DeleteAttachment("app-db", "TOKEN") }},
+	}
+	for _, mutation := range mutations {
+		t.Run(mutation.name, func(t *testing.T) {
+			store.mu.Lock()
+			done := make(chan struct{})
+			go func() { _ = mutation.run(); close(done) }()
+			select {
+			case <-done:
+				store.mu.Unlock()
+				t.Fatal("mutation bypassed store lock")
+			case <-time.After(20 * time.Millisecond):
+			}
+			store.mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("mutation remained blocked after lock release")
+			}
+		})
+	}
+}
+
+func TestPassStoreDeleteRollbackIsSerializedAgainstConcurrentSet(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	basePath := PassDomainSecretsPath + "/" + safeDomain
+	entries := map[string]string{
+		basePath + "/TOKEN": "original",
+		basePath + "/.keys": "TOKEN",
+	}
+	manifestFailureReached := make(chan struct{})
+	releaseFailure := make(chan struct{})
+	failed := false
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		switch args[0] {
+		case "show":
+			value, ok := entries[path]
+			if !ok {
+				return []byte("not in the password store"), errors.New("missing")
+			}
+			return []byte(value), nil
+		case "ls":
+			return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+		case "rm":
+			delete(entries, path)
+			return nil, nil
+		case "insert":
+			if strings.HasSuffix(path, "/.keys") && !failed {
+				failed = true
+				close(manifestFailureReached)
+				<-releaseFailure
+				return nil, errors.New("forced manifest failure")
+			}
+			entries[path] = stdin
+			return nil, nil
+		default:
+			return nil, errors.New("unexpected pass command")
+		}
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- store.Delete("app.example.test", "TOKEN") }()
+	<-manifestFailureReached
+	setDone := make(chan error, 1)
+	go func() { setDone <- store.Set("app.example.test", map[string]string{"NEXT": "next"}) }()
+	select {
+	case <-setDone:
+		t.Fatal("concurrent set entered while delete rollback was pending")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseFailure)
+	require.Error(t, <-deleteDone)
+	require.NoError(t, <-setDone)
+	assert.Equal(t, "original", entries[basePath+"/TOKEN"])
+	assert.Equal(t, "next", entries[basePath+"/NEXT"])
+}
+
+func TestPassStoreDeleteRollsBackEntryAndManifestAfterPostRemoveListFailure(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	tests := []struct {
+		name         string
+		base         string
+		deleteSecret func(*PassStore) error
+	}{
+		{
+			name: "domain",
+			base: PassDomainSecretsPath + "/" + safeDomain,
+			deleteSecret: func(store *PassStore) error {
+				return store.Delete("app.example.test", "TOKEN")
+			},
+		},
+		{
+			name: "attachment",
+			base: PassAttachmentPath + "/app-db",
+			deleteSecret: func(store *PassStore) error {
+				return store.DeleteAttachment("app-db", "TOKEN")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := map[string]string{test.base + "/TOKEN": "original", test.base + "/.keys": "TOKEN"}
+			removed := false
+			store := &PassStore{timeout: time.Second, log: testLogger()}
+			store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+				path := args[len(args)-1]
+				switch args[0] {
+				case "show":
+					if removed && test.name == "attachment" && path == test.base+"/.keys" {
+						return nil, errors.New("forced post-remove attachment list failure")
+					}
+					value, ok := entries[path]
+					if !ok {
+						return []byte("not in the password store"), errors.New("missing")
+					}
+					return []byte(value), nil
+				case "ls":
+					if removed && test.name == "domain" {
+						return nil, errors.New("forced post-remove domain list failure")
+					}
+					return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+				case "rm":
+					delete(entries, path)
+					if path == test.base+"/TOKEN" {
+						removed = true
+					}
+					return nil, nil
+				case "insert":
+					entries[path] = stdin
+					return nil, nil
+				default:
+					return nil, errors.New("unexpected command")
+				}
+			}
+
+			err := test.deleteSecret(store)
+			require.EqualError(t, err, "secret delete failed")
+			assert.Equal(t, "original", entries[test.base+"/TOKEN"])
+			assert.Equal(t, "TOKEN", entries[test.base+"/.keys"])
+		})
+	}
+}
+
+func TestPassStoreDeleteReturnsGenericErrorWhenPostRemoveRollbackFails(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	tests := []struct {
+		name         string
+		base         string
+		deleteSecret func(*PassStore) error
+	}{
+		{
+			name: "domain",
+			base: PassDomainSecretsPath + "/" + safeDomain,
+			deleteSecret: func(store *PassStore) error {
+				return store.Delete("app.example.test", "TOKEN")
+			},
+		},
+		{
+			name: "attachment",
+			base: PassAttachmentPath + "/app-db",
+			deleteSecret: func(store *PassStore) error {
+				return store.DeleteAttachment("app-db", "TOKEN")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := map[string]string{test.base + "/TOKEN": "original", test.base + "/.keys": "TOKEN"}
+			removed := false
+			rollbackAttempts := 0
+			store := &PassStore{timeout: time.Second, log: testLogger()}
+			store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+				path := args[len(args)-1]
+				switch args[0] {
+				case "show":
+					if removed && test.name == "attachment" && path == test.base+"/.keys" {
+						return nil, errors.New("sensitive list failure")
+					}
+					value, ok := entries[path]
+					if !ok {
+						return []byte("not in the password store"), errors.New("missing")
+					}
+					return []byte(value), nil
+				case "ls":
+					if removed && test.name == "domain" {
+						return nil, errors.New("sensitive list failure")
+					}
+					return []byte(path + "\n├── .keys\n└── TOKEN\n"), nil
+				case "rm":
+					delete(entries, path)
+					if path == test.base+"/TOKEN" {
+						removed = true
+					}
+					return nil, nil
+				case "insert":
+					rollbackAttempts++
+					if path == test.base+"/TOKEN" {
+						return nil, errors.New("sensitive rollback failure")
+					}
+					entries[path] = stdin
+					return nil, nil
+				default:
+					return nil, errors.New("unexpected command")
+				}
+			}
+
+			err := test.deleteSecret(store)
+			require.EqualError(t, err, "secret delete failed and rollback failed")
+			assert.Equal(t, 2, rollbackAttempts, "both snapshots must be restored even after one rollback step fails")
+			assert.Equal(t, "TOKEN", entries[test.base+"/.keys"])
+			assert.NotContains(t, err.Error(), "sensitive")
+		})
+	}
+}
+
+func TestPassStoreSetRollsBackOverwritesAndManifestOnFailure(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	base := PassDomainSecretsPath + "/" + safeDomain
+	entries := map[string]string{
+		base + "/A":     "old-a",
+		base + "/B":     "old-b",
+		base + "/.keys": "A\nB",
+	}
+	manifestWrites := 0
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		switch args[0] {
+		case "show":
+			value, ok := entries[path]
+			if !ok {
+				return []byte("not in the password store"), errors.New("missing")
+			}
+			return []byte(value), nil
+		case "ls":
+			return []byte(base + "\n├── .keys\n├── A\n└── B\n"), nil
+		case "insert":
+			if path == base+"/.keys" {
+				manifestWrites++
+				if manifestWrites == 1 {
+					return nil, errors.New("private backend detail")
+				}
+			}
+			entries[path] = stdin
+			return nil, nil
+		case "rm":
+			delete(entries, path)
+			return nil, nil
+		default:
+			return nil, errors.New("unexpected command")
+		}
+	}
+
+	err = store.Set("app.example.test", map[string]string{"A": "new-a", "B": "new-b", "C": "new-c"})
+	require.Error(t, err)
+	assert.Equal(t, "old-a", entries[base+"/A"])
+	assert.Equal(t, "old-b", entries[base+"/B"])
+	assert.NotContains(t, entries, base+"/C")
+	assert.Equal(t, "A\nB", entries[base+"/.keys"])
+	assert.NotContains(t, err.Error(), "private backend detail")
+	assert.NotContains(t, err.Error(), "new-a")
+}
+
+func TestPassStoreSetReturnsGenericErrorWhenRollbackFails(t *testing.T) {
+	safeDomain, err := domain.SanitizeDomainForEnvFile("app.example.test")
+	require.NoError(t, err)
+	base := PassDomainSecretsPath + "/" + safeDomain
+	entries := map[string]string{base + "/A": "old", base + "/.keys": "A"}
+	insertCalls := 0
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	store.runPass = func(_ context.Context, stdin string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		switch args[0] {
+		case "show":
+			value, ok := entries[path]
+			if !ok {
+				return []byte("not in the password store"), errors.New("missing")
+			}
+			return []byte(value), nil
+		case "ls":
+			return []byte(base + "\n├── .keys\n└── A\n"), nil
+		case "insert":
+			insertCalls++
+			if insertCalls >= 2 {
+				return nil, errors.New("sensitive failure")
+			}
+			entries[path] = stdin
+			return nil, nil
+		case "rm":
+			return nil, errors.New("sensitive rollback failure")
+		}
+		return nil, errors.New("unexpected")
+	}
+
+	err = store.Set("app.example.test", map[string]string{"A": "new"})
+	require.EqualError(t, err, "secret transaction failed and rollback failed")
+}
+
+func TestPassStoreGetAllHoldsLockForCompleteRead(t *testing.T) {
+	store := &PassStore{timeout: time.Second, log: testLogger()}
+	readStarted := make(chan struct{})
+	releaseRead := make(chan struct{})
+	store.runPass = func(_ context.Context, _ string, args ...string) ([]byte, error) {
+		path := args[len(args)-1]
+		if args[0] == "ls" {
+			return []byte(path + "\n└── A\n"), nil
+		}
+		if strings.HasSuffix(path, "/.keys") {
+			return []byte("A"), nil
+		}
+		close(readStarted)
+		<-releaseRead
+		return []byte("value"), nil
+	}
+	readDone := make(chan error, 1)
+	go func() { _, err := store.GetAll("app.example.test"); readDone <- err }()
+	<-readStarted
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- store.Set("app.example.test", map[string]string{}) }()
+	select {
+	case <-writeDone:
+		t.Fatal("writer entered during multi-item read")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseRead)
+	require.NoError(t, <-readDone)
+	require.NoError(t, <-writeDone)
 }
 
 func TestPassStore_SetGetDelete(t *testing.T) {

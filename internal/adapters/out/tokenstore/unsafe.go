@@ -33,9 +33,11 @@ const (
 // UnsafeStore implements TokenStore using plain text files.
 // WARNING: This store does not encrypt secrets. Only use when pass/sops are unavailable.
 type UnsafeStore struct {
-	mu      sync.RWMutex
-	dataDir string
-	log     zerowrap.Logger
+	mu                         sync.RWMutex
+	dataDir                    string
+	log                        zerowrap.Logger
+	componentTokenOps          componentTokenFileOps
+	failedComponentRevocations map[string]error
 }
 
 // NewUnsafeStore creates a new file-based token store.
@@ -45,8 +47,10 @@ type UnsafeStore struct {
 // secrets_backend = "unsafe" in config, so they accept this tradeoff.
 func NewUnsafeStore(dataDir string, log zerowrap.Logger) (*UnsafeStore, error) {
 	store := &UnsafeStore{
-		dataDir: dataDir,
-		log:     log,
+		dataDir:                    dataDir,
+		log:                        log,
+		componentTokenOps:          newComponentTokenFileOps(),
+		failedComponentRevocations: make(map[string]error),
 	}
 
 	log.Warn().

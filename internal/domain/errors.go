@@ -5,6 +5,10 @@ import "errors"
 // Domain errors represent business-level errors that can occur in the system.
 // These errors are used across layers to communicate specific failure conditions.
 var (
+	// ErrNotImplemented identifies a deliberately unavailable split-role
+	// capability. Adapters translate it to a stable HTTP 501 response.
+	ErrNotImplemented = errors.New("operation not implemented")
+
 	// Container errors
 	ErrContainerNotFound   = errors.New("container not found")
 	ErrContainerExists     = errors.New("container already exists")
@@ -18,14 +22,16 @@ var (
 	ErrInvalidImageFormat = errors.New("invalid image format")
 
 	// Route errors
-	ErrRouteNotFound      = errors.New("route not found")
-	ErrRouteExists        = errors.New("route already exists")
-	ErrInvalidRoute       = errors.New("invalid route configuration")
-	ErrNoRouteForImage    = errors.New("no route configured for image")
-	ErrRouteDomainEmpty   = errors.New("route domain cannot be empty")
-	ErrRouteImageEmpty    = errors.New("route image cannot be empty")
-	ErrRouteDomainInvalid = errors.New("route domain is not a valid public hostname")
-	ErrNoTargetAvailable  = errors.New("no target available for route")
+	ErrRouteNotFound           = errors.New("route not found")
+	ErrRouteExists             = errors.New("route already exists")
+	ErrInvalidRoute            = errors.New("invalid route configuration")
+	ErrNoRouteForImage         = errors.New("no route configured for image")
+	ErrRouteDomainEmpty        = errors.New("route domain cannot be empty")
+	ErrRouteImageEmpty         = errors.New("route image cannot be empty")
+	ErrRouteDomainInvalid      = errors.New("route domain is not a valid public hostname")
+	ErrNoTargetAvailable       = errors.New("no target available for route")
+	ErrInvalidRouteSnapshot    = errors.New("route target snapshot is invalid")
+	ErrRouteTargetNotReachable = errors.New("route target is not reachable from split edge")
 
 	// Registry errors
 	ErrManifestNotFound = errors.New("manifest not found")
@@ -58,11 +64,14 @@ var (
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
 	// Environment errors
-	ErrEnvFileNotFound      = errors.New("environment file not found")
-	ErrSecretNotFound       = errors.New("secret not found")
-	ErrSecretsAlreadyExist  = errors.New("secrets already exist")
-	ErrProviderNotFound     = errors.New("secret provider not found")
-	ErrInvalidContainerName = errors.New("invalid container name")
+	ErrEnvFileNotFound             = errors.New("environment file not found")
+	ErrSecretNotFound              = errors.New("secret not found")
+	ErrSecretsAlreadyExist         = errors.New("secrets already exist")
+	ErrProviderNotFound            = errors.New("secret provider not found")
+	ErrInvalidContainerName        = errors.New("invalid container name")
+	ErrManagedPassLeaseUnavailable = errors.New("managed pass store is already in use")
+	ErrPassCommandFailed           = errors.New("pass command failed")
+	ErrPassSecretEmpty             = errors.New("empty secret returned from pass")
 
 	// Authentication errors
 	ErrInvalidToken       = errors.New("invalid token")
@@ -109,4 +118,9 @@ var (
 
 	// Traffic errors
 	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
+
+	// Runtime component lifecycle errors
+	ErrUnsupportedComponentLifecycleAction = errors.New("unsupported component lifecycle action")
+	ErrInvalidComponentMountPlan           = errors.New("invalid component mount plan")
+	ErrPostHandoffRuntimeUnsupported       = errors.New("replacement Gordon runtime does not support recovery")
 )

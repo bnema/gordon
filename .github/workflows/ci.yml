@@ -4,81 +4,50 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: read
-    outputs:
-      go: ${{ steps.filter.outputs.go }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            go:
-              - '**.go'
-              - 'go.mod'
-              - 'go.sum'
-              - '.golangci.yml'
-              - 'Makefile'
-              - '.github/workflows/**'
+  go-ci:
+    name: Go lint and test
+    uses: bnema/gh-actions/.github/workflows/go-ci.yml@fcda8139e65ec45af95bc385e318351c86712d48 # main, verified immutable commit
+    with:
+      go-version: 1.26.5
+      lint-version: v2.12.2
+      lint-command: make lint
+      test-command: go test -race ./...
 
-  lint:
-    name: Lint
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
+  generated-and-secrets:
+    name: Generated code and branch secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          go-version: stable
+          fetch-depth: 0
 
-      - name: Cache Go modules
-        uses: actions/cache@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
+          go-version: 1.26.5
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v9
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@3e33fea8596569a62fcaa33eb3880b6ac7098941 # v1.9.0
         with:
-          version: v2.10.1
+          version: 1.71.0
 
-  test:
-    name: Test
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
+      - name: Install pinned generators and gitleaks
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+          go install github.com/gitleaks/gitleaks/v8@v8.30.0
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.11
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: stable
+      - name: Validate workflow definitions
+        run: actionlint
 
-      - name: Cache Go modules
-        uses: actions/cache@v5
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
+      - name: Check generated protobuf bindings
+        run: make proto-check
 
-      - name: Cache Go build cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-
-
-      - name: Run tests
-        run: go test -race -v ./...
+      - name: Scan the current tree for secrets
+        run: make gitleaks

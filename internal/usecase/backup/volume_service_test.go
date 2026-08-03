@@ -65,7 +65,7 @@ func (f *fakeVolumeBackupStorage) ApplyVolumeRetention(_ context.Context, domain
 }
 
 func TestVolumeServiceRunVolumeBackups(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupVolumeTargetRuntime(t)
 	storage := &fakeVolumeBackupStorage{}
 	svc := NewVolumeService(runtime, fakeVolumeArchiveExporter{}, storage, domain.VolumeBackupConfig{
 		Enabled:        true,
@@ -100,7 +100,7 @@ func TestVolumeServiceRunVolumeBackups(t *testing.T) {
 }
 
 func TestVolumeServiceRunVolumeBackupsReturnsPartialFailure(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupVolumeTargetRuntime(t)
 	storage := &fakeVolumeBackupStorage{}
 	svc := NewVolumeService(runtime, fakeVolumeArchiveExporter{err: fmt.Errorf("boom")}, storage, domain.VolumeBackupConfig{
 		Enabled:        true,
@@ -134,7 +134,7 @@ func TestVolumeServiceRunVolumeBackupsReturnsPartialFailure(t *testing.T) {
 
 func TestVolumeServiceListVolumeBackupsWrapsStorageError(t *testing.T) {
 	storageErr := fmt.Errorf("s3 unavailable")
-	svc := NewVolumeService(outmocks.NewMockContainerRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
+	svc := NewVolumeService(outmocks.NewMockBackupVolumeTargetRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
 
 	jobs, err := svc.ListVolumeBackups(context.Background(), "app.example.com")
 
@@ -145,7 +145,7 @@ func TestVolumeServiceListVolumeBackupsWrapsStorageError(t *testing.T) {
 
 func TestVolumeServiceStatusWrapsStorageError(t *testing.T) {
 	storageErr := fmt.Errorf("s3 unavailable")
-	svc := NewVolumeService(outmocks.NewMockContainerRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
+	svc := NewVolumeService(outmocks.NewMockBackupVolumeTargetRuntime(t), fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{listErr: storageErr}, domain.VolumeBackupConfig{}, testLogger())
 
 	jobs, err := svc.VolumeBackupStatus(context.Background())
 
@@ -155,7 +155,7 @@ func TestVolumeServiceStatusWrapsStorageError(t *testing.T) {
 }
 
 func TestVolumeServiceDisabledDoesNothing(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime := outmocks.NewMockBackupVolumeTargetRuntime(t)
 	svc := NewVolumeService(runtime, fakeVolumeArchiveExporter{}, &fakeVolumeBackupStorage{}, domain.VolumeBackupConfig{}, testLogger())
 
 	jobs, err := svc.RunVolumeBackups(context.Background(), "", "")

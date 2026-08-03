@@ -2,6 +2,27 @@
 
 Common issues and solutions when using Gordon.
 
+## Split components
+
+### Edge cannot reach registry
+
+Inspect private-network membership and generated control state. The target must be the controlled `gordon-registry` alias, never `localhost` or `127.0.0.1` from inside edge. A public `/v2/` response of `401` is expected when auth is enabled.
+
+### Runtime API unavailable
+
+Only runtime should have the engine endpoint/socket. For rootless Podman, verify the service as the same user:
+
+```bash
+systemctl --user status podman.socket
+podman info --format '{{.Host.Security.Rootless}}'
+```
+
+Do not fix this by mounting the engine socket into control, edge, or registry.
+
+### Component event outage
+
+Registry push events persist in a bounded outbox and replay after control recovers. Runtime command terminal results and migration checkpoints are also durable. Restore connectivity/storage and allow replay; do not clear state to force a retry.
+
 ## Registry Issues
 
 ### "unauthorized: authentication required"
@@ -38,9 +59,10 @@ Common issues and solutions when using Gordon.
    pgrep -f "gordon serve"
    ```
 
-2. Check registry port is accessible:
+2. In monolith mode, check its local registry listener. In split mode, probe the public Gordon domain because edge forwards to the private registry alias:
    ```bash
-   curl -v http://localhost:5000/v2/
+   curl -v http://localhost:5000/v2/          # monolith only
+   curl -v https://gordon.example.com/v2/     # split/public path; 401 is healthy with auth
    ```
 
 3. Check firewall:
@@ -404,9 +426,11 @@ docker logs gordon-app-mydomain-com
 # Inspect container
 docker inspect gordon-app-mydomain-com
 
-# Check connectivity
+# Check monolith-local connectivity
 curl -v http://localhost:5000/v2/
-curl -v http://localhost:8088/
+
+# Check the public edge/registry path (split or monolith)
+curl -v https://gordon.example.com/v2/
 ```
 
 ## Getting Help

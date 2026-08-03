@@ -5,8 +5,30 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/admin"
+	"github.com/bnema/gordon/internal/usecase/runtimecontrol"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestAssignRuntimeControlHandlerDep(t *testing.T) {
+	t.Run("nil concrete pointer leaves interface nil", func(t *testing.T) {
+		deps := admin.HandlerDeps{}
+		var runtimeControlSvc *runtimecontrol.Service
+
+		assignRuntimeControlHandlerDep(&deps, runtimeControlSvc)
+
+		assert.Nil(t, deps.RuntimeControl)
+	})
+
+	t.Run("non-nil concrete pointer is assigned", func(t *testing.T) {
+		deps := admin.HandlerDeps{}
+		runtimeControlSvc := runtimecontrol.NewService(nil, nil, "test-control")
+
+		assignRuntimeControlHandlerDep(&deps, runtimeControlSvc)
+
+		assert.Same(t, runtimeControlSvc, deps.RuntimeControl)
+	})
+}
 
 func TestResolveRuntimeConfig(t *testing.T) {
 	tests := []struct {

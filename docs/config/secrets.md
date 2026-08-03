@@ -1,6 +1,6 @@
 # Secrets Configuration
 
-Configure how Gordon stores and retrieves sensitive data.
+Configure how Gordon stores and retrieves sensitive data. In split mode control owns secret-provider access and desired secret references; runtime receives only resolved workload environment needed for execution. Edge and registry never receive the runtime/auth signing seed.
 
 ## Configuration
 
@@ -54,7 +54,7 @@ token_secret = "gordon/auth/token_secret"  # Path in pass store
 
 **Route secrets storage:**
 - `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
-- Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
+- Plaintext `.env` sources are removed only after successful migration into `pass`; conflicts fail closed and preserve the source for operator review
 - Attachment secrets are stored under `gordon/env/attachments/<container-name>/<KEY>` with a `.keys` manifest
 - Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 

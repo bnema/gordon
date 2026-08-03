@@ -4,7 +4,7 @@ Deploy your first app with Gordon in under 5 minutes.
 
 ## Prerequisites
 
-- A Linux VPS with Docker or Podman installed
+- A Linux VPS with Docker or Podman installed (rootless Podman is required for production split migration)
 - A domain pointing to your VPS (DNS A record)
 - A public TCP edge address for Gordon (for example external `:443`, mapped to your chosen `entrypoints.edge.address`)
 - [pass](https://www.passwordstore.org/) (password manager) with GPG key initialized
@@ -189,12 +189,17 @@ Gordon automatically:
 3. Routes traffic to the new container
 4. Stops the old container
 
+## Deployment mode
+
+The steps above start monolith mode. Gordon can also run as generated `control`, `runtime`, `edge`, and `registry` containers. Only runtime receives the engine socket; follow the [split bootstrap guide](./operations/split-bootstrap.md) rather than creating role services manually.
+
 ## Next Steps
 
 - [Installation Guide](./installation.md) - Production setup with firewall and rootless containers
 - [Configuration Reference](./config/index.md) - All configuration options
 - [Authentication](./config/auth.md) - Secure your registry
 - [Environment Variables](./config/env.md) - Configure per-app settings
+- [Split Mode](./operations/split-mode.md) - Component responsibilities and trust boundaries
 
 ## Related
 

@@ -2,6 +2,14 @@ package domain
 
 import "time"
 
+// RuntimeImageDetail describes a runtime image without exposing runtime package types across component boundaries.
+type RuntimeImageDetail struct {
+	ID       string
+	RepoTags []string
+	Size     int64
+	Created  time.Time
+}
+
 const DefaultImagePruneKeepLast = 3
 
 // ImagePruneOptions controls which prune subsystems are activated.

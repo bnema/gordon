@@ -56,9 +56,12 @@ func newH2CTransport() *http.Transport {
 	}
 }
 
-// newRegistryTransport creates the transport for the registry reverse proxy (localhost loopback).
-// It needs a longer ResponseHeaderTimeout because admin endpoints like /admin/deploy
-// perform blocking operations (image pull, container start, readiness checks).
+// registryForwardAuthHeader authenticates requests from the split edge to the
+// split registry. It is deliberately not a client-facing credential.
+const registryForwardAuthHeader = "X-Gordon-Registry-Forward-Auth"
+
+// newRegistryTransport creates the transport for the snapshot-selected registry reverse proxy.
+// It needs a longer ResponseHeaderTimeout because registry uploads can take time.
 func newRegistryTransport() *http.Transport {
 	return &http.Transport{
 		DialContext: (&net.Dialer{
@@ -90,9 +93,6 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 		proxyError(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-
-	releaseInFlight := h.proxySvc.TrackInFlight(target.ContainerID)
-	defer releaseInFlight()
 
 	transport := h.transportForTarget(target)
 
@@ -131,14 +131,19 @@ func (h *Handler) forwardToTarget(w http.ResponseWriter, r *http.Request, target
 	proxy.ServeHTTP(w, r)
 }
 
-// forwardToRegistry proxies a request to the local registry server.
-func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, registryPort int) {
+// forwardToRegistry proxies a request to the complete registry target supplied
+// by the current route snapshot. In particular, it never assumes edge-local
+// loopback: split edges must use the control-selected alias or remote endpoint.
+func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, target *domain.ProxyTarget) {
 	h.proxySvc.TrackRegistryRequest()
 	defer h.proxySvc.ReleaseRegistryRequest()
 
 	log := zerowrap.FromCtx(r.Context())
-
-	targetURL, err := url.Parse(fmt.Sprintf("http://localhost:%d", registryPort))
+	if target == nil || target.Host == "" || target.Port < 1 || target.Port > 65535 || (target.Scheme != "http" && target.Scheme != "https") {
+		proxyError(w, "Registry Unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	targetURL, err := url.Parse(fmt.Sprintf("%s://%s", target.Scheme, net.JoinHostPort(target.Host, strconv.Itoa(target.Port))))
 	if err != nil {
 		log.WrapErr(err, "failed to parse registry target URL")
 		proxyError(w, "Internal Server Error", http.StatusInternalServerError)
@@ -149,11 +154,14 @@ func (h *Handler) forwardToRegistry(w http.ResponseWriter, r *http.Request, regi
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
 			pr.SetXForwarded()
-			pr.Out.Host = targetURL.Host
+			pr.Out.Host = targetHostHeader(target, targetURL)
+			// Overwrite rather than append: an untrusted client header must
+			// never become component authorization.
+			pr.Out.Header.Set(registryForwardAuthHeader, h.registryForwardAuthToken)
 		},
 		Transport: h.registryTransport,
 		ErrorHandler: newProxyErrorHandler(
-			log.WithField("registry_port", registryPort),
+			log.WithField("registry_target", targetURL.Host),
 			proxyErrorHandlerConfig{
 				requestTooLargeLog:  "registry proxy error: request body too large",
 				clientDisconnectLog: "registry proxy request canceled by client",
@@ -241,6 +249,9 @@ func newReverseProxy(opts reverseProxyOptions) *httputil.ReverseProxy {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			existingProto := pr.In.Header.Get("X-Forwarded-Proto")
 			pr.SetURL(opts.targetURL)
+			// A client must never replay the registry-only forwarding credential
+			// to an application target.
+			pr.Out.Header.Del(registryForwardAuthHeader)
 			pr.SetXForwarded()
 			if opts.hostHeader != "" {
 				pr.Out.Host = opts.hostHeader

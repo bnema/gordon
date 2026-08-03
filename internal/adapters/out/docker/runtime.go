@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -145,7 +146,15 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if err != nil {
 		return nil, err
 	}
-	binds := buildVolumeBinds(config, log)
+	binds, err := buildVolumeBinds(config, log)
+	if err != nil {
+		return nil, err
+	}
+	if len(config.VolumeOptions) > 0 {
+		if err := r.preflightVolumeChown(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -183,10 +192,12 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Binds:          binds,
 		NetworkMode:    container.NetworkMode(config.NetworkMode),
 		Resources:      resources,
-		SecurityOpt:    []string{"no-new-privileges:true"},
+		SecurityOpt:    containerSecurityOptions(config.NoNewPrivileges),
+		UsernsMode:     container.UsernsMode(config.UsernsMode),
 		CapDrop:        capDrop,
 		CapAdd:         capAdd,
 		ReadonlyRootfs: config.ReadOnlyRootFS,
+		Privileged:     config.Privileged,
 	}
 	if config.RestartPolicy != "" {
 		hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(config.RestartPolicy)}
@@ -217,6 +228,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 
 	// Inspect the created container to get full details
 	return r.InspectContainer(ctx, resp.ID)
+}
+
+func containerSecurityOptions(noNewPrivileges *bool) []string {
+	if noNewPrivileges == nil || *noNewPrivileges {
+		return []string{"no-new-privileges:true"}
+	}
+	return nil
 }
 
 func buildPortBindings(config *domain.ContainerConfig) (nat.PortSet, nat.PortMap, error) {
@@ -257,19 +275,97 @@ func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPor
 	return nil
 }
 
-func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []string {
+func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) ([]string, error) {
+	for destination, options := range config.VolumeOptions {
+		if _, writable := config.Volumes[destination]; !writable || !domain.IsContainerVolumeChownOptions(options) {
+			return nil, fmt.Errorf("invalid container volume options")
+		}
+	}
+
 	binds := make([]string, 0, len(config.Volumes)+len(config.ReadOnlyVolumes))
 	for containerPath, volumeName := range config.Volumes {
 		bind := fmt.Sprintf("%s:%s", volumeName, containerPath)
+		if _, chown := config.VolumeOptions[containerPath]; chown {
+			bind += ":" + domain.ContainerVolumeOptionChown
+		}
 		binds = append(binds, bind)
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding volume mount")
 	}
 	for containerPath, volumeName := range config.ReadOnlyVolumes {
-		bind := fmt.Sprintf("%s:%s:ro", volumeName, containerPath)
-		binds = append(binds, bind)
+		binds = append(binds, fmt.Sprintf("%s:%s:ro", volumeName, containerPath))
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
 	}
-	return binds
+	return binds, nil
+}
+
+func (r *Runtime) preflightVolumeChown(ctx context.Context) error {
+	version, err := r.runtimeVersion(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect runtime version: %w", err)
+	}
+	if runtimeEngineKind(version.Components) != "podman" {
+		return fmt.Errorf("volume ownership option requires rootless Podman")
+	}
+	info, err := r.runtimeInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("inspect runtime: %w", err)
+	}
+	if !runtimeIsRootless(info.Rootless, info.SecurityOptions) {
+		return fmt.Errorf("volume ownership option requires rootless Podman")
+	}
+	return nil
+}
+
+func parseVolumeOptions(mode string) []string {
+	if strings.TrimSpace(mode) == "" {
+		return nil
+	}
+	parsed := strings.Split(mode, ",")
+	options := make([]string, 0, len(parsed))
+	for _, option := range parsed {
+		option = strings.TrimSpace(option)
+		if option == "ro" || option == "rw" {
+			continue
+		}
+		options = append(options, option)
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	return options
+}
+
+// inspectVolumeOptions preserves the compatible API's mount projection. The
+// create-only Podman U intent is restored separately, only after native Podman
+// has proved the inspected Gordon component's identity and confinement.
+func inspectVolumeOptions(mountPoint container.MountPoint) []string {
+	options := parseVolumeOptions(mountPoint.Mode)
+	options = slices.DeleteFunc(options, func(option string) bool {
+		return option == domain.ContainerVolumeOptionChown
+	})
+	if len(options) == 0 {
+		return nil
+	}
+	return options
+}
+
+func normalizeInspectedGenerationVolumeChown(
+	inspected *domain.Container,
+	proof nativePodmanIdentityResult,
+	proofOK bool,
+) {
+	if !proofOK || !proof.boundingCapsNull || !proof.generationVolumeChownOK || inspected == nil || !canonicalContainerID(inspected.ID) {
+		return
+	}
+	expectedName, ok := inspectedGenerationVolumeName(inspected)
+	if !ok {
+		return
+	}
+	mountIndex, ok := exactInspectedGenerationMount(inspected.VolumeMounts, expectedName)
+	if !ok {
+		return
+	}
+	inspected.VolumeMounts[mountIndex].Options = []string{domain.ContainerVolumeOptionChown}
 }
 
 // StartContainer starts a container.
@@ -365,7 +461,10 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
+	// Component migration cleanup must never ask the compatible engine to
+	// remove volumes. State retention is explicit even though false is the API
+	// default, preventing an accidental future default change from deleting data.
+	err := r.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force, RemoveVolumes: false})
 	if err != nil {
 		return log.WrapErr(err, "failed to remove container")
 	}
@@ -432,6 +531,10 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 				Type:        string(m.Type),
 				Source:      m.Source,
 				Destination: m.Destination,
+				Driver:      m.Driver,
+				Mode:        m.Mode,
+				Propagation: string(m.Propagation),
+				Options:     parseVolumeOptions(m.Mode),
 				ReadOnly:    !m.RW,
 			})
 		}
@@ -486,17 +589,25 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 
 	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
 	volumeMounts := make([]domain.ContainerVolumeMount, 0, len(resp.Mounts))
+	var binds []string
+	if resp.HostConfig != nil {
+		binds = resp.HostConfig.Binds
+	}
 	for _, m := range resp.Mounts {
 		volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
 			Name:        m.Name,
 			Type:        string(m.Type),
 			Source:      m.Source,
 			Destination: m.Destination,
+			Driver:      m.Driver,
+			Mode:        m.Mode,
+			Propagation: string(m.Propagation),
+			Options:     inspectVolumeOptions(m),
 			ReadOnly:    !m.RW,
 		})
 	}
 
-	return &domain.Container{
+	inspected := &domain.Container{
 		ID:           resp.ID,
 		Image:        resp.Config.Image,
 		ImageID:      resp.Image,
@@ -506,8 +617,38 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Ports:        ports,
 		Labels:       resp.Config.Labels,
 		VolumeMounts: volumeMounts,
+		User:         resp.Config.User,
 		Created:      created,
-	}, nil
+	}
+	if resp.HostConfig != nil {
+		inspected.UsernsMode = string(resp.HostConfig.UsernsMode)
+		inspected.CapDrop = slices.Clone(resp.HostConfig.CapDrop)
+		inspected.CapAdd = slices.Clone(resp.HostConfig.CapAdd)
+		inspected.NoNewPrivileges = hasNoNewPrivileges(resp.HostConfig.SecurityOpt)
+		if _, component := inspectedComponentIdentity(inspected); component {
+			proof, ok := inspectNativePodmanIdentity(ctx, r.client, inspected, binds)
+			if ok {
+				if inspected.UsernsMode == "private" {
+					inspected.UsernsMode = proof.usernsMode
+				}
+				inspected.CapDrop = normalizeInspectedCapDrop(resp.HostConfig.CapDrop, resp.HostConfig.CapAdd, proof.boundingCapsNull)
+			} else {
+				inspected.CapDrop = nil
+			}
+			normalizeInspectedGenerationVolumeChown(inspected, proof, ok)
+		}
+	}
+	return inspected, nil
+}
+
+func hasNoNewPrivileges(options []string) bool {
+	for _, option := range options {
+		name, value, hasValue := strings.Cut(option, ":")
+		if name == "no-new-privileges" && (!hasValue || strings.EqualFold(value, "true")) {
+			return true
+		}
+	}
+	return false
 }
 
 // GetContainerLogs gets container logs.
@@ -1589,17 +1730,42 @@ func (r *Runtime) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 
 	var result []*domain.NetworkInfo
 	for _, net := range networks {
-		var containers []string
-		for containerID := range net.Containers {
-			containers = append(containers, containerID)
+		// Docker may include endpoint members in NetworkList, but Podman's
+		// compatible endpoint omits them. Inspect is required to produce the
+		// authoritative membership used to build a safe edge route snapshot.
+		inspected, err := r.client.NetworkInspect(ctx, net.ID, network.InspectOptions{})
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to inspect network")
 		}
+		// Endpoint names and aliases are sufficient for Gordon's alias-based
+		// route discovery. Never carry engine container IDs into actual state.
+		containers := make([]string, 0, len(inspected.Containers)*2)
+		for _, endpoint := range inspected.Containers {
+			if endpoint.Name == "" {
+				continue
+			}
+			containers = append(containers, endpoint.Name)
+			containerInfo, err := r.client.ContainerInspect(ctx, endpoint.Name)
+			if err != nil {
+				return nil, log.WrapErr(err, "failed to inspect network endpoint")
+			}
+			if containerInfo.NetworkSettings == nil {
+				continue
+			}
+			if endpointSettings := containerInfo.NetworkSettings.Networks[inspected.Name]; endpointSettings != nil {
+				containers = append(containers, endpointSettings.Aliases...)
+			}
+		}
+		sort.Strings(containers)
+		containers = slices.Compact(containers)
 
 		result = append(result, &domain.NetworkInfo{
-			ID:         net.ID,
-			Name:       net.Name,
-			Driver:     net.Driver,
+			ID:         inspected.ID,
+			Name:       inspected.Name,
+			Driver:     inspected.Driver,
+			Internal:   inspected.Internal,
 			Containers: containers,
-			Labels:     net.Labels,
+			Labels:     inspected.Labels,
 		})
 	}
 
