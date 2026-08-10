@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 )
 
 func testContext() context.Context {
@@ -90,8 +92,10 @@ func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
 	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(blobStorage, manifestStorage, eventBus)
-	data := []byte(`{"schemaVersion":2}`)
+	state := registrystate.New()
+	state.AddPending("sha256:config", time.Now().UTC())
+	svc := NewService(blobStorage, manifestStorage, eventBus, state)
+	data := []byte(`{"schemaVersion":2,"config":{"digest":"sha256:config"}}`)
 	reference := fmt.Sprintf("sha512:%x", sha512.Sum512(data))
 	manifest := &domain.Manifest{Name: "myapp", Reference: reference, ContentType: "application/vnd.oci.image.manifest.v1+json", Data: data}
 
@@ -101,6 +105,7 @@ func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, reference, digest)
+	assert.Empty(t, state.PendingDigests(time.Now().UTC()))
 }
 
 func TestService_PutManifest_RejectsDigestMismatch(t *testing.T) {
@@ -146,6 +151,39 @@ func TestService_GetBlobPath_RequiresRepositoryReference(t *testing.T) {
 	)
 
 	_, err = svc.GetBlobPath(testContext(), "denied", digest)
+	assert.ErrorIs(t, err, domain.ErrBlobNotFound)
+}
+
+func TestService_GetBlobPath_FollowsSubjectManifest(t *testing.T) {
+	const target = "sha256:target"
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+
+	manifestStorage.EXPECT().ListTags("artifacts").Return([]string{"latest"}, nil)
+	manifestStorage.EXPECT().GetManifest("artifacts", "latest").Return(
+		[]byte(`{"subject":{"digest":"sha256:subject"}}`), "application/vnd.oci.artifact.manifest.v1+json", nil,
+	)
+	manifestStorage.EXPECT().GetManifest("artifacts", "sha256:subject").Return(
+		[]byte(`{"config":{"digest":"`+target+`"}}`), "application/vnd.oci.image.manifest.v1+json", nil,
+	)
+	blobStorage.EXPECT().GetBlobPath(target).Return("/registry/target", nil)
+
+	path, err := svc.GetBlobPath(testContext(), "artifacts", target)
+
+	require.NoError(t, err)
+	assert.Equal(t, "/registry/target", path)
+}
+
+func TestService_GetBlobPath_BoundsManifestTraversal(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+	tags := make([]string, maxManifestTraversal+1)
+	manifestStorage.EXPECT().ListTags("busy").Return(tags, nil)
+
+	_, err := svc.GetBlobPath(testContext(), "busy", "sha256:target")
+
 	assert.ErrorIs(t, err, domain.ErrBlobNotFound)
 }
 

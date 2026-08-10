@@ -84,6 +84,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/proxy"
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	"github.com/bnema/gordon/internal/usecase/traffic"
@@ -747,9 +748,9 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 		return err
 	}
 
-	registryMutationMu := &sync.RWMutex{}
-	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus, registryMutationMu)
-	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log, registryMutationMu)
+	registryState := registrystate.New()
+	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus, registryState)
+	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log, registryState)
 	si.svc.volumeSvc = volumesSvc.NewService(si.svc.runtime)
 
 	injectTelemetryMetrics(si.cfg, si.svc, si.log)

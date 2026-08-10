@@ -157,6 +157,7 @@ func newRemotesAddCmd() *cobra.Command {
 	var tokenFile string
 	var tokenEnv string
 	var insecureTLS bool
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "add <name> <url>",
@@ -192,12 +193,15 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Remote added: %s -> %s", name, url)))
-
-			if tokenFile == "" && tokenEnv == "" {
-				fmt.Println(styles.Theme.Muted.Render("Tip: Add a token with --token-file or --token-env for authenticated access"))
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "url": url, "added": true})
 			}
-
+			if err := cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Remote added: %s -> %s", name, url))); err != nil {
+				return err
+			}
+			if tokenFile == "" && tokenEnv == "" {
+				return cliWriteLine(cmd.OutOrStdout(), styles.Theme.Muted.Render("Tip: Add a token with --token-file or --token-env for authenticated access"))
+			}
 			return nil
 		},
 	}
@@ -205,6 +209,7 @@ Examples:
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
 	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "Environment variable containing token")
 	cmd.Flags().BoolVar(&insecureTLS, "insecure", false, "Skip TLS certificate verification")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
@@ -320,6 +325,7 @@ Examples:
 // newRemotesSetTokenCmd creates the remotes set-token command.
 func newRemotesSetTokenCmd() *cobra.Command {
 	var tokenFile string
+	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "set-token <name> --token-file <path>",
 		Short: "Set the token for a remote",
@@ -349,19 +355,24 @@ Examples:
 			}
 
 			if _, exists := remotes[name]; !exists {
-				fmt.Println(styles.RenderError(fmt.Sprintf("Remote '%s' not found", name)))
-				return nil
+				if jsonOut {
+					return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "updated": false, "error": "remote not found"})
+				}
+				return cliWriteLine(cmd.OutOrStdout(), styles.RenderError(fmt.Sprintf("Remote '%s' not found", name)))
 			}
 
 			if err := remote.UpdateRemoteToken(name, token); err != nil {
 				return fmt.Errorf("failed to update token: %w", err)
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token updated for remote '%s'", name)))
-			return nil
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "updated": true})
+			}
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Token updated for remote '%s'", name)))
 		},
 	}
 	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("token-file")
 	return cmd
 }

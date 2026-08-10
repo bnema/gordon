@@ -14,6 +14,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 	"github.com/bnema/gordon/pkg/runtime"
 	"github.com/bnema/gordon/pkg/validation"
 )
@@ -25,6 +26,7 @@ type Service struct {
 	blobStorage     out.BlobStorage
 	log             zerowrap.Logger
 	mutationMu      *sync.RWMutex
+	registryState   *registrystate.State
 }
 
 type imageRuntime interface {
@@ -38,18 +40,19 @@ func NewService(
 	manifestStorage out.ManifestStorage,
 	blobStorage out.BlobStorage,
 	log zerowrap.Logger,
-	mutationLocks ...*sync.RWMutex,
+	states ...*registrystate.State,
 ) *Service {
-	mutationMu := &sync.RWMutex{}
-	if len(mutationLocks) > 0 && mutationLocks[0] != nil {
-		mutationMu = mutationLocks[0]
+	registryState := registrystate.New()
+	if len(states) > 0 && states[0] != nil {
+		registryState = states[0]
 	}
 	return &Service{
 		runtime:         rt,
 		manifestStorage: manifestStorage,
 		blobStorage:     blobStorage,
 		log:             log,
-		mutationMu:      mutationMu,
+		mutationMu:      &registryState.MutationMu,
+		registryState:   registryState,
 	}
 }
 
@@ -243,6 +246,10 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 		if err := s.collectKeptTagDigests(log, repository, tagInfos, keptTags, referencedDigests); err != nil {
 			return domain.ImagePruneReport{}, err
 		}
+	}
+
+	for digest := range s.registryState.PendingDigests(time.Now().UTC()) {
+		referencedDigests[digest] = struct{}{}
 	}
 
 	blobs, err := s.blobStorage.ListBlobs()

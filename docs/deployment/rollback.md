@@ -159,9 +159,17 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
-          docker pull "$GORDON_REGISTRY/myapp:$VERSION"
-          docker tag "$GORDON_REGISTRY/myapp:$VERSION" "$GORDON_REGISTRY/myapp:latest"
-          docker push "$GORDON_REGISTRY/myapp:latest"
+          REPOSITORY="$GORDON_REGISTRY/myapp"
+          SOURCE_IMAGE="$REPOSITORY:$VERSION"
+          LATEST_IMAGE="$REPOSITORY:latest"
+          SOURCE_DIGEST="$(docker buildx imagetools inspect "$SOURCE_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
+          IMMUTABLE_IMAGE="$REPOSITORY@$SOURCE_DIGEST"
+          docker buildx imagetools create --tag "$LATEST_IMAGE" "$IMMUTABLE_IMAGE"
+          LATEST_DIGEST="$(docker buildx imagetools inspect "$LATEST_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
+          [[ "$LATEST_DIGEST" == "$SOURCE_DIGEST" ]] || {
+            echo "rollback verification failed: latest resolved to $LATEST_DIGEST, expected $SOURCE_DIGEST" >&2
+            exit 1
+          }
 
       - name: Summary
         env:

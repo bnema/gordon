@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1736,11 +1737,11 @@ type boundedBuffer struct {
 func (w *boundedBuffer) Write(p []byte) (int, error) {
 	remaining := w.limit - w.Len()
 	if remaining <= 0 {
-		return 0, fmt.Errorf("container exec output exceeds %d bytes", w.limit)
+		return 0, fmt.Errorf("%w: limit is %d bytes", domain.ErrExecOutputExceeded, w.limit)
 	}
 	if len(p) > remaining {
 		_, _ = w.Buffer.Write(p[:remaining])
-		return remaining, fmt.Errorf("container exec output exceeds %d bytes", w.limit)
+		return remaining, fmt.Errorf("%w: limit is %d bytes", domain.ErrExecOutputExceeded, w.limit)
 	}
 	return w.Buffer.Write(p)
 }
@@ -1748,9 +1749,28 @@ func (w *boundedBuffer) Write(p []byte) (int, error) {
 func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
 	stdout := boundedBuffer{limit: maxExecOutputSize}
 	stderr := boundedBuffer{limit: maxExecOutputSize}
+	buffers := map[byte]*boundedBuffer{1: &stdout, 2: &stderr}
+	var header [8]byte
 
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, reader); err != nil {
-		return nil, nil, err
+	for {
+		if _, err := io.ReadFull(reader, header[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, nil, fmt.Errorf("read Docker exec frame header: %w", err)
+		}
+		output, ok := buffers[header[0]]
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid Docker exec stream %d", header[0])
+		}
+		payloadSize := int64(binary.BigEndian.Uint32(header[4:]))
+		remaining := int64(output.limit - output.Len())
+		if payloadSize > remaining {
+			return nil, nil, fmt.Errorf("%w: frame is %d bytes with %d bytes remaining", domain.ErrExecOutputExceeded, payloadSize, remaining)
+		}
+		if _, err := io.CopyN(output, reader, payloadSize); err != nil {
+			return nil, nil, fmt.Errorf("read Docker exec frame payload: %w", err)
+		}
 	}
 
 	return stdout.Bytes(), stderr.Bytes(), nil

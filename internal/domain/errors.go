@@ -28,13 +28,14 @@ var (
 	ErrNoTargetAvailable  = errors.New("no target available for route")
 
 	// Registry errors
-	ErrManifestNotFound = errors.New("manifest not found")
-	ErrBlobNotFound     = errors.New("blob not found")
-	ErrUploadNotFound   = errors.New("upload not found")
-	ErrInvalidDigest    = errors.New("invalid digest")
-	ErrDigestMismatch   = errors.New("digest mismatch")
-	ErrUnauthorized     = errors.New("unauthorized")
-	ErrBlobSizeExceeded = errors.New("blob size exceeds maximum")
+	ErrManifestNotFound   = errors.New("manifest not found")
+	ErrBlobNotFound       = errors.New("blob not found")
+	ErrUploadNotFound     = errors.New("upload not found")
+	ErrInvalidDigest      = errors.New("invalid digest")
+	ErrDigestMismatch     = errors.New("digest mismatch")
+	ErrUnauthorized       = errors.New("unauthorized")
+	ErrBlobSizeExceeded   = errors.New("blob size exceeds maximum")
+	ErrExecOutputExceeded = errors.New("container exec output exceeds maximum")
 
 	// Network errors
 	ErrNetworkNotFound = errors.New("network not found")
@@ -58,11 +59,13 @@ var (
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
 	// Environment errors
-	ErrEnvFileNotFound      = errors.New("environment file not found")
-	ErrSecretNotFound       = errors.New("secret not found")
-	ErrSecretsAlreadyExist  = errors.New("secrets already exist")
-	ErrProviderNotFound     = errors.New("secret provider not found")
-	ErrInvalidContainerName = errors.New("invalid container name")
+	ErrEnvFileNotFound             = errors.New("environment file not found")
+	ErrSecretNotFound              = errors.New("secret not found")
+	ErrSecretsAlreadyExist         = errors.New("secrets already exist")
+	ErrProviderNotFound            = errors.New("secret provider not found")
+	ErrInvalidContainerName        = errors.New("invalid container name")
+	ErrAttachmentOwnershipMismatch = errors.New("attachment ownership mismatch")
+	ErrReadinessLogSizeExceeded    = errors.New("readiness log exceeds maximum")
 
 	// Authentication errors
 	ErrInvalidToken       = errors.New("invalid token")

@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestParseExecOutput_SplitsStdoutAndStderr(t *testing.T) {
@@ -21,6 +23,18 @@ func TestParseExecOutput_SplitsStdoutAndStderr(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("hello\n"), stdout)
 	assert.Equal(t, []byte("warn\n"), stderr)
+}
+
+func TestParseExecOutput_RejectsOversizedFrameBeforeReadingPayload(t *testing.T) {
+	var header [8]byte
+	header[0] = 1
+	binary.BigEndian.PutUint32(header[4:], maxExecOutputSize+1)
+
+	stdout, stderr, err := parseExecOutput(bytes.NewReader(header[:]))
+
+	assert.ErrorIs(t, err, domain.ErrExecOutputExceeded)
+	assert.Nil(t, stdout)
+	assert.Nil(t, stderr)
 }
 
 func TestRuntime_ExecInContainer_RejectsEmptyCommand(t *testing.T) {

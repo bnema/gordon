@@ -2540,8 +2540,13 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 			continue
 		}
 		if legacyExists {
-			volumes[path] = legacyName
-			continue
+			owned, ownershipErr := s.legacyVolumeOwnedByDomain(ctx, legacyName, domainName)
+			if ownershipErr != nil {
+				log.Warn().Err(ownershipErr).Str("volume", legacyName).Msg("could not verify legacy volume ownership; using stable volume name")
+			} else if owned {
+				volumes[path] = legacyName
+				continue
+			}
 		}
 
 		exists, err := s.runtime.VolumeExists(ctx, name)
@@ -3126,6 +3131,9 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 	containerName := fmt.Sprintf("gordon-%s-%s", sanitizeName(ownerDomain), serviceName)
 	existingContainer := s.findContainerByName(ctx, containerName)
 	if existingContainer != nil {
+		if err := validateAttachmentOwnership(existingContainer, ownerDomain, containerName); err != nil {
+			return nil, err
+		}
 		return existingContainer, nil
 	}
 
@@ -3135,10 +3143,8 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 		return nil, nil
 	}
 
-	if existingContainer.Labels[domain.LabelManaged] != "true" ||
-		existingContainer.Labels[domain.LabelAttachment] != "true" ||
-		existingContainer.Labels[domain.LabelAttachedTo] != ownerDomain {
-		return nil, fmt.Errorf("legacy attachment name %q is owned by another workload", containerNameLegacy)
+	if err := validateAttachmentOwnership(existingContainer, ownerDomain, containerNameLegacy); err != nil {
+		return nil, err
 	}
 	log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
 	if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
@@ -3149,6 +3155,15 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 	}
 
 	return nil, nil
+}
+
+func validateAttachmentOwnership(container *domain.Container, ownerDomain, containerName string) error {
+	if container.Labels[domain.LabelManaged] != "true" ||
+		container.Labels[domain.LabelAttachment] != "true" ||
+		container.Labels[domain.LabelAttachedTo] != ownerDomain {
+		return fmt.Errorf("%w: attachment name %q is owned by another workload", domain.ErrAttachmentOwnershipMismatch, containerName)
+	}
+	return nil
 }
 
 // Utility functions
@@ -3209,6 +3224,25 @@ func legacyVolumeName(prefix, domainName, volumePath string) string {
 		prefix,
 		strings.ReplaceAll(domainName, ".", "-"),
 		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+}
+
+func (s *Service) legacyVolumeOwnedByDomain(ctx context.Context, volumeName, domainName string) (bool, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return false, fmt.Errorf("list containers for legacy volume ownership: %w", err)
+	}
+	for _, container := range containers {
+		if container.Labels[domain.LabelManaged] != "true" ||
+			(container.Labels[domain.LabelRoute] != domainName && container.Labels[domain.LabelDomain] != domainName) {
+			continue
+		}
+		for _, mount := range container.VolumeMounts {
+			if mount.Name == volumeName || mount.Source == volumeName {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {

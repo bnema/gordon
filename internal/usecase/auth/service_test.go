@@ -802,6 +802,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 	expectedExpiry := time.Now().Add(24 * time.Hour)
 	actualExpiry := time.Unix(claims.ExpiresAt, 0)
 	assert.WithinDuration(t, expectedExpiry, actualExpiry, 5*time.Minute, "expiry should be ~24h from now")
+	assert.Equal(t, "stored", claims.TokenType)
 }
 
 func TestExtendTokenDebounce(t *testing.T) {

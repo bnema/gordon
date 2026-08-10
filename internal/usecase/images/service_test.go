@@ -13,6 +13,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 	pkgruntime "github.com/bnema/gordon/pkg/runtime"
 )
 
@@ -330,6 +331,24 @@ func TestService_PruneRegistry_GarbageCollectsUnreferencedBlobs(t *testing.T) {
 	assert.Equal(t, 1, report.Registry.BlobsRemoved)
 	assert.Equal(t, int64(4096), report.Registry.SpaceReclaimed)
 	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
+}
+
+func TestService_PruneRegistry_PreservesPendingBlob(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	manifestStorage.repositories = []string{"gordon/api"}
+	manifestStorage.tagsByRepo["gordon/api"] = []string{"latest"}
+	manifestStorage.modTimes[manifestRefKey("gordon/api", "latest")] = time.Now().UTC()
+	manifestStorage.manifests[manifestRefKey("gordon/api", "latest")] = mustManifestJSON(t, "sha256:cfg-live", "sha256:layer-live")
+	blobStorage := &fakeBlobStorage{blobs: []string{"sha256:pending"}}
+	state := registrystate.New()
+	state.AddPending("sha256:pending", time.Now().UTC())
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default(), state)
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Zero(t, report.Registry.BlobsRemoved)
+	assert.Empty(t, blobStorage.deletedBlobs)
 }
 
 func TestService_PruneRegistry_PreservesSharedBlobs(t *testing.T) {

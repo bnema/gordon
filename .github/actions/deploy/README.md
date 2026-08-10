@@ -28,6 +28,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Deploy to Gordon
         uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
@@ -53,6 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Deploy to Gordon
         id: deploy
@@ -151,6 +155,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
 
       - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
@@ -175,6 +180,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
@@ -188,6 +195,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
       - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com

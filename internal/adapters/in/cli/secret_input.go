@@ -14,6 +14,10 @@ func readProtectedSecretFile(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("open secret file %s: %w", path, err)
 	}
+	if fd < 0 {
+		return "", fmt.Errorf("open secret file %s: invalid file descriptor %d", path, fd)
+	}
+	//nolint:gosec // G115: fd is validated non-negative and originates from unix.Open.
 	file := os.NewFile(uintptr(fd), path)
 	if file == nil {
 		_ = unix.Close(fd)

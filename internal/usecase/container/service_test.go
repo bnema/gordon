@@ -1794,11 +1794,48 @@ func TestService_SetupVolumes_ReusesLegacyVolume(t *testing.T) {
 
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil)
 	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{
+		Labels:       map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "app.example.com"},
+		VolumeMounts: []domain.ContainerVolumeMount{{Name: legacyName}},
+	}}, nil)
 
 	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest")
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": legacyName}, volumes)
+}
+
+func TestService_SetupVolumes_DoesNotReuseCollidingLegacyVolume(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: true, VolumePrefix: "gordon"}, nil)
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+	stableName := generateVolumeName("gordon", "app.example.com", "/data")
+	require.Equal(t, legacyName, legacyVolumeName("gordon", "app-example.com", "/data"))
+
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil)
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{
+		Labels:       map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "app-example.com"},
+		VolumeMounts: []domain.ContainerVolumeMount{{Name: legacyName}},
+	}}, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, stableName).Return(true, nil)
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest")
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"/data": stableName}, volumes)
+}
+
+func TestValidateAttachmentOwnership(t *testing.T) {
+	owned := &domain.Container{Labels: map[string]string{
+		domain.LabelManaged: "true", domain.LabelAttachment: "true", domain.LabelAttachedTo: "app.example.com",
+	}}
+	require.NoError(t, validateAttachmentOwnership(owned, "app.example.com", "gordon-app-postgres"))
+
+	foreign := &domain.Container{Labels: map[string]string{
+		domain.LabelManaged: "true", domain.LabelAttachment: "true", domain.LabelAttachedTo: "other.example.com",
+	}}
+	assert.ErrorIs(t, validateAttachmentOwnership(foreign, "app.example.com", "gordon-app-postgres"), domain.ErrAttachmentOwnershipMismatch)
 }
 
 func TestMergeEnvironmentVariables(t *testing.T) {

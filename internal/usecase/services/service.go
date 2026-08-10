@@ -2,10 +2,12 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -532,6 +534,9 @@ func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc 
 		if err == nil && found {
 			return nil
 		}
+		if errors.Is(err, domain.ErrReadinessLogSizeExceeded) {
+			return err
+		}
 		if err != nil {
 			lastErr = err
 		}
@@ -559,14 +564,41 @@ func (s *Service) logContains(ctx context.Context, containerID, path, contains s
 		return false, err
 	}
 	defer reader.Close()
-	content, err := io.ReadAll(io.LimitReader(reader, maxReadinessLogSize+1))
-	if err != nil {
+	if contains == "" {
+		return true, nil
+	}
+
+	needle := []byte(contains)
+	buffer := make([]byte, 32*1024)
+	carry := make([]byte, 0, len(needle)-1)
+	remaining := maxReadinessLogSize
+	for remaining > 0 {
+		readSize := min(len(buffer), remaining)
+		n, readErr := reader.Read(buffer[:readSize])
+		if n > 0 {
+			window := append(carry, buffer[:n]...)
+			if bytes.Contains(window, needle) {
+				return true, nil
+			}
+			overlap := min(len(needle)-1, len(window))
+			carry = append(carry[:0], window[len(window)-overlap:]...)
+			remaining -= n
+		}
+		if errors.Is(readErr, io.EOF) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+	}
+
+	var extra [1]byte
+	if _, err := reader.Read(extra[:]); errors.Is(err, io.EOF) {
+		return false, nil
+	} else if err != nil {
 		return false, err
 	}
-	if len(content) > maxReadinessLogSize {
-		return false, fmt.Errorf("readiness log exceeds %d bytes", maxReadinessLogSize)
-	}
-	return strings.Contains(string(content), contains), nil
+	return false, fmt.Errorf("%w: limit is %d bytes", domain.ErrReadinessLogSizeExceeded, maxReadinessLogSize)
 }
 
 func normalizeCleanup(cleanup domain.StandaloneServiceCleanup) domain.StandaloneServiceCleanup {

@@ -81,22 +81,45 @@ runs:
         INPUT_TAG: ${{ inputs.tag }}
         INPUT_REGISTRY: ${{ inputs.registry }}
       run: |
-        # Determine image name
-        IMAGE_NAME="${INPUT_IMAGE}"
-        if [[ -z "$IMAGE_NAME" ]]; then
-          IMAGE_NAME="${GITHUB_REPOSITORY#*/}"
-        fi
+        reject_line_breaks() {
+          [[ "$2" != *$'\n'* && "$2" != *$'\r'* ]] || {
+            echo "::error::$1 must not contain line breaks"
+            exit 1
+          }
+        }
+        reject_line_breaks "registry" "$INPUT_REGISTRY"
+        reject_line_breaks "image" "$INPUT_IMAGE"
+        reject_line_breaks "tag" "$INPUT_TAG"
 
-        # Extract tag from ref (or override)
+        IMAGE_NAME="${INPUT_IMAGE:-${GITHUB_REPOSITORY#*/}}"
         if [[ -n "${INPUT_TAG}" ]]; then
           TAG="${INPUT_TAG}"
         elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
           TAG="${GITHUB_REF#refs/tags/}"
         else
-          TAG="$(echo "$GITHUB_SHA" | head -c 7)"
+          TAG="${GITHUB_SHA:0:7}"
         fi
 
-        # Full image reference
+        [[ "$INPUT_REGISTRY" =~ ^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$ ]] || {
+          echo "::error::registry must be a hostname with an optional port"
+          exit 1
+        }
+        if [[ "$INPUT_REGISTRY" =~ :([0-9]+)$ ]]; then
+          PORT="${BASH_REMATCH[1]}"
+          [[ "$PORT" != 0* && $((10#$PORT)) -ge 1 && $((10#$PORT)) -le 65535 ]] || {
+            echo "::error::registry port must be between 1 and 65535 without leading zeros"
+            exit 1
+          }
+        fi
+        [[ "$IMAGE_NAME" =~ ^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$ ]] || {
+          echo "::error::image contains invalid Docker repository components"
+          exit 1
+        }
+        [[ "$TAG" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || {
+          echo "::error::tag is not a valid Docker tag"
+          exit 1
+        }
+
         FULL_IMAGE="${INPUT_REGISTRY}/${IMAGE_NAME}:${TAG}"
 
         printf 'image=%s\nimage_name=%s\ntag=%s\nregistry=%s\n' \
@@ -130,7 +153,11 @@ runs:
         if [[ "${INPUT_PUSH_LATEST}" == "true" ]]; then
           TAGS="${TAGS}"$'\n'"${INPUT_REGISTRY}/${META_IMAGE_NAME}:latest"
         fi
-        printf "tags<<EOF\n%s\nEOF\n" "$TAGS" >> "$GITHUB_OUTPUT"
+        DELIMITER="gordon_$(openssl rand -hex 16)"
+        while grep -Fqx "$DELIMITER" <<< "$TAGS"; do
+          DELIMITER="gordon_$(openssl rand -hex 16)"
+        done
+        printf 'tags<<%s\n%s\n%s\n' "$DELIMITER" "$TAGS" "$DELIMITER" >> "$GITHUB_OUTPUT"
 
     - name: Build and push
       id: push

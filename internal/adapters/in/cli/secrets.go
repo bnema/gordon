@@ -223,6 +223,7 @@ func getKeyPrefix(isLastAttachment, isLastKey bool) string {
 // newSecretsSetCmd creates the secrets set command.
 func newSecretsSetCmd() *cobra.Command {
 	var attachment, fromFile string
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "set <domain> --from-file <path>",
@@ -275,20 +276,23 @@ Examples:
 				target = fmt.Sprintf("%s [%s]", secretDomain, attachment)
 			}
 
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{
+					"domain": secretDomain, "attachment": attachment, "count": len(secrets), "updated": true,
+				})
+			}
 			if len(secrets) == 1 {
 				for key := range secrets {
-					fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret set: %s on %s", key, target)))
+					return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Secret set: %s on %s", key, target)))
 				}
-			} else {
-				fmt.Println(styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), target)))
 			}
-
-			return nil
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Set %d secrets for %s", len(secrets), target)))
 		},
 	}
 
 	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read KEY=value lines from a mode 0600 file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("from-file")
 
 	return cmd

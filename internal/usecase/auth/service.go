@@ -515,13 +515,14 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 	newExpiresAt := now.Add(tokenExtensionTTL)
 
 	newClaims := jwt.MapClaims{
-		"jti":    tokenClaims.ID, // Reuse existing JTI to avoid invalidating concurrent requests
-		"sub":    tokenClaims.Subject,
-		"iss":    TokenIssuer,
-		"iat":    now.Unix(), // Update to current time (token is being re-issued)
-		"nbf":    now.Unix(), // SECURITY: not-before matches issuance time
-		"scopes": tokenClaims.Scopes,
-		"exp":    newExpiresAt.Unix(),
+		"jti":        tokenClaims.ID, // Reuse existing JTI to avoid invalidating concurrent requests
+		"sub":        tokenClaims.Subject,
+		"iss":        TokenIssuer,
+		"iat":        now.Unix(), // Update to current time (token is being re-issued)
+		"nbf":        now.Unix(), // SECURITY: not-before matches issuance time
+		"scopes":     tokenClaims.Scopes,
+		"exp":        newExpiresAt.Unix(),
+		"token_type": "stored",
 	}
 
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, newClaims)

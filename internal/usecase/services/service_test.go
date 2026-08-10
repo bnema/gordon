@@ -387,6 +387,32 @@ func TestWaitLogReadinessReadsContainerFileUntilTextAppears(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestLogContainsStopsAtMatchBeforeSizeLimit(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime)
+	runtime.EXPECT().CopyFromContainer(mock.Anything, "container-1", "/logs/server.log").Return(
+		io.NopCloser(strings.NewReader("ready\n"+strings.Repeat("x", maxReadinessLogSize))), nil,
+	)
+
+	found, err := svc.logContains(context.Background(), "container-1", "/logs/server.log", "ready")
+
+	require.NoError(t, err)
+	assert.True(t, found)
+}
+
+func TestLogContainsReturnsSentinelAtSizeLimit(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime)
+	runtime.EXPECT().CopyFromContainer(mock.Anything, "container-1", "/logs/server.log").Return(
+		io.NopCloser(strings.NewReader(strings.Repeat("x", maxReadinessLogSize+1))), nil,
+	)
+
+	found, err := svc.logContains(context.Background(), "container-1", "/logs/server.log", "ready")
+
+	assert.False(t, found)
+	assert.ErrorIs(t, err, domain.ErrReadinessLogSizeExceeded)
+}
+
 func TestWaitReadinessHonorsContextTimeout(t *testing.T) {
 	svc := sampleService()
 	svc.Readiness = domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessTCP}
