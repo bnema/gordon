@@ -939,6 +939,20 @@ func TestIsEphemeralAccessTokenRejectsFutureIat(t *testing.T) {
 	}
 }
 
+func TestIsEphemeralAccessTokenRequiresExplicitTokenType(t *testing.T) {
+	svc, _ := newTestAuthService(t)
+	now := time.Now().UTC()
+
+	claims := &domain.TokenClaims{
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(5 * time.Minute).Unix(),
+	}
+
+	assert.False(t, svc.isEphemeralAccessToken(claims))
+	claims.TokenType = "access"
+	assert.True(t, svc.isEphemeralAccessToken(claims))
+}
+
 func TestExtendTokenSkipsServiceToken(t *testing.T) {
 	tokenStore := mocks.NewMockTokenStore(t)
 

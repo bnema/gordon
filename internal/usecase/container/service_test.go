@@ -200,16 +200,15 @@ func TestService_GetNetworkForApp_UsesLiveConfigProvider(t *testing.T) {
 		nil, Config{NetworkIsolation: true, NetworkPrefix: "gordon"}, provider,
 	)
 
-	// Should use group network: generateNetworkName produces "gordon-shared-group"
+	// Group and per-domain networks use collision-resistant names.
 	network := svc.getNetworkForApp("app1.example.com")
-	assert.Equal(t, "gordon-shared-group", network)
+	assert.Equal(t, svc.generateNetworkName("shared-group"), network)
 
 	network = svc.getNetworkForApp("app3.example.com")
-	assert.Equal(t, "gordon-shared-group", network)
+	assert.Equal(t, svc.generateNetworkName("shared-group"), network)
 
-	// Domain not in any group gets its own network: "gordon-solo-example-com"
 	network = svc.getNetworkForApp("solo.example.com")
-	assert.Equal(t, "gordon-solo-example-com", network)
+	assert.Equal(t, svc.generateNetworkName("solo.example.com"), network)
 }
 
 func TestService_ManagedContainersMetric_GlobalSeriesOnDeployReplaceAndRemove(t *testing.T) {
@@ -704,7 +703,7 @@ func TestService_Deploy_StrictHealthModeWithoutHealthcheckReturnsHint(t *testing
 	assert.ErrorContains(t, deployErr.Err, "no healthcheck detected")
 }
 
-func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
+func TestService_PullImage_DoesNotSendServiceTokenToExternalRegistry(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 
 	config := Config{
@@ -717,28 +716,11 @@ func TestService_PullImage_UsesServiceTokenForExternalPull(t *testing.T) {
 	svc := NewService(runtime, nil, nil, nil, config, nil)
 	ctx := testContext()
 
-	runtime.EXPECT().PullImageWithAuth(mock.Anything, "registry.example.com/myapp:latest", "gordon-service", "service-token").Return(nil)
+	runtime.EXPECT().PullImage(mock.Anything, "registry.example.com/myapp:latest").Return(nil)
 
 	err := svc.pullImage(ctx, "registry.example.com/myapp:latest", false)
 
 	assert.NoError(t, err)
-}
-
-func TestService_PullImage_RequiresServiceTokenForExternalPull(t *testing.T) {
-	runtime := mocks.NewMockContainerRuntime(t)
-
-	config := Config{
-		AllowedRegistries:   []string{"docker.io"},
-		RegistryAuthEnabled: true,
-	}
-
-	svc := NewService(runtime, nil, nil, nil, config, nil)
-	ctx := testContext()
-
-	err := svc.pullImage(ctx, "registry.example.com/myapp:latest", false)
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "registry service token not configured")
 }
 
 func TestService_PullImage_InternalRetriesOnConnectionRefused(t *testing.T) {
@@ -1041,13 +1023,17 @@ func TestService_Deploy_WithNetworkIsolation(t *testing.T) {
 	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
-	// Network isolation - should check and create network
-	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-test-example-com").Return(false, nil)
-	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-test-example-com", domain.NetworkConfig{Driver: "bridge"}).Return(nil)
+	// Network isolation - should check and create an owned network.
+	networkName := svc.generateNetworkName("test.example.com")
+	runtime.EXPECT().NetworkExists(mock.Anything, networkName).Return(false, nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, networkName, domain.NetworkConfig{
+		Driver: "bridge",
+		Labels: map[string]string{domain.LabelManaged: "true"},
+	}).Return(nil)
 
 	container := &domain.Container{ID: "container-123", Status: "created"}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
-		return cfg.NetworkMode == "gordon-test-example-com"
+		return cfg.NetworkMode == networkName
 	})).Return(container, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "container-123").Return(nil)
 
@@ -1100,10 +1086,14 @@ func TestService_Deploy_WithVolumeAutoCreate(t *testing.T) {
 	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
 
 	// Volume operations
+	dataVolume := generateVolumeName("gordon", "test.example.com", "/data")
+	configVolume := generateVolumeName("gordon", "test.example.com", "/config")
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data", "/config"}, nil)
-	runtime.EXPECT().VolumeExists(mock.Anything, "gordon-test-example-com-data").Return(false, nil)
-	runtime.EXPECT().CreateVolume(mock.Anything, "gordon-test-example-com-data").Return(nil)
-	runtime.EXPECT().VolumeExists(mock.Anything, "gordon-test-example-com-config").Return(true, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyVolumeName("gordon", "test.example.com", "/data")).Return(false, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, dataVolume).Return(false, nil)
+	runtime.EXPECT().CreateVolume(mock.Anything, dataVolume).Return(nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyVolumeName("gordon", "test.example.com", "/config")).Return(false, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, configVolume).Return(true, nil)
 
 	container := &domain.Container{ID: "container-123", Status: "created"}
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
@@ -1203,10 +1193,11 @@ func TestService_Remove_WithNetworkCleanup(t *testing.T) {
 	}
 
 	runtime.EXPECT().RemoveContainer(mock.Anything, "container-123", true).Return(nil)
+	networkName := svc.generateNetworkName("test.example.com")
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{
-		{Name: "gordon-test-example-com", Containers: []string{}},
+		{Name: networkName, Containers: []string{}, Labels: map[string]string{domain.LabelManaged: "true"}},
 	}, nil)
-	runtime.EXPECT().RemoveNetwork(mock.Anything, "gordon-test-example-com").Return(nil)
+	runtime.EXPECT().RemoveNetwork(mock.Anything, networkName).Return(nil)
 
 	err := svc.Remove(ctx, "container-123", true)
 
@@ -1777,14 +1768,14 @@ func TestGenerateVolumeName(t *testing.T) {
 			prefix:     "gordon",
 			domain:     "app.example.com",
 			volumePath: "/data",
-			expected:   "gordon-app-example-com-data",
+			expected:   "gordon-app__example__com-28059829b105-data-3a6eb0790f39",
 		},
 		{
 			name:       "nested path",
 			prefix:     "gordon",
 			domain:     "app.example.com",
 			volumePath: "/var/lib/data",
-			expected:   "gordon-app-example-com-var-lib-data",
+			expected:   "gordon-app__example__com-28059829b105-var--lib--data-323f0a44c820",
 		},
 	}
 
@@ -1794,6 +1785,20 @@ func TestGenerateVolumeName(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestService_SetupVolumes_ReusesLegacyVolume(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: true, VolumePrefix: "gordon"}, nil)
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil)
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest")
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"/data": legacyName}, volumes)
 }
 
 func TestMergeEnvironmentVariables(t *testing.T) {
@@ -4480,7 +4485,11 @@ func TestService_CreateNetworkIfNeeded_UsesInternalOptionWhenConfigured(t *testi
 	svc := NewService(runtime, nil, nil, nil, Config{NetworkInternal: true}, nil)
 
 	runtime.EXPECT().NetworkExists(mock.Anything, "gordon-app").Return(false, nil)
-	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-app", domain.NetworkConfig{Driver: "bridge", Internal: true}).Return(nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, "gordon-app", domain.NetworkConfig{
+		Driver:   "bridge",
+		Internal: true,
+		Labels:   map[string]string{domain.LabelManaged: "true"},
+	}).Return(nil)
 
 	require.NoError(t, svc.createNetworkIfNeeded(testContext(), "gordon-app"))
 }

@@ -206,31 +206,35 @@ available while Gordon is running.`,
 
 // newAuthLoginCmd creates the login command for remote authentication.
 func newAuthLoginCmd() *cobra.Command {
-	var token string
+	var tokenFile string
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Gordon server",
 		Long: `Store or verify a token for a Gordon server remote.
 
-With --token: stores the token and verifies it.
-Without --token: verifies the existing stored token still works.
+With --token-file: reads, stores, and verifies a token without exposing it in argv.
+Without --token-file: verifies the existing stored token still works.
 
 Generate a token on the server with: gordon auth token generate
 
 Examples:
-	gordon auth login --token <token>              Store token for active remote
-	gordon auth login --remote prod --token <tok>  Store token for specific remote
+	gordon auth login --token-file ./token         Store token for active remote
+	gordon auth login --remote prod --token-file ./token
 	gordon auth login                              Verify existing token`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token != "" {
+			if tokenFile != "" {
+				token, err := readProtectedSecretFile(tokenFile)
+				if err != nil {
+					return fmt.Errorf("read token: %w", err)
+				}
 				return runAuthLoginWithToken(cmd.Context(), token, cmd.OutOrStdout())
 			}
 			return runAuthLoginVerify(cmd.Context(), cmd.OutOrStdout())
 		},
 	}
 
-	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
 
 	return cmd
 }
@@ -291,7 +295,7 @@ func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
 		return err
 	}
 	if resolved.Token == "" {
-		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolved.DisplayName())
+		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token-file <path>", resolved.DisplayName())
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)

@@ -747,8 +747,9 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 		return err
 	}
 
-	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus)
-	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log)
+	registryMutationMu := &sync.RWMutex{}
+	si.svc.registrySvc = registrySvc.NewService(si.svc.blobStorage, si.svc.manifestStorage, si.svc.eventBus, registryMutationMu)
+	si.svc.imageSvc = images.NewService(si.svc.runtime, si.svc.manifestStorage, si.svc.blobStorage, si.log, registryMutationMu)
 	si.svc.volumeSvc = volumesSvc.NewService(si.svc.runtime)
 
 	injectTelemetryMetrics(si.cfg, si.svc, si.log)

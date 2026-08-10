@@ -16,6 +16,7 @@ type AutoPreviewHandler struct {
 	serviceCtx     context.Context
 	config         auto.AutoConfigProvider
 	previewService *Service
+	jobs           chan struct{}
 }
 
 func NewAutoPreviewHandler(
@@ -27,6 +28,7 @@ func NewAutoPreviewHandler(
 		serviceCtx:     serviceCtx,
 		config:         config,
 		previewService: previewService,
+		jobs:           make(chan struct{}, 16),
 	}
 }
 
@@ -73,8 +75,18 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 			continue
 		}
 
-		// Launch async — volume cloning may exceed event bus timeout
+		// Launch async — volume cloning may exceed event bus timeout. The bounded
+		// semaphore prevents a push burst from creating an unbounded goroutine backlog.
+		select {
+		case h.jobs <- struct{}{}:
+		case <-h.serviceCtx.Done():
+			return h.serviceCtx.Err()
+		default:
+			log.Warn().Str("preview", previewName).Str("base_route", baseRoute.Domain).Msg("preview worker queue is full, skipping event")
+			continue
+		}
 		go func(baseRoute baseRouteInfo, previewDomain string) {
+			defer func() { <-h.jobs }()
 			if err := h.previewService.CreatePreview(h.serviceCtx, CreatePreviewRequest{
 				Name:          previewName,
 				Domain:        previewDomain,

@@ -17,8 +17,18 @@ var _ out.RateLimiter = (*MemoryStore)(nil)
 
 // MemoryStore is an in-memory rate limiter implementation using golang.org/x/time/rate.
 // Each unique key gets its own independent rate limiter.
+type limiterEntry struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+const (
+	maxLimiterEntries = 10000
+	limiterIdleTTL    = 10 * time.Minute
+)
+
 type MemoryStore struct {
-	limiters map[string]*rate.Limiter
+	limiters map[string]limiterEntry
 	mu       sync.RWMutex
 	rps      float64
 	burst    int
@@ -28,7 +38,7 @@ type MemoryStore struct {
 // NewMemoryStore creates a new in-memory rate limiter store.
 func NewMemoryStore(rps float64, burst int, log zerowrap.Logger) *MemoryStore {
 	return &MemoryStore{
-		limiters: make(map[string]*rate.Limiter),
+		limiters: make(map[string]limiterEntry),
 		rps:      rps,
 		burst:    burst,
 		log:      log,
@@ -48,23 +58,43 @@ func (s *MemoryStore) AllowN(_ context.Context, key string, n int) bool {
 
 // getLimiter returns the rate limiter for the given key, creating one if it doesn't exist.
 func (s *MemoryStore) getLimiter(key string) *rate.Limiter {
-	s.mu.RLock()
-	limiter, exists := s.limiters[key]
-	s.mu.RUnlock()
-
-	if exists {
-		return limiter
-	}
-
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Double-check after acquiring write lock
-	if limiter, exists = s.limiters[key]; exists {
-		return limiter
+	if entry, exists := s.limiters[key]; exists {
+		entry.lastSeen = now
+		s.limiters[key] = entry
+		return entry.limiter
 	}
 
-	limiter = rate.NewLimiter(rate.Limit(s.rps), s.burst)
-	s.limiters[key] = limiter
+	s.evictExpiredOrOldest(now)
+	limiter := rate.NewLimiter(rate.Limit(s.rps), s.burst)
+	s.limiters[key] = limiterEntry{limiter: limiter, lastSeen: now}
 	return limiter
+}
+
+func (s *MemoryStore) evictExpiredOrOldest(now time.Time) {
+	for key, entry := range s.limiters {
+		if now.Sub(entry.lastSeen) > limiterIdleTTL {
+			delete(s.limiters, key)
+		}
+	}
+	if len(s.limiters) < maxLimiterEntries {
+		return
+	}
+
+	var oldestKey string
+	var oldest time.Time
+	found := false
+	for key, entry := range s.limiters {
+		if !found || entry.lastSeen.Before(oldest) {
+			oldestKey = key
+			oldest = entry.lastSeen
+			found = true
+		}
+	}
+	if found {
+		delete(s.limiters, oldestKey)
+	}
 }

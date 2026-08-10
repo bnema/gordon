@@ -15,12 +15,21 @@ Detailed installation guide for production environments.
 ### Quick Install (Recommended)
 
 ```bash
-curl -fsSL https://gordon.bnema.dev/install | bash
+(
+  set -euo pipefail
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL --output "$installer" https://gordon.bnema.dev/install
+  less "$installer"
+  bash "$installer"
+)
 ```
 
-This script automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
+Download and inspect the installer before executing it. The installer verifies the release archive checksum before installation and automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
 
 ### Manual Installation
+
+Manual archive installation requires downloading the matching `checksums.txt` release asset and verifying the archive's SHA-256 checksum before extraction. The checksum-verifying installer above is recommended.
 
 **Linux (x86_64)**
 ```bash
@@ -74,8 +83,9 @@ sudo mv gordon /usr/local/bin/
 ### Docker
 
 ```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
+# Install Docker from your distribution's signed package repository.
+sudo apt update
+sudo apt install docker.io
 
 # Add user to docker group
 sudo usermod -aG docker $USER

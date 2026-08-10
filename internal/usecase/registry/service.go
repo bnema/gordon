@@ -4,6 +4,9 @@ package registry
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -31,6 +34,7 @@ type Service struct {
 	eventBus         out.EventPublisher
 	metrics          *telemetry.Metrics
 	suppressedImages sync.Map // imageName -> *time.Timer
+	mutationMu       *sync.RWMutex
 }
 
 // SetMetrics sets the telemetry metrics for the registry service.
@@ -43,11 +47,17 @@ func NewService(
 	blobStorage out.BlobStorage,
 	manifestStorage out.ManifestStorage,
 	eventBus out.EventPublisher,
+	mutationLocks ...*sync.RWMutex,
 ) *Service {
+	mutationMu := &sync.RWMutex{}
+	if len(mutationLocks) > 0 && mutationLocks[0] != nil {
+		mutationMu = mutationLocks[0]
+	}
 	return &Service{
 		blobStorage:     blobStorage,
 		manifestStorage: manifestStorage,
 		eventBus:        eventBus,
+		mutationMu:      mutationMu,
 	}
 }
 
@@ -155,6 +165,9 @@ func (s *Service) GetManifest(ctx context.Context, name, reference string) (*dom
 
 // PutManifest stores a manifest and returns the calculated digest.
 func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (string, error) {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx, span := registryTracer.Start(ctx, "registry.put_manifest",
 		trace.WithAttributes(
 			attribute.String("name", manifest.Name),
@@ -171,8 +184,20 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Calculate digest
+	// Calculate and verify the digest before mutating storage. A digest-addressed
+	// manifest must match its URL reference or clients could later retrieve
+	// attacker-controlled bytes under a trusted content address.
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifest.Data))
+	if validation.IsDigest(manifest.Reference) {
+		matches, err := manifestDigestMatches(manifest.Reference, manifest.Data)
+		if err != nil {
+			return "", err
+		}
+		if !matches {
+			return "", fmt.Errorf("%w: manifest content does not match %s", domain.ErrDigestMismatch, manifest.Reference)
+		}
+		digest = manifest.Reference
+	}
 
 	if err := s.manifestStorage.PutManifest(manifest.Name, manifest.Reference, manifest.ContentType, manifest.Data); err != nil {
 		return "", log.WrapErr(err, "failed to store manifest")
@@ -191,7 +216,7 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	// Publish image pushed event only for tag references (not digests).
 	// A docker push sends manifests by both digest and tag; firing only on
 	// tag prevents duplicate deploy triggers for the same push.
-	if s.eventBus != nil && !strings.HasPrefix(manifest.Reference, "sha256:") {
+	if s.eventBus != nil && !validation.IsDigest(manifest.Reference) {
 		if s.IsDeployEventSuppressed(manifest.Name) {
 			log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
 		} else {
@@ -245,14 +270,24 @@ func (s *Service) GetBlob(ctx context.Context, digest string) (io.ReadCloser, er
 	return reader, nil
 }
 
-// GetBlobPath returns the filesystem path to a blob for direct serving.
-func (s *Service) GetBlobPath(ctx context.Context, digest string) (string, error) {
+// GetBlobPath returns the filesystem path to a blob only when a manifest in
+// the requested repository references it.
+func (s *Service) GetBlobPath(ctx context.Context, name, digest string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetBlobPath",
+		"name":                name,
 		"digest":              digest,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	referenced, err := s.repositoryReferencesDigest(name, digest)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to verify blob ownership")
+	}
+	if !referenced {
+		return "", domain.ErrBlobNotFound
+	}
 
 	path, err := s.blobStorage.GetBlobPath(digest)
 	if err != nil {
@@ -262,8 +297,91 @@ func (s *Service) GetBlobPath(ctx context.Context, digest string) (string, error
 	return path, nil
 }
 
+type manifestDescriptor struct {
+	Digest string `json:"digest"`
+}
+
+type manifestReferences struct {
+	Config    manifestDescriptor   `json:"config"`
+	Layers    []manifestDescriptor `json:"layers"`
+	Manifests []manifestDescriptor `json:"manifests"`
+	Blobs     []manifestDescriptor `json:"blobs"`
+	Subject   *manifestDescriptor  `json:"subject"`
+}
+
+func (s *Service) repositoryReferencesDigest(name, target string) (bool, error) {
+	tags, err := s.manifestStorage.ListTags(name)
+	if err != nil {
+		if errors.Is(err, domain.ErrManifestNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	queue := append([]string(nil), tags...)
+	seen := make(map[string]struct{}, len(queue))
+	for len(queue) > 0 {
+		reference := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[reference]; ok {
+			continue
+		}
+		seen[reference] = struct{}{}
+
+		data, _, err := s.manifestStorage.GetManifest(name, reference)
+		if err != nil {
+			return false, err
+		}
+		var refs manifestReferences
+		if err := json.Unmarshal(data, &refs); err != nil {
+			return false, fmt.Errorf("decode manifest %s: %w", reference, err)
+		}
+
+		if refs.Config.Digest == target || descriptorListContains(refs.Layers, target) ||
+			descriptorListContains(refs.Blobs, target) || (refs.Subject != nil && refs.Subject.Digest == target) {
+			return true, nil
+		}
+		for _, child := range refs.Manifests {
+			if child.Digest == target {
+				return true, nil
+			}
+			if child.Digest != "" {
+				queue = append(queue, child.Digest)
+			}
+		}
+	}
+	return false, nil
+}
+
+func descriptorListContains(descriptors []manifestDescriptor, digest string) bool {
+	for _, descriptor := range descriptors {
+		if descriptor.Digest == digest {
+			return true
+		}
+	}
+	return false
+}
+
+func manifestDigestMatches(reference string, data []byte) (bool, error) {
+	algorithm, _, ok := strings.Cut(reference, ":")
+	if !ok {
+		return false, domain.ErrInvalidDigest
+	}
+	switch algorithm {
+	case "sha256":
+		return reference == fmt.Sprintf("sha256:%x", sha256.Sum256(data)), nil
+	case "sha512":
+		return reference == fmt.Sprintf("sha512:%x", sha512.Sum512(data)), nil
+	default:
+		return false, domain.ErrInvalidDigest
+	}
+}
+
 // PutBlob stores a blob with the given digest.
 func (s *Service) PutBlob(ctx context.Context, digest string, data io.Reader, size int64) error {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PutBlob",

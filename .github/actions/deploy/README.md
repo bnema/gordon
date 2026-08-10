@@ -64,9 +64,6 @@ jobs:
           image: myapp                    # Custom image name
           dockerfile: ./docker/Dockerfile # Custom Dockerfile path
           context: .                      # Build context
-          build-args: |                   # Build arguments
-            NODE_ENV=production
-            API_URL=https://api.example.com
           platforms: linux/amd64,linux/arm64  # Multi-platform
           push-latest: 'true'             # Also push :latest
 
@@ -88,7 +85,6 @@ jobs:
 | `tag` | Override image tag | No | Git tag or short SHA |
 | `dockerfile` | Path to Dockerfile | No | `./Dockerfile` |
 | `context` | Build context path | No | `.` |
-| `build-args` | Build arguments (one per line) | No | - |
 | `platforms` | Target platforms | No | - |
 | `push-latest` | Also push with `:latest` tag | No | `true` |
 | `cache-from` | Cache source | No | `type=gha` |
@@ -204,15 +200,7 @@ jobs:
 
 ### Build with Secrets (BuildKit)
 
-```yaml
-- uses: bnema/gordon/.github/actions/deploy@main
-  with:
-    registry: registry.mydomain.com
-    username: ${{ secrets.GORDON_USERNAME }}
-    password: ${{ secrets.GORDON_TOKEN }}
-    build-args: |
-      NPM_TOKEN=${{ secrets.NPM_TOKEN }}
-```
+The deploy action intentionally does not accept build arguments because CI secrets passed as build arguments can remain in image metadata or layers. For secret-bearing builds, use `docker/build-push-action` with its BuildKit `secrets` input, reference the secret with `RUN --mount=type=secret` in the Dockerfile, and pin every action to a reviewed commit SHA.
 
 ## Troubleshooting
 

@@ -222,32 +222,32 @@ func getKeyPrefix(isLastAttachment, isLastKey bool) string {
 
 // newSecretsSetCmd creates the secrets set command.
 func newSecretsSetCmd() *cobra.Command {
-	var attachment string
+	var attachment, fromFile string
 
 	cmd := &cobra.Command{
-		Use:   "set <domain> <KEY=value>...",
+		Use:   "set <domain> --from-file <path>",
 		Short: "Set secrets for a domain or attachment",
 		Long: `Set one or more secrets for a domain or an attachment container.
 
-Secrets are specified as KEY=value pairs. Multiple secrets can be set at once.
+Secrets are read from a mode 0600 file containing one KEY=value pair per line.
 
 Use --attachment to target an attachment service (e.g., postgres, redis) instead
 of the main domain container.
 
 Examples:
-  gordon secrets set app.mydomain.com DATABASE_URL=postgres://localhost/db
-  gordon secrets set app.mydomain.com API_KEY=secret123 DEBUG=false
-  gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
-  gordon secrets set app.mydomain.com --attachment redis REDIS_PASSWORD=secret`,
-		Args: cobra.MinimumNArgs(2),
+  gordon secrets set app.mydomain.com --from-file ./app.env
+  gordon secrets set app.mydomain.com --attachment postgres --from-file ./postgres.env`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			secretDomain := args[0]
-			pairs := args[1:]
+			content, err := readProtectedSecretFile(fromFile)
+			if err != nil {
+				return fmt.Errorf("read secrets: %w", err)
+			}
 
-			// Parse KEY=value pairs
 			secrets := make(map[string]string)
-			for _, pair := range pairs {
+			for _, pair := range strings.Split(content, "\n") {
 				parts := strings.SplitN(pair, "=", 2)
 				if len(parts) != 2 {
 					return fmt.Errorf("invalid format: %s (expected KEY=value)", pair)
@@ -288,6 +288,8 @@ Examples:
 	}
 
 	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
+	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read KEY=value lines from a mode 0600 file")
+	_ = cmd.MarkFlagRequired("from-file")
 
 	return cmd
 }

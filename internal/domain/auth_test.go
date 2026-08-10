@@ -443,11 +443,11 @@ func TestScopesGrantAdminAccess(t *testing.T) {
 		want     bool
 	}{
 		{
-			name:     "wildcard shorthand grants any admin access",
+			name:     "wildcard shorthand does not grant admin access",
 			granted:  []string{"*"},
 			resource: "routes",
 			action:   "read",
-			want:     true,
+			want:     false,
 		},
 		{
 			name:     "exact admin scope grants matching resource and action",

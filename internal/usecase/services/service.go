@@ -521,7 +521,7 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 }
 
 func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc domain.StandaloneService) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	var lastErr error
 	for {
@@ -551,15 +551,20 @@ func logReadinessTimeoutError(serviceName string, timeoutErr, lastErr error) err
 	return fmt.Errorf("standalone service %q log readiness timed out: %w", serviceName, timeoutErr)
 }
 
+const maxReadinessLogSize = 1 << 20 // 1 MiB
+
 func (s *Service) logContains(ctx context.Context, containerID, path, contains string) (bool, error) {
 	reader, err := s.runtime.CopyFromContainer(ctx, containerID, path)
 	if err != nil {
 		return false, err
 	}
 	defer reader.Close()
-	content, err := io.ReadAll(reader)
+	content, err := io.ReadAll(io.LimitReader(reader, maxReadinessLogSize+1))
 	if err != nil {
 		return false, err
+	}
+	if len(content) > maxReadinessLogSize {
+		return false, fmt.Errorf("readiness log exceeds %d bytes", maxReadinessLogSize)
 	}
 	return strings.Contains(string(content), contains), nil
 }

@@ -92,7 +92,17 @@ func (s *Service) Load(ctx context.Context) error {
 
 func (s *Service) Add(ctx context.Context, p domain.PreviewRoute) error {
 	s.mu.Lock()
-	s.previews = append(s.previews, p)
+	replaced := false
+	for i := range s.previews {
+		if s.previews[i].Domain == p.Domain {
+			s.previews[i] = p
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.previews = append(s.previews, p)
+	}
 	cp := make([]domain.PreviewRoute, len(s.previews))
 	copy(cp, s.previews)
 	s.mu.Unlock()
@@ -102,7 +112,7 @@ func (s *Service) Add(ctx context.Context, p domain.PreviewRoute) error {
 func (s *Service) Update(ctx context.Context, p domain.PreviewRoute) error {
 	s.mu.Lock()
 	for i := range s.previews {
-		if s.previews[i].Name == p.Name {
+		if s.previews[i].Domain == p.Domain {
 			s.previews[i] = p
 			cp := make([]domain.PreviewRoute, len(s.previews))
 			copy(cp, s.previews)
@@ -313,8 +323,8 @@ func (s *Service) qualifyImage(image string) string {
 func generateVolumeName(prefix, domainName, volumePath string) string {
 	return fmt.Sprintf("%s-%s-%s",
 		prefix,
-		strings.ReplaceAll(domainName, ".", "-"),
-		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+		domain.StableResourceName(domainName),
+		domain.StableResourceName(strings.Trim(volumePath, "/")))
 }
 
 func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewDomain string) ([]string, error) {
@@ -328,7 +338,7 @@ func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewD
 	}
 
 	log := zerowrap.FromCtx(ctx)
-	basePrefix := prefix + "-" + strings.ReplaceAll(baseRoute, ".", "-") + "-"
+	basePrefix := prefix + "-" + domain.StableResourceName(baseRoute) + "-"
 
 	vols, err := s.volumeCloner.ListVolumes(ctx)
 	if err != nil {
@@ -370,11 +380,11 @@ type CreatePreviewRequest struct {
 
 // CreatePreview orchestrates the full preview creation: lock, clone volumes, start containers, register.
 func (s *Service) CreatePreview(ctx context.Context, req CreatePreviewRequest) error {
-	lock := s.AcquireNameLock(req.Name)
+	lock := s.AcquireNameLock(req.Domain)
 	lock.Lock()
 	defer func() {
 		lock.Unlock()
-		s.ReleaseNameLock(req.Name)
+		s.ReleaseNameLock(req.Domain)
 	}()
 
 	log := zerowrap.FromCtx(ctx)

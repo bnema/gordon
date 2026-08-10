@@ -32,10 +32,6 @@ inputs:
     description: 'Build context path (defaults to .)'
     required: false
     default: '.'
-  build-args:
-    description: 'Build arguments (one per line, KEY=value format)'
-    required: false
-    default: ''
   platforms:
     description: 'Target platforms (e.g., linux/amd64,linux/arm64)'
     required: false
@@ -69,25 +65,31 @@ runs:
   steps:
     - name: Validate inputs
       shell: bash
+      env:
+        INPUT_DOCKERFILE: ${{ inputs.dockerfile }}
       run: |
-        if [[ ! -f "${{ inputs.dockerfile }}" ]]; then
-          echo "::error::Dockerfile not found at ${{ inputs.dockerfile }}"
+        if [[ ! -f "${INPUT_DOCKERFILE}" ]]; then
+          echo "::error::Dockerfile not found at ${INPUT_DOCKERFILE}"
           exit 1
         fi
 
     - name: Extract metadata
       id: meta
       shell: bash
+      env:
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_TAG: ${{ inputs.tag }}
+        INPUT_REGISTRY: ${{ inputs.registry }}
       run: |
         # Determine image name
-        IMAGE_NAME="${{ inputs.image }}"
+        IMAGE_NAME="${INPUT_IMAGE}"
         if [[ -z "$IMAGE_NAME" ]]; then
           IMAGE_NAME="${GITHUB_REPOSITORY#*/}"
         fi
 
         # Extract tag from ref (or override)
-        if [[ -n "${{ inputs.tag }}" ]]; then
-          TAG="${{ inputs.tag }}"
+        if [[ -n "${INPUT_TAG}" ]]; then
+          TAG="${INPUT_TAG}"
         elif [[ "$GITHUB_REF" == refs/tags/* ]]; then
           TAG="${GITHUB_REF#refs/tags/}"
         else
@@ -95,23 +97,21 @@ runs:
         fi
 
         # Full image reference
-        FULL_IMAGE="${{ inputs.registry }}/${IMAGE_NAME}:${TAG}"
+        FULL_IMAGE="${INPUT_REGISTRY}/${IMAGE_NAME}:${TAG}"
 
-        echo "image=${FULL_IMAGE}" >> $GITHUB_OUTPUT
-        echo "image_name=${IMAGE_NAME}" >> $GITHUB_OUTPUT
-        echo "tag=${TAG}" >> $GITHUB_OUTPUT
-        echo "registry=${{ inputs.registry }}" >> $GITHUB_OUTPUT
+        printf 'image=%s\nimage_name=%s\ntag=%s\nregistry=%s\n' \
+          "${FULL_IMAGE}" "${IMAGE_NAME}" "${TAG}" "${INPUT_REGISTRY}" >> "${GITHUB_OUTPUT}"
 
         echo "Building: ${FULL_IMAGE}"
 
     - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+      uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
     - name: Log in to Gordon registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
       with:
         registry: ${{ inputs.registry }}
         username: ${{ inputs.username }}
@@ -120,16 +120,21 @@ runs:
     - name: Build tags
       id: tags
       shell: bash
+      env:
+        META_IMAGE: ${{ steps.meta.outputs.image }}
+        META_IMAGE_NAME: ${{ steps.meta.outputs.image_name }}
+        INPUT_REGISTRY: ${{ inputs.registry }}
+        INPUT_PUSH_LATEST: ${{ inputs.push-latest }}
       run: |
-        TAGS="${{ steps.meta.outputs.image }}"
-        if [[ "${{ inputs.push-latest }}" == "true" ]]; then
-          TAGS="${TAGS}"$'\n'"${{ inputs.registry }}/${{ steps.meta.outputs.image_name }}:latest"
+        TAGS="${META_IMAGE}"
+        if [[ "${INPUT_PUSH_LATEST}" == "true" ]]; then
+          TAGS="${TAGS}"$'\n'"${INPUT_REGISTRY}/${META_IMAGE_NAME}:latest"
         fi
         printf "tags<<EOF\n%s\nEOF\n" "$TAGS" >> "$GITHUB_OUTPUT"
 
     - name: Build and push
       id: push
-      uses: docker/build-push-action@v6
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
       env:
         DOCKER_BUILD_SUMMARY: false
       with:
@@ -137,7 +142,6 @@ runs:
         file: ${{ inputs.dockerfile }}
         push: true
         tags: ${{ steps.tags.outputs.tags }}
-        build-args: ${{ inputs.build-args }}
         platforms: ${{ inputs.platforms }}
         cache-from: ${{ inputs.cache-from }}
         cache-to: ${{ inputs.cache-to }}
@@ -145,13 +149,17 @@ runs:
 
     - name: Summary
       shell: bash
+      env:
+        META_IMAGE: ${{ steps.meta.outputs.image }}
+        META_TAG: ${{ steps.meta.outputs.tag }}
+        PUSH_DIGEST: ${{ steps.push.outputs.digest }}
       run: |
-        echo "## Gordon Deploy Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## Gordon Deploy Summary" >> "$GITHUB_STEP_SUMMARY"
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
         echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| Image | \`${{ steps.meta.outputs.image }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| Tag | \`${{ steps.meta.outputs.tag }}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| Digest | \`${{ steps.push.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+        printf '| Image | `%s` |\n' "$META_IMAGE" >> "$GITHUB_STEP_SUMMARY"
+        printf '| Tag | `%s` |\n' "$META_TAG" >> "$GITHUB_STEP_SUMMARY"
+        printf '| Digest | `%s` |\n' "$PUSH_DIGEST" >> "$GITHUB_STEP_SUMMARY"
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "Container deployed to Gordon registry and will be automatically deployed." >> $GITHUB_STEP_SUMMARY

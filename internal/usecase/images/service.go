@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -23,6 +24,7 @@ type Service struct {
 	manifestStorage out.ManifestStorage
 	blobStorage     out.BlobStorage
 	log             zerowrap.Logger
+	mutationMu      *sync.RWMutex
 }
 
 type imageRuntime interface {
@@ -36,12 +38,18 @@ func NewService(
 	manifestStorage out.ManifestStorage,
 	blobStorage out.BlobStorage,
 	log zerowrap.Logger,
+	mutationLocks ...*sync.RWMutex,
 ) *Service {
+	mutationMu := &sync.RWMutex{}
+	if len(mutationLocks) > 0 && mutationLocks[0] != nil {
+		mutationMu = mutationLocks[0]
+	}
 	return &Service{
 		runtime:         rt,
 		manifestStorage: manifestStorage,
 		blobStorage:     blobStorage,
 		log:             log,
+		mutationMu:      mutationMu,
 	}
 }
 
@@ -194,6 +202,9 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 // It keeps the "latest" tag when present and keeps keepLast most-recent
 // non-latest tags from tagInfos.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PruneRegistry",

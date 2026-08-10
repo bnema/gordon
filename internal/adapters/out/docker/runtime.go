@@ -525,6 +525,7 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 		ShowStderr: true,
 		Follow:     follow,
 		Timestamps: true,
+		Tail:       "10000",
 	})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
@@ -747,6 +748,7 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 	log := zerowrap.FromCtx(ctx)
 
 	pruneFilters := filters.NewArgs()
+	pruneFilters.Add("label", domain.LabelManaged+"=true")
 	if danglingOnly {
 		pruneFilters.Add("dangling", "true")
 	}
@@ -1724,9 +1726,28 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 	}, nil
 }
 
+const maxExecOutputSize = 8 << 20 // 8 MiB per stream
+
+type boundedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := w.limit - w.Len()
+	if remaining <= 0 {
+		return 0, fmt.Errorf("container exec output exceeds %d bytes", w.limit)
+	}
+	if len(p) > remaining {
+		_, _ = w.Buffer.Write(p[:remaining])
+		return remaining, fmt.Errorf("container exec output exceeds %d bytes", w.limit)
+	}
+	return w.Buffer.Write(p)
+}
+
 func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	stdout := boundedBuffer{limit: maxExecOutputSize}
+	stderr := boundedBuffer{limit: maxExecOutputSize}
 
 	if _, err := stdcopy.StdCopy(&stdout, &stderr, reader); err != nil {
 		return nil, nil, err

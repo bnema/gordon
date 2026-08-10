@@ -214,7 +214,7 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 	_, err = tmpFile.Write(blobContent)
 	assert.NoError(t, err)
 
-	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
 
 	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
 	rec := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestHandler_GetBlob_NotFound(t *testing.T) {
 
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
 
-	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "myapp", "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
 
 	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000", nil)
 	rec := httptest.NewRecorder()
