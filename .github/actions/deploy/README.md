@@ -27,10 +27,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Deploy to Gordon
-        uses: bnema/gordon/.github/actions/deploy@main
+        uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -52,11 +52,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Deploy to Gordon
         id: deploy
-        uses: bnema/gordon/.github/actions/deploy@main
+        uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -148,11 +148,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -174,8 +174,8 @@ jobs:
   deploy-api:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -187,8 +187,8 @@ jobs:
   deploy-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}

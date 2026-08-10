@@ -33,7 +33,8 @@ Manual archive installation requires downloading the matching `checksums.txt` re
 
 **Linux (x86_64)**
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_amd64.tar.gz,checksums.txt}
+grep ' gordon_linux_amd64.tar.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
@@ -41,7 +42,8 @@ sudo mv gordon /usr/local/bin/
 
 **Linux (ARM64)** - for Raspberry Pi 4, AWS Graviton, Oracle Ampere, etc.
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_arm64.tar.gz
+wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_arm64.tar.gz,checksums.txt}
+grep ' gordon_linux_arm64.tar.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_arm64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
@@ -49,7 +51,8 @@ sudo mv gordon /usr/local/bin/
 
 **macOS (Apple Silicon)**
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/gordon_darwin_arm64.tar.gz
+curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_arm64.tar.gz,checksums.txt}
+grep ' gordon_darwin_arm64.tar.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_arm64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
@@ -57,7 +60,8 @@ sudo mv gordon /usr/local/bin/
 
 **macOS (Intel)**
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/gordon_darwin_amd64.tar.gz
+curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_amd64.tar.gz,checksums.txt}
+grep ' gordon_darwin_amd64.tar.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/

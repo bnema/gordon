@@ -2,6 +2,7 @@
 package ratelimit
 
 import (
+	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -18,6 +19,7 @@ var _ out.RateLimiter = (*MemoryStore)(nil)
 // MemoryStore is an in-memory rate limiter implementation using golang.org/x/time/rate.
 // Each unique key gets its own independent rate limiter.
 type limiterEntry struct {
+	key      string
 	limiter  *rate.Limiter
 	lastSeen time.Time
 }
@@ -28,8 +30,9 @@ const (
 )
 
 type MemoryStore struct {
-	limiters map[string]limiterEntry
-	mu       sync.RWMutex
+	limiters map[string]*list.Element
+	lru      *list.List
+	mu       sync.Mutex
 	rps      float64
 	burst    int
 	log      zerowrap.Logger
@@ -38,7 +41,8 @@ type MemoryStore struct {
 // NewMemoryStore creates a new in-memory rate limiter store.
 func NewMemoryStore(rps float64, burst int, log zerowrap.Logger) *MemoryStore {
 	return &MemoryStore{
-		limiters: make(map[string]limiterEntry),
+		limiters: make(map[string]*list.Element),
+		lru:      list.New(),
 		rps:      rps,
 		burst:    burst,
 		log:      log,
@@ -62,39 +66,40 @@ func (s *MemoryStore) getLimiter(key string) *rate.Limiter {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if entry, exists := s.limiters[key]; exists {
+	if element, exists := s.limiters[key]; exists {
+		entry := element.Value.(*limiterEntry)
 		entry.lastSeen = now
-		s.limiters[key] = entry
+		s.lru.MoveToFront(element)
 		return entry.limiter
 	}
 
 	s.evictExpiredOrOldest(now)
 	limiter := rate.NewLimiter(rate.Limit(s.rps), s.burst)
-	s.limiters[key] = limiterEntry{limiter: limiter, lastSeen: now}
+	entry := &limiterEntry{key: key, limiter: limiter, lastSeen: now}
+	s.limiters[key] = s.lru.PushFront(entry)
 	return limiter
 }
 
 func (s *MemoryStore) evictExpiredOrOldest(now time.Time) {
-	for key, entry := range s.limiters {
-		if now.Sub(entry.lastSeen) > limiterIdleTTL {
-			delete(s.limiters, key)
+	for element := s.lru.Back(); element != nil; {
+		entry := element.Value.(*limiterEntry)
+		if now.Sub(entry.lastSeen) <= limiterIdleTTL {
+			break
 		}
+		previous := element.Prev()
+		s.removeElement(element)
+		element = previous
 	}
-	if len(s.limiters) < maxLimiterEntries {
+	if len(s.limiters) >= maxLimiterEntries {
+		s.removeElement(s.lru.Back())
+	}
+}
+
+func (s *MemoryStore) removeElement(element *list.Element) {
+	if element == nil {
 		return
 	}
-
-	var oldestKey string
-	var oldest time.Time
-	found := false
-	for key, entry := range s.limiters {
-		if !found || entry.lastSeen.Before(oldest) {
-			oldestKey = key
-			oldest = entry.lastSeen
-			found = true
-		}
-	}
-	if found {
-		delete(s.limiters, oldestKey)
-	}
+	entry := element.Value.(*limiterEntry)
+	delete(s.limiters, entry.key)
+	s.lru.Remove(element)
 }

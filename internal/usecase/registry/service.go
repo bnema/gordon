@@ -191,7 +191,7 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	if validation.IsDigest(manifest.Reference) {
 		matches, err := manifestDigestMatches(manifest.Reference, manifest.Data)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("validate manifest digest: %w", err)
 		}
 		if !matches {
 			return "", fmt.Errorf("%w: manifest content does not match %s", domain.ErrDigestMismatch, manifest.Reference)
@@ -237,6 +237,9 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 
 // DeleteManifest removes a manifest.
 func (s *Service) DeleteManifest(ctx context.Context, name, reference string) error {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "DeleteManifest",
@@ -315,7 +318,7 @@ func (s *Service) repositoryReferencesDigest(name, target string) (bool, error) 
 		if errors.Is(err, domain.ErrManifestNotFound) {
 			return false, nil
 		}
-		return false, err
+		return false, fmt.Errorf("list tags for repository %s: %w", name, err)
 	}
 
 	queue := append([]string(nil), tags...)
@@ -330,7 +333,7 @@ func (s *Service) repositoryReferencesDigest(name, target string) (bool, error) 
 
 		data, _, err := s.manifestStorage.GetManifest(name, reference)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("get manifest %s for repository %s: %w", reference, name, err)
 		}
 		var refs manifestReferences
 		if err := json.Unmarshal(data, &refs); err != nil {

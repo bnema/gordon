@@ -339,6 +339,7 @@ func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewD
 
 	log := zerowrap.FromCtx(ctx)
 	basePrefix := prefix + "-" + domain.StableResourceName(baseRoute) + "-"
+	legacyBasePrefix := prefix + "-" + strings.ReplaceAll(baseRoute, ".", "-") + "-"
 
 	vols, err := s.volumeCloner.ListVolumes(ctx)
 	if err != nil {
@@ -347,7 +348,7 @@ func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewD
 
 	var sourceVols []string
 	for _, v := range vols {
-		if strings.HasPrefix(v.Name, basePrefix) {
+		if strings.HasPrefix(v.Name, basePrefix) || strings.HasPrefix(v.Name, legacyBasePrefix) {
 			sourceVols = append(sourceVols, v.Name)
 		}
 	}
@@ -358,6 +359,9 @@ func (s *Service) cloneBaseRouteVolumes(ctx context.Context, baseRoute, previewD
 
 	namer := func(sourceVolName string) string {
 		pathSuffix := strings.TrimPrefix(sourceVolName, basePrefix)
+		if pathSuffix == sourceVolName {
+			pathSuffix = strings.TrimPrefix(sourceVolName, legacyBasePrefix)
+		}
 		return generateVolumeName(prefix, previewDomain, pathSuffix)
 	}
 

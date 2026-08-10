@@ -79,11 +79,10 @@ func (h *AutoPreviewHandler) Handle(ctx context.Context, event domain.Event) err
 		// semaphore prevents a push burst from creating an unbounded goroutine backlog.
 		select {
 		case h.jobs <- struct{}{}:
+		case <-ctx.Done():
+			return fmt.Errorf("schedule preview %s for %s: %w", previewName, baseRoute.Domain, ctx.Err())
 		case <-h.serviceCtx.Done():
 			return h.serviceCtx.Err()
-		default:
-			log.Warn().Str("preview", previewName).Str("base_route", baseRoute.Domain).Msg("preview worker queue is full, skipping event")
-			continue
 		}
 		go func(baseRoute baseRouteInfo, previewDomain string) {
 			defer func() { <-h.jobs }()
