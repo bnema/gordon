@@ -610,6 +610,51 @@ func TestService_Deploy_ReadinessFailureReturnsDeployFailureWithLogs(t *testing.
 	assert.ErrorContains(t, deployErr.Err, "last status: starting")
 }
 
+func TestService_Deploy_RequestCancellationStillCleansUpFailedCandidate(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(runtime, envLoader, eventBus, nil, testMinDelayConfig(), nil)
+
+	svc.containers["test.example.com"] = &domain.Container{
+		ID:     "old-container",
+		Name:   "gordon-test.example.com",
+		Status: "running",
+	}
+	route := domain.Route{Domain: "test.example.com", Image: "myapp:v2"}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil)
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:v2"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:v2").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:v2").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "test.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:v2").Return([]string{}, nil)
+
+	candidate := &domain.Container{ID: "candidate", Name: "gordon-test.example.com-new", Status: "created"}
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(candidate, nil)
+
+	ctx, cancel := context.WithCancel(testContext())
+	runtime.EXPECT().StartContainer(mock.Anything, candidate.ID).Run(func(context.Context, string) {
+		cancel()
+	}).Return(nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, candidate.ID).Return(true, nil).Once()
+
+	activeCleanupContext := mock.MatchedBy(func(ctx context.Context) bool {
+		_, hasDeadline := ctx.Deadline()
+		return ctx.Err() == nil && hasDeadline
+	})
+	runtime.EXPECT().StopContainer(activeCleanupContext, candidate.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(activeCleanupContext, candidate.ID, true).Return(nil).Once()
+
+	result, err := svc.Deploy(ctx, route)
+
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, context.Canceled)
+	tracked, exists := svc.Get(testContext(), route.Domain)
+	require.True(t, exists)
+	assert.Equal(t, "old-container", tracked.ID)
+}
+
 func TestService_Deploy_StrictHealthModeWithoutHealthcheckReturnsHint(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
@@ -2492,7 +2537,7 @@ func TestService_Deploy_OrphanCleanupRemovesTrueOrphans(t *testing.T) {
 	assert.Equal(t, "new-container", tracked.ID)
 }
 
-func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
+func TestService_Deploy_OrphanCleanupRemovesRunningStaleCandidate(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -2503,7 +2548,8 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 	svc.SetProxyCacheInvalidator(cacheInvalidator)
 	ctx := testContext()
 
-	// Tracked canonical container exists, but stale -new container should be removed.
+	// The tracked canonical container is active. A candidate left running by an
+	// interrupted request must be removed before its temporary name is reused.
 	svc.containers["test.example.com"] = &domain.Container{
 		ID:     "tracked-container-123",
 		Name:   "gordon-test.example.com",
@@ -2524,7 +2570,7 @@ func TestService_Deploy_OrphanCleanupRemovesStaleNewContainer(t *testing.T) {
 		{
 			ID:     "stale-new-container",
 			Name:   "gordon-test.example.com-new",
-			Status: "exited",
+			Status: "running",
 		},
 	}, nil)
 	runtime.EXPECT().StopContainer(mock.Anything, "stale-new-container").Return(nil).Once()

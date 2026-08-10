@@ -77,9 +77,10 @@ const (
 	// readinessRecoveryWindow is an additional grace window used when a container
 	// is briefly not running at the end of readiness delay. This avoids false
 	// negatives during short startup flaps.
-	readinessRecoveryWindow = 30 * time.Second
-	internalPullMaxAttempts = 3
-	deployFailureLogLimit   = 20
+	readinessRecoveryWindow       = 30 * time.Second
+	failedContainerCleanupTimeout = 30 * time.Second
+	internalPullMaxAttempts       = 3
+	deployFailureLogLimit         = 20
 )
 
 // Service implements the ContainerService interface.
@@ -1963,11 +1964,14 @@ func (s *Service) UpdateAttachments(attachments map[string][]string) {
 
 // cleanupFailedContainer stops and removes a container that failed to start properly.
 func (s *Service) cleanupFailedContainer(ctx context.Context, containerID string) {
-	log := zerowrap.FromCtx(ctx)
-	if err := s.runtime.StopContainer(ctx, containerID); err != nil {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), failedContainerCleanupTimeout)
+	defer cancel()
+
+	log := zerowrap.FromCtx(cleanupCtx)
+	if err := s.runtime.StopContainer(cleanupCtx, containerID); err != nil {
 		log.Warn().Err(err).Str(zerowrap.FieldEntityID, containerID).Msg("failed to stop container after failure")
 	}
-	if err := s.runtime.RemoveContainer(ctx, containerID, true); err != nil {
+	if err := s.runtime.RemoveContainer(cleanupCtx, containerID, true); err != nil {
 		log.Warn().Err(err).Str(zerowrap.FieldEntityID, containerID).Msg("failed to remove container after failure")
 	}
 }
@@ -2631,11 +2635,11 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 
 	for _, c := range allContainers {
 		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			// Skip any container that is still active in the runtime, including
-			// restart backoff, regardless of name — a temp container may be
-			// serving traffic while the new container stabilizes, or may be from
-			// a concurrent deploy.
-			if c.Status == "running" || c.Status == "restarting" {
+			// Without a selected active container, preserve anything that may still
+			// be serving traffic. When an active container is selected, other active
+			// temp-name containers are stale candidates left by interrupted deploys.
+			isActive := c.Status == "running" || c.Status == "restarting"
+			if isActive && (skipContainerID == "" || c.Name == expectedName) {
 				log.Debug().
 					Str(zerowrap.FieldEntityID, c.ID).
 					Str("container_name", c.Name).
