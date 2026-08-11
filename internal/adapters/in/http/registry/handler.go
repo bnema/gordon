@@ -370,6 +370,10 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 	digest, err := h.registrySvc.PutManifest(ctx, manifestObj)
 	if err != nil {
 		log.Error().Err(err).Str("name", name).Str("reference", reference).Msg("failed to store manifest")
+		if errors.Is(err, domain.ErrDigestMismatch) || errors.Is(err, domain.ErrInvalidDigest) {
+			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "manifest digest does not match content")
+			return
+		}
 		h.sendRegistryError(w, http.StatusInternalServerError, "MANIFEST_INVALID", "failed to store manifest")
 		return
 	}
@@ -387,7 +391,7 @@ func (h *Handler) handleGetBlob(w http.ResponseWriter, r *http.Request) {
 
 	log.Debug().Str("name", name).Str("digest", digest).Msg("GET blob")
 
-	path, err := h.registrySvc.GetBlobPath(ctx, digest)
+	path, err := h.registrySvc.GetBlobPath(ctx, name, digest)
 	if err != nil {
 		log.Warn().Err(err).Str("name", name).Str("digest", digest).Msg("blob not found")
 		h.sendRegistryError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob not found")

@@ -147,21 +147,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Login to Registry
-        run: |
-          echo "${{ secrets.GORDON_TOKEN }}" | \
-          docker login -u ${{ secrets.GORDON_USERNAME }} --password-stdin ${{ secrets.GORDON_REGISTRY }}
+        env:
+          GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
+          GORDON_USERNAME: ${{ secrets.GORDON_USERNAME }}
+          GORDON_REGISTRY: ${{ secrets.GORDON_REGISTRY }}
+        run: printf '%s' "$GORDON_TOKEN" | docker login -u "$GORDON_USERNAME" --password-stdin "$GORDON_REGISTRY"
 
       - name: Rollback
+        env:
+          GORDON_REGISTRY: ${{ secrets.GORDON_REGISTRY }}
+          VERSION: ${{ inputs.version }}
         run: |
-          docker pull ${{ secrets.GORDON_REGISTRY }}/myapp:${{ github.event.inputs.version }}
-          docker tag ${{ secrets.GORDON_REGISTRY }}/myapp:${{ github.event.inputs.version }} \
-                     ${{ secrets.GORDON_REGISTRY }}/myapp:latest
-          docker push ${{ secrets.GORDON_REGISTRY }}/myapp:latest
+          [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
+          REPOSITORY="$GORDON_REGISTRY/myapp"
+          SOURCE_IMAGE="$REPOSITORY:$VERSION"
+          LATEST_IMAGE="$REPOSITORY:latest"
+          SOURCE_DIGEST="$(docker buildx imagetools inspect "$SOURCE_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
+          IMMUTABLE_IMAGE="$REPOSITORY@$SOURCE_DIGEST"
+          docker buildx imagetools create --tag "$LATEST_IMAGE" "$IMMUTABLE_IMAGE"
+          LATEST_DIGEST="$(docker buildx imagetools inspect "$LATEST_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
+          [[ "$LATEST_DIGEST" == "$SOURCE_DIGEST" ]] || {
+            echo "rollback verification failed: latest resolved to $LATEST_DIGEST, expected $SOURCE_DIGEST" >&2
+            exit 1
+          }
 
       - name: Summary
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          echo "## Rollback Complete" >> $GITHUB_STEP_SUMMARY
-          echo "Rolled back to version: ${{ github.event.inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "## Rollback Complete" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Rolled back to version: %s\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
 ```
 
 ### Rollback Script

@@ -13,6 +13,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -204,6 +205,8 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
 	// Create a temp file for http.ServeFile
 	tmpFile, err := os.CreateTemp("", "blob-*")
@@ -214,30 +217,32 @@ func TestHandler_GetBlob_Success(t *testing.T) {
 	_, err = tmpFile.Write(blobContent)
 	assert.NoError(t, err)
 
-	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(tmpFile.Name(), nil)
 
-	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", nil)
-	rec := httptest.NewRecorder()
+	resp, err := server.Client().Get(server.URL + "/v2/myapp/blobs/sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, blobContent, rec.Body.Bytes())
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, blobContent, body)
 }
 
 func TestHandler_GetBlob_NotFound(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
 	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
-	registrySvc.EXPECT().GetBlobPath(mock.Anything, "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
+	registrySvc.EXPECT().GetBlobPath(mock.Anything, "myapp", "sha256:0000000000000000000000000000000000000000000000000000000000000000").Return("", assert.AnError)
 
-	req := httptest.NewRequest("GET", "/v2/myapp/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000", nil)
-	rec := httptest.NewRecorder()
+	resp, err := server.Client().Get(server.URL + "/v2/myapp/blobs/sha256:0000000000000000000000000000000000000000000000000000000000000000")
+	require.NoError(t, err)
+	defer resp.Body.Close()
 
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestHandler_BlobRoutes_MethodNotAllowed(t *testing.T) {

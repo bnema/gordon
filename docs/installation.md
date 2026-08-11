@@ -15,46 +15,68 @@ Detailed installation guide for production environments.
 ### Quick Install (Recommended)
 
 ```bash
-curl -fsSL https://gordon.bnema.dev/install | bash
+(
+  set -euo pipefail
+  installer="$(mktemp)"
+  trap 'rm -f "$installer"' EXIT
+  curl -fsSL --output "$installer" https://gordon.bnema.dev/install
+  if command -v less >/dev/null 2>&1; then
+    less "$installer"
+  else
+    cat "$installer"
+  fi
+  bash "$installer"
+)
 ```
 
-This script automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
+Download and inspect the installer before executing it. The installer verifies the release archive checksum before installation and automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
 
 ### Manual Installation
 
+Manual archive installation requires downloading the matching `checksums.txt` release asset and verifying the archive's SHA-256 checksum before extraction. The checksum-verifying installer above is recommended.
+
 **Linux (x86_64)**
+
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_amd64.tar.gz,checksums.txt}
+grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_linux_amd64\.tar\.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 ```
 
 **Linux (ARM64)** - for Raspberry Pi 4, AWS Graviton, Oracle Ampere, etc.
+
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_arm64.tar.gz
+wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_arm64.tar.gz,checksums.txt}
+grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_linux_arm64\.tar\.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_arm64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 ```
 
 **macOS (Apple Silicon)**
+
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/gordon_darwin_arm64.tar.gz
+curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_arm64.tar.gz,checksums.txt}
+grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_darwin_arm64\.tar\.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_arm64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 ```
 
 **macOS (Intel)**
+
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/gordon_darwin_amd64.tar.gz
+curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_amd64.tar.gz,checksums.txt}
+grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_darwin_amd64\.tar\.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_amd64.tar.gz
 chmod +x gordon
 sudo mv gordon /usr/local/bin/
 ```
 
 Verify installation:
+
 ```bash
 gordon version
 ```
@@ -74,8 +96,9 @@ sudo mv gordon /usr/local/bin/
 ### Docker
 
 ```bash
-# Install Docker
-curl -fsSL https://get.docker.com | sh
+# Install Docker from your distribution's signed package repository.
+sudo apt update
+sudo apt install docker.io
 
 # Add user to docker group
 sudo usermod -aG docker $USER

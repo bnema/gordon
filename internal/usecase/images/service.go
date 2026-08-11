@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 	"github.com/bnema/gordon/pkg/runtime"
 	"github.com/bnema/gordon/pkg/validation"
 )
@@ -23,6 +25,8 @@ type Service struct {
 	manifestStorage out.ManifestStorage
 	blobStorage     out.BlobStorage
 	log             zerowrap.Logger
+	mutationMu      *sync.RWMutex
+	registryState   *registrystate.State
 }
 
 type imageRuntime interface {
@@ -36,12 +40,19 @@ func NewService(
 	manifestStorage out.ManifestStorage,
 	blobStorage out.BlobStorage,
 	log zerowrap.Logger,
+	states ...*registrystate.State,
 ) *Service {
+	registryState := registrystate.New()
+	if len(states) > 0 && states[0] != nil {
+		registryState = states[0]
+	}
 	return &Service{
 		runtime:         rt,
 		manifestStorage: manifestStorage,
 		blobStorage:     blobStorage,
 		log:             log,
+		mutationMu:      &registryState.MutationMu,
+		registryState:   registryState,
 	}
 }
 
@@ -194,6 +205,9 @@ func (s *Service) PruneRuntime(ctx context.Context) (domain.ImagePruneReport, er
 // It keeps the "latest" tag when present and keeps keepLast most-recent
 // non-latest tags from tagInfos.
 func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.ImagePruneReport, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PruneRegistry",
@@ -232,6 +246,10 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 		if err := s.collectKeptTagDigests(log, repository, tagInfos, keptTags, referencedDigests); err != nil {
 			return domain.ImagePruneReport{}, err
 		}
+	}
+
+	for digest := range s.registryState.PendingDigests(time.Now().UTC()) {
+		referencedDigests[digest] = struct{}{}
 	}
 
 	blobs, err := s.blobStorage.ListBlobs()

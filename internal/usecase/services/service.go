@@ -2,10 +2,12 @@ package services
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -521,7 +523,7 @@ func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 }
 
 func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc domain.StandaloneService) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	var lastErr error
 	for {
@@ -531,6 +533,9 @@ func (s *Service) waitLogReadiness(ctx context.Context, containerID string, svc 
 		found, err := s.logContains(ctx, containerID, svc.Readiness.Path, svc.Readiness.Contains)
 		if err == nil && found {
 			return nil
+		}
+		if errors.Is(err, domain.ErrReadinessLogSizeExceeded) {
+			return err
 		}
 		if err != nil {
 			lastErr = err
@@ -551,17 +556,49 @@ func logReadinessTimeoutError(serviceName string, timeoutErr, lastErr error) err
 	return fmt.Errorf("standalone service %q log readiness timed out: %w", serviceName, timeoutErr)
 }
 
+const maxReadinessLogSize = 1 << 20 // 1 MiB
+
 func (s *Service) logContains(ctx context.Context, containerID, path, contains string) (bool, error) {
 	reader, err := s.runtime.CopyFromContainer(ctx, containerID, path)
 	if err != nil {
 		return false, err
 	}
 	defer reader.Close()
-	content, err := io.ReadAll(reader)
-	if err != nil {
+	if contains == "" {
+		return true, nil
+	}
+
+	needle := []byte(contains)
+	buffer := make([]byte, 32*1024)
+	carry := make([]byte, 0, len(needle)-1)
+	remaining := maxReadinessLogSize
+	for remaining > 0 {
+		readSize := min(len(buffer), remaining)
+		n, readErr := reader.Read(buffer[:readSize])
+		if n > 0 {
+			window := append(carry, buffer[:n]...)
+			if bytes.Contains(window, needle) {
+				return true, nil
+			}
+			overlap := min(len(needle)-1, len(window))
+			carry = append(carry[:0], window[len(window)-overlap:]...)
+			remaining -= n
+		}
+		if errors.Is(readErr, io.EOF) {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+	}
+
+	var extra [1]byte
+	if _, err := reader.Read(extra[:]); errors.Is(err, io.EOF) {
+		return false, nil
+	} else if err != nil {
 		return false, err
 	}
-	return strings.Contains(string(content), contains), nil
+	return false, fmt.Errorf("%w: limit is %d bytes", domain.ErrReadinessLogSizeExceeded, maxReadinessLogSize)
 }
 
 func normalizeCleanup(cleanup domain.StandaloneServiceCleanup) domain.StandaloneServiceCleanup {

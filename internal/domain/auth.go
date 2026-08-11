@@ -35,6 +35,7 @@ type TokenClaims struct {
 	IssuedAt    int64    `json:"iat"`
 	ExpiresAt   int64    `json:"exp,omitempty"` // 0 means never expires
 	Issuer      string   `json:"iss"`
+	TokenType   string   `json:"token_type"`
 	IsEphemeral bool     `json:"-"` // true when token was issued by /auth/token (not stored)
 }
 
@@ -257,17 +258,12 @@ func ScopesGrantRegistryAccess(grantedScopes []string, repoName, action string) 
 	return false
 }
 
-// ScopesGrantAdminAccess reports whether any of the granted scope strings
-// authorise the given action on the named admin resource.
-// It handles the wildcard shorthand ("*") as well as full admin scope format
-// (admin:resource:actions).
+// ScopesGrantAdminAccess reports whether an explicit admin scope authorises
+// the given action on the named admin resource. Untyped shorthand scopes such
+// as "*" are registry-only and never grant administrative access.
 func ScopesGrantAdminAccess(grantedScopes []string, resource, action string) bool {
 	for _, raw := range grantedScopes {
 		scopeStr := strings.TrimSpace(raw)
-		if scopeStr == ScopeActionAll {
-			return true
-		}
-
 		adminScope, err := ParseAdminScope(scopeStr)
 		if err != nil {
 			continue

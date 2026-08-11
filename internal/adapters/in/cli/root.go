@@ -38,7 +38,18 @@ const (
 // NewRootCmd creates the root command for Gordon CLI.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "gordon",
+		Use: "gordon",
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if tokenFlag == "" {
+				return nil
+			}
+			token, err := readProtectedSecretFile(tokenFlag)
+			if err != nil {
+				return fmt.Errorf("read remote token: %w", err)
+			}
+			tokenFlag = token
+			return nil
+		},
 		Short: "Gordon - A lightweight container deployment platform",
 		Long: `Gordon is a self-contained container deployment platform that combines
 a Docker registry with automatic container deployment capabilities.
@@ -61,7 +72,7 @@ Commands are organized by where they run:
 
 	// Add persistent flags for remote targeting
 	rootCmd.PersistentFlags().StringVarP(&remoteFlag, "remote", "r", "", "Remote name or URL (e.g., prod, https://gordon.mydomain.com)")
-	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token", "", "Authentication token for remote")
+	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token-file", "", "Read remote authentication token from a mode 0600 file")
 	rootCmd.PersistentFlags().BoolVar(&insecureTLSFlag, "insecure", false, "Skip TLS certificate verification for remote HTTPS endpoints")
 
 	// Server-only commands (must run on the Gordon host)

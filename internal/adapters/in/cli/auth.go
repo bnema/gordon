@@ -206,31 +206,37 @@ available while Gordon is running.`,
 
 // newAuthLoginCmd creates the login command for remote authentication.
 func newAuthLoginCmd() *cobra.Command {
-	var token string
+	var tokenFile string
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Authenticate with a Gordon server",
 		Long: `Store or verify a token for a Gordon server remote.
 
-With --token: stores the token and verifies it.
-Without --token: verifies the existing stored token still works.
+With --token-file: reads, stores, and verifies a token without exposing it in argv.
+Without --token-file: verifies the existing stored token still works.
 
 Generate a token on the server with: gordon auth token generate
 
 Examples:
-	gordon auth login --token <token>              Store token for active remote
-	gordon auth login --remote prod --token <tok>  Store token for specific remote
+	gordon auth login --token-file ./token         Store token for active remote
+	gordon auth login --remote prod --token-file ./token
 	gordon auth login                              Verify existing token`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if token != "" {
-				return runAuthLoginWithToken(cmd.Context(), token, cmd.OutOrStdout())
+			if tokenFile != "" {
+				token, err := readProtectedSecretFile(tokenFile)
+				if err != nil {
+					return fmt.Errorf("read token: %w", err)
+				}
+				return runAuthLoginWithToken(cmd.Context(), token, cmd.OutOrStdout(), jsonOut)
 			}
-			return runAuthLoginVerify(cmd.Context(), cmd.OutOrStdout())
+			return runAuthLoginVerify(cmd.Context(), cmd.OutOrStdout(), jsonOut)
 		},
 	}
 
-	cmd.Flags().StringVarP(&token, "token", "t", "", "Authentication token to store for the remote")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
@@ -247,7 +253,7 @@ func resolveRequiredRemote(flagToken string) (*remote.ResolvedRemote, error) {
 	return resolved, nil
 }
 
-func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) error {
+func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer, jsonOut bool) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("token cannot be empty")
@@ -264,19 +270,26 @@ func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) err
 	defer cancel()
 	verified := true
 	if _, err := client.GetStatus(verifyCtx); err != nil {
-		_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+		if !jsonOut {
+			_ = cliWriteLine(out, styles.RenderWarning(fmt.Sprintf("Token verification failed: %v", err)))
+		}
 		verified = false
 	}
 
 	// Store token — requires a named remote.
 	if resolved.Name == "" {
-		_ = cliWriteLine(out, styles.RenderWarning("Ad-hoc URL: token verified but cannot be stored. Use 'gordon remotes add' to save this remote."))
-		return nil
+		if jsonOut {
+			return writeJSON(out, map[string]any{"remote": resolved.DisplayName(), "stored": false, "verified": verified})
+		}
+		return cliWriteLine(out, styles.RenderWarning("Ad-hoc URL: token verified but cannot be stored. Use 'gordon remotes add' to save this remote."))
 	}
 	if err := remote.UpdateRemoteToken(resolved.Name, token); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
+	if jsonOut {
+		return writeJSON(out, map[string]any{"remote": resolved.Name, "stored": true, "verified": verified})
+	}
 	_ = cliWriteLine(out, "")
 	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Token stored for remote '%s'", resolved.Name)))
 	if verified {
@@ -285,13 +298,13 @@ func runAuthLoginWithToken(ctx context.Context, token string, out io.Writer) err
 	return nil
 }
 
-func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
+func runAuthLoginVerify(ctx context.Context, out io.Writer, jsonOut bool) error {
 	resolved, err := resolveRequiredRemote(tokenFlag)
 	if err != nil {
 		return err
 	}
 	if resolved.Token == "" {
-		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token <token>", resolved.DisplayName())
+		return fmt.Errorf("no token stored for remote '%s'; use: gordon auth login --token-file <path>", resolved.DisplayName())
 	}
 
 	client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
@@ -303,8 +316,10 @@ func runAuthLoginVerify(ctx context.Context, out io.Writer) error {
 		return fmt.Errorf("authentication failed")
 	}
 
-	_ = cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", resolved.DisplayName())))
-	return nil
+	if jsonOut {
+		return writeJSON(out, map[string]any{"remote": resolved.DisplayName(), "authenticated": true})
+	}
+	return cliWriteLine(out, styles.RenderSuccess(fmt.Sprintf("Authenticated to '%s'", resolved.DisplayName())))
 }
 
 // newAuthShowTokenCmd creates the show-token command.

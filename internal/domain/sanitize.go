@@ -1,6 +1,10 @@
 package domain
 
-import "strings"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strings"
+)
 
 // SanitizeDomainForContainer makes a domain safe for container naming.
 // It uses distinct replacements to avoid collisions between domains like
@@ -17,6 +21,12 @@ func SanitizeDomainForContainer(domain string) string {
 	result = strings.ReplaceAll(result, ":", "-_")
 	result = strings.ReplaceAll(result, "/", "--")
 	return result
+}
+
+// StableResourceName returns a Docker-safe, collision-resistant name fragment.
+func StableResourceName(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return fmt.Sprintf("%s-%x", SanitizeDomainForContainer(value), digest[:6])
 }
 
 // SanitizeDomainForContainerLegacy uses the OLD (buggy) sanitization that replaces

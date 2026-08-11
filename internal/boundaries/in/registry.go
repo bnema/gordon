@@ -16,7 +16,7 @@ type RegistryService interface {
 
 	// Blob operations
 	GetBlob(ctx context.Context, digest string) (io.ReadCloser, error)
-	GetBlobPath(ctx context.Context, digest string) (string, error)
+	GetBlobPath(ctx context.Context, name, digest string) (string, error)
 	PutBlob(ctx context.Context, digest string, data io.Reader, size int64) error
 	BlobExists(ctx context.Context, digest string) bool
 

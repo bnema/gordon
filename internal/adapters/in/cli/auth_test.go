@@ -39,8 +39,9 @@ func TestRunAuthLoginWithToken_StoresToken(t *testing.T) {
 	t.Cleanup(func() { remoteFlag = origRemote })
 
 	var out bytes.Buffer
-	err := runAuthLoginWithToken(context.Background(), "token123", &out)
+	err := runAuthLoginWithToken(context.Background(), "token123", &out, true)
 	assert.NoError(t, err)
+	assert.JSONEq(t, `{"remote":"prod","stored":true,"verified":false}`, out.String())
 
 	loaded, err := remote.LoadRemotes("")
 	assert.NoError(t, err)

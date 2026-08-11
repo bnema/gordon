@@ -802,6 +802,7 @@ func TestExtendTokenSlidesExpiry(t *testing.T) {
 	expectedExpiry := time.Now().Add(24 * time.Hour)
 	actualExpiry := time.Unix(claims.ExpiresAt, 0)
 	assert.WithinDuration(t, expectedExpiry, actualExpiry, 5*time.Minute, "expiry should be ~24h from now")
+	assert.Equal(t, "stored", claims.TokenType)
 }
 
 func TestExtendTokenDebounce(t *testing.T) {
@@ -937,6 +938,20 @@ func TestIsEphemeralAccessTokenRejectsFutureIat(t *testing.T) {
 	if svc.isEphemeralAccessToken(tokenClaims) {
 		t.Error("token with future iat must NOT be classified as ephemeral — it bypasses revocation")
 	}
+}
+
+func TestIsEphemeralAccessTokenRequiresExplicitTokenType(t *testing.T) {
+	svc, _ := newTestAuthService(t)
+	now := time.Now().UTC()
+
+	claims := &domain.TokenClaims{
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(5 * time.Minute).Unix(),
+	}
+
+	assert.False(t, svc.isEphemeralAccessToken(claims))
+	claims.TokenType = "access"
+	assert.True(t, svc.isEphemeralAccessToken(claims))
 }
 
 func TestExtendTokenSkipsServiceToken(t *testing.T) {

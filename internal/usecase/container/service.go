@@ -211,7 +211,7 @@ func (s *Service) acquireDomainDeployLock(ctx context.Context, domain string) (f
 
 // buildContainerConfig constructs the container configuration for deployment.
 func (s *Service) deploymentContainerName(containerDomain string, existing *domain.Container) string {
-	canonicalName := fmt.Sprintf("gordon-%s", containerDomain)
+	canonicalName := managedContainerName(containerDomain)
 	if existing == nil {
 		return canonicalName
 	}
@@ -517,7 +517,7 @@ func (s *Service) resolveExistingContainer(ctx context.Context, domainName strin
 
 	// Slow path: query runtime for running containers
 	log := zerowrap.FromCtx(ctx)
-	canonicalName := fmt.Sprintf("gordon-%s", domainName)
+	canonicalName := managedContainerName(domainName)
 	candidateNames := map[string]bool{
 		canonicalName:           true,
 		canonicalName + "-new":  true,
@@ -1333,7 +1333,7 @@ func isManagedRouteContainerForDomain(c *domain.Container, domainName string) bo
 	if c.Labels[domain.LabelAttachment] == "true" {
 		return false
 	}
-	return c.Labels[domain.LabelRoute] == domainName || c.Labels[domain.LabelDomain] == domainName || c.Name == fmt.Sprintf("gordon-%s", domainName)
+	return c.Labels[domain.LabelRoute] == domainName || c.Labels[domain.LabelDomain] == domainName || c.Name == managedContainerName(domainName)
 }
 
 func isPreservedAttachmentForDomain(c *domain.Container, domainName string) bool {
@@ -1997,7 +1997,7 @@ func (s *Service) cleanupOldContainer(ctx context.Context, old *domain.Container
 	}
 
 	// Rename new container to canonical name
-	canonicalName := fmt.Sprintf("gordon-%s", domainName)
+	canonicalName := managedContainerName(domainName)
 	if err := s.runtime.RenameContainer(ctx, newContainerID, canonicalName); err != nil {
 		log.Warn().Err(err).Str("canonical_name", canonicalName).Msg("failed to rename container to canonical name")
 	}
@@ -2431,14 +2431,10 @@ func (s *Service) pullImage(ctx context.Context, pullRef string, isInternal bool
 		}, isInternal); err != nil {
 			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 		}
-	case cfg.RegistryAuthEnabled:
-		if cfg.ServiceTokenUsername == "" || cfg.ServiceToken == "" {
-			return log.WrapErr(fmt.Errorf("registry service token not configured"), "failed to pull image for registry auth")
-		}
-		if err := s.runtime.PullImageWithAuth(ctx, pullRef, cfg.ServiceTokenUsername, cfg.ServiceToken); err != nil {
-			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image with auth")
-		}
 	default:
+		// Never send Gordon's service credentials to an external registry.
+		// External pulls are anonymous until per-registry credentials have an
+		// explicit trust-boundary-aware configuration path.
 		if err := s.runtime.PullImage(ctx, pullRef); err != nil {
 			return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 		}
@@ -2537,6 +2533,21 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 
 	for _, path := range volumePaths {
 		name := generateVolumeName(cfg.VolumePrefix, domainName, path)
+		legacyName := legacyVolumeName(cfg.VolumePrefix, domainName, path)
+		legacyExists, err := s.runtime.VolumeExists(ctx, legacyName)
+		if err != nil {
+			log.WrapErrWithFields(err, "failed to check legacy volume", map[string]any{"volume": legacyName})
+			continue
+		}
+		if legacyExists {
+			owned, ownershipErr := s.legacyVolumeOwnedByDomain(ctx, legacyName, domainName)
+			if ownershipErr != nil {
+				log.Warn().Err(ownershipErr).Str("volume", legacyName).Msg("could not verify legacy volume ownership; using stable volume name")
+			} else if owned {
+				volumes[path] = legacyName
+				continue
+			}
+		}
 
 		exists, err := s.runtime.VolumeExists(ctx, name)
 		if err != nil {
@@ -2593,7 +2604,7 @@ func (s *Service) generateNetworkName(identifier string) string {
 	cfg := s.config
 	s.mu.RUnlock()
 
-	return fmt.Sprintf("%s-%s", cfg.NetworkPrefix, strings.ReplaceAll(identifier, ".", "-"))
+	return fmt.Sprintf("%s-%s", cfg.NetworkPrefix, domain.StableResourceName(identifier))
 }
 
 func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string) error {
@@ -2613,7 +2624,11 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 		s.mu.RLock()
 		internal := s.config.NetworkInternal
 		s.mu.RUnlock()
-		if err := s.runtime.CreateNetwork(ctx, networkName, domain.NetworkConfig{Driver: "bridge", Internal: internal}); err != nil {
+		if err := s.runtime.CreateNetwork(ctx, networkName, domain.NetworkConfig{
+			Driver:   "bridge",
+			Internal: internal,
+			Labels:   map[string]string{domain.LabelManaged: "true"},
+		}); err != nil {
 			return log.WrapErr(err, "failed to create network")
 		}
 		log.Info().Msg("created network for app isolation")
@@ -2624,7 +2639,7 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 
 func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string) error {
 	log := zerowrap.FromCtx(ctx)
-	expectedName := fmt.Sprintf("gordon-%s", domainName)
+	expectedName := managedContainerName(domainName)
 	expectedNewName := expectedName + "-new"
 	expectedNextName := expectedName + "-next"
 
@@ -2681,7 +2696,7 @@ func (s *Service) cleanupNetworkIfEmpty(ctx context.Context, networkName string)
 	}
 
 	for _, n := range networks {
-		if n.Name == networkName && len(n.Containers) == 0 {
+		if n.Name == networkName && len(n.Containers) == 0 && n.Labels[domain.LabelManaged] == "true" {
 			if err := s.runtime.RemoveNetwork(ctx, networkName); err != nil {
 				return err
 			}
@@ -3116,6 +3131,9 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 	containerName := fmt.Sprintf("gordon-%s-%s", sanitizeName(ownerDomain), serviceName)
 	existingContainer := s.findContainerByName(ctx, containerName)
 	if existingContainer != nil {
+		if err := validateAttachmentOwnership(existingContainer, ownerDomain, containerName); err != nil {
+			return nil, err
+		}
 		return existingContainer, nil
 	}
 
@@ -3125,6 +3143,9 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 		return nil, nil
 	}
 
+	if err := validateAttachmentOwnership(existingContainer, ownerDomain, containerNameLegacy); err != nil {
+		return nil, err
+	}
 	log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
 	if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
 		return nil, log.WrapErr(err, "failed to stop legacy attachment container")
@@ -3136,7 +3157,20 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 	return nil, nil
 }
 
+func validateAttachmentOwnership(container *domain.Container, ownerDomain, containerName string) error {
+	if container.Labels[domain.LabelManaged] != "true" ||
+		container.Labels[domain.LabelAttachment] != "true" ||
+		container.Labels[domain.LabelAttachedTo] != ownerDomain {
+		return fmt.Errorf("%w: attachment name %q is owned by another workload", domain.ErrAttachmentOwnershipMismatch, containerName)
+	}
+	return nil
+}
+
 // Utility functions
+
+func managedContainerName(domainName string) string {
+	return "gordon-" + domainName
+}
 
 func normalizeImageRef(image string) string {
 	if isDigestRef(image) {
@@ -3181,8 +3215,34 @@ func normalizeImageRef(image string) string {
 func generateVolumeName(prefix, domainName, volumePath string) string {
 	return fmt.Sprintf("%s-%s-%s",
 		prefix,
+		domain.StableResourceName(domainName),
+		domain.StableResourceName(strings.Trim(volumePath, "/")))
+}
+
+func legacyVolumeName(prefix, domainName, volumePath string) string {
+	return fmt.Sprintf("%s-%s-%s",
+		prefix,
 		strings.ReplaceAll(domainName, ".", "-"),
 		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
+}
+
+func (s *Service) legacyVolumeOwnedByDomain(ctx context.Context, volumeName, domainName string) (bool, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return false, fmt.Errorf("list containers for legacy volume ownership: %w", err)
+	}
+	for _, container := range containers {
+		if container.Labels[domain.LabelManaged] != "true" ||
+			(container.Labels[domain.LabelRoute] != domainName && container.Labels[domain.LabelDomain] != domainName) {
+			continue
+		}
+		for _, mount := range container.VolumeMounts {
+			if mount.Name == volumeName || mount.Source == volumeName {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {

@@ -27,10 +27,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Deploy to Gordon
-        uses: bnema/gordon/.github/actions/deploy@main
+        uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -52,11 +54,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
 
       - name: Deploy to Gordon
         id: deploy
-        uses: bnema/gordon/.github/actions/deploy@main
+        uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -64,9 +68,6 @@ jobs:
           image: myapp                    # Custom image name
           dockerfile: ./docker/Dockerfile # Custom Dockerfile path
           context: .                      # Build context
-          build-args: |                   # Build arguments
-            NODE_ENV=production
-            API_URL=https://api.example.com
           platforms: linux/amd64,linux/arm64  # Multi-platform
           push-latest: 'true'             # Also push :latest
 
@@ -88,7 +89,6 @@ jobs:
 | `tag` | Override image tag | No | Git tag or short SHA |
 | `dockerfile` | Path to Dockerfile | No | `./Dockerfile` |
 | `context` | Build context path | No | `.` |
-| `build-args` | Build arguments (one per line) | No | - |
 | `platforms` | Target platforms | No | - |
 | `push-latest` | Also push with `:latest` tag | No | `true` |
 | `cache-from` | Cache source | No | `type=gha` |
@@ -152,11 +152,12 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          persist-credentials: false
 
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -178,8 +179,10 @@ jobs:
   deploy-api:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -191,8 +194,10 @@ jobs:
   deploy-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: bnema/gordon/.github/actions/deploy@main
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: bnema/gordon/.github/actions/deploy@271c36a4cc32fabd91b20f93cd006bdd2a01b181
         with:
           registry: registry.mydomain.com
           username: ${{ secrets.GORDON_USERNAME }}
@@ -204,15 +209,7 @@ jobs:
 
 ### Build with Secrets (BuildKit)
 
-```yaml
-- uses: bnema/gordon/.github/actions/deploy@main
-  with:
-    registry: registry.mydomain.com
-    username: ${{ secrets.GORDON_USERNAME }}
-    password: ${{ secrets.GORDON_TOKEN }}
-    build-args: |
-      NPM_TOKEN=${{ secrets.NPM_TOKEN }}
-```
+The deploy action intentionally does not accept build arguments because CI secrets passed as build arguments can remain in image metadata or layers. For secret-bearing builds, use `docker/build-push-action` with its BuildKit `secrets` input, reference the secret with `RUN --mount=type=secret` in the Dockerfile, and pin every action to a reviewed commit SHA.
 
 ## Troubleshooting
 

@@ -4,6 +4,9 @@ package registry
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/registrystate"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -31,6 +35,8 @@ type Service struct {
 	eventBus         out.EventPublisher
 	metrics          *telemetry.Metrics
 	suppressedImages sync.Map // imageName -> *time.Timer
+	mutationMu       *sync.RWMutex
+	registryState    *registrystate.State
 }
 
 // SetMetrics sets the telemetry metrics for the registry service.
@@ -43,11 +49,18 @@ func NewService(
 	blobStorage out.BlobStorage,
 	manifestStorage out.ManifestStorage,
 	eventBus out.EventPublisher,
+	states ...*registrystate.State,
 ) *Service {
+	registryState := registrystate.New()
+	if len(states) > 0 && states[0] != nil {
+		registryState = states[0]
+	}
 	return &Service{
 		blobStorage:     blobStorage,
 		manifestStorage: manifestStorage,
 		eventBus:        eventBus,
+		mutationMu:      &registryState.MutationMu,
+		registryState:   registryState,
 	}
 }
 
@@ -155,6 +168,9 @@ func (s *Service) GetManifest(ctx context.Context, name, reference string) (*dom
 
 // PutManifest stores a manifest and returns the calculated digest.
 func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (string, error) {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx, span := registryTracer.Start(ctx, "registry.put_manifest",
 		trace.WithAttributes(
 			attribute.String("name", manifest.Name),
@@ -171,12 +187,25 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Calculate digest
+	// Calculate and verify the digest before mutating storage. A digest-addressed
+	// manifest must match its URL reference or clients could later retrieve
+	// attacker-controlled bytes under a trusted content address.
 	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifest.Data))
+	if validation.IsDigest(manifest.Reference) {
+		matches, err := manifestDigestMatches(manifest.Reference, manifest.Data)
+		if err != nil {
+			return "", fmt.Errorf("validate manifest digest: %w", err)
+		}
+		if !matches {
+			return "", fmt.Errorf("%w: manifest content does not match %s", domain.ErrDigestMismatch, manifest.Reference)
+		}
+		digest = manifest.Reference
+	}
 
 	if err := s.manifestStorage.PutManifest(manifest.Name, manifest.Reference, manifest.ContentType, manifest.Data); err != nil {
 		return "", log.WrapErr(err, "failed to store manifest")
 	}
+	s.registryState.MarkPublished(manifestReferencedDigests(manifest.Data))
 
 	// Record push metrics
 	if s.metrics != nil {
@@ -191,7 +220,7 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	// Publish image pushed event only for tag references (not digests).
 	// A docker push sends manifests by both digest and tag; firing only on
 	// tag prevents duplicate deploy triggers for the same push.
-	if s.eventBus != nil && !strings.HasPrefix(manifest.Reference, "sha256:") {
+	if s.eventBus != nil && !validation.IsDigest(manifest.Reference) {
 		if s.IsDeployEventSuppressed(manifest.Name) {
 			log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
 		} else {
@@ -212,6 +241,9 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 
 // DeleteManifest removes a manifest.
 func (s *Service) DeleteManifest(ctx context.Context, name, reference string) error {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "DeleteManifest",
@@ -245,14 +277,24 @@ func (s *Service) GetBlob(ctx context.Context, digest string) (io.ReadCloser, er
 	return reader, nil
 }
 
-// GetBlobPath returns the filesystem path to a blob for direct serving.
-func (s *Service) GetBlobPath(ctx context.Context, digest string) (string, error) {
+// GetBlobPath returns the filesystem path to a blob only when a manifest in
+// the requested repository references it.
+func (s *Service) GetBlobPath(ctx context.Context, name, digest string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "GetBlobPath",
+		"name":                name,
 		"digest":              digest,
 	})
 	log := zerowrap.FromCtx(ctx)
+
+	referenced, err := s.repositoryReferencesDigest(name, digest)
+	if err != nil {
+		return "", log.WrapErr(err, "failed to verify blob ownership")
+	}
+	if !referenced {
+		return "", domain.ErrBlobNotFound
+	}
 
 	path, err := s.blobStorage.GetBlobPath(digest)
 	if err != nil {
@@ -262,8 +304,137 @@ func (s *Service) GetBlobPath(ctx context.Context, digest string) (string, error
 	return path, nil
 }
 
+type manifestDescriptor struct {
+	Digest string `json:"digest"`
+}
+
+type manifestReferences struct {
+	Config    manifestDescriptor   `json:"config"`
+	Layers    []manifestDescriptor `json:"layers"`
+	Manifests []manifestDescriptor `json:"manifests"`
+	Blobs     []manifestDescriptor `json:"blobs"`
+	Subject   *manifestDescriptor  `json:"subject"`
+}
+
+const maxManifestTraversal = 10000
+
+func (s *Service) repositoryReferencesDigest(name, target string) (bool, error) {
+	tags, err := s.manifestStorage.ListTags(name)
+	if err != nil {
+		if errors.Is(err, domain.ErrManifestNotFound) {
+			return false, nil
+		}
+		return false, fmt.Errorf("list tags for repository %s: %w", name, err)
+	}
+
+	if len(tags) > maxManifestTraversal {
+		return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
+	}
+	queue := append([]string(nil), tags...)
+	seen := make(map[string]struct{}, len(queue))
+	for len(queue) > 0 {
+		reference := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[reference]; ok {
+			continue
+		}
+		seen[reference] = struct{}{}
+		if len(seen) > maxManifestTraversal {
+			return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
+		}
+
+		data, _, err := s.manifestStorage.GetManifest(name, reference)
+		if err != nil {
+			return false, fmt.Errorf("get manifest %s for repository %s: %w", reference, name, err)
+		}
+		var refs manifestReferences
+		if err := json.Unmarshal(data, &refs); err != nil {
+			return false, fmt.Errorf("decode manifest %s: %w", reference, err)
+		}
+
+		if manifestReferencesTarget(refs, target) {
+			return true, nil
+		}
+		nestedManifests := refs.Manifests
+		if refs.Subject != nil && refs.Subject.Digest != "" {
+			nestedManifests = append(append([]manifestDescriptor(nil), refs.Manifests...), *refs.Subject)
+		}
+		if len(seen)+len(queue)+len(nestedManifests) > maxManifestTraversal {
+			return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
+		}
+		queue = appendManifestDigests(queue, nestedManifests)
+	}
+	return false, nil
+}
+
+func manifestReferencesTarget(refs manifestReferences, target string) bool {
+	return refs.Config.Digest == target ||
+		descriptorListContains(refs.Layers, target) ||
+		descriptorListContains(refs.Manifests, target) ||
+		descriptorListContains(refs.Blobs, target) ||
+		(refs.Subject != nil && refs.Subject.Digest == target)
+}
+
+func appendManifestDigests(queue []string, descriptors []manifestDescriptor) []string {
+	for _, descriptor := range descriptors {
+		if descriptor.Digest != "" {
+			queue = append(queue, descriptor.Digest)
+		}
+	}
+	return queue
+}
+
+func manifestReferencedDigests(data []byte) []string {
+	var refs manifestReferences
+	if json.Unmarshal(data, &refs) != nil {
+		return nil
+	}
+	digests := make([]string, 0, 1+len(refs.Layers)+len(refs.Manifests)+len(refs.Blobs))
+	if refs.Config.Digest != "" {
+		digests = append(digests, refs.Config.Digest)
+	}
+	for _, descriptors := range [][]manifestDescriptor{refs.Layers, refs.Manifests, refs.Blobs} {
+		for _, descriptor := range descriptors {
+			if descriptor.Digest != "" {
+				digests = append(digests, descriptor.Digest)
+			}
+		}
+	}
+	if refs.Subject != nil && refs.Subject.Digest != "" {
+		digests = append(digests, refs.Subject.Digest)
+	}
+	return digests
+}
+
+func descriptorListContains(descriptors []manifestDescriptor, digest string) bool {
+	for _, descriptor := range descriptors {
+		if descriptor.Digest == digest {
+			return true
+		}
+	}
+	return false
+}
+
+func manifestDigestMatches(reference string, data []byte) (bool, error) {
+	algorithm, _, ok := strings.Cut(reference, ":")
+	if !ok {
+		return false, domain.ErrInvalidDigest
+	}
+	switch algorithm {
+	case "sha256":
+		return reference == fmt.Sprintf("sha256:%x", sha256.Sum256(data)), nil
+	case "sha512":
+		return reference == fmt.Sprintf("sha512:%x", sha512.Sum512(data)), nil
+	default:
+		return false, domain.ErrInvalidDigest
+	}
+}
+
 // PutBlob stores a blob with the given digest.
 func (s *Service) PutBlob(ctx context.Context, digest string, data io.Reader, size int64) error {
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "PutBlob",
@@ -275,6 +446,7 @@ func (s *Service) PutBlob(ctx context.Context, digest string, data io.Reader, si
 	if err := s.blobStorage.PutBlob(digest, data, size); err != nil {
 		return log.WrapErr(err, "failed to store blob")
 	}
+	s.registryState.AddPending(digest, time.Now().UTC())
 
 	log.Info().Msg("blob stored")
 	return nil

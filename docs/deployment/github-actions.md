@@ -138,11 +138,15 @@ jobs:
       - name: Build and Deploy
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
+          GORDON_REMOTE: ${{ secrets.GORDON_REMOTE }}
+          DEPLOY_TAG: ${{ inputs.tag }}
         run: |
-          gordon push --build \
-            --remote ${{ secrets.GORDON_REMOTE }} \
-            ${{ github.event.inputs.tag && format('--tag {0}', github.event.inputs.tag) || '' }} \
-            --no-confirm
+          args=(push --build --remote "$GORDON_REMOTE" --no-confirm)
+          if [[ -n "$DEPLOY_TAG" ]]; then
+            [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
+            args+=(--tag "$DEPLOY_TAG")
+          fi
+          gordon "${args[@]}"
 ```
 
 #### Monorepo

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -525,6 +526,7 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 		ShowStderr: true,
 		Follow:     follow,
 		Timestamps: true,
+		Tail:       "10000",
 	})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
@@ -747,6 +749,7 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 	log := zerowrap.FromCtx(ctx)
 
 	pruneFilters := filters.NewArgs()
+	pruneFilters.Add("label", domain.LabelManaged+"=true")
 	if danglingOnly {
 		pruneFilters.Add("dangling", "true")
 	}
@@ -1724,12 +1727,50 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 	}, nil
 }
 
-func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+const maxExecOutputSize = 8 << 20 // 8 MiB per stream
 
-	if _, err := stdcopy.StdCopy(&stdout, &stderr, reader); err != nil {
-		return nil, nil, err
+type boundedBuffer struct {
+	bytes.Buffer
+	limit int
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	remaining := w.limit - w.Len()
+	if remaining <= 0 {
+		return 0, fmt.Errorf("%w: limit is %d bytes", domain.ErrExecOutputExceeded, w.limit)
+	}
+	if len(p) > remaining {
+		_, _ = w.Buffer.Write(p[:remaining])
+		return remaining, fmt.Errorf("%w: limit is %d bytes", domain.ErrExecOutputExceeded, w.limit)
+	}
+	return w.Buffer.Write(p)
+}
+
+func parseExecOutput(reader io.Reader) ([]byte, []byte, error) {
+	stdout := boundedBuffer{limit: maxExecOutputSize}
+	stderr := boundedBuffer{limit: maxExecOutputSize}
+	buffers := map[byte]*boundedBuffer{1: &stdout, 2: &stderr}
+	var header [8]byte
+
+	for {
+		if _, err := io.ReadFull(reader, header[:]); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, nil, fmt.Errorf("read Docker exec frame header: %w", err)
+		}
+		output, ok := buffers[header[0]]
+		if !ok {
+			return nil, nil, fmt.Errorf("invalid Docker exec stream %d", header[0])
+		}
+		payloadSize := int64(binary.BigEndian.Uint32(header[4:]))
+		remaining := int64(output.limit - output.Len())
+		if payloadSize > remaining {
+			return nil, nil, fmt.Errorf("%w: frame is %d bytes with %d bytes remaining", domain.ErrExecOutputExceeded, payloadSize, remaining)
+		}
+		if _, err := io.CopyN(output, reader, payloadSize); err != nil {
+			return nil, nil, fmt.Errorf("read Docker exec frame payload: %w", err)
+		}
 	}
 
 	return stdout.Bytes(), stderr.Bytes(), nil

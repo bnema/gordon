@@ -438,8 +438,8 @@ func (_c *MockRegistryService_GetBlob_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // GetBlobPath provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) GetBlobPath(ctx context.Context, digest string) (string, error) {
-	ret := _mock.Called(ctx, digest)
+func (_mock *MockRegistryService) GetBlobPath(ctx context.Context, name string, digest string) (string, error) {
+	ret := _mock.Called(ctx, name, digest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetBlobPath")
@@ -447,16 +447,16 @@ func (_mock *MockRegistryService) GetBlobPath(ctx context.Context, digest string
 
 	var r0 string
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, error)); ok {
-		return returnFunc(ctx, digest)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (string, error)); ok {
+		return returnFunc(ctx, name, digest)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
-		r0 = returnFunc(ctx, digest)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) string); ok {
+		r0 = returnFunc(ctx, name, digest)
 	} else {
 		r0 = ret.Get(0).(string)
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, digest)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, name, digest)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -470,12 +470,13 @@ type MockRegistryService_GetBlobPath_Call struct {
 
 // GetBlobPath is a helper method to define mock.On call
 //   - ctx context.Context
+//   - name string
 //   - digest string
-func (_e *MockRegistryService_Expecter) GetBlobPath(ctx any, digest any) *MockRegistryService_GetBlobPath_Call {
-	return &MockRegistryService_GetBlobPath_Call{Call: _e.mock.On("GetBlobPath", ctx, digest)}
+func (_e *MockRegistryService_Expecter) GetBlobPath(ctx any, name any, digest any) *MockRegistryService_GetBlobPath_Call {
+	return &MockRegistryService_GetBlobPath_Call{Call: _e.mock.On("GetBlobPath", ctx, name, digest)}
 }
 
-func (_c *MockRegistryService_GetBlobPath_Call) Run(run func(ctx context.Context, digest string)) *MockRegistryService_GetBlobPath_Call {
+func (_c *MockRegistryService_GetBlobPath_Call) Run(run func(ctx context.Context, name string, digest string)) *MockRegistryService_GetBlobPath_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -485,9 +486,14 @@ func (_c *MockRegistryService_GetBlobPath_Call) Run(run func(ctx context.Context
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -498,7 +504,7 @@ func (_c *MockRegistryService_GetBlobPath_Call) Return(s string, err error) *Moc
 	return _c
 }
 
-func (_c *MockRegistryService_GetBlobPath_Call) RunAndReturn(run func(ctx context.Context, digest string) (string, error)) *MockRegistryService_GetBlobPath_Call {
+func (_c *MockRegistryService_GetBlobPath_Call) RunAndReturn(run func(ctx context.Context, name string, digest string) (string, error)) *MockRegistryService_GetBlobPath_Call {
 	_c.Call.Return(run)
 	return _c
 }

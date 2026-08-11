@@ -154,9 +154,10 @@ func remotesListJSON(out io.Writer, remotes map[string]remote.RemoteEntry, names
 
 // newRemotesAddCmd creates the remotes add command.
 func newRemotesAddCmd() *cobra.Command {
-	var token string
+	var tokenFile string
 	var tokenEnv string
 	var insecureTLS bool
+	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "add <name> <url>",
@@ -165,7 +166,7 @@ func newRemotesAddCmd() *cobra.Command {
 
 Examples:
   gordon remotes add prod https://gordon.mydomain.com
-  gordon remotes add prod https://gordon.mydomain.com --token eyJ...
+  gordon remotes add prod https://gordon.mydomain.com --token-file ./token
   gordon remotes add staging https://staging.mydomain.com --token-env STAGING_TOKEN
   gordon remotes add dev https://dev.internal --insecure`,
 		Args: cobra.ExactArgs(2),
@@ -173,8 +174,14 @@ Examples:
 			name := args[0]
 			url := normalizeURL(args[1])
 
-			// If token-env is provided, use that instead of token
-			finalToken := token
+			var finalToken string
+			if tokenFile != "" {
+				var err error
+				finalToken, err = readProtectedSecretFile(tokenFile)
+				if err != nil {
+					return fmt.Errorf("read token: %w", err)
+				}
+			}
 			if tokenEnv != "" {
 				// Store token_env reference instead of actual token
 				if err := addRemoteWithEnv(name, url, tokenEnv, insecureTLS); err != nil {
@@ -186,19 +193,23 @@ Examples:
 				}
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Remote added: %s -> %s", name, url)))
-
-			if token == "" && tokenEnv == "" {
-				fmt.Println(styles.Theme.Muted.Render("Tip: Add a token with --token or --token-env for authenticated access"))
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "url": url, "added": true})
 			}
-
+			if err := cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Remote added: %s -> %s", name, url))); err != nil {
+				return err
+			}
+			if tokenFile == "" && tokenEnv == "" {
+				return cliWriteLine(cmd.OutOrStdout(), styles.Theme.Muted.Render("Tip: Add a token with --token-file or --token-env for authenticated access"))
+			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&token, "token", "", "Authentication token")
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
 	cmd.Flags().StringVar(&tokenEnv, "token-env", "", "Environment variable containing token")
 	cmd.Flags().BoolVar(&insecureTLS, "insecure", false, "Skip TLS certificate verification")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
 }
@@ -313,8 +324,10 @@ Examples:
 
 // newRemotesSetTokenCmd creates the remotes set-token command.
 func newRemotesSetTokenCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "set-token <name> <token>",
+	var tokenFile string
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "set-token <name> --token-file <path>",
 		Short: "Set the token for a remote",
 		Long: `Set or update the authentication token for a saved remote.
 
@@ -326,12 +339,14 @@ This is useful when:
 For servers with password authentication, use 'gordon auth login' instead.
 
 Examples:
-  gordon remotes set-token prod eyJhbGciOiJIUzI1NiIs...
-  gordon remotes set-token staging $(cat token.txt)`,
-		Args: cobra.ExactArgs(2),
+  gordon remotes set-token prod --token-file ./token`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			token := args[1]
+			token, err := readProtectedSecretFile(tokenFile)
+			if err != nil {
+				return fmt.Errorf("read token: %w", err)
+			}
 
 			// Verify remote exists
 			remotes, _, err := remote.ListRemotes()
@@ -340,18 +355,26 @@ Examples:
 			}
 
 			if _, exists := remotes[name]; !exists {
-				fmt.Println(styles.RenderError(fmt.Sprintf("Remote '%s' not found", name)))
-				return nil
+				if jsonOut {
+					return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "updated": false, "error": "remote not found"})
+				}
+				return cliWriteLine(cmd.OutOrStdout(), styles.RenderError(fmt.Sprintf("Remote '%s' not found", name)))
 			}
 
 			if err := remote.UpdateRemoteToken(name, token); err != nil {
 				return fmt.Errorf("failed to update token: %w", err)
 			}
 
-			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Token updated for remote '%s'", name)))
-			return nil
+			if jsonOut {
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"name": name, "updated": true})
+			}
+			return cliWriteLine(cmd.OutOrStdout(), styles.RenderSuccess(fmt.Sprintf("Token updated for remote '%s'", name)))
 		},
 	}
+	cmd.Flags().StringVar(&tokenFile, "token-file", "", "Read authentication token from a mode 0600 file")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	_ = cmd.MarkFlagRequired("token-file")
+	return cmd
 }
 
 // normalizeURL ensures the URL has a protocol scheme, defaulting to https.

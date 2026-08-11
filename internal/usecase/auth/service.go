@@ -200,6 +200,9 @@ func buildTokenClaims(claims jwt.MapClaims) *domain.TokenClaims {
 			}
 		}
 	}
+	if tokenType, ok := claims["token_type"].(string); ok {
+		tokenClaims.TokenType = tokenType
+	}
 
 	return tokenClaims
 }
@@ -238,6 +241,9 @@ func ensureTokenNotExpired(tokenClaims *domain.TokenClaims, log zerowrap.Logger)
 // 2. Have lifetime ≤ MaxAccessTokenLifetime
 // 3. Be recently issued (within MaxAccessTokenLifetime) to prevent replay attacks
 func (s *Service) isEphemeralAccessToken(claims *domain.TokenClaims) bool {
+	if claims.TokenType != "access" {
+		return false // Only tokens minted by GenerateAccessToken may bypass the store
+	}
 	if claims.ExpiresAt <= 0 {
 		return false // Never-expiring tokens require store validation
 	}
@@ -289,12 +295,13 @@ func (s *Service) GenerateToken(ctx context.Context, subject string, scopes []st
 
 	// Build JWT claims
 	claims := jwt.MapClaims{
-		"jti":    tokenID,
-		"sub":    subject,
-		"iss":    TokenIssuer,
-		"iat":    now.Unix(),
-		"nbf":    now.Unix(), // SECURITY: Not-before claim for clock skew protection
-		"scopes": scopes,
+		"jti":        tokenID,
+		"sub":        subject,
+		"iss":        TokenIssuer,
+		"iat":        now.Unix(),
+		"nbf":        now.Unix(), // SECURITY: Not-before claim for clock skew protection
+		"scopes":     scopes,
+		"token_type": "stored",
 	}
 
 	// Set expiry if specified
@@ -349,13 +356,14 @@ func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scope
 	now := time.Now().UTC()
 
 	claims := jwt.MapClaims{
-		"jti":    tokenID,
-		"sub":    subject,
-		"iss":    TokenIssuer,
-		"iat":    now.Unix(),
-		"nbf":    now.Unix(), // SECURITY: Not-before claim for clock skew protection
-		"scopes": scopes,
-		"exp":    now.Add(expiry).Unix(),
+		"jti":        tokenID,
+		"sub":        subject,
+		"iss":        TokenIssuer,
+		"iat":        now.Unix(),
+		"nbf":        now.Unix(), // SECURITY: Not-before claim for clock skew protection
+		"scopes":     scopes,
+		"exp":        now.Add(expiry).Unix(),
+		"token_type": "access",
 	}
 
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -507,13 +515,14 @@ func (s *Service) ExtendToken(ctx context.Context, tokenString string) (string, 
 	newExpiresAt := now.Add(tokenExtensionTTL)
 
 	newClaims := jwt.MapClaims{
-		"jti":    tokenClaims.ID, // Reuse existing JTI to avoid invalidating concurrent requests
-		"sub":    tokenClaims.Subject,
-		"iss":    TokenIssuer,
-		"iat":    now.Unix(), // Update to current time (token is being re-issued)
-		"nbf":    now.Unix(), // SECURITY: not-before matches issuance time
-		"scopes": tokenClaims.Scopes,
-		"exp":    newExpiresAt.Unix(),
+		"jti":        tokenClaims.ID, // Reuse existing JTI to avoid invalidating concurrent requests
+		"sub":        tokenClaims.Subject,
+		"iss":        TokenIssuer,
+		"iat":        now.Unix(), // Update to current time (token is being re-issued)
+		"nbf":        now.Unix(), // SECURITY: not-before matches issuance time
+		"scopes":     tokenClaims.Scopes,
+		"exp":        newExpiresAt.Unix(),
+		"token_type": "stored",
 	}
 
 	jwtToken := jwt.NewWithClaims(jwt.SigningMethodHS256, newClaims)
