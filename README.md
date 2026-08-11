@@ -1,11 +1,10 @@
 # Gordon
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/bnema/gordon)](https://goreportcard.com/report/github.com/bnema/gordon)
 
 Self-hosted container deployment. Push an image, Gordon routes it to the web.
 
-- Website: https://gordon.bnema.dev
+- Website: https://bnema.dev/gordon
 - Documentation: [Docs](https://gordon.bnema.dev/docs) | [Wiki](https://gordon.bnema.dev/wiki)
 - Discuss: [GitHub Discussions](https://github.com/bnema/gordon/discussions)
 
@@ -142,10 +141,10 @@ See the [Deploy Action README](.github/actions/deploy/README.md) for multi-platf
 
 ## Documentation
 
-Full documentation at **[gordon.bnema.dev](https://gordon.bnema.dev)**
+Full documentation at **[gordon.bnema.dev](https://bnema.dev/gordon)**
 
-- [Docs](https://gordon.bnema.dev/docs) — Installation, configuration, CLI reference
-- [Wiki](https://gordon.bnema.dev/wiki) — Tutorials, guides, and examples
+- [Docs](https://bnema.dev/gordon/docs) — Installation, configuration, CLI reference
+- [Wiki](https://bnema.dev/gordon/wiki) — Tutorials, guides, and examples
 
 ## Community
 
