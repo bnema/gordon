@@ -1227,15 +1227,22 @@ func (r *Runtime) RemoveVolume(ctx context.Context, volumeName string, force boo
 
 // ListVolumes returns all named volumes with their usage status.
 func (r *Runtime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ListVolumes",
+	})
+	log := zerowrap.FromCtx(ctx)
+
 	volumeList, err := r.client.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list volumes: %w", err)
+		return nil, log.WrapErr(err, "failed to list volumes")
 	}
 
 	// Get all containers to determine volume usage.
 	containerList, err := r.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers for volume usage: %w", err)
+		return nil, log.WrapErr(err, "failed to list containers for volume usage")
 	}
 
 	// Build a map of volume name -> container names.
