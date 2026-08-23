@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -9,8 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,9 +20,9 @@ func TestRuntime_PruneImages_DanglingOnlyFilter(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v1.41/images/prune", r.URL.Path)
 
-		parsedFilters, err := filters.FromJSON(r.URL.Query().Get("filters"))
-		require.NoError(t, err)
-		assert.Equal(t, []string{"true"}, parsedFilters.Get("dangling"))
+		parsedFilters := client.Filters{}
+		require.NoError(t, json.Unmarshal([]byte(r.URL.Query().Get("filters")), &parsedFilters))
+		assert.True(t, parsedFilters["dangling"]["true"])
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ImagesDeleted":[{"Deleted":"sha256:abc"},{"Untagged":"example:old"}],"SpaceReclaimed":1234}`))
@@ -42,9 +42,9 @@ func TestRuntime_PruneImages_FullUnusedHasNoDanglingFilter(t *testing.T) {
 		assert.Equal(t, http.MethodPost, r.Method)
 		assert.Equal(t, "/v1.41/images/prune", r.URL.Path)
 
-		parsedFilters, err := filters.FromJSON(r.URL.Query().Get("filters"))
-		require.NoError(t, err)
-		assert.Empty(t, parsedFilters.Get("dangling"))
+		parsedFilters := client.Filters{}
+		require.NoError(t, json.Unmarshal([]byte(r.URL.Query().Get("filters")), &parsedFilters))
+		assert.Empty(t, parsedFilters["dangling"])
 
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ImagesDeleted":[{"Deleted":"sha256:def"}],"SpaceReclaimed":5678}`))
@@ -183,7 +183,7 @@ func newRuntimeForHTTPServer(t *testing.T, server *httptest.Server) *Runtime {
 	t.Helper()
 
 	host := strings.TrimPrefix(server.URL, "http://")
-	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	cli, err := client.New(client.WithHost("tcp://"+host), client.WithAPIVersion("1.41"), client.WithHTTPClient(server.Client()))
 	require.NoError(t, err)
 
 	return NewRuntimeWithClient(cli)

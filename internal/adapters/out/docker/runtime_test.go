@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/bnema/zerowrap"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +31,7 @@ func TestRuntime_InspectImageEnv_RedactsValuesInDebugLog(t *testing.T) {
 	defer server.Close()
 
 	host := strings.TrimPrefix(server.URL, "http://")
-	cli, err := client.NewClientWithOpts(client.WithHost("tcp://"+host), client.WithVersion("1.41"), client.WithHTTPClient(server.Client()))
+	cli, err := client.New(client.WithHost("tcp://"+host), client.WithAPIVersion("1.41"), client.WithHTTPClient(server.Client()))
 	require.NoError(t, err)
 	runtime := NewRuntimeWithClient(cli)
 

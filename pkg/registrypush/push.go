@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/docker/docker/client"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/moby/moby/client"
 )
 
 // DefaultChunkSize is 50MB - safely under Cloudflare's 100MB per-request limit
@@ -207,7 +207,7 @@ func (p *Pusher) UploadBlob(ctx context.Context, baseURL, repo, digest string, s
 
 // defaultImageSourceWithCleanup reads an image from the local Docker/Podman daemon.
 func defaultImageSourceWithCleanup(ctx context.Context, ref string) (v1.Image, func(), error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}

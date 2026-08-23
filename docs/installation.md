@@ -8,7 +8,7 @@ Detailed installation guide for production environments.
 - **Architecture**: x86_64 (amd64) or ARM64
 - **Memory**: 512MB minimum, 1GB recommended
 - **Disk**: 10GB minimum for registry storage
-- **Runtime**: Docker or Podman
+- **Runtime**: Docker or Podman with a Docker-compatible API version 1.40 or later
 
 ## Download Gordon
 

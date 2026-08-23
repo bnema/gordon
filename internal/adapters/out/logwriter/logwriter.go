@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 

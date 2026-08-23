@@ -246,7 +246,6 @@ gordon routes list
 Gordon reads configuration from environment variables:
 
 ```bash
-GORDON_SERVER_PORT=8088 gordon serve
 GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 

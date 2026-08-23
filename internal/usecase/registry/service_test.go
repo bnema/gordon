@@ -456,6 +456,68 @@ func TestService_FinishUpload_Success(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestService_FinishUploadMarksBlobPending(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	state := registrystate.New()
+	svc := NewService(blobStorage, manifestStorage, eventBus, state)
+	const digest = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+
+	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", digest).Return(nil)
+
+	require.NoError(t, svc.FinishUpload(testContext(), "1234567890-myapp", digest))
+	assert.Contains(t, state.PendingDigests(time.Now().UTC()), digest)
+}
+
+func TestService_FinishUploadBlocksRegistryPruning(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	state := registrystate.New()
+	svc := NewService(blobStorage, manifestStorage, eventBus, state)
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", mock.Anything).RunAndReturn(func(string, string) error {
+		close(started)
+		<-release
+		return nil
+	})
+
+	finished := make(chan error, 1)
+	go func() {
+		finished <- svc.FinishUpload(testContext(), "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
+	}()
+	<-started
+
+	pruneLockAcquired := make(chan struct{})
+	go func() {
+		state.MutationMu.Lock()
+		close(pruneLockAcquired)
+		state.MutationMu.Unlock()
+	}()
+	assert.Never(t, func() bool {
+		select {
+		case <-pruneLockAcquired:
+			return true
+		default:
+			return false
+		}
+	}, 100*time.Millisecond, 10*time.Millisecond)
+
+	close(release)
+	require.NoError(t, <-finished)
+	require.Eventually(t, func() bool {
+		select {
+		case <-pruneLockAcquired:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestService_FinishUpload_Error(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)

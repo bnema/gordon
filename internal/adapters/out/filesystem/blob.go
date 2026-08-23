@@ -223,6 +223,23 @@ func (s *BlobStorage) ListBlobs() ([]string, error) {
 	return digests, nil
 }
 
+// GetBlobModTime returns the last modification time for a blob.
+func (s *BlobStorage) GetBlobModTime(digest string) (time.Time, error) {
+	blobPath, err := s.getBlobPath(digest)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid blob path: %w", err)
+	}
+
+	info, err := os.Stat(blobPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return time.Time{}, fmt.Errorf("blob not found: %s", digest)
+		}
+		return time.Time{}, fmt.Errorf("failed to stat blob: %w", err)
+	}
+	return info.ModTime(), nil
+}
+
 // StartBlobUpload starts a new blob upload and returns the upload UUID.
 func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	uploadID := uuid.New().String()
@@ -394,7 +411,14 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 		return fmt.Errorf("failed to create blob directory: %w", err)
 	}
 
-	// Move upload file to blob location
+	// Update the timestamp before rename so it survives a restart even when the
+	// upload has been open longer than the pending-blob grace period.
+	now := time.Now()
+	if err := os.Chtimes(uploadPath, now, now); err != nil {
+		return fmt.Errorf("failed to mark blob as finalized: %w", err)
+	}
+
+	// Move upload file to blob location.
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		return fmt.Errorf("failed to move upload to blob location: %w", err)
 	}
@@ -474,11 +498,22 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(uploadsDir, entry.Name())
-			size := info.Size()
 
 			mu := s.getUploadLock(entry.Name())
 			mu.Lock()
-
+			currentInfo, err := os.Stat(path)
+			if err != nil {
+				mu.Unlock()
+				if !os.IsNotExist(err) {
+					s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to stat stale upload")
+				}
+				continue
+			}
+			if !currentInfo.ModTime().Before(cutoff) {
+				mu.Unlock()
+				continue
+			}
+			size := currentInfo.Size()
 			if err := os.Remove(path); err != nil {
 				mu.Unlock()
 				s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove stale upload")

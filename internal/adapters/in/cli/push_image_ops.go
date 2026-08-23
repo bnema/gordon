@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/pkg/registrypush"
@@ -41,7 +41,7 @@ type dockerImageOps struct {
 
 // newDockerImageOps creates a dockerImageOps from the Docker environment.
 func newDockerImageOps(insecureTLS bool, progress io.Writer) (*dockerImageOps, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
@@ -77,7 +77,7 @@ func newImageOpsForResolvedRemote(resolved *remote.ResolvedRemote) (pushImageOps
 }
 
 func (d *dockerImageOps) Tag(ctx context.Context, sourceRef, targetRef string) error {
-	if err := d.cli.ImageTag(ctx, sourceRef, targetRef); err != nil {
+	if _, err := d.cli.ImageTag(ctx, client.ImageTagOptions{Source: sourceRef, Target: targetRef}); err != nil {
 		return fmt.Errorf("failed to tag %s as %s: %w", sourceRef, targetRef, err)
 	}
 	return nil

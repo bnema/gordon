@@ -95,15 +95,17 @@ build-local: ## Build binary for current platform
 
 ##@ Release
 
-build-push: build ## Build and push Docker images
+build-push: ## Build and push Docker images
 	@echo "Cleaning up dangling images..."
 	@$(ENGINE) image prune -f
 
 	@echo "Building and pushing Docker images..."
 	@for arch in $(ARCHS); do \
-		cp $(DIST_DIR)/gordon-linux-$$arch gordon; \
-		$(ENGINE) build -t $(REPO):$(TAG)-$$arch .; \
-		rm gordon; \
+		$(ENGINE) build --platform linux/$$arch \
+			--build-arg VERSION="$(VERSION)" \
+			--build-arg COMMIT="$(COMMIT)" \
+			--build-arg BUILD_DATE="$(BUILD_DATE)" \
+			-t $(REPO):$(TAG)-$$arch .; \
 		$(ENGINE) push $(REPO):$(TAG)-$$arch; \
 	done
 

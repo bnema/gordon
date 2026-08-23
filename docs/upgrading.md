@@ -61,34 +61,23 @@ Keep `server.registry_port` for Docker/Podman push and pull traffic; it is separ
 
 ## v2.30.0 to v2.31.0
 
-### Breaking: Default Port Changes
+### Breaking: Public listener migration
 
-Gordon now defaults to unprivileged ports that work without root or firewall rules:
+`server.port` and `server.tls_port` no longer create public listeners. Gordon refuses to start when either legacy key is present without an `[entrypoints]` entry, preventing routes from silently becoming unavailable.
 
-| Setting | Old default | New default |
-|---------|-------------|-------------|
-| `server.port` | `80` | `8088` |
-| `server.registry_port` | `5000` | `5000` (unchanged) |
-| `server.tls_port` | *(n/a)* | `8443` |
-
-**If you relied on the old defaults** (no explicit `port` in your config), add the port explicitly:
+Replace the legacy listener settings with a route-capable entrypoint:
 
 ```toml
 [server]
-port = 80
+registry_port = 5000
+gordon_domain = "gordon.example.com"
+
+[entrypoints.edge]
+address = ":443"
+protocol = "smart_tcp"
 ```
 
-Or set up firewall port forwarding to the new defaults:
-
-```bash
-sudo firewall-cmd --permanent --add-forward-port=port=80:proto=tcp:toport=8088
-sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=8443
-sudo firewall-cmd --reload
-```
-
-### New: Internal Certificate Authority
-
-Gordon now includes an internal CA for automatic on-demand TLS. Set `tls_port = 0` to disable. See [Server Configuration](./config/server.md#internal-ca-and-tls) for details.
+Keep `server.registry_port` for Docker and Podman registry traffic. For public TLS, configure `[tls.acme]` or static certificates; do not use `server.tls_port`.
 
 ### Required for Cloudflare/Proxy Setups: `proxy_allowed_ips`
 
@@ -105,7 +94,7 @@ proxy_allowed_ips = [
 ]
 ```
 
-Without this, all proxied HTTP traffic returns `403 Forbidden`. Set `tls_port = 0` to disable the internal CA and skip this requirement.
+Without this, all proxied HTTP traffic returns `403 Forbidden`. Remove TLS-capable entrypoints to disable the internal CA and skip this requirement.
 
 ### Breaking: `server.gordon_domain` Replaces `server.registry_domain`
 

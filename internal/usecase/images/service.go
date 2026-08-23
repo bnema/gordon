@@ -248,26 +248,17 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 		}
 	}
 
-	for digest := range s.registryState.PendingDigests(time.Now().UTC()) {
+	now := time.Now().UTC()
+	for digest := range s.registryState.PendingDigests(now) {
 		referencedDigests[digest] = struct{}{}
 	}
 
-	blobs, err := s.blobStorage.ListBlobs()
+	blobsRemoved, spaceReclaimed, err := s.pruneUnreferencedBlobs(log, now, referencedDigests)
 	if err != nil {
-		return domain.ImagePruneReport{}, log.WrapErr(err, "failed to list blobs")
+		return domain.ImagePruneReport{}, err
 	}
-
-	for _, digest := range blobs {
-		if _, referenced := referencedDigests[digest]; referenced {
-			continue
-		}
-		size, err := s.blobStorage.DeleteBlob(digest)
-		if err != nil {
-			return domain.ImagePruneReport{}, log.WrapErr(err, "failed to delete blob")
-		}
-		report.Registry.BlobsRemoved++
-		report.Registry.SpaceReclaimed += size
-	}
+	report.Registry.BlobsRemoved = blobsRemoved
+	report.Registry.SpaceReclaimed = spaceReclaimed
 
 	// Clean up stale uploads (abandoned push operations)
 	uploadsRemoved, uploadBytes, err := s.blobStorage.CleanupStaleUploads(24 * time.Hour)
@@ -279,6 +270,35 @@ func (s *Service) PruneRegistry(ctx context.Context, keepLast int) (domain.Image
 	}
 
 	return report, nil
+}
+
+func (s *Service) pruneUnreferencedBlobs(log zerowrap.Logger, now time.Time, referencedDigests map[string]struct{}) (int, int64, error) {
+	blobs, err := s.blobStorage.ListBlobs()
+	if err != nil {
+		return 0, 0, log.WrapErr(err, "failed to list blobs")
+	}
+
+	var removed int
+	var spaceReclaimed int64
+	for _, digest := range blobs {
+		if _, referenced := referencedDigests[digest]; referenced {
+			continue
+		}
+		modTime, err := s.blobStorage.GetBlobModTime(digest)
+		if err != nil {
+			return 0, 0, log.WrapErr(err, "failed to get blob modification time")
+		}
+		if now.Sub(modTime) <= registrystate.PendingBlobTTL {
+			continue
+		}
+		size, err := s.blobStorage.DeleteBlob(digest)
+		if err != nil {
+			return 0, 0, log.WrapErr(err, "failed to delete blob")
+		}
+		removed++
+		spaceReclaimed += size
+	}
+	return removed, spaceReclaimed, nil
 }
 
 func (s *Service) loadRepositoryTagInfos(repository string) ([]registryTag, error) {

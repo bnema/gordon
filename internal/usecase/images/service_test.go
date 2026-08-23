@@ -333,6 +333,21 @@ func TestService_PruneRegistry_GarbageCollectsUnreferencedBlobs(t *testing.T) {
 	assert.Equal(t, []string{"sha256:orphan"}, blobStorage.deletedBlobs)
 }
 
+func TestService_PruneRegistry_PreservesRecentlyFinalizedBlobAfterRestart(t *testing.T) {
+	manifestStorage := newFakeManifestStorage()
+	blobStorage := &fakeBlobStorage{
+		blobs:        []string{"sha256:recent"},
+		blobModTimes: map[string]time.Time{"sha256:recent": time.Now().UTC()},
+	}
+	svc := NewService(&fakeRuntime{}, manifestStorage, blobStorage, zerowrap.Default(), registrystate.New())
+
+	report, err := svc.PruneRegistry(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Zero(t, report.Registry.BlobsRemoved)
+	assert.Empty(t, blobStorage.deletedBlobs)
+}
+
 func TestService_PruneRegistry_PreservesPendingBlob(t *testing.T) {
 	manifestStorage := newFakeManifestStorage()
 	manifestStorage.repositories = []string{"gordon/api"}
@@ -687,6 +702,7 @@ type fakeBlobStorage struct {
 
 	blobs        []string
 	blobSizes    map[string]int64
+	blobModTimes map[string]time.Time
 	deletedBlobs []string
 }
 
@@ -811,6 +827,10 @@ func (f *fakeManifestStorage) GetManifest(name, reference string) ([]byte, strin
 
 func (f *fakeBlobStorage) ListBlobs() ([]string, error) {
 	return append([]string(nil), f.blobs...), nil
+}
+
+func (f *fakeBlobStorage) GetBlobModTime(digest string) (time.Time, error) {
+	return f.blobModTimes[digest], nil
 }
 
 func (f *fakeBlobStorage) DeleteBlob(digest string) (int64, error) {
