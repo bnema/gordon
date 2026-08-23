@@ -1,34 +1,39 @@
-# Gordon v2 - Production Dockerfile
-# Multi-stage build for optimized container image
+# Gordon v2 production image.
+# Build with BuildKit or Podman to select TARGETOS and TARGETARCH.
 
-# Build stage
-FROM golang:1.26.1-alpine3.22 AS builder
+ARG BUILDPLATFORM
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 
-# Install build dependencies
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine3.22 AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
+
 RUN apk add --no-cache git ca-certificates tzdata
 
-# Set working directory
 WORKDIR /app
 
-# Copy go mod files
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-w -s -extldflags "-static"' \
-    -a -installsuffix cgo \
-    -o gordon .
+RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
+    -trimpath \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+    -o /gordon ./main.go
 
-# Runtime stage
 FROM alpine:3.22
 
-# Install runtime dependencies
+ARG VERSION
+ARG COMMIT
+ARG BUILD_DATE
+
 RUN apk add --no-cache \
     ca-certificates \
     docker-cli \
@@ -37,35 +42,26 @@ RUN apk add --no-cache \
     tzdata \
     && rm -rf /var/cache/apk/*
 
-# Create non-root user
 RUN adduser -D -s /bin/sh gordon
 
-# Set working directory
 WORKDIR /app
 
-# Copy binary from builder
-COPY --from=builder /app/gordon .
+COPY --from=builder /gordon ./gordon
 
-# Create data directory
 RUN mkdir -p /data && chown gordon:gordon /data
-
-# Copy default configuration (optional)
 COPY --chown=gordon:gordon gordon.toml.example /app/gordon.toml.example
 
-# Switch to non-root user
 USER gordon
 
-# Expose ports
 EXPOSE 8088 5000
 
 # Admin health is served on the registry/admin listener and is gated by auth in
 # normal deployments, so this image does not declare a Docker healthcheck.
-
-# Default command
 CMD ["./gordon", "serve"]
 
-# Metadata
-LABEL maintainer="bnemam"
-LABEL version="2.0"
-LABEL description="Event-driven container deployment platform"
+LABEL org.opencontainers.image.title="Gordon"
+LABEL org.opencontainers.image.description="Event-driven container deployment platform"
 LABEL org.opencontainers.image.source="https://github.com/bnema/gordon"
+LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.revision="${COMMIT}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"

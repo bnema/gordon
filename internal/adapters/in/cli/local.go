@@ -21,10 +21,10 @@ import (
 
 // LocalServices provides direct access to local services for CLI operations.
 type LocalServices struct {
-	configSvc in.ConfigService
-	secretSvc in.SecretService
-	dataDir   string
-	tlsPort   int
+	configSvc  in.ConfigService
+	secretSvc  in.SecretService
+	dataDir    string
+	tlsEnabled bool
 }
 
 // GetConfigService returns the config service.
@@ -42,9 +42,9 @@ func (l *LocalServices) GetDataDir() string {
 	return l.dataDir
 }
 
-// GetTLSPort returns the configured TLS port (0 means internal TLS is disabled).
-func (l *LocalServices) GetTLSPort() int {
-	return l.tlsPort
+// HasInternalTLS reports whether a TLS-capable entrypoint enables the internal CA.
+func (l *LocalServices) HasInternalTLS() bool {
+	return l.tlsEnabled
 }
 
 // GetLocalServices creates local services for CLI operations.
@@ -95,11 +95,25 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 	secretSvc := secretsSvc.NewService(domainSecretStore, log, nil)
 
 	return &LocalServices{
-		configSvc: configSvc,
-		secretSvc: secretSvc,
-		dataDir:   dataDir,
-		tlsPort:   v.GetInt("server.tls_port"),
+		configSvc:  configSvc,
+		secretSvc:  secretSvc,
+		dataDir:    dataDir,
+		tlsEnabled: hasLocalTLSCapableEntrypoint(v),
 	}, nil
+}
+
+func hasLocalTLSCapableEntrypoint(v *viper.Viper) bool {
+	for _, rawEntryPoint := range v.GetStringMap("entrypoints") {
+		entryPoint, ok := rawEntryPoint.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(fmt.Sprint(entryPoint["protocol"])) {
+		case "smart_tcp", "tls_mux":
+			return true
+		}
+	}
+	return false
 }
 
 func createLocalDomainSecretStore(v *viper.Viper, envDir string, log zerowrap.Logger) (out.DomainSecretStore, error) {

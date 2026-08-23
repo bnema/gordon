@@ -26,6 +26,9 @@ type BlobStorage interface {
 	// ListBlobs returns all blob digests.
 	ListBlobs() ([]string, error)
 
+	// GetBlobModTime returns the last modification time for a blob.
+	GetBlobModTime(digest string) (time.Time, error)
+
 	// StartBlobUpload starts a new blob upload and returns the upload UUID.
 	StartBlobUpload(name string) (string, error)
 

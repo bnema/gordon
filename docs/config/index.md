@@ -278,7 +278,6 @@ gordon reload
 Configuration values can be overridden with environment variables:
 
 ```bash
-GORDON_SERVER_PORT=8088 gordon serve
 GORDON_LOGGING_LEVEL=debug gordon serve
 ```
 

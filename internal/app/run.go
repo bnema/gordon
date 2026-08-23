@@ -411,8 +411,29 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	if err := validateEntrypointMigration(v, cfg); err != nil {
+		return nil, Config{}, err
+	}
 
 	return v, cfg, nil
+}
+
+func validateEntrypointMigration(v *viper.Viper, cfg Config) error {
+	if len(cfg.EntryPoints) > 0 {
+		return nil
+	}
+
+	legacyKeys := make([]string, 0, 2)
+	for _, key := range []string{"server.port", "server.tls_port"} {
+		if v.IsSet(key) {
+			legacyKeys = append(legacyKeys, key)
+		}
+	}
+	if len(legacyKeys) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("legacy %s configuration requires at least one [entrypoints] entry; see docs/upgrading.md", strings.Join(legacyKeys, " or "))
 }
 
 // initLogger initializes the zerowrap logger.
@@ -1834,6 +1855,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := c.v.Unmarshal(&reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
 		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
+	}
+	if err := validateEntrypointMigration(c.v, reloadCfg); err != nil {
+		return err
 	}
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)

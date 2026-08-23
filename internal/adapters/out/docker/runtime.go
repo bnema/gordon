@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,18 +24,13 @@ import (
 
 	"github.com/bnema/zerowrap"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/api/types/registry"
-	"github.com/docker/docker/api/types/strslice"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
 	"github.com/docker/go-units"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -100,7 +96,7 @@ func (f *removeOnCloseFile) Close() error {
 
 // NewRuntime creates a new Docker runtime instance.
 func NewRuntime() (*Runtime, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
@@ -113,10 +109,7 @@ func NewRuntime() (*Runtime, error) {
 // NewRuntimeWithSocket creates a Docker runtime targeting a specific socket path.
 func NewRuntimeWithSocket(socketPath string) (*Runtime, error) {
 	host := "unix://" + socketPath
-	cli, err := client.NewClientWithOpts(
-		client.WithHost(host),
-		client.WithAPIVersionNegotiation(),
-	)
+	cli, err := client.New(client.WithHost(host))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client for %s: %w", socketPath, err)
 	}
@@ -170,13 +163,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
 	}
-	capDrop := strslice.StrSlice{"ALL"}
-	capAdd := strslice.StrSlice{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	capDrop := []string{"ALL"}
+	capAdd := []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
 	if config.CapDrop != nil {
-		capDrop = strslice.StrSlice(config.CapDrop)
+		capDrop = config.CapDrop
 	}
 	if config.CapAdd != nil {
-		capAdd = strslice.StrSlice(config.CapAdd)
+		capAdd = config.CapAdd
 	}
 	hostConfig := &container.HostConfig{
 		PortBindings:   portBindings,
@@ -208,8 +201,13 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		}
 	}
 
-	// Create the container
-	resp, err := r.client.ContainerCreate(ctx, containerConfig, hostConfig, networkConfig, nil, config.Name)
+	// Create the container.
+	resp, err := r.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:           containerConfig,
+		HostConfig:       hostConfig,
+		NetworkingConfig: networkConfig,
+		Name:             config.Name,
+	})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to create container")
 	}
@@ -220,38 +218,54 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	return r.InspectContainer(ctx, resp.ID)
 }
 
-func buildPortBindings(config *domain.ContainerConfig) (nat.PortSet, nat.PortMap, error) {
-	exposedPorts := make(nat.PortSet)
-	portBindings := make(nat.PortMap)
-	addLegacyPortBindings(config.Ports, exposedPorts, portBindings)
+func buildPortBindings(config *domain.ContainerConfig) (network.PortSet, network.PortMap, error) {
+	exposedPorts := make(network.PortSet)
+	portBindings := make(network.PortMap)
+	if err := addLegacyPortBindings(config.Ports, exposedPorts, portBindings); err != nil {
+		return nil, nil, err
+	}
 	if err := addExplicitPortBindings(config.PortPublishes, exposedPorts, portBindings); err != nil {
 		return nil, nil, err
 	}
 	return exposedPorts, portBindings, nil
 }
 
-func addLegacyPortBindings(ports []int, exposedPorts nat.PortSet, portBindings nat.PortMap) {
+func addLegacyPortBindings(ports []int, exposedPorts network.PortSet, portBindings network.PortMap) error {
 	for _, port := range ports {
-		containerPort := nat.Port(fmt.Sprintf("%d/tcp", port))
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", port))
+		if err != nil {
+			return fmt.Errorf("invalid container port %d: %w", port, err)
+		}
 		exposedPorts[containerPort] = struct{}{}
 
 		// Bind to random available port on localhost only.
 		// SECURITY: Using 127.0.0.1 prevents direct access from the network,
 		// forcing all traffic through Gordon's reverse proxy where auth,
 		// rate limiting, and security headers are applied.
-		portBindings[containerPort] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: "0"}}
+		portBindings[containerPort] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "0"}}
 	}
+	return nil
 }
 
-func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPorts nat.PortSet, portBindings nat.PortMap) error {
+func addExplicitPortBindings(publishes []domain.ContainerPortPublish, exposedPorts network.PortSet, portBindings network.PortMap) error {
 	for _, publish := range publishes {
 		if publish.Protocol != domain.NetworkProtocolTCP && publish.Protocol != domain.NetworkProtocolUDP {
 			return fmt.Errorf("unsupported container port publish protocol %q", publish.Protocol)
 		}
-		containerPort := nat.Port(fmt.Sprintf("%d/%s", publish.ContainerPort, publish.Protocol))
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", publish.ContainerPort, publish.Protocol))
+		if err != nil {
+			return fmt.Errorf("invalid container port %d: %w", publish.ContainerPort, err)
+		}
+		var hostIP netip.Addr
+		if publish.HostIP != "" {
+			hostIP, err = netip.ParseAddr(publish.HostIP)
+			if err != nil {
+				return fmt.Errorf("invalid host IP %q: %w", publish.HostIP, err)
+			}
+		}
 		exposedPorts[containerPort] = struct{}{}
-		portBindings[containerPort] = append(portBindings[containerPort], nat.PortBinding{
-			HostIP:   publish.HostIP,
+		portBindings[containerPort] = append(portBindings[containerPort], network.PortBinding{
+			HostIP:   hostIP,
 			HostPort: strconv.Itoa(publish.HostPort),
 		})
 	}
@@ -283,7 +297,7 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.ContainerStart(ctx, containerID, container.StartOptions{})
+	_, err := r.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
 	if err != nil {
 		return log.WrapErr(err, "failed to start container")
 	}
@@ -302,7 +316,8 @@ func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	statusCh, errCh := r.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	waitResult := r.client.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	statusCh, errCh := waitResult.Result, waitResult.Error
 	select {
 	case err := <-errCh:
 		if err != nil {
@@ -326,7 +341,7 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	log := zerowrap.FromCtx(ctx)
 
 	timeout := 20 // 20 seconds before SIGKILL
-	err := r.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
+	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout})
 	if err != nil {
 		return log.WrapErr(err, "failed to stop container")
 	}
@@ -346,7 +361,7 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 	log := zerowrap.FromCtx(ctx)
 
 	timeout := 20 // 20 seconds before SIGKILL
-	err := r.client.ContainerRestart(ctx, containerID, container.StopOptions{Timeout: &timeout})
+	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: &timeout})
 	if err != nil {
 		return log.WrapErr(err, "failed to restart container")
 	}
@@ -366,7 +381,7 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: force})
+	_, err := r.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: force})
 	if err != nil {
 		return log.WrapErr(err, "failed to remove container")
 	}
@@ -386,7 +401,7 @@ func (r *Runtime) RenameContainer(ctx context.Context, containerID, newName stri
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.ContainerRename(ctx, containerID, newName)
+	_, err := r.client.ContainerRename(ctx, containerID, client.ContainerRenameOptions{NewName: newName})
 	if err != nil {
 		return log.WrapErr(err, "failed to rename container")
 	}
@@ -405,13 +420,13 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	containers, err := r.client.ContainerList(ctx, container.ListOptions{All: all})
+	containerList, err := r.client.ContainerList(ctx, client.ContainerListOptions{All: all})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list containers")
 	}
 
 	var result []*domain.Container
-	for _, c := range containers {
+	for _, c := range containerList.Items {
 		// Extract ports
 		var ports []int
 		for _, port := range c.Ports {
@@ -442,7 +457,7 @@ func (r *Runtime) ListContainers(ctx context.Context, all bool) ([]*domain.Conta
 			Image:        c.Image,
 			ImageID:      c.ImageID,
 			Name:         name,
-			Status:       c.State, // Use State (e.g., "running") not Status (e.g., "Up 2 days")
+			Status:       string(c.State), // Use State (e.g., "running") not Status (e.g., "Up 2 days")
 			Ports:        ports,
 			Labels:       c.Labels,
 			VolumeMounts: volumeMounts,
@@ -463,10 +478,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to inspect container")
 	}
+	resp := inspectResult.Container
 
 	// Extract published ports
 	var ports []int
@@ -502,7 +518,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Image:        resp.Config.Image,
 		ImageID:      resp.Image,
 		Name:         name,
-		Status:       resp.State.Status,
+		Status:       string(resp.State.Status),
 		ExitCode:     resp.State.ExitCode,
 		Ports:        ports,
 		Labels:       resp.Config.Labels,
@@ -521,7 +537,7 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	logs, err := r.client.ContainerLogs(ctx, containerID, container.LogsOptions{
+	logs, err := r.client.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     follow,
@@ -547,7 +563,7 @@ func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 
 	log.Info().Msg("pulling image")
 
-	reader, err := r.client.ImagePull(ctx, imageRef, image.PullOptions{})
+	reader, err := r.client.ImagePull(ctx, imageRef, client.ImagePullOptions{})
 	if err != nil {
 		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to pull image")
 	}
@@ -605,7 +621,7 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 		Msg("auth config for pull")
 
 	// Pull with authentication
-	reader, err := r.client.ImagePull(ctx, imageRef, image.PullOptions{
+	reader, err := r.client.ImagePull(ctx, imageRef, client.ImagePullOptions{
 		RegistryAuth: authStr,
 	})
 	if err != nil {
@@ -634,7 +650,7 @@ func (r *Runtime) TagImage(ctx context.Context, sourceRef, targetRef string) err
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	if err := r.client.ImageTag(ctx, sourceRef, targetRef); err != nil {
+	if _, err := r.client.ImageTag(ctx, client.ImageTagOptions{Source: sourceRef, Target: targetRef}); err != nil {
 		return log.WrapErr(err, "failed to tag image")
 	}
 
@@ -653,7 +669,7 @@ func (r *Runtime) UntagImage(ctx context.Context, imageRef string) error {
 	log := zerowrap.FromCtx(ctx)
 
 	// ImageRemove with PruneChildren=false only removes the tag, not the image layers
-	_, err := r.client.ImageRemove(ctx, imageRef, image.RemoveOptions{
+	_, err := r.client.ImageRemove(ctx, imageRef, client.ImageRemoveOptions{
 		Force:         false,
 		PruneChildren: false,
 	})
@@ -676,7 +692,7 @@ func (r *Runtime) RemoveImage(ctx context.Context, imageRef string, force bool) 
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	_, err := r.client.ImageRemove(ctx, imageRef, image.RemoveOptions{Force: force})
+	_, err := r.client.ImageRemove(ctx, imageRef, client.ImageRemoveOptions{Force: force})
 	if err != nil {
 		return log.WrapErr(err, "failed to remove image")
 	}
@@ -694,13 +710,13 @@ func (r *Runtime) ListImages(ctx context.Context) ([]string, error) {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	images, err := r.client.ImageList(ctx, image.ListOptions{})
+	imageList, err := r.client.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list images")
 	}
 
 	var result []string
-	for _, img := range images {
+	for _, img := range imageList.Items {
 		for _, tag := range img.RepoTags {
 			if tag != "<none>:<none>" {
 				result = append(result, tag)
@@ -720,13 +736,13 @@ func (r *Runtime) ListImagesDetailed(ctx context.Context) ([]runtimepkg.ImageDet
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	images, err := r.client.ImageList(ctx, image.ListOptions{All: true})
+	imageList, err := r.client.ImageList(ctx, client.ImageListOptions{All: true})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list detailed images")
 	}
 
-	result := make([]runtimepkg.ImageDetail, 0, len(images))
-	for _, img := range images {
+	result := make([]runtimepkg.ImageDetail, 0, len(imageList.Items))
+	for _, img := range imageList.Items {
 		result = append(result, runtimepkg.ImageDetail{
 			ID:       img.ID,
 			RepoTags: img.RepoTags,
@@ -748,19 +764,18 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	pruneFilters := filters.NewArgs()
-	pruneFilters.Add("label", domain.LabelManaged+"=true")
+	pruneFilters := make(client.Filters).Add("label", domain.LabelManaged+"=true")
 	if danglingOnly {
 		pruneFilters.Add("dangling", "true")
 	}
 
-	pruneResult, err := r.client.ImagesPrune(ctx, pruneFilters)
+	pruneResult, err := r.client.ImagePrune(ctx, client.ImagePruneOptions{Filters: pruneFilters})
 	if err != nil {
 		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to prune images")
 	}
 
-	deletedIDs := make([]string, 0, len(pruneResult.ImagesDeleted))
-	for _, deleted := range pruneResult.ImagesDeleted {
+	deletedIDs := make([]string, 0, len(pruneResult.Report.ImagesDeleted))
+	for _, deleted := range pruneResult.Report.ImagesDeleted {
 		if deleted.Deleted != "" {
 			deletedIDs = append(deletedIDs, deleted.Deleted)
 		}
@@ -769,7 +784,7 @@ func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepk
 		}
 	}
 
-	spaceReclaimed := pruneResult.SpaceReclaimed
+	spaceReclaimed := pruneResult.Report.SpaceReclaimed
 	if spaceReclaimed > math.MaxInt64 {
 		log.Warn().
 			Uint64("space_reclaimed_bytes", spaceReclaimed).
@@ -796,7 +811,7 @@ func (r *Runtime) Ping(ctx context.Context) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	_, err := r.client.Ping(ctx)
+	_, err := r.client.Ping(ctx, client.PingOptions{})
 	if err != nil {
 		return log.WrapErr(err, "Docker ping failed")
 	}
@@ -812,7 +827,7 @@ func (r *Runtime) Version(ctx context.Context) (string, error) {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	version, err := r.client.ServerVersion(ctx)
+	version, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
 		return "", log.WrapErr(err, "failed to get Docker version")
 	}
@@ -838,10 +853,11 @@ func (r *Runtime) GetContainerHealthStatus(ctx context.Context, containerID stri
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", false, log.WrapErr(err, "failed to inspect container")
 	}
+	resp := inspectResult.Container
 
 	// Detect configured healthchecks from container config rather than relying on
 	// State.Health presence. Some runtimes can expose an empty State.Health struct
@@ -854,7 +870,7 @@ func (r *Runtime) GetContainerHealthStatus(ctx context.Context, containerID stri
 		return "", true, nil
 	}
 
-	return resp.State.Health.Status, true, nil
+	return string(resp.State.Health.Status), true, nil
 }
 
 func hasConfiguredHealthcheck(cfg *container.Config) bool {
@@ -876,16 +892,20 @@ func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, inte
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return 0, log.WrapErr(err, "failed to inspect container")
 	}
+	resp := inspectResult.Container
 
 	if resp.NetworkSettings == nil || resp.NetworkSettings.Ports == nil {
 		return 0, fmt.Errorf("no port mappings found for container %s", containerID)
 	}
 
-	containerPort := nat.Port(fmt.Sprintf("%d/tcp", internalPort))
+	containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", internalPort))
+	if err != nil {
+		return 0, fmt.Errorf("invalid container port %d: %w", internalPort, err)
+	}
 	bindings, exists := resp.NetworkSettings.Ports[containerPort]
 	if !exists || len(bindings) == 0 {
 		return 0, fmt.Errorf("port %d not mapped for container %s", internalPort, containerID)
@@ -975,16 +995,17 @@ func (r *Runtime) GetContainerExposedPorts(ctx context.Context, containerID stri
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to inspect container")
 	}
+	resp := inspectResult.Container
 
 	var ports []int
 	if resp.NetworkSettings != nil && resp.NetworkSettings.Ports != nil {
 		for portSpec := range resp.NetworkSettings.Ports {
-			// Parse port from format like "80/tcp"
-			portStr := strings.Split(string(portSpec), "/")[0]
+			// Parse port from format like "80/tcp".
+			portStr := portSpec.Port()
 			if port, err := strconv.Atoi(portStr); err == nil {
 				ports = append(ports, port)
 			}
@@ -1004,18 +1025,19 @@ func (r *Runtime) GetContainerNetworkInfo(ctx context.Context, containerID strin
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", 0, log.WrapErr(err, "failed to inspect container")
 	}
+	resp := inspectResult.Container
 
 	// Get container's internal IP address
 	var containerIP string
 	if resp.NetworkSettings != nil && resp.NetworkSettings.Networks != nil {
 		// Use the first available network (usually bridge or custom network)
 		for _, net := range resp.NetworkSettings.Networks {
-			if net.IPAddress != "" {
-				containerIP = net.IPAddress
+			if net.IPAddress.IsValid() {
+				containerIP = net.IPAddress.String()
 				break
 			}
 		}
@@ -1029,9 +1051,8 @@ func (r *Runtime) GetContainerNetworkInfo(ctx context.Context, containerID strin
 	var exposedPorts []int
 	if resp.NetworkSettings != nil && resp.NetworkSettings.Ports != nil {
 		for portSpec := range resp.NetworkSettings.Ports {
-			// Parse port from format like "80/tcp"
-			portStr := strings.Split(string(portSpec), "/")[0]
-			if port, err := strconv.Atoi(portStr); err == nil {
+			// Parse port from format like "80/tcp".
+			if port, err := strconv.Atoi(portSpec.Port()); err == nil {
 				exposedPorts = append(exposedPorts, port)
 			}
 		}
@@ -1064,12 +1085,12 @@ func (r *Runtime) GetContainerNetwork(ctx context.Context, containerID string) (
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	resp, err := r.client.ContainerInspect(ctx, containerID)
+	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", log.WrapErr(err, "failed to inspect container")
 	}
 
-	networks := resp.NetworkSettings
+	networks := inspectResult.Container.NetworkSettings
 	if networks == nil || networks.Networks == nil || len(networks.Networks) == 0 {
 		return "bridge", nil
 	}
@@ -1145,7 +1166,7 @@ func (r *Runtime) VolumeExists(ctx context.Context, volumeName string) (bool, er
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	_, err := r.client.VolumeInspect(ctx, volumeName)
+	_, err := r.client.VolumeInspect(ctx, volumeName, client.VolumeInspectOptions{})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
@@ -1165,7 +1186,7 @@ func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	_, err := r.client.VolumeCreate(ctx, volume.CreateOptions{
+	_, err := r.client.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name: volumeName,
 		Labels: map[string]string{
 			domain.LabelManaged: "true",
@@ -1191,7 +1212,7 @@ func (r *Runtime) RemoveVolume(ctx context.Context, volumeName string, force boo
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.VolumeRemove(ctx, volumeName, force)
+	_, err := r.client.VolumeRemove(ctx, volumeName, client.VolumeRemoveOptions{Force: force})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			log.Debug().Msg("volume not found, already removed")
@@ -1206,20 +1227,27 @@ func (r *Runtime) RemoveVolume(ctx context.Context, volumeName string, force boo
 
 // ListVolumes returns all named volumes with their usage status.
 func (r *Runtime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error) {
-	volumeList, err := r.client.VolumeList(ctx, volume.ListOptions{})
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "adapter",
+		zerowrap.FieldAdapter: "docker",
+		zerowrap.FieldAction:  "ListVolumes",
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	volumeList, err := r.client.VolumeList(ctx, client.VolumeListOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list volumes: %w", err)
+		return nil, log.WrapErr(err, "failed to list volumes")
 	}
 
-	// Get all containers to determine volume usage
-	containers, err := r.client.ContainerList(ctx, container.ListOptions{All: true})
+	// Get all containers to determine volume usage.
+	containerList, err := r.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers for volume usage: %w", err)
+		return nil, log.WrapErr(err, "failed to list containers for volume usage")
 	}
 
-	// Build a map of volume name -> container names
+	// Build a map of volume name -> container names.
 	volumeUsers := make(map[string][]string)
-	for _, c := range containers {
+	for _, c := range containerList.Items {
 		for _, m := range c.Mounts {
 			if m.Type == "volume" {
 				name := ""
@@ -1232,11 +1260,7 @@ func (r *Runtime) ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
 	}
 
 	var result []*domain.VolumeInfo
-	for _, v := range volumeList.Volumes {
-		if v == nil {
-			continue
-		}
-
+	for _, v := range volumeList.Items {
 		var size int64
 		if v.UsageData != nil {
 			size = v.UsageData.Size
@@ -1281,7 +1305,7 @@ func (r *Runtime) ExportVolumeArchive(ctx context.Context, req domain.VolumeArch
 	if err != nil {
 		return nil, err
 	}
-	if err := r.client.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+	if _, err := r.client.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		_ = cleanup()
 		return nil, log.WrapErr(err, "failed to start volume archive helper container")
 	}
@@ -1314,14 +1338,18 @@ func (r *Runtime) ensureVolumeArchiveHelperImage(ctx context.Context, imageRef s
 	return nil
 }
 
-func (r *Runtime) createVolumeArchiveHelper(ctx context.Context, req domain.VolumeArchiveRequest, log zerowrap.Logger) (container.CreateResponse, func() error, error) {
+func (r *Runtime) createVolumeArchiveHelper(ctx context.Context, req domain.VolumeArchiveRequest, log zerowrap.Logger) (client.ContainerCreateResult, func() error, error) {
 	cmd, err := volumeArchiveCommand(req.Compression)
 	if err != nil {
-		return container.CreateResponse{}, nil, err
+		return client.ContainerCreateResult{}, nil, err
 	}
-	created, err := r.client.ContainerCreate(ctx, volumeArchiveContainerConfig(req.HelperImage, cmd), volumeArchiveHostConfig(req.VolumeName), nil, nil, fmt.Sprintf("gordon-volume-backup-%d", time.Now().UTC().UnixNano()))
+	created, err := r.client.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     volumeArchiveContainerConfig(req.HelperImage, cmd),
+		HostConfig: volumeArchiveHostConfig(req.VolumeName),
+		Name:       fmt.Sprintf("gordon-volume-backup-%d", time.Now().UTC().UnixNano()),
+	})
 	if err != nil {
-		return container.CreateResponse{}, nil, log.WrapErr(err, "failed to create volume archive helper container")
+		return client.ContainerCreateResult{}, nil, log.WrapErr(err, "failed to create volume archive helper container")
 	}
 	var cleanupOnce sync.Once
 	cleanup := func() error {
@@ -1363,11 +1391,12 @@ func volumeArchiveHostConfig(volumeName string) *container.HostConfig {
 }
 
 func (r *Runtime) attachVolumeArchiveStream(ctx context.Context, containerID string, cleanup func() error, log zerowrap.Logger) (io.ReadCloser, error) {
-	logs, err := r.client.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+	logs, err := r.client.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to attach volume archive stream")
 	}
-	statusCh, errCh := r.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	waitResult := r.client.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	statusCh, errCh := waitResult.Result, waitResult.Error
 	pr, pw := io.Pipe()
 	go streamVolumeArchiveLogs(logs, pw, statusCh, errCh, cleanup, log)
 	return &pipeReadCloser{pr: pr, pw: pw, original: logs, cleanup: cleanup}, nil
@@ -1538,7 +1567,7 @@ func (r *Runtime) CreateNetwork(ctx context.Context, name string, config domain.
 	maps.Copy(labels, config.Labels)
 	labels[domain.LabelManaged] = "true"
 
-	createOptions := network.CreateOptions{
+	createOptions := client.NetworkCreateOptions{
 		Driver:   driver,
 		Internal: config.Internal,
 		Labels:   labels,
@@ -1563,7 +1592,7 @@ func (r *Runtime) RemoveNetwork(ctx context.Context, name string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.NetworkRemove(ctx, name)
+	_, err := r.client.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			log.Debug().Msg("network not found, already removed")
@@ -1585,15 +1614,19 @@ func (r *Runtime) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	networks, err := r.client.NetworkList(ctx, network.ListOptions{})
+	networkList, err := r.client.NetworkList(ctx, client.NetworkListOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to list networks")
 	}
 
 	var result []*domain.NetworkInfo
-	for _, net := range networks {
+	for _, net := range networkList.Items {
+		networkInspect, err := r.client.NetworkInspect(ctx, net.ID, client.NetworkInspectOptions{})
+		if err != nil {
+			return nil, log.WrapErr(err, "failed to inspect network")
+		}
 		var containers []string
-		for containerID := range net.Containers {
+		for containerID := range networkInspect.Network.Containers {
 			containers = append(containers, containerID)
 		}
 
@@ -1619,7 +1652,7 @@ func (r *Runtime) NetworkExists(ctx context.Context, name string) (bool, error) 
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	_, err := r.client.NetworkInspect(ctx, name, network.InspectOptions{})
+	_, err := r.client.NetworkInspect(ctx, name, client.NetworkInspectOptions{})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
@@ -1640,7 +1673,10 @@ func (r *Runtime) ConnectContainerToNetwork(ctx context.Context, containerName, 
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.NetworkConnect(ctx, networkName, containerName, &network.EndpointSettings{})
+	_, err := r.client.NetworkConnect(ctx, networkName, client.NetworkConnectOptions{
+		Container:      containerName,
+		EndpointConfig: &network.EndpointSettings{},
+	})
 	if err != nil {
 		return log.WrapErr(err, "failed to connect container to network")
 	}
@@ -1660,7 +1696,9 @@ func (r *Runtime) DisconnectContainerFromNetwork(ctx context.Context, containerN
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	err := r.client.NetworkDisconnect(ctx, networkName, containerName, false)
+	_, err := r.client.NetworkDisconnect(ctx, networkName, client.NetworkDisconnectOptions{
+		Container: containerName,
+	})
 	if err != nil {
 		return log.WrapErr(err, "failed to disconnect container from network")
 	}
@@ -1685,7 +1723,7 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	execResp, err := r.client.ContainerExecCreate(ctx, containerID, container.ExecOptions{
+	execResp, err := r.client.ExecCreate(ctx, containerID, client.ExecCreateOptions{
 		Cmd:          cmd,
 		AttachStdout: true,
 		AttachStderr: true,
@@ -1701,7 +1739,7 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 		defer cancel()
 	}
 
-	attachResp, err := r.client.ContainerExecAttach(attachCtx, execResp.ID, container.ExecAttachOptions{})
+	attachResp, err := r.client.ExecAttach(attachCtx, execResp.ID, client.ExecAttachOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to attach to exec")
 	}
@@ -1715,7 +1753,7 @@ func (r *Runtime) ExecInContainer(ctx context.Context, containerID string, cmd [
 		return nil, log.WrapErr(err, "failed to read exec output")
 	}
 
-	inspectResp, err := r.client.ContainerExecInspect(ctx, execResp.ID)
+	inspectResp, err := r.client.ExecInspect(ctx, execResp.ID, client.ExecInspectOptions{})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to inspect exec result")
 	}
@@ -1787,15 +1825,15 @@ func (r *Runtime) CopyFromContainer(ctx context.Context, containerID, srcPath st
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	tarReader, _, err := r.client.CopyFromContainer(ctx, containerID, srcPath)
+	copyResult, err := r.client.CopyFromContainer(ctx, containerID, client.CopyFromContainerOptions{SourcePath: srcPath})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to copy from container")
 	}
 
 	// The response is a tar archive - we need to extract the requested file stream.
-	reader, err := extractFileFromTar(tarReader, srcPath)
+	reader, err := extractFileFromTar(copyResult.Content, srcPath)
 	if err != nil {
-		_ = tarReader.Close()
+		_ = copyResult.Content.Close()
 		return nil, log.WrapErr(err, "failed to extract file from tar")
 	}
 
@@ -1928,7 +1966,7 @@ func (r *Runtime) ExtractEnvFileFromImage(ctx context.Context, imageRef, envFile
 		Cmd:   []string{"true"}, // Dummy command
 	}
 
-	resp, err := r.client.ContainerCreate(ctx, containerConfig, nil, nil, nil, "")
+	resp, err := r.client.ContainerCreate(ctx, client.ContainerCreateOptions{Config: containerConfig})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to create temporary container")
 	}
@@ -1938,7 +1976,7 @@ func (r *Runtime) ExtractEnvFileFromImage(ctx context.Context, imageRef, envFile
 
 	// Ensure cleanup
 	defer func() {
-		if err := r.client.ContainerRemove(ctx, tempContainerID, container.RemoveOptions{Force: true}); err != nil {
+		if _, err := r.client.ContainerRemove(ctx, tempContainerID, client.ContainerRemoveOptions{Force: true}); err != nil {
 			log.Warn().Err(err).Str("temp_container_id", tempContainerID).Msg("failed to remove temporary container")
 		}
 	}()

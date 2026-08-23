@@ -495,6 +495,12 @@ func (s *Service) AppendBlobChunk(ctx context.Context, name, uuid string, data i
 
 // FinishUpload completes a blob upload.
 func (s *Service) FinishUpload(ctx context.Context, uuid, digest string) error {
+	// Keep the transition from upload to blob storage atomic with respect to
+	// registry garbage collection. PruneRegistry holds the exclusive lock, so
+	// it cannot observe a finalized blob before it is marked pending.
+	s.mutationMu.RLock()
+	defer s.mutationMu.RUnlock()
+
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "FinishUpload",
@@ -506,6 +512,7 @@ func (s *Service) FinishUpload(ctx context.Context, uuid, digest string) error {
 	if err := s.blobStorage.FinishBlobUpload(uuid, digest); err != nil {
 		return log.WrapErr(err, "failed to finish blob upload")
 	}
+	s.registryState.AddPending(digest, time.Now().UTC())
 
 	log.Info().Msg("blob upload finished")
 	return nil

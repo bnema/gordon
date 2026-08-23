@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -678,6 +679,27 @@ func TestBlobStorage_AppendAfterFinalize(t *testing.T) {
 	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("more")), -1, 0)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
+}
+
+func TestBlobStorage_FinishBlobUploadMarksBlobAsRecentlyFinalized(t *testing.T) {
+	tmpDir := t.TempDir()
+	storage, err := NewBlobStorage(tmpDir, testLogger())
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+	blobData := []byte("finalized content")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
+	require.NoError(t, err)
+
+	uploadPath := filepath.Join(tmpDir, "uploads", uuid)
+	old := time.Now().Add(-2 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(uploadPath, old, old))
+
+	require.NoError(t, storage.FinishBlobUpload(uuid, digestForData(blobData)))
+	modTime, err := storage.GetBlobModTime(digestForData(blobData))
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), modTime, time.Minute)
 }
 
 func TestBlobStorage_FailedFinalizeRetryable(t *testing.T) {
