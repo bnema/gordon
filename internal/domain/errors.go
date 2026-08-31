@@ -42,9 +42,10 @@ var (
 	ErrNetworkExists   = errors.New("network already exists")
 
 	// Volume errors
-	ErrVolumeNotFound          = errors.New("volume not found")
-	ErrVolumeExists            = errors.New("volume already exists")
-	ErrVolumeBackupUnavailable = errors.New("volume backup service unavailable")
+	ErrVolumeNotFound            = errors.New("volume not found")
+	ErrVolumeExists              = errors.New("volume already exists")
+	ErrVolumeBackupUnavailable   = errors.New("volume backup service unavailable")
+	ErrVolumeOwnershipUnverified = errors.New("volume ownership cannot be verified")
 
 	// Preview errors
 	ErrPreviewNotFound = errors.New("preview not found")
