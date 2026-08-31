@@ -305,7 +305,9 @@ func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, &requestTransportError{err: err}
+		return nil, &requestTransportError{
+			err: fmt.Errorf("%s %s transport request: %w", method, path, err),
+		}
 	}
 
 	return resp, nil
@@ -394,7 +396,10 @@ func parseErrorResponse(resp *http.Response, body []byte) error {
 }
 
 func isRetryableRequestError(err error) bool {
-	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	var transportErr *requestTransportError
+	return errors.As(err, &transportErr) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded)
 }
 
 func isIdempotentMethod(method string) bool {

@@ -164,6 +164,26 @@ func TestClientDeployAuthenticationRejectionIsNotOutcomeUnknown(t *testing.T) {
 	assert.Zero(t, atomic.LoadInt32(&deployAttempts))
 }
 
+func TestClientGetStatusDoesNotRetryAuthenticationRejection(t *testing.T) {
+	withFastRetry(t)
+
+	var tokenAttempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/auth/token", r.URL.Path)
+		atomic.AddInt32(&tokenAttempts, 1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"invalid credentials"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, WithToken("invalid-token"))
+	status, err := client.GetStatus(context.Background())
+
+	require.Nil(t, status)
+	assert.ErrorContains(t, err, "ephemeral token exchange: 403 Forbidden")
+	assert.EqualValues(t, 1, atomic.LoadInt32(&tokenAttempts))
+}
+
 func TestClientGetStatusRetriesTransientGatewayResponse(t *testing.T) {
 	withFastRetry(t)
 
@@ -213,6 +233,26 @@ func TestClientGetStatusRetriesTransientTransportFailure(t *testing.T) {
 	require.NotNil(t, status)
 	assert.Equal(t, 2, status.Routes)
 	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
+}
+
+func TestClientGetStatusReportsTransportContextAfterRetryExhaustion(t *testing.T) {
+	withFastRetry(t)
+
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	status, err := client.GetStatus(context.Background())
+
+	require.Nil(t, status)
+	assert.ErrorContains(t, err, "GET /status transport request")
+	assert.EqualValues(t, retryMaxAttempts, atomic.LoadInt32(&attempts))
 }
 
 func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
