@@ -607,7 +607,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	}
 	envHash := hashEnvironment(envVars)
 
-	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef)
+	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2513,13 +2513,16 @@ func (s *Service) loadEnvironment(ctx context.Context, preResolved []string, dom
 	return mergeEnvironmentVariables(dockerfileEnvVars, userEnvVars), nil
 }
 
-func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string) (map[string]string, error) {
+func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string, preferredVolumes map[string]namedVolumeMount) (map[string]string, error) {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
 
 	log := zerowrap.FromCtx(ctx)
-	volumes := make(map[string]string)
+	volumes, err := s.validatePreferredVolumes(ctx, preferredVolumes)
+	if err != nil {
+		return nil, err
+	}
 
 	if !cfg.VolumeAutoCreate {
 		return volumes, nil
@@ -2532,6 +2535,10 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 	}
 
 	for _, path := range volumePaths {
+		if _, preferred := volumes[path]; preferred {
+			continue
+		}
+
 		name := generateVolumeName(cfg.VolumePrefix, domainName, path)
 		legacyName := legacyVolumeName(cfg.VolumePrefix, domainName, path)
 		legacyExists, err := s.runtime.VolumeExists(ctx, legacyName)
@@ -2539,11 +2546,12 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 			log.WrapErrWithFields(err, "failed to check legacy volume", map[string]any{"volume": legacyName})
 			continue
 		}
+		legacyOwnership := legacyVolumeOwnershipUnverified
 		if legacyExists {
-			owned, ownershipErr := s.legacyVolumeOwnedByDomain(ctx, legacyName, domainName)
-			if ownershipErr != nil {
-				log.Warn().Err(ownershipErr).Str("volume", legacyName).Msg("could not verify legacy volume ownership; using stable volume name")
-			} else if owned {
+			legacyOwnership, err = s.legacyVolumeOwnership(ctx, legacyName, domainName)
+			if err != nil {
+				log.Warn().Err(err).Str("volume", legacyName).Msg("could not verify legacy volume ownership; using stable volume name")
+			} else if legacyOwnership == legacyVolumeOwnershipOwned {
 				volumes[path] = legacyName
 				continue
 			}
@@ -2556,6 +2564,11 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 		}
 
 		if !exists {
+			if legacyExists && legacyOwnership != legacyVolumeOwnershipForeign {
+				// No verified mount may mean the owning container was already removed;
+				// it does not prove that the preserved volume belongs elsewhere.
+				return nil, fmt.Errorf("legacy volume %q exists but its ownership cannot be verified; refusing to create a replacement volume: %w", legacyName, domain.ErrVolumeOwnershipUnverified)
+			}
 			if err := s.runtime.CreateVolume(ctx, name); err != nil {
 				log.WrapErrWithFields(err, "failed to create volume", map[string]any{"volume": name})
 				continue
@@ -2566,6 +2579,24 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string)
 		volumes[path] = name
 	}
 
+	return volumes, nil
+}
+
+func (s *Service) validatePreferredVolumes(ctx context.Context, preferredVolumes map[string]namedVolumeMount) (map[string]string, error) {
+	volumes := make(map[string]string)
+	for path, preferred := range preferredVolumes {
+		if preferred.Name == "" {
+			continue
+		}
+		exists, err := s.runtime.VolumeExists(ctx, preferred.Name)
+		if err != nil {
+			return nil, fmt.Errorf("check previously mounted volume %q: %w", preferred.Name, err)
+		}
+		if !exists {
+			return nil, fmt.Errorf("previously mounted volume %q no longer exists: %w", preferred.Name, domain.ErrVolumeNotFound)
+		}
+		volumes[path] = preferred.Name
+	}
 	return volumes, nil
 }
 
@@ -2922,8 +2953,9 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	if err != nil {
 		return err
 	}
+	preferredVolumes := namedVolumeMounts(existingContainer)
 
-	if existingContainer != nil {
+	if existingContainer != nil && existingContainer.Name == containerName {
 		shouldSkip, err := s.handleRunningAttachment(ctx, existingContainer, containerName, serviceImage)
 		if err != nil {
 			return err
@@ -2931,19 +2963,16 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 		if shouldSkip {
 			return nil
 		}
-		if existingContainer.Status == string(domain.ContainerStatusRunning) {
-			existingContainer = nil
-		}
-	}
-
-	if err := s.removeStoppedAttachment(ctx, existingContainer, containerName); err != nil {
-		return err
 	}
 
 	log.Info().Str(zerowrap.FieldService, serviceImage).Msg("deploying attached service")
 
-	config, err := s.buildAttachmentContainerConfig(ctx, ownerDomain, serviceName, serviceImage, containerName, networkName)
+	config, err := s.buildAttachmentContainerConfig(ctx, ownerDomain, serviceName, serviceImage, containerName, networkName, preferredVolumes)
 	if err != nil {
+		return err
+	}
+
+	if err := s.removeAttachmentForReplacement(ctx, existingContainer, containerName); err != nil {
 		return err
 	}
 
@@ -2979,7 +3008,7 @@ func (s *Service) deployAttachedService(ctx context.Context, ownerDomain, servic
 	return nil
 }
 
-func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomain, serviceName, serviceImage, containerName, networkName string) (*domain.ContainerConfig, error) {
+func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomain, serviceName, serviceImage, containerName, networkName string, preferredVolumes map[string]namedVolumeMount) (*domain.ContainerConfig, error) {
 	imageRef, err := s.buildValidatedImageRef(ctx, serviceImage)
 	if err != nil {
 		return nil, err
@@ -2990,7 +3019,7 @@ func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomai
 	}
 
 	exposedPorts := s.attachmentExposedPorts(ctx, actualImageRef)
-	volumes, err := s.attachmentVolumes(ctx, containerName, actualImageRef)
+	volumes, readOnlyVolumes, err := s.attachmentVolumes(ctx, containerName, actualImageRef, preferredVolumes)
 	if err != nil {
 		return nil, err
 	}
@@ -3004,14 +3033,15 @@ func (s *Service) buildAttachmentContainerConfig(ctx context.Context, ownerDomai
 	s.mu.RUnlock()
 
 	config := &domain.ContainerConfig{
-		Image:       actualImageRef,
-		Name:        containerName,
-		Hostname:    serviceName,
-		Aliases:     []string{serviceName},
-		Ports:       exposedPorts,
-		Env:         envVars,
-		Volumes:     volumes,
-		NetworkMode: networkName,
+		Image:           actualImageRef,
+		Name:            containerName,
+		Hostname:        serviceName,
+		Aliases:         []string{serviceName},
+		Ports:           exposedPorts,
+		Env:             envVars,
+		Volumes:         volumes,
+		ReadOnlyVolumes: readOnlyVolumes,
+		NetworkMode:     networkName,
 		Labels: map[string]string{
 			domain.LabelManaged:    "true",
 			domain.LabelAttachment: "true",
@@ -3038,12 +3068,37 @@ func (s *Service) attachmentExposedPorts(ctx context.Context, imageRef string) [
 	return exposedPorts
 }
 
-func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string) (map[string]string, error) {
-	volumes, err := s.setupVolumes(ctx, containerName, imageRef)
+func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string, preferredVolumes map[string]namedVolumeMount) (map[string]string, map[string]string, error) {
+	volumes, err := s.setupVolumes(ctx, containerName, imageRef, preferredVolumes)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup volumes for attachment %s with image %s: %w", containerName, imageRef, err)
+		return nil, nil, fmt.Errorf("failed to setup volumes for attachment %s with image %s: %w", containerName, imageRef, err)
 	}
-	return volumes, nil
+	readOnlyVolumes := make(map[string]string)
+	for path, preferred := range preferredVolumes {
+		if preferred.ReadOnly && volumes[path] == preferred.Name {
+			delete(volumes, path)
+			readOnlyVolumes[path] = preferred.Name
+		}
+	}
+	return volumes, readOnlyVolumes, nil
+}
+
+type namedVolumeMount struct {
+	Name     string
+	ReadOnly bool
+}
+
+func namedVolumeMounts(container *domain.Container) map[string]namedVolumeMount {
+	volumes := make(map[string]namedVolumeMount)
+	if container == nil {
+		return volumes
+	}
+	for _, mount := range container.VolumeMounts {
+		if mount.Type == "volume" && mount.Name != "" && mount.Destination != "" {
+			volumes[mount.Destination] = namedVolumeMount{Name: mount.Name, ReadOnly: mount.ReadOnly}
+		}
+	}
+	return volumes
 }
 
 func (s *Service) attachmentEnv(ctx context.Context, containerName, imageRef string) ([]string, error) {
@@ -3102,25 +3157,24 @@ func (s *Service) handleRunningAttachment(ctx context.Context, existing *domain.
 		log.Info().Str("container_name", containerName).Msg("attachment env changed, recreating")
 	}
 
-	if err := s.runtime.StopContainer(ctx, existing.ID); err != nil {
-		return false, log.WrapErr(err, "failed to stop attachment for drift update")
-	}
-	if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
-		return false, log.WrapErr(err, "failed to remove attachment for drift update")
-	}
-
 	return false, nil
 }
 
-func (s *Service) removeStoppedAttachment(ctx context.Context, existing *domain.Container, containerName string) error {
+func (s *Service) removeAttachmentForReplacement(ctx context.Context, existing *domain.Container, containerName string) error {
 	if existing == nil {
 		return nil
 	}
 
 	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("container_name", containerName).Msg("removing stopped attachment container")
+	if existing.Status == string(domain.ContainerStatusRunning) {
+		log.Info().Str("container_name", containerName).Msg("stopping attachment container for replacement")
+		if err := s.runtime.StopContainer(ctx, existing.ID); err != nil {
+			return log.WrapErr(err, "failed to stop attachment for replacement")
+		}
+	}
+	log.Info().Str("container_name", containerName).Msg("removing attachment container for replacement")
 	if err := s.runtime.RemoveContainer(ctx, existing.ID, true); err != nil {
-		return log.WrapErr(err, "failed to remove existing attachment container")
+		return log.WrapErr(err, "failed to remove attachment for replacement")
 	}
 
 	return nil
@@ -3147,14 +3201,7 @@ func (s *Service) resolveExistingAttachment(ctx context.Context, ownerDomain, se
 		return nil, err
 	}
 	log.Info().Str("container_name", containerNameLegacy).Msg("found attachment with legacy naming, will be replaced")
-	if err := s.runtime.StopContainer(ctx, existingContainer.ID); err != nil {
-		return nil, log.WrapErr(err, "failed to stop legacy attachment container")
-	}
-	if err := s.runtime.RemoveContainer(ctx, existingContainer.ID, true); err != nil {
-		return nil, log.WrapErr(err, "failed to remove legacy attachment container")
-	}
-
-	return nil, nil
+	return existingContainer, nil
 }
 
 func validateAttachmentOwnership(container *domain.Container, ownerDomain, containerName string) error {
@@ -3226,23 +3273,48 @@ func legacyVolumeName(prefix, domainName, volumePath string) string {
 		strings.ReplaceAll(strings.Trim(volumePath, "/"), "/", "-"))
 }
 
-func (s *Service) legacyVolumeOwnedByDomain(ctx context.Context, volumeName, domainName string) (bool, error) {
+type legacyVolumeOwnership uint8
+
+const (
+	legacyVolumeOwnershipUnverified legacyVolumeOwnership = iota
+	legacyVolumeOwnershipOwned
+	legacyVolumeOwnershipForeign
+)
+
+func (s *Service) legacyVolumeOwnership(ctx context.Context, volumeName, domainName string) (legacyVolumeOwnership, error) {
 	containers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
-		return false, fmt.Errorf("list containers for legacy volume ownership: %w", err)
+		return legacyVolumeOwnershipUnverified, fmt.Errorf("list containers for legacy volume ownership: %w", err)
 	}
+	ownerFound := false
+	foreignFound := false
 	for _, container := range containers {
-		if container.Labels[domain.LabelManaged] != "true" ||
-			(container.Labels[domain.LabelRoute] != domainName && container.Labels[domain.LabelDomain] != domainName) {
+		if container.Labels[domain.LabelManaged] != "true" || !containerMountsVolume(container, volumeName) {
 			continue
 		}
-		for _, mount := range container.VolumeMounts {
-			if mount.Name == volumeName || mount.Source == volumeName {
-				return true, nil
-			}
+		if container.Name == domainName || container.Labels[domain.LabelRoute] == domainName || container.Labels[domain.LabelDomain] == domainName {
+			ownerFound = true
+		} else {
+			foreignFound = true
 		}
 	}
-	return false, nil
+	switch {
+	case ownerFound && !foreignFound:
+		return legacyVolumeOwnershipOwned, nil
+	case foreignFound && !ownerFound:
+		return legacyVolumeOwnershipForeign, nil
+	default:
+		return legacyVolumeOwnershipUnverified, nil
+	}
+}
+
+func containerMountsVolume(container *domain.Container, volumeName string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == volumeName || mount.Source == volumeName {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {

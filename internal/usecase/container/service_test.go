@@ -1799,7 +1799,7 @@ func TestService_SetupVolumes_ReusesLegacyVolume(t *testing.T) {
 		VolumeMounts: []domain.ContainerVolumeMount{{Name: legacyName}},
 	}}, nil)
 
-	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest")
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": legacyName}, volumes)
@@ -1820,10 +1820,91 @@ func TestService_SetupVolumes_DoesNotReuseCollidingLegacyVolume(t *testing.T) {
 	}}, nil)
 	runtime.EXPECT().VolumeExists(mock.Anything, stableName).Return(true, nil)
 
-	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest")
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", nil)
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": stableName}, volumes)
+}
+
+func TestService_SetupVolumes_CreatesStableVolumeWhenLegacyVolumeIsForeign(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: true, VolumePrefix: "gordon"}, nil)
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+	stableName := generateVolumeName("gordon", "app.example.com", "/data")
+
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{{
+		Labels:       map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "other.example.com"},
+		VolumeMounts: []domain.ContainerVolumeMount{{Name: legacyName}},
+	}}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, stableName).Return(false, nil).Once()
+	runtime.EXPECT().CreateVolume(mock.Anything, stableName).Return(nil).Once()
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", nil)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"/data": stableName}, volumes)
+}
+
+func TestService_SetupVolumes_PreservesPreferredVolumesWhenAutoCreateDisabled(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: false}, nil)
+	preferred := map[string]namedVolumeMount{
+		"/data": {Name: "existing-data"},
+	}
+
+	runtime.EXPECT().VolumeExists(mock.Anything, "existing-data").Return(true, nil).Once()
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", preferred)
+
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"/data": "existing-data"}, volumes)
+}
+
+func TestService_SetupVolumes_RejectsUnverifiedLegacyVolumeWithoutStableReplacement(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: true, VolumePrefix: "gordon"}, nil)
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+	stableName := generateVolumeName("gordon", "app.example.com", "/data")
+
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, stableName).Return(false, nil).Once()
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", nil)
+
+	require.ErrorContains(t, err, "refusing to create a replacement")
+	require.ErrorIs(t, err, domain.ErrVolumeOwnershipUnverified)
+	assert.Empty(t, volumes)
+}
+
+func TestService_SetupVolumes_RejectsLegacyVolumeSharedWithForeignWorkload(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	svc := NewService(runtime, nil, nil, nil, Config{VolumeAutoCreate: true, VolumePrefix: "gordon"}, nil)
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+	stableName := generateVolumeName("gordon", "app.example.com", "/data")
+	mount := []domain.ContainerVolumeMount{{Name: legacyName}}
+
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{
+		{
+			Labels:       map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "app.example.com"},
+			VolumeMounts: mount,
+		},
+		{
+			Labels:       map[string]string{domain.LabelManaged: "true", domain.LabelRoute: "other.example.com"},
+			VolumeMounts: mount,
+		},
+	}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, stableName).Return(false, nil).Once()
+
+	volumes, err := svc.setupVolumes(testContext(), "app.example.com", "myapp:latest", nil)
+
+	require.ErrorIs(t, err, domain.ErrVolumeOwnershipUnverified)
+	assert.Empty(t, volumes)
 }
 
 func TestValidateAttachmentOwnership(t *testing.T) {
@@ -4372,6 +4453,201 @@ func TestService_WaitForAttachmentReady_FallsBackToDelay(t *testing.T) {
 
 	err := svc.waitForAttachmentReady(ctx, containerID, containerConfig)
 	assert.NoError(t, err)
+}
+
+func TestDeployAttachedService_ReusesVerifiedLegacyVolumeFromStoppedAttachment(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	config.VolumeAutoCreate = true
+	config.VolumePrefix = "gordon"
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+	ctx := testContext()
+
+	ownerDomain := "app.example.com"
+	serviceImage := "postgres:16"
+	networkName := "gordon-net"
+	containerName := fmt.Sprintf("gordon-%s-postgres", domain.SanitizeDomainForContainer(ownerDomain))
+	volumePath := "/var/lib/postgresql"
+	legacyVolume := legacyVolumeName(config.VolumePrefix, containerName, volumePath)
+	existing := &domain.Container{
+		ID:     "stopped-postgres",
+		Name:   containerName,
+		Status: string(domain.ContainerStatusExited),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Name:        legacyVolume,
+			Type:        "volume",
+			Destination: volumePath,
+			ReadOnly:    true,
+		}},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{existing}, nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, existing.ID, true).Return(nil).Once()
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{serviceImage}, nil).Once()
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, serviceImage).Return([]int{}, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, serviceImage).Return([]string{volumePath}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyVolume).Return(true, nil).Once()
+	envLoader.EXPECT().LoadEnv(mock.Anything, containerName).Return([]string{}, nil).Once()
+	runtime.EXPECT().InspectImageEnv(mock.Anything, serviceImage).Return([]string{}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).
+		Run(func(_ context.Context, cfg *domain.ContainerConfig) {
+			assert.NotContains(t, cfg.Volumes, volumePath)
+			assert.Equal(t, map[string]string{volumePath: legacyVolume}, cfg.ReadOnlyVolumes)
+		}).
+		Return(&domain.Container{ID: "new-postgres", Name: containerName}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "new-postgres").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-postgres").Return(true, nil).Times(2)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "new-postgres").Return("", false, nil).Once()
+
+	require.NoError(t, svc.deployAttachedService(ctx, ownerDomain, serviceImage, networkName))
+}
+
+func TestDeployAttachedService_KeepsStoppedAttachmentWhenVolumeValidationFails(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	config.VolumeAutoCreate = true
+	config.VolumePrefix = "gordon"
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+
+	ownerDomain := "app.example.com"
+	serviceImage := "postgres:16"
+	containerName := fmt.Sprintf("gordon-%s-postgres", domain.SanitizeDomainForContainer(ownerDomain))
+	existing := &domain.Container{
+		ID:     "stopped-postgres",
+		Name:   containerName,
+		Status: string(domain.ContainerStatusExited),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Name:        "missing-data",
+			Type:        "volume",
+			Destination: "/var/lib/postgresql",
+		}},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{existing}, nil).Once()
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{serviceImage}, nil).Once()
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, serviceImage).Return([]int{}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, "missing-data").Return(false, nil).Once()
+
+	err := svc.deployAttachedService(testContext(), ownerDomain, serviceImage, "gordon-net")
+
+	require.ErrorContains(t, err, "previously mounted volume")
+	require.ErrorIs(t, err, domain.ErrVolumeNotFound)
+}
+
+func TestDeployAttachedService_KeepsRunningAttachmentWhenVolumeValidationFails(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	config.VolumeAutoCreate = true
+	config.VolumePrefix = "gordon"
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+
+	ownerDomain := "app.example.com"
+	serviceImage := "postgres:16"
+	containerName := fmt.Sprintf("gordon-%s-postgres", domain.SanitizeDomainForContainer(ownerDomain))
+	existing := &domain.Container{
+		ID:     "running-postgres",
+		Name:   containerName,
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+			domain.LabelImage:      "postgres:15",
+			domain.LabelEnvHash:    hashEnvironment(nil),
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Name:        "missing-data",
+			Type:        "volume",
+			Destination: "/var/lib/postgresql",
+		}},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{existing}, nil).Once()
+	envLoader.EXPECT().LoadEnv(mock.Anything, containerName).Return([]string{}, nil).Once()
+	runtime.EXPECT().InspectImageEnv(mock.Anything, serviceImage).Return([]string{}, nil).Once()
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{serviceImage}, nil).Once()
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, serviceImage).Return([]int{}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, "missing-data").Return(false, nil).Once()
+
+	err := svc.deployAttachedService(testContext(), ownerDomain, serviceImage, "gordon-net")
+
+	require.ErrorContains(t, err, "previously mounted volume")
+	require.ErrorIs(t, err, domain.ErrVolumeNotFound)
+}
+
+func TestDeployAttachedService_ReusesVolumeFromLegacyNamedAttachment(t *testing.T) {
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+
+	config := testMinDelayConfig()
+	config.VolumeAutoCreate = true
+	config.VolumePrefix = "gordon"
+	svc := NewService(runtime, envLoader, eventBus, nil, config, nil)
+	ctx := testContext()
+
+	ownerDomain := "app.example.com"
+	serviceImage := "postgres:16"
+	serviceName := "postgres"
+	networkName := "gordon-net"
+	containerName := fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainer(ownerDomain), serviceName)
+	legacyContainerName := fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainerLegacy(ownerDomain), serviceName)
+	volumePath := "/var/lib/postgresql"
+	legacyVolume := legacyVolumeName(config.VolumePrefix, legacyContainerName, volumePath)
+	existing := &domain.Container{
+		ID:     "legacy-postgres",
+		Name:   legacyContainerName,
+		Status: string(domain.ContainerStatusRunning),
+		Labels: map[string]string{
+			domain.LabelManaged:    "true",
+			domain.LabelAttachment: "true",
+			domain.LabelAttachedTo: ownerDomain,
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{{
+			Name:        legacyVolume,
+			Type:        "volume",
+			Destination: volumePath,
+		}},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, true).Return([]*domain.Container{existing}, nil).Times(2)
+	runtime.EXPECT().StopContainer(mock.Anything, existing.ID).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, existing.ID, true).Return(nil).Once()
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{serviceImage}, nil).Once()
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, serviceImage).Return([]int{}, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, serviceImage).Return([]string{volumePath}, nil).Once()
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyVolume).Return(true, nil).Once()
+	envLoader.EXPECT().LoadEnv(mock.Anything, containerName).Return([]string{}, nil).Once()
+	runtime.EXPECT().InspectImageEnv(mock.Anything, serviceImage).Return([]string{}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).
+		Run(func(_ context.Context, cfg *domain.ContainerConfig) {
+			assert.Equal(t, map[string]string{volumePath: legacyVolume}, cfg.Volumes)
+		}).
+		Return(&domain.Container{ID: "new-postgres", Name: containerName}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "new-postgres").Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "new-postgres").Return(true, nil).Times(2)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "new-postgres").Return("", false, nil).Once()
+
+	require.NoError(t, svc.deployAttachedService(ctx, ownerDomain, serviceImage, networkName))
 }
 
 func TestDeployAttachedService_SetsAliasOnContainerConfig(t *testing.T) {
