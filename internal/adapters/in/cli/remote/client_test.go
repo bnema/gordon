@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func withFastRetry(t *testing.T) {
@@ -32,57 +32,72 @@ func withFastRetry(t *testing.T) {
 	})
 }
 
-func TestClientRestartRetriesOn5xx(t *testing.T) {
+func TestClientRestartDoesNotRetryGatewayResponseAfterSideEffect(t *testing.T) {
 	withFastRetry(t)
 
-	var attempts int32
+	var mutations int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/restart/test.example.com", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
-		current := atomic.AddInt32(&attempts, 1)
-		if current < 3 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"temporary outage"}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"restarted","domain":"test.example.com"}`))
+		atomic.AddInt32(&mutations, 1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"upstream response unavailable"}`))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
 	result, err := client.Restart(context.Background(), "test.example.com", false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, "test.example.com", result.Domain)
-	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
+
+	require.Nil(t, result)
+	var outcomeErr *OutcomeUnknownError
+	require.ErrorAs(t, err, &outcomeErr)
+	assert.Contains(t, err.Error(), "inspect current state before retrying")
+	assert.EqualValues(t, 1, atomic.LoadInt32(&mutations))
 }
 
-func TestClientReloadRetriesOn5xx(t *testing.T) {
+func TestClientRestartDoesNotRetryAmbiguousTransportFailure(t *testing.T) {
+	withFastRetry(t)
+
+	var mutations int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&mutations, 1)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		require.NoError(t, conn.Close())
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	result, err := client.Restart(context.Background(), "test.example.com", true)
+
+	require.Nil(t, result)
+	var outcomeErr *OutcomeUnknownError
+	require.ErrorAs(t, err, &outcomeErr)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&mutations))
+}
+
+func TestClientReloadDoesNotRetryGatewayResponse(t *testing.T) {
 	withFastRetry(t)
 
 	var attempts int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/reload", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
-		current := atomic.AddInt32(&attempts, 1)
-		if current < 2 {
-			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`upstream down`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"reloaded"}`))
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`upstream down`))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
 	err := client.Reload(context.Background())
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, atomic.LoadInt32(&attempts))
+
+	var outcomeErr *OutcomeUnknownError
+	require.ErrorAs(t, err, &outcomeErr)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
 }
 
-func TestClientDeployReturnsErrorAfterRetryExhaustion(t *testing.T) {
+func TestClientDeployDoesNotRetryGatewayResponse(t *testing.T) {
 	withFastRetry(t)
 
 	var attempts int32
@@ -96,10 +111,108 @@ func TestClientDeployReturnsErrorAfterRetryExhaustion(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	_, err := client.Deploy(context.Background(), "test.example.com")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "502 Bad Gateway: upstream unavailable")
-	assert.EqualValues(t, retryMaxAttempts, atomic.LoadInt32(&attempts))
+	result, err := client.Deploy(context.Background(), "test.example.com")
+
+	require.Nil(t, result)
+	var outcomeErr *OutcomeUnknownError
+	require.ErrorAs(t, err, &outcomeErr)
+	assert.ErrorContains(t, err, "502 Bad Gateway: upstream unavailable")
+	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
+}
+
+func TestClientDeployConfirmedRejectionIsNotOutcomeUnknown(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"error":"invalid deployment"}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	result, err := client.Deploy(context.Background(), "test.example.com")
+
+	require.Nil(t, result)
+	var outcomeErr *OutcomeUnknownError
+	assert.NotErrorAs(t, err, &outcomeErr)
+	var httpErr *HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnprocessableEntity, httpErr.StatusCode)
+	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
+}
+
+func TestClientDeployAuthenticationRejectionIsNotOutcomeUnknown(t *testing.T) {
+	var deployAttempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/token" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"invalid credentials"}`))
+			return
+		}
+		atomic.AddInt32(&deployAttempts, 1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, WithToken("invalid-token"))
+	result, err := client.Deploy(context.Background(), "test.example.com")
+
+	require.Nil(t, result)
+	var outcomeErr *OutcomeUnknownError
+	assert.NotErrorAs(t, err, &outcomeErr)
+	assert.ErrorContains(t, err, "ephemeral token exchange: 403 Forbidden")
+	assert.Zero(t, atomic.LoadInt32(&deployAttempts))
+}
+
+func TestClientGetStatusRetriesTransientGatewayResponse(t *testing.T) {
+	withFastRetry(t)
+
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/status", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			w.WriteHeader(http.StatusGatewayTimeout)
+			_, _ = w.Write([]byte(`{"error":"upstream timeout"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"routes":2,"container_status":{}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	status, err := client.GetStatus(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, 2, status.Routes)
+	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
+}
+
+func TestClientGetStatusRetriesTransientTransportFailure(t *testing.T) {
+	withFastRetry(t)
+
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&attempts, 1) < 3 {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"routes":2,"container_status":{}}`))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	status, err := client.GetStatus(context.Background())
+
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, 2, status.Routes)
+	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
 }
 
 func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {

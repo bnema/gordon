@@ -266,6 +266,18 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 	return resp, nil
 }
 
+type requestTransportError struct {
+	err error
+}
+
+func (e *requestTransportError) Error() string {
+	return e.err.Error()
+}
+
+func (e *requestTransportError) Unwrap() error {
+	return e.err
+}
+
 // doRequest builds and executes a single HTTP request to the admin API.
 func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []byte) (*http.Response, error) {
 	reqURL := c.baseURL + "/admin" + path
@@ -293,7 +305,7 @@ func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, &requestTransportError{err: err}
 	}
 
 	return resp, nil
@@ -333,6 +345,28 @@ func (e *HTTPError) Error() string {
 	return e.Status + ": " + e.Body
 }
 
+// OutcomeUnknownError reports that a non-idempotent request may have completed
+// even though the client did not receive a definitive response.
+type OutcomeUnknownError struct {
+	Method string
+	Path   string
+	Err    error
+}
+
+func (e *OutcomeUnknownError) Error() string {
+	return fmt.Sprintf(
+		"%s %s outcome unknown: request may have completed; inspect current state before retrying: %v",
+		e.Method,
+		e.Path,
+		e.Err,
+	)
+}
+
+// Unwrap returns the transport or HTTP error that made the outcome ambiguous.
+func (e *OutcomeUnknownError) Unwrap() error {
+	return e.Err
+}
+
 func parseErrorResponse(resp *http.Response, body []byte) error {
 	msg := string(body)
 	structured := false
@@ -363,9 +397,19 @@ func isRetryableRequestError(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
+func isIdempotentMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace,
+		http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
 func isRetryableStatus(status int) bool {
-	// Only retry gateway errors; retrying 500 on non-idempotent POSTs
-	// (deploy, restart, reload) can cause duplicate state changes.
+	// Gateway errors can be transient; requestWithRetry separately ensures the
+	// method is safe to replay before attempting another request.
 	return status == 502 || status == 503 || status == 504
 }
 
@@ -376,14 +420,23 @@ func retryDelay(attempt int) time.Duration {
 	return retryBaseDelay * time.Duration(1<<(attempt-1))
 }
 
-// requestWithRetry performs an HTTP request and retries transient failures.
-// Retries occur on transport errors and gateway errors (502, 503, 504).
+// requestWithRetry performs an HTTP request and retries transient failures
+// only when the HTTP method is idempotent. A transient failure from a
+// non-idempotent request is returned as OutcomeUnknownError without replaying it.
 func (c *Client) requestWithRetry(ctx context.Context, method, path string, body any) (*http.Response, error) {
 	var lastErr error
+	idempotent := isIdempotentMethod(method)
 
 	for attempt := 1; attempt <= retryMaxAttempts; attempt++ {
 		resp, err := c.request(ctx, method, path, body)
 		if err != nil {
+			if !idempotent {
+				var transportErr *requestTransportError
+				if errors.As(err, &transportErr) {
+					return nil, &OutcomeUnknownError{Method: method, Path: path, Err: err}
+				}
+				return nil, err
+			}
 			lastErr = err
 			if attempt == retryMaxAttempts || !isRetryableRequestError(err) {
 				return nil, err
@@ -396,6 +449,9 @@ func (c *Client) requestWithRetry(ctx context.Context, method, path string, body
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize))
 			_ = resp.Body.Close()
 			lastErr = parseErrorResponse(resp, respBody)
+			if !idempotent {
+				return nil, &OutcomeUnknownError{Method: method, Path: path, Err: lastErr}
+			}
 			if attempt == retryMaxAttempts {
 				return nil, lastErr
 			}
@@ -718,7 +774,7 @@ func (c *Client) GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusRespon
 
 // GetStatus returns the Gordon server status.
 func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/status", nil)
+	resp, err := c.requestWithRetry(ctx, http.MethodGet, "/status", nil)
 	if err != nil {
 		return nil, err
 	}
