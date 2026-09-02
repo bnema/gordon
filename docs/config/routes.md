@@ -34,7 +34,7 @@ Legacy `http://...` route keys are still read for backward compatibility and rew
 
 ```toml
 [service_routes]
-"app.mydomain.com" = { service = "app", port = "web" }
+"app.mydomain.com" = { service = "app", port_name = "web" }
 ```
 
 The standalone service owns its single container; this mapping only forwards HTTP traffic to its validated published TCP port. See [Standalone Services](./services.md).

@@ -185,7 +185,7 @@ func (b *builder) addHTTPServiceRoutes(_ *domain.TrafficGraph) error {
 	}
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
 	for _, route := range routes {
-		ref := domain.TrafficServiceRef{Kind: domain.TrafficServiceRefService, Name: route.Service, PortName: route.Port}
+		ref := domain.TrafficServiceRef{Kind: domain.TrafficServiceRefService, Name: route.Service, PortName: route.PortName}
 		service, port, backend, err := b.resolveStandaloneServicePort(ref, domain.NetworkProtocolTCP)
 		if err != nil {
 			return fmt.Errorf("service route %q: %w", route.Domain, err)

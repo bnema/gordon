@@ -2884,12 +2884,12 @@ func TestLoadStringMap(t *testing.T) {
 func TestService_LoadsServiceRoutesSeparatelyFromContainerRoutes(t *testing.T) {
 	v := viper.New()
 	v.Set("routes", map[string]any{"app.example.com": "app:latest"})
-	v.Set("service_routes", map[string]any{"play.example.com": map[string]any{"service": "rust", "port": "web"}})
+	v.Set("service_routes", map[string]any{"play.example.com": map[string]any{"service": "rust", "port_name": "web"}})
 
 	svc := NewService(v, mocks.NewMockEventPublisher(t))
 	require.NoError(t, svc.Load(testContext()))
 	require.Equal(t, []domain.Route{{Domain: "app.example.com", Image: "app:latest", HTTPS: true}}, svc.GetRoutes(testContext()))
-	require.Equal(t, []domain.HTTPServiceRoute{{Domain: "play.example.com", Service: "rust", Port: "web"}}, svc.GetServiceRoutes())
+	require.Equal(t, []domain.HTTPServiceRoute{{Domain: "play.example.com", Service: "rust", PortName: "web"}}, svc.GetServiceRoutes())
 }
 
 func TestService_LoadRejectsServiceRouteConflictsAndInvalidReferences(t *testing.T) {
@@ -2900,9 +2900,9 @@ func TestService_LoadRejectsServiceRouteConflictsAndInvalidReferences(t *testing
 		serviceRoutes map[string]any
 		want          string
 	}{
-		{name: "conflicts with route", routes: map[string]any{"app.example.com": "app:latest"}, serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust", "port": "web"}}, want: "conflicts"},
-		{name: "conflicts with external", external: map[string]any{"app.example.com": "203.0.113.10:8080"}, serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust", "port": "web"}}, want: "conflicts"},
-		{name: "missing port", serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust"}}, want: "non-empty port"},
+		{name: "conflicts with route", routes: map[string]any{"app.example.com": "app:latest"}, serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust", "port_name": "web"}}, want: "conflicts"},
+		{name: "conflicts with external", external: map[string]any{"app.example.com": "203.0.113.10:8080"}, serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust", "port_name": "web"}}, want: "conflicts"},
+		{name: "missing port name", serviceRoutes: map[string]any{"app.example.com": map[string]any{"service": "rust"}}, want: "non-empty port_name"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			v := viper.New()

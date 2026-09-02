@@ -502,7 +502,7 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 	serviceRoutes := l.configSvc.GetServiceRoutes()
 	serviceRouteResponses := make([]remote.ServiceRoute, 0, len(serviceRoutes))
 	for _, route := range serviceRoutes {
-		serviceRouteResponses = append(serviceRouteResponses, remote.ServiceRoute{Domain: route.Domain, Service: route.Service, Port: route.Port})
+		serviceRouteResponses = append(serviceRouteResponses, remote.ServiceRoute{Domain: route.Domain, Service: route.Service, PortName: route.PortName})
 	}
 	cfg := &remote.Config{
 		Routes:         l.configSvc.GetRoutes(ctx),

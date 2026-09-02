@@ -61,8 +61,8 @@ type routeConfig struct {
 }
 
 type serviceRouteConfig struct {
-	Service string
-	Port    string
+	Service  string
+	PortName string
 }
 
 // Service implements the ConfigService interface.
@@ -287,9 +287,9 @@ func loadServiceRoutes(raw any) (map[string]serviceRouteConfig, error) {
 		if !ok || strings.TrimSpace(service) == "" {
 			return nil, fmt.Errorf("service route %q must include a non-empty service", key)
 		}
-		port, ok := route["port"].(string)
-		if !ok || strings.TrimSpace(port) == "" {
-			return nil, fmt.Errorf("service route %q must include a non-empty port", key)
+		portName, ok := route["port_name"].(string)
+		if !ok || strings.TrimSpace(portName) == "" {
+			return nil, fmt.Errorf("service route %q must include a non-empty port_name", key)
 		}
 		canonicalKey, ok := domain.CanonicalRouteDomain(key)
 		if !ok {
@@ -298,7 +298,7 @@ func loadServiceRoutes(raw any) (map[string]serviceRouteConfig, error) {
 		if _, exists := result[canonicalKey]; exists {
 			return nil, fmt.Errorf("duplicate service route key %q canonicalizes to %q", key, canonicalKey)
 		}
-		result[canonicalKey] = serviceRouteConfig{Service: service, Port: port}
+		result[canonicalKey] = serviceRouteConfig{Service: service, PortName: portName}
 	}
 	return result, nil
 }
@@ -1622,7 +1622,7 @@ func (s *Service) GetServiceRoutes() []domain.HTTPServiceRoute {
 
 	routes := make([]domain.HTTPServiceRoute, 0, len(s.config.ServiceRoutes))
 	for domainName, route := range s.config.ServiceRoutes {
-		routes = append(routes, domain.HTTPServiceRoute{Domain: domainName, Service: route.Service, Port: route.Port})
+		routes = append(routes, domain.HTTPServiceRoute{Domain: domainName, Service: route.Service, PortName: route.PortName})
 	}
 	slices.SortFunc(routes, func(a, b domain.HTTPServiceRoute) int {
 		return cmp.Compare(a.Domain, b.Domain)

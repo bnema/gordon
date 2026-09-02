@@ -171,7 +171,7 @@ preserve = true                              # Keep volumes when containers are 
 # SERVICE ROUTES
 # =============================================================================
 [service_routes]
-# "app.domain.com" = { service = "app", port = "web" } # HTTP to a standalone service TCP port
+# "app.domain.com" = { service = "app", port_name = "web" } # HTTP to a standalone service TCP port
 
 # =============================================================================
 # EXTERNAL ROUTES
@@ -321,7 +321,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
 | `service_routes.<domain>.service` | none | Name of the target standalone service |
-| `service_routes.<domain>.port` | none | Name of the target TCP service port; does not create a route container |
+| `service_routes.<domain>.port_name` | none | Name of the target TCP service port; does not create a route container |
 | `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |

@@ -1653,7 +1653,7 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	serviceRoutes := h.configSvc.GetServiceRoutes()
 	serviceRouteResponses := make([]dto.ServiceRoute, 0, len(serviceRoutes))
 	for _, route := range serviceRoutes {
-		serviceRouteResponses = append(serviceRouteResponses, dto.ServiceRoute{Domain: route.Domain, Service: route.Service, Port: route.Port})
+		serviceRouteResponses = append(serviceRouteResponses, dto.ServiceRoute{Domain: route.Domain, Service: route.Service, PortName: route.PortName})
 	}
 
 	config := dto.ConfigResponse{

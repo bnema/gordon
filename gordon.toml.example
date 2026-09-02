@@ -192,7 +192,7 @@ keep = 14
 # publish = "127.0.0.1:19001"
 
 [service_routes]
-# "app.example.com" = { service = "app", port = "web" }
+# "app.example.com" = { service = "app", port_name = "web" }
 
 [external_routes]
 # "status.example.com" = "198.51.100.10:9000"

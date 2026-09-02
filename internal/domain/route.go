@@ -11,9 +11,9 @@ type Route struct {
 // HTTPServiceRoute maps a hostname to a named, published standalone service port.
 // It does not own a route container.
 type HTTPServiceRoute struct {
-	Domain  string
-	Service string
-	Port    string
+	Domain   string
+	Service  string
+	PortName string
 }
 
 // ProxyTarget represents the destination for proxying requests.

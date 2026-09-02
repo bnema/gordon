@@ -35,7 +35,7 @@ To expose the web port on a hostname, select it explicitly:
 
 ```toml
 [service_routes]
-"app.example.com" = { service = "app", port = "web" }
+"app.example.com" = { service = "app", port_name = "web" }
 ```
 
 Gordon creates **one** `app` container and forwards HTTP traffic to its `web` port. It does not create a normal `[routes]` container for `app.example.com`.

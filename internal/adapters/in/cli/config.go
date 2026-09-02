@@ -160,13 +160,13 @@ func renderConfigServiceRoutes(out io.Writer, config *remote.Config) error {
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
 	rows := make([][]string, 0, len(routes))
 	for _, route := range routes {
-		rows = append(rows, []string{route.Domain, route.Service, route.Port})
+		rows = append(rows, []string{route.Domain, route.Service, route.PortName})
 	}
 	table := components.NewTable(
 		components.WithColumns([]components.TableColumn{
 			{Title: "Domain", Width: 30},
 			{Title: "Service", Width: 30},
-			{Title: "Port", Width: 15},
+			{Title: "Port name", Width: 15},
 		}),
 		components.WithRows(rows),
 	)

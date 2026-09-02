@@ -1031,9 +1031,9 @@ type ExternalRoute struct {
 
 // ServiceRoute represents a redacted HTTP-to-standalone-service route config entry.
 type ServiceRoute struct {
-	Domain  string `json:"domain"`
-	Service string `json:"service"`
-	Port    string `json:"port"`
+	Domain   string `json:"domain"`
+	Service  string `json:"service"`
+	PortName string `json:"port_name"`
 }
 
 // GetConfig returns the Gordon configuration.
