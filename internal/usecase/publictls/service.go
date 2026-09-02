@@ -106,7 +106,7 @@ func (s *Service) Load(ctx context.Context) error {
 	if s.deps.Routes != nil {
 		routes := s.deps.Routes.GetRoutes(ctx)
 		external := s.deps.Routes.GetExternalRoutes()
-		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
+		required = canonicalHostSet(routeHostsWithServiceRoutes(routes, external, serviceRoutes(s.deps.Routes), s.additionalHosts))
 	}
 
 	s.mu.Lock()
@@ -145,7 +145,7 @@ func (s *Service) SetAdditionalHosts(ctx context.Context, hosts []string) {
 	if s.deps.Routes != nil {
 		routes := s.deps.Routes.GetRoutes(ctx)
 		external := s.deps.Routes.GetExternalRoutes()
-		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
+		required = canonicalHostSet(routeHostsWithServiceRoutes(routes, external, serviceRoutes(s.deps.Routes), s.additionalHosts))
 	}
 
 	s.mu.Lock()
@@ -201,6 +201,9 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// DeriveCertificateTargets fails (e.g. broken DNS-01 zone resolver).
 	routes := s.deps.Routes.GetRoutes(ctx)
 	external := s.deps.Routes.GetExternalRoutes()
+	for _, route := range serviceRoutes(s.deps.Routes) {
+		routes = append(routes, domain.Route{Domain: route.Domain})
+	}
 	hosts := routeHosts(routes, external, s.additionalHosts)
 
 	// Build required hosts set from route hosts (before target derivation).

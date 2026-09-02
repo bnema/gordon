@@ -818,7 +818,7 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 				return tlsErr
 			}
 		}
-		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc, si.svc.proxySvc); err != nil {
 			return err
 		}
 		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
@@ -2966,7 +2966,7 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
-	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc); err != nil {
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, svc.proxySvc); err != nil {
 		return err
 	}
 	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)

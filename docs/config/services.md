@@ -1,66 +1,63 @@
 # Standalone Services
 
-Standalone services are Gordon-managed containers for non-HTTP workloads such as game servers, databases, or TCP/UDP daemons. Gordon creates, starts, restarts, reconciles, and removes these containers from the `[[services]]` configuration during startup and reload.
+Use `[[services]]` when Gordon should run one container that exposes more than one named port. Gordon owns that one container; each route only chooses which published port receives traffic.
 
-Standalone services are separate from HTTP `[routes]`. Route normal web apps with `[routes]`; use `[[services]]` when Gordon must manage a long-running container that is reached by explicit L4 traffic routers.
+## One container, several ports
 
-## Example
+This image exposes a web server, an optional TCP service, and an optional UDP service:
 
 ```toml
 [[services]]
-name = "rust"
-image = "registry.example.com:5000/rust:latest"
+name = "app"
+image = "registry.example.com:5000/app:latest"
 enabled = true
-env_file = "/srv/gordon/services/rust.env"
-
-[services.readiness]
-type = "log"
-path = "/steamcmd/rust/server.log"
-contains = "Server startup complete"
-timeout = "2m"
 
 [[services.ports]]
-name = "game"
-container = 28015
-protocol = "udp"
-publish = "127.0.0.1:38015"
-
-[[services.ports]]
-name = "rcon"
-container = 28016
+name = "web"
+container = 8080
 protocol = "tcp"
-publish = "127.0.0.1:38016"
-trusted_cidrs = ["100.64.0.0/10"]
+publish = "127.0.0.1:18080"
+
+[[services.ports]]
+name = "tcp"
+container = 9000
+protocol = "tcp"
+publish = "127.0.0.1:19000"
+
+[[services.ports]]
+name = "udp"
+container = 9001
+protocol = "udp"
+publish = "127.0.0.1:19001"
 ```
 
-The `publish` address is the host-side bind address that Gordon's traffic manager dials; use loopback for private backends. Expose services through `[traffic]` routers instead of binding service containers directly to a public interface.
-
-## Traffic routing
-
-Use `service:<service>:<port-name>` from TCP, UDP, or TLS passthrough routers:
+To expose the web port on a hostname, select it explicitly:
 
 ```toml
-[entrypoints.rust]
-address = "0.0.0.0:28015"
+[service_routes]
+"app.example.com" = { service = "app", port = "web" }
+```
+
+Gordon creates **one** `app` container and forwards HTTP traffic to its `web` port. It does not create a normal `[routes]` container for `app.example.com`.
+
+The selected port must be TCP and have a valid `publish` address. `[service_routes]` is only for Gordon-managed services; external routes remain for non-private, independently managed backends.
+
+## Optional TCP and UDP traffic
+
+Use a traffic router only for ports that need L4 traffic. It can target another named port on the same container:
+
+```toml
+[entrypoints.app-udp]
+address = ":9001"
 protocol = "udp"
 
 [[traffic.udp.routers]]
-name = "rust-game"
-entrypoint = "rust"
-service = "service:rust:game"
-
-[entrypoints.rcon]
-address = "0.0.0.0:28016"
-protocol = "tcp"
-trusted_cidrs = ["100.64.0.0/10"]
-
-[[traffic.tcp.routers]]
-name = "rust-rcon"
-entrypoint = "rcon"
-service = "service:rust:rcon"
+name = "app-udp"
+entrypoint = "app-udp"
+service = "service:app:udp"
 ```
 
-Ports named `rcon` default to private. Private ports require non-empty `trusted_cidrs` on both the service port and target entrypoint, and the CIDR sets must match. To intentionally expose an RCON port publicly, set `public = true` on that port.
+The `web`, `tcp`, and `udp` names are yours. They make the intended port clear in configuration. Private ports require `trusted_cidrs`; Gordon enforces that policy before forwarding.
 
 ## Volumes
 
@@ -68,8 +65,8 @@ Explicit volumes are optional:
 
 ```toml
 [[services.volumes]]
-source = "rust-data"
-target = "/steamcmd/rust"
+source = "app-data"
+target = "/var/lib/app"
 read_only = false
 ```
 

@@ -8,6 +8,7 @@ type ConfigResponse struct {
 	Volumes          VolumesConfig          `json:"volumes"`
 	Routes           []Route                `json:"routes"`
 	ExternalRoutes   []ExternalRoute        `json:"external_routes"`
+	ServiceRoutes    []ServiceRoute         `json:"service_routes"`
 }
 
 // ServerConfig represents server config details.
@@ -40,4 +41,11 @@ type VolumesConfig struct {
 type ExternalRoute struct {
 	Domain string `json:"domain"`
 	Target string `json:"target,omitempty"`
+}
+
+// ServiceRoute represents a redacted HTTP-to-standalone-service route config entry.
+type ServiceRoute struct {
+	Domain  string `json:"domain"`
+	Service string `json:"service"`
+	Port    string `json:"port"`
 }

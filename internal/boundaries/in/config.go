@@ -65,6 +65,9 @@ type ConfigService interface {
 	// GetExternalRoutes returns all configured external routes.
 	GetExternalRoutes() map[string]string
 
+	// GetServiceRoutes returns HTTP routes targeting named standalone-service ports.
+	GetServiceRoutes() []domain.HTTPServiceRoute
+
 	// GetAllAttachments returns all configured attachments.
 	GetAllAttachments(ctx context.Context) map[string][]string
 

@@ -1,13 +1,13 @@
 # External Routes Configuration
 
-External routes allow proxying to non-containerized services running on the host or network.
+External routes allow proxying to independently managed, non-containerized services on public network addresses. They are not a bridge to Gordon-managed standalone services.
 
 ## Configuration
 
 ```toml
 [external_routes]
-"service.mydomain.com" = "localhost:3000"
-"cache.mydomain.com" = "192.168.1.100:6379"
+"service.mydomain.com" = "198.51.100.10:3000"
+"cache.mydomain.com" = "backend.example.net:6379"
 ```
 
 ## Syntax
@@ -58,6 +58,7 @@ Client ─> Gordon Proxy ─> External Service
 
 ## Limitations
 
+- Loopback, private, link-local, and otherwise internal targets are blocked by SSRF protection. Use `[service_routes]` for an HTTP hostname targeting a Gordon-managed `[[services]]` port.
 - HTTP only (no HTTPS upstream)
 - No health checks
 - No load balancing

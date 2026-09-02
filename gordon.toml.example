@@ -171,48 +171,40 @@ keep = 14
 [routes]
 # "app.example.com" = { image = "myapp:latest" }
 
-[external_routes]
-# "status.example.com" = "127.0.0.1:9000"
-
-# Gordon-managed standalone L4 services. Use service:<name>:<port> from
-# traffic routers to expose published loopback ports.
+# One Gordon-managed image can expose several named ports. Gordon creates one
+# container; service_routes selects its HTTP port, while traffic routers can
+# optionally expose its TCP or UDP ports.
 # [[services]]
-# name = "rust"
-# image = "registry.example.com:5000/rust:latest"
+# name = "app"
+# image = "registry.example.com:5000/app:latest"
 # enabled = true
-# env_file = "/srv/gordon/services/rust.env"
 #
 # [[services.ports]]
-# name = "game"
-# container = 28015
-# protocol = "udp"
-# publish = "127.0.0.1:38015"
-#
-# [[services.ports]]
-# name = "rcon"
-# container = 28016
+# name = "web"
+# container = 8080
 # protocol = "tcp"
-# publish = "127.0.0.1:38016"
-# trusted_cidrs = ["100.64.0.0/10"]
+# publish = "127.0.0.1:18080"
 #
-# [entrypoints.rust]
-# address = "0.0.0.0:28015"
+# [[services.ports]]
+# name = "udp"
+# container = 9001
+# protocol = "udp"
+# publish = "127.0.0.1:19001"
+
+[service_routes]
+# "app.example.com" = { service = "app", port = "web" }
+
+[external_routes]
+# "status.example.com" = "198.51.100.10:9000"
+
+# [entrypoints.app-udp]
+# address = ":9001"
 # protocol = "udp"
 #
 # [[traffic.udp.routers]]
-# name = "rust-game"
-# entrypoint = "rust"
-# service = "service:rust:game"
-#
-# [entrypoints.rcon]
-# address = "0.0.0.0:28016"
-# protocol = "tcp"
-# trusted_cidrs = ["100.64.0.0/10"]
-#
-# [[traffic.tcp.routers]]
-# name = "rust-rcon"
-# entrypoint = "rcon"
-# service = "service:rust:rcon"
+# name = "app-udp"
+# entrypoint = "app-udp"
+# service = "service:app:udp"
 
 [network_groups]
 # "backend" = ["app.example.com", "api.example.com"]

@@ -8,15 +8,24 @@ type Route struct {
 	Env    []string // Pre-resolved env vars ("KEY=VALUE"); when set, Deploy skips EnvLoader lookup.
 }
 
+// HTTPServiceRoute maps a hostname to a named, published standalone service port.
+// It does not own a route container.
+type HTTPServiceRoute struct {
+	Domain  string
+	Service string
+	Port    string
+}
+
 // ProxyTarget represents the destination for proxying requests.
 type ProxyTarget struct {
 	Host         string
 	Port         int
 	ContainerID  string
-	Scheme       string // "http" or "https"
-	Protocol     string // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
-	OriginalHost string // Original hostname before DNS resolution (for external-route Host header)
-	RouteHost    string // Canonical matched route domain for managed-route Host header
+	Scheme       string   // "http" or "https"
+	Protocol     string   // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
+	OriginalHost string   // Original hostname before DNS resolution (for external-route Host header)
+	RouteHost    string   // Canonical matched route domain for managed-route Host header
+	TrustedCIDRs []string // Direct peers allowed to access a private standalone-service port
 }
 
 // RouteMatch represents the result of matching a request to a route.

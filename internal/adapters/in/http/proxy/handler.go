@@ -12,6 +12,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // Handler implements http.Handler for the reverse proxy.
@@ -94,6 +95,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !targetAllowsPeer(target, r.RemoteAddr) {
+		log.Warn().Str("route_host", target.RouteHost).Msg("request source is not allowed for private service target")
+		proxyError(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+
 	log.Debug().
 		Str("host", target.Host).
 		Int("port", target.Port).
@@ -101,6 +108,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Msg("resolved proxy target")
 
 	h.forwardToTarget(w, r, target, cfg.MaxResponseSize)
+}
+
+func targetAllowsPeer(target *domain.ProxyTarget, remoteAddr string) bool {
+	if len(target.TrustedCIDRs) == 0 {
+		return true
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return false
+	}
+	peer := net.ParseIP(host)
+	if peer == nil {
+		return false
+	}
+	for _, cidr := range target.TrustedCIDRs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err == nil && network.Contains(peer) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeRequestHost(host string) string {

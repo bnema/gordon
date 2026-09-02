@@ -28,6 +28,17 @@ Legacy `http://...` route keys are still read for backward compatibility and rew
 
 ## Route Types
 
+### Service Routes
+
+`[routes]` owns an image-backed route container. To send HTTP traffic to an existing Gordon-managed standalone service port, use `[service_routes]` instead:
+
+```toml
+[service_routes]
+"app.mydomain.com" = { service = "app", port = "web" }
+```
+
+The standalone service owns its single container; this mapping only forwards HTTP traffic to its validated published TCP port. See [Standalone Services](./services.md).
+
 ### HTTPS Routes (Default)
 
 Standard routes expect HTTPS traffic (terminated by Cloudflare or similar):

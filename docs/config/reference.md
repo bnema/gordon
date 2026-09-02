@@ -168,19 +168,25 @@ preserve = true                              # Keep volumes when containers are 
 # Legacy "http://domain.com" keys are read for compatibility and rewritten on save.
 
 # =============================================================================
+# SERVICE ROUTES
+# =============================================================================
+[service_routes]
+# "app.domain.com" = { service = "app", port = "web" } # HTTP to a standalone service TCP port
+
+# =============================================================================
 # EXTERNAL ROUTES
 # =============================================================================
 [external_routes]
-# "domain.com" = "host:port"                 # Proxy to non-container services
+# "domain.com" = "host:port"                 # Proxy to a non-private external service
 
 # =============================================================================
 # STANDALONE SERVICES
 # =============================================================================
 # [[services]]
-# name = "rust"
-# image = "registry.example.com:5000/rust:latest"
+# name = "app"
+# image = "registry.example.com:5000/app:latest"
 # enabled = true
-# env_file = "/srv/gordon/services/rust.env"
+# env_file = "/srv/gordon/services/app.env"
 #
 # [[services.ports]]
 # name = "game"
@@ -314,6 +320,8 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
+| `service_routes.<domain>.service` | none | Name of the target standalone service |
+| `service_routes.<domain>.port` | none | Name of the target TCP service port; does not create a route container |
 | `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |
@@ -322,7 +330,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `services[].ports[].name` | none | Port name used by traffic service refs |
 | `services[].ports[].container` | none | Container port number |
 | `services[].ports[].protocol` | none | `tcp` or `udp` |
-| `services[].ports[].publish` | `""` | Host-side bind address, usually loopback, that the traffic manager dials |
+| `services[].ports[].publish` | `""` | Host-side bind address, usually loopback, that Gordon dials |
 | `services[].ports[].private` | `false` | Require matching service and entrypoint `trusted_cidrs` for this port |
 | `services[].ports[].public` | `false` | Explicit public opt-out for admin port names such as `rcon` |
 | `services[].ports[].trusted_cidrs` | `[]` | CIDRs allowed for private port routing; must match the target entrypoint |
