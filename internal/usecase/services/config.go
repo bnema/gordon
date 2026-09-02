@@ -23,7 +23,7 @@ type Config struct {
 
 type PortConfig struct {
 	Name         string                 `mapstructure:"name"`
-	Container    int                    `mapstructure:"container"`
+	Container    int                    `mapstructure:"container_port"`
 	Protocol     domain.NetworkProtocol `mapstructure:"protocol"`
 	Publish      string                 `mapstructure:"publish"`
 	Private      bool                   `mapstructure:"private"`

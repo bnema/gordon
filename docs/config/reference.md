@@ -190,13 +190,13 @@ preserve = true                              # Keep volumes when containers are 
 #
 # [[services.ports]]
 # name = "game"
-# container = 28015
+# container_port = 28015
 # protocol = "udp"
 # publish = "127.0.0.1:38015"
 #
 # [[services.ports]]
 # name = "rcon"
-# container = 28016
+# container_port = 28016
 # protocol = "tcp"
 # publish = "127.0.0.1:38016"
 # trusted_cidrs = ["100.64.0.0/10"]
@@ -328,7 +328,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `services[].env` | `[]` | Inline `KEY=value` environment entries |
 | `services[].env_file` | `""` | Env file loaded before inline entries |
 | `services[].ports[].name` | none | Port name used by traffic service refs |
-| `services[].ports[].container` | none | Container port number |
+| `services[].ports[].container_port` | none | Port number inside the container |
 | `services[].ports[].protocol` | none | `tcp` or `udp` |
 | `services[].ports[].publish` | `""` | Host-side bind address, usually loopback, that Gordon dials |
 | `services[].ports[].private` | `false` | Require matching service and entrypoint `trusted_cidrs` for this port |

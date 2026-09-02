@@ -45,7 +45,7 @@ enabled = true
 
 [[services.ports]]
 name = "udp"
-container = 9001
+container_port = 9001
 protocol = "udp"
 publish = "127.0.0.1:19001"
 

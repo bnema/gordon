@@ -14,19 +14,19 @@ enabled = true
 
 [[services.ports]]
 name = "web"
-container = 8080
+container_port = 8080
 protocol = "tcp"
 publish = "127.0.0.1:18080"
 
 [[services.ports]]
 name = "tcp"
-container = 9000
+container_port = 9000
 protocol = "tcp"
 publish = "127.0.0.1:19000"
 
 [[services.ports]]
 name = "udp"
-container = 9001
+container_port = 9001
 protocol = "udp"
 publish = "127.0.0.1:19001"
 ```
