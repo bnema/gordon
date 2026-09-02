@@ -184,7 +184,16 @@ func (b *builder) addHTTPServiceRoutes(_ *domain.TrafficGraph) error {
 		return nil
 	}
 	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
+	seenDomains := make(map[string]struct{}, len(routes))
 	for _, route := range routes {
+		canonicalDomain, ok := domain.CanonicalRouteDomain(route.Domain)
+		if !ok {
+			return fmt.Errorf("invalid service route domain %q", route.Domain)
+		}
+		if _, exists := seenDomains[canonicalDomain]; exists {
+			return fmt.Errorf("duplicate service route domain %q", canonicalDomain)
+		}
+		seenDomains[canonicalDomain] = struct{}{}
 		ref := domain.TrafficServiceRef{Kind: domain.TrafficServiceRefService, Name: route.Service, PortName: route.PortName}
 		service, port, backend, err := b.resolveStandaloneServicePort(ref, domain.NetworkProtocolTCP)
 		if err != nil {
@@ -193,11 +202,11 @@ func (b *builder) addHTTPServiceRoutes(_ *domain.TrafficGraph) error {
 		if isPrivateStandalonePort(port) && len(port.TrustedCIDRs) == 0 {
 			return fmt.Errorf("private service %q port %q service route %q requires non-empty service port trusted_cidrs", service.Name, port.Name, route.Domain)
 		}
-		target := &domain.ProxyTarget{Host: backend.Host, Port: backend.Port, Scheme: "http", RouteHost: route.Domain}
+		target := &domain.ProxyTarget{Host: backend.Host, Port: backend.Port, Scheme: "http", RouteHost: canonicalDomain}
 		if isPrivateStandalonePort(port) {
 			target.TrustedCIDRs = append([]string(nil), port.TrustedCIDRs...)
 		}
-		b.serviceTargets[route.Domain] = target
+		b.serviceTargets[canonicalDomain] = target
 	}
 	return nil
 }

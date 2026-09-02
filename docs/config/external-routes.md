@@ -25,24 +25,14 @@ External routes allow proxying to independently managed, non-containerized servi
 
 ## Use Cases
 
-### Database Admin Tools
-
-Proxy to database admin interfaces:
+Proxy to an independently managed public backend:
 
 ```toml
 [external_routes]
-"pgadmin.mydomain.com" = "localhost:5050"
-"redis-commander.mydomain.com" = "localhost:8081"
+"legacy-api.mydomain.com" = "api.example.net:8080"
 ```
 
-### Legacy Services
-
-Proxy to services that can't be containerized:
-
-```toml
-[external_routes]
-"legacy-api.mydomain.com" = "192.168.1.50:8080"
-```
+For a local or private backend owned by Gordon, define it as `[[services]]` and select its HTTP port with `[service_routes]` instead.
 
 ## How It Works
 
@@ -73,7 +63,7 @@ vim ~/.config/gordon/gordon.toml
 
 # Add external route
 [external_routes]
-"newservice.mydomain.com" = "localhost:9000"
+"newservice.mydomain.com" = "service.example.net:9000"
 
 # Save - Gordon reloads automatically
 ```

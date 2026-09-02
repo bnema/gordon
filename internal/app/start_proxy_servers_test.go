@@ -131,7 +131,7 @@ func TestStartProxyServers_ConfiguresSmartTCPHTTPAndHTTPSRoutesWithoutPublicHTTP
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 
 	_, smartPortText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestStartProxyServers_ConfiguresTrafficManagerHTTPSRoute(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 
 	_, portText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -214,7 +214,7 @@ func TestStartProxyServers_ConfiguresCustomTLSMuxHTTPSRoute(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 
 	_, customPort, err := net.SplitHostPort(cfg.EntryPoints["custom-secure"].Address)
 	require.NoError(t, err)

@@ -62,6 +62,19 @@ func TestService_GetTarget_ServiceRouteUsesStaticTrustedTarget(t *testing.T) {
 	assert.Equal(t, []string{"100.64.0.0/10"}, target.TrustedCIDRs)
 }
 
+func TestService_StageServiceTargetsPublishesOnlyAfterCommit(t *testing.T) {
+	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+	require.NoError(t, svc.StageServiceTargets(map[string]*domain.ProxyTarget{
+		"App.Example.com": {Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "untrusted.example.com"},
+	}))
+	assert.Empty(t, svc.serviceTargets)
+
+	svc.CommitStagedServiceTargets()
+	target := svc.serviceTargets["app.example.com"]
+	require.NotNil(t, target)
+	assert.Equal(t, "app.example.com", target.RouteHost)
+}
+
 func TestService_ReconcileServiceTargetsRemovesDeletedRoute(t *testing.T) {
 	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)

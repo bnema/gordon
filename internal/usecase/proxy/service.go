@@ -36,16 +36,17 @@ type Config struct {
 
 // Service implements the ProxyService interface.
 type Service struct {
-	runtime          out.ContainerRuntime
-	containerSvc     in.ContainerService
-	configSvc        in.ConfigService
-	config           Config
-	targets          map[string]*domain.ProxyTarget
-	serviceTargets   map[string]*domain.ProxyTarget
-	mu               sync.RWMutex
-	inFlight         map[string]int
-	inFlightMu       sync.Mutex
-	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
+	runtime               out.ContainerRuntime
+	containerSvc          in.ContainerService
+	configSvc             in.ConfigService
+	config                Config
+	targets               map[string]*domain.ProxyTarget
+	serviceTargets        map[string]*domain.ProxyTarget
+	pendingServiceTargets map[string]*domain.ProxyTarget
+	mu                    sync.RWMutex
+	inFlight              map[string]int
+	inFlightMu            sync.Mutex
+	registryInFlight      atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
 // NewService creates a new proxy service.
@@ -56,13 +57,14 @@ func NewService(
 	config Config,
 ) *Service {
 	return &Service{
-		runtime:        runtime,
-		containerSvc:   containerSvc,
-		configSvc:      configSvc,
-		config:         config,
-		targets:        make(map[string]*domain.ProxyTarget),
-		serviceTargets: make(map[string]*domain.ProxyTarget),
-		inFlight:       make(map[string]int),
+		runtime:               runtime,
+		containerSvc:          containerSvc,
+		configSvc:             configSvc,
+		config:                config,
+		targets:               make(map[string]*domain.ProxyTarget),
+		serviceTargets:        make(map[string]*domain.ProxyTarget),
+		pendingServiceTargets: make(map[string]*domain.ProxyTarget),
+		inFlight:              make(map[string]int),
 	}
 }
 
@@ -242,20 +244,39 @@ func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr
 	return t, nil
 }
 
-// ReconcileServiceTargets atomically replaces the validated standalone-service targets.
-func (s *Service) ReconcileServiceTargets(targets map[string]*domain.ProxyTarget) error {
+// StageServiceTargets validates and stages standalone-service targets without publishing them.
+func (s *Service) StageServiceTargets(targets map[string]*domain.ProxyTarget) error {
 	next := make(map[string]*domain.ProxyTarget, len(targets))
 	for domainName, target := range targets {
 		canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
 		if !ok || target == nil || target.Host == "" || target.Port < 1 || target.Port > 65535 {
 			return fmt.Errorf("invalid service target for %q", domainName)
 		}
-		next[canonicalDomain] = cloneProxyTarget(target)
+		prepared := cloneProxyTarget(target)
+		prepared.RouteHost = canonicalDomain
+		next[canonicalDomain] = prepared
 	}
 
 	s.mu.Lock()
-	s.serviceTargets = next
+	s.pendingServiceTargets = next
 	s.mu.Unlock()
+	return nil
+}
+
+// CommitStagedServiceTargets atomically publishes the last staged service targets.
+func (s *Service) CommitStagedServiceTargets() {
+	s.mu.Lock()
+	s.serviceTargets = s.pendingServiceTargets
+	s.pendingServiceTargets = make(map[string]*domain.ProxyTarget)
+	s.mu.Unlock()
+}
+
+// ReconcileServiceTargets validates and immediately publishes standalone-service targets.
+func (s *Service) ReconcileServiceTargets(targets map[string]*domain.ProxyTarget) error {
+	if err := s.StageServiceTargets(targets); err != nil {
+		return err
+	}
+	s.CommitStagedServiceTargets()
 	return nil
 }
 

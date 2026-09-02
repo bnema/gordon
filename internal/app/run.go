@@ -826,6 +826,9 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
 			return err
 		}
+		if si.svc.proxySvc != nil {
+			si.svc.proxySvc.CommitStagedServiceTargets()
+		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
 		return nil
 	})
@@ -2969,7 +2972,13 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, svc.proxySvc); err != nil {
 		return err
 	}
-	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)
+	if err := reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg); err != nil {
+		return err
+	}
+	if svc.proxySvc != nil {
+		svc.proxySvc.CommitStagedServiceTargets()
+	}
+	return nil
 }
 
 func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {

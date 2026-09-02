@@ -123,13 +123,17 @@ func TestHandler_RejectsUntrustedPeerForPrivateServiceTarget(t *testing.T) {
 	}, nil)
 
 	handler := NewHandler(proxySvc, nil, testLogger())
-	req := httptest.NewRequest(http.MethodGet, "http://play.example.com/", nil)
-	req.Host = "play.example.com"
-	req.RemoteAddr = "203.0.113.10:12345"
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	server := httptest.NewServer(handler)
+	defer server.Close()
 
-	assert.Equal(t, http.StatusForbidden, w.Code)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "play.example.com"
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestHandler_Returns404WhenNoTarget(t *testing.T) {

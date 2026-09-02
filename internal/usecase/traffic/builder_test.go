@@ -390,7 +390,7 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 
 func TestBuildPlanResolvesHTTPServiceRouteWithoutRouteContainer(t *testing.T) {
 	plan, err := BuildPlan(Input{
-		ServiceRoutes: []domain.HTTPServiceRoute{{Domain: "play.example.com", Service: "rust", PortName: "web"}},
+		ServiceRoutes: []domain.HTTPServiceRoute{{Domain: "Play.Example.com", Service: "rust", PortName: "web"}},
 		Services: []domain.StandaloneService{{
 			Name: "rust", Enabled: true, Image: "example/rust:latest",
 			Ports: []domain.StandaloneServicePort{{Name: "web", Container: 8080, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:18080"}},

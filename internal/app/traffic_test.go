@@ -110,7 +110,7 @@ func TestApplyTrafficRuntimeConfigAppliesSmartTCPEntrypointWithRawFallbackPolicy
 	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, traffic.DefaultEdgeEntryPointName, status.EntryPoints[0].Name)
@@ -138,7 +138,7 @@ func TestApplyTrafficRuntimeConfigPassesStandaloneServicesToBuilder(t *testing.T
 	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "rust", status.EntryPoints[0].Name)
@@ -163,7 +163,7 @@ func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "postgres", status.EntryPoints[0].Name)

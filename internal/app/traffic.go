@@ -12,7 +12,7 @@ import (
 	trafficbuilder "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
-func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc in.ConfigService, proxySvcs ...*proxy.Service) error {
+func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc in.ConfigService, proxySvc *proxy.Service) error {
 	if configSvc == nil {
 		return nil
 	}
@@ -41,9 +41,9 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 			return fmt.Errorf("apply traffic graph: %w", err)
 		}
 	}
-	if len(proxySvcs) > 0 && proxySvcs[0] != nil {
-		if err := proxySvcs[0].ReconcileServiceTargets(plan.ServiceTargets); err != nil {
-			return fmt.Errorf("reconcile HTTP service targets: %w", err)
+	if proxySvc != nil {
+		if err := proxySvc.StageServiceTargets(plan.ServiceTargets); err != nil {
+			return fmt.Errorf("stage HTTP service targets: %w", err)
 		}
 	}
 	return nil
