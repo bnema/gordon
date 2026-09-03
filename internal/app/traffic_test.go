@@ -155,6 +155,29 @@ func TestApplyTrafficRuntimeConfigPassesStandaloneServicesToBuilder(t *testing.T
 	assert.True(t, status.EntryPoints[0].Active)
 }
 
+func TestApplyTrafficRuntimeConfigValidatesRoutesBeforeServiceReconciliation(t *testing.T) {
+	cfg := Config{Services: map[string]servicecfg.Config{
+		"app": {
+			Image: "localhost/app:latest",
+			Ports: map[string]servicecfg.PortConfig{
+				"web": {Container: 8080, Protocol: domain.ServicePortProtocolHTTP},
+			},
+		},
+	}}
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
+	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+	configSvc.EXPECT().GetServiceRoutes().Return([]domain.HTTPServiceRoute{{
+		Domain: "app.example.com", Service: "missing", PortName: "web", HTTPS: true,
+	}})
+	serviceSvc := &standaloneServiceRecorder{}
+
+	err := applyTrafficRuntimeConfig(context.Background(), nil, cfg, configSvc, nil, serviceSvc)
+
+	require.ErrorContains(t, err, `unknown service "missing"`)
+	require.Zero(t, serviceSvc.Calls())
+}
+
 func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(context.Background())) }()

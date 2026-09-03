@@ -98,6 +98,22 @@ func Build(input Input) (domain.TrafficGraph, error) {
 	return plan.Graph, nil
 }
 
+// Validate checks the complete traffic configuration without requiring live
+// service backends or mutating runtime state.
+func Validate(input Input) error {
+	input.ServiceBackends = make([]domain.ServicePortBackend, 0)
+	for _, service := range input.Services {
+		for _, port := range service.Ports {
+			input.ServiceBackends = append(input.ServiceBackends, domain.ServicePortBackend{
+				Service: service.Name, PortName: port.Name, Host: "127.0.0.1",
+				Port: port.Container, Protocol: port.Protocol, TLS: port.TLS,
+			})
+		}
+	}
+	_, err := BuildPlan(input)
+	return err
+}
+
 // BuildPlan validates routing and resolves HTTP bindings to Gordon-owned service ports.
 func BuildPlan(input Input) (Plan, error) {
 	b := builder{input: input, services: map[string]domain.TrafficService{}, serviceTargets: map[string]*domain.ProxyTarget{}}

@@ -61,6 +61,18 @@ func TestService_GetTarget_UsesReconciledServiceTarget(t *testing.T) {
 	require.Equal(t, target.Port, result.Port)
 }
 
+func TestService_GetTarget_ReconciledServiceTargetOverridesCachedTarget(t *testing.T) {
+	svc := NewService(nil, nil, nil, Config{})
+	svc.targets["app.example.com"] = &domain.ProxyTarget{Host: "127.0.0.1", Port: 10080}
+	reconciled := &domain.ProxyTarget{Host: "127.0.0.1", Port: 18080, Scheme: "http"}
+	require.NoError(t, svc.ReconcileServiceTargets(map[string]*domain.ProxyTarget{"app.example.com": reconciled}))
+
+	result, err := svc.GetTarget(testContext(), "app.example.com")
+
+	require.NoError(t, err)
+	require.Equal(t, reconciled.Port, result.Port)
+}
+
 func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	containerSvc := inmocks.NewMockContainerService(t)

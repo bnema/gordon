@@ -34,9 +34,10 @@ import (
 // callers may modify the returned data; a hand-rolled fake ensures each
 // GetRoutes/GetExternalRoutes call returns a defensive copy.
 type fakeRoutes struct {
-	mu       sync.Mutex
-	routes   []domain.Route
-	external map[string]string
+	mu            sync.Mutex
+	routes        []domain.Route
+	serviceRoutes []domain.HTTPServiceRoute
+	external      map[string]string
 }
 
 func (f *fakeRoutes) GetRoutes(_ context.Context) []domain.Route {
@@ -53,6 +54,12 @@ func (f *fakeRoutes) GetExternalRoutes() map[string]string {
 	externalCopy := make(map[string]string, len(f.external))
 	maps.Copy(externalCopy, f.external)
 	return externalCopy
+}
+
+func (f *fakeRoutes) GetServiceRoutes() []domain.HTTPServiceRoute {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.HTTPServiceRoute(nil), f.serviceRoutes...)
 }
 
 type mockIssuerRecorder struct {
@@ -680,6 +687,28 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	assert.Equal(t, []string{"app.example.com"}, stored[0].Names)
 	assert.False(t, stored[0].NotAfter.IsZero())
 	assert.NotEmpty(t, stored[0].Certificate.Certificate)
+}
+
+func TestServiceReconcileObtainsCertificateForHTTPSServiceRoute(t *testing.T) {
+	ctx := context.Background()
+	routes := &fakeRoutes{serviceRoutes: []domain.HTTPServiceRoute{{
+		Domain: "app.example.com", Service: "app", PortName: "web", HTTPS: true,
+	}}}
+	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
+	store, _ := newMockCertificateStore(t)
+	cfg := Config{Enabled: true, Email: "admin@example.com", Challenge: "http-01"}
+	svc := NewService(cfg, ServiceDeps{
+		Config: cfg, Routes: routes, Issuer: issuer, Store: store,
+		Challenges: NewHTTP01Challenges(),
+		Effective:  EffectiveChallenge{Mode: domain.ACMEChallengeHTTP01},
+	})
+
+	require.NoError(t, svc.Load(ctx))
+	require.NoError(t, svc.Reconcile(ctx))
+
+	orders := recorder.Orders()
+	require.Len(t, orders, 1)
+	require.Equal(t, []string{"app.example.com"}, orders[0].Names)
 }
 
 func TestServiceReconcile_SerializesConcurrentRuns(t *testing.T) {

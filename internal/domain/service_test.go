@@ -133,3 +133,39 @@ func TestStandaloneServiceValidateRejectsDuplicateVolumeTargets(t *testing.T) {
 	}
 	require.ErrorContains(t, svc.Validate(), "duplicate volume target")
 }
+
+func TestStandaloneServiceValidateNestedContainerConfiguration(t *testing.T) {
+	base := StandaloneService{
+		Name:    "app",
+		Enabled: true,
+		Containers: []StandaloneServiceContainer{{
+			Name:  "web",
+			Image: "app:latest",
+		}},
+	}
+
+	tests := []struct {
+		name        string
+		configure   func(*StandaloneServiceContainer)
+		wantErrText string
+	}{
+		{name: "blank env file", configure: func(c *StandaloneServiceContainer) { c.EnvFile = "   " }, wantErrText: "env_file"},
+		{name: "missing secret name", configure: func(c *StandaloneServiceContainer) { c.Secrets = []StandaloneServiceSecretRef{{Key: "TOKEN"}} }, wantErrText: "secret"},
+		{name: "relative volume target", configure: func(c *StandaloneServiceContainer) { c.Volumes = []StandaloneServiceVolume{{Target: "data"}} }, wantErrText: "absolute"},
+		{name: "log readiness missing path", configure: func(c *StandaloneServiceContainer) {
+			c.Readiness = StandaloneServiceReadiness{Type: StandaloneServiceReadinessLog, Contains: "ready"}
+		}, wantErrText: "path"},
+		{name: "log readiness missing contains", configure: func(c *StandaloneServiceContainer) {
+			c.Readiness = StandaloneServiceReadiness{Type: StandaloneServiceReadinessLog, Path: "/tmp/app.log"}
+		}, wantErrText: "contains"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := base
+			svc.Containers = append([]StandaloneServiceContainer(nil), base.Containers...)
+			tt.configure(&svc.Containers[0])
+			require.ErrorContains(t, svc.Validate(), tt.wantErrText)
+		})
+	}
+}

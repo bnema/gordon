@@ -347,19 +347,10 @@ func parseRouteTable(domainName string, raw map[string]any) (routeConfig, error)
 	return routeConfig{Service: serviceName, PortName: portName, HTTPS: https}, nil
 }
 
-// GetRoutes returns all configured routes.
+// GetRoutes returns container-owned routes. Keyed configuration defines none;
+// service bindings are exposed exclusively through GetServiceRoutes.
 func (s *Service) GetRoutes(_ context.Context) []domain.Route {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	var routes []domain.Route
-	for domainName, route := range s.config.Routes {
-		routes = append(routes, domain.Route{
-			Domain: domainName, Service: route.Service, PortName: route.PortName, HTTPS: route.HTTPS,
-		})
-	}
-	slices.SortFunc(routes, func(a, b domain.Route) int { return cmp.Compare(a.Domain, b.Domain) })
-	return routes
+	return nil
 }
 
 // GetServiceRoutes returns HTTP bindings to named Gordon-owned service ports.
@@ -520,8 +511,8 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 		return domain.ErrRouteDomainInvalid
 	}
 	route.Domain = canonicalDomain
-	if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
-		return fmt.Errorf("route %q requires non-empty service and port", route.Domain)
+	if err := validateRouteServiceReference(route.Domain, route.Service, route.PortName); err != nil {
+		return err
 	}
 	if route.Image != "" {
 		return fmt.Errorf("route %q cannot own an image; define the image under [services.%s]", route.Domain, route.Service)
@@ -585,8 +576,8 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 		return domain.ErrRouteDomainInvalid
 	}
 	route.Domain = canonicalDomain
-	if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
-		return fmt.Errorf("route %q requires non-empty service and port", route.Domain)
+	if err := validateRouteServiceReference(route.Domain, route.Service, route.PortName); err != nil {
+		return err
 	}
 	if route.Image != "" {
 		return fmt.Errorf("route %q cannot own an image; define the image under [services.%s]", route.Domain, route.Service)
@@ -896,13 +887,25 @@ func canonicalRoutesForSave(routes map[string]routeConfig, registryDomain string
 		if !domain.IsValidRouteDomain(key) {
 			return nil, fmt.Errorf("invalid route key %q: %w", key, domain.ErrRouteDomainInvalid)
 		}
-		if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
-			return nil, fmt.Errorf("route %q requires non-empty service and port", key)
+		if err := validateRouteServiceReference(key, route.Service, route.PortName); err != nil {
+			return nil, err
 		}
 		result[key] = route
 	}
 
 	return result, nil
+}
+
+func validateRouteServiceReference(domainName, serviceName, portName string) error {
+	trimmedService := strings.TrimSpace(serviceName)
+	trimmedPort := strings.TrimSpace(portName)
+	if trimmedService == "" || trimmedPort == "" {
+		return fmt.Errorf("route %q requires non-empty service and port", domainName)
+	}
+	if serviceName != trimmedService || portName != trimmedPort {
+		return fmt.Errorf("route %q service and port must not contain leading or trailing whitespace", domainName)
+	}
+	return nil
 }
 
 func renderCanonicalRoutesSection(routes map[string]routeConfig) string {

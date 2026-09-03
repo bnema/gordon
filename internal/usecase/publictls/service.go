@@ -201,7 +201,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// DeriveCertificateTargets fails (e.g. broken DNS-01 zone resolver).
 	routes := s.deps.Routes.GetRoutes(ctx)
 	external := s.deps.Routes.GetExternalRoutes()
-	hosts := routeHostsWithServiceRoutes(routes, external, serviceRoutes(s.deps.Routes), s.additionalHosts)
+	httpServiceRoutes := serviceRoutes(s.deps.Routes)
+	hosts := routeHostsWithServiceRoutes(routes, external, httpServiceRoutes, s.additionalHosts)
 
 	// Build required hosts set from route hosts (before target derivation).
 	required := canonicalHostSet(hosts)
@@ -213,12 +214,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	clearRouteErrorsLocked(s.routeErr, required)
 	s.mu.Unlock()
 
-	// Derive desired targets.
-	targets, err := DeriveCertificateTargets(ctx, effective.Mode,
-		routes, external,
-		s.additionalHosts,
-		s.deps.ZoneResolver,
-	)
+	// Derive desired targets from the same complete host set used for authorization.
+	targets, err := deriveCertificateTargetsFromHosts(ctx, effective.Mode, hosts, s.deps.ZoneResolver)
 	if err != nil {
 		s.mu.Lock()
 		setRouteErrorsLocked(s.routeErr, required, fmt.Sprintf("derive certificate targets: %v", err))

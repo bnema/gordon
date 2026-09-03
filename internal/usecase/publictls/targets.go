@@ -28,7 +28,15 @@ func DeriveCertificateTargets(
 	resolver out.CloudflareZoneResolver,
 ) ([]CertificateTarget, error) {
 	hosts := routeHosts(routes, external, additionalHosts)
+	return deriveCertificateTargetsFromHosts(ctx, mode, hosts, resolver)
+}
 
+func deriveCertificateTargetsFromHosts(
+	ctx context.Context,
+	mode domain.ACMEChallengeMode,
+	hosts []string,
+	resolver out.CloudflareZoneResolver,
+) ([]CertificateTarget, error) {
 	switch mode {
 	case domain.ACMEChallengeHTTP01:
 		return deriveHTTP01Targets(hosts), nil

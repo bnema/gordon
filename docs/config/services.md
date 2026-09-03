@@ -83,12 +83,11 @@ Use an expanded declaration when a port needs additional settings:
 [services.game.ports.rcon]
 port = 28016
 protocol = "tcp"
-publish = "127.0.0.1:38016"
 private = true
 trusted_cidrs = ["100.64.0.0/10"]
 ```
 
-A port used by Gordon's current proxy runtime must have a loopback `publish` address. This is the private backend address Gordon dials; it is not the public listener. Public listeners are configured with routes or traffic entrypoints.
+Gordon allocates the loopback backend port that it uses to reach the container. Public listeners are configured with routes or traffic entrypoints.
 
 ## Send HTTP traffic to a service
 
@@ -120,7 +119,7 @@ An entrypoint tells Gordon where to listen. A traffic router connects that liste
 image = "registry.example.com/game:latest"
 
 [services.game.ports]
-game = { port = 28015, protocol = "udp", publish = "127.0.0.1:38015" }
+game = { port = 28015, protocol = "udp" }
 
 [entrypoints.game]
 address = ":28015"
@@ -149,7 +148,6 @@ image = "registry.example.com/api:latest"
 port = 9443
 protocol = "tcp"
 tls = true
-publish = "127.0.0.1:19443"
 
 [entrypoints.secure-api]
 address = ":9443"

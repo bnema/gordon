@@ -93,8 +93,12 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Check cache first
+	// Reconciled service targets take precedence over the legacy runtime cache.
 	s.mu.RLock()
+	if target, exists := s.serviceTargets[domainName]; exists {
+		s.mu.RUnlock()
+		return cloneProxyTarget(target), nil
+	}
 	if target, exists := s.targets[domainName]; exists {
 		s.mu.RUnlock()
 		log.Debug().
@@ -103,10 +107,6 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 			Str("container_id", target.ContainerID).
 			Msg("using cached proxy target")
 		return target, nil
-	}
-	if target, exists := s.serviceTargets[domainName]; exists {
-		s.mu.RUnlock()
-		return cloneProxyTarget(target), nil
 	}
 	s.mu.RUnlock()
 

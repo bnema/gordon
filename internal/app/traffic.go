@@ -20,17 +20,7 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 	if err != nil {
 		return fmt.Errorf("convert service config: %w", err)
 	}
-	var serviceBackends []domain.ServicePortBackend
-	if len(serviceSvcs) > 0 && serviceSvcs[0] != nil {
-		if err := serviceSvcs[0].Reconcile(ctx, standaloneServices); err != nil {
-			return fmt.Errorf("reconcile services: %w", err)
-		}
-		serviceBackends, err = serviceSvcs[0].ResolvePorts(ctx, standaloneServices)
-		if err != nil {
-			return fmt.Errorf("resolve service ports: %w", err)
-		}
-	}
-	plan, err := trafficbuilder.BuildPlan(trafficbuilder.Input{
+	input := trafficbuilder.Input{
 		EntryPoints:     cfg.EntryPoints,
 		Traffic:         cfg.Traffic,
 		Routes:          configSvc.GetRoutes(ctx),
@@ -38,8 +28,20 @@ func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Mana
 		ServiceRoutes:   configSvc.GetServiceRoutes(),
 		NetworkServices: cfg.NetworkServices,
 		Services:        standaloneServices,
-		ServiceBackends: serviceBackends,
-	})
+	}
+	if err := trafficbuilder.Validate(input); err != nil {
+		return fmt.Errorf("validate traffic graph: %w", err)
+	}
+	if len(serviceSvcs) > 0 && serviceSvcs[0] != nil {
+		if err := serviceSvcs[0].Reconcile(ctx, standaloneServices); err != nil {
+			return fmt.Errorf("reconcile services: %w", err)
+		}
+		input.ServiceBackends, err = serviceSvcs[0].ResolvePorts(ctx, standaloneServices)
+		if err != nil {
+			return fmt.Errorf("resolve service ports: %w", err)
+		}
+	}
+	plan, err := trafficbuilder.BuildPlan(input)
 	if err != nil {
 		return fmt.Errorf("build traffic graph: %w", err)
 	}

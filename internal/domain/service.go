@@ -161,10 +161,37 @@ func validateStandaloneServiceIdentity(s StandaloneService) error {
 		if _, exists := containerNames[container.Name]; exists {
 			return fmt.Errorf("standalone service %q duplicate container %q", s.Name, container.Name)
 		}
+		if err := validateStandaloneServiceContainer(s.Name, container); err != nil {
+			return err
+		}
 		containerNames[container.Name] = struct{}{}
 	}
-	if s.EnvFile != "" && strings.TrimSpace(s.EnvFile) == "" {
-		return fmt.Errorf("standalone service %q env_file must be non-empty when set", s.Name)
+	return validateStandaloneServiceEnvFile(s.Name, s.EnvFile)
+}
+
+func validateStandaloneServiceContainer(serviceName string, container StandaloneServiceContainer) error {
+	owner := serviceName + "." + container.Name
+	if err := validateStandaloneServiceEnvFile(owner, container.EnvFile); err != nil {
+		return err
+	}
+	nested := StandaloneService{
+		Name:      owner,
+		Secrets:   container.Secrets,
+		Readiness: container.Readiness,
+		Volumes:   container.Volumes,
+	}
+	if err := validateStandaloneServiceVolumes(nested); err != nil {
+		return err
+	}
+	if err := validateStandaloneServiceSecrets(nested); err != nil {
+		return err
+	}
+	return validateStandaloneServiceReadiness(nested)
+}
+
+func validateStandaloneServiceEnvFile(serviceName, envFile string) error {
+	if envFile != "" && strings.TrimSpace(envFile) == "" {
+		return fmt.Errorf("standalone service %q env_file must be non-empty when set", serviceName)
 	}
 	return nil
 }
