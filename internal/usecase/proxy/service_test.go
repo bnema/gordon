@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -45,6 +46,19 @@ func TestService_GetTarget_FromCache(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, cachedTarget, result)
+}
+
+func TestService_GetTarget_UsesReconciledServiceTarget(t *testing.T) {
+	svc := NewService(nil, nil, nil, Config{})
+	target := &domain.ProxyTarget{Host: "127.0.0.1", Port: 18080, Scheme: "http"}
+	require.NoError(t, svc.ReconcileServiceTargets(map[string]*domain.ProxyTarget{"app.example.com": target}))
+
+	result, err := svc.GetTarget(testContext(), "App.Example.com")
+
+	require.NoError(t, err)
+	require.Equal(t, "app.example.com", result.RouteHost)
+	require.Equal(t, target.Host, result.Host)
+	require.Equal(t, target.Port, result.Port)
 }
 
 func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {

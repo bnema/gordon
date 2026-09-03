@@ -1838,8 +1838,8 @@ func (_c *MockControlPlane_ListRoutesWithDetails_Call) Run(run func(ctx context.
 	return _c
 }
 
-func (_c *MockControlPlane_ListRoutesWithDetails_Call) Return(vs []remote.RouteInfo, err error) *MockControlPlane_ListRoutesWithDetails_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockControlPlane_ListRoutesWithDetails_Call) Return(routeInfos []remote.RouteInfo, err error) *MockControlPlane_ListRoutesWithDetails_Call {
+	_c.Call.Return(routeInfos, err)
 	return _c
 }
 

@@ -129,6 +129,15 @@ func collectRouteDomains(ctx context.Context, routes RouteSource) []string {
 			}
 		}
 	}
+	for _, route := range serviceRoutes(routes) {
+		canonical, ok := domain.CanonicalRouteDomain(route.Domain)
+		if ok && route.HTTPS {
+			if _, exists := routeSet[canonical]; !exists {
+				routeSet[canonical] = struct{}{}
+				domains = append(domains, canonical)
+			}
+		}
+	}
 	return domains
 }
 

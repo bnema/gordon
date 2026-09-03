@@ -68,7 +68,7 @@ func TestBuildRawFallbackConfigMapsToEntryPoint(t *testing.T) {
 			RawFallbackTrustedCIDRs: []string{"100.64.0.0/10"},
 			AllowPublicRawFallback:  true,
 		}},
-		Traffic:         Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "ssh-fallback", EntryPoint: "edge", Service: "network_service:ssh:ssh"}}}},
+		Traffic:         Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "ssh-fallback", EntryPoint: "edge", NetworkService: "ssh", Port: "ssh"}}}},
 		NetworkServices: []NetworkServiceConfig{{Name: "ssh", Ports: []PortConfig{{Name: "ssh", Container: 22, Protocol: domain.NetworkProtocolTCP}}}},
 	})
 	require.NoError(t, err)
@@ -116,9 +116,9 @@ func TestBuildExplicitTCPUDPTLSRouterResolution(t *testing.T) {
 			"tls-db":  {Address: ":15432", Protocol: domain.EntryPointProtocolTLSMux},
 		},
 		Traffic: Config{
-			TCP: TCPConfig{Routers: []RouterConfig{{Name: "db", EntryPoint: "tcp-db", Service: "network_service:postgres:sql"}}},
-			UDP: UDPConfig{Routers: []RouterConfig{{Name: "dns", EntryPoint: "udp-dns", Service: "network_service:coredns:dns"}}},
-			TLS: TLSConfig{Routers: []RouterConfig{{Name: "tlsdb", EntryPoint: "tls-db", SNI: "db.example.com", Service: "network_service:postgres:sql"}}},
+			TCP: TCPConfig{Routers: []RouterConfig{{Name: "db", EntryPoint: "tcp-db", NetworkService: "postgres", Port: "sql"}}},
+			UDP: UDPConfig{Routers: []RouterConfig{{Name: "dns", EntryPoint: "udp-dns", NetworkService: "coredns", Port: "dns"}}},
+			TLS: TLSConfig{Routers: []RouterConfig{{Name: "tlsdb", EntryPoint: "tls-db", SNI: "db.example.com", NetworkService: "postgres", Port: "sql"}}},
 		},
 		NetworkServices: []NetworkServiceConfig{
 			{Name: "postgres", Ports: []PortConfig{{Name: "sql", Container: 5432, Protocol: domain.NetworkProtocolTCP}}},
@@ -144,7 +144,7 @@ func TestBuildRejectsTLSHTTPRouteConflict(t *testing.T) {
 	_, err := Build(Input{
 		EntryPoints:     map[string]EntryPointConfig{"edge": {Address: ":443", Protocol: domain.EntryPointProtocolSmartTCP}},
 		Routes:          []domain.Route{{Domain: "app.example.com", HTTPS: true}},
-		Traffic:         Config{TLS: TLSConfig{Routers: []RouterConfig{{Name: "passthrough", EntryPoint: "edge", SNI: "app.example.com", Service: "network_service:app:https"}}}},
+		Traffic:         Config{TLS: TLSConfig{Routers: []RouterConfig{{Name: "passthrough", EntryPoint: "edge", SNI: "app.example.com", NetworkService: "app", Port: "https"}}}},
 		NetworkServices: []NetworkServiceConfig{{Name: "app", Ports: []PortConfig{{Name: "https", Container: 443, Protocol: domain.NetworkProtocolTCP}}}},
 	})
 	require.ErrorContains(t, err, "http host conflicts")
@@ -210,79 +210,72 @@ func TestBuildRejectsAmbiguousNetworkServices(t *testing.T) {
 func TestBuildResolvesStandaloneServiceBackend(t *testing.T) {
 	graph, err := Build(Input{
 		EntryPoints: map[string]EntryPointConfig{"udp": {Address: ":28015", Protocol: domain.EntryPointProtocolUDP}},
-		Traffic:     Config{UDP: UDPConfig{Routers: []RouterConfig{{Name: "rust-game", EntryPoint: "udp", Service: "service:rust:game"}}}},
+		Traffic:     Config{UDP: UDPConfig{Routers: []RouterConfig{{Name: "gameplay", EntryPoint: "udp", Service: "game", Port: "gameplay"}}}},
 		Services: []domain.StandaloneService{{
-			Name:    "rust",
-			Image:   "localhost/rust:latest",
+			Name:    "game",
+			Image:   "localhost/game-server:latest",
 			Enabled: true,
-			Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}},
+			Ports:   []domain.StandaloneServicePort{{Name: "gameplay", Container: 28015, Protocol: domain.ServicePortProtocolUDP}},
 		}},
+		ServiceBackends: []domain.ServicePortBackend{{Service: "game", PortName: "gameplay", Host: "127.0.0.1", Port: 38015, Protocol: domain.ServicePortProtocolUDP}},
 	})
 	require.NoError(t, err)
-	require.Contains(t, graph.Services, domain.TrafficService{Name: "service:rust:game", Backends: []domain.TrafficBackend{{Name: "rust:game", Host: "127.0.0.1", Port: 38015, Protocol: domain.NetworkProtocolUDP}}})
+	require.Contains(t, graph.Services, domain.TrafficService{Name: "service:game:gameplay", Backends: []domain.TrafficBackend{{Name: "game:gameplay", Host: "127.0.0.1", Port: 38015, Protocol: domain.NetworkProtocolUDP}}})
 }
 
 func TestBuildRejectsInvalidStandaloneServiceRefs(t *testing.T) {
 	base := Input{
 		EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},
 		Services: []domain.StandaloneService{{
-			Name:    "rust",
-			Image:   "localhost/rust:latest",
+			Name:    "game",
+			Image:   "localhost/game-server:latest",
 			Enabled: true,
-			Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}, {Name: "rcon", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:38016", Private: true, TrustedCIDRs: []string{"100.64.0.0/10"}}},
+			Ports:   []domain.StandaloneServicePort{{Name: "gameplay", Container: 28015, Protocol: domain.ServicePortProtocolUDP}, {Name: "admin", Container: 28016, Protocol: domain.ServicePortProtocolTCP, Private: true, TrustedCIDRs: []string{"100.64.0.0/10"}}},
 		}},
+		ServiceBackends: []domain.ServicePortBackend{
+			{Service: "game", PortName: "gameplay", Host: "127.0.0.1", Port: 38015, Protocol: domain.ServicePortProtocolUDP},
+			{Service: "game", PortName: "admin", Host: "127.0.0.1", Port: 38016, Protocol: domain.ServicePortProtocolTCP},
+		},
 	}
 
 	t.Run("unknown service", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:missing:rcon"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "missing", Port: "admin"}}}}
 		_, err := Build(input)
 		require.ErrorContains(t, err, "router \"bad\": unknown service \"missing\"")
 	})
 
 	t.Run("unknown port", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:missing"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "game", Port: "missing"}}}}
 		_, err := Build(input)
-		require.ErrorContains(t, err, "unknown port \"missing\" on service \"rust\"")
+		require.ErrorContains(t, err, "unknown port \"missing\" on service \"game\"")
 	})
 
 	t.Run("disabled service", func(t *testing.T) {
 		input := base
 		input.Services = append([]domain.StandaloneService(nil), base.Services...)
 		input.Services[0].Enabled = false
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "game", Port: "admin"}}}}
 		_, err := Build(input)
-		require.ErrorContains(t, err, "unknown service \"rust\"")
+		require.ErrorContains(t, err, "unknown service \"game\"")
 	})
 
 	t.Run("protocol mismatch", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:game"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "game", Port: "gameplay"}}}}
 		_, err := Build(input)
-		require.ErrorContains(t, err, "service \"rust\" port \"game\" protocol udp does not match router protocol tcp")
+		require.ErrorContains(t, err, "service \"game\" port \"gameplay\" protocol udp does not match router protocol tcp")
 	})
 
-	t.Run("missing publish", func(t *testing.T) {
+	t.Run("missing runtime backend", func(t *testing.T) {
 		input := base
-		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}}
-		input.Services = append([]domain.StandaloneService(nil), base.Services...)
-		input.Services[0].Ports = append([]domain.StandaloneServicePort(nil), base.Services[0].Ports...)
-		input.Services[0].Ports[1].Publish = ""
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
+		input.ServiceBackends = nil
+		input.Services[0].Ports[1].Private = false
+		input.Services[0].Ports[1].Public = true
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "game", Port: "admin"}}}}
 		_, err := Build(input)
-		require.ErrorContains(t, err, "service \"rust\" port \"rcon\" publish address")
-	})
-
-	t.Run("invalid publish", func(t *testing.T) {
-		input := base
-		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}}
-		input.Services = append([]domain.StandaloneService(nil), base.Services...)
-		input.Services[0].Ports = append([]domain.StandaloneServicePort(nil), base.Services[0].Ports...)
-		input.Services[0].Ports[1].Publish = "127.0.0.1:notaport"
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "service:rust:rcon"}}}}
-		_, err := Build(input)
-		require.ErrorContains(t, err, "publish address")
+		require.ErrorContains(t, err, "has no resolved runtime backend")
 	})
 }
 
@@ -290,14 +283,14 @@ func TestBuildWrapsStandaloneServiceValidationErrorsWithServiceName(t *testing.T
 	_, err := Build(Input{
 		EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},
 		Services: []domain.StandaloneService{{
-			Name:    "rust",
-			Image:   "localhost/rust:latest",
+			Name:    "game",
+			Image:   "localhost/game-server:latest",
 			Enabled: true,
-			Ports:   []domain.StandaloneServicePort{{Name: " admin ", Container: 28016, Protocol: domain.NetworkProtocolTCP}},
+			Ports:   []domain.StandaloneServicePort{{Name: " admin ", Container: 28016, Protocol: domain.ServicePortProtocolTCP}},
 		}},
 	})
 
-	require.ErrorContains(t, err, "standalone service \"rust\"")
+	require.ErrorContains(t, err, "standalone service \"game\"")
 	require.ErrorContains(t, err, "leading or trailing whitespace")
 }
 
@@ -305,13 +298,14 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 	base := func() Input {
 		return Input{
 			EntryPoints: map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP, TrustedCIDRs: []string{"100.64.0.0/10"}}},
-			Traffic:     Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "rust-rcon", EntryPoint: "tcp", Service: "service:rust:rcon"}}}},
+			Traffic:     Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "game-admin", EntryPoint: "tcp", Service: "game", Port: "admin"}}}},
 			Services: []domain.StandaloneService{{
-				Name:    "rust",
-				Image:   "localhost/rust:latest",
+				Name:    "game",
+				Image:   "localhost/game-server:latest",
 				Enabled: true,
-				Ports:   []domain.StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:38016", TrustedCIDRs: []string{"100.64.0.0/10"}}},
+				Ports:   []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.ServicePortProtocolTCP, Private: true, TrustedCIDRs: []string{"100.64.0.0/10"}}},
 			}},
+			ServiceBackends: []domain.ServicePortBackend{{Service: "game", PortName: "admin", Host: "127.0.0.1", Port: 38016, Protocol: domain.ServicePortProtocolTCP}},
 		}
 	}
 
@@ -337,10 +331,11 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 
 	t.Run("explicit private non-rcon rejects service port without trusted cidrs", func(t *testing.T) {
 		input := base()
-		input.Services[0].Ports[0].Name = "admin"
+		input.Services[0].Ports[0].Name = "management"
 		input.Services[0].Ports[0].Private = true
 		input.Services[0].Ports[0].TrustedCIDRs = nil
-		input.Traffic.TCP.Routers[0].Service = "service:rust:admin"
+		input.Traffic.TCP.Routers[0].Port = "management"
+		input.ServiceBackends[0].PortName = "management"
 		_, err := Build(input)
 		require.ErrorContains(t, err, "requires non-empty service port trusted_cidrs")
 	})
@@ -366,9 +361,10 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("explicit public rcon is allowed without trusted cidrs", func(t *testing.T) {
+	t.Run("explicit public admin is allowed without trusted cidrs", func(t *testing.T) {
 		input := base()
 		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
+		input.Services[0].Ports[0].Private = false
 		input.Services[0].Ports[0].Public = true
 		input.Services[0].Ports[0].TrustedCIDRs = nil
 		_, err := Build(input)
@@ -378,14 +374,30 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 	t.Run("explicit public non-rcon is allowed without trusted cidrs", func(t *testing.T) {
 		input := base()
 		input.EntryPoints = map[string]EntryPointConfig{"tcp": {Address: ":28016", Protocol: domain.EntryPointProtocolTCP}}
-		input.Services[0].Ports[0].Name = "admin"
+		input.Services[0].Ports[0].Name = "management"
 		input.Services[0].Ports[0].Private = false
 		input.Services[0].Ports[0].Public = true
 		input.Services[0].Ports[0].TrustedCIDRs = nil
-		input.Traffic.TCP.Routers[0].Service = "service:rust:admin"
+		input.Traffic.TCP.Routers[0].Port = "management"
+		input.ServiceBackends[0].PortName = "management"
 		_, err := Build(input)
 		require.NoError(t, err)
 	})
+}
+
+func TestBuildPlanResolvesHTTPServiceRouteWithoutRouteContainer(t *testing.T) {
+	plan, err := BuildPlan(Input{
+		ServiceRoutes: []domain.HTTPServiceRoute{{Domain: "Play.Example.com", Service: "game", PortName: "web"}},
+		Services: []domain.StandaloneService{{
+			Name: "game", Enabled: true, Image: "example/game-server:latest",
+			Ports: []domain.StandaloneServicePort{{Name: "web", Container: 8080, Protocol: domain.ServicePortProtocolHTTP}},
+		}},
+		ServiceBackends: []domain.ServicePortBackend{{Service: "game", PortName: "web", Host: "127.0.0.1", Port: 18080, Protocol: domain.ServicePortProtocolHTTP}},
+	})
+
+	require.NoError(t, err)
+	require.Empty(t, plan.Graph.Routers, "service routes are HTTP proxy targets, not traffic-manager routers")
+	require.Equal(t, &domain.ProxyTarget{Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "play.example.com"}, plan.ServiceTargets["play.example.com"])
 }
 
 func TestBuildRejectsInvalidServiceRefs(t *testing.T) {
@@ -396,21 +408,21 @@ func TestBuildRejectsInvalidServiceRefs(t *testing.T) {
 
 	t.Run("unknown service", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "network_service:missing:tcp"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", NetworkService: "missing", Port: "tcp"}}}}
 		_, err := Build(input)
 		require.ErrorContains(t, err, "unknown network service")
 	})
 
 	t.Run("unknown port", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "network_service:svc:missing"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", NetworkService: "svc", Port: "missing"}}}}
 		_, err := Build(input)
 		require.ErrorContains(t, err, "unknown port")
 	})
 
 	t.Run("protocol mismatch", func(t *testing.T) {
 		input := base
-		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", Service: "network_service:svc:udp"}}}}
+		input.Traffic = Config{TCP: TCPConfig{Routers: []RouterConfig{{Name: "bad", EntryPoint: "tcp", NetworkService: "svc", Port: "udp"}}}}
 		_, err := Build(input)
 		require.ErrorContains(t, err, "does not match")
 	})

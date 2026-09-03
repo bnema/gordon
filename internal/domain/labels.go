@@ -18,6 +18,7 @@ const (
 	// Standalone service labels identify Gordon-managed L4 service containers.
 	LabelService                       = "gordon.service"
 	LabelServiceName                   = "gordon.service.name"
+	LabelServiceContainer              = "gordon.service.container"
 	LabelServiceConfigHash             = "gordon.service.config-hash"
 	LabelServiceManagedVolumes         = "gordon.service.managed-volumes"
 	LabelServiceCleanupPreserveVolumes = "gordon.service.cleanup.preserve-volumes"

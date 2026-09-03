@@ -114,6 +114,28 @@ func TestHandler_RejectsInvalidRequestHost(t *testing.T) {
 	}
 }
 
+func TestHandler_RejectsUntrustedPeerForPrivateServiceTarget(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().IsRegistryDomain("play.example.com").Return(false)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "play.example.com").Return(&domain.ProxyTarget{
+		Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "play.example.com", TrustedCIDRs: []string{"100.64.0.0/10"},
+	}, nil)
+
+	handler := NewHandler(proxySvc, nil, testLogger())
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "play.example.com"
+	resp, err := server.Client().Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+}
+
 func TestHandler_Returns404WhenNoTarget(t *testing.T) {
 	proxySvc := inmocks.NewMockProxyService(t)
 

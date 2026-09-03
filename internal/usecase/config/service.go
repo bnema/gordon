@@ -55,8 +55,9 @@ type Config struct {
 }
 
 type routeConfig struct {
-	Image string `toml:"image"`
-	HTTPS bool   `toml:"https"`
+	Service  string `toml:"service"`
+	PortName string `toml:"port"`
+	HTTPS    bool   `toml:"https"`
 }
 
 // Service implements the ConfigService interface.
@@ -285,7 +286,7 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 
 	for key, value := range routes {
 		if strings.HasPrefix(key, "http://") {
-			continue
+			return nil, fmt.Errorf("route key %q uses removed http:// syntax; use the plain hostname and set https = false when needed", key)
 		}
 
 		route, err := parseCanonicalRouteEntry(key, value)
@@ -297,27 +298,6 @@ func loadCanonicalRoutes(raw any) (map[string]routeConfig, error) {
 			return nil, fmt.Errorf("duplicate route key %q canonicalizes to %q", key, canonicalKey)
 		}
 		result[canonicalKey] = route
-	}
-
-	for key, value := range routes {
-		if !strings.HasPrefix(key, "http://") {
-			continue
-		}
-
-		domainName := strings.TrimPrefix(key, "http://")
-		canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
-		if !ok {
-			return nil, fmt.Errorf("invalid route key %q: %w", legacyRouteStorageKey(domainName), domain.ErrRouteDomainInvalid)
-		}
-		if _, exists := result[canonicalDomain]; exists {
-			continue
-		}
-
-		route, err := parseLegacyRouteEntry(domainName, value)
-		if err != nil {
-			return nil, err
-		}
-		result[canonicalDomain] = route
 	}
 
 	return result, nil
@@ -332,51 +312,39 @@ func parseCanonicalRouteEntry(domainName string, raw any) (routeConfig, error) {
 
 	switch value := raw.(type) {
 	case string:
-		if value == "" {
-			return routeConfig{}, fmt.Errorf("route %q has empty image", domainName)
-		}
-		return routeConfig{Image: value, HTTPS: true}, nil
+		return routeConfig{}, fmt.Errorf("route %q uses removed image-backed string syntax; define [services.<name>] and bind it with { service = \"<name>\", port = \"<port>\" }", domainName)
 	case map[string]any:
 		return parseRouteTable(domainName, value)
 	default:
-		return routeConfig{}, fmt.Errorf("route %q has unsupported value type %T", domainName, raw)
+		return routeConfig{}, fmt.Errorf("route %q must be a table with non-empty service and port fields, got %T", domainName, raw)
 	}
-}
-
-func parseLegacyRouteEntry(domainName string, raw any) (routeConfig, error) {
-	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
-	if !ok {
-		return routeConfig{}, fmt.Errorf("invalid route key %q: %w", legacyRouteStorageKey(domainName), domain.ErrRouteDomainInvalid)
-	}
-	domainName = canonicalDomain
-
-	value, ok := raw.(string)
-	if !ok {
-		return routeConfig{}, fmt.Errorf("legacy route %q must be a string", legacyRouteStorageKey(domainName))
-	}
-	if value == "" {
-		return routeConfig{}, fmt.Errorf("legacy route %q has empty image", legacyRouteStorageKey(domainName))
-	}
-
-	return routeConfig{Image: value, HTTPS: false}, nil
 }
 
 func parseRouteTable(domainName string, raw map[string]any) (routeConfig, error) {
-	imageValue, ok := raw["image"].(string)
-	if !ok || imageValue == "" {
-		return routeConfig{}, fmt.Errorf("route %q has invalid image field", domainName)
+	if _, exists := raw["image"]; exists {
+		return routeConfig{}, fmt.Errorf("route %q uses removed image-backed syntax; define the image under [services.<name>] and bind this route with service and port", domainName)
+	}
+	if _, exists := raw["target"]; exists {
+		return routeConfig{}, fmt.Errorf("route %q uses removed target syntax; replace target with explicit service and port fields", domainName)
+	}
+	serviceName, serviceOK := raw["service"].(string)
+	portName, portOK := raw["port"].(string)
+	if !serviceOK || strings.TrimSpace(serviceName) == "" || !portOK || strings.TrimSpace(portName) == "" {
+		return routeConfig{}, fmt.Errorf("route %q must define non-empty service and port fields", domainName)
+	}
+	if serviceName != strings.TrimSpace(serviceName) || portName != strings.TrimSpace(portName) {
+		return routeConfig{}, fmt.Errorf("route %q service and port must not contain leading or trailing whitespace", domainName)
 	}
 
-	httpsValue, ok := raw["https"]
-	if !ok {
-		return routeConfig{Image: imageValue, HTTPS: true}, nil
+	https := true
+	if httpsValue, ok := raw["https"]; ok {
+		var valid bool
+		https, valid = httpsValue.(bool)
+		if !valid {
+			return routeConfig{}, fmt.Errorf("route %q has invalid https field", domainName)
+		}
 	}
-	https, ok := httpsValue.(bool)
-	if !ok {
-		return routeConfig{}, fmt.Errorf("route %q has invalid https field", domainName)
-	}
-
-	return routeConfig{Image: imageValue, HTTPS: https}, nil
+	return routeConfig{Service: serviceName, PortName: portName, HTTPS: https}, nil
 }
 
 // GetRoutes returns all configured routes.
@@ -386,12 +354,26 @@ func (s *Service) GetRoutes(_ context.Context) []domain.Route {
 
 	var routes []domain.Route
 	for domainName, route := range s.config.Routes {
-		if strings.HasPrefix(domainName, "http://") {
-			continue
-		}
-		routes = append(routes, domain.Route{Domain: domainName, Image: route.Image, HTTPS: route.HTTPS})
+		routes = append(routes, domain.Route{
+			Domain: domainName, Service: route.Service, PortName: route.PortName, HTTPS: route.HTTPS,
+		})
 	}
+	slices.SortFunc(routes, func(a, b domain.Route) int { return cmp.Compare(a.Domain, b.Domain) })
+	return routes
+}
 
+// GetServiceRoutes returns HTTP bindings to named Gordon-owned service ports.
+func (s *Service) GetServiceRoutes() []domain.HTTPServiceRoute {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	routes := make([]domain.HTTPServiceRoute, 0)
+	for domainName, route := range s.config.Routes {
+		routes = append(routes, domain.HTTPServiceRoute{
+			Domain: domainName, Service: route.Service, PortName: route.PortName, HTTPS: route.HTTPS,
+		})
+	}
+	slices.SortFunc(routes, func(a, b domain.HTTPServiceRoute) int { return cmp.Compare(a.Domain, b.Domain) })
 	return routes
 }
 
@@ -409,7 +391,9 @@ func (s *Service) GetRoute(_ context.Context, domainName string) (*domain.Route,
 		return nil, domain.ErrRouteNotFound
 	}
 
-	routeValue := domain.Route{Domain: domainName, Image: routeCfg.Image, HTTPS: routeCfg.HTTPS}
+	routeValue := domain.Route{
+		Domain: domainName, Service: routeCfg.Service, PortName: routeCfg.PortName, HTTPS: routeCfg.HTTPS,
+	}
 	route := &routeValue
 
 	return route, nil
@@ -422,17 +406,7 @@ func (s *Service) FindRoutesByImage(_ context.Context, imageName string) []domai
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var routes []domain.Route
-	for domainName, route := range s.config.Routes {
-		if strings.HasPrefix(domainName, "http://") {
-			continue
-		}
-		if matchesImageName(imageName, route.Image, s.config.RegistryDomain, s.config.LegacyRegistryDomains) {
-			routes = append(routes, domain.Route{Domain: domainName, Image: route.Image, HTTPS: route.HTTPS})
-		}
-	}
-
-	return routes
+	return nil
 }
 
 // FindAttachmentTargetsByImage returns all attachment targets whose image matches the given image name.
@@ -546,8 +520,11 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 		return domain.ErrRouteDomainInvalid
 	}
 	route.Domain = canonicalDomain
-	if route.Image == "" {
-		return domain.ErrRouteImageEmpty
+	if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
+		return fmt.Errorf("route %q requires non-empty service and port", route.Domain)
+	}
+	if route.Image != "" {
+		return fmt.Errorf("route %q cannot own an image; define the image under [services.%s]", route.Domain, route.Service)
 	}
 
 	// Store previous value for rollback
@@ -563,7 +540,7 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	previousCanonicalRoute, canonicalExisted := currentConfig.Routes[route.Domain]
 	legacyKey := legacyRouteStorageKey(route.Domain)
 	_, legacyExisted := currentConfig.Routes[legacyKey]
-	newRoute := routeConfig{Image: route.Image, HTTPS: route.HTTPS}
+	newRoute := routeConfig{Service: route.Service, PortName: route.PortName, HTTPS: route.HTTPS}
 	if canonicalExisted && previousCanonicalRoute == newRoute && !legacyExisted {
 		s.mu.Unlock()
 		return nil
@@ -586,7 +563,7 @@ func (s *Service) AddRoute(ctx context.Context, route domain.Route) error {
 	s.config.Routes = nextRoutes
 	s.mu.Unlock()
 
-	log.Info().Str("image", route.Image).Msg("route added to configuration")
+	log.Info().Str("service", route.Service).Str("port", route.PortName).Msg("route added to configuration")
 	return nil
 }
 
@@ -608,8 +585,11 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 		return domain.ErrRouteDomainInvalid
 	}
 	route.Domain = canonicalDomain
-	if route.Image == "" {
-		return domain.ErrRouteImageEmpty
+	if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
+		return fmt.Errorf("route %q requires non-empty service and port", route.Domain)
+	}
+	if route.Image != "" {
+		return fmt.Errorf("route %q cannot own an image; define the image under [services.%s]", route.Domain, route.Service)
 	}
 
 	// Store previous value for rollback
@@ -624,7 +604,8 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	legacyKey := legacyRouteStorageKey(route.Domain)
 	nextRoutes := cloneRouteConfigs(currentConfig.Routes)
 	delete(nextRoutes, legacyKey)
-	updatedRoute.Image = route.Image
+	updatedRoute.Service = route.Service
+	updatedRoute.PortName = route.PortName
 	updatedRoute.HTTPS = route.HTTPS
 	nextRoutes[route.Domain] = updatedRoute
 
@@ -640,7 +621,7 @@ func (s *Service) UpdateRoute(ctx context.Context, route domain.Route) error {
 	s.config.Routes = nextRoutes
 	s.mu.Unlock()
 
-	log.Info().Str("image", route.Image).Msg("route updated")
+	log.Info().Str("service", route.Service).Str("port", route.PortName).Msg("route updated")
 	return nil
 }
 
@@ -908,35 +889,17 @@ func canonicalRoutesForSave(routes map[string]routeConfig, registryDomain string
 		return result, nil
 	}
 
-	canonicalizeRoute := func(route routeConfig) routeConfig {
-		route.Image = domain.CanonicalizeGordonImageRef(route.Image, registryDomain, legacyRegistryDomains)
-		return route
-	}
-
 	for key, route := range routes {
 		if strings.HasPrefix(key, "http://") {
-			continue
+			return nil, fmt.Errorf("route key %q uses removed http:// syntax", key)
 		}
 		if !domain.IsValidRouteDomain(key) {
 			return nil, fmt.Errorf("invalid route key %q: %w", key, domain.ErrRouteDomainInvalid)
 		}
-		result[key] = canonicalizeRoute(route)
-	}
-
-	for key, route := range routes {
-		if !strings.HasPrefix(key, "http://") {
-			continue
+		if strings.TrimSpace(route.Service) == "" || strings.TrimSpace(route.PortName) == "" {
+			return nil, fmt.Errorf("route %q requires non-empty service and port", key)
 		}
-
-		domainName := strings.TrimPrefix(key, "http://")
-		if !domain.IsValidRouteDomain(domainName) {
-			return nil, fmt.Errorf("invalid route key %q: %w", key, domain.ErrRouteDomainInvalid)
-		}
-		if _, exists := result[domainName]; exists {
-			continue
-		}
-		route.HTTPS = false
-		result[domainName] = canonicalizeRoute(route)
+		result[key] = route
 	}
 
 	return result, nil
@@ -958,8 +921,10 @@ func renderCanonicalRoutesSection(routes map[string]routeConfig) string {
 	for _, key := range keys {
 		route := routes[key]
 		b.WriteString(strconv.Quote(key))
-		b.WriteString(" = { image = ")
-		b.WriteString(strconv.Quote(route.Image))
+		b.WriteString(" = { service = ")
+		b.WriteString(strconv.Quote(route.Service))
+		b.WriteString(", port = ")
+		b.WriteString(strconv.Quote(route.PortName))
 		b.WriteString(", https = ")
 		if route.HTTPS {
 			b.WriteString("true")

@@ -7,35 +7,55 @@ import (
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
+	proxyusecase "github.com/bnema/gordon/internal/usecase/proxy"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	trafficbuilder "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
-func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc in.ConfigService) error {
-	if manager == nil || configSvc == nil {
+func applyTrafficRuntimeConfig(ctx context.Context, manager *trafficadapter.Manager, cfg Config, configSvc in.ConfigService, proxySvc *proxyusecase.Service, serviceSvcs ...in.StandaloneServiceService) error {
+	if configSvc == nil {
 		return nil
 	}
 	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
 	if err != nil {
-		return fmt.Errorf("convert standalone service config: %w", err)
+		return fmt.Errorf("convert service config: %w", err)
 	}
-	graph, err := trafficbuilder.Build(trafficbuilder.Input{
+	var serviceBackends []domain.ServicePortBackend
+	if len(serviceSvcs) > 0 && serviceSvcs[0] != nil {
+		if err := serviceSvcs[0].Reconcile(ctx, standaloneServices); err != nil {
+			return fmt.Errorf("reconcile services: %w", err)
+		}
+		serviceBackends, err = serviceSvcs[0].ResolvePorts(ctx, standaloneServices)
+		if err != nil {
+			return fmt.Errorf("resolve service ports: %w", err)
+		}
+	}
+	plan, err := trafficbuilder.BuildPlan(trafficbuilder.Input{
 		EntryPoints:     cfg.EntryPoints,
 		Traffic:         cfg.Traffic,
 		Routes:          configSvc.GetRoutes(ctx),
 		ExternalRoutes:  configSvc.GetExternalRoutes(),
+		ServiceRoutes:   configSvc.GetServiceRoutes(),
 		NetworkServices: cfg.NetworkServices,
 		Services:        standaloneServices,
+		ServiceBackends: serviceBackends,
 	})
 	if err != nil {
 		return fmt.Errorf("build traffic graph: %w", err)
 	}
-	owned, err := trafficRuntimeGraph(graph)
-	if err != nil {
-		return fmt.Errorf("filter traffic graph for runtime ownership: %w", err)
+	if manager != nil {
+		owned, err := trafficRuntimeGraph(plan.Graph)
+		if err != nil {
+			return fmt.Errorf("filter traffic graph for runtime ownership: %w", err)
+		}
+		if err := manager.Apply(ctx, &owned); err != nil {
+			return fmt.Errorf("apply traffic graph: %w", err)
+		}
 	}
-	if err := manager.Apply(ctx, &owned); err != nil {
-		return fmt.Errorf("apply traffic graph: %w", err)
+	if proxySvc != nil {
+		if err := proxySvc.StageServiceTargets(plan.ServiceTargets); err != nil {
+			return fmt.Errorf("stage HTTP service targets: %w", err)
+		}
 	}
 	return nil
 }

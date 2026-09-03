@@ -1039,6 +1039,52 @@ func (_c *MockConfigService_GetServerPort_Call) RunAndReturn(run func() int) *Mo
 	return _c
 }
 
+// GetServiceRoutes provides a mock function for the type MockConfigService
+func (_mock *MockConfigService) GetServiceRoutes() []domain.HTTPServiceRoute {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetServiceRoutes")
+	}
+
+	var r0 []domain.HTTPServiceRoute
+	if returnFunc, ok := ret.Get(0).(func() []domain.HTTPServiceRoute); ok {
+		r0 = returnFunc()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.HTTPServiceRoute)
+		}
+	}
+	return r0
+}
+
+// MockConfigService_GetServiceRoutes_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetServiceRoutes'
+type MockConfigService_GetServiceRoutes_Call struct {
+	*mock.Call
+}
+
+// GetServiceRoutes is a helper method to define mock.On call
+func (_e *MockConfigService_Expecter) GetServiceRoutes() *MockConfigService_GetServiceRoutes_Call {
+	return &MockConfigService_GetServiceRoutes_Call{Call: _e.mock.On("GetServiceRoutes")}
+}
+
+func (_c *MockConfigService_GetServiceRoutes_Call) Run(run func()) *MockConfigService_GetServiceRoutes_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockConfigService_GetServiceRoutes_Call) Return(hTTPServiceRoutes []domain.HTTPServiceRoute) *MockConfigService_GetServiceRoutes_Call {
+	_c.Call.Return(hTTPServiceRoutes)
+	return _c
+}
+
+func (_c *MockConfigService_GetServiceRoutes_Call) RunAndReturn(run func() []domain.HTTPServiceRoute) *MockConfigService_GetServiceRoutes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // IsAutoEnabled provides a mock function for the type MockConfigService
 func (_mock *MockConfigService) IsAutoEnabled() bool {
 	ret := _mock.Called()

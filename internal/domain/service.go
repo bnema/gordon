@@ -15,21 +15,53 @@ const (
 	StandaloneServiceReadinessLog  = "log"
 )
 
+// ServicePortProtocol describes what an application speaks on a named port.
+type ServicePortProtocol string
+
+const (
+	ServicePortProtocolHTTP ServicePortProtocol = "http"
+	ServicePortProtocolTCP  ServicePortProtocol = "tcp"
+	ServicePortProtocolUDP  ServicePortProtocol = "udp"
+)
+
 type StandaloneService struct {
+	Name          string
+	Image         string // Single-container shorthand.
+	Containers    []StandaloneServiceContainer
+	Enabled       bool
+	ContainerName string // Normalized runtime component name.
+	NetworkName   string // Normalized private service network.
+	Env           []string
+	EnvFile       string
+	Secrets       []StandaloneServiceSecretRef
+	Readiness     StandaloneServiceReadiness
+	Cleanup       StandaloneServiceCleanup
+	Ports         []StandaloneServicePort
+	Volumes       []StandaloneServiceVolume
+}
+
+type StandaloneServiceContainer struct {
 	Name      string
 	Image     string
-	Enabled   bool
 	Env       []string
 	EnvFile   string
 	Secrets   []StandaloneServiceSecretRef
 	Readiness StandaloneServiceReadiness
-	Cleanup   StandaloneServiceCleanup
-	Ports     []StandaloneServicePort
 	Volumes   []StandaloneServiceVolume
+}
+
+type ServicePortBackend struct {
+	Service  string
+	PortName string
+	Host     string
+	Port     int
+	Protocol ServicePortProtocol
+	TLS      bool
 }
 
 type StandaloneServiceStatus struct {
 	Name          string
+	ComponentName string
 	ContainerID   string
 	ContainerName string
 	Status        ContainerStatus
@@ -37,13 +69,15 @@ type StandaloneServiceStatus struct {
 }
 
 type StandaloneServicePort struct {
-	Name         string
-	Container    int
-	Protocol     NetworkProtocol
-	Publish      string
-	Private      bool
-	Public       bool
-	TrustedCIDRs []string
+	Name          string
+	ContainerName string
+	Container     int
+	Protocol      ServicePortProtocol
+	TLS           bool
+	Publish       string
+	Private       bool
+	Public        bool
+	TrustedCIDRs  []string
 }
 
 type StandaloneServiceVolume struct {
@@ -87,18 +121,8 @@ func (c StandaloneServiceCleanup) WithDefaults() StandaloneServiceCleanup {
 
 func (s StandaloneService) Validate() error {
 	s = s.WithDefaults()
-	name := strings.TrimSpace(s.Name)
-	if name == "" {
-		return fmt.Errorf("standalone service name is required")
-	}
-	if s.Name != name {
-		return fmt.Errorf("standalone service name %q must not include leading or trailing whitespace", s.Name)
-	}
-	if s.Enabled && strings.TrimSpace(s.Image) == "" {
-		return fmt.Errorf("standalone service %q image is required when enabled", s.Name)
-	}
-	if s.EnvFile != "" && strings.TrimSpace(s.EnvFile) == "" {
-		return fmt.Errorf("standalone service %q env_file must be non-empty when set", s.Name)
+	if err := validateStandaloneServiceIdentity(s); err != nil {
+		return err
 	}
 	if err := validateStandaloneServicePorts(s); err != nil {
 		return err
@@ -115,8 +139,42 @@ func (s StandaloneService) Validate() error {
 	return nil
 }
 
+func validateStandaloneServiceIdentity(s StandaloneService) error {
+	name := strings.TrimSpace(s.Name)
+	if name == "" {
+		return fmt.Errorf("standalone service name is required")
+	}
+	if s.Name != name {
+		return fmt.Errorf("standalone service name %q must not include leading or trailing whitespace", s.Name)
+	}
+	if s.Enabled && strings.TrimSpace(s.Image) == "" && len(s.Containers) == 0 {
+		return fmt.Errorf("standalone service %q image or containers are required when enabled", s.Name)
+	}
+	if strings.TrimSpace(s.Image) != "" && len(s.Containers) > 0 {
+		return fmt.Errorf("standalone service %q cannot define both image and containers", s.Name)
+	}
+	containerNames := make(map[string]struct{}, len(s.Containers))
+	for _, container := range s.Containers {
+		if strings.TrimSpace(container.Name) == "" || strings.TrimSpace(container.Image) == "" {
+			return fmt.Errorf("standalone service %q containers require a name and image", s.Name)
+		}
+		if _, exists := containerNames[container.Name]; exists {
+			return fmt.Errorf("standalone service %q duplicate container %q", s.Name, container.Name)
+		}
+		containerNames[container.Name] = struct{}{}
+	}
+	if s.EnvFile != "" && strings.TrimSpace(s.EnvFile) == "" {
+		return fmt.Errorf("standalone service %q env_file must be non-empty when set", s.Name)
+	}
+	return nil
+}
+
 func validateStandaloneServicePorts(s StandaloneService) error {
 	seen := make(map[string]struct{}, len(s.Ports))
+	containerNames := make(map[string]struct{}, len(s.Containers))
+	for _, container := range s.Containers {
+		containerNames[container.Name] = struct{}{}
+	}
 	for i, port := range s.Ports {
 		name, err := validateStandaloneServicePort(s.Name, i, port)
 		if err != nil {
@@ -124,6 +182,11 @@ func validateStandaloneServicePorts(s StandaloneService) error {
 		}
 		if _, ok := seen[name]; ok {
 			return fmt.Errorf("standalone service %q duplicate port name %q", s.Name, name)
+		}
+		if len(containerNames) > 0 {
+			if _, ok := containerNames[port.ContainerName]; !ok {
+				return fmt.Errorf("standalone service %q port %q references unknown container %q", s.Name, name, port.ContainerName)
+			}
 		}
 		seen[name] = struct{}{}
 	}
@@ -141,8 +204,11 @@ func validateStandaloneServicePort(serviceName string, index int, port Standalon
 	if port.Container <= 0 || port.Container > 65535 {
 		return "", fmt.Errorf("standalone service %q port %q container port must be 1-65535", serviceName, name)
 	}
-	if port.Protocol != NetworkProtocolTCP && port.Protocol != NetworkProtocolUDP {
-		return "", fmt.Errorf("standalone service %q port %q protocol must be tcp or udp", serviceName, name)
+	if !port.Protocol.Valid() {
+		return "", fmt.Errorf("standalone service %q port %q protocol must be http, tcp, or udp", serviceName, name)
+	}
+	if port.Protocol == ServicePortProtocolUDP && port.TLS {
+		return "", fmt.Errorf("standalone service %q port %q cannot enable TLS with UDP", serviceName, name)
 	}
 	if port.Private && port.Public {
 		return "", fmt.Errorf("standalone service %q port %q cannot be both private and public", serviceName, name)
@@ -159,6 +225,29 @@ func validateStandaloneServicePort(serviceName string, index int, port Standalon
 		return "", err
 	}
 	return name, nil
+}
+
+// Valid reports whether the service port protocol is supported.
+func (p ServicePortProtocol) Valid() bool {
+	switch p {
+	case ServicePortProtocolHTTP, ServicePortProtocolTCP, ServicePortProtocolUDP:
+		return true
+	default:
+		return false
+	}
+}
+
+// NetworkProtocol returns the underlying container transport.
+func (p ServicePortProtocol) NetworkProtocol() NetworkProtocol {
+	if p == ServicePortProtocolUDP {
+		return NetworkProtocolUDP
+	}
+	return NetworkProtocolTCP
+}
+
+// IsHTTP reports whether Gordon's HTTP reverse proxy can use the port.
+func (p ServicePortProtocol) IsHTTP() bool {
+	return p == ServicePortProtocolHTTP
 }
 
 func validateStandaloneServiceTrustedCIDRs(serviceName, portName string, cidrs []string) error {

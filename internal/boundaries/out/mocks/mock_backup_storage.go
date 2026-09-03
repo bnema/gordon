@@ -301,8 +301,8 @@ func (_c *MockBackupStorage_List_Call) Run(run func(ctx context.Context, domainN
 	return _c
 }
 
-func (_c *MockBackupStorage_List_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupStorage_List_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockBackupStorage_List_Call) Return(databaseBackupJobs []domain.DatabaseBackupJob, err error) *MockBackupStorage_List_Call {
+	_c.Call.Return(databaseBackupJobs, err)
 	return _c
 }
 

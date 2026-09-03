@@ -95,6 +95,74 @@ func (_c *MockStandaloneServiceService_Reconcile_Call) RunAndReturn(run func(ctx
 	return _c
 }
 
+// ResolvePorts provides a mock function for the type MockStandaloneServiceService
+func (_mock *MockStandaloneServiceService) ResolvePorts(ctx context.Context, services []domain.StandaloneService) ([]domain.ServicePortBackend, error) {
+	ret := _mock.Called(ctx, services)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ResolvePorts")
+	}
+
+	var r0 []domain.ServicePortBackend
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []domain.StandaloneService) ([]domain.ServicePortBackend, error)); ok {
+		return returnFunc(ctx, services)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, []domain.StandaloneService) []domain.ServicePortBackend); ok {
+		r0 = returnFunc(ctx, services)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.ServicePortBackend)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, []domain.StandaloneService) error); ok {
+		r1 = returnFunc(ctx, services)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockStandaloneServiceService_ResolvePorts_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ResolvePorts'
+type MockStandaloneServiceService_ResolvePorts_Call struct {
+	*mock.Call
+}
+
+// ResolvePorts is a helper method to define mock.On call
+//   - ctx context.Context
+//   - services []domain.StandaloneService
+func (_e *MockStandaloneServiceService_Expecter) ResolvePorts(ctx any, services any) *MockStandaloneServiceService_ResolvePorts_Call {
+	return &MockStandaloneServiceService_ResolvePorts_Call{Call: _e.mock.On("ResolvePorts", ctx, services)}
+}
+
+func (_c *MockStandaloneServiceService_ResolvePorts_Call) Run(run func(ctx context.Context, services []domain.StandaloneService)) *MockStandaloneServiceService_ResolvePorts_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 []domain.StandaloneService
+		if args[1] != nil {
+			arg1 = args[1].([]domain.StandaloneService)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockStandaloneServiceService_ResolvePorts_Call) Return(servicePortBackends []domain.ServicePortBackend, err error) *MockStandaloneServiceService_ResolvePorts_Call {
+	_c.Call.Return(servicePortBackends, err)
+	return _c
+}
+
+func (_c *MockStandaloneServiceService_ResolvePorts_Call) RunAndReturn(run func(ctx context.Context, services []domain.StandaloneService) ([]domain.ServicePortBackend, error)) *MockStandaloneServiceService_ResolvePorts_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Status provides a mock function for the type MockStandaloneServiceService
 func (_mock *MockStandaloneServiceService) Status(ctx context.Context) ([]domain.StandaloneServiceStatus, error) {
 	ret := _mock.Called(ctx)

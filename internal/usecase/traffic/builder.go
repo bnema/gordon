@@ -20,8 +20,10 @@ type Input struct {
 	Traffic         Config
 	Routes          []domain.Route
 	ExternalRoutes  map[string]string
+	ServiceRoutes   []domain.HTTPServiceRoute
 	NetworkServices []NetworkServiceConfig
 	Services        []domain.StandaloneService
+	ServiceBackends []domain.ServicePortBackend
 }
 
 type EntryPointConfig struct {
@@ -60,11 +62,13 @@ type TLSConfig struct {
 }
 
 type RouterConfig struct {
-	Name       string `mapstructure:"name"`
-	EntryPoint string `mapstructure:"entrypoint"`
-	Host       string `mapstructure:"host"`
-	SNI        string `mapstructure:"sni"`
-	Service    string `mapstructure:"service"`
+	Name           string `mapstructure:"name"`
+	EntryPoint     string `mapstructure:"entrypoint"`
+	Host           string `mapstructure:"host"`
+	SNI            string `mapstructure:"sni"`
+	Service        string `mapstructure:"service"`
+	NetworkService string `mapstructure:"network_service"`
+	Port           string `mapstructure:"port"`
 }
 
 type NetworkServiceConfig struct {
@@ -78,33 +82,51 @@ type PortConfig struct {
 	Protocol  domain.NetworkProtocol `mapstructure:"protocol"`
 }
 
+// Plan is the validated routing configuration shared by the traffic manager and HTTP proxy.
+type Plan struct {
+	Graph          domain.TrafficGraph
+	ServiceTargets map[string]*domain.ProxyTarget
+}
+
 // Build builds and validates a TrafficGraph snapshot. Managed route services are
 // intentionally backend-less because their concrete container endpoints are resolved at runtime.
 func Build(input Input) (domain.TrafficGraph, error) {
-	b := builder{input: input, services: map[string]domain.TrafficService{}}
+	plan, err := BuildPlan(input)
+	if err != nil {
+		return domain.TrafficGraph{}, err
+	}
+	return plan.Graph, nil
+}
+
+// BuildPlan validates routing and resolves HTTP bindings to Gordon-owned service ports.
+func BuildPlan(input Input) (Plan, error) {
+	b := builder{input: input, services: map[string]domain.TrafficService{}, serviceTargets: map[string]*domain.ProxyTarget{}}
 	graph := domain.TrafficGraph{}
 
 	options, err := buildOptions(input.Traffic)
 	if err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("build traffic options: %w", err)
+		return Plan{}, fmt.Errorf("build traffic options: %w", err)
 	}
 	if err := validateNetworkServices(input.NetworkServices); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("validate network services: %w", err)
+		return Plan{}, fmt.Errorf("validate network services: %w", err)
 	}
 	if err := validateStandaloneServices(input.Services); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("validate standalone services: %w", err)
+		return Plan{}, fmt.Errorf("validate standalone services: %w", err)
 	}
 	graph.Options = options
 	graph.EntryPoints = b.buildEntryPoints()
 
 	if err := b.addHTTPRoutes(&graph); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("add HTTP routes: %w", err)
+		return Plan{}, fmt.Errorf("add HTTP routes: %w", err)
 	}
 	if err := b.addExternalRoutes(&graph); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("add external routes: %w", err)
+		return Plan{}, fmt.Errorf("add external routes: %w", err)
+	}
+	if err := b.addHTTPServiceRoutes(); err != nil {
+		return Plan{}, fmt.Errorf("add HTTP service routes: %w", err)
 	}
 	if err := b.addExplicitRouters(&graph); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("add explicit traffic routers: %w", err)
+		return Plan{}, fmt.Errorf("add explicit traffic routers: %w", err)
 	}
 
 	graph.Services = make([]domain.TrafficService, 0, len(b.services))
@@ -113,14 +135,15 @@ func Build(input Input) (domain.TrafficGraph, error) {
 	}
 	sort.Slice(graph.Services, func(i, j int) bool { return graph.Services[i].Name < graph.Services[j].Name })
 	if err := graph.Validate(); err != nil {
-		return domain.TrafficGraph{}, fmt.Errorf("validate traffic graph: %w", err)
+		return Plan{}, fmt.Errorf("validate traffic graph: %w", err)
 	}
-	return graph, nil
+	return Plan{Graph: graph, ServiceTargets: b.serviceTargets}, nil
 }
 
 type builder struct {
-	input    Input
-	services map[string]domain.TrafficService
+	input          Input
+	services       map[string]domain.TrafficService
+	serviceTargets map[string]*domain.ProxyTarget
 }
 
 func (b *builder) buildEntryPoints() []domain.EntryPoint {
@@ -156,6 +179,55 @@ func (b *builder) addHTTPRoutes(graph *domain.TrafficGraph) error {
 		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: "route:" + route.Domain, EntryPoint: entryPoint, Protocol: domain.RouterProtocolHTTP, Rule: domain.TrafficRule{Host: route.Domain}, Service: serviceName})
 	}
 	return nil
+}
+
+func (b *builder) addHTTPServiceRoutes() error {
+	routes := append([]domain.HTTPServiceRoute(nil), b.input.ServiceRoutes...)
+	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
+	for _, route := range routes {
+		canonicalDomain, ok := domain.CanonicalRouteDomain(route.Domain)
+		if !ok {
+			return fmt.Errorf("invalid service route domain %q", route.Domain)
+		}
+		if _, exists := b.serviceTargets[canonicalDomain]; exists {
+			return fmt.Errorf("duplicate service route domain %q", canonicalDomain)
+		}
+		target, err := b.resolveHTTPServiceTarget(route, canonicalDomain)
+		if err != nil {
+			return fmt.Errorf("service route %q: %w", route.Domain, err)
+		}
+		b.serviceTargets[canonicalDomain] = target
+	}
+	return nil
+}
+
+func (b *builder) resolveHTTPServiceTarget(route domain.HTTPServiceRoute, canonicalDomain string) (*domain.ProxyTarget, error) {
+	svc, ok := b.standaloneService(route.Service)
+	if !ok || !svc.Enabled {
+		return nil, fmt.Errorf("unknown service %q", route.Service)
+	}
+	port, ok := standaloneServicePort(svc, route.PortName)
+	if !ok {
+		return nil, fmt.Errorf("unknown port %q on service %q", route.PortName, route.Service)
+	}
+	if !port.Protocol.IsHTTP() {
+		return nil, fmt.Errorf("service %q port %q protocol %s cannot handle an HTTP route", route.Service, route.PortName, port.Protocol)
+	}
+	if isPrivateStandalonePort(port) && len(port.TrustedCIDRs) == 0 {
+		return nil, fmt.Errorf("private service %q port %q requires non-empty trusted_cidrs", route.Service, route.PortName)
+	}
+	backend, ok := b.serviceBackend(route.Service, route.PortName)
+	if !ok {
+		return nil, fmt.Errorf("service %q port %q has no resolved runtime backend", route.Service, route.PortName)
+	}
+	target := &domain.ProxyTarget{Host: backend.Host, Port: backend.Port, Scheme: "http", RouteHost: canonicalDomain}
+	if port.TLS {
+		target.Scheme = "https"
+	}
+	if isPrivateStandalonePort(port) {
+		target.TrustedCIDRs = append([]string(nil), port.TrustedCIDRs...)
+	}
+	return target, nil
 }
 
 func (b *builder) addExternalRoutes(graph *domain.TrafficGraph) error {
@@ -224,73 +296,92 @@ func (b *builder) addL4Routers(graph *domain.TrafficGraph, routers []RouterConfi
 	ordered := append([]RouterConfig{}, routers...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Name < ordered[j].Name })
 	for _, cfg := range ordered {
-		service, err := b.resolveService(cfg, backendProtocol)
+		service, err := b.resolveService(cfg, protocol, backendProtocol)
 		if err != nil {
 			return fmt.Errorf("router %q: %w", cfg.Name, err)
 		}
 		b.addService(service)
-		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: cfg.Name, EntryPoint: cfg.EntryPoint, Protocol: protocol, Rule: domain.TrafficRule{Host: cfg.Host, SNI: cfg.SNI}, Service: cfg.Service})
+		graph.Routers = append(graph.Routers, domain.TrafficRouter{Name: cfg.Name, EntryPoint: cfg.EntryPoint, Protocol: protocol, Rule: domain.TrafficRule{Host: cfg.Host, SNI: cfg.SNI}, Service: service.Name})
 	}
 	return nil
 }
 
-func (b *builder) resolveService(router RouterConfig, protocol domain.NetworkProtocol) (domain.TrafficService, error) {
-	ref, err := domain.ParseTrafficServiceRef(router.Service)
-	if err != nil {
-		return domain.TrafficService{}, err
+func (b *builder) resolveService(router RouterConfig, routerProtocol domain.RouterProtocol, networkProtocol domain.NetworkProtocol) (domain.TrafficService, error) {
+	if strings.Contains(router.Service, ":") {
+		return domain.TrafficService{}, fmt.Errorf("service reference %q uses removed typed-ref syntax; set service and port separately", router.Service)
 	}
-	switch ref.Kind {
-	case domain.TrafficServiceRefNetworkService:
-		return b.resolveNetworkService(router.Service, ref, protocol)
-	case domain.TrafficServiceRefService:
-		return b.resolveStandaloneService(router, ref, protocol)
-	case domain.TrafficServiceRefStatic:
-		return domain.TrafficService{}, fmt.Errorf("static service ref %q is unsupported", router.Service)
-	default:
-		return domain.TrafficService{}, fmt.Errorf("service ref %q must be network_service:<name>:<port-name> or service:<name>:<port-name>", router.Service)
+	if strings.TrimSpace(router.Port) == "" {
+		return domain.TrafficService{}, fmt.Errorf("port is required")
 	}
+	if router.Service != "" && router.NetworkService != "" {
+		return domain.TrafficService{}, fmt.Errorf("define exactly one of service or network_service")
+	}
+	if router.Service != "" {
+		return b.resolveStandaloneService(router, router.Service, router.Port, routerProtocol)
+	}
+	if router.NetworkService != "" {
+		return b.resolveNetworkService(router.NetworkService, router.Port, networkProtocol)
+	}
+	return domain.TrafficService{}, fmt.Errorf("service or network_service is required")
 }
 
-func (b *builder) resolveNetworkService(refValue string, ref domain.TrafficServiceRef, protocol domain.NetworkProtocol) (domain.TrafficService, error) {
-	ns, ok := b.networkService(ref.Name)
+func (b *builder) resolveNetworkService(name, portName string, protocol domain.NetworkProtocol) (domain.TrafficService, error) {
+	ns, ok := b.networkService(name)
 	if !ok {
-		return domain.TrafficService{}, fmt.Errorf("unknown network service %q", ref.Name)
+		return domain.TrafficService{}, fmt.Errorf("unknown network service %q", name)
 	}
-	port, ok := networkServicePort(ns, ref.PortName)
+	port, ok := networkServicePort(ns, portName)
 	if !ok {
-		return domain.TrafficService{}, fmt.Errorf("unknown port %q on network service %q", ref.PortName, ref.Name)
+		return domain.TrafficService{}, fmt.Errorf("unknown port %q on network service %q", portName, name)
 	}
 	if port.Container < 1 || port.Container > 65535 {
-		return domain.TrafficService{}, fmt.Errorf("invalid port %d on network service %q port %q", port.Container, ref.Name, ref.PortName)
+		return domain.TrafficService{}, fmt.Errorf("invalid port %d on network service %q port %q", port.Container, name, portName)
 	}
 	if port.Protocol != protocol {
-		return domain.TrafficService{}, fmt.Errorf("network service %q port %q protocol %s does not match router protocol %s", ref.Name, ref.PortName, port.Protocol, protocol)
+		return domain.TrafficService{}, fmt.Errorf("network service %q port %q protocol %s does not match router protocol %s", name, portName, port.Protocol, protocol)
 	}
-	return domain.TrafficService{Name: refValue, Backends: []domain.TrafficBackend{{Name: ref.Name + ":" + ref.PortName, Host: ref.Name, Port: port.Container, Protocol: port.Protocol}}}, nil
+	serviceName := "network_service:" + name + ":" + portName
+	return domain.TrafficService{Name: serviceName, Backends: []domain.TrafficBackend{{Name: name + ":" + portName, Host: name, Port: port.Container, Protocol: port.Protocol}}}, nil
 }
 
-func (b *builder) resolveStandaloneService(router RouterConfig, ref domain.TrafficServiceRef, protocol domain.NetworkProtocol) (domain.TrafficService, error) {
-	svc, ok := b.standaloneService(ref.Name)
+func (b *builder) resolveStandaloneService(router RouterConfig, name, portName string, routerProtocol domain.RouterProtocol) (domain.TrafficService, error) {
+	svc, ok := b.standaloneService(name)
 	if !ok || !svc.Enabled {
-		return domain.TrafficService{}, fmt.Errorf("unknown service %q", ref.Name)
+		return domain.TrafficService{}, fmt.Errorf("unknown service %q", name)
 	}
-	port, ok := standaloneServicePort(svc, ref.PortName)
+	port, ok := standaloneServicePort(svc, portName)
 	if !ok {
-		return domain.TrafficService{}, fmt.Errorf("unknown port %q on service %q", ref.PortName, ref.Name)
+		return domain.TrafficService{}, fmt.Errorf("unknown port %q on service %q", portName, name)
 	}
-	if port.Protocol != protocol {
-		return domain.TrafficService{}, fmt.Errorf("service %q port %q protocol %s does not match router protocol %s", ref.Name, ref.PortName, port.Protocol, protocol)
+	expectedProtocol := serviceProtocolForRouter(routerProtocol)
+	if port.Protocol != expectedProtocol {
+		return domain.TrafficService{}, fmt.Errorf("service %q port %q protocol %s does not match router protocol %s", name, portName, port.Protocol, routerProtocol)
+	}
+	if routerProtocol == domain.RouterProtocolTLSPassthrough && !port.TLS {
+		return domain.TrafficService{}, fmt.Errorf("service %q port %q must set tls = true for TLS passthrough", name, portName)
 	}
 	if isPrivateStandalonePort(port) {
 		if err := b.validatePrivateStandalonePortRoute(router, svc, port); err != nil {
 			return domain.TrafficService{}, err
 		}
 	}
-	host, backendPort, err := parseBackendAddress(port.Publish)
-	if err != nil {
-		return domain.TrafficService{}, fmt.Errorf("service %q port %q publish address %q is invalid: %w", ref.Name, ref.PortName, port.Publish, err)
+	backend, ok := b.serviceBackend(name, portName)
+	if !ok {
+		return domain.TrafficService{}, fmt.Errorf("service %q port %q has no resolved runtime backend", name, portName)
 	}
-	return domain.TrafficService{Name: router.Service, Backends: []domain.TrafficBackend{{Name: ref.Name + ":" + ref.PortName, Host: host, Port: backendPort, Protocol: port.Protocol}}}, nil
+	serviceName := "service:" + name + ":" + portName
+	return domain.TrafficService{Name: serviceName, Backends: []domain.TrafficBackend{{Name: name + ":" + portName, Host: backend.Host, Port: backend.Port, Protocol: port.Protocol.NetworkProtocol()}}}, nil
+}
+
+func serviceProtocolForRouter(protocol domain.RouterProtocol) domain.ServicePortProtocol {
+	switch protocol {
+	case domain.RouterProtocolUDP:
+		return domain.ServicePortProtocolUDP
+	case domain.RouterProtocolTLSPassthrough:
+		return domain.ServicePortProtocolTCP
+	default:
+		return domain.ServicePortProtocolTCP
+	}
 }
 
 func validateStandaloneServices(services []domain.StandaloneService) error {
@@ -363,6 +454,15 @@ func (b *builder) networkService(name string) (NetworkServiceConfig, bool) {
 		}
 	}
 	return NetworkServiceConfig{}, false
+}
+
+func (b *builder) serviceBackend(serviceName, portName string) (domain.ServicePortBackend, bool) {
+	for _, backend := range b.input.ServiceBackends {
+		if backend.Service == serviceName && backend.PortName == portName {
+			return backend, true
+		}
+	}
+	return domain.ServicePortBackend{}, false
 }
 
 func (b *builder) standaloneService(name string) (domain.StandaloneService, bool) {

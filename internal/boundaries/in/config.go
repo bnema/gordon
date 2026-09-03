@@ -15,10 +15,13 @@ type ConfigService interface {
 	// This is different from Load() which only loads from the cached viper values.
 	Reload(ctx context.Context) error
 
-	// GetRoutes returns all configured routes.
+	// GetRoutes returns image-backed routes that own route containers.
 	GetRoutes(ctx context.Context) []domain.Route
 
-	// GetRoute returns a single route by domain.
+	// GetServiceRoutes returns HTTP bindings to named Gordon-owned service ports.
+	GetServiceRoutes() []domain.HTTPServiceRoute
+
+	// GetRoute returns a single image-backed route by domain.
 	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
 
 	// FindRoutesByImage returns all routes that match the given image name.

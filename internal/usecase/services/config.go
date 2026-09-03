@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -9,26 +10,36 @@ import (
 )
 
 type Config struct {
-	Name      string            `mapstructure:"name"`
+	Image      string                     `mapstructure:"image"`
+	Containers map[string]ContainerConfig `mapstructure:"containers"`
+	Enabled    *bool                      `mapstructure:"enabled"`
+	Env        []string                   `mapstructure:"env"`
+	EnvFile    string                     `mapstructure:"env_file"`
+	Secrets    []SecretRefConfig          `mapstructure:"secrets"`
+	Readiness  ReadinessConfig            `mapstructure:"readiness"`
+	Cleanup    CleanupConfig              `mapstructure:"cleanup"`
+	Ports      map[string]PortConfig      `mapstructure:"ports"`
+	Volumes    []VolumeConfig             `mapstructure:"volumes"`
+}
+
+type ContainerConfig struct {
 	Image     string            `mapstructure:"image"`
-	Enabled   bool              `mapstructure:"enabled"`
 	Env       []string          `mapstructure:"env"`
 	EnvFile   string            `mapstructure:"env_file"`
 	Secrets   []SecretRefConfig `mapstructure:"secrets"`
 	Readiness ReadinessConfig   `mapstructure:"readiness"`
-	Cleanup   CleanupConfig     `mapstructure:"cleanup"`
-	Ports     []PortConfig      `mapstructure:"ports"`
 	Volumes   []VolumeConfig    `mapstructure:"volumes"`
 }
 
 type PortConfig struct {
-	Name         string                 `mapstructure:"name"`
-	Container    int                    `mapstructure:"container"`
-	Protocol     domain.NetworkProtocol `mapstructure:"protocol"`
-	Publish      string                 `mapstructure:"publish"`
-	Private      bool                   `mapstructure:"private"`
-	Public       bool                   `mapstructure:"public"`
-	TrustedCIDRs []string               `mapstructure:"trusted_cidrs"`
+	ContainerName string                     `mapstructure:"container"`
+	Container     int                        `mapstructure:"port"`
+	Protocol      domain.ServicePortProtocol `mapstructure:"protocol"`
+	TLS           bool                       `mapstructure:"tls"`
+	Publish       string                     `mapstructure:"publish"`
+	Private       bool                       `mapstructure:"private"`
+	Public        bool                       `mapstructure:"public"`
+	TrustedCIDRs  []string                   `mapstructure:"trusted_cidrs"`
 }
 
 type VolumeConfig struct {
@@ -61,31 +72,36 @@ type CleanupConfig struct {
 	RemoveContainer *bool `mapstructure:"remove_container"`
 }
 
-func ToDomain(configs []Config) ([]domain.StandaloneService, error) {
+func ToDomain(configs map[string]Config) ([]domain.StandaloneService, error) {
+	names := make([]string, 0, len(configs))
+	for name := range configs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	services := make([]domain.StandaloneService, 0, len(configs))
-	seenNames := make(map[string]struct{}, len(configs))
 	seenRuntimeNames := make(map[string]string, len(configs))
-	for i, cfg := range configs {
-		svc, err := cfg.ToDomain()
+	for _, name := range names {
+		svc, err := configs[name].ToDomain(name)
 		if err != nil {
-			return nil, fmt.Errorf("service config %d: %w", i, err)
-		}
-		name := strings.TrimSpace(svc.Name)
-		if _, ok := seenNames[name]; ok {
-			return nil, fmt.Errorf("service config %d: duplicate service name %q", i, name)
+			return nil, fmt.Errorf("service %q: %w", name, err)
 		}
 		runtimeName := serviceRuntimeIdentifier(name)
 		if previous, ok := seenRuntimeNames[runtimeName]; ok {
-			return nil, fmt.Errorf("service config %d: duplicate service name %q normalizes to same runtime identifier as %q", i, name, previous)
+			return nil, fmt.Errorf("service %q normalizes to same runtime identifier as %q", name, previous)
 		}
-		seenNames[name] = struct{}{}
 		seenRuntimeNames[runtimeName] = name
 		services = append(services, svc)
 	}
 	return services, nil
 }
 
-func (c Config) ToDomain() (domain.StandaloneService, error) {
+func (c Config) ToDomain(name string) (domain.StandaloneService, error) {
+	for portName, port := range c.Ports {
+		if port.Publish != "" {
+			return domain.StandaloneService{}, fmt.Errorf("port %q uses removed publish setting; Gordon assigns routed backend ports automatically", portName)
+		}
+	}
 	if err := c.Cleanup.validate(); err != nil {
 		return domain.StandaloneService{}, err
 	}
@@ -93,17 +109,22 @@ func (c Config) ToDomain() (domain.StandaloneService, error) {
 	if err != nil {
 		return domain.StandaloneService{}, err
 	}
+	containers, err := containersToDomain(c.Containers)
+	if err != nil {
+		return domain.StandaloneService{}, err
+	}
 	svc := domain.StandaloneService{
-		Name:      c.Name,
-		Image:     c.Image,
-		Enabled:   c.Enabled,
-		Env:       append([]string(nil), c.Env...),
-		EnvFile:   c.EnvFile,
-		Secrets:   secretRefsToDomain(c.Secrets),
-		Readiness: readiness,
-		Cleanup:   c.Cleanup.toDomain(),
-		Ports:     portsToDomain(c.Ports),
-		Volumes:   volumesToDomain(c.Volumes),
+		Name:       name,
+		Image:      c.Image,
+		Containers: containers,
+		Enabled:    c.enabled(),
+		Env:        append([]string(nil), c.Env...),
+		EnvFile:    c.EnvFile,
+		Secrets:    secretRefsToDomain(c.Secrets),
+		Readiness:  readiness,
+		Cleanup:    c.Cleanup.toDomain(),
+		Ports:      portsToDomain(c.Ports),
+		Volumes:    volumesToDomain(c.Volumes),
 	}
 	if err := svc.Validate(); err != nil {
 		return domain.StandaloneService{}, err
@@ -111,16 +132,24 @@ func (c Config) ToDomain() (domain.StandaloneService, error) {
 	return svc, nil
 }
 
+func (c Config) enabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 func (c Config) readinessToDomain() (domain.StandaloneServiceReadiness, error) {
-	readinessType := c.Readiness.Type
+	return readinessConfigToDomain(c.Readiness)
+}
+
+func readinessConfigToDomain(config ReadinessConfig) (domain.StandaloneServiceReadiness, error) {
+	readinessType := config.Type
 	if readinessType == "" {
 		readinessType = domain.StandaloneServiceReadinessNone
 	}
-	readiness := domain.StandaloneServiceReadiness{Type: readinessType, Path: c.Readiness.Path, Contains: c.Readiness.Contains}
-	if c.Readiness.Timeout != "" {
-		timeout, err := time.ParseDuration(c.Readiness.Timeout)
+	readiness := domain.StandaloneServiceReadiness{Type: readinessType, Path: config.Path, Contains: config.Contains}
+	if config.Timeout != "" {
+		timeout, err := time.ParseDuration(config.Timeout)
 		if err != nil {
-			return domain.StandaloneServiceReadiness{}, fmt.Errorf("readiness timeout %q is invalid: %w", c.Readiness.Timeout, err)
+			return domain.StandaloneServiceReadiness{}, fmt.Errorf("readiness timeout %q is invalid: %w", config.Timeout, err)
 		}
 		if timeout <= 0 {
 			return domain.StandaloneServiceReadiness{}, fmt.Errorf("readiness timeout must be positive when set")
@@ -152,20 +181,55 @@ func (c CleanupConfig) validate() error {
 	return nil
 }
 
-func portsToDomain(configs []PortConfig) []domain.StandaloneServicePort {
+func portsToDomain(configs map[string]PortConfig) []domain.StandaloneServicePort {
+	names := make([]string, 0, len(configs))
+	for name := range configs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	ports := make([]domain.StandaloneServicePort, 0, len(configs))
-	for _, cfg := range configs {
+	for _, name := range names {
+		cfg := configs[name]
+		protocol := cfg.Protocol
+		if protocol == "" {
+			protocol = domain.ServicePortProtocolTCP
+		}
 		ports = append(ports, domain.StandaloneServicePort{
-			Name:         cfg.Name,
-			Container:    cfg.Container,
-			Protocol:     cfg.Protocol,
-			Publish:      cfg.Publish,
-			Private:      cfg.Private,
-			Public:       cfg.Public,
-			TrustedCIDRs: append([]string(nil), cfg.TrustedCIDRs...),
+			Name:          name,
+			ContainerName: cfg.ContainerName,
+			Container:     cfg.Container,
+			Protocol:      protocol,
+			TLS:           cfg.TLS,
+			Publish:       cfg.Publish,
+			Private:       cfg.Private,
+			Public:        cfg.Public,
+			TrustedCIDRs:  append([]string(nil), cfg.TrustedCIDRs...),
 		})
 	}
 	return ports
+}
+
+func containersToDomain(configs map[string]ContainerConfig) ([]domain.StandaloneServiceContainer, error) {
+	names := make([]string, 0, len(configs))
+	for name := range configs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	containers := make([]domain.StandaloneServiceContainer, 0, len(configs))
+	for _, name := range names {
+		cfg := configs[name]
+		readiness, err := readinessConfigToDomain(cfg.Readiness)
+		if err != nil {
+			return nil, fmt.Errorf("container %q: %w", name, err)
+		}
+		containers = append(containers, domain.StandaloneServiceContainer{
+			Name: name, Image: cfg.Image, Env: append([]string(nil), cfg.Env...), EnvFile: cfg.EnvFile,
+			Secrets: secretRefsToDomain(cfg.Secrets), Readiness: readiness, Volumes: volumesToDomain(cfg.Volumes),
+		})
+	}
+	return containers, nil
 }
 
 func volumesToDomain(configs []VolumeConfig) []domain.StandaloneServiceVolume {

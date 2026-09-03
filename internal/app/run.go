@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 	zerowrapotel "github.com/bnema/zerowrap/otel"
+	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
 	"golang.org/x/sys/unix"
 
@@ -181,7 +183,7 @@ type Config struct {
 	EntryPoints     map[string]traffic.EntryPointConfig `mapstructure:"entrypoints"`
 	Traffic         traffic.Config                      `mapstructure:"traffic"`
 	NetworkServices []traffic.NetworkServiceConfig      `mapstructure:"network_services"`
-	Services        []servicecfg.Config                 `mapstructure:"services"`
+	Services        map[string]servicecfg.Config        `mapstructure:"services"`
 
 	Backups struct {
 		// Legacy database backup keys. Prefer backups.databases.* for new configs.
@@ -406,16 +408,84 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if err := loadConfig(v, configPath); err != nil {
 		return nil, Config{}, fmt.Errorf("failed to load config: %w", err)
 	}
-
 	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, Config{}, fmt.Errorf("failed to unmarshal config: %w", err)
+	if err := unmarshalConfig(v, &cfg); err != nil {
+		return nil, Config{}, err
 	}
 	if err := validateEntrypointMigration(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
 
 	return v, cfg, nil
+}
+
+func unmarshalConfig(v *viper.Viper, cfg *Config) error {
+	if err := validateServiceConfigSyntax(v); err != nil {
+		return err
+	}
+	hook := mapstructure.ComposeDecodeHookFunc(
+		mapstructure.StringToTimeDurationHookFunc(),
+		mapstructure.StringToSliceHookFunc(","),
+		serviceContainerDecodeHook,
+		servicePortDecodeHook,
+	)
+	if err := v.Unmarshal(cfg, viper.DecodeHook(hook)); err != nil {
+		return fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	return nil
+}
+
+func validateServiceConfigSyntax(v *viper.Viper) error {
+	services := v.Get("services")
+	if services != nil && reflect.ValueOf(services).Kind() == reflect.Slice {
+		return fmt.Errorf("the [[services]] array syntax is no longer supported; migrate each service to a [services.<name>] table as documented in docs/config/services.md")
+	}
+	return nil
+}
+
+func serviceContainerDecodeHook(from reflect.Type, to reflect.Type, data any) (any, error) {
+	if to != reflect.TypeOf(servicecfg.ContainerConfig{}) {
+		return data, nil
+	}
+	if image, ok := data.(string); ok {
+		return servicecfg.ContainerConfig{Image: image}, nil
+	}
+	return data, nil
+}
+
+func servicePortDecodeHook(from reflect.Type, to reflect.Type, data any) (any, error) {
+	if to != reflect.TypeOf(servicecfg.PortConfig{}) {
+		return data, nil
+	}
+	switch value := data.(type) {
+	case int64:
+		return servicecfg.PortConfig{Container: int(value)}, nil
+	case string:
+		return parseServicePortShorthand(value)
+	default:
+		return data, nil
+	}
+}
+
+func parseServicePortShorthand(value string) (servicecfg.PortConfig, error) {
+	targetText, protocolText, hasProtocol := strings.Cut(value, "/")
+	containerName, portText, hasContainer := strings.Cut(targetText, ":")
+	if !hasContainer {
+		portText = containerName
+		containerName = ""
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return servicecfg.PortConfig{}, fmt.Errorf("service port shorthand %q must use PORT or PORT/protocol", value)
+	}
+	protocol := domain.ServicePortProtocolTCP
+	if hasProtocol {
+		protocol = domain.ServicePortProtocol(protocolText)
+		if !protocol.Valid() {
+			return servicecfg.PortConfig{}, fmt.Errorf("service port shorthand %q protocol must be http, tcp, or udp; use an expanded port table for TLS", value)
+		}
+	}
+	return servicecfg.PortConfig{ContainerName: containerName, Container: port, Protocol: protocol}, nil
 }
 
 func validateEntrypointMigration(v *viper.Viper, cfg Config) error {
@@ -818,13 +888,13 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 				return tlsErr
 			}
 		}
-		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc, si.svc.proxySvc, si.svc.standaloneServiceSvc); err != nil {
 			return err
 		}
 		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
 		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
-		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
-			return err
+		if si.svc.proxySvc != nil {
+			si.svc.proxySvc.CommitStagedServiceTargets()
 		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
 		return nil
@@ -1852,7 +1922,7 @@ func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) e
 
 func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time) error {
 	var reloadCfg Config
-	if err := c.v.Unmarshal(&reloadCfg); err != nil {
+	if err := unmarshalConfig(c.v, &reloadCfg); err != nil {
 		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
 		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
 	}
@@ -2966,22 +3036,11 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
-	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc); err != nil {
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, svc.proxySvc, svc.standaloneServiceSvc); err != nil {
 		return err
 	}
-	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)
-}
-
-func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {
-	if serviceSvc == nil {
-		return nil
-	}
-	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
-	if err != nil {
-		return fmt.Errorf("convert standalone service config: %w", err)
-	}
-	if err := serviceSvc.Reconcile(ctx, standaloneServices); err != nil {
-		return fmt.Errorf("reconcile standalone services: %w", err)
+	if svc.proxySvc != nil {
+		svc.proxySvc.CommitStagedServiceTargets()
 	}
 	return nil
 }

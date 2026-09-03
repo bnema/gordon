@@ -203,7 +203,22 @@ func (s *Service) isDomainAllowed(ctx context.Context, domainName string) bool {
 	if _, ok := s.routes.GetExternalRoutes()[domainName]; ok {
 		return true
 	}
+	for _, route := range configuredServiceRoutes(s.routes) {
+		if route.HTTPS && route.Domain == domainName {
+			return true
+		}
+	}
 	return false
+}
+
+func configuredServiceRoutes(source out.RouteChecker) []domain.HTTPServiceRoute {
+	provider, ok := source.(interface {
+		GetServiceRoutes() []domain.HTTPServiceRoute
+	})
+	if !ok {
+		return nil
+	}
+	return provider.GetServiceRoutes()
 }
 
 func canonicalDomainSet(domains []string) map[string]struct{} {
@@ -256,9 +271,10 @@ func (s *Service) sweepExpiredCerts(ctx context.Context) {
 	// Fetch routes once for all cache entries.
 	routes := s.routes.GetRoutes(ctx)
 	extRoutes := s.routes.GetExternalRoutes()
+	serviceRoutes := configuredServiceRoutes(s.routes)
 
 	s.allowedMu.RLock()
-	allowed := make(map[string]struct{}, len(routes)+len(extRoutes)+len(s.allowedDomains))
+	allowed := make(map[string]struct{}, len(routes)+len(extRoutes)+len(serviceRoutes)+len(s.allowedDomains))
 	for domain := range s.allowedDomains {
 		allowed[domain] = struct{}{}
 	}
@@ -268,6 +284,11 @@ func (s *Service) sweepExpiredCerts(ctx context.Context) {
 	}
 	for d := range extRoutes {
 		allowed[d] = struct{}{}
+	}
+	for _, route := range serviceRoutes {
+		if route.HTTPS {
+			allowed[route.Domain] = struct{}{}
+		}
 	}
 
 	swept := 0

@@ -9,21 +9,32 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestToDomainRejectsDuplicateServiceNames(t *testing.T) {
-	configs := []Config{
-		{Name: "cache", Image: "redis:7", Enabled: true},
-		{Name: "cache", Image: "redis:7", Enabled: true},
+func TestToDomainUsesKeyedServiceAndPortNames(t *testing.T) {
+	configs := map[string]Config{
+		"app": {
+			Image: "app:latest",
+			Ports: map[string]PortConfig{
+				"web":  {Container: 8080},
+				"game": {Container: 9000, Protocol: domain.ServicePortProtocolUDP},
+			},
+		},
 	}
 
-	_, err := ToDomain(configs)
+	services, err := ToDomain(configs)
 
-	require.ErrorContains(t, err, "duplicate service name")
+	require.NoError(t, err)
+	require.Len(t, services, 1)
+	assert.Equal(t, "app", services[0].Name)
+	assert.Equal(t, []domain.StandaloneServicePort{
+		{Name: "game", Container: 9000, Protocol: domain.ServicePortProtocolUDP},
+		{Name: "web", Container: 8080, Protocol: domain.ServicePortProtocolTCP},
+	}, services[0].Ports)
 }
 
 func TestToDomainRejectsServiceNamesWithDuplicateRuntimeIdentifier(t *testing.T) {
-	configs := []Config{
-		{Name: "cache.api", Image: "redis:7", Enabled: true},
-		{Name: "cache_api", Image: "redis:7", Enabled: true},
+	configs := map[string]Config{
+		"cache.api": {Image: "redis:7"},
+		"cache_api": {Image: "redis:7"},
 	}
 
 	_, err := ToDomain(configs)
@@ -35,16 +46,14 @@ func TestConfigToDomainRejectsNonPositiveReadinessTimeout(t *testing.T) {
 	for _, timeout := range []string{"0s", "-1s"} {
 		t.Run(timeout, func(t *testing.T) {
 			cfg := Config{
-				Name:    "cache",
-				Image:   "redis:7",
-				Enabled: true,
+				Image: "redis:7",
 				Readiness: ReadinessConfig{
 					Type:    domain.StandaloneServiceReadinessTCP,
 					Timeout: timeout,
 				},
 			}
 
-			_, err := cfg.ToDomain()
+			_, err := cfg.ToDomain("cache")
 
 			require.ErrorContains(t, err, "readiness timeout")
 			require.ErrorContains(t, err, "positive")
@@ -56,33 +65,29 @@ func TestConfigToDomainRejectsExplicitNoCleanupAction(t *testing.T) {
 	preserveVolumes := false
 	removeContainer := false
 	cfg := Config{
-		Name:    "cache",
 		Image:   "redis:7",
-		Enabled: true,
 		Cleanup: CleanupConfig{PreserveVolumes: &preserveVolumes, RemoveContainer: &removeContainer},
 	}
 
-	_, err := cfg.ToDomain()
+	_, err := cfg.ToDomain("cache")
 
 	require.ErrorContains(t, err, "preserve_volumes=false")
 	require.ErrorContains(t, err, "remove_container=false")
 }
 
-func TestConfigToDomainMapsExplicitPublicPorts(t *testing.T) {
+func TestConfigToDomainMapsExplicitPortPolicy(t *testing.T) {
 	cfg := Config{
-		Name:    "game",
-		Image:   "game:latest",
-		Enabled: true,
-		Ports: []PortConfig{{
-			Name:      "rcon",
-			Container: 28016,
-			Protocol:  domain.NetworkProtocolTCP,
-			Publish:   "127.0.0.1:38016",
-			Public:    true,
-		}},
+		Image: "game:latest",
+		Ports: map[string]PortConfig{
+			"rcon": {
+				Container: 28016,
+				Protocol:  domain.ServicePortProtocolTCP,
+				Public:    true,
+			},
+		},
 	}
 
-	svc, err := cfg.ToDomain()
+	svc, err := cfg.ToDomain("game")
 
 	require.NoError(t, err)
 	require.Len(t, svc.Ports, 1)

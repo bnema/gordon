@@ -881,8 +881,13 @@ func hasConfiguredHealthcheck(cfg *container.Config) bool {
 	return !strings.EqualFold(strings.TrimSpace(cfg.Healthcheck.Test[0]), "NONE")
 }
 
-// GetContainerPort gets the host port for a container's internal port.
+// GetContainerPort gets the TCP host port for a container's internal port.
 func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error) {
+	return r.GetContainerPublishedPort(ctx, containerID, internalPort, domain.NetworkProtocolTCP)
+}
+
+// GetContainerPublishedPort gets the host port for a container port and transport.
+func (r *Runtime) GetContainerPublishedPort(ctx context.Context, containerID string, internalPort int, protocol domain.NetworkProtocol) (int, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -902,7 +907,10 @@ func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, inte
 		return 0, fmt.Errorf("no port mappings found for container %s", containerID)
 	}
 
-	containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", internalPort))
+	if protocol != domain.NetworkProtocolTCP && protocol != domain.NetworkProtocolUDP {
+		return 0, fmt.Errorf("unsupported network protocol %q", protocol)
+	}
+	containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", internalPort, protocol))
 	if err != nil {
 		return 0, fmt.Errorf("invalid container port %d: %w", internalPort, err)
 	}

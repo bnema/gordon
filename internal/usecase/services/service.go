@@ -46,15 +46,20 @@ func NewServiceWithVolumePrefix(runtime out.ContainerRuntime, volumePrefix strin
 }
 
 func (s *Service) Reconcile(ctx context.Context, configured []domain.StandaloneService) error {
+	workloads, networks := normalizeServiceWorkloads(configured)
+	if err := s.ensureServiceNetworks(ctx, networks); err != nil {
+		return err
+	}
 	containers, err := s.runtime.ListContainers(ctx, true)
 	if err != nil {
 		return fmt.Errorf("list standalone service containers: %w", err)
 	}
 	existing := managedServiceContainers(containers)
-	configuredNames := make(map[string]struct{}, len(configured))
-	for _, svc := range configured {
-		configuredNames[svc.Name] = struct{}{}
-		if err := s.reconcileOne(ctx, svc, existing[svc.Name]); err != nil {
+	configuredNames := make(map[string]struct{}, len(workloads))
+	for _, svc := range workloads {
+		key := serviceWorkloadKey(svc.Name, svc.ContainerName)
+		configuredNames[key] = struct{}{}
+		if err := s.reconcileOne(ctx, svc, existing[key]); err != nil {
 			return err
 		}
 	}
@@ -64,6 +69,51 @@ func (s *Service) Reconcile(ctx context.Context, configured []domain.StandaloneS
 		}
 		if err := s.stopRemoved(ctx, name, containers); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) ResolvePorts(ctx context.Context, configured []domain.StandaloneService) ([]domain.ServicePortBackend, error) {
+	containers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		return nil, fmt.Errorf("list service containers for port resolution: %w", err)
+	}
+	existing := managedServiceContainers(containers)
+	backends := make([]domain.ServicePortBackend, 0)
+	for _, svc := range configured {
+		if !svc.Enabled {
+			continue
+		}
+		for _, port := range svc.Ports {
+			component := port.ContainerName
+			candidates := existing[serviceWorkloadKey(svc.Name, component)]
+			container := runningServiceContainer(candidates)
+			if container == nil {
+				return nil, fmt.Errorf("service %q port %q has no running container", svc.Name, port.Name)
+			}
+			hostPort, err := s.runtime.GetContainerPublishedPort(ctx, container.ID, port.Container, port.Protocol.NetworkProtocol())
+			if err != nil {
+				return nil, fmt.Errorf("resolve service %q port %q: %w", svc.Name, port.Name, err)
+			}
+			backends = append(backends, domain.ServicePortBackend{
+				Service: svc.Name, PortName: port.Name, Host: "127.0.0.1", Port: hostPort, Protocol: port.Protocol, TLS: port.TLS,
+			})
+		}
+	}
+	sort.Slice(backends, func(i, j int) bool {
+		if backends[i].Service == backends[j].Service {
+			return backends[i].PortName < backends[j].PortName
+		}
+		return backends[i].Service < backends[j].Service
+	})
+	return backends, nil
+}
+
+func runningServiceContainer(containers []*domain.Container) *domain.Container {
+	for _, container := range containers {
+		if containerStatus(container) == domain.ContainerStatusRunning {
+			return container
 		}
 	}
 	return nil
@@ -81,6 +131,7 @@ func (s *Service) Status(ctx context.Context) ([]domain.StandaloneServiceStatus,
 		}
 		statuses = append(statuses, domain.StandaloneServiceStatus{
 			Name:          container.Labels[domain.LabelServiceName],
+			ComponentName: container.Labels[domain.LabelServiceContainer],
 			ContainerID:   container.ID,
 			ContainerName: container.Name,
 			Status:        containerStatus(container),
@@ -130,6 +181,11 @@ func (s *Service) reconcileOne(ctx context.Context, svc domain.StandaloneService
 	if containerStatus(current) != domain.ContainerStatusRunning {
 		if err := s.runtime.StartContainer(ctx, current.ID); err != nil {
 			return fmt.Errorf("start standalone service %q container: %w", svc.Name, err)
+		}
+	}
+	if svc.Readiness.Type == domain.StandaloneServiceReadinessTCP {
+		if err := s.resolveTCPReadinessPort(ctx, current.ID, &svc); err != nil {
+			return err
 		}
 	}
 	if err := s.waitReadiness(ctx, current.ID, svc); err != nil {
@@ -249,10 +305,31 @@ func (s *Service) createAndStart(ctx context.Context, svc domain.StandaloneServi
 	if err := s.runtime.StartContainer(ctx, container.ID); err != nil {
 		return fmt.Errorf("start standalone service %q container: %w", svc.Name, err)
 	}
+	if svc.Readiness.Type == domain.StandaloneServiceReadinessTCP {
+		if err := s.resolveTCPReadinessPort(ctx, container.ID, &svc); err != nil {
+			return err
+		}
+	}
 	if err := s.waitReadiness(ctx, container.ID, svc); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Service) resolveTCPReadinessPort(ctx context.Context, containerID string, svc *domain.StandaloneService) error {
+	for i := range svc.Ports {
+		port := &svc.Ports[i]
+		if port.Protocol.NetworkProtocol() != domain.NetworkProtocolTCP {
+			continue
+		}
+		hostPort, err := s.runtime.GetContainerPublishedPort(ctx, containerID, port.Container, domain.NetworkProtocolTCP)
+		if err != nil {
+			return fmt.Errorf("resolve service %q readiness port %q: %w", svc.Name, port.Name, err)
+		}
+		port.Publish = net.JoinHostPort("127.0.0.1", strconv.Itoa(hostPort))
+		return nil
+	}
+	return fmt.Errorf("standalone service %q tcp readiness requires a declared TCP port", svc.Name)
 }
 
 func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneService, hash string, env []string) (*domain.ContainerConfig, error) {
@@ -264,7 +341,7 @@ func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneServ
 			return nil, fmt.Errorf("inspect standalone service %q image volumes: %w", svc.Name, err)
 		}
 	}
-	mounts := ResolveVolumeMounts(s.volumePrefix, svc.Name, svc.Volumes, imageVolumes)
+	mounts := ResolveVolumeMounts(s.volumePrefix, serviceWorkloadKey(svc.Name, svc.ContainerName), svc.Volumes, imageVolumes)
 	volumes := make(map[string]string)
 	readOnlyVolumes := make(map[string]string)
 	managedVolumes := make([]string, 0)
@@ -284,14 +361,16 @@ func (s *Service) containerConfig(ctx context.Context, svc domain.StandaloneServ
 	}
 	return &domain.ContainerConfig{
 		Image:           svc.Image,
-		Name:            serviceContainerName(svc.Name),
+		Name:            serviceContainerName(svc.Name, svc.ContainerName),
 		Env:             env,
 		PortPublishes:   publishes,
-		Labels:          serviceLabels(svc.Name, hash, normalizeCleanup(svc.Cleanup), managedVolumes),
+		Labels:          serviceLabels(svc.Name, svc.ContainerName, hash, normalizeCleanup(svc.Cleanup), managedVolumes),
 		AutoRemove:      false,
 		RestartPolicy:   domain.RestartPolicyAlways,
 		Volumes:         emptyToNil(volumes),
 		ReadOnlyVolumes: emptyToNil(readOnlyVolumes),
+		NetworkMode:     svc.NetworkName,
+		Aliases:         componentAliases(svc.ContainerName),
 	}, nil
 }
 
@@ -305,17 +384,19 @@ func managedServiceContainers(containers []*domain.Container) map[string][]*doma
 		if name == "" {
 			continue
 		}
-		managed[name] = append(managed[name], container)
+		key := serviceWorkloadKey(name, container.Labels[domain.LabelServiceContainer])
+		managed[key] = append(managed[key], container)
 	}
 	return managed
 }
 
-func serviceLabels(name, hash string, cleanup domain.StandaloneServiceCleanup, managedVolumes []string) map[string]string {
+func serviceLabels(name, component, hash string, cleanup domain.StandaloneServiceCleanup, managedVolumes []string) map[string]string {
 	sort.Strings(managedVolumes)
 	return map[string]string{
 		domain.LabelManaged:                       "true",
 		domain.LabelService:                       "true",
 		domain.LabelServiceName:                   name,
+		domain.LabelServiceContainer:              component,
 		domain.LabelServiceConfigHash:             hash,
 		domain.LabelServiceManagedVolumes:         strings.Join(managedVolumes, ","),
 		domain.LabelServiceCleanupPreserveVolumes: strconv.FormatBool(cleanup.PreserveVolumes),
@@ -326,19 +407,8 @@ func serviceLabels(name, hash string, cleanup domain.StandaloneServiceCleanup, m
 func portPublishes(svc domain.StandaloneService) ([]domain.ContainerPortPublish, error) {
 	publishes := make([]domain.ContainerPortPublish, 0, len(svc.Ports))
 	for _, port := range svc.Ports {
-		if port.Publish == "" {
-			continue
-		}
-		host, hostPort, err := net.SplitHostPort(port.Publish)
-		if err != nil {
-			return nil, fmt.Errorf("parse standalone service %q port %q publish: %w", svc.Name, port.Name, err)
-		}
-		hostPortNumber, err := strconv.Atoi(hostPort)
-		if err != nil {
-			return nil, fmt.Errorf("parse standalone service %q port %q publish port: %w", svc.Name, port.Name, err)
-		}
 		publishes = append(publishes, domain.ContainerPortPublish{
-			HostIP: host, HostPort: hostPortNumber, ContainerPort: port.Container, Protocol: port.Protocol,
+			HostIP: "127.0.0.1", HostPort: 0, ContainerPort: port.Container, Protocol: port.Protocol.NetworkProtocol(),
 		})
 	}
 	return publishes, nil
@@ -504,7 +574,7 @@ func waitTCPReadiness(ctx context.Context, svc domain.StandaloneService) error {
 
 func tcpReadinessAddress(svc domain.StandaloneService) (string, error) {
 	for _, port := range svc.Ports {
-		if port.Protocol != domain.NetworkProtocolTCP || port.Publish == "" {
+		if port.Protocol.NetworkProtocol() != domain.NetworkProtocolTCP || port.Publish == "" {
 			continue
 		}
 		host, hostPort, err := net.SplitHostPort(port.Publish)
@@ -601,6 +671,77 @@ func (s *Service) logContains(ctx context.Context, containerID, path, contains s
 	return false, fmt.Errorf("%w: limit is %d bytes", domain.ErrReadinessLogSizeExceeded, maxReadinessLogSize)
 }
 
+func normalizeServiceWorkloads(configured []domain.StandaloneService) ([]domain.StandaloneService, map[string]string) {
+	workloads := make([]domain.StandaloneService, 0, len(configured))
+	networks := make(map[string]string)
+	for _, svc := range configured {
+		if len(svc.Containers) == 0 {
+			workloads = append(workloads, svc)
+			continue
+		}
+		networkName := serviceNetworkName(svc.Name)
+		if svc.Enabled {
+			networks[svc.Name] = networkName
+		}
+		for _, component := range svc.Containers {
+			workload := svc
+			workload.Containers = nil
+			workload.Image = component.Image
+			workload.ContainerName = component.Name
+			workload.NetworkName = networkName
+			workload.Env = append(append([]string(nil), svc.Env...), component.Env...)
+			if component.EnvFile != "" {
+				workload.EnvFile = component.EnvFile
+			}
+			workload.Secrets = append(append([]domain.StandaloneServiceSecretRef(nil), svc.Secrets...), component.Secrets...)
+			if component.Readiness.Type != "" {
+				workload.Readiness = component.Readiness
+			}
+			workload.Volumes = append([]domain.StandaloneServiceVolume(nil), component.Volumes...)
+			workload.Ports = portsForComponent(svc.Ports, component.Name)
+			workloads = append(workloads, workload)
+		}
+	}
+	return workloads, networks
+}
+
+func portsForComponent(ports []domain.StandaloneServicePort, component string) []domain.StandaloneServicePort {
+	result := make([]domain.StandaloneServicePort, 0)
+	for _, port := range ports {
+		if port.ContainerName != component {
+			continue
+		}
+		port.ContainerName = ""
+		result = append(result, port)
+	}
+	return result
+}
+
+func (s *Service) ensureServiceNetworks(ctx context.Context, networks map[string]string) error {
+	if len(networks) == 0 {
+		return nil
+	}
+	existing, err := s.runtime.ListNetworks(ctx)
+	if err != nil {
+		return fmt.Errorf("list service networks: %w", err)
+	}
+	byName := make(map[string]struct{}, len(existing))
+	for _, network := range existing {
+		byName[network.Name] = struct{}{}
+	}
+	for serviceName, networkName := range networks {
+		if _, ok := byName[networkName]; ok {
+			continue
+		}
+		if err := s.runtime.CreateNetwork(ctx, networkName, domain.NetworkConfig{
+			Driver: "bridge", Labels: map[string]string{domain.LabelManaged: "true", domain.LabelServiceName: serviceName},
+		}); err != nil {
+			return fmt.Errorf("create private network for service %q: %w", serviceName, err)
+		}
+	}
+	return nil
+}
+
 func normalizeCleanup(cleanup domain.StandaloneServiceCleanup) domain.StandaloneServiceCleanup {
 	if !cleanup.PreserveVolumes && !cleanup.RemoveContainer {
 		return domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true}
@@ -628,8 +769,34 @@ func containerStatus(container *domain.Container) domain.ContainerStatus {
 	return domain.ContainerStatusUnknown
 }
 
-func serviceContainerName(name string) string {
-	return "gordon-service-" + strings.NewReplacer(".", "-", "_", "-", "/", "-").Replace(name)
+func serviceContainerName(name string, components ...string) string {
+	base := "gordon-service-" + sanitizeServiceRuntimeName(name)
+	if len(components) == 0 || components[0] == "" {
+		return base
+	}
+	return base + "-" + sanitizeServiceRuntimeName(components[0])
+}
+
+func serviceNetworkName(name string) string {
+	return "gordon-service-" + sanitizeServiceRuntimeName(name)
+}
+
+func sanitizeServiceRuntimeName(name string) string {
+	return strings.NewReplacer(".", "-", "_", "-", "/", "-").Replace(name)
+}
+
+func serviceWorkloadKey(name, component string) string {
+	if component == "" {
+		return name
+	}
+	return name + "/" + component
+}
+
+func componentAliases(component string) []string {
+	if component == "" {
+		return nil
+	}
+	return []string{component}
 }
 
 func emptyToNil(values map[string]string) map[string]string {

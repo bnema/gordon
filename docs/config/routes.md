@@ -1,206 +1,103 @@
-# Routes Configuration
+# Routes
 
-Routes map hostnames to container images.
+A **route** sends HTTP requests for a hostname to one named port of a service.
 
-## Configuration
+Routes do not run images and do not create containers. Services own applications and their deployment lifecycle; routes only decide where HTTP requests go.
+
+## Example
+
+```toml
+[services.app]
+image = "registry.example.com/app:latest"
+ports = { web = "8080/http" }
+
+[routes]
+"app.example.com" = { service = "app", port = "web" }
+```
+
+Read this route as:
+
+> Send HTTP requests for `app.example.com` to the `web` port of the `app` service.
+
+Gordon creates one container for the `app` service. Adding another route to the same service does not create another container:
 
 ```toml
 [routes]
-"app.mydomain.com" = { image = "myapp:latest" }
-"api.mydomain.com" = { image = "myapi:v2.1.0" }
-"admin.mydomain.com" = { image = "admin-panel:v1.0.0" }
+"app.example.com" = { service = "app", port = "web" }
+"www.example.com" = { service = "app", port = "web" }
 ```
 
-## Syntax
+## Route fields
+
+| Field | Required | Description |
+|---|---:|---|
+| `service` | yes | Name of a configured service |
+| `port` | yes | Name of an `http` port on that service |
+| `https` | no | Whether the hostname should receive HTTPS certificate coverage; defaults to `true` |
+
+The hostname is the key in the `[routes]` table. It must be a valid fully qualified domain name.
+
+## HTTP-only development route
 
 ```toml
 [routes]
-"<domain>" = { image = "<image>:<tag>" }
+"dev-app.example.com" = { service = "app", port = "web", https = false }
 ```
 
-| Component | Description |
-|-----------|-------------|
-| `domain` | Public, fully qualified domain name |
-| `image` | Full container image reference, including tag |
-| `https` | Optional; add `false` for HTTP-only routes |
+Setting `https = false` disables certificate coverage for that hostname. It does not change the protocol spoken by the application port.
 
-Legacy `http://...` route keys are still read for backward compatibility and rewritten on the next save.
+## Backend protocols
 
-## Route Types
-
-### HTTPS Routes (Default)
-
-Standard routes expect HTTPS traffic (terminated by Cloudflare or similar):
+A route targets an `http` service port. TLS is a separate property of that port:
 
 ```toml
-[routes]
-"app.mydomain.com" = { image = "myapp:latest" }
+[services.app.ports.secure_web]
+port = 8443
+protocol = "http"
+tls = true
 ```
 
-Route domains must be plain hostnames. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals.
+With `tls = true`, Gordon uses HTTPS when connecting to the service. Without it, Gordon uses HTTP. This backend setting is independent of public HTTPS termination on the route.
 
-### Development Routes
+A route cannot target a `tcp` or `udp` port. Use a traffic router for those protocols.
 
-For local testing, use a hostname you can resolve yourself:
+## External applications
+
+Use `[external_routes]` when Gordon does not deploy or manage the destination application:
 
 ```toml
-[routes]
-"dev-app.example.com" = { image = "internal-app:latest", https = false }
+[external_routes]
+"legacy.example.com" = "backend.example.net:8080"
 ```
 
-## Version Strategies
+External routes have separate SSRF protections. A normal route cannot contain an arbitrary network address.
 
-### Latest Tag
+## Removed image-backed route syntax
 
-Always deploy the most recent push:
+Routes previously combined application deployment and HTTP routing:
 
 ```toml
+# Removed
 [routes]
-"app.mydomain.com" = { image = "myapp:latest" }
+"app.example.com" = { image = "app:latest" }
 ```
 
-### Pinned Version
-
-Deploy a specific version:
+Split the application and route explicitly:
 
 ```toml
+[services.app]
+image = "app:latest"
+ports = { web = "8080/http" }
+
 [routes]
-"app.mydomain.com" = { image = "myapp:v2.1.0" }
+"app.example.com" = { service = "app", port = "web" }
 ```
 
-Update the config to deploy a new version:
-
-```toml
-[routes]
-"app.mydomain.com" = { image = "myapp:v2.2.0" }  # Changed
-```
-
-### Semantic Versioning
-
-Use different routes for different versions:
-
-```toml
-[routes]
-"app.mydomain.com" = { image = "myapp:v2.1.0" }        # Production
-"staging.mydomain.com" = { image = "myapp:staging" }    # Staging
-"canary.mydomain.com" = { image = "myapp:canary" }      # Canary
-```
-
-## Multiple Routes
-
-### Same Image, Different Domains
-
-```toml
-[routes]
-"app.mydomain.com" = { image = "myapp:latest" }
-"www.mydomain.com" = { image = "myapp:latest" }
-"mydomain.com" = { image = "myapp:latest" }
-```
-
-### Multiple Services
-
-```toml
-[routes]
-"app.mydomain.com" = { image = "frontend:latest" }
-"api.mydomain.com" = { image = "backend:v2.1.0" }
-"docs.mydomain.com" = { image = "documentation:latest" }
-"status.mydomain.com" = { image = "status-page:v1.0.0" }
-```
-
-## How Routing Works
-
-1. Request arrives for `app.mydomain.com`
-2. Gordon looks up the route in configuration
-3. Finds running container for `myapp:latest`
-4. Proxies request to container's exposed port
-5. Returns response to client
-
-```
-Client ─> Gordon Proxy ─> Container
-          (port 80)       (exposed port)
-```
-
-## Deployment Flow
-
-When you push an image:
-
-```bash
-docker push registry.mydomain.com/myapp:latest
-```
-
-1. Gordon receives the image
-2. Checks routes for any that use `myapp:latest`
-3. Deploys new container for each matching route
-4. Updates proxy to route traffic to new container
-5. Stops old container
-
-## Route Changes
-
-Route changes in the config file are hot-reloaded automatically:
-
-1. Edit `[routes]` in `gordon.toml`
-2. Save the file
-3. Gordon reloads the updated routes and proxy config
-
-Legacy `http://...` route keys are still read here for backward compatibility and rewritten the next time Gordon saves the config.
-
-You can still manage routes with the API or CLI if you prefer live mutations:
-
-```bash
-gordon routes add newapp.mydomain.com newapp:latest
-gordon routes add app.mydomain.com myapp:v2.2.0
-gordon routes remove oldapp.mydomain.com
-```
-
-## Examples
-
-### Development Setup
-
-```toml
-[routes]
-"dev-app.example.com" = { image = "myapp:latest" }
-"dev-api.example.com" = { image = "myapi:latest" }
-```
-
-Add to `/etc/hosts`:
-
-```text
-127.0.0.1  dev-app.example.com dev-api.example.com registry.example.com
-```
-
-### Production Setup
-
-```toml
-[routes]
-"app.company.com" = { image = "company-app:v2.1.0" }
-"api.company.com" = { image = "company-api:v1.5.2" }
-"admin.company.com" = { image = "admin-panel:v1.0.1" }
-"docs.company.com" = { image = "company-docs:latest" }
-```
-
-### Multi-Tenant SaaS
-
-```toml
-[routes]
-# Platform services
-"app.saas-platform.com" = { image = "saas-frontend:v2.1.0" }
-"api.saas-platform.com" = { image = "saas-api:v3.2.1" }
-
-# Customer subdomains
-"acme.saas-platform.com" = { image = "saas-app:v2.1.0" }
-"beta.saas-platform.com" = { image = "saas-app:v2.1.0" }
-
-# Customer custom domains
-"portal.acme-corp.com" = { image = "saas-app:v2.1.0" }
-```
-
-## External Services
-
-For non-containerized services (databases, legacy apps, etc.), see [External Routes](./external-routes.md).
+Gordon reports a focused configuration error when it detects an image-backed route and points to this migration.
 
 ## Related
 
-- [Configuration Overview](./index.md)
-- [Auto Route](./auto-route.md)
-- [Attachments](./attachments.md)
+- [Services](./services.md)
 - [External Routes](./external-routes.md)
+- [Traffic Plane Configuration](./traffic.md)
+- [Configuration Reference](./reference.md)

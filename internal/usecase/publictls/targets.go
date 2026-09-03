@@ -42,6 +42,10 @@ func DeriveCertificateTargets(
 // routeHosts collects all unique canonical hosts from routes and external keys,
 // sorted alphabetically. Trailing dots are stripped before canonicalization.
 func routeHosts(routes []domain.Route, external map[string]string, additionalHosts []string) []string {
+	return routeHostsWithServiceRoutes(routes, external, nil, additionalHosts)
+}
+
+func routeHostsWithServiceRoutes(routes []domain.Route, external map[string]string, serviceRoutes []domain.HTTPServiceRoute, additionalHosts []string) []string {
 	seen := make(map[string]struct{})
 	var hosts []string
 
@@ -63,12 +67,27 @@ func routeHosts(routes []domain.Route, external map[string]string, additionalHos
 	for h := range external {
 		addHost(h)
 	}
+	for _, route := range serviceRoutes {
+		if route.HTTPS {
+			addHost(route.Domain)
+		}
+	}
 	for _, h := range additionalHosts {
 		addHost(h)
 	}
 
 	sort.Strings(hosts)
 	return hosts
+}
+
+func serviceRoutes(source RouteSource) []domain.HTTPServiceRoute {
+	provider, ok := source.(interface {
+		GetServiceRoutes() []domain.HTTPServiceRoute
+	})
+	if !ok {
+		return nil
+	}
+	return provider.GetServiceRoutes()
 }
 
 // deriveHTTP01Targets creates one target per host for HTTP-01 challenge.

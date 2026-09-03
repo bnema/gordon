@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
@@ -104,13 +105,14 @@ func TestApplyTrafficRuntimeConfigAppliesSmartTCPEntrypointWithRawFallbackPolicy
 			Ports: []traffic.PortConfig{{Name: "ssh", Container: 22, Protocol: domain.NetworkProtocolTCP}},
 		}},
 	}
-	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "ssh", EntryPoint: traffic.DefaultEdgeEntryPointName, Service: "network_service:ssh:ssh"}}
+	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "ssh", EntryPoint: traffic.DefaultEdgeEntryPointName, NetworkService: "ssh", Port: "ssh"}}
 
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+	configSvc.EXPECT().GetServiceRoutes().Return(nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, traffic.DefaultEdgeEntryPointName, status.EntryPoints[0].Name)
@@ -125,20 +127,28 @@ func TestApplyTrafficRuntimeConfigPassesStandaloneServicesToBuilder(t *testing.T
 		EntryPoints: map[string]traffic.EntryPointConfig{
 			"rust": {Address: freeUDPAddress(t), Protocol: domain.EntryPointProtocolUDP},
 		},
-		Services: []servicecfg.Config{{
-			Name:    "rust",
-			Image:   "localhost/rust:latest",
-			Enabled: true,
-			Ports:   []servicecfg.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}},
-		}},
+		Services: map[string]servicecfg.Config{
+			"rust": {
+				Image: "localhost/rust:latest",
+				Ports: map[string]servicecfg.PortConfig{
+					"game": {Container: 28015, Protocol: domain.ServicePortProtocolUDP},
+				},
+			},
+		},
 	}
-	cfg.Traffic.UDP.Routers = []traffic.RouterConfig{{Name: "rust-game", EntryPoint: "rust", Service: "service:rust:game"}}
+	cfg.Traffic.UDP.Routers = []traffic.RouterConfig{{Name: "rust-game", EntryPoint: "rust", Service: "rust", Port: "game"}}
 
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+	configSvc.EXPECT().GetServiceRoutes().Return(nil)
+	serviceSvc := inmocks.NewMockStandaloneServiceService(t)
+	serviceSvc.EXPECT().Reconcile(context.Background(), mock.Anything).Return(nil)
+	serviceSvc.EXPECT().ResolvePorts(context.Background(), mock.Anything).Return([]domain.ServicePortBackend{{
+		Service: "rust", PortName: "game", Host: "127.0.0.1", Port: 38015, Protocol: domain.ServicePortProtocolUDP,
+	}}, nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil, serviceSvc))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "rust", status.EntryPoints[0].Name)
@@ -157,13 +167,14 @@ func TestApplyTrafficRuntimeConfigAppliesCustomL4Entrypoint(t *testing.T) {
 			Ports: []traffic.PortConfig{{Name: "db", Container: 5432, Protocol: domain.NetworkProtocolTCP}},
 		}},
 	}
-	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "postgres", EntryPoint: "postgres", Service: "network_service:postgres:db"}}
+	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "postgres", EntryPoint: "postgres", NetworkService: "postgres", Port: "db"}}
 
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
+	configSvc.EXPECT().GetServiceRoutes().Return(nil)
 
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, nil))
 	status := manager.Status()
 	require.Len(t, status.EntryPoints, 1)
 	assert.Equal(t, "postgres", status.EntryPoints[0].Name)

@@ -23,7 +23,7 @@ func TestStandaloneServiceValidateRejectsPaddedNames(t *testing.T) {
 		Name:    "cache",
 		Image:   "redis:7",
 		Enabled: true,
-		Ports:   []StandaloneServicePort{{Name: " admin ", Container: 6379, Protocol: NetworkProtocolTCP}},
+		Ports:   []StandaloneServicePort{{Name: " admin ", Container: 6379, Protocol: ServicePortProtocolTCP}},
 	}
 	require.ErrorContains(t, svc.Validate(), "leading or trailing whitespace")
 }
@@ -39,30 +39,30 @@ func TestStandaloneServiceValidatePorts(t *testing.T) {
 		Image:   "game:latest",
 		Enabled: true,
 		Ports: []StandaloneServicePort{
-			{Name: "game", Container: 28015, Protocol: NetworkProtocolUDP, Publish: "127.0.0.1:38015"},
-			{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Publish: "127.0.0.1:38016", Private: true},
+			{Name: "game", Container: 28015, Protocol: ServicePortProtocolUDP, Publish: "127.0.0.1:38015"},
+			{Name: "rcon", Container: 28016, Protocol: ServicePortProtocolTCP, Publish: "127.0.0.1:38016", Private: true},
 		},
 	}
 	require.NoError(t, valid.Validate())
 
 	duplicate := valid
-	duplicate.Ports = append(duplicate.Ports, StandaloneServicePort{Name: "game", Container: 28017, Protocol: NetworkProtocolUDP})
+	duplicate.Ports = append(duplicate.Ports, StandaloneServicePort{Name: "game", Container: 28017, Protocol: ServicePortProtocolUDP})
 	require.ErrorContains(t, duplicate.Validate(), "duplicate port")
 
 	badProtocol := valid
-	badProtocol.Ports = []StandaloneServicePort{{Name: "game", Container: 28015, Protocol: NetworkProtocol("sctp")}}
+	badProtocol.Ports = []StandaloneServicePort{{Name: "game", Container: 28015, Protocol: ServicePortProtocol("sctp")}}
 	require.ErrorContains(t, badProtocol.Validate(), "protocol")
 
 	badPublish := valid
-	badPublish.Ports = []StandaloneServicePort{{Name: "game", Container: 28015, Protocol: NetworkProtocolUDP, Publish: "127.0.0.1:not-a-port"}}
+	badPublish.Ports = []StandaloneServicePort{{Name: "game", Container: 28015, Protocol: ServicePortProtocolUDP, Publish: "127.0.0.1:not-a-port"}}
 	require.ErrorContains(t, badPublish.Validate(), "valid port")
 
 	conflictingVisibility := valid
-	conflictingVisibility.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Private: true, Public: true}}
+	conflictingVisibility.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: ServicePortProtocolTCP, Private: true, Public: true}}
 	require.ErrorContains(t, conflictingVisibility.Validate(), "cannot be both private and public")
 
 	privateNonLoopback := valid
-	privateNonLoopback.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: NetworkProtocolTCP, Private: true, Publish: "0.0.0.0:28016"}}
+	privateNonLoopback.Ports = []StandaloneServicePort{{Name: "rcon", Container: 28016, Protocol: ServicePortProtocolTCP, Private: true, Publish: "0.0.0.0:28016"}}
 	require.ErrorContains(t, privateNonLoopback.Validate(), "must be loopback")
 }
 

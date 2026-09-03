@@ -1,11 +1,22 @@
 package domain
 
-// Route represents a mapping from a domain to a container image.
+// Route binds an HTTP hostname to a named port on a Gordon-owned service.
 type Route struct {
-	Domain string
-	Image  string
-	HTTPS  bool
-	Env    []string // Pre-resolved env vars ("KEY=VALUE"); when set, Deploy skips EnvLoader lookup.
+	Domain   string
+	Service  string
+	PortName string
+	Image    string // Removed public model; retained temporarily while route-owned deployment code is migrated.
+	HTTPS    bool
+	Env      []string // Pre-resolved env vars ("KEY=VALUE"); when set, Deploy skips EnvLoader lookup.
+}
+
+// HTTPServiceRoute maps a hostname to a named port on a Gordon-owned service.
+// It binds HTTP traffic but does not own a separate route container.
+type HTTPServiceRoute struct {
+	Domain   string
+	Service  string
+	PortName string
+	HTTPS    bool
 }
 
 // ProxyTarget represents the destination for proxying requests.
@@ -13,10 +24,11 @@ type ProxyTarget struct {
 	Host         string
 	Port         int
 	ContainerID  string
-	Scheme       string // "http" or "https"
-	Protocol     string // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
-	OriginalHost string // Original hostname before DNS resolution (for external-route Host header)
-	RouteHost    string // Canonical matched route domain for managed-route Host header
+	Scheme       string   // "http" or "https"
+	Protocol     string   // "" (default HTTP/1.1) or "h2c" (cleartext HTTP/2)
+	OriginalHost string   // Original hostname before DNS resolution (for external-route Host header)
+	RouteHost    string   // Canonical matched route domain for managed-route Host header
+	TrustedCIDRs []string // Direct peers allowed to access a private service port
 }
 
 // RouteMatch represents the result of matching a request to a route.

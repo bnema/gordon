@@ -469,6 +469,66 @@ func (_c *MockBlobStorage_GetBlob_Call) RunAndReturn(run func(digest string) (io
 	return _c
 }
 
+// GetBlobModTime provides a mock function for the type MockBlobStorage
+func (_mock *MockBlobStorage) GetBlobModTime(digest string) (time.Time, error) {
+	ret := _mock.Called(digest)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlobModTime")
+	}
+
+	var r0 time.Time
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (time.Time, error)); ok {
+		return returnFunc(digest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) time.Time); ok {
+		r0 = returnFunc(digest)
+	} else {
+		r0 = ret.Get(0).(time.Time)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(digest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBlobStorage_GetBlobModTime_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlobModTime'
+type MockBlobStorage_GetBlobModTime_Call struct {
+	*mock.Call
+}
+
+// GetBlobModTime is a helper method to define mock.On call
+//   - digest string
+func (_e *MockBlobStorage_Expecter) GetBlobModTime(digest any) *MockBlobStorage_GetBlobModTime_Call {
+	return &MockBlobStorage_GetBlobModTime_Call{Call: _e.mock.On("GetBlobModTime", digest)}
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) Run(run func(digest string)) *MockBlobStorage_GetBlobModTime_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) Return(time1 time.Time, err error) *MockBlobStorage_GetBlobModTime_Call {
+	_c.Call.Return(time1, err)
+	return _c
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) RunAndReturn(run func(digest string) (time.Time, error)) *MockBlobStorage_GetBlobModTime_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetBlobPath provides a mock function for the type MockBlobStorage
 func (_mock *MockBlobStorage) GetBlobPath(digest string) (string, error) {
 	ret := _mock.Called(digest)
@@ -642,63 +702,6 @@ func (_c *MockBlobStorage_ListBlobs_Call) Return(strings []string, err error) *M
 }
 
 func (_c *MockBlobStorage_ListBlobs_Call) RunAndReturn(run func() ([]string, error)) *MockBlobStorage_ListBlobs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetBlobModTime provides a mock function for the type MockBlobStorage.
-func (_mock *MockBlobStorage) GetBlobModTime(digest string) (time.Time, error) {
-	ret := _mock.Called(digest)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetBlobModTime")
-	}
-
-	var r0 time.Time
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (time.Time, error)); ok {
-		return returnFunc(digest)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) time.Time); ok {
-		r0 = returnFunc(digest)
-	} else if ret.Get(0) != nil {
-		r0 = ret.Get(0).(time.Time)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(digest)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockBlobStorage_GetBlobModTime_Call is a typed expectation for GetBlobModTime.
-type MockBlobStorage_GetBlobModTime_Call struct {
-	*mock.Call
-}
-
-// GetBlobModTime is a helper method to define mock.On call.
-func (_e *MockBlobStorage_Expecter) GetBlobModTime(digest any) *MockBlobStorage_GetBlobModTime_Call {
-	return &MockBlobStorage_GetBlobModTime_Call{Call: _e.mock.On("GetBlobModTime", digest)}
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) Run(run func(digest string)) *MockBlobStorage_GetBlobModTime_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(arg0)
-	})
-	return _c
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) Return(modTime time.Time, err error) *MockBlobStorage_GetBlobModTime_Call {
-	_c.Call.Return(modTime, err)
-	return _c
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) RunAndReturn(run func(digest string) (time.Time, error)) *MockBlobStorage_GetBlobModTime_Call {
 	_c.Call.Return(run)
 	return _c
 }

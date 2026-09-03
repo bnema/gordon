@@ -12,5 +12,6 @@ import (
 // StandaloneServiceService defines standalone service lifecycle operations.
 type StandaloneServiceService interface {
 	Reconcile(ctx context.Context, services []domain.StandaloneService) error
+	ResolvePorts(ctx context.Context, services []domain.StandaloneService) ([]domain.ServicePortBackend, error)
 	Status(ctx context.Context) ([]domain.StandaloneServiceStatus, error)
 }

@@ -33,31 +33,27 @@ For each accepted connection on a `smart_tcp` entrypoint Gordon:
 
 Malformed HTTP-looking or TLS-looking traffic is rejected instead of bypassing to raw fallback.
 
-## Standalone and Network Services
+## Services and network services
 
-Standalone services are Gordon-managed containers that L4 routers can target with `service:<service>:<port-name>`. Define them under `[[services]]` when Gordon should own the container lifecycle.
+Services are Gordon-owned applications. Traffic routers target a declared service port using separate `service` and `port` fields.
 
 ```toml
-[[services]]
-name = "rust"
-image = "registry.example.com:5000/rust:latest"
-enabled = true
+[services.game]
+image = "registry.example.com:5000/game-server:latest"
+ports = { gameplay = "28015/udp" }
 
-[[services.ports]]
-name = "game"
-container = 28015
-protocol = "udp"
-publish = "127.0.0.1:38015"
-
-[entrypoints.rust]
+[entrypoints.game]
 address = "0.0.0.0:28015"
 protocol = "udp"
 
 [[traffic.udp.routers]]
-name = "rust-game"
-entrypoint = "rust"
-service = "service:rust:game"
+name = "gameplay"
+entrypoint = "game"
+service = "game"
+port = "gameplay"
 ```
+
+Ports used only between containers in the same service are not declared. Declaring a service port does not expose it until a route or traffic router binds it.
 
 Network services describe manually managed non-HTTP backends that L4 routers can target.
 
@@ -71,14 +67,7 @@ container = 5432
 protocol = "tcp"
 ```
 
-Service references use:
-
-- `route:<domain>` for configured HTTP routes
-- `external_route:<domain>` for configured external HTTP routes
-- `network_service:<service>:<port-name>` for manually managed TCP, UDP, and TLS passthrough backends
-- `service:<service>:<port-name>` for Gordon-managed standalone service backends
-
-`static:<name>` is reserved and currently unsupported.
+A traffic router defines exactly one backend with either `service = "<name>"` or `network_service = "<name>"`, plus `port = "<port-name>"`. Typed strings such as `service:name:port` and `network_service:name:port` have been removed.
 
 ## TLS Passthrough on Smart TCP
 
@@ -93,7 +82,8 @@ protocol = "smart_tcp"
 name = "raw-tls"
 entrypoint = "edge"
 sni = "raw.example.com"
-service = "network_service:raw:tls"
+network_service = "raw"
+port = "tls"
 ```
 
 Exact SNI matches win over wildcard matches. Ambiguous wildcard overlaps and HTTP-host/TLS-passthrough conflicts on the same smart TCP entrypoint are rejected at validation time. HTTPS application routes that do not match a passthrough SNI use Gordon's normal HTTPS fallback and certificate selection.

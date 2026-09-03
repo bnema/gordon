@@ -45,7 +45,7 @@ func TestService_ReconcileCreatesMissingEnabledService(t *testing.T) {
 	assert.Equal(t, "true", created.Labels[domain.LabelServiceCleanupRemoveContainer])
 	assert.NotEmpty(t, created.Labels[domain.LabelServiceConfigHash])
 	assert.Equal(t, "gordon-service-game-data", created.Labels[domain.LabelServiceManagedVolumes])
-	assert.Equal(t, []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 38015, ContainerPort: 28015, Protocol: domain.NetworkProtocolUDP}}, created.PortPublishes)
+	assert.Equal(t, []domain.ContainerPortPublish{{HostIP: "127.0.0.1", HostPort: 0, ContainerPort: 28015, Protocol: domain.NetworkProtocolUDP}}, created.PortPublishes)
 	assert.Equal(t, map[string]string{"/data": "gordon-service-game-data"}, created.Volumes)
 }
 
@@ -345,7 +345,7 @@ func TestServiceEnvUsesExplicitProviderSecretPaths(t *testing.T) {
 
 func TestTCPReadinessAddressMapsIPv6WildcardToIPv6Loopback(t *testing.T) {
 	svc := sampleService()
-	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "[::]:38016"}}
+	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.ServicePortProtocolTCP, Publish: "[::]:38016"}}
 
 	address, err := tcpReadinessAddress(svc)
 
@@ -367,7 +367,7 @@ func TestWaitTCPReadinessDialsResolvedLoopbackPublish(t *testing.T) {
 	}()
 	svc := sampleService()
 	svc.Readiness = domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessTCP, Timeout: time.Second}
-	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: listener.Addr().String()}}
+	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.ServicePortProtocolTCP, Publish: listener.Addr().String()}}
 
 	err = NewService(nil).waitReadiness(context.Background(), "container-1", svc)
 
@@ -416,7 +416,7 @@ func TestLogContainsReturnsSentinelAtSizeLimit(t *testing.T) {
 func TestWaitReadinessHonorsContextTimeout(t *testing.T) {
 	svc := sampleService()
 	svc.Readiness = domain.StandaloneServiceReadiness{Type: domain.StandaloneServiceReadinessTCP}
-	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:1"}}
+	svc.Ports = []domain.StandaloneServicePort{{Name: "admin", Container: 28016, Protocol: domain.ServicePortProtocolTCP, Publish: "127.0.0.1:1"}}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
 	defer cancel()
 
@@ -454,7 +454,7 @@ func sampleService() domain.StandaloneService {
 		Enabled: true,
 		Env:     []string{"PUBLIC=value"},
 		Cleanup: domain.StandaloneServiceCleanup{PreserveVolumes: true, RemoveContainer: true},
-		Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolUDP, Publish: "127.0.0.1:38015"}},
+		Ports:   []domain.StandaloneServicePort{{Name: "game", Container: 28015, Protocol: domain.ServicePortProtocolUDP, Publish: "127.0.0.1:38015"}},
 	}
 }
 

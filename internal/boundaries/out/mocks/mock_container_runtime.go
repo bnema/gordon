@@ -926,6 +926,84 @@ func (_c *MockContainerRuntime_GetContainerPort_Call) RunAndReturn(run func(ctx 
 	return _c
 }
 
+// GetContainerPublishedPort provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) GetContainerPublishedPort(ctx context.Context, containerID string, internalPort int, protocol domain.NetworkProtocol) (int, error) {
+	ret := _mock.Called(ctx, containerID, internalPort, protocol)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetContainerPublishedPort")
+	}
+
+	var r0 int
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int, domain.NetworkProtocol) (int, error)); ok {
+		return returnFunc(ctx, containerID, internalPort, protocol)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int, domain.NetworkProtocol) int); ok {
+		r0 = returnFunc(ctx, containerID, internalPort, protocol)
+	} else {
+		r0 = ret.Get(0).(int)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int, domain.NetworkProtocol) error); ok {
+		r1 = returnFunc(ctx, containerID, internalPort, protocol)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_GetContainerPublishedPort_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerPublishedPort'
+type MockContainerRuntime_GetContainerPublishedPort_Call struct {
+	*mock.Call
+}
+
+// GetContainerPublishedPort is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - internalPort int
+//   - protocol domain.NetworkProtocol
+func (_e *MockContainerRuntime_Expecter) GetContainerPublishedPort(ctx any, containerID any, internalPort any, protocol any) *MockContainerRuntime_GetContainerPublishedPort_Call {
+	return &MockContainerRuntime_GetContainerPublishedPort_Call{Call: _e.mock.On("GetContainerPublishedPort", ctx, containerID, internalPort, protocol)}
+}
+
+func (_c *MockContainerRuntime_GetContainerPublishedPort_Call) Run(run func(ctx context.Context, containerID string, internalPort int, protocol domain.NetworkProtocol)) *MockContainerRuntime_GetContainerPublishedPort_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 int
+		if args[2] != nil {
+			arg2 = args[2].(int)
+		}
+		var arg3 domain.NetworkProtocol
+		if args[3] != nil {
+			arg3 = args[3].(domain.NetworkProtocol)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerPublishedPort_Call) Return(n int, err error) *MockContainerRuntime_GetContainerPublishedPort_Call {
+	_c.Call.Return(n, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerPublishedPort_Call) RunAndReturn(run func(ctx context.Context, containerID string, internalPort int, protocol domain.NetworkProtocol) (int, error)) *MockContainerRuntime_GetContainerPublishedPort_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetImageExposedPorts provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error) {
 	ret := _mock.Called(ctx, imageRef)

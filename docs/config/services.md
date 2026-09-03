@@ -1,94 +1,245 @@
-# Standalone Services
+# Services
 
-Standalone services are Gordon-managed containers for non-HTTP workloads such as game servers, databases, or TCP/UDP daemons. Gordon creates, starts, restarts, reconciles, and removes these containers from the `[[services]]` configuration during startup and reload.
+A **service** is an application that Gordon runs and keeps available.
 
-Standalone services are separate from HTTP `[routes]`. Route normal web apps with `[routes]`; use `[[services]]` when Gordon must manage a long-running container that is reached by explicit L4 traffic routers.
+You tell Gordon which image contains the application and which named ports the application provides. Gordon then creates the container, starts it, checks that it is ready, replaces it during deployments, and cleans up old containers.
 
-## Example
+The service remains the same even when Gordon replaces its container. Think of the service as the application and the container as the current running copy of that application.
+
+## A first service
 
 ```toml
-[[services]]
-name = "rust"
-image = "registry.example.com:5000/rust:latest"
-enabled = true
-env_file = "/srv/gordon/services/rust.env"
+[services.app]
+image = "registry.example.com/app:latest"
 
-[services.readiness]
-type = "log"
-path = "/steamcmd/rust/server.log"
-contains = "Server startup complete"
-timeout = "2m"
+[services.app.ports]
+web = "8080/http"
+```
 
-[[services.ports]]
-name = "game"
-container = 28015
-protocol = "udp"
-publish = "127.0.0.1:38015"
+This configuration says:
 
-[[services.ports]]
-name = "rcon"
-container = 28016
+- the service is named `app`;
+- Gordon runs the image `registry.example.com/app:latest`;
+- the application accepts HTTP traffic on container port `8080`;
+- that port is named `web`, so routes can refer to it clearly.
+
+Declaring a port does not make it public. A route or traffic router must explicitly expose it.
+
+> **Do not declare ports used only between containers.** The `ports` table is not an inventory of every port opened by the application. It contains only stable, named service ports that Gordon must route. Containers in the same service communicate directly over their private network using the destination container name and port, such as `postgres:5432` or `valkey:6379`.
+
+For example, a web application can use PostgreSQL and Valkey internally while exporting only its HTTP port:
+
+```toml
+[services.shop.containers]
+web = "registry.example.com/shop-web:latest"
+postgres = "postgres:18"
+valkey = "valkey/valkey:latest"
+
+[services.shop.ports]
+web = "web:3000/http"
+```
+
+There is intentionally no `postgres` or `valkey` entry under `services.shop.ports`. Gordon creates private DNS names for those containers, so `web` connects directly to `postgres:5432` and `valkey:6379`.
+
+## One service with several routed ports
+
+One application can provide several protocols from the same container:
+
+```toml
+[services.app]
+image = "registry.example.com/app:latest"
+
+[services.app.ports]
+web = "8080/http"
+database = "5432/tcp"
+game = "9000/udp"
+
+[services.app.ports.secure_web]
+port = 8443
+protocol = "http"
+tls = true
+```
+
+The left side is a name chosen by you. A compact value contains the container port followed by the protocol spoken by the application.
+
+| Protocol | Use it when the application speaks |
+|---|---|
+| `http` | HTTP |
+| `tcp` | A non-HTTP TCP protocol, such as PostgreSQL or RCON |
+| `udp` | A UDP protocol, such as a game or DNS protocol |
+
+TLS is not a protocol value. It is an independent property of a TCP-based port. Use an expanded port table with `tls = true` when the application expects an encrypted connection. Do not write `https`, `tls`, or `http+tls` as a protocol.
+
+A plain integer is shorthand for a TCP port:
+
+```toml
+[services.database.ports]
+postgres = 5432
+```
+
+Use an expanded declaration when a port needs additional settings:
+
+```toml
+[services.game.ports.rcon]
+port = 28016
 protocol = "tcp"
 publish = "127.0.0.1:38016"
+private = true
 trusted_cidrs = ["100.64.0.0/10"]
 ```
 
-The `publish` address is the host-side bind address that Gordon's traffic manager dials; use loopback for private backends. Expose services through `[traffic]` routers instead of binding service containers directly to a public interface.
+A port used by Gordon's current proxy runtime must have a loopback `publish` address. This is the private backend address Gordon dials; it is not the public listener. Public listeners are configured with routes or traffic entrypoints.
 
-## Traffic routing
+## Send HTTP traffic to a service
 
-Use `service:<service>:<port-name>` from TCP, UDP, or TLS passthrough routers:
+A **route** connects an HTTP hostname to one named port of a service:
 
 ```toml
-[entrypoints.rust]
-address = "0.0.0.0:28015"
+[services.app]
+image = "registry.example.com/app:latest"
+ports = { web = "8080/http" }
+
+[routes]
+"app.example.com" = { service = "app", port = "web" }
+```
+
+Read the route as:
+
+> Send requests for `app.example.com` to the `web` port of the `app` service.
+
+A route never creates a second container. The service owns deployment; the route only directs HTTP traffic.
+
+HTTP routes target `http` service ports. When the service port has `tls = true`, Gordon uses HTTPS for the private backend connection. Public HTTPS is configured and terminated at the route layer, so most HTTP service ports do not need `tls = true`.
+
+## Expose TCP or UDP
+
+An entrypoint tells Gordon where to listen. A traffic router connects that listener to a named service port.
+
+```toml
+[services.game]
+image = "registry.example.com/game:latest"
+
+[services.game.ports]
+game = { port = 28015, protocol = "udp", publish = "127.0.0.1:38015" }
+
+[entrypoints.game]
+address = ":28015"
 protocol = "udp"
 
 [[traffic.udp.routers]]
-name = "rust-game"
-entrypoint = "rust"
-service = "service:rust:game"
-
-[entrypoints.rcon]
-address = "0.0.0.0:28016"
-protocol = "tcp"
-trusted_cidrs = ["100.64.0.0/10"]
-
-[[traffic.tcp.routers]]
-name = "rust-rcon"
-entrypoint = "rcon"
-service = "service:rust:rcon"
+name = "game"
+entrypoint = "game"
+service = "game"
+port = "game"
 ```
 
-Ports named `rcon` default to private. Private ports require non-empty `trusted_cidrs` on both the service port and target entrypoint, and the CIDR sets must match. To intentionally expose an RCON port publicly, set `public = true` on that port.
+Read the traffic router as:
+
+> Forward UDP packets received by the `game` entrypoint to the `game` port of the `game` service.
+
+## Pass TLS through unchanged
+
+TLS passthrough is a traffic binding behavior. The service port remains TCP and separately records that its traffic is TLS-wrapped:
+
+```toml
+[services.api]
+image = "registry.example.com/api:latest"
+
+[services.api.ports.secure]
+port = 9443
+protocol = "tcp"
+tls = true
+publish = "127.0.0.1:19443"
+
+[entrypoints.secure-api]
+address = ":9443"
+protocol = "tls"
+
+[[traffic.tls.routers]]
+name = "secure-api"
+entrypoint = "secure-api"
+sni = "api.example.com"
+service = "api"
+port = "secure"
+```
+
+Gordon reads the TLS server name to choose the service but does not decrypt the connection.
+
+## Environment and readiness
+
+```toml
+[services.game]
+image = "registry.example.com/game:latest"
+env_file = "/srv/gordon/services/game.env"
+env = ["REGION=eu"]
+
+[services.game.readiness]
+type = "log"
+path = "/var/log/game/server.log"
+contains = "Server startup complete"
+timeout = "2m"
+```
 
 ## Volumes
 
-Explicit volumes are optional:
-
 ```toml
-[[services.volumes]]
-source = "rust-data"
-target = "/steamcmd/rust"
+[[services.game.volumes]]
+source = "game-data"
+target = "/var/lib/game"
 read_only = false
 ```
 
-When `[[services.volumes]]` is omitted, Gordon inspects the image `VOLUME` metadata and creates deterministic Gordon-managed named volumes for those paths. If the image has no `VOLUME` metadata, the service is stateless unless the image writes inside its own filesystem.
+When no volumes are declared, Gordon inspects the image's `VOLUME` metadata and creates deterministic managed volumes for those paths. Gordon preserves volumes by default when replacing or removing a service container.
 
-Gordon tracks image-discovered managed volumes and only removes those managed volumes when `cleanup.preserve_volumes = false`. Explicit named volumes and bind mounts are not deleted as managed image volumes.
+## Disable or remove a service
 
-## Cleanup
+Services are enabled by default:
 
 ```toml
-[services.cleanup]
+[services.game]
+image = "game:latest"
+enabled = false
+```
+
+When disabled, Gordon stops and removes the service container according to its cleanup policy.
+
+```toml
+[services.game.cleanup]
 preserve_volumes = true
 remove_container = true
 ```
 
-By default Gordon removes old or disabled service containers while preserving volumes. Set `preserve_volumes = false` only for disposable managed image volumes.
+## Removed configuration syntax
+
+The old array syntax is no longer supported:
+
+```toml
+# Removed
+[[services]]
+name = "game"
+image = "game:latest"
+
+[[services.ports]]
+name = "web"
+container = 8080
+protocol = "tcp"
+```
+
+Write the service and port names as table keys instead:
+
+```toml
+[services.game]
+image = "game:latest"
+
+[services.game.ports]
+web = "8080/http"
+```
+
+Gordon reports a focused startup error when it detects the removed syntax.
 
 ## Related
 
+- [Routes Configuration](./routes.md)
 - [Traffic Plane Configuration](./traffic.md)
 - [Configuration Reference](./reference.md)
 - [CLI traffic status](../cli/traffic.md)

@@ -52,8 +52,8 @@ func setupServiceWithCoexistingLegacyRoute(t *testing.T, canonicalImage, legacyI
 	if svc.config.Routes == nil {
 		svc.config.Routes = make(map[string]routeConfig)
 	}
-	svc.config.Routes["app.example.com"] = routeConfig{Image: canonicalImage, HTTPS: true}
-	svc.config.Routes["http://app.example.com"] = routeConfig{Image: legacyImage, HTTPS: false}
+	svc.config.Routes["app.example.com"] = routeConfig{Service: "app", PortName: "web", HTTPS: true}
+	svc.config.Routes["http://app.example.com"] = routeConfig{Service: "app", PortName: "web", HTTPS: false}
 	svc.mu.Unlock()
 
 	return svc, ctx
@@ -74,8 +74,8 @@ func TestService_Load(t *testing.T) {
 	v.Set("volumes.auto_create", true)
 	v.Set("volumes.prefix", "gordon")
 	v.Set("volumes.preserve", false)
-	v.Set("routes", map[string]interface{}{
-		"app.example.com": "myapp:latest",
+	v.Set("routes", map[string]any{
+		"app.example.com": map[string]any{"service": "app", "port": "web"},
 	})
 
 	eventBus := mocks.NewMockEventPublisher(t)
@@ -103,7 +103,7 @@ func TestService_Load_CanonicalInlineRoute(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
 	err := os.WriteFile(configFile, []byte(`[routes]
-"insecure.example.com" = { image = "myapp:latest", https = false }
+"insecure.example.com" = { service = "app", port = "web", https = false }
 `), 0600)
 	require.NoError(t, err)
 
@@ -120,7 +120,8 @@ func TestService_Load_CanonicalInlineRoute(t *testing.T) {
 
 	route, err := svc.GetRoute(ctx, "insecure.example.com")
 	require.NoError(t, err)
-	assert.Equal(t, "myapp:latest", route.Image)
+	assert.Equal(t, "app", route.Service)
+	assert.Equal(t, "web", route.PortName)
 	assert.False(t, route.HTTPS)
 }
 
@@ -128,7 +129,7 @@ func TestService_Load_CanonicalInlineRouteDefaultsHTTPS(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
 	err := os.WriteFile(configFile, []byte(`[routes]
-"secure.example.com" = { image = "myapp:latest" }
+"secure.example.com" = { service = "app", port = "web" }
 `), 0600)
 	require.NoError(t, err)
 
@@ -145,7 +146,8 @@ func TestService_Load_CanonicalInlineRouteDefaultsHTTPS(t *testing.T) {
 
 	route, err := svc.GetRoute(ctx, "secure.example.com")
 	require.NoError(t, err)
-	assert.Equal(t, "myapp:latest", route.Image)
+	assert.Equal(t, "app", route.Service)
+	assert.Equal(t, "web", route.PortName)
 	assert.True(t, route.HTTPS)
 }
 
@@ -153,7 +155,7 @@ func TestService_Reload_InvalidRouteKeyPreservesPreviousState(t *testing.T) {
 	tmpDir := t.TempDir()
 	configFile := filepath.Join(tmpDir, "gordon.toml")
 	initialConfig := `[routes]
-"app.example.com" = "myapp:v1"
+"app.example.com" = { service = "app", port = "web" }
 `
 	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
 	require.NoError(t, err)
@@ -206,8 +208,8 @@ func TestService_FindRoutesByImage_DeduplicatesCanonicalAndLegacyEntries(t *test
 	_ = svc.Load(ctx)
 	svc.mu.Lock()
 	svc.config.Routes = make(map[string]routeConfig)
-	svc.config.Routes["app.example.com"] = routeConfig{Image: "registry.example.com/myapp:v2", HTTPS: true}
-	svc.config.Routes["http://app.example.com"] = routeConfig{Image: "myapp:v1", HTTPS: false}
+	svc.config.Routes["app.example.com"] = routeConfig{Service: "app", PortName: "web", HTTPS: true}
+	svc.config.Routes["http://app.example.com"] = routeConfig{Service: "app", PortName: "web", HTTPS: false}
 	svc.mu.Unlock()
 
 	routes := svc.FindRoutesByImage(ctx, "myapp")
@@ -220,24 +222,15 @@ func TestService_FindRoutesByImage_DeduplicatesCanonicalAndLegacyEntries(t *test
 
 func TestCanonicalRoutesForSave(t *testing.T) {
 	routes := map[string]routeConfig{
-		"legacy.example.com":             {Image: "old-registry.example.com/app:latest", HTTPS: true},
-		"current.example.com":            {Image: "registry.example.com/current:v1", HTTPS: true},
-		"bare.example.com":               {Image: "worker:v2", HTTPS: true},
-		"external.example.com":           {Image: "docker.io/library/nginx:latest", HTTPS: true},
-		"http://legacy-http.example.com": {Image: "old-registry.example.com:5000/http:v3", HTTPS: true},
+		"app.example.com":      {Service: "app", PortName: "web", HTTPS: true},
+		"worker.example.com":   {Service: "worker", PortName: "http", HTTPS: true},
+		"insecure.example.com": {Service: "legacy", PortName: "web", HTTPS: false},
 	}
 
 	savedRoutes, err := canonicalRoutesForSave(routes, "registry.example.com", []string{"old-registry.example.com", "old-registry.example.com:5000"})
 	require.NoError(t, err)
 
-	assert.Equal(t, routeConfig{Image: "registry.example.com/app:latest", HTTPS: true}, requireRoute(t, savedRoutes, "legacy.example.com"))
-	assert.Equal(t, routeConfig{Image: "registry.example.com/current:v1", HTTPS: true}, requireRoute(t, savedRoutes, "current.example.com"))
-	assert.Equal(t, routeConfig{Image: "worker:v2", HTTPS: true}, requireRoute(t, savedRoutes, "bare.example.com"))
-	assert.Equal(t, routeConfig{Image: "docker.io/library/nginx:latest", HTTPS: true}, requireRoute(t, savedRoutes, "external.example.com"))
-	assert.Equal(t, routeConfig{Image: "registry.example.com/http:v3", HTTPS: false}, requireRoute(t, savedRoutes, "legacy-http.example.com"))
-
-	assert.Equal(t, "old-registry.example.com/app:latest", routes["legacy.example.com"].Image)
-	assert.Equal(t, "old-registry.example.com:5000/http:v3", routes["http://legacy-http.example.com"].Image)
+	assert.Equal(t, routes, savedRoutes)
 }
 
 func TestService_AddRoute_StoresHTTPSFalseInCanonicalForm(t *testing.T) {
@@ -254,11 +247,12 @@ func TestService_AddRoute_StoresHTTPSFalseInCanonicalForm(t *testing.T) {
 
 	_ = svc.Load(ctx)
 
-	err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Image: "newapp:latest", HTTPS: false})
+	err = svc.AddRoute(ctx, domain.Route{Domain: "new.example.com", Service: "app", PortName: "web", HTTPS: false})
 	require.NoError(t, err)
 
 	routeCfg := requireRoute(t, svc.GetConfig().Routes, "new.example.com")
-	assert.Equal(t, "newapp:latest", routeCfg.Image)
+	assert.Equal(t, "app", routeCfg.Service)
+	assert.Equal(t, "web", routeCfg.PortName)
 	assert.False(t, routeCfg.HTTPS)
 }
 
@@ -298,46 +292,6 @@ legacy_registry_domains = ["old-registry.example.com"]
 	assert.Contains(t, text, `"new.example.com" = { image = "new:v1", https = false }`)
 	assert.NotContains(t, text, "http://insecure.example.com")
 	assert.Contains(t, text, "[routes]")
-}
-
-func TestService_SaveCanonicalizesRouteImages(t *testing.T) {
-	tmpDir := t.TempDir()
-	configFile := filepath.Join(tmpDir, "gordon.toml")
-	initialConfig := `[server]
-gordon_domain = "registry.example.com"
-legacy_registry_domains = ["old-registry.example.com", "old-registry.example.com:5000"]
-
-[routes]
-"legacy.example.com" = "old-registry.example.com/app:latest"
-"legacy-port.example.com" = "old-registry.example.com:5000/api:v2"
-"current.example.com" = "registry.example.com/web:v3"
-"bare.example.com" = "worker:v4"
-"external.example.com" = "docker.io/library/nginx:latest"
-`
-	err := os.WriteFile(configFile, []byte(initialConfig), 0600)
-	require.NoError(t, err)
-
-	v := viper.New()
-	v.SetConfigFile(configFile)
-	require.NoError(t, v.ReadInConfig())
-
-	eventBus := mocks.NewMockEventPublisher(t)
-	svc := NewService(v, eventBus)
-	ctx := testContext()
-
-	require.NoError(t, svc.Load(ctx))
-	assert.Equal(t, "old-registry.example.com/app:latest", requireRoute(t, svc.GetConfig().Routes, "legacy.example.com").Image)
-
-	require.NoError(t, svc.Save(ctx))
-
-	content, err := os.ReadFile(configFile)
-	require.NoError(t, err)
-	text := string(content)
-	assert.Contains(t, text, `"legacy.example.com" = { image = "registry.example.com/app:latest", https = true }`)
-	assert.Contains(t, text, `"legacy-port.example.com" = { image = "registry.example.com/api:v2", https = true }`)
-	assert.Contains(t, text, `"current.example.com" = { image = "registry.example.com/web:v3", https = true }`)
-	assert.Contains(t, text, `"bare.example.com" = { image = "worker:v4", https = true }`)
-	assert.Contains(t, text, `"external.example.com" = { image = "docker.io/library/nginx:latest", https = true }`)
 }
 
 func TestCanonicalAttachmentsForSave(t *testing.T) {
@@ -443,7 +397,7 @@ func TestService_Reload(t *testing.T) {
 port = 8080
 
 [routes]
-"app.example.com" = "myapp:v1"
+"app.example.com" = { service = "app", port = "web" }
 `
 		err := os.WriteFile(configFile, []byte(initialConfig), 0600)
 		require.NoError(t, err)
@@ -462,7 +416,8 @@ port = 8080
 		require.NoError(t, err)
 		assert.Equal(t, 8080, svc.GetServerPort())
 		route := requireRoute(t, svc.GetConfig().Routes, "app.example.com")
-		assert.Equal(t, "myapp:v1", route.Image)
+		assert.Equal(t, "app", route.Service)
+		assert.Equal(t, "web", route.PortName)
 		assert.True(t, route.HTTPS)
 
 		// Modify config file on disk
@@ -470,8 +425,8 @@ port = 8080
 port = 9090
 
 [routes]
-"app.example.com" = "myapp:v2"
-"new.example.com" = "newapp:latest"
+"app.example.com" = { service = "app-v2", port = "web" }
+"new.example.com" = { service = "new-app", port = "web" }
 `
 		err = os.WriteFile(configFile, []byte(updatedConfig), 0600)
 		require.NoError(t, err)
@@ -482,10 +437,12 @@ port = 9090
 
 		assert.Equal(t, 9090, svc.GetServerPort())
 		route = requireRoute(t, svc.GetConfig().Routes, "app.example.com")
-		assert.Equal(t, "myapp:v2", route.Image)
+		assert.Equal(t, "app-v2", route.Service)
+		assert.Equal(t, "web", route.PortName)
 		assert.True(t, route.HTTPS)
 		route = requireRoute(t, svc.GetConfig().Routes, "new.example.com")
-		assert.Equal(t, "newapp:latest", route.Image)
+		assert.Equal(t, "new-app", route.Service)
+		assert.Equal(t, "web", route.PortName)
 		assert.True(t, route.HTTPS)
 	})
 
@@ -581,6 +538,20 @@ func TestService_GetRoutes(t *testing.T) {
 
 	assert.Equal(t, "insecureapp:latest", routeMap["insecure.example"].Image)
 	assert.False(t, routeMap["insecure.example"].HTTPS)
+}
+
+func TestService_GetRoutesSeparatesServiceTargetsFromImageBackedRoutes(t *testing.T) {
+	v := viper.New()
+	v.Set("routes", map[string]interface{}{
+		"app.example.com":    map[string]any{"target": "service:app:web"},
+		"static.example.com": map[string]any{"image": "static:latest"},
+	})
+
+	svc := NewService(v, mocks.NewMockEventPublisher(t))
+	require.NoError(t, svc.Load(testContext()))
+
+	require.Equal(t, []domain.Route{{Domain: "static.example.com", Image: "static:latest", HTTPS: true}}, svc.GetRoutes(testContext()))
+	require.Equal(t, []domain.HTTPServiceRoute{{Domain: "app.example.com", Service: "app", PortName: "web", HTTPS: true}}, svc.GetServiceRoutes())
 }
 
 func TestService_GetRoute(t *testing.T) {
@@ -734,7 +705,7 @@ func TestService_AddRoute(t *testing.T) {
 		// Verify route was added
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "new.example.com")
-		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.Equal(t, "newapp:latest", routeCfg.Service)
 		assert.True(t, routeCfg.HTTPS)
 	})
 
@@ -761,7 +732,7 @@ func TestService_AddRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "app.example.com")
-		assert.Equal(t, "myapp:latest", routeCfg.Image,
+		assert.Equal(t, "myapp:latest", routeCfg.Service,
 			"zero-value route should store under plain domain key")
 		assert.False(t, routeCfg.HTTPS)
 		_, hasHTTPKey := config.Routes["http://app.example.com"]
@@ -797,7 +768,7 @@ func TestService_AddRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "secure.example.com")
-		assert.Equal(t, "myapp:latest", routeCfg.Image,
+		assert.Equal(t, "myapp:latest", routeCfg.Service,
 			"HTTPS=true route should store under plain domain key")
 		assert.True(t, routeCfg.HTTPS)
 	})
@@ -836,7 +807,7 @@ func TestService_AddRoute(t *testing.T) {
 
 		assert.Equal(t, before.ModTime(), after.ModTime())
 		routeCfg := requireRoute(t, svc.GetConfig().Routes, "new.example.com")
-		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.Equal(t, "newapp:latest", routeCfg.Service)
 		assert.True(t, routeCfg.HTTPS)
 	})
 
@@ -947,7 +918,7 @@ func TestService_AddRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "app.example.com")
-		assert.Equal(t, "myapp:v2", routeCfg.Image,
+		assert.Equal(t, "myapp:v2", routeCfg.Service,
 			"canonical route should be updated")
 		assert.True(t, routeCfg.HTTPS)
 		_, exists := config.Routes["http://app.example.com"]
@@ -987,7 +958,7 @@ func TestService_UpdateRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "app.example.com")
-		assert.Equal(t, "myapp:v2", routeCfg.Image)
+		assert.Equal(t, "myapp:v2", routeCfg.Service)
 		assert.True(t, routeCfg.HTTPS)
 	})
 
@@ -1019,7 +990,7 @@ func TestService_UpdateRoute(t *testing.T) {
 		require.NoError(t, err)
 
 		routeCfg := requireRoute(t, svc.GetConfig().Routes, "app.example.com")
-		assert.Equal(t, "myapp:v2", routeCfg.Image)
+		assert.Equal(t, "myapp:v2", routeCfg.Service)
 		assert.False(t, routeCfg.HTTPS)
 
 		content, err := os.ReadFile(configFile)
@@ -1142,7 +1113,7 @@ func TestService_UpdateRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "insecure.example.com")
-		assert.Equal(t, "myapp:v2", routeCfg.Image,
+		assert.Equal(t, "myapp:v2", routeCfg.Service,
 			"insecure route update should preserve the plain hostname key")
 		assert.False(t, routeCfg.HTTPS)
 	})
@@ -1164,7 +1135,7 @@ func TestService_UpdateRoute(t *testing.T) {
 
 		config := svc.GetConfig()
 		routeCfg := requireRoute(t, config.Routes, "app.example.com")
-		assert.Equal(t, "myapp:v2", routeCfg.Image,
+		assert.Equal(t, "myapp:v2", routeCfg.Service,
 			"canonical route should be updated")
 		assert.True(t, routeCfg.HTTPS)
 		_, exists := config.Routes["http://app.example.com"]
@@ -1281,7 +1252,7 @@ func TestService_Save_WrapsInvalidRouteDomainError(t *testing.T) {
 		require.NoError(t, svc.Load(ctx))
 
 		svc.mu.Lock()
-		svc.config.Routes["localhost"] = routeConfig{Image: "myapp:latest", HTTPS: true}
+		svc.config.Routes["localhost"] = routeConfig{Service: "app", PortName: "web", HTTPS: true}
 		svc.mu.Unlock()
 
 		err = svc.Save(ctx)
@@ -1304,7 +1275,7 @@ func TestService_Save_WrapsInvalidRouteDomainError(t *testing.T) {
 		require.NoError(t, svc.Load(ctx))
 
 		svc.mu.Lock()
-		svc.config.Routes["http://localhost"] = routeConfig{Image: "myapp:latest", HTTPS: false}
+		svc.config.Routes["http://localhost"] = routeConfig{Service: "app", PortName: "web", HTTPS: false}
 		svc.mu.Unlock()
 
 		err = svc.Save(ctx)
@@ -2434,10 +2405,10 @@ backend = ["app.example.com"]
 		savedRoutes, err := loadCanonicalRoutes(v2.Get("routes"))
 		require.NoError(t, err)
 		routeCfg := requireRoute(t, savedRoutes, "new.example.com")
-		assert.Equal(t, "newapp:latest", routeCfg.Image)
+		assert.Equal(t, "newapp:latest", routeCfg.Service)
 		assert.False(t, routeCfg.HTTPS)
 		routeCfg = requireRoute(t, savedRoutes, "app.example.com")
-		assert.Equal(t, "reg.example.com/myapp:latest", routeCfg.Image)
+		assert.Equal(t, "reg.example.com/myapp:latest", routeCfg.Service)
 		assert.True(t, routeCfg.HTTPS)
 
 		matches, err := filepath.Glob(configFile + ".bak.*")
