@@ -47,3 +47,39 @@ Senior review `568a43bf-aa10-49e3-8d0b-30caf08fbd5a` found one blocking and four
 ### Final verdict
 
 After two correction rounds, senior reviewer `568a43bf-aa10-49e3-8d0b-30caf08fbd5a` returned **VALIDATED** with no remaining blocking or high-impact objection.
+
+## 2026-09-04 — Workload design clarification
+
+### Builder decision
+
+Clarify route reservations across desired/active/in-flight state, effective configuration identity after partial rollback, durable execution intent, volume-safe restoration, and the minimum workload invariants required in Alpha 2. Require full-path ingress proofs, registry certificate/client-trust analysis, and a concurrency/draining ADR before the corresponding features are enabled.
+
+Public environment remains app-wide only. All service-specific values remain write-only secrets, including non-confidential values. Their historical values are not reproduced by manifests or release rollback. No new per-service public environment, rollout eligibility field, registry trust mechanism, or component update support is introduced.
+
+### Evidence
+
+- Updated design, foundation ADR, and agent guidance only; sandbox and runtime code are untouched.
+- `git diff --check` passes.
+- Markdown fences and relative file links pass validation; all 15 design TOML examples parse with Python `tomllib`.
+- No Go tests or VM execution are claimed for this documentation-only change.
+- CodeRabbit CLI is unavailable in this environment.
+
+### Critic pass
+
+Senior reviewer `63230960-eaa2-41af-8fbe-c8ceb49d680a` reviewed the changes against `origin/v3-alpha` and raised four high-impact and one medium-impact clarification, plus two wording improvements.
+
+### Resolutions
+
+- Unified source-address acceptance around full-path observation, original-client CIDR enforcement, and an explicit gate for workloads requiring preservation at the backend. Observation alone does not waive a workload's preservation requirement.
+- Defined service rollback provenance as the base active AppSpec revision plus base/donor release identities and the composed effective AppSpec; full rollback retains the selected historical revision.
+- Replaced mutable observed network attachments with declarations from the active release's effective AppSpec.
+- Kept stopped intent until successful full-deploy activation; interrupted operations use their journal and failed attempts clean up rather than resurrecting prior releases.
+- Distinguished certificate-lifecycle decisions from their implementation proof and clarified that web concurrency eligibility remains unselected.
+
+### Remaining gates
+
+The public-env model is unchanged. Detailed persistence/recovery, registry trust, ingress implementation, and rollout eligibility remain subject to their stated ADRs and runtime proofs.
+
+### Final verdict
+
+The same senior reviewer verified the corrections in commit `139ebd4b` and returned no remaining must-fix semantic contradictions within that scope. This closes the documentation critic pass, not the future implementation proofs. The final commit additionally records this review outcome.
