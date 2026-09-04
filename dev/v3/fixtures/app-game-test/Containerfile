@@ -1,0 +1,5 @@
+FROM scratch
+COPY app-game-test /app-game-test
+USER 65532:65532
+EXPOSE 27015/tcp 27015/udp 27016/tcp 27017/tcp
+ENTRYPOINT ["/app-game-test"]

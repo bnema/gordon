@@ -1,0 +1,28 @@
+name = "app-web-test"
+
+[env]
+VALKEY_ADDR = "valkey:6379"
+RELEASE = "dev"
+
+[services.web]
+image = "app-web-test:dev"
+secrets = ["DATABASE_URL"]
+
+[services.postgres]
+image = "docker.io/library/postgres@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2"
+secrets = ["POSTGRES_PASSWORD"]
+
+[services.postgres.volumes.data]
+target = "/var/lib/postgresql"
+
+[services.valkey]
+image = "docker.io/valkey/valkey@sha256:ccfa19b0d743e48927e1c8c14e39e0acb97b5cea347fef0bfe340247fea920cd"
+
+[entrypoints.web]
+service = "web"
+port = 8080
+protocol = "http"
+
+[routes.web]
+host = "app-web-test.gordon.test"
+entrypoint = "web"

@@ -1,0 +1,16 @@
+version: 2
+ethernets:
+  management:
+    match:
+      macaddress: "52:54:00:67:03:01"
+    dhcp4: true
+    dhcp4-overrides:
+      use-dns: false
+    nameservers:
+      addresses: [1.1.1.1, 9.9.9.9]
+  test0:
+    match:
+      macaddress: "52:54:00:67:03:02"
+    set-name: test0
+    dhcp4: false
+    addresses: [198.18.77.2/24]

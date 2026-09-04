@@ -1,0 +1,50 @@
+#cloud-config
+ssh_keys:
+  ed25519_private: |
+{{HostKey}}
+users:
+  - name: root
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{ClientKey}}
+  - name: gordon
+    shell: /bin/bash
+    lock_passwd: true
+disable_root: false
+ssh_pwauth: false
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - dbus-user-session
+  - nftables
+  - openssl
+  - passt
+  - podman
+  - uidmap
+write_files:
+  - path: /etc/ssh/sshd_config.d/00-sandbox.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      AllowUsers root
+      AllowAgentForwarding no
+      ListenAddress 0.0.0.0
+  - path: /etc/nftables.conf
+    permissions: "0644"
+    content: |
+      table inet sandbox {
+        chain input {
+          type filter hook input priority 0; policy accept;
+          iifname != "enp1s0" iifname != "lo" tcp dport 22 drop
+        }
+      }
+runcmd:
+  - [systemctl, enable, --now, nftables.service]
+  - [systemctl, restart, ssh.service]
+  - [loginctl, enable-linger, gordon]
+  - [install, -d, -o, gordon, -g, gordon, -m, "0700", /home/gordon/src]
+  - [sh, -ec, 'curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o /tmp/go.tar.gz; echo "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445  /tmp/go.tar.gz" | sha256sum -c --strict; tar -C /usr/local -xzf /tmp/go.tar.gz; ln -s /usr/local/go/bin/go /usr/local/bin/go; rm /tmp/go.tar.gz']
+final_message: "Gordon development VM ready"

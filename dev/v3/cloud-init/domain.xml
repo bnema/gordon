@@ -1,0 +1,41 @@
+<domain type="kvm">
+  <name>gordon-v3-sandbox</name>
+  <uuid>{{UUID}}</uuid>
+  <memory unit="MiB">4096</memory>
+  <vcpu>4</vcpu>
+  <os firmware="efi">
+    <type arch="x86_64" machine="q35">hvm</type>
+    <boot dev="hd"/>
+  </os>
+  <features><acpi/><apic/></features>
+  <cpu mode="host-passthrough"/>
+  <on_reboot>restart</on_reboot>
+  <devices>
+    <disk type="volume" device="disk">
+      <driver name="qemu" type="qcow2" discard="unmap"/>
+      <source pool="gordon-v3-sandbox" volume="disk.qcow2"/>
+      <target dev="vda" bus="virtio"/>
+    </disk>
+    <disk type="volume" device="cdrom">
+      <driver name="qemu" type="raw"/>
+      <source pool="gordon-v3-sandbox" volume="seed.iso"/>
+      <target dev="sda" bus="sata"/>
+      <readonly/>
+    </disk>
+    <interface type="user">
+      <mac address="52:54:00:67:03:01"/>
+      <model type="virtio"/>
+      <backend type="passt"/>
+      <portForward proto="tcp" address="127.0.0.1">
+        <range start="2222" to="22"/>
+      </portForward>
+    </interface>
+    <interface type="network">
+      <mac address="52:54:00:67:03:02"/>
+      <source network="gordon-v3-sandbox"/>
+      <model type="virtio"/>
+    </interface>
+    <console type="pty"><target type="serial" port="0"/></console>
+    <rng model="virtio"><backend model="random">/dev/urandom</backend></rng>
+  </devices>
+</domain>
