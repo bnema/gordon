@@ -25,7 +25,8 @@ A second big-bang refactor would repeat the same failure. Keeping the v2 monolit
 5. Runtime deployments must use immutable OCI identities.
 6. The system must remain usable when one control component restarts.
 7. Every incremental change on `v3-alpha` must leave an installable, testable system.
-8. V3 may break compatibility and omit v2 features rather than preserve accidental complexity.
+8. One Gordon distribution must install and maintain one coherent generation of the host CLI and all four components.
+9. V3 may break compatibility and omit v2 features rather than preserve accidental complexity.
 
 ## Decision
 
@@ -41,7 +42,24 @@ Gordon runs `control`, `runtime`, `edge`, and `registry` as separate rootless Po
 
 All components initially run under one trusted host account and rootless Podman engine; container UIDs are not separate host security principals. Only runtime receives the rootless Podman socket, which grants full authority over that engine, including Gordon's containers. Host-account or runtime compromise defeats the component boundaries and is an accepted alpha risk. Docker, rootful engines, multi-host operation, and clustering are outside v3 scope.
 
-Systemd and Quadlet own component lifecycle. Gordon does not launch, migrate, replace, or hand off its own components.
+### Ship one distribution as one host binary and one component image
+
+One Gordon distribution provides the host CLI and one component image containing an octet-identical copy of that Gordon executable. The image invokes that executable in four role-specific serve modes: `control`, `runtime`, `edge`, and `registry`. The exact command syntax is an Alpha 1 implementation detail; separate role binaries and independently versioned component images are not allowed. "Distribution" and "installation generation" identify Gordon itself; "release" remains reserved for immutable app deployments.
+
+A distribution identity binds its version or source revision, executable SHA-256, component-image OCI digest, and persistent-format versions. The build copies that exact executable into the image and verifies its hash before publication. Generated Quadlets pin the image digest. Tagged distributions publish a signed manifest attesting the executable hash and image digest. Before executing a downloaded Gordon binary, the shell bootstrap verifies that signature with a pinned release public key and verifies the executable hash. Initial `curl | sh` delivery still trusts HTTPS; an independent root of trust requires obtaining and verifying the installer through a separately trusted channel. Branch and commit modes are unauthenticated alpha inputs attributable to one exact clean revision. Dirty local builds include a source-tree hash in their identity rather than reporting clean `HEAD`.
+
+The installed host binary owns the declarative lifecycle of those four Gordon components. It provisions their Quadlets, asks the user systemd manager to perform lifecycle operations, and verifies process state, role readiness, dependencies, and distribution identity. A future update may temporarily run mixed generations only in an explicit transitional state that is never reported healthy. Alpha 1 is limited to fresh installation and recovery of the same incomplete generation; installing a different generation, update, and component rollback remain blocked on the lifecycle ADR.
+
+Responsibility is deliberately layered:
+
+- Gordon owns the intended distribution identity, configuration, generated Quadlets, installation lock and journal, and installation-level operations;
+- Quadlet translates the Podman declarations into systemd units;
+- systemd owns boot activation, dependency ordering, continuous supervision, and restart-after-failure;
+- Podman creates and runs the four rootless containers.
+
+The shell installer only obtains and verifies or builds the host binary, then invokes Gordon's host-side installer. Gordon permits one installation per host account and rootless engine and performs atomic, locked, journaled, idempotent steps so an interrupted install can resume. Generated Quadlets are checksummed Gordon outputs; supported customization belongs in `gordon.toml`, and unknown edits are preserved and require an explicit recovery operation. The installer configures and tests the user-manager lingering policy needed for boot without login.
+
+Gordon is not a fifth resident supervisor. It does not reimplement systemd or restore the archived checkpointed migration, runtime handoff, or autonomous self-upgrade machinery. Component update support requires a focused lifecycle ADR defining states, replacement order, persistent-format compatibility, backup, rollback or roll-forward, and interruption recovery.
 
 ### Use local capability sockets
 
@@ -63,7 +81,7 @@ Each app is defined by one user-owned TOML manifest and has a globally unique na
 
 Every service is explicitly named, references one image, and has one active instance. There is no app-level image shorthand or implicit default service. Compact and expanded syntax are both accepted but normalize to one model.
 
-An app has an automatic private network. Named private networks allow explicitly selected services from different apps to communicate. The intended public-routing topology adds an automatic per-app ingress network containing edge and only routed services. Runtime may reconcile edge's network attachments while Quadlet remains responsible for creating and restarting edge. Alpha 1 is blocked on a clean-host ADR and proof covering this topology, rootless host ingress, source-IP preservation, privileged ports, dynamic TCP/UDP listeners, socket permissions, UID mappings, and SELinux labels.
+An app has an automatic private network. Named private networks allow explicitly selected services from different apps to communicate. The intended public-routing topology adds an automatic per-app ingress network containing edge and only routed services. Gordon component resources use reserved names and ownership labels and are excluded from workload reconciliation and garbage collection. Runtime's narrow, idempotent reconciliation of edge's app-ingress attachments is the only allowed workload-side component mutation; Quadlet remains responsible for creating and restarting edge. Alpha 1 is blocked on a clean-host ADR and proof covering this exception, rootless host ingress, source-IP preservation, privileged ports, dynamic TCP/UDP listeners, socket permissions, UID mappings, and SELinux labels.
 
 App entrypoints describe stable service interfaces. Declaring one does not expose it. Routes are the only exposure primitive and support HTTP, TCP, and UDP. HTTP uses edge's shared listener; dedicated TCP and UDP routes contain their own listen address.
 
@@ -103,7 +121,7 @@ Attachments, autoroute, bootstrap, pin, reload, partial route mutations, and tok
 
 ### Install alpha from source references
 
-Stable installation and `gordon update` remain release- and version-based. Alpha testing uses `install.sh` with one mutually exclusive source selector:
+Stable installation remains signed-distribution- and version-based. The future v3 `gordon update` will accept only a verified signed distribution manifest, but the command is unavailable until the lifecycle ADR is accepted and implemented. Alpha testing uses `install.sh` with one mutually exclusive source selector:
 
 ```text
 GORDON_BRANCH=v3-alpha
@@ -112,7 +130,7 @@ GORDON_LOCAL=1
 GORDON_VERSION=<tag>
 ```
 
-Alpha 1 will implement branch, commit, and local modes that build and install the selected source through rootless Podman and report the exact commit. These modes do not exist in the current installer and do not introduce an alpha channel into `gordon update`.
+Alpha 1 will implement branch, commit, and local modes that derive one explicit distribution identity, build both the host executable and digest-pinned component image from it, and invoke that executable to provision installation directories and Quadlets, start an installation target through the user systemd manager, and verify all four roles. The executable copied into the image must have the same SHA-256 as the host executable. Installation is locked, journaled, idempotent, and limited to a clean host or same-generation recovery. Branch, commit, and local inputs are not authenticated releases. The shell remains bootstrap transport only; after installation, Gordon owns installation-level operations while systemd supervises the containers. These modes do not exist in the current installer and do not introduce an alpha update channel.
 
 ## Consequences
 
@@ -134,6 +152,7 @@ Alpha 1 will implement branch, commit, and local modes that build and install th
 - V3 cannot upgrade an existing v2 installation in place.
 - Docker users must migrate to rootless Podman.
 - Four containers and Quadlets are operationally heavier than one host process.
+- Installation and future update must coordinate a host binary, a component image, four units, persistent formats, and partial-failure recovery while preserving one distribution identity.
 - The initial single host account and engine do not isolate Gordon components from host-account or runtime compromise.
 - Registry availability depends on edge's public TCP mux on a single-IP installation.
 - Control and runtime remain a trusted core; a full control compromise may indirectly request harmful runtime actions.
@@ -145,6 +164,9 @@ Alpha 1 will implement branch, commit, and local modes that build and install th
 
 ### Operational
 
+- The installed Gordon binary owns generated Quadlets and must detect local edits or generation drift instead of silently accepting an incoherent installation.
+- Installation status must distinguish intended, staged, running, degraded, and rollback-required distribution states.
+- User-manager lingering must be configured and tested so components start after reboot without an interactive login.
 - Component data and socket permissions require explicit installer and Quadlet tests.
 - Edge must preserve its last valid sanitized snapshot so a control restart does not interrupt traffic.
 - Registry must persist and retry push events while control is unavailable.
@@ -207,7 +229,12 @@ Rejected. It would force obsolete ownership and command models into the new arch
 | Stale edge routing after control failure | Persist the last valid monotonic snapshot; reject invalid or older generations; expose applied generation in status |
 | Apply overwrites another operator's desired state | Complete-manifest semantics and future optimistic-concurrency details in a focused API ADR |
 | Failed stateful deployment causes downtime | Do not promise zero downtime; retain immutable former release and perform bounded best-effort recovery |
-| Alpha installer silently moves branch state | Resolve and report exact commit; support `GORDON_COMMIT` for reproduction |
+| Alpha installer silently moves branch state | Resolve and report exact commit; support `GORDON_COMMIT` for reproduction; include a source-tree hash for dirty local builds |
+| Version text identifies different artifacts | Bind the executable hash, OCI digest, and format versions in a distribution identity; verify the same executable is copied into the image; pin image digests; sign tagged distribution manifests |
+| Partial update leaves mixed component generations | Limit Alpha 1 to fresh install; never report transitional mixed state healthy; require a lifecycle ADR before update support |
+| Component rollback meets incompatible persisted data | Version formats and require the lifecycle ADR to define preflight, backup, reversible migration, and roll-forward policy |
+| Workload reconciliation mutates Gordon resources | Reserve names and ownership labels; exclude component resources; keep edge attachment reconciliation narrow and idempotent |
+| Generated Quadlets drift from Gordon's intended state | Record checksums and generation; fail clearly before overwriting unrecognized local changes and preserve a backup |
 | Deferred v2 features are forgotten | Keep the feature tracking matrix in `docs/v3/design.md` and require explicit ownership before reintroduction |
 
 ## Validation requirements
@@ -224,9 +251,15 @@ The decision is considered implemented only when automated tests prove:
 8. An invalid deployment leaves the former route projection active where the deployment strategy permits.
 9. A service rollback does not restart unrelated services.
 10. App removal preserves volumes and purge requires explicit confirmation.
-11. The branch installer provisions a clean rootless Podman host from an exact commit.
-12. The selected host-ingress mechanism preserves required source addresses and supports the documented HTTP, registry SNI, TCP, and UDP listeners under rootless Podman.
-13. Socket directories survive component restart with exact ownership, mode, mount, and SELinux behavior.
+11. The branch installer provisions a clean rootless Podman host from an exact commit and refuses to replace another generation.
+12. The distribution identity binds source/version, executable hash, component-image digest, and persistent-format versions; before executing a tagged binary, the shell verifies its hash against a manifest signature rooted in a pinned release key.
+13. The installed host executable and its octet-identical copy in the image match that identity, and generated Quadlets pin one image digest in four distinct serve roles with only their documented capabilities.
+14. The installer lock prevents concurrent mutation; an interrupted Alpha 1 installation persists an incomplete state and can resume the same generation idempotently.
+15. Process running, role ready, dependencies ready, and identity verified are distinguishable; mixed generations are never reported healthy.
+16. User-manager lingering starts the installation after reboot without an interactive login.
+17. Workload reconciliation cannot mutate or garbage-collect Gordon-owned resources except for the narrow tested edge-network attachment operation.
+18. The selected host-ingress mechanism preserves required source addresses and supports the documented HTTP, registry SNI, TCP, and UDP listeners under rootless Podman.
+19. Socket directories survive component restart with exact ownership, mode, mount, and SELinux behavior.
 
 ## Follow-up decisions
 
@@ -240,5 +273,5 @@ Focused ADRs should define, when implementation reaches them:
 - registry event outbox semantics;
 - shared named-network declaration;
 - certificate lifecycle;
-- alpha-to-stable component update ordering;
+- lifecycle states, component replacement order, persistent-format compatibility, backup, rollback or roll-forward, interruption recovery, and generated-Quadlet drift policy before any component update support;
 - release and orphan retention policies.
