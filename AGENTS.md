@@ -1,158 +1,188 @@
-# AGENTS.md — Gordon
+# AGENTS.md — Gordon v3-alpha
 
-Guidelines for AI coding agents operating in this repository.
+Guidance for coding agents working on the `v3-alpha` integration branch and branches based on it.
 
 ## Project
 
-Gordon is a self-hosted container deployment platform: Docker registry + reverse proxy + auto-deploy.
-Module: `github.com/bnema/gordon`. Go 1.25+. Single binary, no external database.
+Gordon v3 is a fresh-install, single-host container deployment platform. It manages declarative apps, OCI images, routes, secrets, volumes, and rootless Podman workloads through four isolated Gordon components.
 
-## Build & Test Commands
+- Module: `github.com/bnema/gordon`
+- Language: Go 1.27
+- Reference host for Alpha 1: Ubuntu 26.04 LTS
+- Runtime: rootless Podman only
+- Service manager: `systemd --user` with Quadlet
+- Database policy: no external database
+
+Read these before changing v3 behavior:
+
+- `docs/v3/design.md` — accepted product and architecture baseline
+- `docs/v3/adr-001-v3-foundation.md` — accepted foundation decision and risks
+
+Those documents are normative. The repository still contains v2 code inherited from `main`; existing code is not evidence that a v2 behavior belongs in v3.
+
+## Branch and PR workflow
+
+`v3-alpha` is the long-lived v3 integration branch. **Never open a v3-alpha feature PR against `main`.**
+
+1. Start every change from the latest `origin/v3-alpha`.
+2. Create a focused branch and worktree under `.worktrees/<branch-name>`.
+3. Keep each commit buildable and testable.
+4. Use signed conventional commits: `type(scope): description`.
+5. Push the feature branch and open a **Draft PR targeting `v3-alpha`**.
+6. Remove the feature worktree and branch after merge or abandonment.
+
+Do not commit directly to `v3-alpha`. Do not merge v3 into `main` until the maintainer explicitly starts that release process.
+
+## V3 invariants
+
+### Distribution and component lifecycle
+
+One Gordon distribution has:
+
+- one host executable;
+- one OCI component image containing an octet-identical copy of that executable;
+- four role-specific serve modes: `control`, `runtime`, `edge`, and `registry`;
+- one distribution identity binding source/version, executable SHA-256, OCI image digest, and persistent-format versions.
+
+The host executable owns installation state and generated Quadlets. Quadlet translates declarations into systemd units, systemd supervises them, and Podman runs the containers. Gordon is not a fifth resident supervisor.
+
+Alpha 1 supports fresh installation and same-generation recovery only. V3 component update and rollback are unavailable until a focused lifecycle ADR is accepted and implemented. Do not add an alpha channel to `gordon update`.
+
+### Trust boundaries
+
+The four Gordon roles are independent rootless containers, never one shared Podman pod.
+
+- `control` owns desired state, AppSpecs, app releases, routes, and secret metadata.
+- `runtime` alone receives the Podman socket; it owns workload mutation, actual state, volumes, and stored secret values.
+- `edge` owns public listeners and receives only a sanitized route projection.
+- `registry` owns OCI storage, registry TLS, and a bounded push-event outbox.
+
+Runtime's Podman socket grants authority over the entire rootless engine, including Gordon's containers. This is an accepted alpha risk, not a strong isolation claim.
+
+Internal APIs use strict HTTP/JSON over role-specific Unix sockets. Do not add internal TCP APIs, gRPC, protobuf, generic RPC sockets, or bearer-token plumbing without a new ADR.
+
+For all Gordon and app containers:
+
+- never use Docker or rootful Podman;
+- never add `--privileged`, host PID/IPC/network, or host devices;
+- never mount the Podman socket outside `runtime`;
+- use no added Linux capabilities, `no-new-privileges`, and a read-only root filesystem where practical;
+- preserve SELinux/AppArmor, seccomp, user-namespace, resource-limit, and least-network-access protections.
+
+App manifests never receive host bind mounts. Gordon component mounts are limited to their owned data and explicit capability-socket directories documented by the design and socket ADR.
+
+Gordon-owned containers, networks, volumes, and labels are reserved. Workload reconciliation and garbage collection must not mutate them. The only accepted exception is runtime's narrow, idempotent reconciliation of edge's app-ingress network attachments.
+
+### Product model
+
+The public model is:
+
+```text
+app -> services -> runtime containers
+```
+
+- One standalone TOML manifest defines one globally named app.
+- `gordon apps apply --file ...` persists desired configuration only; it never mutates runtime.
+- `gordon deploy <app>` is the only operation that activates a pending AppSpec.
+- Runtime receives digest-pinned OCI references only.
+- Entrypoints describe service interfaces; routes are the only public exposure primitive.
+- Secrets are write-only and service-owned.
+- Volumes are named Podman volumes owned by one service; no host bind mounts or shared service volumes.
+- Each app has a private network; edge joins only generated ingress networks for routed services.
+
+Do not restore v2 route-owned containers, implicit deploy-on-apply, mutable runtime tags, global secret sharing, or ad hoc route mutations.
+
+## Scope discipline
+
+V3 deliberately has no v2 compatibility, migration path, Docker support, cluster mode, shared Gordon pod, or alpha feature-parity requirement.
+
+Do not copy or cherry-pick the archived `v3-deprecated` implementation wholesale. Reimplement only a clearly applicable invariant or test case, using the smallest design that fits the accepted v3 model.
+
+Before introducing a new architecture, security, interface, migration, or rollout decision:
+
+1. verify whether the design or an ADR already decides it;
+2. ask the maintainer clear questions one at a time;
+3. record consequential decisions in a focused ADR;
+4. run a critical senior/red-team pass before implementation.
+
+Prefer standard-library and native Podman/systemd mechanisms over new dependencies. Avoid speculative abstractions and deferred feature scaffolding.
+
+## Alpha delivery order
+
+Alpha 1 is blocked until ADRs and clean-host proofs establish:
+
+1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP preservation, firewall behavior, edge restarts, and private runtime-to-registry pulls;
+2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior.
+
+Implement Alpha 1 incrementally after those proofs:
+
+1. four minimal role-specific serve modes;
+2. distribution identity and role readiness;
+3. one digest-pinned component image;
+4. branch, commit, and local installer inputs;
+5. locked, journaled, idempotent host installation;
+6. atomic Quadlet generation and systemd target;
+7. private sockets and SSH administration;
+8. clean Ubuntu 26.04 installation, reboot, authority, and failure tests.
+
+Do not start Alpha 2 workload features until Alpha 1 installs and passes on a clean reference host.
+
+## Architecture and Go style
+
+Keep dependency flow inward:
+
+```text
+adapters -> boundaries/ports -> use cases -> domain
+```
+
+- Domain and use cases must not import concrete adapters.
+- Put cross-layer interfaces at the consumer-owned boundary.
+- Keep transport DTOs out of domain types.
+- Keep role composition in the application/bootstrap layer.
+- Treat current v2 package and CLI patterns as reusable only when they fit v3 ownership.
+
+Imports use three groups: standard library, external modules, then Gordon modules.
+
+Wrap errors with actionable context and preserve causes with `%w`. Use `errors.Is` for sentinel errors. CLI commands return errors and write through Cobra's configured output; do not print directly to global stdout.
+
+Use `zerowrap` for structured component logs. Never log secret values, credentials, complete untrusted payloads, or internal capability paths unnecessarily.
+
+## Commands and checks
 
 ```bash
 # Build
 go build ./...
 
-# Test — full suite (~1800 tests, 48 packages)
+# Full test suite
 go test ./...
 
-# Test — single package
+# Required race suite when practical
+go test ./... -race
+
+# Narrow package or test
 go test ./internal/usecase/container/...
+go test ./path/to/package -run '^TestName$' -v
 
-# Test — single test function
-go test ./internal/usecase/container/... -run TestService_ListNetworks -v
-
-# Test — by layer
-go test ./internal/adapters/...     # adapters only
-go test ./internal/usecase/...      # use cases only
-
-# Lint (MUST pass before any commit)
-golangci-lint run ./...
-
-# Generate mocks (after changing boundaries/in or boundaries/out interfaces)
+# Generate boundary mocks after interface changes
 mockery
+
+# Mandatory before every code commit
+golangci-lint run ./...
 ```
 
-Lint config is in `.golangci.yml` (v2): errcheck, gocyclo (max 15), gosec, govet, staticcheck.
-Errcheck is relaxed for `Close`, `Write`, `Publish`, `Stop`, `RemoveContainer`, and zerowrap log methods.
-Test files are exempt from gocyclo, errcheck, and gosec.
+Use table-driven tests by default. Prefer deterministic fakes over sleeps. Test security boundaries negatively: prove forbidden sockets, mounts, networks, capabilities, and secret reads are absent.
 
-## Architecture — Hexagonal
+For documentation-only commits, run at minimum `git diff --check` and verify Markdown fences. Code commits must pass `golangci-lint run ./...` before commit, even when narrower tests already pass.
 
-```
-internal/
-  domain/         # Entities, value objects, sentinel errors, labels
-  boundaries/     # Port interfaces (in = driving, out = driven)
-    in/           # Service interfaces (ConfigService, ContainerService, etc.)
-    out/          # Infrastructure interfaces (ContainerRuntime, BlobStorage, etc.)
-  usecase/        # Business logic (container/, config/, registry/, proxy/, etc.)
-  adapters/       # Implementations
-    in/           # Driving adapters
-      http/admin/ # Admin HTTP API (handler.go)
-      cli/        # Cobra CLI commands
-        remote/   # HTTP client for remote Gordon instances
-        ui/       # Terminal UI components (tables, spinners, styles)
-    out/          # Driven adapters (docker/, filesystem/, sqlite/)
-    dto/          # Data transfer objects (request/response structs)
-  app/            # Application bootstrap (Kernel wiring)
-```
+## Definition of done
 
-Dependencies flow inward: adapters → boundaries → domain. Never import adapters from domain/usecase.
+Before opening or updating a Draft PR:
 
-## Code Style
-
-### Imports
-
-Three groups separated by blank lines: stdlib, external, internal.
-
-```go
-import (
-    "context"
-    "fmt"
-
-    "github.com/spf13/cobra"
-
-    "github.com/bnema/gordon/internal/domain"
-)
-```
-
-### Error Handling
-
-- Sentinel errors in `internal/domain/errors.go` — use `errors.New`, check with `errors.Is`.
-- Wrap errors with context: `fmt.Errorf("failed to list routes: %w", err)`.
-- Usecase/service methods return `error`. Handlers translate to HTTP status codes.
-- CLI commands return `error` from `RunE` — cobra prints it.
-
-### Logging
-
-Use `zerowrap` (structured zerolog wrapper) in usecase and adapter layers:
-
-```go
-ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-    zerowrap.FieldLayer:   "usecase",
-    zerowrap.FieldUseCase: "AddRoute",
-    "domain":              route.Domain,
-})
-log := zerowrap.FromCtx(ctx)
-log.Info().Str("image", route.Image).Msg("route added")
-```
-
-CLI commands do NOT use zerowrap — they use `cliWriteLine`/`cliWritef` for output.
-
-### CLI Commands (Cobra)
-
-- Each command lives in its own file under `internal/adapters/in/cli/`.
-- Use `cmd.OutOrStdout()` for output (testable), never raw `fmt.Println`.
-- Use helpers: `cliWriteLine(out, msg)`, `cliWritef(out, fmt, args...)`, `cliRenderTitle`, `cliRenderMeta`, `cliRenderMuted`, `cliRenderSuccess`, `cliRenderWarning`.
-- All list/show commands support `--json` via `writeJSON(out, v)`.
-- Use `cmd.Context()` for context (not `context.Background()`).
-- Commands register in `root.go` under `groupServer`, `groupManage`, or `groupClient`.
-- Local/remote dispatch via `resolveControlPlane(configPath)` or `GetRemoteClient()`.
-
-### ControlPlane Pattern
-
-`ControlPlane` interface (`controlplane.go`) abstracts local vs remote operations.
-- `controlplane_remote.go` — delegates to `remote.Client` HTTP methods.
-- `controlplane_local.go` — calls service interfaces directly.
-- Test fakes in `push_test.go` — update when adding interface methods.
-
-### HTTP Admin Handlers
-
-- Single `Handler` struct in `handler.go` with `matchRoute` dispatcher.
-- Permission checks: `HasAccess(ctx, resource, action)` at the top of each handler.
-- Response via `h.sendJSON(w, status, payload)` or `h.sendError(w, status, msg)`.
-- DTOs in `internal/adapters/dto/` with JSON tags.
-
-### Mocks
-
-Generated by mockery (config in `.mockery.yaml`). Output: `internal/boundaries/in/mocks/`.
-Only boundary interfaces are mocked. Run `mockery` after modifying any interface in `boundaries/`.
-
-### Testing
-
-- Framework: `testing` + `testify` (assert/require).
-- Test files: `*_test.go` in the same package.
-- Use `httptest.NewServer` for HTTP handler tests.
-- Use mockery-generated mocks for boundary interfaces.
-- Hand-rolled fakes for CLI `ControlPlane` in test files.
-
-### Naming
-
-- Files: `snake_case.go`.
-- Types: `PascalCase`. Interfaces describe capability (`ConfigService`, `ContainerRuntime`).
-- Functions: `PascalCase` exported, `camelCase` unexported.
-- CLI constructors: `newXxxCmd()` returns `*cobra.Command`.
-- Runner functions: `runXxx(ctx, ..., out, jsonOut)`.
-- Domain labels: constants in `domain/labels.go` prefixed with `Label`.
-
-### Documentation
-
-- CLI docs in `docs/cli/`. Every command page has `## Related` links at the bottom.
-- Docs follow the pattern: header, subcommands table, usage examples, flags table, JSON output example.
-
-## Key Rules
-
-1. **Run `golangci-lint run ./...` before committing** — CI enforces it.
-2. **gocyclo max 15** — extract helpers to reduce complexity.
-3. **errcheck enabled** — always handle all error returns gracefully by wrapping with context (fmt.Errorf) and logging critical errors with zerowrap.
-
+- behavior matches `docs/v3/design.md` and accepted ADRs;
+- the change is scoped to one incremental outcome;
+- tests cover success, failure, recovery, and relevant authority boundaries;
+- generated mocks and docs are current;
+- `golangci-lint run ./...` passes for code changes;
+- commits are signed and conventional;
+- the PR targets `v3-alpha`, not `main`;
+- remaining uncertainty and deferred behavior are stated explicitly.

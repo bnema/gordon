@@ -640,6 +640,8 @@ This table must remain in the v3 backlog. A v2 feature returns only after its ow
 
 ## Alpha installation
 
+Alpha 1 uses Go 1.27 and Ubuntu 26.04 LTS as its reference build and clean-host validation baseline.
+
 Stable installation remains version-based. The future v3 `gordon update` will consume only signed, tagged distributions, but component update is unavailable until the lifecycle ADR is accepted and implemented. A signed distribution manifest defines its future input by binding version and source commit to the executable hash, component-image digest, and persistent-format versions.
 
 The Alpha 1 installer will support:
@@ -687,7 +689,7 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 - Four role-specific serve modes from that image.
 - A locked, journaled, idempotent host installer limited to fresh install and same-generation recovery.
 - Atomic Quadlet generation and an installation target managed by the host binary.
-- Identity, readiness, lingering, partial-failure, and clean-host bootstrap tests.
+- Identity, readiness, lingering, partial-failure, and clean Ubuntu 26.04 bootstrap tests.
 - Private Unix sockets and SSH administration.
 - Socket recreation, startup-order, ownership, mode, mount, and SELinux tests.
 - Status and ownership tests proving only runtime sees Podman.
