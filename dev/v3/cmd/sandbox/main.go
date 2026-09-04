@@ -150,17 +150,29 @@ func (s *sandbox) virsh(args ...string) error {
 func (s *sandbox) inspect(args ...string) (string, error) {
 	return s.out("virsh", append([]string{"-c", uri}, args...)...)
 }
+func contains(output, value string) bool {
+	for _, field := range strings.Fields(output) {
+		if field == value {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *sandbox) contains(command, flag string) (bool, error) {
 	output, err := s.inspect(command, "--all", flag)
 	if err != nil {
 		return false, err
 	}
-	for _, line := range strings.Fields(output) {
-		if line == name {
-			return true, nil
-		}
+	return contains(output, name), nil
+}
+
+func (s *sandbox) active(list string) (bool, error) {
+	output, err := s.inspect(list, "--name")
+	if err != nil {
+		return false, err
 	}
-	return false, nil
+	return contains(output, name), nil
 }
 
 func (s *sandbox) owned() error {
@@ -236,11 +248,11 @@ func random(n int) []byte { return []byte(rand.Text())[:n] }
 func (s *sandbox) start() error {
 	// Restore only our existing resources after an ordinary host reboot.
 	for _, r := range []struct{ list, start string }{{"net-list", "net-start"}, {"pool-list", "pool-start"}} {
-		active, err := s.inspect(r.list, "--name")
+		isActive, err := s.active(r.list)
 		if err != nil {
 			return err
 		}
-		if !strings.Contains(active, name) {
+		if !isActive {
 			if err := s.virsh(r.start, name); err != nil {
 				return err
 			}
@@ -437,7 +449,11 @@ func (s *sandbox) sync() error {
 	// Git determines what belongs in the snapshot; ignored files and .git stay local.
 	fileBytes, err := s.command("git", "-C", s.root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").Output()
 	if err != nil {
-		return err
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return fmt.Errorf("git ls-files: %w: %s", err, exit.Stderr)
+		}
+		return fmt.Errorf("git ls-files: %w", err)
 	}
 	// GNU tar does not dereference symlinks. Extract as gordon, never as root.
 	c := s.command("tar", "-C", s.root, "--null", "--verbatim-files-from", "-T", "-", "-czf", "-")
@@ -522,11 +538,11 @@ func (s *sandbox) destroy() error {
 		return err
 	}
 	if exists {
-		active, err := s.inspect("net-list", "--name")
+		isActive, err := s.active("net-list")
 		if err != nil {
 			return err
 		}
-		if strings.Contains(active, name) {
+		if isActive {
 			if err := s.virsh("net-destroy", name); err != nil {
 				return err
 			}
@@ -542,11 +558,11 @@ func (s *sandbox) destroyPool() error {
 	if err != nil || !exists {
 		return err
 	}
-	active, err := s.inspect("pool-list", "--name")
+	isActive, err := s.active("pool-list")
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(active, name) {
+	if !isActive {
 		if err := s.virsh("pool-start", name); err != nil {
 			return err
 		}

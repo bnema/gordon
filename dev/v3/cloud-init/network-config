@@ -3,6 +3,7 @@ ethernets:
   management:
     match:
       macaddress: "52:54:00:67:03:01"
+    set-name: management
     dhcp4: true
     dhcp4-overrides:
       use-dns: false

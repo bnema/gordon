@@ -38,7 +38,7 @@ write_files:
       table inet sandbox {
         chain input {
           type filter hook input priority 0; policy accept;
-          iifname != "enp1s0" iifname != "lo" tcp dport 22 drop
+          iifname != "management" iifname != "lo" tcp dport 22 drop
         }
       }
 runcmd:

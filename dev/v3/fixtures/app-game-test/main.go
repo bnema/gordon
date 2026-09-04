@@ -27,17 +27,19 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	var waitGroup sync.WaitGroup
+	var handlerWaitGroup sync.WaitGroup
 	for _, port := range tcpPorts {
 		waitGroup.Add(1)
-		go serveTCP(ctx, &waitGroup, port)
+		go serveTCP(ctx, &waitGroup, &handlerWaitGroup, port)
 	}
 	waitGroup.Add(1)
 	go serveUDP(ctx, &waitGroup, "27015")
 	<-ctx.Done()
 	waitGroup.Wait()
+	handlerWaitGroup.Wait()
 }
 
-func serveTCP(ctx context.Context, waitGroup *sync.WaitGroup, port string) {
+func serveTCP(ctx context.Context, waitGroup, handlerWaitGroup *sync.WaitGroup, port string) {
 	defer waitGroup.Done()
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -57,7 +59,11 @@ func serveTCP(ctx context.Context, waitGroup *sync.WaitGroup, port string) {
 			}
 			return
 		}
-		go handleTCP(connection, port)
+		handlerWaitGroup.Add(1)
+		go func() {
+			defer handlerWaitGroup.Done()
+			handleTCP(connection, port)
+		}()
 	}
 }
 
@@ -118,18 +124,18 @@ func recordEvent(protocol, port, source string) {
 func probe(address string) error {
 	connection, err := net.DialTimeout("tcp", address, 3*time.Second)
 	if err != nil {
-		return err
+		return fmt.Errorf("dial probe endpoint %q: %w", address, err)
 	}
 	defer connection.Close()
 	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return err
+		return fmt.Errorf("set probe deadline for %q: %w", address, err)
 	}
 	if _, err := fmt.Fprintln(connection, "private-rcon-probe"); err != nil {
-		return err
+		return fmt.Errorf("write probe payload to %q: %w", address, err)
 	}
 	response, err := bufio.NewReader(connection).ReadString('\n')
 	if err != nil {
-		return err
+		return fmt.Errorf("read probe response from %q: %w", address, err)
 	}
 	fmt.Print(response)
 	return nil

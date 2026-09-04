@@ -13,7 +13,7 @@ import (
 
 func main() {
 	if len(os.Args) != 5 {
-		fatal("usage: l4probe <tcp|udp> <address> <payload> <expected-source-ip>")
+		fatal("usage: l4probe <tcp|udp|closed> <address> <payload> <expected-source-ip>")
 	}
 	protocol, address, payload, expectedSource := os.Args[1], os.Args[2], os.Args[3], os.Args[4]
 	if protocol == "closed" {
@@ -41,23 +41,26 @@ func main() {
 func exchange(protocol, address, payload string) (string, error) {
 	connection, err := net.DialTimeout(protocol, address, 3*time.Second)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("dial %s endpoint %q: %w", protocol, address, err)
 	}
 	defer connection.Close()
 	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
-		return "", err
+		return "", fmt.Errorf("set deadline for %s endpoint %q: %w", protocol, address, err)
 	}
 	if _, err := fmt.Fprintln(connection, payload); err != nil {
-		return "", err
+		return "", fmt.Errorf("write to %s endpoint %q: %w", protocol, address, err)
 	}
 	if protocol == "udp" {
 		buffer := make([]byte, 2048)
 		n, err := connection.Read(buffer)
-		return strings.TrimSpace(string(buffer[:n])), err
+		if err != nil {
+			return "", fmt.Errorf("read from %s endpoint %q: %w", protocol, address, err)
+		}
+		return strings.TrimSpace(string(buffer[:n])), nil
 	}
 	response, err := bufio.NewReader(connection).ReadString('\n')
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read from %s endpoint %q: %w", protocol, address, err)
 	}
 	return strings.TrimSpace(response), nil
 }
