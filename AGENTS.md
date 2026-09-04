@@ -85,8 +85,11 @@ app -> services -> runtime containers
 - `gordon apps apply --file ...` persists desired configuration only; it never mutates runtime.
 - `gordon deploy <app>` is the only operation that activates a pending AppSpec.
 - Runtime receives digest-pinned OCI references only.
-- Entrypoints describe service interfaces; routes are the only public exposure primitive.
-- Secrets are write-only and service-owned.
+- Entrypoints describe service interfaces; routes are the only public exposure primitive. Reserve hosts and listeners across desired, active, and in-flight state, including during rollback.
+- Public environment is app-wide only. All service-specific values use write-only secrets, even when non-confidential; reject public-environment/secret name collisions.
+- Secrets are write-only and service-owned; rollback uses current values, not historical ones.
+- Releases record effective configuration and provenance. Service-targeted deploy and push/auto-deploy require matching desired/active source revisions and effective configuration, including after synthetic rollback.
+- Execution intent is durable and separate from releases. Stopped apps stay stopped after reboot and queued events; only successful full-deploy activation changes their durable intent to running. Interrupted deploy follows its journal, not generic resurrection of a prior release. Restart uses the active release and current secrets.
 - Volumes are named Podman volumes owned by one service; no host bind mounts or shared service volumes.
 - Each app has a private network; edge joins only generated ingress networks for routed services.
 
@@ -111,7 +114,7 @@ Prefer standard-library and native Podman/systemd mechanisms over new dependenci
 
 Alpha 1 is blocked until ADRs and clean-host proofs establish:
 
-1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP preservation, firewall behavior, edge restarts, and private runtime-to-registry pulls;
+1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP observation at edge and backend across the full proxied path, CIDR enforcement, firewall behavior, edge restarts, and private runtime-to-registry pulls;
 2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior.
 
 Implement Alpha 1 incrementally after those proofs:
@@ -125,7 +128,9 @@ Implement Alpha 1 incrementally after those proofs:
 7. private sockets and SSH administration;
 8. clean Ubuntu 26.04 installation, reboot, authority, and failure tests.
 
-Do not start Alpha 2 workload features until Alpha 1 installs and passes on a clean reference host.
+Do not start Alpha 2 workload features until Alpha 1 installs and passes on a clean reference host. Alpha 2 must already include minimal digest-pinned immutable releases, separate ingress networks, durable execution intent, stop, and interruption/reboot tests. Persistence, reservation, edge-snapshot, and workload-recovery ADRs precede those features; do not defer their invariants to Alpha 4.
+
+Before public registry access, require a certificate-lifecycle ADR and proof that compromised edge cannot obtain a registry identity accepted by clients. Before web replacement in Alpha 5, require a rollout ADR for concurrency-safe eligibility and bounded draining. Neither the registry trust mechanism nor the web concurrency-eligibility mechanism is selected yet. Do not automatically restore an older volume-owning service after a replacement may have written its data.
 
 ## Architecture and Go style
 

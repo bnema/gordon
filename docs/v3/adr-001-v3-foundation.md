@@ -73,6 +73,8 @@ Edge terminates public application HTTP/HTTPS. It receives only a sanitized, gen
 
 Registry is publicly reachable for authenticated OCI operations. Edge selects registry traffic by SNI and forwards the encrypted TCP stream without terminating TLS. Registry owns its TLS identity and a durable push-event outbox, but has no general configuration or runtime API. Auto-deploy deliberately grants registry bounded authority to trigger a release for one configured repository-and-tag target. Without artifact verification rooted outside registry, registry compromise can deploy arbitrary content to that opted-in service; this is accepted for alpha.
 
+Before public registry access, a certificate-lifecycle ADR must define issuance, renewal, and client trust; a separate implementation proof must demonstrate that a compromised edge cannot obtain a registry identity accepted by OCI clients. TLS passthrough and separate private-key storage alone do not prevent impersonation if edge can satisfy registry-domain ACME challenges through its public ports. Issuance, renewal, and client trust remain an explicit implementation gate.
+
 Control and runtime form the trusted core. Control owns desired state and deployment decisions. Runtime owns actual Podman state and persisted secret values.
 
 ### Replace route-owned workloads with declarative apps
@@ -81,9 +83,11 @@ Each app is defined by one user-owned TOML manifest and has a globally unique na
 
 Every service is explicitly named, references one image, and has one active instance. There is no app-level image shorthand or implicit default service. Compact and expanded syntax are both accepted but normalize to one model.
 
-An app has an automatic private network. Named private networks allow explicitly selected services from different apps to communicate. The intended public-routing topology adds an automatic per-app ingress network containing edge and only routed services. Gordon component resources use reserved names and ownership labels and are excluded from workload reconciliation and garbage collection. Runtime's narrow, idempotent reconciliation of edge's app-ingress attachments is the only allowed workload-side component mutation; Quadlet remains responsible for creating and restarting edge. Alpha 1 is blocked on a clean-host ADR and proof covering this exception, rootless host ingress, source-IP preservation, privileged ports, dynamic TCP/UDP listeners, socket permissions, UID mappings, and SELinux labels.
+An app has an automatic private network. Named private networks allow explicitly selected services from different apps to communicate. The intended public-routing topology adds an automatic per-app ingress network containing edge and only routed services. Gordon component resources use reserved names and ownership labels and are excluded from workload reconciliation and garbage collection. Runtime's narrow, idempotent reconciliation of edge's app-ingress attachments is the only allowed workload-side component mutation; Quadlet remains responsible for creating and restarting edge. Alpha 1 is blocked on a clean-host ADR and proof covering this exception, rootless host ingress, source-address behavior, privileged ports, dynamic TCP/UDP listeners, socket permissions, UID mappings, and SELinux labels.
 
-App entrypoints describe stable service interfaces. Declaring one does not expose it. Routes are the only exposure primitive and support HTTP, TCP, and UDP. HTTP uses edge's shared listener; dedicated TCP and UDP routes contain their own listen address.
+App entrypoints describe stable service interfaces. Declaring one does not expose it. Routes are the only exposure primitive and support HTTP, TCP, and UDP. HTTP uses edge's shared listener; dedicated TCP and UDP routes contain their own listen address. The ingress proof must test the complete client-to-edge-to-backend path, document source addresses observed at edge and backend, identify the `trusted_cidrs` enforcement point, and prove allow/deny behavior using the original client address there. Workloads requiring that address at the backend remain blocked unless preservation there is proven; direct Podman publication is not sufficient evidence.
+
+Control atomically reserves route hosts and listener bindings across desired, active, and in-flight state. Removing a desired route does not release an active binding until edge acknowledges withdrawal and no desired or in-flight reference remains. Historical releases hold no permanent reservation; deploy and rollback reacquire and validate before mutation. Listener conflicts include installation listeners, wildcard/specific address overlap, and IPv4/IPv6 dual-stack behavior.
 
 ### Separate configuration from runtime mutation
 
@@ -91,25 +95,35 @@ App entrypoints describe stable service interfaces. Declaring one does not expos
 
 `gordon deploy <app>` is the only command that activates a new AppSpec revision. It resolves image selectors to OCI digests, creates an immutable release, applies runtime changes, and publishes the release's routes through persisted `prepared`, `mutating`, `routes-published`, and terminal phases. Activation requires observed runtime state and edge acknowledgement; restart recovery observes before acting and never blindly replays mutations.
 
-`gordon deploy <app> --service <name>` is allowed only when desired and active AppSpec revisions match and creates a composed release changing that service digest only. `push --deploy` and auto-deploy follow the same restriction and cannot implicitly activate pending configuration. Auto-deploy selectors must be unique installation-wide; ambiguous push targets require explicit app and service selection.
+`gordon deploy <app> --service <name>` is allowed only when desired and active source AppSpec revisions match and the desired normalized configuration equals the active release's effective configuration. It creates a composed release changing that service digest only. `push --deploy` and auto-deploy follow the same restriction and cannot implicitly activate pending configuration or undo configuration changes from a synthetic rollback. Auto-deploy selectors must be unique installation-wide; ambiguous push targets require explicit app and service selection.
+
+Control serializes mutations of each app, including apply and secret mutation, so operation inputs cannot change mid-flight. Route reservations and edge snapshot publication require installation-wide coordination across apps. Persistence, snapshot, and workload-recovery ADRs are prerequisites for Alpha 2. The first workload stage already requires digest-pinned immutable releases, ingress isolation, durable execution intent, and restart/interruption tests; Alpha 4 adds Gordon's registry and rollback rather than introducing those invariants.
 
 ### Use immutable releases and scoped rollback
 
 Runtime receives only digest-pinned OCI references. Unqualified image references target Gordon's registry; external references require a full registry hostname. The literal tag `latest` is rejected with no alpha override.
 
-A release combines an immutable normalized AppSpec with exact service digests. Full rollback and service-level rollback both create new releases; historical releases are never mutated. A service rollback uses the currently active app-level environment, entrypoints, routes, networks, and other services, and substitutes only the selected former service definition and digest. The synthetic release must pass complete validation before mutation.
+A release records its immutable effective normalized AppSpec, source revision, exact service digests, and source release identities when composed. Full rollback and service-level rollback both create new releases; neither desired configuration nor historical releases are mutated. A service rollback retains the active release's app-level environment, entrypoints, routes, network declarations, and other services, and substitutes only the selected former service definition and digest. Network declarations come from the active release's effective AppSpec, never observed Podman attachments. The new release retains the base active release's source AppSpec revision as provenance and records base and donor release identities plus the composed effective AppSpec. A full rollback retains the selected historical release's source AppSpec revision. The synthetic release must pass complete validation before mutation and expose its actual effective configuration, not merely reuse a revision label. Configuration divergence blocks subsequent service-targeted deploy and push/auto-deploy until full deploy activates the desired AppSpec.
+
+Rollback uses current secret values and never reverses data migrations. Automatic best-effort restoration must not restart an older volume-owning service after its replacement may have written data; report degraded state for operator recovery. Explicit rollback requires the operator to establish volume compatibility outside Gordon.
 
 ### Minimize secret and storage authority
 
-Public environment values are app-wide and injected into every service. There is no service-local public environment. Values intended for one service use write-only secrets, even if not confidential.
+Public environment values are app-wide and injected into every service. There is no service-local public environment. Values intended for one service use write-only secrets, even if not confidential. This deliberately separates public app configuration from service-owned values: manifests declare the required secret names but do not reproduce their values, and release rollback does not restore historical values. A secret name colliding with an app-wide public environment key is rejected during validation.
 
 Secrets are identified by app, service, and name. They cannot be read through any Gordon API or shared by reference between services. Control handles values transiently during set/update; runtime persists and injects them as same-name environment variables. This prevents direct API disclosure but does not protect service secrets from a compromised control plane authorized to deploy that service. Secret changes affect only a later deploy/restart, missing declared secrets block deployment, and removal of a desired or active reference is rejected.
 
 App manifests allow only service-owned Podman named volumes. Host bind mounts and cross-service shared volumes are forbidden. `stop` preserves all durable state. `remove` deletes app metadata and secrets but preserves volumes plus a tombstone that reserves the app name and prevents implicit data adoption. `purge` also deletes volumes and the tombstone after explicit confirmation. Registry images have an independent lifecycle. Runtime pulls them through a separate private registry endpoint with pull-only credentials, not through public edge passthrough; the exact rootless endpoint is part of the Alpha 1 ingress proof.
 
+### Persist workload execution intent
+
+Control stores `running` or `stopped` intent separately from desired configuration, the last active release, and observed containers. Apply preserves intent; a new app starts stopped. A full deploy of a stopped app changes durable intent to running only upon successful release activation. Its journaled operation may create resources and resume after interruption, but generic reboot reconciliation must not resurrect a prior release. If deployment fails, intent stays stopped and recovery cleans up partial resources. Stop persists stopped intent before cleanup, which resumes after interruption. Restart, rollback, service-targeted deploy, push deploy, and auto-deploy refuse stopped apps; only full deploy requests running state again. Restart uses the active effective configuration and pinned digests with current secret values, never pending configuration or newly resolved tags.
+
+Before Alpha 2, the workload-recovery ADR must identify who restarts app containers after host reboot and how to restore active releases, retain stopped intent, recover interrupted operations, and validate persisted edge backends. Component Quadlets and lingering alone do not establish workload recovery. Reboot recovery may wait for the trusted core and must not activate pending AppSpecs implicitly.
+
 ### Limit zero-downtime behavior
 
-Deployment strategy is inferred and not configurable. Only stateless services exclusively routed through HTTP/HTTPS and without persistent volumes are eligible for replacement without a transport outage. Gordon starts the new instance, waits for Podman `running` and an accepting HTTP backend TCP port, switches edge routes, and removes the old instance.
+Deployment strategy is not configurable. Statelessness, exclusive HTTP/HTTPS routing, and absence of persistent volumes are necessary but insufficient conditions for web replacement without a transport outage. Replacement remains disabled until the Alpha 5 rollout ADR selects a concurrency-eligibility mechanism and implementation proofs validate it, multi-entrypoint checks, and bounded draining including WebSockets. No concurrency-eligibility mechanism or strategy selector is chosen here. Gordon starts the new instance, waits for Podman `running` and an accepting HTTP backend TCP port, switches edge routes, drains existing connections up to a deadline, and removes the old instance. Connections outliving that deadline may be interrupted.
 
 All stateful, worker, TCP, UDP, RCON, mixed-protocol, and volume-owning services use recreate and may experience downtime. V3 has no readiness configuration and does not interpret OCI `HEALTHCHECK`.
 
@@ -142,7 +156,7 @@ Alpha 1 will implement branch, commit, and local modes that derive one explicit 
 - The app manifest is a portable, Git-friendly source of truth.
 - Apply and deploy have distinct, predictable effects.
 - Routes no longer own containers.
-- Digest-pinned releases provide reproducible deployment and rollback.
+- Digest-pinned releases reproduce image identities and recorded configuration, not historical secret values or volume contents.
 - Per-service secrets and volumes reduce workload blast radius.
 - The smaller CLI and fresh-start policy permit substantial code deletion.
 - Incremental alpha milestones can be tested on real clean installations.
@@ -171,7 +185,7 @@ Alpha 1 will implement branch, commit, and local modes that derive one explicit 
 - Edge must preserve its last valid sanitized snapshot so a control restart does not interrupt traffic.
 - Registry must persist and retry push events while control is unavailable.
 - Runtime must reconstruct actual state from Podman after restart rather than trust stale process memory.
-- Deployment status must distinguish desired AppSpec, active release, and observed runtime state.
+- Deployment status must distinguish desired AppSpec, active release's effective configuration, execution intent, and observed runtime state.
 
 ## Alternatives considered
 
@@ -228,7 +242,7 @@ Rejected. It would force obsolete ownership and command models into the new arch
 | Socket mount accidentally grants excessive API access | Separate directories and handlers per capability; installer ownership tests; no generic RPC socket |
 | Stale edge routing after control failure | Persist the last valid monotonic snapshot; reject invalid or older generations; expose applied generation in status |
 | Apply overwrites another operator's desired state | Complete-manifest semantics and future optimistic-concurrency details in a focused API ADR |
-| Failed stateful deployment causes downtime | Do not promise zero downtime; retain immutable former release and perform bounded best-effort recovery |
+| Failed stateful deployment causes downtime or data incompatibility | Do not promise zero downtime; retain the former release but do not automatically restart an older volume-owning service after replacement writes; operator recovery must establish data compatibility |
 | Alpha installer silently moves branch state | Resolve and report exact commit; support `GORDON_COMMIT` for reproduction; include a source-tree hash for dirty local builds |
 | Version text identifies different artifacts | Bind the executable hash, OCI digest, and format versions in a distribution identity; verify the same executable is copied into the image; pin image digests; sign tagged distribution manifests |
 | Partial update leaves mixed component generations | Limit Alpha 1 to fresh install; never report transitional mixed state healthy; require a lifecycle ADR before update support |
@@ -258,20 +272,29 @@ The decision is considered implemented only when automated tests prove:
 15. Process running, role ready, dependencies ready, and identity verified are distinguishable; mixed generations are never reported healthy.
 16. User-manager lingering starts the installation after reboot without an interactive login.
 17. Workload reconciliation cannot mutate or garbage-collect Gordon-owned resources except for the narrow tested edge-network attachment operation.
-18. The selected host-ingress mechanism preserves required source addresses and supports the documented HTTP, registry SNI, TCP, and UDP listeners under rootless Podman.
+18. Full-path ingress tests document source addresses at edge and backend, prove `trusted_cidrs` allow/deny behavior using the original client address at its enforcement point, and cover HTTP, registry SNI, TCP, and UDP under rootless Podman. Workloads requiring the original address at their backend remain blocked until preservation there is proven.
 19. Socket directories survive component restart with exact ownership, mode, mount, and SELinux behavior.
+20. Pending route removal cannot free an active binding; concurrent app operations and rollback cannot claim conflicting hosts or listeners, including wildcard and dual-stack overlaps.
+21. Synthetic rollback exposes its effective configuration and prevents service-targeted deploy or auto-deploy from implicitly reverting configuration changes.
+22. Stopped apps remain stopped across component restart, reboot, and queued push events; restart uses the active release and current secrets without resolving newer tags.
+23. Alpha 2 already uses immutable digest-pinned releases, separate ingress networks, and interrupted-operation recovery, including stop.
+24. Registry issuance and client trust resist identity impersonation by a compromised edge, not only disclosure of the existing registry key.
+25. Web replacement has proven concurrent-instance eligibility and bounded draining before it is enabled; stateful recovery never assumes older code is compatible with modified volumes.
+26. Service-owned values remain write-only even when non-confidential; public-environment/secret name collisions fail validation and rollback injects current values.
 
 ## Follow-up decisions
 
 Focused ADRs should define, when implementation reaches them:
 
-- AppSpec and release persistence;
+- AppSpec/release persistence, effective configuration identity, execution intent, route reservations, and app-operation serialization before Alpha 2;
+- workload startup ownership and host reboot/interruption recovery before Alpha 2;
 - internal HTTP DTO versioning;
 - Unix-socket filesystem and UID mapping, which is a prerequisite for Alpha 1 rather than a deferrable implementation detail;
 - rootless host ingress and private runtime-to-registry pulls, also prerequisites for Alpha 1;
-- edge snapshot generation and acknowledgement;
-- registry event outbox semantics;
+- edge snapshot generation, publication coordination across apps, and acknowledgement before Alpha 2;
+- registry event outbox limits, ordering, deduplication, stale-event handling, and retry semantics before auto-deploy;
 - shared named-network declaration;
-- certificate lifecycle;
+- certificate issuance, renewal, and client trust against edge impersonation before public registry access;
+- concurrent-instance eligibility, multi-entrypoint checks, and bounded connection draining before web replacement in Alpha 5;
 - lifecycle states, component replacement order, persistent-format compatibility, backup, rollback or roll-forward, interruption recovery, and generated-Quadlet drift policy before any component update support;
 - release and orphan retention policies.
