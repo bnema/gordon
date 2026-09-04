@@ -3,3 +3,4 @@ gordon
 dist/
 docs/plans/
 .worktrees/
+.agent-reviews/

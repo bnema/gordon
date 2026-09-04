@@ -1,0 +1,39 @@
+name = "app-game-test"
+
+[services.game]
+image = "app-game-test:dev"
+
+[services.game.volumes.data]
+target = "/data"
+
+[entrypoints.game-tcp]
+service = "game"
+port = 27015
+protocol = "tcp"
+
+[entrypoints.game-udp]
+service = "game"
+port = 27015
+protocol = "udp"
+
+[entrypoints.status]
+service = "game"
+port = 27016
+protocol = "tcp"
+
+[entrypoints.rcon]
+service = "game"
+port = 27017
+protocol = "tcp"
+
+[routes.game-tcp]
+listen = ":27015/tcp"
+entrypoint = "game-tcp"
+
+[routes.game-udp]
+listen = ":27015/udp"
+entrypoint = "game-udp"
+
+[routes.status]
+listen = ":27016/tcp"
+entrypoint = "status"

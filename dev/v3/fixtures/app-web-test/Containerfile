@@ -1,0 +1,5 @@
+FROM scratch
+COPY app-web-test /app-web-test
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/app-web-test"]

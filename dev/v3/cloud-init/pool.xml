@@ -1,0 +1,5 @@
+<pool type="dir">
+  <name>gordon-v3-sandbox</name>
+  <uuid>{{UUID}}</uuid>
+  <target><path>/var/lib/libvirt/images/gordon-v3-sandbox</path></target>
+</pool>

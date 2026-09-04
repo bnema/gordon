@@ -1,0 +1,6 @@
+<network>
+  <name>gordon-v3-sandbox</name>
+  <uuid>{{UUID}}</uuid>
+  <bridge name="gv3test0" stp="on" delay="0"/>
+  <ip address="198.18.77.1" netmask="255.255.255.0"/>
+</network>
