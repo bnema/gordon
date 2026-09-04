@@ -114,7 +114,7 @@ Prefer standard-library and native Podman/systemd mechanisms over new dependenci
 
 Alpha 1 is blocked until ADRs and clean-host proofs establish:
 
-1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP observation at edge and backend across the full proxied path, CIDR enforcement, firewall behavior, edge restarts, and private runtime-to-registry pulls;
+1. rootless ingress for `80/443`, dedicated TCP/UDP, source-address observation at edge and backend across the full proxied path, CIDR enforcement, firewall behavior, edge restarts, and private runtime-to-registry pulls;
 2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior.
 
 Implement Alpha 1 incrementally after those proofs:
