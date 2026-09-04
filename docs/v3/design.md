@@ -1,7 +1,9 @@
 # Gordon v3 design
 
-Status: accepted design baseline; not yet implemented  
-Date: 2026-09-04  
+Status: accepted design baseline; not yet implemented
+
+Date: 2026-09-04
+
 Supersedes: the distributed implementation archived as `v3-deprecated`
 
 ## Purpose
@@ -216,11 +218,13 @@ The logical edge configuration has one main multiplexed listener:
 listen = ":443"
 ```
 
-This is a desired public address, not yet a claim that an unprivileged container can bind host port 443 directly. Alpha 1 requires a clean-host ingress ADR and proof of concept covering rootless privileged ports, source-IP preservation, fixed versus dynamic TCP/UDP publication, address-specific binds, firewall interaction, and edge restarts. Dedicated TCP/UDP listeners remain blocked until that mechanism is selected.
+This is a desired public address, not yet a claim that an unprivileged container can bind host port 443 directly. Alpha 1 requires a clean-host ingress ADR and proof of concept covering rootless privileged ports, source-address behavior, fixed versus dynamic TCP/UDP publication, address-specific binds, firewall interaction, and edge restarts. The proof must exercise the complete client-to-edge-to-backend path, not only direct Podman port publication. It must document the source addresses observed by edge and TCP/UDP backends, identify the `trusted_cidrs` enforcement point, and prove allow/deny behavior using the original client address there. A conventional TCP proxy does not preserve that address at the backend; workloads requiring it there remain blocked unless the selected mechanism proves preservation at that point. Dedicated TCP/UDP listeners remain blocked until that mechanism is selected.
 
 Edge terminates HTTP/HTTPS application traffic. Registry traffic is selected by SNI and forwarded as raw TCP. Registry terminates its own TLS, so edge never receives registry credentials or decrypted OCI payloads.
 
 Sharing edge introduces an accepted availability dependency: a failed or compromised edge can make registry unavailable, but must not compromise registry confidentiality.
+
+TLS passthrough alone does not establish that confidentiality guarantee. Before public registry access is enabled, a certificate-lifecycle ADR must define issuance, renewal, and client trust so a compromised edge cannot obtain a registry identity accepted by clients. In particular, evaluate registry-domain ACME HTTP-01 and TLS-ALPN-01 challenges against edge's control of public ports. Keeping registry's existing private key out of edge is necessary but insufficient. The trust mechanism remains undecided; no public registry implementation may assume that SNI routing enforces it.
 
 Runtime pulls Gordon-hosted images through a separate private registry endpoint that is reachable by the rootless Podman engine and is not routed through edge. Runtime uses pull-only credentials; control and edge receive no OCI push credentials. The exact private endpoint, TLS identity, and rootless reachability are part of the required host-ingress proof.
 
@@ -327,7 +331,9 @@ APP_ENV = "production"
 LOG_LEVEL = "info"
 ```
 
-There is no service-specific public environment block. Any value intended for only one service uses the secret mechanism, even when the value is not confidential.
+There is no service-specific public environment block. Any value intended for only one service uses the secret mechanism, even when the value is not confidential. This deliberately keeps two configuration paths: public app-wide values in the manifest and write-only service-owned values outside it. The manifest declares the required secret names, not a complete reproducible set of service values. Those values must be provisioned separately and are not restored by release rollback.
+
+A declared secret name must not collide with an app-wide public environment key; validation rejects the collision rather than silently choosing a value.
 
 Services declare their secret names:
 
@@ -370,7 +376,7 @@ target = "/var/lib/postgresql/data"
 
 The canonical identity includes app, service, and volume names. Host bind mounts and volumes shared between services are forbidden in app manifests.
 
-Releases reuse stable service volumes. Rollback never duplicates or deletes persistent data.
+Releases reuse stable service volumes. Rollback never duplicates or deletes persistent data and does not reverse database or filesystem migrations. An older image is not evidence that the current volume remains compatible. Automatic best-effort restoration must not restart an older volume-owning service after a replacement may have written its data; report the degraded state for operator recovery instead. An explicit rollback of such a service requires the operator to establish data compatibility outside Gordon.
 
 ### Networks
 
@@ -426,7 +432,9 @@ trusted_cidrs = ["100.64.0.0/10"]
 
 Route identity is `<app>/<route>`. Removing or changing a route never creates, stops, or deletes a service by itself.
 
-Apply validation canonicalizes DNS names to lowercase ASCII, rejects duplicate exact hosts, and initially rejects wildcard hosts. For dedicated routes, `(listen address, port, transport protocol)` is unique installation-wide. A route's protocol must match its target entrypoint. HTTP routes target `http` entrypoints and edge terminates public TLS; SNI passthrough targets `tcp` entrypoints and leaves TLS untouched. Registry's configured SNI is reserved and conflicts with no app route. Route and certificate conflicts fail during apply, before persistence.
+Apply validation canonicalizes DNS names to lowercase ASCII, rejects duplicate exact hosts, and initially rejects wildcard hosts. Dedicated listeners must not overlap installation-wide for the same transport protocol, including wildcard-versus-specific address binds and IPv4/IPv6 dual-stack conflicts. Installation listeners, including edge's shared HTTP/HTTPS ports, participate in this check. A route's protocol must match its target entrypoint. HTTP routes target `http` entrypoints and edge terminates public TLS; SNI passthrough targets `tcp` entrypoints and leaves TLS untouched. Registry's configured SNI is reserved and conflicts with no app route. Route and certificate conflicts fail during apply, before persistence.
+
+Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. It becomes available to another app only after no desired or in-flight reference remains and edge has acknowledged its withdrawal. Historical releases do not reserve routes indefinitely: deploy and rollback revalidate and acquire reservations before runtime mutation. Apply validation and reservation changes are one atomic control-side operation; they do not change edge or Podman.
 
 Registry passthrough is a system-generated route derived from registry configuration, not a fake app.
 
@@ -477,7 +485,8 @@ Complete-manifest updates intentionally use last-successful-write-wins semantics
 
 A release is immutable and contains:
 
-- one normalized AppSpec revision;
+- the immutable effective normalized AppSpec;
+- source AppSpec revision (the base active release's revision for service composition) and the source release identities;
 - exact OCI digests for all services;
 - the resolved service runtime definitions;
 - the route projection associated with that release.
@@ -486,7 +495,9 @@ A release is immutable and contains:
 
 `gordon deploy <app>` is the only operation that activates a new AppSpec revision. It resolves images, creates a release, performs the runtime change, and activates the release's routes after its required backends are available.
 
-`gordon deploy <app> --service <name>` never activates a pending AppSpec. It is valid only when desired and active AppSpec revisions match; it resolves the selected service's image from that active spec and creates a composed release changing only that service digest.
+`gordon deploy <app> --service <name>` never activates a pending AppSpec. It is valid only when desired and active source AppSpec revisions match and the desired normalized configuration equals the active release's effective configuration. Revision equality alone is insufficient after a synthetic rollback. It resolves the selected service's image selector from that effective configuration and creates a composed release changing only that service digest.
+
+Control serializes app mutations, including apply, deploy, rollback, secret mutation, restart, stop, remove, and purge. An operation captures its configuration and source release before effects; a concurrent request cannot change that operation's inputs. Global route reservations and edge snapshot publication also require installation-wide coordination so deployments of different apps cannot overwrite each other's routes. The persistence and edge-snapshot ADRs must define these atomicity boundaries before Alpha 2.
 
 Release activation follows persisted phases:
 
@@ -495,9 +506,9 @@ prepared -> mutating -> routes-published -> active
                          \-> failed
 ```
 
-Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set and edge acknowledges the intended route generation. On restart, control observes runtime and edge before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services, and reports the exact mixed or restored actual state as degraded.
+Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set and edge acknowledges the intended route generation. On restart, control observes runtime and edge before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
 
-`push --deploy` and auto-deploy may update service digests only when the AppSpec revision is already active. If a newer AppSpec awaits deployment, the image push succeeds but deployment is refused until `gordon deploy <app>` activates the pending specification.
+`push --deploy` and auto-deploy use the same revision and effective-configuration checks as service-targeted deploy. If a newer AppSpec awaits deployment or a synthetic rollback has changed the effective configuration, the image push succeeds but deployment is refused until a full `gordon deploy <app>` activates the desired specification. They cannot implicitly reconcile that divergence.
 
 ### Auto-deploy
 
@@ -507,7 +518,9 @@ Registry emits a minimal durable event containing repository, tag, digest, times
 
 ### Rollback
 
-A full rollback creates a new release from a previous immutable release. A service rollback creates a synthetic release from the currently active AppSpec and route projection, replacing only the selected service's resolved service definition and digest with a previous successful version. App-wide environment, entrypoints, routes, networks, and all other services remain from the active AppSpec. The composition is rejected before mutation if the former service definition is incompatible with those current app-level fields.
+A full rollback creates a new release from a previous immutable release. A service rollback creates a synthetic release from the active release's effective configuration and route projection, replacing only the selected service's resolved service definition and digest with a previous successful version. App-wide environment, entrypoints, routes, network declarations, and all other services remain from the active release's effective AppSpec. Runtime reconciles actual network attachments from those declarations; observed Podman state is not a configuration source. The composition is rejected before mutation if the former service definition is incompatible with those retained fields.
+
+Rollback never rewrites desired configuration or historical releases. A service rollback creates a new release identity, retains the base active release's source AppSpec revision as provenance, and records the base and donor release identities plus the composed effective AppSpec. That retained revision does not claim that the effective configuration is unchanged. A full rollback retains the selected historical release's source AppSpec revision. Status exposes any divergence between desired and effective configuration; subsequent service-targeted deploy, push deploy, and auto-deploy follow the checks above.
 
 ```console
 gordon rollback shop
@@ -520,7 +533,7 @@ Gordon validates the composed release before mutation. Historical secret values 
 
 ## Deployment strategy
 
-Deployment strategy is not configurable.
+Deployment strategy is not configurable. The web replacement algorithm below remains gated on a focused rollout ADR before Alpha 5. That ADR must establish how Gordon knows concurrent instances are safe; HTTP routes and absence of volumes cannot prove this for an image that may also run migrations, schedulers, or workers. This design does not yet choose a concurrency-eligibility mechanism or add a user-selectable strategy.
 
 An eligible web service uses replacement without a transport-level outage when it:
 
@@ -536,20 +549,25 @@ start new container
 -> wait for Podman running
 -> verify that its HTTP entrypoint accepts TCP
 -> atomically switch edge routes
+-> drain existing requests/connections up to a bounded deadline
 -> stop old container
 ```
 
-V3 has no readiness configuration and does not consume OCI `HEALTHCHECK`. It does not promise application-level readiness.
+V3 has no readiness configuration and does not consume OCI `HEALTHCHECK`. It does not promise application-level readiness or uninterrupted connections beyond the drain deadline. The rollout ADR must define multi-entrypoint checks, the drain deadline, and treatment of long-lived connections such as WebSockets.
 
 Every stateful, worker, TCP, UDP, RCON, mixed-protocol, or volume-owning service uses recreate and may experience downtime.
 
 ## Lifecycle commands
 
+Control persists an app's execution intent (`running` or `stopped`) separately from desired configuration, the last active release, and observed containers. Apply does not change execution intent. A newly applied app is stopped. A full deploy of a stopped app changes durable intent to running only when its new release successfully activates. Its journaled in-flight operation may create resources and resume after interruption, but generic reboot reconciliation must not resurrect a retained prior release. On failure, intent remains stopped and operation recovery cleans up partial resources rather than treating them as an active app.
+
+`restart` uses the active release's effective configuration and pinned digests, with current secret values. It never resolves newer image tags or activates pending configuration. Restart, rollback, service-targeted deploy, push deploy, and auto-deploy refuse a stopped app; only a full `deploy` can request running state again. Queued events cannot undo `stop`.
+
 ```console
 gordon stop shop
 ```
 
-Removes active routes and containers while preserving manifest revisions, releases, secrets, and volumes. `gordon deploy shop` starts it again.
+Persists stopped intent before removing active routes and containers, while preserving manifest revisions, releases, secrets, and volumes. Interrupted stop resumes cleanup rather than resurrecting the app. `gordon deploy shop` starts it again.
 
 ```console
 gordon remove shop
@@ -575,6 +593,8 @@ Performs remove and deletes app-owned volumes and the tombstone after explicit c
 Edge persists only its last valid sanitized route snapshot and public certificates. It may start from that snapshot when control is unavailable. With no valid snapshot, it fails closed. Invalid or older snapshots never replace the active one.
 
 The general rule is that losing the control plane must not interrupt already active workloads or routes.
+
+Host reboot is distinct from a component restart. Before Alpha 2, the workload-recovery ADR must define how persisted execution intent and active releases restore running apps, keep stopped apps stopped, and recover interrupted operations. It must identify who starts workload containers and when edge's persisted backends become valid again. Do not assume component Quadlets or user-manager lingering alone restart applications. Reboot recovery may wait for the trusted core; pending AppSpecs and newly resolved tags must never replace the last active release implicitly.
 
 ## CLI surface
 
@@ -698,9 +718,12 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 
 - App manifest and globally unique name.
 - Configuration-only apply.
-- Explicit deploy.
-- One service, private app network, HTTP entrypoint, HTTP route.
-- End-to-end edge traffic.
+- Explicit deploy with digest-pinned images from an external registry and a minimal immutable release.
+- Persistence, reservation, edge-snapshot, and workload-recovery ADRs covering the first deploy, not deferred until registry support.
+- One service, private app network, separate per-app ingress network, HTTP entrypoint, HTTP route.
+- End-to-end edge traffic and negative network-access tests.
+- Durable execution intent, minimal stop, and interrupted-deploy/stop recovery.
+- Component restart and host reboot tests proving the active release is recovered without activating pending configuration.
 
 ### Alpha 3: multi-service security
 
@@ -709,13 +732,13 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 - Service-scoped write-only secrets.
 - Service-owned volumes.
 - Named private networks across apps.
-- Per-app ingress networks.
+- Multi-service ingress isolation and volume-safe failure recovery.
 
-### Alpha 4: registry and releases
+### Alpha 4: registry and rollback
 
+- Certificate-lifecycle ADR and proof against registry identity impersonation by a compromised edge.
 - Public authenticated OCI registry through raw SNI passthrough.
-- Digest-only runtime deployments.
-- Immutable releases.
+- Extend the existing digest-pinned release flow to Gordon-hosted images.
 - Push deploy and opt-in auto-deploy.
 - Durable registry outbox.
 - Full and service-level rollback.
@@ -723,9 +746,9 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 ### Alpha 5: routes and lifecycle
 
 - HTTP, TCP, and UDP routes.
-- Web-only replacement without transport outage.
-- Restart, stop, remove, and purge.
-- Component restart and failure-matrix tests.
+- Rollout ADR establishing concurrency-safe eligibility and bounded connection draining before web replacement is enabled.
+- Restart, remove, and purge; extend the existing stop/recovery flow to all supported protocols.
+- Complete multi-service and multi-protocol failure-matrix tests.
 - End-to-end security and recovery checks.
 
 Every commit on `v3-alpha` must remain buildable and testable. Every alpha stage must install on a clean host through the same installer and clearly report unsupported features.
@@ -734,11 +757,14 @@ Every commit on `v3-alpha` must remain buildable and testable. Every alpha stage
 
 The following details are intentionally left to focused implementation ADRs, provided they preserve this design:
 
-- exact on-disk formats for AppSpec, releases, and deployment status;
+- AppSpec/release persistence, effective configuration identity, execution intent, and app-operation serialization before Alpha 2;
+- route reservations and edge snapshot publication/acknowledgement under concurrent app operations before Alpha 2;
+- workload startup ownership and reboot/interruption recovery before Alpha 2;
 - exact HTTP DTOs and streaming format;
 - Unix-socket directory layout and Quadlet UID mappings;
 - named shared-network declaration syntax;
-- certificate storage and renewal mechanics inside edge and registry;
-- bounded event-outbox limits and retry schedule;
+- certificate issuance, storage, renewal, and client trust preventing registry impersonation by edge before public registry access;
+- bounded event-outbox limits, ordering, deduplication, stale-event handling, and retry schedule before auto-deploy;
+- concurrency-safe web replacement eligibility, multi-entrypoint checks, and bounded draining before Alpha 5;
 - release retention and garbage-collection defaults;
 - lifecycle states, component replacement order, persistent-format compatibility, backup, rollback or roll-forward, and interrupted-update recovery before any component update support.
