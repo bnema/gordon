@@ -47,3 +47,12 @@ Senior review `568a43bf-aa10-49e3-8d0b-30caf08fbd5a` found one blocking and four
 ### Final verdict
 
 After two correction rounds, senior reviewer `568a43bf-aa10-49e3-8d0b-30caf08fbd5a` returned **VALIDATED** with no remaining blocking or high-impact objection.
+
+## 2026-09-04 — Development VM, reduced scope
+
+- Decision: a development-only libvirt/cloud-init/SSH wrapper; no host sudo, DNS or CA mutations, no application orchestrator. Fixtures remain manual README examples.
+- Critic: Go reviewer `4e1d4b73-5d63-4a06-addf-ffe328d26bfb` reviewed the discarded prototype and reported risks around host privilege, SSH trust, ownership, synchronization and cleanup.
+- Resolution: the prototype's `dev/v3/internal` implementation was removed after the maintainer requested KISS. The replacement pins SSH keys before boot, checks libvirt UUID ownership, uses a kernel lock and extracts source as the guest's unprivileged user. Host namespace and trust-store operations were removed.
+- Evidence: automated checks and real-VM validation of the replacement are recorded in `dev/v3/VALIDATION.md`.
+- Limit: the reviewer explicitly did not re-audit the replacement. Its report is not approval of the final wrapper or remaining fixture code. No further review was launched.
+- Accepted scope: one fixed trusted development VM, manual fixture lifecycle, no production ingress or installer guarantee. Future Gordon implementation requires separate plans.
