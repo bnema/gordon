@@ -8,6 +8,7 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -45,6 +46,47 @@ func TestService_GetTarget_FromCache(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, cachedTarget, result)
+}
+
+func TestService_GetTarget_ServiceRouteUsesStaticTrustedTarget(t *testing.T) {
+	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+	require.NoError(t, svc.ReconcileServiceTargets(map[string]*domain.ProxyTarget{
+		"play.example.com": {Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "play.example.com", TrustedCIDRs: []string{"100.64.0.0/10"}},
+	}))
+
+	target, err := svc.GetTarget(testContext(), "Play.Example.com")
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", target.Host)
+	assert.Equal(t, 18080, target.Port)
+	assert.Empty(t, target.ContainerID)
+	assert.Equal(t, []string{"100.64.0.0/10"}, target.TrustedCIDRs)
+}
+
+func TestService_StageServiceTargetsPublishesOnlyAfterCommit(t *testing.T) {
+	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+	require.NoError(t, svc.StageServiceTargets(map[string]*domain.ProxyTarget{
+		"App.Example.com": {Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "untrusted.example.com"},
+	}))
+	assert.Empty(t, svc.serviceTargets)
+
+	svc.CommitStagedServiceTargets()
+	target := svc.serviceTargets["app.example.com"]
+	require.NotNil(t, target)
+	assert.Equal(t, "app.example.com", target.RouteHost)
+}
+
+func TestService_ReconcileServiceTargetsRemovesDeletedRoute(t *testing.T) {
+	containerSvc := inmocks.NewMockContainerService(t)
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	containerSvc.EXPECT().Get(mock.Anything, "play.example.com").Return(nil, false)
+	svc := NewService(outmocks.NewMockContainerRuntime(t), containerSvc, configSvc, Config{})
+	require.NoError(t, svc.ReconcileServiceTargets(map[string]*domain.ProxyTarget{
+		"play.example.com": {Host: "127.0.0.1", Port: 18080, Scheme: "http"},
+	}))
+	require.NoError(t, svc.ReconcileServiceTargets(nil))
+	_, err := svc.GetTarget(testContext(), "play.example.com")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
 }
 
 func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {

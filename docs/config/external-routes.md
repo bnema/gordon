@@ -1,13 +1,13 @@
 # External Routes Configuration
 
-External routes allow proxying to non-containerized services running on the host or network.
+External routes allow proxying to independently managed, non-containerized services on public network addresses. They are not a bridge to Gordon-managed standalone services.
 
 ## Configuration
 
 ```toml
 [external_routes]
-"service.mydomain.com" = "localhost:3000"
-"cache.mydomain.com" = "192.168.1.100:6379"
+"service.mydomain.com" = "198.51.100.10:3000"
+"cache.mydomain.com" = "backend.example.net:6379"
 ```
 
 ## Syntax
@@ -25,24 +25,14 @@ External routes allow proxying to non-containerized services running on the host
 
 ## Use Cases
 
-### Database Admin Tools
-
-Proxy to database admin interfaces:
+Proxy to an independently managed public backend:
 
 ```toml
 [external_routes]
-"pgadmin.mydomain.com" = "localhost:5050"
-"redis-commander.mydomain.com" = "localhost:8081"
+"legacy-api.mydomain.com" = "api.example.net:8080"
 ```
 
-### Legacy Services
-
-Proxy to services that can't be containerized:
-
-```toml
-[external_routes]
-"legacy-api.mydomain.com" = "192.168.1.50:8080"
-```
+For a local or private backend owned by Gordon, define it as `[[services]]` and select its HTTP port with `[service_routes]` instead.
 
 ## How It Works
 
@@ -58,6 +48,7 @@ Client ─> Gordon Proxy ─> External Service
 
 ## Limitations
 
+- Loopback, private, link-local, and otherwise internal targets are blocked by SSRF protection. Use `[service_routes]` for an HTTP hostname targeting a Gordon-managed `[[services]]` port.
 - HTTP only (no HTTPS upstream)
 - No health checks
 - No load balancing
@@ -72,7 +63,7 @@ vim ~/.config/gordon/gordon.toml
 
 # Add external route
 [external_routes]
-"newservice.mydomain.com" = "localhost:9000"
+"newservice.mydomain.com" = "service.example.net:9000"
 
 # Save - Gordon reloads automatically
 ```

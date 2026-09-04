@@ -75,6 +75,9 @@ func renderConfigTable(out io.Writer, config *remote.Config) error {
 	if err := renderConfigRoutes(out, config); err != nil {
 		return err
 	}
+	if err := renderConfigServiceRoutes(out, config); err != nil {
+		return err
+	}
 	return renderConfigExternalRoutes(out, config)
 }
 
@@ -141,6 +144,33 @@ func renderConfigRoutes(out io.Writer, config *remote.Config) error {
 		}
 	}
 	return nil
+}
+
+func renderConfigServiceRoutes(out io.Writer, config *remote.Config) error {
+	if err := cliWriteLine(out, ""); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, cliRenderTitle("Service Routes")); err != nil {
+		return err
+	}
+	if len(config.ServiceRoutes) == 0 {
+		return cliWriteLine(out, cliRenderMuted("No service routes configured"))
+	}
+	routes := append([]remote.ServiceRoute(nil), config.ServiceRoutes...)
+	sort.Slice(routes, func(i, j int) bool { return routes[i].Domain < routes[j].Domain })
+	rows := make([][]string, 0, len(routes))
+	for _, route := range routes {
+		rows = append(rows, []string{route.Domain, route.Service, route.PortName})
+	}
+	table := components.NewTable(
+		components.WithColumns([]components.TableColumn{
+			{Title: "Domain", Width: 30},
+			{Title: "Service", Width: 30},
+			{Title: "Port name", Width: 15},
+		}),
+		components.WithRows(rows),
+	)
+	return cliWriteLine(out, table.View())
 }
 
 func renderConfigExternalRoutes(out io.Writer, config *remote.Config) error {

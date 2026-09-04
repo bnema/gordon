@@ -39,24 +39,24 @@ Standalone services are Gordon-managed containers that L4 routers can target wit
 
 ```toml
 [[services]]
-name = "rust"
-image = "registry.example.com:5000/rust:latest"
+name = "app"
+image = "registry.example.com:5000/app:latest"
 enabled = true
 
 [[services.ports]]
-name = "game"
-container = 28015
+name = "udp"
+container_port = 9001
 protocol = "udp"
-publish = "127.0.0.1:38015"
+publish = "127.0.0.1:19001"
 
-[entrypoints.rust]
-address = "0.0.0.0:28015"
+[entrypoints.app-udp]
+address = ":9001"
 protocol = "udp"
 
 [[traffic.udp.routers]]
-name = "rust-game"
-entrypoint = "rust"
-service = "service:rust:game"
+name = "app-udp"
+entrypoint = "app-udp"
+service = "service:app:udp"
 ```
 
 Network services describe manually managed non-HTTP backends that L4 routers can target.

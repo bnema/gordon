@@ -3,11 +3,27 @@ package services
 import (
 	"testing"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/domain"
 )
+
+func TestConfigUnmarshalUsesContainerPort(t *testing.T) {
+	v := viper.New()
+	v.Set("services", []map[string]any{{
+		"name": "app", "image": "app:latest", "enabled": true,
+		"ports": []map[string]any{{"name": "web", "container_port": 8080, "protocol": "tcp", "publish": "127.0.0.1:18080"}},
+	}})
+	var config struct {
+		Services []Config `mapstructure:"services"`
+	}
+	require.NoError(t, v.Unmarshal(&config))
+	require.Len(t, config.Services, 1)
+	require.Len(t, config.Services[0].Ports, 1)
+	assert.Equal(t, 8080, config.Services[0].Ports[0].Container)
+}
 
 func TestToDomainRejectsDuplicateServiceNames(t *testing.T) {
 	configs := []Config{

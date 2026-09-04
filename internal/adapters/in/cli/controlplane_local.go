@@ -499,9 +499,15 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 	sort.Slice(externalResponses, func(i, j int) bool {
 		return externalResponses[i].Domain < externalResponses[j].Domain
 	})
+	serviceRoutes := l.configSvc.GetServiceRoutes()
+	serviceRouteResponses := make([]remote.ServiceRoute, 0, len(serviceRoutes))
+	for _, route := range serviceRoutes {
+		serviceRouteResponses = append(serviceRouteResponses, remote.ServiceRoute{Domain: route.Domain, Service: route.Service, PortName: route.PortName})
+	}
 	cfg := &remote.Config{
 		Routes:         l.configSvc.GetRoutes(ctx),
 		ExternalRoutes: externalResponses,
+		ServiceRoutes:  serviceRouteResponses,
 	}
 	cfg.Server.Port = l.configSvc.GetServerPort()
 	cfg.Server.RegistryPort = l.configSvc.GetRegistryPort()

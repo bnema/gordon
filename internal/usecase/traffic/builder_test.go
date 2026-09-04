@@ -388,6 +388,50 @@ func TestBuildEnforcesPrivateStandaloneServicePortRouting(t *testing.T) {
 	})
 }
 
+func TestBuildPlanResolvesHTTPServiceRouteWithoutRouteContainer(t *testing.T) {
+	plan, err := BuildPlan(Input{
+		ServiceRoutes: []domain.HTTPServiceRoute{{Domain: "Play.Example.com", Service: "rust", PortName: "web"}},
+		Services: []domain.StandaloneService{{
+			Name: "rust", Enabled: true, Image: "example/rust:latest",
+			Ports: []domain.StandaloneServicePort{{Name: "web", Container: 8080, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:18080"}},
+		}},
+	})
+	require.NoError(t, err)
+	require.Empty(t, plan.Graph.Routers, "service routes are HTTP proxy targets, not traffic-manager routers")
+	require.Equal(t, &domain.ProxyTarget{Host: "127.0.0.1", Port: 18080, Scheme: "http", RouteHost: "play.example.com"}, plan.ServiceTargets["play.example.com"])
+}
+
+func TestBuildPlanRejectsInvalidHTTPServiceRoutes(t *testing.T) {
+	base := func() Input {
+		return Input{
+			ServiceRoutes: []domain.HTTPServiceRoute{{Domain: "play.example.com", Service: "rust", PortName: "web"}},
+			Services: []domain.StandaloneService{{
+				Name: "rust", Enabled: true, Image: "example/rust:latest",
+				Ports: []domain.StandaloneServicePort{{Name: "web", Container: 8080, Protocol: domain.NetworkProtocolTCP, Publish: "127.0.0.1:18080"}},
+			}},
+		}
+	}
+
+	t.Run("disabled service", func(t *testing.T) {
+		input := base()
+		input.Services[0].Enabled = false
+		_, err := BuildPlan(input)
+		require.ErrorContains(t, err, "unknown service")
+	})
+	t.Run("UDP port", func(t *testing.T) {
+		input := base()
+		input.Services[0].Ports[0].Protocol = domain.NetworkProtocolUDP
+		_, err := BuildPlan(input)
+		require.ErrorContains(t, err, "does not match")
+	})
+	t.Run("private port without policy", func(t *testing.T) {
+		input := base()
+		input.Services[0].Ports[0].Private = true
+		_, err := BuildPlan(input)
+		require.ErrorContains(t, err, "requires non-empty")
+	})
+}
+
 func TestBuildRejectsInvalidServiceRefs(t *testing.T) {
 	base := Input{
 		EntryPoints:     map[string]EntryPointConfig{"tcp": {Address: ":1234", Protocol: domain.EntryPointProtocolTCP}},

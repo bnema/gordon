@@ -36,15 +36,17 @@ type Config struct {
 
 // Service implements the ProxyService interface.
 type Service struct {
-	runtime          out.ContainerRuntime
-	containerSvc     in.ContainerService
-	configSvc        in.ConfigService
-	config           Config
-	targets          map[string]*domain.ProxyTarget
-	mu               sync.RWMutex
-	inFlight         map[string]int
-	inFlightMu       sync.Mutex
-	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
+	runtime               out.ContainerRuntime
+	containerSvc          in.ContainerService
+	configSvc             in.ConfigService
+	config                Config
+	targets               map[string]*domain.ProxyTarget
+	serviceTargets        map[string]*domain.ProxyTarget
+	pendingServiceTargets map[string]*domain.ProxyTarget
+	mu                    sync.RWMutex
+	inFlight              map[string]int
+	inFlightMu            sync.Mutex
+	registryInFlight      atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
 // NewService creates a new proxy service.
@@ -55,12 +57,14 @@ func NewService(
 	config Config,
 ) *Service {
 	return &Service{
-		runtime:      runtime,
-		containerSvc: containerSvc,
-		configSvc:    configSvc,
-		config:       config,
-		targets:      make(map[string]*domain.ProxyTarget),
-		inFlight:     make(map[string]int),
+		runtime:               runtime,
+		containerSvc:          containerSvc,
+		configSvc:             configSvc,
+		config:                config,
+		targets:               make(map[string]*domain.ProxyTarget),
+		serviceTargets:        make(map[string]*domain.ProxyTarget),
+		pendingServiceTargets: make(map[string]*domain.ProxyTarget),
+		inFlight:              make(map[string]int),
 	}
 }
 
@@ -89,8 +93,13 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Check cache first
+	// Service targets are validated at configuration load/reload time and must
+	// take precedence over dynamic deployment targets and external routes.
 	s.mu.RLock()
+	if target, exists := s.serviceTargets[domainName]; exists {
+		s.mu.RUnlock()
+		return cloneProxyTarget(target), nil
+	}
 	if target, exists := s.targets[domainName]; exists {
 		s.mu.RUnlock()
 		log.Debug().
@@ -235,6 +244,51 @@ func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr
 	return t, nil
 }
 
+// StageServiceTargets validates and stages standalone-service targets without publishing them.
+func (s *Service) StageServiceTargets(targets map[string]*domain.ProxyTarget) error {
+	next := make(map[string]*domain.ProxyTarget, len(targets))
+	for domainName, target := range targets {
+		canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
+		if !ok || target == nil || target.Host == "" || target.Port < 1 || target.Port > 65535 {
+			return fmt.Errorf("invalid service target for %q", domainName)
+		}
+		prepared := cloneProxyTarget(target)
+		prepared.RouteHost = canonicalDomain
+		next[canonicalDomain] = prepared
+	}
+
+	s.mu.Lock()
+	s.pendingServiceTargets = next
+	s.mu.Unlock()
+	return nil
+}
+
+// CommitStagedServiceTargets atomically publishes the last staged service targets.
+func (s *Service) CommitStagedServiceTargets() {
+	s.mu.Lock()
+	s.serviceTargets = s.pendingServiceTargets
+	s.pendingServiceTargets = make(map[string]*domain.ProxyTarget)
+	s.mu.Unlock()
+}
+
+// ReconcileServiceTargets validates and immediately publishes standalone-service targets.
+func (s *Service) ReconcileServiceTargets(targets map[string]*domain.ProxyTarget) error {
+	if err := s.StageServiceTargets(targets); err != nil {
+		return err
+	}
+	s.CommitStagedServiceTargets()
+	return nil
+}
+
+func cloneProxyTarget(target *domain.ProxyTarget) *domain.ProxyTarget {
+	if target == nil {
+		return nil
+	}
+	copy := *target
+	copy.TrustedCIDRs = append([]string(nil), target.TrustedCIDRs...)
+	return &copy
+}
+
 // RegisterTarget registers a new proxy target for a domain.
 func (s *Service) RegisterTarget(_ context.Context, domainName string, target *domain.ProxyTarget) error {
 	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
@@ -351,6 +405,12 @@ func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 		return true
 	}
 	if _, err := s.configSvc.GetRoute(ctx, canonicalHost); err == nil {
+		return true
+	}
+	s.mu.RLock()
+	_, serviceRoute := s.serviceTargets[canonicalHost]
+	s.mu.RUnlock()
+	if serviceRoute {
 		return true
 	}
 	_, ok = s.configSvc.GetExternalRoutes()[canonicalHost]

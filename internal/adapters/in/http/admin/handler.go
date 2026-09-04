@@ -1650,6 +1650,11 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 			Domain: domain,
 		})
 	}
+	serviceRoutes := h.configSvc.GetServiceRoutes()
+	serviceRouteResponses := make([]dto.ServiceRoute, 0, len(serviceRoutes))
+	for _, route := range serviceRoutes {
+		serviceRouteResponses = append(serviceRouteResponses, dto.ServiceRoute{Domain: route.Domain, Service: route.Service, PortName: route.PortName})
+	}
 
 	config := dto.ConfigResponse{
 		Server: dto.ServerConfig{
@@ -1666,6 +1671,7 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		},
 		Routes:         routeResponses,
 		ExternalRoutes: externalResponses,
+		ServiceRoutes:  serviceRouteResponses,
 	}
 	if volumeCfg, ok := any(h.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
 		config.Volumes.AutoCreate, config.Volumes.Prefix, config.Volumes.Preserve = volumeCfg.GetVolumeConfig()

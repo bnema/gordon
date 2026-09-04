@@ -44,6 +44,7 @@ type Config struct {
 	NetworkPrefix           string
 	Routes                  map[string]routeConfig
 	ExternalRoutes          map[string]string // domain -> "host:port"
+	ServiceRoutes           map[string]serviceRouteConfig
 	RegistryAuthEnabled     bool
 	RegistryAuthUsername    string
 	RegistryAuthPassword    string
@@ -57,6 +58,11 @@ type Config struct {
 type routeConfig struct {
 	Image string `toml:"image"`
 	HTTPS bool   `toml:"https"`
+}
+
+type serviceRouteConfig struct {
+	Service  string
+	PortName string
 }
 
 // Service implements the ConfigService interface.
@@ -100,12 +106,25 @@ func (s *Service) Load(ctx context.Context) error {
 	if err != nil {
 		return log.WrapErr(err, "failed to load external routes")
 	}
+	serviceRoutes, err := loadServiceRoutes(s.viper.Get("service_routes"))
+	if err != nil {
+		return log.WrapErr(err, "failed to load service routes")
+	}
 	for domainName := range externalRoutes {
 		if _, exists := routes[domainName]; exists {
 			return fmt.Errorf("external route %q conflicts with configured route", domainName)
 		}
+		if _, exists := serviceRoutes[domainName]; exists {
+			return fmt.Errorf("external route %q conflicts with service route", domainName)
+		}
+	}
+	for domainName := range serviceRoutes {
+		if _, exists := routes[domainName]; exists {
+			return fmt.Errorf("service route %q conflicts with configured route", domainName)
+		}
 	}
 	newConfig.ExternalRoutes = externalRoutes
+	newConfig.ServiceRoutes = serviceRoutes
 	newConfig.NetworkGroups = loadStringArrayMap(s.viper.Get("network_groups"))
 	newConfig.Attachments = loadStringArrayMap(s.viper.Get("attachments"))
 
@@ -198,6 +217,7 @@ func (s *Service) loadConfigValues() Config {
 		VolumePreserve:          s.viper.GetBool("volumes.preserve"),
 		Routes:                  make(map[string]routeConfig),
 		ExternalRoutes:          make(map[string]string),
+		ServiceRoutes:           make(map[string]serviceRouteConfig),
 		NetworkGroups:           make(map[string][]string),
 		Attachments:             make(map[string][]string),
 	}
@@ -244,6 +264,41 @@ func loadExternalRoutes(raw any) (map[string]string, error) {
 			return nil, fmt.Errorf("duplicate external route key %q canonicalizes to %q", k, canonicalKey)
 		}
 		result[canonicalKey] = vs
+	}
+	return result, nil
+}
+
+// loadServiceRoutes loads HTTP routes that target named standalone-service ports.
+func loadServiceRoutes(raw any) (map[string]serviceRouteConfig, error) {
+	result := make(map[string]serviceRouteConfig)
+	if raw == nil {
+		return result, nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("service_routes section must be a table, got %T", raw)
+	}
+	for key, value := range m {
+		route, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("service route %q must be an inline table", key)
+		}
+		service, ok := route["service"].(string)
+		if !ok || strings.TrimSpace(service) == "" {
+			return nil, fmt.Errorf("service route %q must include a non-empty service", key)
+		}
+		portName, ok := route["port_name"].(string)
+		if !ok || strings.TrimSpace(portName) == "" {
+			return nil, fmt.Errorf("service route %q must include a non-empty port_name", key)
+		}
+		canonicalKey, ok := domain.CanonicalRouteDomain(key)
+		if !ok {
+			return nil, fmt.Errorf("invalid service route key %q: %w", key, domain.ErrRouteDomainInvalid)
+		}
+		if _, exists := result[canonicalKey]; exists {
+			return nil, fmt.Errorf("duplicate service route key %q canonicalizes to %q", key, canonicalKey)
+		}
+		result[canonicalKey] = serviceRouteConfig{Service: service, PortName: portName}
 	}
 	return result, nil
 }
@@ -1558,6 +1613,21 @@ func (s *Service) GetExternalRoutes() map[string]string {
 		result[k] = v
 	}
 	return result
+}
+
+// GetServiceRoutes returns all configured HTTP-to-standalone-service routes.
+func (s *Service) GetServiceRoutes() []domain.HTTPServiceRoute {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	routes := make([]domain.HTTPServiceRoute, 0, len(s.config.ServiceRoutes))
+	for domainName, route := range s.config.ServiceRoutes {
+		routes = append(routes, domain.HTTPServiceRoute{Domain: domainName, Service: route.Service, PortName: route.PortName})
+	}
+	slices.SortFunc(routes, func(a, b domain.HTTPServiceRoute) int {
+		return cmp.Compare(a.Domain, b.Domain)
+	})
+	return routes
 }
 
 // ExtractDomainFromImageName extracts domain from image names like "myapp.bamen.dev:latest".

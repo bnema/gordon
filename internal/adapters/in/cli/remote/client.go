@@ -1020,12 +1020,20 @@ type Config struct {
 	} `json:"volumes"`
 	Routes         []domain.Route  `json:"routes"`
 	ExternalRoutes []ExternalRoute `json:"external_routes"`
+	ServiceRoutes  []ServiceRoute  `json:"service_routes"`
 }
 
 // ExternalRoute represents a redacted external route config entry.
 type ExternalRoute struct {
 	Domain string `json:"domain"`
 	Target string `json:"target,omitempty"`
+}
+
+// ServiceRoute represents a redacted HTTP-to-standalone-service route config entry.
+type ServiceRoute struct {
+	Domain   string `json:"domain"`
+	Service  string `json:"service"`
+	PortName string `json:"port_name"`
 }
 
 // GetConfig returns the Gordon configuration.
