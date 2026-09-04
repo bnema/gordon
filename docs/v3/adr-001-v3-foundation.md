@@ -251,7 +251,7 @@ The decision is considered implemented only when automated tests prove:
 8. An invalid deployment leaves the former route projection active where the deployment strategy permits.
 9. A service rollback does not restart unrelated services.
 10. App removal preserves volumes and purge requires explicit confirmation.
-11. The branch installer provisions a clean rootless Podman host from an exact commit and refuses to replace another generation.
+11. Artifacts build with Go 1.27, and the branch installer provisions a clean Ubuntu 26.04 LTS rootless Podman host from an exact commit while refusing to replace another generation.
 12. The distribution identity binds source/version, executable hash, component-image digest, and persistent-format versions; before executing a tagged binary, the shell verifies its hash against a manifest signature rooted in a pinned release key.
 13. The installed host executable and its octet-identical copy in the image match that identity, and generated Quadlets pin one image digest in four distinct serve roles with only their documented capabilities.
 14. The installer lock prevents concurrent mutation; an interrupted Alpha 1 installation persists an incomplete state and can resume the same generation idempotently.
