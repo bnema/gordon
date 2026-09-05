@@ -23,6 +23,16 @@ packages:
   - podman
   - uidmap
 write_files:
+  # Merge the rename into cloud-init's MAC-matched management configuration.
+  # Netplan can safely down/rename the NIC after initramfs acquired a lease.
+  - path: /etc/netplan/60-sandbox-management.yaml
+    permissions: "0600"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          management:
+            set-name: management
   - path: /etc/ssh/sshd_config.d/00-sandbox.conf
     permissions: "0644"
     content: |
@@ -42,6 +52,7 @@ write_files:
         }
       }
 runcmd:
+  - [netplan, apply]
   - [systemctl, enable, --now, nftables.service]
   - [systemctl, restart, ssh.service]
   - [loginctl, enable-linger, gordon]
