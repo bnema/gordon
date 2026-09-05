@@ -44,6 +44,10 @@ V3 deliberately breaks compatibility with v2. It removes legacy configuration, c
 - Zero downtime for stateful, TCP, UDP, or mixed-protocol services.
 - Feature parity with v2 during alpha.
 
+The [multi-host evolution review](multi-host-evolution.md) records boundaries to
+preserve and mono-host assumptions to revisit if cluster work is proposed. It is
+a planning note, not an extension of this accepted scope or a cluster API contract.
+
 ## Security model
 
 ### Trust boundaries
