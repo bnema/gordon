@@ -4,6 +4,36 @@ A small Go wrapper around **libvirt + cloud-init + SSH**. It creates an Ubuntu 2
 
 Gordon v3 is not implemented yet. The example apps below run directly with rootless Podman; their success is **not** evidence that Gordon's edge, installer, routes, or security policy works.
 
+## Ubuntu dependency caveat: socket activation
+
+As checked on **2026-09-05**, the Ubuntu 26.04 guest installs `aardvark-dns`
+**1.16.0-3** alongside Podman; that is also the candidate in its configured Ubuntu
+repositories. It does **not** include the socket-inheritance fix in upstream
+**2.1.0**. Check your guest rather than assuming the package version:
+
+```sh
+./dev/v3/sandbox exec apt-cache policy aardvark-dns
+```
+
+With rootless Quadlet socket activation and named bridge networks, the affected
+DNS helper can retain inherited TCP/UDP listeners after the container and socket
+units stop. Restarting a TCP socket then fails with `Address already in use`.
+See [the upstream report](https://github.com/podman-container-tools/podman/issues/27854)
+and [the fix](https://github.com/containers/aardvark-dns/pull/710).
+
+**Development workaround:** use upstream aardvark-dns **2.1.0**, or a distribution
+package with that fix backported, for socket-activation experiments. A temporary
+2.1.0 substitution in the disposable VM passed TCP/UDP forwarding, listener
+withdrawal with another container still running, and subsequent restart. The
+packaged binary was restored afterward. If testing a source build, preserve the
+original binary and restore it after stopping the experimental containers and
+networks; do not replace packages on a production host using this procedure.
+
+The sandbox does not apply this workaround automatically. The direct-Podman
+examples below do not use socket activation. A fixed DNS helper alone does not
+establish Gordon's ingress design or resolve dynamic-listener ownership and
+other Alpha 1 security/lifecycle requirements.
+
 ## CachyOS setup (once)
 
 The administrator installs and authorizes libvirt once. After that, **every sandbox command runs as your normal user without sudo**.
