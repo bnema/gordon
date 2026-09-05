@@ -31,7 +31,7 @@ critical review before implementation.
 | Releases and operations | Releases capture immutable effective configuration and digests; operations journal effects and observed results. | Keep release identity separate from container identity and operation outcome. A future shared release could have different deployment results on different hosts. |
 | Control and runtime | Control owns desired state; runtime owns Podman and observed local resources. | Keep Podman IDs, local paths and transport mechanics at their owning boundary, not in logical app identity. |
 | Routing | Routes target stable entrypoints; edge consumes a sanitized projection. | Keep logical routing separate from resolving live backend addresses. Do not make a container IP the stable route identity. |
-| Host ingress | Ingress binds local sockets and hands TCP descriptors to its local edge. | Keep this local. `SCM_RIGHTS` is not a cross-host transport; an upstream load balancer would not need to change that. |
+| Host ingress | Ingress owns host sockets and relays opaque TCP/UDP traffic to its local edge over Unix IPC. | Keep this transport local; an upstream load balancer does not require ingress-to-edge IPC to become a cross-host API. |
 | Persistent data | A volume belongs to a service; releases reuse it and rollback does not roll back its contents. | Do not infer volume mobility or safe replication from a reusable service definition. |
 
 These are implementation review criteria, not a request to introduce generic

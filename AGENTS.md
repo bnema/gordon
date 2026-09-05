@@ -55,13 +55,13 @@ Control, runtime, edge and registry are independent rootless containers, never o
 
 - `control` owns desired state, AppSpecs, app releases, routes, and secret metadata.
 - `runtime` alone receives the Podman socket; it owns workload mutation, actual state, volumes, and stored secret values.
-- `ingress` binds only control-authorized host listeners, transfers TCP descriptors to edge, and retains UDP sockets for bounded session relay. It owns no secrets, Podman access, routing/TLS decisions or firewall management.
-- `edge` owns handed-off TCP listeners, application TLS, routing and client policy. It receives a sanitized route projection and UDP payload/peer metadata, never host UDP descriptors.
+- `ingress` owns control-authorized host sockets and relays opaque TCP streams and UDP datagrams through private Unix transport, with kernel-observed identity and bounded resources. It owns no secrets, Podman access, HTTP/SNI/game parsing, routing/TLS decisions or firewall management.
+- `edge` owns application TLS, routing, backend connections and client policy. It receives a sanitized route projection and relayed traffic with trusted ingress metadata, never host-network descriptors.
 - `registry` owns OCI storage, registry TLS, and a bounded push-event outbox.
 
 Runtime's Podman socket grants authority over the entire rootless engine, including Gordon's containers. This is an accepted alpha risk, not a strong isolation claim.
 
-Ordinary control APIs use strict HTTP/JSON over role-specific Unix sockets. ADR-002 permits dedicated Unix IPC for TCP descriptor transfer and framed UDP sessions. Keep ingress administration separate from edge's data channel; edge cannot authorize new host binds or choose arbitrary UDP reply destinations. Do not introduce internal TCP APIs, gRPC, protobuf, generic RPC or bearer-token plumbing.
+Ordinary control APIs use strict HTTP/JSON over role-specific Unix sockets. ADR-002 permits dedicated Unix IPC for opaque TCP streams and framed UDP datagrams. Keep ingress administration separate from edge's data channel; edge cannot authorize new host binds, request outbound host connections or choose arbitrary UDP reply destinations. Do not introduce internal TCP APIs, gRPC, protobuf, generic RPC or bearer-token plumbing.
 
 The administrator owns firewalld/equivalent and privileged-port redirections. Gordon must not mutate firewall rules or host sysctls. App route listeners are not duplicated in an installation-level port catalogue.
 
@@ -91,13 +91,15 @@ app -> services -> runtime containers
 - `gordon apps apply --file ...` persists desired configuration only; it never mutates runtime.
 - `gordon deploy <app>` is the only operation that activates a pending AppSpec.
 - Runtime receives digest-pinned OCI references only.
-- Entrypoints describe service interfaces; routes are the only public exposure primitive. Reserve hosts and listeners across desired, active, and in-flight state, including during rollback. Activation requires runtime/edge/ingress readiness; withdrawal must account for edge acknowledgement and ingress listener/session ownership.
+- Entrypoints describe service interfaces; routes are the only public exposure primitive. Reserve hosts and listeners across desired, active, and in-flight state, including during rollback. Activation requires runtime/edge/ingress readiness. Edge acknowledges route withdrawal on shared listeners; dedicated/final shared-listener withdrawal also requires ingress socket/transport cleanup. Do not make opaque ingress identify HTTP/SNI routes.
 - Public environment is app-wide only. All service-specific values use write-only secrets, even when non-confidential; reject public-environment/secret name collisions.
 - Secrets are write-only and service-owned; rollback uses current values, not historical ones.
 - Releases record effective configuration and provenance. Service-targeted deploy and push/auto-deploy require matching desired/active source revisions and effective configuration, including after synthetic rollback.
 - Execution intent is durable and separate from releases. Stopped apps stay stopped after reboot and queued events; only successful full-deploy activation changes their durable intent to running. Interrupted deploy follows its journal, not generic resurrection of a prior release. Restart uses the active release and current secrets.
 - Volumes are named Podman volumes owned by one service; no host bind mounts or shared service volumes.
 - Each app has a private network; edge joins only generated ingress networks for routed services.
+- UDP uses recreate with interruption and bounded in-memory transport associations. Stop admission and invalidate affected per-listener epochs before backend replacement; reopen only after readiness with fresh epochs and reject stale replies, including across restart. No live session migration or session restoration after ingress/edge restart or reboot. Recover only authorized listeners/routes, with empty UDP sessions.
+- Ingress failure interrupts relayed TCP connections and loses UDP sessions. Do not promise transparent ingress restart.
 
 Do not restore v2 route-owned containers, implicit deploy-on-apply, mutable runtime tags, global secret sharing, or ad hoc route mutations.
 
@@ -122,7 +124,7 @@ Alpha 1 is blocked until ADRs and clean-host proofs establish:
 
 1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP observation at edge and backend across the full proxied path, CIDR enforcement, firewall behavior, edge restarts, and private runtime-to-registry pulls;
 2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior;
-3. host-ingress confinement, TCP handoff/withdrawal and interrupted-operation recovery; bounded bidirectional UDP sessions, source-metadata trust and restart behavior before UDP exposure. Request/response prototypes and manual replay are not production recovery proofs.
+3. host-ingress confinement, TCP relay/withdrawal and interrupted-operation recovery; source-metadata trust for both transports, bounded bidirectional UDP associations and disruptive recreate/restart behavior before UDP exposure. Request/response prototypes and manual replay are not production recovery proofs. The OS confinement mechanism remains undecided; no dedicated account or service-manager change is selected.
 
 Implement Alpha 1 incrementally after those proofs:
 

@@ -58,7 +58,7 @@ Gordon runs four independent rootless containers, outside a shared Podman pod, p
 Internet -> administrator-managed firewall/redirects
    |
    v
-host ingress -- TCP listener handoff / bounded UDP relay --> edge
+host ingress -- opaque TCP streams / bounded UDP datagrams --> edge
                                                             |
                                                apps / registry TLS passthrough
 
@@ -81,7 +81,7 @@ Only `runtime` receives the rootless Podman socket. Gordon components are separa
 
 All four containers initially run under one trusted host account and one rootless Podman engine. Container UIDs are not independent host security principals. A compromise of that host account defeats every component boundary. Runtime has full authority over every container in that engine, including Gordon's own containers; runtime compromise therefore defeats the component boundaries as well. A future stronger design may place workloads and Gordon components in separate rootless engines, but that is not part of the accepted alpha baseline.
 
-The host ingress process is also Internet-facing, through UDP. It must have an OS-enforced sandbox excluding secrets, control-private state, the Podman socket/storage and same-account process/filesystem escape paths. Running it unconfined under the Podman account would defeat the primary containment goal; non-root and `NoNewPrivileges` alone are insufficient. Public use remains blocked until this boundary is proven on the reference host (ADR-002).
+The transport-only host ingress process is Internet-facing through TCP and UDP. It must have an OS-enforced sandbox excluding secrets, control-private state, the Podman socket/storage and same-account process/filesystem escape paths. Running it unconfined under the Podman account would defeat the primary containment goal; non-root and `NoNewPrivileges` alone are insufficient. Public use remains blocked until this boundary is proven on the reference host (ADR-002).
 
 ### Compromise containment
 
@@ -98,7 +98,7 @@ It must not be able to:
 - mutate desired state;
 - invoke runtime operations;
 - read registry credentials or traffic carried through TLS passthrough;
-- obtain host UDP descriptors or direct ingress to arbitrary host-network destinations.
+- obtain any host-network descriptors or direct ingress to arbitrary host-network destinations.
 
 A compromised `registry` controls its OCI storage and may emit malformed or forged push events. It has no general runtime or configuration API. When auto-deploy is enabled, however, registry has bounded authority to trigger a release for an already configured repository-and-tag mapping. Control validates and deduplicates events, maps repositories to configured services, checks auto-deploy policy, and selects the resulting release. Without signature or attestation verification rooted outside registry, registry compromise can supply arbitrary content to those opted-in services; this is an accepted risk for alpha.
 
@@ -153,8 +153,8 @@ This lifecycle applies only to Gordon's five managed roles. Application containe
 | --- | --- | --- |
 | control | App manifests, AppSpec history, releases, route definitions, deployment status, secret metadata | Podman socket, OCI blobs, stored secret values |
 | runtime | Podman operations, actual state, workload networks, volumes, stored secret values | Public listeners, desired app manifests, OCI registry storage |
-| ingress (host) | Authorized host binds, TCP descriptor handoff, bounded UDP sessions and relay | Firewall policy, TLS/routing decisions, app secrets, Podman, component supervision |
-| edge | Handed-off TCP listeners, HTTP/TCP/UDP routing, client policy, active sanitized route snapshot, public app certificates | Host UDP descriptors, app secrets, Podman socket, complete manifests, registry credentials |
+| ingress (host) | Authorized host sockets, opaque TCP relay, bounded UDP associations, kernel-observed source metadata and transport limits | Firewall policy, HTTP/SNI/game parsing, TLS/routing decisions, app secrets, Podman, component supervision |
+| edge | Relayed TCP streams/UDP datagrams, HTTP/TCP/UDP routing, client policy, active sanitized route snapshot, public app certificates | Host-network descriptors, app secrets, Podman socket, complete manifests, registry credentials |
 | registry | OCI blobs, manifests, tags, registry TLS identity, durable push-event outbox | App secrets, Podman socket, deployment decisions |
 
 The components do not share data volumes. Explicit host-mounted Unix-socket directories are communication capabilities, not shared data stores. Ingress administration is accessible only to control, separately from the edge data capability; edge cannot request new host binds or choose arbitrary UDP destinations.
@@ -165,7 +165,7 @@ Gordon component containers, networks, volumes, and Quadlet-managed resources us
 
 ### Transport
 
-Ordinary internal control APIs use HTTP with strict JSON DTOs over private Unix sockets. ADR-002 adds a narrow Unix IPC transport for live TCP descriptor transfer (`SCM_RIGHTS`) and framed UDP sessions between ingress and edge. Its format, peer validation and recovery protocol remain implementation gates; it is not generic RPC. Gordon does not use gRPC or protobuf internally in v3.
+Ordinary internal control APIs use HTTP with strict JSON DTOs over private Unix sockets. ADR-002 adds a narrow Unix IPC transport for opaque TCP streams and framed UDP datagrams between ingress and edge. No host-network descriptors, listening or connected, are passed to edge. Its format, peer validation and recovery protocol remain implementation gates; it is not generic RPC. Gordon does not use gRPC or protobuf internally in v3.
 
 Streams use NDJSON or server-sent events only where required, such as logs or edge snapshot updates.
 
@@ -233,11 +233,15 @@ listen = ":443"
 
 This is a logical public address, not a requirement for an unprivileged process to bind host 443 directly. The administrator configures firewalld or equivalent, including public access and any redirect such as 443 to 8443. Gordon binds the configured local destination; it does not change firewall rules or host sysctls. Public-to-local mapping syntax and reservation checks must distinguish both addresses before implementation, without introducing an installation-level catalogue of app ports.
 
-[ADR-002](adr-002-host-ingress.md) selects a confined host ingress role. Control authorizes listener changes from the deploying release, never from apply alone. Ingress transfers TCP listeners to the already-running edge and closes its copies after acknowledged handoff. It retains UDP sockets and relays datagrams through bounded, private sessions; replies can target only the original client of an ingress-owned session. Host UDP sockets are never passed to edge. Edge keeps TLS, routing, backend selection, CIDR policy and connection/session handling.
+[ADR-002](adr-002-host-ingress.md) selects a confined, transport-only host ingress role. Control authorizes journaled listener creation, activation, invalidation and removal, including rollback and recovery, from captured authorized release/applied state and generation. Apply never mutates ingress; recovery reconciles previously authorized applied state rather than accepting new bind authority from edge. Ingress retains all host sockets and relays opaque TCP streams and UDP datagrams to edge through private Unix IPC. TCP replies go only to the accepted client connection; UDP replies go only to the original client of a live ingress-owned association. Edge cannot request outbound host connections or arbitrary UDP destinations. Ingress neither parses HTTP/SNI/game protocols nor selects backends; edge keeps TLS, routing and CIDR policy.
 
-TCP handoff requires descriptor type, `LISTEN` state, family and authorized bind-address validation, plus negative tests of residual host-network authority. TCP peer identity comes from the handed-off socket; UDP identity comes from authenticated ingress metadata, not client payloads. Each UDP session includes the kernel-observed local destination and family/interface/scope where needed, so ingress can choose the correct reply source for wildcard and multi-address binds. Both require full-path allow/deny tests. Neither mechanism reverses prior source NAT, and ordinary edge-to-backend proxying still exposes edge's address at the backend. Backend original-source requirements remain gated.
+Both transports carry authenticated ingress metadata derived from the kernel-observed client and local destination, including family/interface/scope where needed. Client payloads or headers cannot override this identity. UDP reply source selection uses the observed local destination, including wildcard and multi-address binds. Both require full-path allow/deny tests. Neither reverses prior source NAT, and ordinary edge-to-backend proxying still exposes edge's address at the backend. Backend original-source requirements remain gated.
 
-Alpha 1 still requires clean-host proofs for host-process confinement, dynamic listener ownership and withdrawal, interrupted handoff, restart/reboot recovery, address-specific and dual-stack conflicts, firewall coexistence and ingress-network isolation. General bidirectional UDP sessions, binary fidelity, limits and performance must pass before UDP exposure. A request/response prototype is not evidence of game-server compatibility.
+TCP relay requires ordered, binary-transparent delivery, half-close semantics, bounded buffers/connections, backpressure and cleanup. The extra relay costs I/O, CPU and memory; performance must be measured. Ingress failure interrupts TCP connections, including registry passthrough, and loses UDP associations. No transparent ingress restart is promised. This replaces TCP listener handoff because a validated host listener could be repurposed by edge for outbound host-network access.
+
+UDP uses bounded, in-memory associations of listener/epoch, client and local destination. It preserves datagram boundaries and supports multiple/unsolicited backend replies within a live association. UDP deployment uses recreate: stop admission and forwarding for each affected listener, invalidate its old epoch and associations in ingress and edge before backend replacement, keep admission closed until replacement route readiness, then authorize admission under a fresh epoch. Epochs are per listener, not the global edge route generation, and must not be reused even across restart; late backend/IPC responses from old epochs remain rejected. Unrelated apps' sessions are not reset. No live session migration, durable session storage or session restoration after ingress/edge restart or reboot is required. Delayed client datagrams cannot be distinguished from new ones without application knowledge; game-protocol recovery belongs to clients and servers.
+
+Alpha 1 completion still requires clean-host proofs for host-process confinement, capability/source-metadata trust, TCP relay correctness and limits, dynamic listener withdrawal, interrupted operations, restart/reboot recovery, address-specific and dual-stack conflicts, firewall coexistence and ingress-network isolation. Bidirectional UDP associations, binary fidelity, expiry/resource bounds, stale-generation rejection and disruptive recreate/restart behavior must pass before UDP exposure. Listener/route recovery remains required with empty UDP sessions. The OS confinement mechanism remains undecided; this amendment selects neither a dedicated host account nor a service-manager change, and does not relax containment to accommodate the failed user-service profiles.
 
 Edge terminates HTTP/HTTPS application traffic. Registry traffic is selected by SNI and forwarded as raw TCP. Registry terminates its own TLS, so edge never receives registry credentials or decrypted OCI payloads.
 
@@ -453,9 +457,9 @@ Route identity is `<app>/<route>`. Removing or changing a route never creates, s
 
 Apply validation canonicalizes DNS names to lowercase ASCII, rejects duplicate exact hosts, and initially rejects wildcard hosts. Dedicated listeners must not overlap installation-wide for the same transport protocol, including wildcard-versus-specific address binds and IPv4/IPv6 dual-stack conflicts. Installation listeners, including edge's shared HTTP/HTTPS ports, participate in this check. A route's protocol must match its target entrypoint. HTTP routes target `http` entrypoints and edge terminates public TLS; SNI passthrough targets `tcp` entrypoints and leaves TLS untouched. Registry's configured SNI is reserved and conflicts with no app route. Route and certificate conflicts fail during apply, before persistence.
 
-Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. It becomes available to another app only after no desired or in-flight reference remains, edge has acknowledged withdrawal, and ingress has confirmed release of the relevant host listener/session ownership.
+Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. A host/route reservation on a shared HTTP/SNI listener becomes available after no desired or in-flight reference remains and edge acknowledges its route-generation withdrawal, including route-level draining/rejection on existing streams. Ingress cannot attribute opaque shared streams to application routes and must not close unrelated traffic; the shared listener reservation remains while other authorized routes need it.
 
-TCP handoff gives ingress no remote revocation power over edge's copy: an ACK describes cooperative withdrawal, not proof against retained descriptors. Timeout, refusal or uncertain closure fails withdrawal and retains the reservation. Reassignment then requires operator-controlled installation recovery to stop descriptor holders and verify release, without restoring the withdrawn listener or granting runtime/ingress new restart authority.
+Withdrawal of a dedicated listener or the final authorization for a shared listener additionally requires ingress confirmation of listener closure and bounded cleanup of accepted connections/UDP associations. Ingress owns all host sockets; edge has no host descriptors to retain. Stopping acceptance is distinct from draining/termination, and an edge ACK alone does not prove ingress cleanup. Timeout, refusal or uncertain release fails withdrawal and retains the applicable reservation. Reassignment requires verified release, with operator-controlled installation recovery if ownership remains uncertain, without restoring the withdrawn listener or granting runtime/ingress new restart authority.
 
 Historical releases do not reserve routes indefinitely: deploy and rollback revalidate and acquire reservations before runtime mutation. Apply validation and reservation changes are one atomic control-side operation; they do not change edge or Podman.
 
@@ -529,7 +533,7 @@ prepared -> mutating -> routes-published -> active
                          \-> failed
 ```
 
-Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set, edge acknowledges the intended route generation, and ingress confirms the required listener handoffs or UDP relay readiness. On restart, control observes runtime, edge and ingress before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
+Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set, edge acknowledges the intended route generation, and ingress confirms the required listener and TCP/UDP relay readiness. On restart, control observes runtime, edge and ingress before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
 
 `push --deploy` and auto-deploy use the same revision and effective-configuration checks as service-targeted deploy. If a newer AppSpec awaits deployment or a synthetic rollback has changed the effective configuration, the image push succeeds but deployment is refused until a full `gordon deploy <app>` activates the desired specification. They cannot implicitly reconcile that divergence.
 
@@ -610,7 +614,7 @@ Performs remove and deletes app-owned volumes and the tombstone after explicit c
 | --- | --- |
 | control unavailable | Existing workloads and routes continue. Administration and mutations fail. Registry queues push events durably. |
 | runtime unavailable | Existing Podman containers continue. Edge and registry continue. Runtime mutations fail clearly. |
-| ingress unavailable | Handed-off TCP traffic can continue. UDP and new host binds are unavailable. Healthy edge is not restarted merely to recover ingress. |
+| ingress unavailable | Relayed TCP connections terminate, UDP associations are lost, and public traffic/registry passthrough and new host binds are unavailable. Healthy edge is not restarted merely to recover ingress. |
 | edge unavailable | Workloads and administration continue. Public app traffic and registry passthrough are unavailable. |
 | registry unavailable | Existing apps and routes continue. OCI push/pull fail. Cached digest-pinned images may still be deployable. |
 
@@ -735,7 +739,7 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 - Four role-specific serve modes from that image.
 - A locked, journaled, idempotent host installer limited to fresh install and same-generation recovery.
 - Atomic Quadlet and ingress-service generation with an installation target managed by the host binary.
-- Live TCP handoff, bounded UDP relay, effective withdrawal and automatic ingress/edge recovery tests; no firewall mutation.
+- Opaque TCP relay, bounded UDP associations, effective withdrawal and automatic listener/route recovery tests with new connections and empty UDP sessions; no firewall mutation or live UDP session migration.
 - Identity, readiness, lingering, partial-failure, and clean Ubuntu 26.04 bootstrap tests.
 - Private Unix sockets and SSH administration.
 - Socket recreation, startup-order, ownership, mode, mount, and SELinux tests.

@@ -12,7 +12,8 @@
 
 - Four rootless containers remain, plus a confined non-root host ingress role from the same executable. Systemd supervises five roles; ingress is not a component supervisor.
 - Distribution identity, generated-unit ownership, readiness and recovery cover the host service as well as the four Quadlets.
-- Ingress acquires authorized TCP listeners and transfers them to edge through dedicated Unix IPC. It retains host UDP sockets and relays bounded sessions; edge keeps TLS, routing and client policy.
+- Ingress retains all host sockets and provides opaque TCP relay and bounded UDP associations through dedicated Unix IPC. No host-network descriptors reach edge; edge keeps TLS, routing and client policy.
+- UDP uses recreate with interruption, no live session migration or durable session restoration. Ingress failure interrupts relayed TCP connections and loses UDP associations; authorized listeners/routes recover with new connections and empty sessions.
 - The administrator owns public firewall policy and privileged-port redirections. Gordon does not change firewall rules or host sysctls.
 - Control coordinates listener activation and withdrawal with ingress and edge. Apply/deploy, route reservations, stopped intent and immutable releases are unchanged; app ports are not duplicated in installation configuration.
 - The new public host process must prove OS-enforced isolation from secrets, Podman and control-private state. UDP sessions and crash recovery remain implementation gates, not completed prototype guarantees.
@@ -270,8 +271,9 @@ The decision is considered implemented only when the automated tests below
 **and all validation gates in [ADR-002](adr-002-host-ingress.md#evidence-and-remaining-gates)**
 pass. The original four-container checklist is not sufficient on its own:
 validation also covers the host ingress service's confinement, distribution
-identity/readiness, TCP descriptor authority and non-cooperative withdrawal,
-UDP peer/local-destination identity, and automatic failure/restart recovery.
+identity/readiness, TCP relay correctness and non-cooperative withdrawal,
+trusted peer/local-destination identity for both transports, and automatic
+listener/route recovery without restoring UDP sessions.
 
 1. Edge and registry cannot see the Podman socket or application-secret storage.
 2. Control cannot retrieve persisted secret values through its runtime API.
