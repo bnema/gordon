@@ -4,7 +4,7 @@ Guidance for coding agents working on the `v3-alpha` integration branch and bran
 
 ## Project
 
-Gordon v3 is a fresh-install, single-host container deployment platform. It manages declarative apps, OCI images, routes, secrets, volumes, and rootless Podman workloads through four isolated Gordon components.
+Gordon v3 is a fresh-install, single-host container deployment platform. It manages declarative apps, OCI images, routes, secrets, volumes, and rootless Podman workloads through four isolated Gordon containers and a confined, non-root host ingress role.
 
 - Module: `github.com/bnema/gordon`
 - Language: Go 1.27
@@ -16,7 +16,8 @@ Gordon v3 is a fresh-install, single-host container deployment platform. It mana
 Read these before changing v3 behavior:
 
 - `docs/v3/design.md` — accepted product and architecture baseline
-- `docs/v3/adr-001-v3-foundation.md` — accepted foundation decision and risks
+- `docs/v3/adr-001-v3-foundation.md` — foundation decision and risks, as amended
+- `docs/v3/adr-002-host-ingress.md` — accepted host-ingress direction, security boundaries and remaining proof gates
 
 Those documents are normative. The repository still contains v2 code inherited from `main`; existing code is not evidence that a v2 behavior belongs in v3.
 
@@ -41,25 +42,30 @@ One Gordon distribution has:
 
 - one host executable;
 - one OCI component image containing an octet-identical copy of that executable;
-- four role-specific serve modes: `control`, `runtime`, `edge`, and `registry`;
+- four container serve modes: `control`, `runtime`, `edge`, and `registry`, plus an ingress mode of the installed host executable (exact syntax not yet fixed);
 - one distribution identity binding source/version, executable SHA-256, OCI image digest, and persistent-format versions.
 
-The host executable owns installation state and generated Quadlets. Quadlet translates declarations into systemd units, systemd supervises them, and Podman runs the containers. Gordon is not a fifth resident supervisor.
+The host executable owns installation state, four generated Quadlets and one ordinary user service for ingress. Systemd supervises all five roles; Podman runs the four containers. Ingress is not a supervisor and cannot launch components or manage Podman/systemd. Distribution identity, checksums, readiness and recovery cover all five roles.
 
 Alpha 1 supports fresh installation and same-generation recovery only. V3 component update and rollback are unavailable until a focused lifecycle ADR is accepted and implemented. Do not add an alpha channel to `gordon update`.
 
 ### Trust boundaries
 
-The four Gordon roles are independent rootless containers, never one shared Podman pod.
+Control, runtime, edge and registry are independent rootless containers, never one shared Podman pod. Ingress is a separately confined, non-root host process.
 
 - `control` owns desired state, AppSpecs, app releases, routes, and secret metadata.
 - `runtime` alone receives the Podman socket; it owns workload mutation, actual state, volumes, and stored secret values.
-- `edge` owns public listeners and receives only a sanitized route projection.
+- `ingress` binds only control-authorized host listeners, transfers TCP descriptors to edge, and retains UDP sockets for bounded session relay. It owns no secrets, Podman access, routing/TLS decisions or firewall management.
+- `edge` owns handed-off TCP listeners, application TLS, routing and client policy. It receives a sanitized route projection and UDP payload/peer metadata, never host UDP descriptors.
 - `registry` owns OCI storage, registry TLS, and a bounded push-event outbox.
 
 Runtime's Podman socket grants authority over the entire rootless engine, including Gordon's containers. This is an accepted alpha risk, not a strong isolation claim.
 
-Internal APIs use strict HTTP/JSON over role-specific Unix sockets. Do not add internal TCP APIs, gRPC, protobuf, generic RPC sockets, or bearer-token plumbing without a new ADR.
+Ordinary control APIs use strict HTTP/JSON over role-specific Unix sockets. ADR-002 permits dedicated Unix IPC for TCP descriptor transfer and framed UDP sessions. Keep ingress administration separate from edge's data channel; edge cannot authorize new host binds or choose arbitrary UDP reply destinations. Do not introduce internal TCP APIs, gRPC, protobuf, generic RPC or bearer-token plumbing.
+
+The administrator owns firewalld/equivalent and privileged-port redirections. Gordon must not mutate firewall rules or host sysctls. App route listeners are not duplicated in an installation-level port catalogue.
+
+Ingress is a public attack surface. Non-root and `NoNewPrivileges` alone do not isolate it from the trusted host account's files/processes. Public use is blocked until an OS-enforced service sandbox denies secrets, Podman sockets/storage, control-private state and process/filesystem escape paths. Do not relax containment to accommodate a prototype.
 
 For all Gordon and app containers:
 
@@ -85,7 +91,7 @@ app -> services -> runtime containers
 - `gordon apps apply --file ...` persists desired configuration only; it never mutates runtime.
 - `gordon deploy <app>` is the only operation that activates a pending AppSpec.
 - Runtime receives digest-pinned OCI references only.
-- Entrypoints describe service interfaces; routes are the only public exposure primitive. Reserve hosts and listeners across desired, active, and in-flight state, including during rollback.
+- Entrypoints describe service interfaces; routes are the only public exposure primitive. Reserve hosts and listeners across desired, active, and in-flight state, including during rollback. Activation requires runtime/edge/ingress readiness; withdrawal must account for edge acknowledgement and ingress listener/session ownership.
 - Public environment is app-wide only. All service-specific values use write-only secrets, even when non-confidential; reject public-environment/secret name collisions.
 - Secrets are write-only and service-owned; rollback uses current values, not historical ones.
 - Releases record effective configuration and provenance. Service-targeted deploy and push/auto-deploy require matching desired/active source revisions and effective configuration, including after synthetic rollback.
@@ -115,16 +121,17 @@ Prefer standard-library and native Podman/systemd mechanisms over new dependenci
 Alpha 1 is blocked until ADRs and clean-host proofs establish:
 
 1. rootless ingress for `80/443`, dedicated TCP/UDP, source-IP observation at edge and backend across the full proxied path, CIDR enforcement, firewall behavior, edge restarts, and private runtime-to-registry pulls;
-2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior.
+2. Unix-socket paths, UID/GID mappings, ownership, modes, directory mounts, recreation, startup ordering, and SELinux/AppArmor behavior;
+3. host-ingress confinement, TCP handoff/withdrawal and interrupted-operation recovery; bounded bidirectional UDP sessions, source-metadata trust and restart behavior before UDP exposure. Request/response prototypes and manual replay are not production recovery proofs.
 
 Implement Alpha 1 incrementally after those proofs:
 
-1. four minimal role-specific serve modes;
+1. four minimal container serve modes plus the confined host ingress mode;
 2. distribution identity and role readiness;
 3. one digest-pinned component image;
 4. branch, commit, and local installer inputs;
 5. locked, journaled, idempotent host installation;
-6. atomic Quadlet generation and systemd target;
+6. atomic Quadlet/ingress-service generation and systemd target;
 7. private sockets and SSH administration;
 8. clean Ubuntu 26.04 installation, reboot, authority, and failure tests.
 

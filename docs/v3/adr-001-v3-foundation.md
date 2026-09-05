@@ -1,10 +1,23 @@
 # ADR-001: Rebuild Gordon v3 around isolated local components and declarative apps
 
-- Status: Accepted; not yet implemented
+- Status: Accepted; amended by [ADR-002](adr-002-host-ingress.md); not yet implemented
 - Date: 2026-09-04
 - Decision owners: Gordon maintainers
 - Related: [V3 design](./design.md), issue #245, PR #244
 - Supersedes: the implementation archived on branch `v3-deprecated`
+
+## Amendment — 2026-09-05
+
+[ADR-002](adr-002-host-ingress.md) takes precedence over this original decision for host ingress, IPC and the corresponding lifecycle/validation requirements:
+
+- Four rootless containers remain, plus a confined non-root host ingress role from the same executable. Systemd supervises five roles; ingress is not a component supervisor.
+- Distribution identity, generated-unit ownership, readiness and recovery cover the host service as well as the four Quadlets.
+- Ingress acquires authorized TCP listeners and transfers them to edge through dedicated Unix IPC. It retains host UDP sockets and relays bounded sessions; edge keeps TLS, routing and client policy.
+- The administrator owns public firewall policy and privileged-port redirections. Gordon does not change firewall rules or host sysctls.
+- Control coordinates listener activation and withdrawal with ingress and edge. Apply/deploy, route reservations, stopped intent and immutable releases are unchanged; app ports are not duplicated in installation configuration.
+- The new public host process must prove OS-enforced isolation from secrets, Podman and control-private state. UDP sessions and crash recovery remain implementation gates, not completed prototype guarantees.
+
+The text below records the original foundation. References to four managed roles, HTTP/JSON-only transport and edge-only listener ownership must be read with this amendment. All unaffected product and security decisions remain in force; [the design](design.md) presents the consolidated baseline.
 
 ## Context
 
@@ -253,7 +266,12 @@ Rejected. It would force obsolete ownership and command models into the new arch
 
 ## Validation requirements
 
-The decision is considered implemented only when automated tests prove:
+The decision is considered implemented only when the automated tests below
+**and all validation gates in [ADR-002](adr-002-host-ingress.md#evidence-and-remaining-gates)**
+pass. The original four-container checklist is not sufficient on its own:
+validation also covers the host ingress service's confinement, distribution
+identity/readiness, TCP descriptor authority and non-cooperative withdrawal,
+UDP peer/local-destination identity, and automatic failure/restart recovery.
 
 1. Edge and registry cannot see the Podman socket or application-secret storage.
 2. Control cannot retrieve persisted secret values through its runtime API.
