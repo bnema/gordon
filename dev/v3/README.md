@@ -4,7 +4,9 @@ A small Go wrapper around **libvirt + cloud-init + SSH**. It creates an Ubuntu 2
 
 Gordon v3 is not implemented yet. The example apps below run directly with rootless Podman; their success is **not** evidence that Gordon's edge, installer, routes, or security policy works.
 
-## Ubuntu dependency caveat: socket activation
+The selected ingress direction is documented in [ADR-002](../../docs/v3/adr-002-host-ingress.md): four rootless containers plus a confined host role, with live TCP socket handoff and bounded UDP relay. This wrapper does not install those roles. Host confinement, recovery and general UDP-session behavior remain proof gates; see the [consolidated design](../../docs/v3/design.md).
+
+## Ubuntu dependency caveat: socket-activation experiments
 
 As checked on **2026-09-05**, the Ubuntu 26.04 guest installs `aardvark-dns`
 **1.16.0-3** alongside Podman; that is also the candidate in its configured Ubuntu
@@ -30,9 +32,10 @@ original binary and restore it after stopping the experimental containers and
 networks; do not replace packages on a production host using this procedure.
 
 The sandbox does not apply this workaround automatically. The direct-Podman
-examples below do not use socket activation. A fixed DNS helper alone does not
-establish Gordon's ingress design or resolve dynamic-listener ownership and
-other Alpha 1 security/lifecycle requirements.
+examples below do not use socket activation. ADR-002 uses live TCP handoff rather
+than startup socket activation, so this experimental workaround is not an
+established prerequisite for the selected design. A fixed DNS helper alone does
+not satisfy the remaining Alpha 1 security/lifecycle requirements.
 
 ## CachyOS setup (once)
 

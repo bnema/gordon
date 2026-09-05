@@ -2,7 +2,9 @@
 
 Status: accepted design baseline; not yet implemented
 
-Date: 2026-09-04
+Date: 2026-09-04; host-ingress amendment: 2026-09-05
+
+Decisions: [ADR-001](adr-001-v3-foundation.md), amended by [ADR-002: host ingress](adr-002-host-ingress.md). The ingress direction is accepted; its implementation and security proofs remain gated.
 
 Supersedes: the distributed implementation archived as `v3-deprecated`
 
@@ -19,7 +21,7 @@ V3 deliberately breaks compatibility with v2. It removes legacy configuration, c
 ### In scope
 
 - One Gordon distribution, host binary, and component image generation for one installation.
-- Four isolated Gordon components on one host.
+- Four isolated Gordon containers and one confined host ingress role.
 - Rootless Podman as the only container runtime.
 - One declarative manifest per app.
 - Apps composed of independently managed services.
@@ -46,21 +48,22 @@ V3 deliberately breaks compatibility with v2. It removes legacy configuration, c
 
 ### Trust boundaries
 
-Gordon runs as four independent containers, outside a shared Podman pod:
+Gordon runs four independent rootless containers, outside a shared Podman pod, plus a confined, non-root host ingress process from the same executable:
 
 ```text
-Internet
+Internet -> administrator-managed firewall/redirects
    |
-   +--> edge ----------- public application traffic
-   |
-   +--> registry ------- authenticated OCI push/pull
+   v
+host ingress -- TCP listener handoff / bounded UDP relay --> edge
+                                                            |
+                                               apps / registry TLS passthrough
 
 control ---------------- desired state and administration
-   |
+   |                     authorizes ingress listener operations
 runtime ---------------- Podman, workloads, volumes, secret values
 ```
 
-Each component has:
+Each container has:
 
 - a distinct container, user, mount, and network namespace;
 - its own root filesystem and private data volume;
@@ -73,6 +76,8 @@ Each component has:
 Only `runtime` receives the rootless Podman socket. Gordon components are separate containers because a Podman pod shares networking and would weaken the intended trust boundaries.
 
 All four containers initially run under one trusted host account and one rootless Podman engine. Container UIDs are not independent host security principals. A compromise of that host account defeats every component boundary. Runtime has full authority over every container in that engine, including Gordon's own containers; runtime compromise therefore defeats the component boundaries as well. A future stronger design may place workloads and Gordon components in separate rootless engines, but that is not part of the accepted alpha baseline.
+
+The host ingress process is also Internet-facing, through UDP. It must have an OS-enforced sandbox excluding secrets, control-private state, the Podman socket/storage and same-account process/filesystem escape paths. Running it unconfined under the Podman account would defeat the primary containment goal; non-root and `NoNewPrivileges` alone are insufficient. Public use remains blocked until this boundary is proven on the reference host (ADR-002).
 
 ### Compromise containment
 
@@ -88,7 +93,8 @@ It must not be able to:
 - access the Podman socket;
 - mutate desired state;
 - invoke runtime operations;
-- read registry credentials or traffic carried through TLS passthrough.
+- read registry credentials or traffic carried through TLS passthrough;
+- obtain host UDP descriptors or direct ingress to arbitrary host-network destinations.
 
 A compromised `registry` controls its OCI storage and may emit malformed or forged push events. It has no general runtime or configuration API. When auto-deploy is enabled, however, registry has bounded authority to trigger a release for an already configured repository-and-tag mapping. Control validates and deduplicates events, maps repositories to configured services, checks auto-deploy policy, and selects the resulting release. Without signature or attestation verification rooted outside registry, registry compromise can supply arbitrary content to those opted-in services; this is an accepted risk for alpha.
 
@@ -96,24 +102,26 @@ A compromised `registry` controls its OCI storage and may emit malformed or forg
 
 ## Deployment topology
 
-V3 is strictly mono-host. One Gordon distribution provides the host CLI and one component image containing an octet-identical copy of that Gordon executable. The image runs that executable in four role-specific serve modes; the exact command syntax is fixed during Alpha 1. "Distribution" and "installation generation" refer to Gordon itself; "release" remains reserved for immutable app deployments.
+V3 is strictly mono-host. One Gordon distribution provides the host CLI and one component image containing an octet-identical copy of that Gordon executable. The image runs that executable in four container serve modes. The installed executable also runs the host ingress role under a user systemd service; exact serve syntax is fixed during Alpha 1. "Distribution" and "installation generation" refer to Gordon itself; "release" remains reserved for immutable app deployments.
 
 ```text
 host: gordon <version>
   |
-  +-- owns installation state and generated Quadlets
+  +-- owns installation state, generated Quadlets and ingress service
   |
-  `-- systemd --user / Quadlet
-      ├── gordon serve edge
-      ├── gordon serve registry
-      ├── gordon serve control
-      `── gordon serve runtime
-          `── rootless Podman socket
+  `-- systemd --user
+      ├── host ingress (same installed executable; confined service)
+      `── four Quadlet-managed containers
+          ├── edge
+          ├── registry
+          ├── control
+          `── runtime
+              `── rootless Podman socket
 ```
 
 A distribution identity binds its version or source revision, executable SHA-256, component-image OCI digest, and persistent-format versions. The build copies that exact executable into the image and verifies its hash before image publication; the signed manifest attests both that hash and the resulting image digest. Quadlets reference the image by digest, never by a mutable tag. Branch and commit builds are attributable to one exact clean revision but are not authenticated releases. A dirty local checkout receives an explicit identity containing both the commit and source-tree hash instead of reporting clean `HEAD`.
 
-The installed host binary and all four running roles must match one intended distribution identity. A future component update will necessarily observe mixed generations while replacing processes; that is permitted only as an explicit transitional state and must never be reported healthy. Alpha 1 supports fresh installation and recovery of that same incomplete installation only. Installing a different generation, component update, and component rollback remain blocked on the lifecycle ADR.
+The installed host binary and all five running roles (four containers plus ingress) must match one intended distribution identity. A future component update will necessarily observe mixed generations while replacing processes; that is permitted only as an explicit transitional state and must never be reported healthy. Alpha 1 supports fresh installation and recovery of that same incomplete installation only. Installing a different generation, component update, and component rollback remain blocked on the lifecycle ADR.
 
 ### Component lifecycle ownership
 
@@ -124,16 +132,16 @@ Gordon owns the declarative lifecycle of its installation. A minimal shell boots
 - records intended, staged, running, and failure state in a persistent journal;
 - uses atomic, idempotent steps so the same generation can resume after interruption;
 - installs the matching component image and creates installation directories and initial configuration;
-- generates the four Quadlet definitions;
+- generates the four Quadlet definitions and the confined host ingress service;
 - asks the user systemd manager to reload, enable, start, or stop the installation target;
 - verifies process state, role readiness, dependencies, and distribution identity without granting a mutation capability to public components;
 - reports partial operations as degraded or incomplete without claiming success.
 
-Quadlet translates Gordon's Podman declarations into systemd units. Systemd owns continuous process supervision, boot activation, dependency ordering, and restart-after-failure. The installer must configure and test the user-manager lingering policy required for boot without an interactive login. Podman creates and runs the containers. Gordon is not a fifth resident supervisor and does not reimplement systemd.
+Quadlet translates Gordon's Podman declarations into systemd units. Systemd owns continuous process supervision, boot activation, dependency ordering, and restart-after-failure. The installer must configure and test the user-manager lingering policy required for boot without an interactive login. Podman creates and runs the containers. Ingress is a fifth resident role, not a supervisor: it cannot launch components or manage systemd/Podman. Gordon does not reimplement systemd.
 
-Generated Quadlets are Gordon-owned outputs, not user configuration. Gordon records their generation and checksums, writes them atomically, and refuses to overwrite unknown edits without an explicit recovery operation that preserves a backup. Supported customization belongs in `gordon.toml`.
+Generated Quadlets and the ingress service are Gordon-owned outputs, not user configuration. Gordon records their generation and checksums, writes them atomically, and refuses to overwrite unknown edits without an explicit recovery operation that preserves a backup. Supported customization belongs in `gordon.toml`.
 
-This lifecycle applies only to Gordon's four components. Application containers remain desired by control and reconciled by runtime through the Podman socket. Gordon v3 does not contain the archived checkpointed split migration, runtime handoff, or autonomous self-upgrade system. Component update support remains blocked until the focused lifecycle ADR defines safe replacement order, persistent-format compatibility, rollback or roll-forward, and interruption recovery.
+This lifecycle applies only to Gordon's five managed roles. Application containers remain desired by control and reconciled by runtime through the Podman socket. Gordon v3 does not contain the archived checkpointed split migration, runtime handoff, or autonomous self-upgrade system. Component update support remains blocked until the focused lifecycle ADR defines safe replacement order, persistent-format compatibility, rollback or roll-forward, and interruption recovery.
 
 ## Component ownership
 
@@ -141,18 +149,19 @@ This lifecycle applies only to Gordon's four components. Application containers 
 | --- | --- | --- |
 | control | App manifests, AppSpec history, releases, route definitions, deployment status, secret metadata | Podman socket, OCI blobs, stored secret values |
 | runtime | Podman operations, actual state, workload networks, volumes, stored secret values | Public listeners, desired app manifests, OCI registry storage |
-| edge | Public application listeners, active sanitized route snapshot, public app certificates | App secrets, Podman socket, complete manifests, registry credentials |
+| ingress (host) | Authorized host binds, TCP descriptor handoff, bounded UDP sessions and relay | Firewall policy, TLS/routing decisions, app secrets, Podman, component supervision |
+| edge | Handed-off TCP listeners, HTTP/TCP/UDP routing, client policy, active sanitized route snapshot, public app certificates | Host UDP descriptors, app secrets, Podman socket, complete manifests, registry credentials |
 | registry | OCI blobs, manifests, tags, registry TLS identity, durable push-event outbox | App secrets, Podman socket, deployment decisions |
 
-The components do not share data volumes. Explicit host-mounted Unix-socket directories are communication capabilities, not shared data stores.
+The components do not share data volumes. Explicit host-mounted Unix-socket directories are communication capabilities, not shared data stores. Ingress administration is accessible only to control, separately from the edge data capability; edge cannot request new host binds or choose arbitrary UDP destinations.
 
-Gordon component containers, networks, volumes, and Quadlet-managed resources use reserved names and ownership labels. Runtime workload reconciliation and future garbage collection must exclude them. Runtime's narrowly defined, idempotent reconciliation of edge's app-ingress network attachments is the only allowed workload-side mutation of a Gordon component; the ingress ADR must prove that this exception cannot become a generic component-management path.
+Gordon component containers, networks, volumes, and Quadlet-managed resources use reserved names and ownership labels. Runtime workload reconciliation and future garbage collection must exclude them. Runtime's narrowly defined, idempotent reconciliation of edge's app-ingress network attachments is its only permitted workload-side mutation of Gordon container resources; implementation proofs must ensure it cannot become a generic component-management path. Control-authorized ingress listener operations do not grant runtime additional authority.
 
 ## Internal communication
 
 ### Transport
 
-Internal APIs use HTTP with strict JSON DTOs over private Unix sockets. Gordon does not use gRPC or protobuf internally in v3.
+Ordinary internal control APIs use HTTP with strict JSON DTOs over private Unix sockets. ADR-002 adds a narrow Unix IPC transport for live TCP descriptor transfer (`SCM_RIGHTS`) and framed UDP sessions between ingress and edge. Its format, peer validation and recovery protocol remain implementation gates; it is not generic RPC. Gordon does not use gRPC or protobuf internally in v3.
 
 Streams use NDJSON or server-sent events only where required, such as logs or edge snapshot updates.
 
@@ -218,7 +227,13 @@ The logical edge configuration has one main multiplexed listener:
 listen = ":443"
 ```
 
-This is a desired public address, not yet a claim that an unprivileged container can bind host port 443 directly. Alpha 1 requires a clean-host ingress ADR and proof of concept covering rootless privileged ports, source-address behavior, fixed versus dynamic TCP/UDP publication, address-specific binds, firewall interaction, and edge restarts. The proof must exercise the complete client-to-edge-to-backend path, not only direct Podman port publication. It must document the source addresses observed by edge and TCP/UDP backends, identify the `trusted_cidrs` enforcement point, and prove allow/deny behavior using the original client address there. A conventional TCP proxy does not preserve that address at the backend; workloads requiring it there remain blocked unless the selected mechanism proves preservation at that point. Dedicated TCP/UDP listeners remain blocked until that mechanism is selected.
+This is a logical public address, not a requirement for an unprivileged process to bind host 443 directly. The administrator configures firewalld or equivalent, including public access and any redirect such as 443 to 8443. Gordon binds the configured local destination; it does not change firewall rules or host sysctls. Public-to-local mapping syntax and reservation checks must distinguish both addresses before implementation.
+
+[ADR-002](adr-002-host-ingress.md) selects a confined host ingress role. Control authorizes listener changes from the deploying release, never from apply alone. Ingress transfers TCP listeners to the already-running edge and closes its copies after acknowledged handoff. It retains UDP sockets and relays datagrams through bounded, private sessions; replies can target only the original client of an ingress-owned session. Host UDP sockets are never passed to edge. Edge keeps TLS, routing, backend selection, CIDR policy and connection/session handling.
+
+TCP peer identity comes from the handed-off socket; UDP peer identity comes from authenticated ingress metadata, not client payloads. Both require full-path allow/deny tests. Neither mechanism reverses prior source NAT, and ordinary edge-to-backend proxying still exposes edge's address at the backend. Backend original-source requirements remain gated.
+
+Alpha 1 still requires clean-host proofs for host-process confinement, dynamic listener ownership and withdrawal, interrupted handoff, restart/reboot recovery, address-specific and dual-stack conflicts, firewall coexistence and ingress-network isolation. General bidirectional UDP sessions, binary fidelity, limits and performance must pass before UDP exposure. A request/response prototype is not evidence of game-server compatibility.
 
 Edge terminates HTTP/HTTPS application traffic. Registry traffic is selected by SNI and forwarded as raw TCP. Registry terminates its own TLS, so edge never receives registry credentials or decrypted OCI payloads.
 
@@ -434,7 +449,7 @@ Route identity is `<app>/<route>`. Removing or changing a route never creates, s
 
 Apply validation canonicalizes DNS names to lowercase ASCII, rejects duplicate exact hosts, and initially rejects wildcard hosts. Dedicated listeners must not overlap installation-wide for the same transport protocol, including wildcard-versus-specific address binds and IPv4/IPv6 dual-stack conflicts. Installation listeners, including edge's shared HTTP/HTTPS ports, participate in this check. A route's protocol must match its target entrypoint. HTTP routes target `http` entrypoints and edge terminates public TLS; SNI passthrough targets `tcp` entrypoints and leaves TLS untouched. Registry's configured SNI is reserved and conflicts with no app route. Route and certificate conflicts fail during apply, before persistence.
 
-Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. It becomes available to another app only after no desired or in-flight reference remains and edge has acknowledged its withdrawal. Historical releases do not reserve routes indefinitely: deploy and rollback revalidate and acquire reservations before runtime mutation. Apply validation and reservation changes are one atomic control-side operation; they do not change edge or Podman.
+Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. It becomes available to another app only after no desired or in-flight reference remains, edge has acknowledged withdrawal, and ingress has confirmed release of the relevant host listener/session ownership. Historical releases do not reserve routes indefinitely: deploy and rollback revalidate and acquire reservations before runtime mutation. Apply validation and reservation changes are one atomic control-side operation; they do not change edge or Podman.
 
 Registry passthrough is a system-generated route derived from registry configuration, not a fake app.
 
@@ -506,7 +521,7 @@ prepared -> mutating -> routes-published -> active
                          \-> failed
 ```
 
-Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set and edge acknowledges the intended route generation. On restart, control observes runtime and edge before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
+Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set, edge acknowledges the intended route generation, and ingress confirms the required listener handoffs or UDP relay readiness. On restart, control observes runtime, edge and ingress before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
 
 `push --deploy` and auto-deploy use the same revision and effective-configuration checks as service-targeted deploy. If a newer AppSpec awaits deployment or a synthetic rollback has changed the effective configuration, the image push succeeds but deployment is refused until a full `gordon deploy <app>` activates the desired specification. They cannot implicitly reconcile that divergence.
 
@@ -587,10 +602,11 @@ Performs remove and deletes app-owned volumes and the tombstone after explicit c
 | --- | --- |
 | control unavailable | Existing workloads and routes continue. Administration and mutations fail. Registry queues push events durably. |
 | runtime unavailable | Existing Podman containers continue. Edge and registry continue. Runtime mutations fail clearly. |
+| ingress unavailable | Handed-off TCP traffic can continue. UDP and new host binds are unavailable. Healthy edge is not restarted merely to recover ingress. |
 | edge unavailable | Workloads and administration continue. Public app traffic and registry passthrough are unavailable. |
 | registry unavailable | Existing apps and routes continue. OCI push/pull fail. Cached digest-pinned images may still be deployable. |
 
-Edge persists only its last valid sanitized route snapshot and public certificates. It may start from that snapshot when control is unavailable. With no valid snapshot, it fails closed. Invalid or older snapshots never replace the active one.
+Edge persists only its last valid sanitized route snapshot and public certificates. It may start from that snapshot when control is unavailable, but public readiness also requires validated listener recovery with ingress. With no valid snapshot, it fails closed. Invalid or older snapshots never replace the active one. Ingress recovery must use authorized applied state and observed ownership, not arbitrary bind requests from edge or a pending AppSpec; the protocol and minimal persisted metadata remain gated by ADR-002.
 
 The general rule is that losing the control plane must not interrupt already active workloads or routes.
 
@@ -636,6 +652,8 @@ gordon serve --role control|runtime|edge|registry
 gordon version
 gordon completion
 ```
+
+The host ingress role also uses the installed executable; its serve-mode spelling is not yet fixed. It has no public administration endpoint and is not a replacement for edge.
 
 ### V2 feature tracking
 
@@ -690,9 +708,9 @@ The shell is bootstrap transport only: after pre-execution verification or a loc
 2. builds or acquires the matching component image and records its immutable digest;
 3. installs the host CLI and distribution identity;
 4. creates installation directories, configuration, networks, and capability-socket directories;
-5. atomically generates four Quadlets that invoke the digest-pinned image in distinct serve roles with role-specific mounts, sockets, and networks;
+5. atomically generates four Quadlets that invoke the digest-pinned image in distinct serve roles, plus the confined ingress service invoking the same installed executable;
 6. reloads the user systemd manager and enables/starts the installation target;
-7. verifies process state, readiness, dependencies, and identity for all four roles;
+7. verifies process state, readiness, dependencies, confinement, and identity for all five roles;
 8. records success or an explicitly incomplete, resumable state and reports the exact distribution identity.
 
 Alpha 1 accepts only a clean host or resumption of the same incomplete generation. It does not replace another generation and makes no component update or rollback promise. The v3 `gordon update` command remains unavailable. Enabling it requires the lifecycle ADR to define transitional states, replacement order, persistent-format compatibility, backup, rollback versus roll-forward, and recovery after interruption. Source modes do not create an alpha update channel. They do not exist in the current v2 installer and are not usable until Alpha 1 implements and verifies them.
@@ -702,13 +720,14 @@ Alpha 1 accepts only a clean host or resumption of the same incomplete generatio
 ### Alpha 1: isolated foundation
 
 - Branch and installer flow.
-- A clean-host ingress and Unix-socket/UID/SELinux ADR plus Podman/Quadlet proof of concept.
-- Four separately confined containers under the documented trusted host account.
+- ADR-002 host-ingress direction plus clean-host confinement, IPC/UID/LSM and Podman/Quadlet implementation proofs.
+- Four separately confined containers and one confined non-root host ingress role under the documented trust model.
 - Rootless Podman only, with runtime's full-engine authority explicitly tested.
 - One host binary and one digest-pinned component image built from one distribution identity.
 - Four role-specific serve modes from that image.
 - A locked, journaled, idempotent host installer limited to fresh install and same-generation recovery.
-- Atomic Quadlet generation and an installation target managed by the host binary.
+- Atomic Quadlet and ingress-service generation with an installation target managed by the host binary.
+- Live TCP handoff, bounded UDP relay, effective withdrawal and automatic ingress/edge recovery tests; no firewall mutation.
 - Identity, readiness, lingering, partial-failure, and clean Ubuntu 26.04 bootstrap tests.
 - Private Unix sockets and SSH administration.
 - Socket recreation, startup-order, ownership, mode, mount, and SELinux tests.
