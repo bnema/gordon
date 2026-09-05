@@ -60,6 +60,8 @@ cover shared system listeners and host-level policy, not a duplicate catalogue
 of app ports. The precise representation of public-to-local address translation
 and its participation in listener-conflict validation must be settled before
 implementation; do not assume public 443 and local 8443 are the same reservation.
+That representation must derive or express the translation without introducing
+an installation-level catalogue of ports for each app.
 
 ### Separate listener acquisition from application routing
 
@@ -96,18 +98,33 @@ and either process crashing mid-transfer without leaking listeners or declaring
 an uninstalled generation active. Native startup activation is not a substitute
 for this live handoff protocol.
 
+Before accepting a descriptor, validate that it is a TCP stream socket in
+`LISTEN` state, with the authorized address family and local bind address/port
+for that operation and generation. Reject other socket types, connected sockets,
+wrong families/addresses and unexpected descriptors. Successful handoff is not
+proof that a host TCP descriptor is safe: negative tests must characterize and
+constrain the host-network operations a compromised edge can perform through
+it, including attempts to repurpose it for outbound connections. If the retained
+authority violates containment, the handoff design remains blocked.
+
 ### UDP: retain the host socket and constrain replies
 
-Ingress retains each UDP socket. It forwards payload and kernel-observed client
-address to edge via the private data channel. Edge uses that authenticated
+Ingress retains each UDP socket. It records the kernel-observed client and local
+destination addresses for each datagram, including address family and IPv6 scope
+or receiving interface where needed. It forwards payload and this identity to
+edge via the private data channel. Edge uses that authenticated
 metadata for `trusted_cidrs`, then routes to the backend. This is not a claim
 that edge observes the original client through a local `ReadFrom` call.
 
 Ingress may send responses only to the original client associated with a live,
 ingress-owned session. Edge must not choose an arbitrary host-network destination
 or create a session without an incoming datagram. Session identifiers must be
-bound to the listener generation, peer and lifetime; stale or unknown identifiers
-must fail closed. Sender-controlled payload fields are never peer identity.
+bound to the listener generation, peer, observed local destination and lifetime;
+stale or unknown identifiers must fail closed. Ingress selects the reply's local
+source address/interface from that kernel-derived tuple, not from edge input.
+Wildcard binds must retain the actual destination address rather than treating
+all local addresses as interchangeable. Test multi-address IPv4/IPv6 and scoped
+interfaces. Sender-controlled payload fields are never peer or local identity.
 
 Production UDP requires binary-transparent, bidirectional sessions, including
 multiple and unsolicited backend responses within a valid session. Bound frame
@@ -126,6 +143,16 @@ removal requires edge withdrawal acknowledgement and ingress confirmation that
 host ownership/session state has been released as appropriate. Historical
 releases do not retain bindings; rollback reacquires and validates them. No
 restart or recovery may bind a merely pending AppSpec or revive a stopped app.
+
+TCP withdrawal acknowledgements describe cooperative operation only. Once ingress
+has closed its copy, it cannot revoke edge's descriptor or certify that edge
+closed every copy merely by receiving an ACK. Timeout, refusal or uncertain
+closure fails the operation and retains the reservation. Non-cooperative recovery
+requires stopping the descriptor-holding processes through the existing,
+operator-controlled installation lifecycle and verifying release before
+reassignment; an edge restart must not restore the withdrawn listener. This does
+not authorize runtime or ingress to restart edge during workload reconciliation.
+Tests must cover retained/duplicated descriptors and failed withdrawal.
 
 Recovery must reconcile authorized applied state with observed ingress and edge
 state, not trust edge to request arbitrary new binds. Minimal persisted listener
@@ -162,15 +189,26 @@ passthrough and the separate certificate-impersonation gate remain unchanged.
 
 ## Evidence and remaining gates
 
-Bounded disposable-VM experiments demonstrated live TCP/UDP changes, original
-TCP peer delivery, UDP peer metadata, TCP continuity after ingress termination,
-listener release on edge termination and explicit replay. Keeping UDP on the
-host prevented the tested edge-to-host-loopback send: a forged reply destination
-was ignored while the real client received the response.
+Two bounded disposable-VM prototypes supplied different evidence:
+
+- The initial TCP-and-UDP descriptor-transfer prototype demonstrated live changes,
+  TCP/UDP source delivery, traffic continuity after ingress termination, listener
+  release after edge termination and explicit replay. Its UDP handoff was rejected
+  because it granted edge host-loopback send authority.
+- The selected-direction prototype kept UDP on the host and transferred only TCP.
+  It demonstrated live changes, UDP peer metadata, TCP continuity but UDP loss
+  after ingress termination, and manual UDP resumption. A forged UDP reply
+  destination was ignored while the real client received the response. Edge
+  termination/recovery with this revised UDP relay was not tested.
+
+Neither prototype demonstrated automatic durable recovery or complete TCP
+capability confinement. The UDP tests were textual request/response exchanges,
+not general bidirectional sessions.
 
 These results support the direction, not production readiness. Alpha 1 remains
-blocked on confined host-role execution, capability permissions, descriptor
-validation, dynamic activation/withdrawal, interrupted-transfer recovery,
+blocked on confined host-role execution, capability permissions, TCP descriptor
+validation and negative authority tests, non-cooperative withdrawal, UDP local
+address/session identity, interrupted-transfer recovery,
 automatic restart/reboot behavior, IPv4/IPv6 and address conflicts, firewall
 coexistence, full-path CIDR allow/deny, and private runtime-to-registry access.
 General UDP sessions, binary fidelity, limits and performance must be proven

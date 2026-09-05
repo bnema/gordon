@@ -266,7 +266,12 @@ Rejected. It would force obsolete ownership and command models into the new arch
 
 ## Validation requirements
 
-The decision is considered implemented only when automated tests prove:
+The decision is considered implemented only when the automated tests below
+**and all validation gates in [ADR-002](adr-002-host-ingress.md#evidence-and-remaining-gates)**
+pass. The original four-container checklist is not sufficient on its own:
+validation also covers the host ingress service's confinement, distribution
+identity/readiness, TCP descriptor authority and non-cooperative withdrawal,
+UDP peer/local-destination identity, and automatic failure/restart recovery.
 
 1. Edge and registry cannot see the Podman socket or application-secret storage.
 2. Control cannot retrieve persisted secret values through its runtime API.
