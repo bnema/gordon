@@ -4,7 +4,7 @@ A small Go wrapper around **libvirt + cloud-init + SSH**. It creates an Ubuntu 2
 
 Gordon v3 is not implemented yet. The example apps below run directly with rootless Podman; their success is **not** evidence that Gordon's edge, installer, routes, or security policy works.
 
-The selected ingress direction is documented in [ADR-002](../../docs/v3/adr-002-host-ingress.md): four rootless containers plus a confined host role, with live TCP socket handoff and bounded UDP relay. This wrapper does not install those roles. Host confinement, recovery and general UDP-session behavior remain proof gates; see the [consolidated design](../../docs/v3/design.md).
+The selected ingress direction is documented in [ADR-002](../../docs/v3/adr-002-host-ingress.md): four rootless containers plus a confined host role, with transport-only TCP/UDP relay and no host-network descriptors passed to edge. This wrapper does not install those roles. Host confinement, relay correctness and listener/route recovery remain proof gates; UDP sessions are disposable, not migrated or restored across restart; see the [consolidated design](../../docs/v3/design.md).
 
 ## Ubuntu dependency caveat: socket-activation experiments
 
@@ -32,8 +32,8 @@ original binary and restore it after stopping the experimental containers and
 networks; do not replace packages on a production host using this procedure.
 
 The sandbox does not apply this workaround automatically. The direct-Podman
-examples below do not use socket activation. ADR-002 uses live TCP handoff rather
-than startup socket activation, so this experimental workaround is not an
+examples below do not use socket activation. ADR-002 retains host sockets in
+ingress for TCP/UDP relay rather than startup activation, so this workaround is not an
 established prerequisite for the selected design. A fixed DNS helper alone does
 not satisfy the remaining Alpha 1 security/lifecycle requirements.
 
