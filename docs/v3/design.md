@@ -490,6 +490,12 @@ docker.io/library/postgres@sha256:...
 
 If an image cannot be resolved, deployment fails before activating a new release. The stored manifest remains valid and unchanged.
 
+### Image labels
+
+Gordon v3 does not interpret image labels. They provide no configuration defaults or overrides and cannot trigger routing, probes, environment imports, or deployment behavior. Legacy v2 `gordon.*` image labels are ignored without compatibility handling or label-specific warnings. Alpha does not use `org.opencontainers.image.*` labels for display or release metadata.
+
+Resource-management labels are written and controlled exclusively by Gordon. Labels inherited from an image must not establish or override resource ownership, app/service/release identity, or component role, nor influence reconciliation or garbage collection. Ignoring image labels does not require removing unrelated labels from the image or container.
+
 ## Apply, releases, and deployment
 
 ### Apply
