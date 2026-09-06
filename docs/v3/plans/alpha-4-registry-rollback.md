@@ -45,7 +45,7 @@ Proposed work belongs in the established registry/control/edge compositions, con
   - For `--deploy`, use the same eligibility rules as service-targeted deploy. Zero/multiple active targets require explicit `--app` and `--service`; target selection cannot bypass policy. A successful image push followed by refused deployment reports both outcomes clearly.
   - Implement `images list` and JSON inspection with verified image/digest data, not OCI label metadata. Do not add prune, retention deletion or an implicit tag rollback path.
   - Test explicit/ambiguous targets, auth failure, canceled build/upload, successful push with deploy refusal, stopped apps, external/Gordon reference canonicalization and pending desired/effective divergence.
-  - Update CI push examples to call the actual v3 command/API; remove old route-based workflow guidance for v3. No credentials in logs or command output.
+  - Update CI examples to call `gordon push <image> [--build] [--deploy]`; deployment administration uses the private control socket via SSH, never a public control API. Remove old route-based guidance. No credentials in logs or command output.
   - Done: C2–C6/C10, C8 real standard-client and CLI push/deploy, plus C1 for CLI/CI docs.
 
 - [ ] **A4.5 — Immutable full and service rollback** — depends on: A4.1, A4.3–4; Alpha 3 composition/data safety.

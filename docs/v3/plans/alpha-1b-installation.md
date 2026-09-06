@@ -6,7 +6,7 @@ Five-role/relay/ingress-service tasks below are the conditional fallback only. O
 
 ## Context and scope
 
-Use the [shared baseline and checks](README.md) and [Alpha 1A outputs](alpha-1a-foundation-proofs.md). Outcome: clean Ubuntu 26.04 installation of one coherent distribution, five supervised roles, private administration, validated isolation and same-generation interrupted-install recovery. No app deployment or component update.
+Use the [shared baseline and checks](README.md) and [Alpha 1A outputs](alpha-1a-foundation-proofs.md). Outcome: clean Ubuntu 26.04 installation of one coherent distribution, the selected four-role native or five-role fallback topology, private administration, validated isolation and same-generation interrupted-install recovery. No app deployment or component update.
 
 Existing anchors: `main.go`, `internal/adapters/in/cli/{root,serve,controlplane_local,controlplane_resolver}.go`, `internal/app/{run,kernel}.go`, `Dockerfile`, `install.sh`, `.goreleaser.yaml`, `.github/workflows/ci.yml`, `pkg/version/`.
 
@@ -45,7 +45,7 @@ Proposed new work locations, created only as needed: `internal/app/roles/`, `int
   - Generate four independent hardened Quadlets, confined ingress user service and installation target. Record generation/checksums; detect unknown edits before overwrite and preserve backups in explicit recovery. Systemd supervises continuously; ingress and runtime do not become component supervisors.
   - Fault-inject before/after each persistent record, file replacement and external effect. Test duplicate install requests, disk/write failures, permission failures, port conflicts, missing image, image/hash mismatch and restart after partial unit generation.
   - Refuse replacing a complete different generation and adopting unknown resources. Same-generation incomplete installation observes existing resources and resumes without duplicate networks/volumes or data loss. Unknown/incompatible persistent formats fail closed.
-  - Done: C2–C6/C10 plus C8 clean branch/commit/local installation and interrupted same-generation resume. Complete success requires all five roles ready with the expected identity.
+  - Done: C2–C6/C10 plus C8 clean branch/commit/local installation and interrupted same-generation resume. Complete success requires all selected roles ready with the expected identity: four after native success, five only with host ingress.
 
 - [ ] **A1B.5 — Private administration, network authority and useful status** — depends on: A1B.2, A1B.4.
   - Implement local CLI → control admin Unix socket and remote CLI → OpenSSH Unix-socket forwarding → the same endpoint. Replace v2 remote bearer/TCP and local service construction; do not implement public control HTTPS during alpha.
@@ -57,7 +57,7 @@ Proposed new work locations, created only as needed: `internal/app/roles/`, `int
 
 - [ ] **A1B.6 — Clean-host, reboot and failure release gate** — depends on: A1B.1–5.
   - Extend the A1A harness with full installer scenarios and document exact invocations in `dev/v3/README.md`. Test all source selectors on separate clean installs; retain identity/proof reports.
-  - Reboot without login; verify lingering/target ordering starts five roles with valid sockets and identity. Restart each role separately; recreate its sockets. Kill installer mid-effect and resume the same generation. Inject edited Quadlets, damaged state and mismatched executable/image identities; report incomplete/degraded, never healthy.
+  - Reboot without login; verify lingering/target ordering starts all selected roles (four native, five fallback) with valid sockets and identity. Restart each role separately; recreate its sockets. Kill installer mid-effect and resume the same generation. Inject edited Quadlets, damaged state and mismatched executable/image identities; report incomplete/degraded, never healthy.
   - Re-run confinement, TCP/UDP stale-reply/withdrawal, source identity, private pulls and network isolation against generated units. Prove ingress failure interrupts TCP/loss of UDP sessions and does not cause a healthy edge to restart.
   - Extend `.github/workflows/ci.yml` so Go, installer, image, generated-unit fixtures and nested proof changes trigger their relevant checks. VM tests need an explicit capable/authorized runner; hosted unit tests are not the reference-host gate. Keep full lint/test/race checks.
   - Update installation/CLI docs and examples to distinguish implemented Alpha 1 from future apps. Delete remaining v2 reachable paths and direct dependency baggage; do not promise a working public registry or workload command.
@@ -67,7 +67,7 @@ Proposed new work locations, created only as needed: `internal/app/roles/`, `int
 
 Only fresh authorized reference hosts or same-generation incomplete installations are allowed. Preserve unknown unit edits and resources. An interruption resumes its journal after observation; it never blindly deletes/recreates the installation. Do not test a new stage by replacing an existing generation: use a fresh VM until the separate update lifecycle is accepted and implemented.
 
-All five roles share one intended identity. Mixed identities, readiness errors, unresolved ownership or failed confinement are release blockers, not warning-only successes.
+All roles in the selected topology share one intended identity (four native, five only with ingress). Mixed identities, readiness errors, unresolved ownership or failed confinement are release blockers, not warning-only successes.
 
 ## Related
 

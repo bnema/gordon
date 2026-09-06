@@ -58,7 +58,7 @@ New paths named in stage plans are **proposed work locations**, not existing API
 ## Shared constraints
 
 1. Fresh install, one host account/rootless Podman engine, no Docker/rootful runtime, cluster, v2 migration or compatibility layer. Never import the archived `v3-deprecated` system wholesale.
-2. One host executable and one component image containing the exact executable; five roles, four independent containers and confined host ingress. No shared pod, host network/PID/IPC/devices, privilege escalation or extra capabilities. Preserve LSM/seccomp and read-only roots where practical.
+2. One host executable and one component image containing the exact executable; four independent container roles after native success, or five roles only with the confined host-ingress fallback. Readiness covers exactly the selected topology; never build both paths. No shared pod, host network/PID/IPC/devices, privilege escalation or extra capabilities. Preserve LSM/seccomp and read-only roots where practical.
 3. Only runtime receives Podman. Runtime's full-engine authority is an accepted risk, not strong isolation. Only its narrow edge ingress-network reconciliation may mutate a Gordon component resource.
 4. Control owns desired state/listener authorization and bbolt control state; runtime owns actual state and separately encrypted bbolt secrets; edge owns app/public-registry routing/TLS; registry owns OCI/authentication/outbox; conditional ingress owns opaque host transport. No host descriptors reach edge. No internal TCP API, gRPC, protobuf or component bearer-token scheme. Edge traffic/credential compromise is accepted, not direct private-store or administration authority.
 5. App manifest is the configuration source. Apply has no runtime effects; full deploy alone activates pending configuration. Runtime receives pinned digests. Reject `latest`. Image labels have no configuration or display effect; inherited labels grant no management authority.
@@ -78,7 +78,7 @@ The table below separates contract work from proof gates. Storage schemas, DTOs,
 | --- | --- | --- |
 | N0 | A1A.0 | Native networking proof; success removes host ingress and all its dedicated tasks |
 | F1 | A1A.1–2 | Applicable mounts/socket/peer/startup contract; rootless confinement proof only if ingress retained |
-| F2 | A1A.3–5 | TCP/UDP IPC, replay/epoch rules, listener persistence/recovery, public/local mapping, network/source-IP and private-pull proof |
+| F2 | A1A.0, A1A.5; A1A.3–4 only for fallback | Selected publication/listener lifecycle, source identity, network/private pulls; dedicated IPC/relay only if ingress retained |
 | F3 | A1A.6 | Distribution/install configuration, identity and journal contract; exact host command syntax and Podman API subset |
 | W1 | A2.1 | bbolt schema/transactions, operation serialization, reservations, edge snapshots, shutdown/reboot ownership and initial HTTP/TLS contracts |
 | S1 | A3.1 | Shared-network syntax, encrypted bbolt record/key/recovery/injection and volume ownership contracts |
@@ -128,7 +128,7 @@ Installation testing is restricted to explicitly authorized disposable hosts. Pr
 | Accepted outcome | Planned tasks |
 | --- | --- |
 | Native-network retest, applicable ingress isolation/IPC, client policy, private pulls | A1A.0–5; A1B.2, A1B.5–6 |
-| One distribution, source installer, five-role readiness and recovery | A1A.6; A1B.1–6 |
+| One distribution, source installer, selected-role readiness and recovery | A1A.6; A1B.1–6 |
 | V2 command/bootstrap removal, SSH administration, CLI inspection | A1B.1, A1B.5; A2.5; A3.5; A4.4; A5.5 |
 | Apply/deploy, immutable releases, ignored image labels, stopped intent | A2.1–6 |
 | Secrets, volumes, networks, safe multi-service failure | A3.1–6 |
