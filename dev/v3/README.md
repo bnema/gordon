@@ -4,7 +4,7 @@ A small Go wrapper around **libvirt + cloud-init + SSH**. It creates an Ubuntu 2
 
 Gordon v3 is not implemented yet. The example apps below run directly with rootless Podman; their success is **not** evidence that Gordon's edge, installer, routes, or security policy works.
 
-The selected ingress direction is documented in [ADR-002](../../docs/v3/adr-002-host-ingress.md): four rootless containers plus a confined host role, with transport-only TCP/UDP relay and no host-network descriptors passed to edge. This wrapper does not install those roles. Host confinement, relay correctness and listener/route recovery remain proof gates; UDP sessions are disposable, not migrated or restored across restart; see the [consolidated design](../../docs/v3/design.md).
+[ADR-003](../../docs/v3/adr-003-alpha-scope-and-trust.md) requires a [native pasta/Pesto retest](../../docs/v3/plans/alpha-1a-foundation-proofs.md) before implementing ingress. Direct pasta was already tested; native bridge publication/version availability remains unverified. If it passes isolation, identity and lifecycle checks, omit the host role entirely. Otherwise [ADR-002](../../docs/v3/adr-002-host-ingress.md) remains the conditional confined rootless user-service fallback, with no host-network descriptors passed to edge. This wrapper installs neither topology. UDP sessions remain disposable; see the [consolidated design](../../docs/v3/design.md). The privileged libvirt setup below is optional developer-host tooling, not permission for Gordon's installer to perform privileged setup.
 
 ## Ubuntu dependency caveat: socket-activation experiments
 

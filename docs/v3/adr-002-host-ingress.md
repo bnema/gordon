@@ -1,9 +1,17 @@
 # ADR-002: Use a confined, transport-only host ingress for TCP and UDP
 
-- Status: Accepted direction, amended to replace TCP descriptor handoff; implementation and public use remain gated below
+- Status: Conditional fallback under [ADR-003](adr-003-alpha-scope-and-trust.md); native networking must be retested first; implementation and public use remain gated
 - Date: 2026-09-05
 - Amends: [ADR-001](adr-001-v3-foundation.md), for ingress ownership, transport and component lifecycle
 - Related: [V3 design](design.md)
+
+## Amendment — 2026-09-06
+
+[ADR-003](adr-003-alpha-scope-and-trust.md) supersedes the unconditional host-ingress selection: first retest native pasta/Pesto bridge publication on the reference host. On a successful reviewed proof, omit the Gordon ingress role and dedicated relay IPC entirely and update the topology before implementation. The earlier direct-pasta experiments below do not establish whether that native bridge path works.
+
+The relay, confinement and five-role requirements below now apply only if host ingress remains necessary. All Gordon setup must stay rootless/user-managed: no required dedicated system account, system service or privileged installer operation. If the existing containment goals cannot be met within those constraints, public use stays blocked pending an explicit decision; non-root execution is not proof of confinement.
+
+Registry may now terminate public TLS in trusted-but-fallible edge. Statements below requiring independent registry TLS/confidentiality or an edge-impersonation proof are historical and superseded. Valid TLS/authentication, private runtime pulls and direct secret/Podman isolation remain required. The descriptor-handoff failures and UDP interruption/no-session-recovery constraints are unchanged. See the [consolidated design](design.md) and [native retest task](plans/alpha-1a-foundation-proofs.md).
 
 ## Context
 
