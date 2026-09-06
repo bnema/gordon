@@ -1,10 +1,16 @@
 # ADR-001: Rebuild Gordon v3 around isolated local components and declarative apps
 
-- Status: Accepted; amended by [ADR-002](adr-002-host-ingress.md); not yet implemented
+- Status: Accepted as amended by [ADR-002](adr-002-host-ingress.md) and [ADR-003](adr-003-alpha-scope-and-trust.md); not yet implemented
 - Date: 2026-09-04
 - Decision owners: Gordon maintainers
 - Related: [V3 design](./design.md), issue #245, PR #244
 - Supersedes: the implementation archived on branch `v3-deprecated`
+
+## Amendment — 2026-09-06
+
+[ADR-003](adr-003-alpha-scope-and-trust.md) takes precedence over the historical text and validation checklist below. It selects bbolt control state and separately encrypted bbolt runtime secrets; trusts edge for application and registry traffic while preserving direct private-state/administration isolation; makes public registry exposure opt-in; replaces concurrency-safety proof with automatic HTTP-only/no-volume overlap and per-service `stop_timeout` (default `30s`); requires entirely rootless setup and a native pasta retest before any host ingress implementation; and defers native CrowdSec beyond alpha.
+
+The original registry-confidentiality/edge-impersonation requirements (including original validation item 24), concurrency-eligibility requirement (part of item 25), unconditional five-role assumption and privileged lingering setup are superseded. TLS correctness, bounded shutdown/stream cleanup, data-safe recovery and applicable isolation proofs remain required. Ingress is omitted entirely if native networking passes; otherwise its rootless confinement remains unproven, not waived. Read the [consolidated design](design.md) for current requirements; do not reintroduce superseded gates from this record.
 
 ## Amendment — 2026-09-05
 
