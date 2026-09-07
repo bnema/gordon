@@ -2,7 +2,9 @@
 
 Status: planning note; not a cluster specification or an amendment to accepted ADRs
 
-Date: 2026-09-05
+Date: 2026-09-05; alpha-context update: 2026-09-06
+
+[ADR-003](adr-003-alpha-scope-and-trust.md) updates the alpha baseline: edge is trusted for application/registry traffic, native pasta is tested before committing to host ingress, and web overlap requires no concurrency declaration. References below to host ingress apply only to the conditional fallback. Future cluster concurrency/fencing questions remain future decisions; they are not a reason to restore the removed alpha eligibility gate. No cluster scope is added.
 
 ## Purpose and scope
 
