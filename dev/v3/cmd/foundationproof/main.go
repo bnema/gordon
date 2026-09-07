@@ -21,7 +21,8 @@ const usage = `usage:
   foundationproof setup-canaries <dir>
   foundationproof positive-controls <dir>
   foundationproof run-scenario --dir <dir> --bind <ip> --expect <open|confined>
-  foundationproof report --dir <dir>`
+  foundationproof report --dir <dir>
+  foundationproof probe-read <path>`
 
 type checkResult struct {
 	Check    string `json:"check"`
@@ -63,6 +64,11 @@ func run(args []string) error {
 			return errors.New(usage)
 		}
 		return report(args[2])
+	case "probe-read":
+		if len(args) != 2 {
+			return errors.New(usage)
+		}
+		return probeRead(args[1])
 	default:
 		return errors.New(usage)
 	}
@@ -299,6 +305,16 @@ func scenario(dir, bind string) []checkResult {
 	r.Pass = true
 	out = append(out, r)
 	return out
+}
+
+func probeRead(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Println("denied: " + err.Error())
+		return nil
+	}
+	fmt.Printf("allowed: %d bytes\n", len(data))
+	return nil
 }
 
 func report(dir string) error {

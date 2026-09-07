@@ -95,3 +95,16 @@ func TestVersionsRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestProbeRead(t *testing.T) {
+	dir := setup(t)
+	if err := run([]string{"probe-read", dir + "/secrets/app-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"probe-read", dir + "/does-not-exist"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"probe-read"}); err == nil {
+		t.Fatal("expected error without path")
+	}
+}

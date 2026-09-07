@@ -1,6 +1,6 @@
 # A1A.1 — Proof harness and confinement decision
 
-Status: in progress (runbook prepared; no guest execution yet)
+Status: in progress (harness landed; guest baseline + first profiles executed)
 Date: 2026-09-07
 Task: [alpha-1a-foundation-proofs.md](../plans/alpha-1a-foundation-proofs.md) A1A.1
 Gate: proven confinement unblocks ingress transport work (A1A.2–4); failure blocks public use.
@@ -60,7 +60,52 @@ not turn the sandbox into an installer or supervisor:
 - scenarios run a test-only probe binary as the ingress context under the
   candidate unit profile — never a production ingress implementation.
 
-## Procedure
+## Execution record (2026-09-07)
+
+Guest: Ubuntu 26.04 LTS, kernel `7.0.0-30-generic`, podman `5.7.0`,
+systemd `259`, uid/gid `1000`, LSM
+`lockdown,capability,landlock,yama,apparmor,ima,evm`.
+`apparmor_restrict_unprivileged_userns = 1`.
+
+Harness (`dev/v3/cmd/foundationproof`, committed) ran in the guest:
+
+- `versions` reports the above as JSON.
+- `setup-canaries /tmp/foundationproof-a1a1` + `positive-controls`: pass.
+- `run-scenario --bind 198.18.77.2 --expect open`: **11/11 pass** — binds
+  (TCP+UDP), IPC read/write, and all canary reads allowed, as expected
+  without confinement.
+- `probe-read` subcommand added for real-path checks: open context reads
+  `/home/gordon/.bashrc` (allowed, 3771 bytes); the Podman socket path does
+  not exist while no engine service runs (informational).
+
+### Profile H1: unit filesystem sandboxing silently absent (FAIL)
+
+`systemd-run --user` with `NoNewPrivileges=yes ProtectSystem=strict
+ProtectHome=yes` (transient and persistent unit): the unit starts, journal
+shows no error, `NoNewPrivs=1` holds — but `/home` has no overmount,
+`ls /home/gordon` works, and `touch /etc/should-fail` succeeds under
+`ProtectSystem=strict`. Settings are accepted (`systemctl show` confirms)
+but mount namespacing never happens.
+
+Root cause (kernel audit, sanitized): `systemd-executor` creates a userns
+and transitions to the `unprivileged_userns` AppArmor profile, where
+`capable sys_admin` is **DENIED** — so mount setup cannot proceed, yet the
+unit runs unconfined without any error. `PrivateUsers=yes` is skipped the
+same way (`uid_map` stays identity `1000 1000 1`). Pure unit filesystem
+confinement therefore **cannot meet F1–F7 on the reference guest**.
+
+### Seccomp and NNP are enforced
+
+- `NoNewPrivileges=yes`: holds (`NoNewPrivs: 1` in `/proc/PID/status`).
+- `SystemCallFilter=@system-service` + `~socket`: the scenario process dies
+  with `status=31/SYS` (SIGSYS) on its first bind — seccomp applies to user
+  units. Seccomp restricts calls, not file paths, so it cannot cover F1–F7
+  alone.
+
+Remaining candidate: unprivileged Landlock (present in the active LSM list;
+needs no namespace or capability). Not yet tested.
+
+## Remaining procedure
 
 ```sh
 ./dev/v3/sandbox sync
@@ -80,12 +125,14 @@ unit profile, UID mapping, allowed resources and every allow/deny result below.
 
 | Check | Result | Evidence |
 | --- | --- | --- |
-| versions/account/UID mapping recorded | NOT RUN | — |
-| canaries + positive controls | NOT RUN | — |
-| allowed binds/IPC usable per profile | NOT RUN | — |
-| forbidden reads/writes/process/socket denial | NOT RUN | — |
-| traversal/unauthorized-socket denial | NOT RUN | — |
-| restart + reboot confinement retest | NOT RUN | — |
+| versions/account/UID mapping recorded | PASS | Ubuntu 26.04, kernel 7.0.0-30, podman 5.7.0, systemd 259, uid 1000, LSM incl. apparmor+landlock |
+| canaries + positive controls | PASS | setup-canaries + positive-controls pass in guest |
+| allowed binds/IPC usable (open) | PASS | 11/11 scenario checks pass unconstrained (TCP+UDP bind on 198.18.77.2, IPC rw) |
+| unit filesystem sandboxing (H1) | FAIL | ProtectHome/ProtectSystem/PrivateUsers accepted but silently unapplied; AppArmor denies sys_admin to systemd-executor userns |
+| NNP + seccomp enforcement | PASS | NoNewPrivs=1 holds; ~socket filter kills with SIGSYS |
+| forbidden denial under confinement | NOT RUN | needs Landlock candidate (next) |
+| traversal/unauthorized-socket denial | NOT RUN | same |
+| restart + reboot confinement retest | NOT RUN | only meaningful once a passing profile exists |
 
 ## Decision
 
