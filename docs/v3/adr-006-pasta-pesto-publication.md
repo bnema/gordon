@@ -67,6 +67,14 @@ This ADR supersedes ADR-004's prohibition on the pasta/Pesto path, rootlessport/
 
 All other boundaries remain: rootless only, no shared pod, no host network/PID/IPC, no firewall/sysctl mutation, no privileged Gordon setup, Podman only in runtime, private stores, write-only secrets, digest-pinned images, app-private networks and no component update/migration scope. The socket proposal in ADR-005 must be extended and reviewed for Pesto before acceptance.
 
+## Reference-host AppArmor boundary
+
+The maintainer accepts proceeding on Ubuntu 26.04 without a per-container AppArmor profile on the selected rootless stack. Podman 6.1.1's vendored `common/pkg/apparmor/internal/supported` explicitly rejects rootless mode; its profile selection also rejects a requested profile in rootless mode. Compiling with the `apparmor` build tag does not remove this limitation. See [the upstream discussion](https://github.com/containers/common/issues/958).
+
+Keep host AppArmor enabled and preserve applicable host policies. Do not patch out Podman's checks, switch to rootful execution, or disable an LSM to pass a proof. Container acceptance instead requires observed user-namespace isolation, dropped capabilities, no-new-privileges, seccomp, read-only roots, least-authority mounts, network separation and resource bounds, including negative authority tests. These layers are not equivalent to a restrictive AppArmor profile; the missing container policy is an accepted defense-in-depth limitation, not a passed LSM proof.
+
+This exception supersedes requirements for active per-container AppArmor on the Ubuntu reference stack in ADR-005 and the foundation plans. It does not relax SELinux on other supported hosts or close any other F1/F2 gate. Reconsider per-container AppArmor when upstream supports the required rootless path, with fresh positive and negative enforcement tests; no compatibility scaffolding is required now.
+
 ## Proof gates and critical questions
 
 - Prove runtime-container access to the narrowly mounted Pesto capability and denial from edge/apps; quantify its authority over the shared rootless engine.
@@ -74,7 +82,7 @@ All other boundaries remain: rootless only, no shared pod, no host network/PID/I
 - Test stale destination IPs, address reuse by unrelated workloads, overlapping/dual-stack conflicts, failed mutations, lost responses, restart/reboot and stopped-intent recovery.
 - Test actual established TCP and UDP behavior on deletion, bounded cleanup, UDP epochs, binary fidelity, multiple/unsolicited replies, saturation and backpressure.
 - Verify HTTP header spoof/bypass rejection separately from direct source preservation.
-- Resolve reference-host container LSM enforcement: the experiment observed zero effective capabilities, NNP and seccomp, but not an AppArmor-confined container.
+- Verify the reference-host protections and negative authority tests described above; report host AppArmor state separately from the accepted absence of a per-container AppArmor profile.
 - Measure performance and private registry pulls; run the full four-role and installer acceptance suite before declaring Alpha 1 ready.
 
 The stack selection is accepted. These outstanding contracts/proofs govern safe implementation; they do not restore an abandoned fallback or authorize declaring the experimental stack production-ready.

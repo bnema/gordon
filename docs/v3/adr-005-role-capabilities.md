@@ -30,7 +30,7 @@ Define `D = $XDG_DATA_HOME/gordon` (default `~/.local/share/gordon`) and `R = $X
 
 Every capability directory contains exactly `api.sock`; the Podman directory retains its native socket name. Read-only consumer mounts prevent socket replacement/unlink, not connecting and sending authorized requests. Socket connect permission is checked separately by Linux; prove it with real mounts.
 
-Only the exact directories above are mounted, never their common parents, the host home, host root, user systemd bus or unit directory. All roles use read-only roots, dropped capabilities, no-new-privileges, default seccomp and active LSM confinement. Writable temporary files use bounded tmpfs. Network attachment and resource bounds belong to F2/F3; this matrix does not imply broad network access is safe.
+Only the exact directories above are mounted, never their common parents, the host home, host root, user systemd bus or unit directory. All roles use read-only roots, dropped capabilities, no-new-privileges and default seccomp. Preserve applicable LSM policies; [ADR-006](adr-006-pasta-pesto-publication.md#reference-host-apparmor-boundary) accepts the absence of per-container AppArmor on the Ubuntu rootless reference stack, not the disabling of host AppArmor. Writable temporary files use bounded tmpfs. Network attachment and resource bounds belong to F2/F3; this matrix does not imply broad network access is safe.
 
 ## Candidate UID and permissions
 
@@ -75,6 +75,6 @@ A consumer may start before its producer and report dependency-unavailable witho
 | Reboot with absent runtime directories | Owned directories recreated before bind; no broad host mount |
 | Malformed/duplicate/unknown/oversized JSON, slow headers | Bounded rejection without effects or leaked payload |
 | Cancelled/disconnected stream and saturation | Bounded goroutines/memory and prompt resource cleanup |
-| Active LSM, userns, seccomp, NNP and read-only root | Protections observed in running containers, not inferred from flags |
+| Userns, dropped capabilities, seccomp, NNP, read-only root and applicable LSM policies | Protections observed in running containers, not inferred from flags; report the accepted Ubuntu per-container AppArmor exception separately |
 
 Candidate validation must run on the authorized Ubuntu reference VM and use synthetic data. No production APIs or installer paths are implemented until the corresponding decision is accepted and proof evidence is reviewed.
