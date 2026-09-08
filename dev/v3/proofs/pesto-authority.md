@@ -47,11 +47,22 @@ A follow-up used separate, non-overlapping synthetic edge (`10.92.0.0/24`) and a
 
 This supports fixed edge destination feasibility under the manually enforced network assignment. It does not prove a durable allocator or prevent a Podman-authorized caller from placing an unrelated container on the edge network. Gordon must enforce exclusive edge network/address ownership, reject overlapping allocations and validate recovery before opening listeners. The surviving rule automatically reaches a replacement as soon as it listens; application readiness/authorization is not provided by Pesto. Established-flow cleanup and UDP remain separate gates. Both networks and all follow-up containers were removed by exact names.
 
+## Network-attached runtime and restart experiment
+
+Two restricted Ubuntu fixtures represented edge and runtime on a dedicated bridge. Runtime used keep-id UID/GID 1000 and the same read-only capability/toolchain mounts; it was attached to the bridge rather than network-none.
+
+- Removing edge while runtime remained attached preserved working Pesto access. Runtime's own network attachment kept the native context alive; no extra keeper container was added.
+- Killing the exact native pasta PID caused runtime's Pesto connection to fail with connection refused. Creating a new edge fixture made Podman report the dead helper and restart it. The existing runtime mount then reached the new socket, with empty forwarding tables. This is recovery triggered by a Podman operation, not demonstrated autonomous supervision.
+- Stopping both fixtures, starting edge first and then runtime restored access through runtime's remounted directory.
+- After an actual VM reboot, the first attempted Podman start failed with `failed to reexec: Permission denied`. A subsequent diagnostic invocation and ordered edge/runtime start succeeded without configuration or protection changes. The cause of the initial failure remains unresolved. Bundle binaries were reused without compilation; Pesto was reachable with empty tables after manual startup.
+
+These results support context retention by a legitimate network-attached runtime and ordered remounting, but do not validate an automatic Quadlet recovery path. No forwarding rules were present in this lifecycle experiment; authorized-rule replay was not tested. Fixtures and the dedicated bridge were removed after the test. The native-directory inventory concern remains unchanged.
+
 ## Consequences and remaining work
 
 Runtime remains the sole intended Pesto capability holder. The naive native-directory mount fails both least-mount and stable-recreation assumptions. Rule deletion is not established-flow termination. These failures block accepting this candidate, not the selected Podman/pasta stack.
 
-Unverified: UDP established associations/late replies, native command authorization internals, alternate host addresses and wildcard conflicts, live socket replacement distinct from directory replacement, abrupt pasta death, full reboot and durable recovery. No UDP or general recovery guarantee follows from these tests. Resolve the lifecycle and destination-identity contract before production integration; do not add broad mounts, host executors or disable protections to pass.
+Unverified: UDP established associations/late replies, native command authorization internals, alternate host addresses and wildcard conflicts, independent socket replacement, autonomous pasta-death/reboot recovery and durable mapping recovery. No UDP or general recovery guarantee follows from these tests. Resolve the lifecycle and destination-identity contract before production integration; do not add broad mounts, host executors or disable protections to pass.
 
 ## Cleanup
 
