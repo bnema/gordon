@@ -59,6 +59,9 @@ var (
 	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
+	// App manifest errors
+	ErrInvalidAppSpec = errors.New("invalid app manifest")
+
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")
 	ErrSecretNotFound              = errors.New("secret not found")
