@@ -2,7 +2,7 @@
 
 Status: draft for maintainer acceptance. Freezes the app TOML schema.
 Parser: `pelletier/go-toml/v2` (`v2.4.3`, already in `go.mod`) with
-`Decoder.DisallowUnknownFields()` — verified present in the vendored
+`Decoder.DisallowUnknownFields()` — verified present in the module-cache
 source. No Viper defaults for app schema. No `env_file` support.
 
 ## 1. File identity
@@ -25,10 +25,6 @@ KEY = "value"
 ...
 
 [[network.shared]]              # optional, 0..n shared memberships (§6)
-...
-
-[backup.postgres]               # optional, 0..n named declarations (§7)
-[backup.volume]
 ...
 ```
 
@@ -57,12 +53,22 @@ form removes duplicate-item and merge-order ambiguity.)
   disambiguates: app names never contain `--` — validation rejects
   them — so `gordon-a-b--c` parses unambiguously) carried as labels
   `gordon.app` + `gordon.app.service`, PLUS an instance suffix for
-  the runtime NAME: `gordon-<app>--<service>--<short-op>` where
-  `<short-op>` is the first 8 chars of the creating op ULID
-  (initial deploy: `init`). retiring containers keep their instance
-  names until removal; queries by logical identity use LABELS, never
-  name parsing. Generated volume runtime names follow the same
-  scheme: `gordon-<app>--<service>--vol-<name>`.
+  the runtime NAME: `gordon-<app>--<service>--<instance>` where
+  `<instance>` is the FULL creating op ULID (26 chars, Crockford
+  base32, timestamp + 80-bit randomness — review fix: the previous
+  8-char prefix carried timestamp bits only and collided within the
+  same ~1s bucket). Retries of the same op REUSE its ULID (same
+  instance name, idempotent recreate); a new op (including retry-as-new
+  after partial failure) allocates a new ULID, hence a new instance
+  name. Retiring containers keep their instance names until removal;
+  queries by logical identity use LABELS, never name parsing.
+  Generated volume runtime names: `gordon-<app>--<service>--vol--<name>`
+  (DOUBLE dash before `<name>`, and `--` FORBIDDEN inside volume names
+  by validation — review fix: single-dash encoding was ambiguous across
+  valid service/volume pairs, e.g. `(a, b--vol-c)` vs `(a--vol-b, c)`).
+  Service names keep allowing `--` (only APP names forbid it); the
+  volume-name `--` ban + double-dash separators make every generated
+  name unambiguous WITHOUT rejecting otherwise-valid service names.
 - Pass secret identity for service `S` of app `A`: the manifest maps
   ENV var name → service-LOCAL secret name
   (`DB_PASSWORD = "db-password"`); the stored pass path is
@@ -80,9 +86,19 @@ form removes duplicate-item and merge-order ambiguity.)
 ## 4. `[env]` — app-wide public environment
 
 - Flat `KEY = "value"` string map, injected into every service.
-- Collision with any service secret name (§5.4) is a hard error.
-- Values MUST be non-empty strings ≤ 64 KiB; no multi-line values
-  (TOML basic strings only, no `"""` literals).
+- Collision (review fix): each `[env]` KEY MUST be disjoint from the
+  KEYS of every `[service.secrets]` map in the app — comparing
+  against secret NAMES (values) was wrong: `[env] DB_PASSWORD` +
+  `[service.secrets] DB_PASSWORD = "db-password"` injects the same
+  var twice with no precedence rule. What is rejected is KEY overlap;
+  a public key that merely resembles a secret's local name is fine.
+- Multi-line values are rejected as a constraint on DECODED values
+  (newline in value = error), not on TOML literal syntax — review
+  fix: `DisallowUnknownFields` + typed structs enforce shape;
+  semantic validation enforces the rest. Strict decoding is NOT
+  `DisallowUnknownFields` alone: required fields, reference
+  resolution, name collisions, and type-specific readiness
+  constraints are explicit semantic checks (frozen here).
 - Any value matching the existing secret-reference pattern
   (`${pass:…}` / `${sops:…}`, cf. `domain.ContainsSecretReference`)
   is rejected: secrets MUST be declared as secret names, never inlined.
@@ -222,7 +238,9 @@ Separate types and names at the owning boundary.
 
 ### 5.5 Volumes
 
-- Named volumes only: `name` (same charset as service names) +
+- Named volumes only: `name` (service-name charset §3, PLUS `--`
+  forbidden by validation so generated runtime names stay unambiguous
+  — see §3 runtime identity) +
   container `path` (absolute, no `..`, no host-bind syntax).
 - No bind mounts. No service-shared volumes: a volume `name` MUST be
   claimed by at most one service in the app. Sharing across apps goes
@@ -395,7 +413,7 @@ name = "rust-data"
 path = "/data"
 ```
 
-### 8.4 Shared database
+### 8.4 Shared network membership (+ local database)
 
 ```toml
 name = "shop"
@@ -409,6 +427,11 @@ host = "shop.example.com"
 port = 8080
 tls = "auto"
 
+[[service.database]]
+name = "main"
+type = "postgres"
+schedule = "daily"
+
 [service.backup]
 postgres = ["main"]
 
@@ -417,6 +440,12 @@ network = "shop-cache"
 services = ["api"]
 aliases = ["cache"]
 ```
+
+> REVIEW FIX: the previous version referenced `postgres = ["main"]`
+> with NO `[[service.database]]` declaration — an explicitly forbidden
+> unresolved reference (§7). The database is declared on the OWNING
+> service (`api`); shared-network membership does NOT resolve
+> per-service database references and does not share backups.
 
 ## Decision required (D6 — maintainer acceptance)
 
