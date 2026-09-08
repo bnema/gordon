@@ -1,6 +1,6 @@
 # Alpha 5: multi-protocol routes and complete app lifecycle
 
-Status: planned; entry requires Alpha 4 complete and L1 ordering/deadline/recovery contracts. ADR-003 already selects automatic HTTP-only/no-volume overlap without a concurrency declaration or safety classifier. Ingress-specific transport tasks are conditional on N0; native success removes dedicated relay IPC, not the applicable isolation/recovery objectives.
+Status: planned; entry requires Alpha 4 complete and L1 ordering/deadline/recovery contracts. ADR-003 already selects automatic HTTP-only/no-volume overlap without a concurrency declaration or safety classifier. ADR-004 fixes merged-edge publication; no relay IPC is built, only the applicable isolation/recovery objectives.
 
 ## Context and scope
 

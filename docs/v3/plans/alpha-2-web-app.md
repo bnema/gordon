@@ -2,7 +2,7 @@
 
 Status: planned; entry requires complete Alpha 1 and W1 contracts before workload implementation.
 
-ADR-003 selects bbolt, default 30s per-service shutdown and the trusted-edge model. Ingress references below apply only to the fallback; if N0 selects native networking, use its accepted publication/withdrawal readiness contract instead, without implementing relay IPC.
+ADR-003 selects bbolt, default 30s per-service shutdown and the trusted-edge model. ADR-004 selects the merged edge container with runtime-owned publication; edge publication/withdrawal readiness follows its contracts, without relay IPC.
 
 ## Context and scope
 

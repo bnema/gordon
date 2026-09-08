@@ -21,9 +21,9 @@ Read [design](../design.md), [ADR-001](../adr-001-v3-foundation.md), [ADR-002](.
 
 Alpha 1A experiments are not a shipped alpha and must not claim installer readiness. Every shipped milestone must install on a clean reference host. Public UDP app routes arrive in Alpha 5; transport-level UDP correctness is proven and integrated in Alpha 1, not deferred to the first game deployment.
 
-## Native-network checkpoint before ingress
+## Topology checkpoint (resolved by ADR-004)
 
-Maintainer direction, 2026-09-06: **run A1A.0 in the [foundation proof plan](alpha-1a-foundation-proofs.md) before implementing host ingress**. Retest pasta, distinguishing previously tested direct networking from native pasta/Pesto publication on named rootless bridges. If the reference-host proof meets the required behavior and isolation, skip the Gordon ingress role completely: amend the ADRs and remove its tasks from all stages, rather than shipping both paths. Five-role descriptions below remain the existing baseline, not an instruction to implement ingress before this checkpoint. Native functionality and acceptable port-change interruption have not yet been established.
+A1A.0 proved packaged-stack native publication NAT-rewrites source and has no pasta forwarder/Pesto; the maintainer abandoned the native path. A1A.1 proved no same-account host-process confinement mechanism works. [ADR-004](../adr-004-merged-edge.md) therefore replaces the host ingress role with a merged edge container and runtime-owned publication: four containers, no host ingress process, no relay IPC. Do not revive the native path, the host relay, or any parallel path.
 
 ## Baseline and handoff
 
@@ -58,27 +58,27 @@ New paths named in stage plans are **proposed work locations**, not existing API
 ## Shared constraints
 
 1. Fresh install, one host account/rootless Podman engine, no Docker/rootful runtime, cluster, v2 migration or compatibility layer. Never import the archived `v3-deprecated` system wholesale.
-2. One host executable and one component image containing the exact executable; four independent container roles after native success, or five roles only with the confined host-ingress fallback. Readiness covers exactly the selected topology; never build both paths. No shared pod, host network/PID/IPC/devices, privilege escalation or extra capabilities. Preserve LSM/seccomp and read-only roots where practical.
-3. Only runtime receives Podman. Runtime's full-engine authority is an accepted risk, not strong isolation. Only its narrow edge ingress-network reconciliation may mutate a Gordon component resource.
-4. Control owns desired state/listener authorization and bbolt control state; runtime owns actual state and separately encrypted bbolt secrets; edge owns app/public-registry routing/TLS; registry owns OCI/authentication/outbox; conditional ingress owns opaque host transport. No host descriptors reach edge. No internal TCP API, gRPC, protobuf or component bearer-token scheme. Edge traffic/credential compromise is accepted, not direct private-store or administration authority.
+2. One host executable and one component image containing the exact executable; four independent container roles with merged edge and runtime-owned publication. Readiness covers exactly this topology; never build a parallel path. No shared pod, host network/PID/IPC/devices, privilege escalation or extra capabilities. Preserve LSM/seccomp and read-only roots where practical.
+3. Only runtime receives Podman. Runtime's full-engine authority is an accepted risk, not strong isolation. Only its narrow edge publication/ingress-network reconciliation may mutate a Gordon component resource.
+4. Control owns desired state/listener authorization and bbolt control state; runtime owns actual state, publication execution, and separately encrypted bbolt secrets; edge owns app/public-registry routing/TLS in its merged traffic plane; registry owns OCI/authentication/outbox. No host descriptors exist in this topology. No internal TCP API, gRPC, protobuf or component bearer-token scheme. Edge traffic/credential compromise is accepted, not direct private-store or administration authority.
 5. App manifest is the configuration source. Apply has no runtime effects; full deploy alone activates pending configuration. Runtime receives pinned digests. Reject `latest`. Image labels have no configuration or display effect; inherited labels grant no management authority.
 6. Releases are immutable; execution intent is separate and durable. Recovery must not resolve a new tag, activate pending configuration, revive stopped apps or blindly replay effects.
-7. Reservations cover desired, active and in-flight state. Shared-route withdrawal is edge-owned; dedicated/final-listener withdrawal also needs ingress cleanup. Uncertain withdrawal retains reservations.
+7. Reservations cover desired, active and in-flight state. Shared-route withdrawal is edge-owned; dedicated/final-listener withdrawal additionally requires verified runtime mapping removal and bounded transport cleanup. Uncertain withdrawal retains reservations.
 8. Secrets are service-owned/write-only, public environment is app-wide, collisions fail. Volumes are named/service-owned, never host binds/shared service volumes. Rollback cannot restore old secret values or undo writes to volumes.
-9. UDP recreate invalidates per-listener epochs before backend mutation. Sessions are bounded and disposable, never recovered. Ingress restart interrupts TCP and loses UDP; no transparent recovery promise.
-10. Firewall/sysctls and privileged host prerequisites belong to the administrator; Gordon performs no privileged setup, system-account creation or system-service installation. Public access requires applicable containment/TLS proofs. Native CrowdSec is post-alpha, not assumed protection. Web overlap uses structural HTTP-only/no-volume eligibility and application-owned concurrency safety, with finite per-service stop_timeout defaulting to 30s.
+9. UDP recreate invalidates per-listener epochs before backend mutation. Sessions are bounded and disposable, never recovered. Edge restart interrupts its TCP and loses UDP; no transparent recovery promise.
+10. Firewall/sysctls and privileged host prerequisites belong to the administrator; Gordon performs no privileged setup, system-account creation or system-service installation. Public access requires the ADR-004 publication/isolation proofs and specified TLS modes. Native CrowdSec is post-alpha, not assumed protection. Web overlap uses structural HTTP-only/no-volume eligibility and application-owned concurrency safety, with finite per-service stop_timeout defaulting to 30s.
 
 ## Approved choices, remaining contracts and proofs
 
-ADR-003 fixes bbolt control state, encrypted runtime bbolt secrets with a separate key, trusted-but-fallible edge including registry TLS, private-by-default registry publication, automatic HTTP-only/no-volume overlap, `stop_timeout = "30s"` by default, entirely rootless setup, pasta-first testing and post-alpha CrowdSec. These are not open product questions.
+ADR-003 fixes bbolt control state, encrypted runtime bbolt secrets with a separate key, trusted-but-fallible edge including registry TLS, private-by-default registry publication, automatic HTTP-only/no-volume overlap, `stop_timeout = "30s"` by default, entirely rootless setup, and post-alpha CrowdSec. ADR-004 fixes the four-container merged-edge topology with runtime-owned publication, documented NAT limits, and the pragmatic alpha scope. These are not open product questions.
 
 The table below separates contract work from proof gates. Storage schemas, DTOs, atomicity, deadlines and concrete error handling refine approved behavior; they do not reopen the storage engine or demand a new product choice for every field. TLS modes/issuance/origin trust and the validated network topology still need decisions. Propose bounded contracts, ask material unresolved questions one at a time, and record consequential choices in focused ADRs with a critical review. Supply test vectors/evidence; do not describe an unrun proof as acceptance.
 
 | Gate | Owner task | Required output before implementation |
 | --- | --- | --- |
-| N0 | A1A.0 | Native networking proof; success removes host ingress and all its dedicated tasks |
-| F1 | A1A.1–2 | Applicable mounts/socket/peer/startup contract; rootless confinement proof only if ingress retained |
-| F2 | A1A.0, A1A.5; A1A.3–4 only for fallback | Selected publication/listener lifecycle, source identity, network/private pulls; dedicated IPC/relay only if ingress retained |
+| N0 | A1A.0 (complete, failed) | Native networking proof; path abandoned by ADR-004 |
+| F1 | A1A.1 (complete, failed) + A1A.2 | Mounts/socket/peer/startup contract; host-process confinement moot, container denial proofs required |
+| F2 | A1A.3–5 | Runtime publication lifecycle, traffic plane, source limits, network/private pulls; no relay IPC |
 | F3 | A1A.6 | Distribution/install configuration, identity and journal contract; exact host command syntax and Podman API subset |
 | W1 | A2.1 | bbolt schema/transactions, operation serialization, reservations, edge snapshots, shutdown/reboot ownership and initial HTTP/TLS contracts |
 | S1 | A3.1 | Shared-network syntax, encrypted bbolt record/key/recovery/injection and volume ownership contracts |
@@ -127,7 +127,7 @@ Installation testing is restricted to explicitly authorized disposable hosts. Pr
 
 | Accepted outcome | Planned tasks |
 | --- | --- |
-| Native-network retest, applicable ingress isolation/IPC, client policy, private pulls | A1A.0–5; A1B.2, A1B.5–6 |
+| Merged-edge topology decision, publication lifecycle, traffic plane, source limits | A1A.2–5; A1B.2, A1B.5–6 |
 | One distribution, source installer, selected-role readiness and recovery | A1A.6; A1B.1–6 |
 | V2 command/bootstrap removal, SSH administration, CLI inspection | A1B.1, A1B.5; A2.5; A3.5; A4.4; A5.5 |
 | Apply/deploy, immutable releases, ignored image labels, stopped intent | A2.1–6 |
@@ -142,5 +142,6 @@ Retain the design's v2 feature matrix: attachments/autoroute/bootstrap/pin/reloa
 
 - [Accepted design](../design.md)
 - [Foundation ADR](../adr-001-v3-foundation.md)
-- [Host-ingress ADR](../adr-002-host-ingress.md)
+- [Host-ingress record](../adr-002-host-ingress.md) (superseded by ADR-004)
+- [Merged edge](../adr-004-merged-edge.md)
 - [Development host guide](../../../dev/v3/README.md)
