@@ -61,22 +61,35 @@ GET    /admin/routes/{domain}         # read-only (existing, retained as read)
   `413`); manifest files are small by construction (§4, 01-manifest).
 - Every mutation request carries `Idempotency-Key: <ulid>` (client
   generated, REQUIRED). IDEMPOTENCY PROTOCOL (review fix):
-  a. The daemon ATOMICALLY persists `{key, request_fingerprint
-     (sha256 of canonicalized body), state: pending, op}` in the
-     app's journal index BEFORE any effect (same temp+rename
-     discipline as §4, 02-state.md).
+  a. The daemon ATOMICALLY persists `{key, request_fingerprint,
+     state: pending, op}` in the app's journal index BEFORE any effect
+     (same temp+rename discipline as §4, 02-state.md). The fingerprint
+     is sha256 over a VERSIONED TUPLE (review fix round 3, HIGH-1 —
+     body-only hashing let `stop`/`start`/`remove` with identical bodies
+     share a result): `v1 | HTTP-method | canonical route+operation |
+     app | service-or-empty | sha256(normalized semantic payload)`.
+     The redundant body `idempotency_key`, when present, is EXCLUDED
+     from the payload hash (it must equal the header per (e)).
   b. A duplicate submission with the SAME key + SAME fingerprint
      while `pending` BLOCKS until the first completes, then returns
      the RECORDED result (no re-execution). After completion it
      returns the recorded result immediately.
   c. SAME key + DIFFERENT fingerprint → `409 idempotency-key-reuse`
      (client bug; never executes).
-  d. The FIRST response always includes the `op` id, even on
-     transport ambiguity the client can recover by RE-QUERYING WITH
-     THE SAME KEY (`GET /admin/apps/{app}/operations/by-key/{key}`
-     → `{op, state, result}`) instead of needing an op id it never
-     received. Key records TTL 24h; expiry of a completed record
-     returns `410 idempotency-key-expired` (safe to retry as new).
+  d. The FIRST response always includes the `op` id; on transport
+     ambiguity the client recovers by RE-QUERYING WITH THE SAME KEY
+     (`GET /admin/apps/{app}/operations/by-key/{key}` →
+     `{op, state, result}`) instead of needing an op id it never
+     received. Key records: PENDING claims NEVER expire (explicit
+     prohibition — a pending claim is a live lock; expiry would orphan
+     it). COMPLETED records TTL 24h for replay convenience; after
+     expiry the key reads as NEVER-SEEN (distinguishable code
+     `idempotency-key-unknown`, NOT `expired`), and reusing it as
+     new is FORBIDDEN without operator outcome inspection first
+     (review fix round 3, HIGH-2 — expiry never proved non-execution:
+     the operator MUST query app state/show + op history and issue an
+     explicit new intent; the CLI refuses silent re-keyed retry of a
+     completed-then-expired mutation).
   e. Header-vs-body precedence: the HEADER is authoritative; a body
      `idempotency_key` that differs → `400 idempotency-key-mismatch`.
   This replaces the previous "store executed keys" sentence, which
@@ -93,35 +106,55 @@ GET    /admin/routes/{domain}         # read-only (existing, retained as read)
 ## 3. DTOs (frozen field names)
 
 ```json
-// POST /admin/apps/apply  { "manifest_toml": "...", "dry_run": false,
-//   "idempotency_key": "…" }
+// POST /admin/apps/apply  { "manifest_toml": "...", "dry_run": false }
+// NOTE: apply is idempotent-by-content, NOT by Idempotency-Key claim:
+// dry-run writes NOTHING (02-state.md §4.3 — exempt from key claims),
+// no-change apply returns the existing REV with no journal (exempt),
+// and accepted apply returns `intent` (the durable apply intent id)
+// instead of `op` (review fix round 3, MEDIUM-4 — the old text demanded
+// both "every mutation persists a claim" and "operation: null").
+// Recovery for accepted apply uses the INTENT id
+// (GET .../operations/by-key/{intent} → {revision, state}).
 { "app": "blog",
   "former_revision": "rev-…", "resulting_revision": "rev-…",
   "pending": true, "noop": false,
   "diff": { "added": […], "removed": […], "changed": […] },
-  "warnings": ["…"], "operation": null }
+  "warnings": ["…"], "intent": "apply-…" }
 
 // dry_run=true → same shape, resulting_revision is "rev-preview"
-// (never persisted), "pending" false, operation null.
+// (never persisted), "pending" false, intent null.
 
 // POST /admin/apps/{app}/deploy  { "revision": "rev-…"(optional),
-//   "service": "web"(optional), "idempotency_key": "…" }
+//   "service": "web"(optional) }
 { "op": "op-…", "app": "blog", "revision": "rev-…",
   "outcome": "success|partial|failed",
+  "services": { "web": { "result": "deployed|failed",
+      "effective_revision": "rev-…", "before": "ctr-…",
+      "after": "ctr-…", "restart_unsafe": false } },
   "steps": [ { "id": "service.web.replace", "state": "succeeded",
                 "before": "ctr-…", "after": "ctr-…" } ],
-  "effective": { "revision": "rev-…", "digest_table": […] },
+  "cleanup_warnings": [ { "service": "web", "leftover": "ctr-…",
+                "detail": "retire failed after publish" } ],
+  "effective": { "converged": false, "converged_revision": "rev-…",
+    "services": { "web": "rev-…", "db": "rev-…" } },
   "observed": { "running": […], "stopped": […] },
   "retained": { "volumes": […], "secrets": […] } }
+// (review fix round 3, MEDIUM-5: per-service terminal results +
+// cleanup warnings + per-service effective map replace the old
+// steps-only DTO and scalar effective.revision.)
 
 // GET /admin/apps/{app}
 { "app": "blog",
   "desired": { "revision": "rev-…", "status": "pending|active" },
   "active": { "converged": false, "converged_revision": "rev-…",
     "services": { "web": { "effective_revision": "rev-…",
-      "digest": "sha256:…", "container": "ctr-…" } } },
+      "digest": "sha256:…", "container": "ctr-…",
+      "restart_unsafe": false } } },
   "intent": { "stopped": false },
   "last_op": { "op": "op-…", "outcome": "success" } }
+// (review fix round 3, HIGH-3: per-service restart_unsafe surfaced so
+// operators can see WHY recovery is blocked; start/restart below gate
+// on it with `recovery-blocked-unsafe`.)
 ```
 
 - JSON and text outputs have EQUIVALENT semantics; stable sorted
@@ -142,9 +175,9 @@ GET    /admin/routes/{domain}         # read-only (existing, retained as read)
   `unmanaged-image-volume`, `bind-failed`,
   `traffic-snapshot-conflict`, `daemon-unavailable`,
   `outcome-unknown`, `prune-disabled`, `op-not-found`,
-  `config-retired`, `scope-retired`, `endpoint-retired`,
+  `config-retired`, `config-unknown`, `scope-retired`, `endpoint-retired`,
   `idempotency-key-reuse`, `idempotency-key-mismatch`,
-  `idempotency-key-expired`.
+  `idempotency-key-unknown`, `recovery-blocked-unsafe`.
 
 ## 4. Auth scopes (extends existing model)
 
@@ -162,12 +195,14 @@ Frozen extension — ONE new resource, no new action vocabulary:
   defines BROAD resources only (`routes|secrets|config|status|logs|
   volumes|*`), NOT per-feature bootstrap/attachment/autoroute/preview/
   pin scope entries. What cutover actually removes is the ENDPOINT +
-  its `HasAccess` check site; tokens carrying the BROAD grants
-  (`config:write`, `routes:write`) that previously authorized those
-  endpoints get explicit `scope-retired`-style `403 endpoint-retired`
-  responses at the removed paths (never silent downgrade — the grant
-  itself stays valid for its remaining endpoints). The retired
-  surface list (§7) names endpoint paths, not scope strings.
+  its `HasAccess` check site. Authenticated requests reaching a retired
+  route get `410 Gone` + `{"error":"endpoint-retired"}` (review fix
+  round 3, MEDIUM-6 — the old text promised `403` here, contradicting
+  the §7 `410` contract; ordinary authN/authZ failures keep their
+  existing 401/403 behavior on LIVE routes). The retired surface list
+  (§7) names endpoint paths, not scope strings; there is no scope
+  string to delete from the registry beyond the NEW `apps` resource
+  lifecycle.
 
 ## 5. CLI lifecycle surface (D5 proposal for acceptance)
 
@@ -185,9 +220,16 @@ gordon apps list [--json]
 gordon apps show APP [--json]            # desired + active + intent
 gordon apps diff APP [--json]            # normalized desired-vs-active
 gordon deploy APP [--revision REV] [--service SVC] [--json]
-gordon restart APP [--service SVC] [--json]   # pinned digests, no re-resolve
+gordon restart APP [--service SVC] [--json]   # pinned digests, no re-resolve;
+                                         # REFUSED with recovery-blocked-unsafe
+                                         # for services with restart_unsafe set
+                                         # (explicit deploy clears it; HIGH-3)
 gordon stop APP [--json]                 # durable stopped intent; preserves ALL data
-gordon start APP [--json]                # clear intent; ensure running from ACTIVE
+gordon start APP [--json]                # clear intent; ensure running from ACTIVE;
+                                         # services with restart_unsafe set stay
+                                         # blocked (recovery-blocked-unsafe) until
+                                         # explicit deploy — start is NOT an escape
+                                         # hatch (HIGH-3)
 gordon remove APP [--json]               # withdraw workloads; volumes+secrets
                                          # retained as owned orphans; name reserved
 gordon apps secrets set APP --service SVC KEY=VALUE… [--stdin] [--json]

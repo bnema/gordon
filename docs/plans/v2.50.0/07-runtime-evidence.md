@@ -57,11 +57,12 @@ explicitly, plus the alias-at-create path the engine will use).
   error `Bind for 127.0.0.1:18081 failed: port is already allocated`.
   Real bind failure is observable and mappable to `bind-failed`.
 - UDP (`nc -l -u -p 9000 -e cat`): datagrams flow intra-network
-  (`echo hello-udp | nc -u` received). `docker stop -t 5` on the
-  UDP listener waited the FULL timeout (5.1s) — SIGTERM ignored, no
-  graceful drain exists. FROZEN: UDP/game replacement is DECLARED
-  interrupting; deploy output states interruption, never
-  zero-downtime; UDP readiness restricted to `none`/`log`.
+  (`echo hello-udp | nc -u` received). `docker stop -t 5` on THIS
+  fixture waited the FULL timeout (5.1s) — fixture behavior, NOT proof
+  that graceful application shutdown is impossible (mirrors parent
+  03-deployment.md wording; review fix round 3, LOW-8). Declared
+  interruption of UDP/game replacement is an INDEPENDENT product
+  policy. UDP readiness restricted to `none`/`log`.
 - Observed source IP behind proxy (TCP): NOT probed end-to-end (needs
   the Gordon proxy in path). RECORDED OPEN: peer-identity and
   UDP-forwarding proofs are required before any route-CIDR control

@@ -66,11 +66,29 @@ routes.* (old routes→image)                 hint: declare [[service.http]] in 
 attachments.*, network_groups.*             hint: declare [[service]] + volumes; attachments are removed
 services.* (global standalone)              hint: one [[service]] per app file
 service_routes.*                            hint: [[service.http]] (see 04-network.md §1)
-autoroute / auto_route_allowed_domains      hint: feature removed; declare explicit interfaces
-preview.* / pin.*                           hint: staging is an ordinary app file (01-manifest.md §8.2)
-env-directory import behavior               hint: values move to [env]/pass; no auto-import
+auto.enabled, auto.allowed_domains,         hint: feature removed; declare explicit interfaces
+  auto_route.enabled, auto_route_allowed_domains (both spellings +
+  legacy alias; verified config/service.go:153-160)
+auto.preview.*, auto.preview.enabled/ttl/   hint: staging is an ordinary app file (01-manifest.md §8.2)
+  separator/tag_patterns/data_copy/env_copy
+network_isolation.enabled,                  hint: removal TBD — NO disposition frozen here;
+  network_isolation.network_prefix          P7 MUST explicitly keep-or-retire before strict
+                                            decoding lands (open item, not silent keep)
+auth.password                               hint: KEEP reading one release as rejection pointer
+                                            (`config-retired`: inline password removed;
+                                            use auth.username + token_secret backend),
+                                            then join strict rejection
 image-label defaults (gordon.* label inference for routing/env)
 ```
+
+> REVIEW FIX round 3, MEDIUM-7: the previous inventory used umbrella
+> names (`autoroute`, `preview.*`) that match NO actual key — the loader
+> reads `auto.*` + legacy `auto_route.*` spellings. `external_routes`
+> is loaded outside `run.go Config` (config/service.go) and MUST be
+> included in the strict-validation schema (KEEP, live class). Strict
+> decoding covers the UNION of both loaders; anything outside the
+> union is `config-unknown`, anything inside the retired set is
+> `config-retired`.
 
 - The rejection is a SMALL explicit retired-key check (retired-key
   set), NOT a legacy parser. REVIEW FIX: current startup/reload use
