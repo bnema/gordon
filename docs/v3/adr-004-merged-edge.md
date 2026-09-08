@@ -1,10 +1,14 @@
 # ADR-004: Merged edge container with runtime-owned publication
 
-- Status: Accepted
+- Status: Accepted as amended by [ADR-006](adr-006-pasta-pesto-publication.md)
 - Date: 2026-09-08
 - Decision owner: Gordon maintainer
 - Amends: [ADR-002](adr-002-host-ingress.md), [ADR-003](adr-003-alpha-scope-and-trust.md) §5, and the five-role topology in [design](design.md)
-- Related: [A1A.0](../dev/v3/proofs/a1a0-native-pasta.md) and [A1A.1](../dev/v3/proofs/a1a1-confinement.md) proof records, [implementation plans](plans/README.md)
+- Related: [A1A.0](../../dev/v3/proofs/a1a0-native-pasta.md) and [A1A.1](../../dev/v3/proofs/a1a1-confinement.md) proof records, [implementation plans](plans/README.md)
+
+## Publication amendment
+
+[ADR-006](adr-006-pasta-pesto-publication.md) requires Podman 6 and pasta/Pesto, with runtime-controlled dynamic forwarding. It supersedes the native-path abandonment, NAT baseline and edge-recreation assumption below. Four containers and no Gordon host ingress remain the topology. The original mechanism rationale below is historical.
 
 ## Context
 

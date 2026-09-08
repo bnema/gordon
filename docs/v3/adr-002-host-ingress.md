@@ -1,9 +1,13 @@
 # ADR-002: Use a confined, transport-only host ingress for TCP and UDP
 
-- Status: Conditional fallback under [ADR-003](adr-003-alpha-scope-and-trust.md); native networking must be retested first; implementation and public use remain gated
+- Status: Superseded by [ADR-004](adr-004-merged-edge.md); historical decision and experimental evidence, not an implementation fallback
 - Date: 2026-09-05
 - Amends: [ADR-001](adr-001-v3-foundation.md), for ingress ownership, transport and component lifecycle
 - Related: [V3 design](design.md)
+
+## Amendment — 2026-09-08
+
+[ADR-004](adr-004-merged-edge.md) removes the host ingress process and relay IPC. Four rootless containers use merged edge with runtime-owned publication. The conditional paths and implementation requirements below are historical; do not implement them. Reservation, bounded withdrawal and recovery objectives are carried into the current publication contract without retaining a fifth role.
 
 ## Amendment — 2026-09-06
 

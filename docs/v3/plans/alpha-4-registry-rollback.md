@@ -1,6 +1,6 @@
 # Alpha 4: public OCI registry, push events and rollback
 
-Status: planned; entry requires Alpha 3 complete and R1 TLS/auth/event contracts. ADR-003 removes the edge-impersonation/confidentiality gate: edge is trusted for public registry traffic. Ingress-specific readiness applies only to the conditional fallback after N0.
+Status: planned; entry requires Alpha 3 complete and R1 TLS/auth/event contracts. ADR-003 removes the edge-impersonation/confidentiality gate: edge is trusted for public registry traffic. ADR-006 requires runtime-controlled Pesto publication with merged edge; there is no rootlessport/ingress fallback or relay IPC.
 
 ## Context and scope
 
@@ -15,8 +15,8 @@ Proposed work belongs in the established registry/control/edge compositions, con
 ## Tasks
 
 - [ ] **A4.1 — Accept registry trust, authentication and event contracts** — depends on: A3.6.
-  - Consolidate W1 TLS modes for explicit public registry exposure: certificate ownership/provisioning/renewal, client trust and proxy-to-origin transport. V2 CA, supplied certificates and upstream TLS are candidates, not selected implementations. No mandatory SNI passthrough or proof against trusted-edge impersonation. Require correct endpoint validation, not insecure TLS fallback.
-  - Specify public-domain opt-in (private default), reserved system-route lifecycle, OCI authentication/provisioning/revocation and repository-scoped authorization. No public control API or stored-token printing. Runtime stays pull-only on the private endpoint; control/edge/ingress receive no credential-store mounts. Public credentials transit trusted edge; their exposure on compromise is accepted.
+  - Consolidate W1 TLS modes for explicit public registry exposure: certificate ownership/provisioning/renewal, client trust and proxy-to-origin transport. ADR-004 includes edge ACME issuance; supported challenges, renewal, supplied certificates and upstream TLS/origin trust still require a precise endpoint contract. No mandatory SNI passthrough or proof against trusted-edge impersonation. Require correct endpoint validation, not insecure TLS fallback.
+  - Specify public-domain opt-in (private default), reserved system-route lifecycle, OCI authentication/provisioning/revocation and repository-scoped authorization, including ADR-004's short-lived control-minted push tokens. No public control API or stored-token printing. Runtime stays pull-only on the private endpoint; control/edge receive no credential-store mounts. Public credentials transit trusted edge; their exposure on compromise is accepted.
   - Specify registry protocol support, digest/media-type/platform validation, bounded uploads, interrupted-upload storage and request/resource limits. Reuse existing OCI libraries where applicable; no new dependency without approval.
   - Write the bounded outbox contract: repository/tag/digest/time/event ID, durable acceptance/ack boundary, capacity/backpressure, dedup retention, ordering, stale-event policy, retry timing, poison events and restart recovery. Define what a successful push guarantees if event persistence or queue capacity fails.
   - Specify exact control eligibility/error rules for push target lookup, unique auto-deploy mapping, stopped intent, pending configuration, synthetic-release divergence and ambiguous explicit push targets. Events cannot supply route/secret/runtime instructions.
@@ -25,10 +25,10 @@ Proposed work belongs in the established registry/control/edge compositions, con
 
 - [ ] **A4.2 — Explicit public OCI storage and TLS routing** — depends on: R1 accepted.
   - Implement bounded OCI handlers/storage and authentication in registry's isolated role. Registry owns blobs/manifests/tags and authentication storage; TLS/key ownership follows the accepted endpoint contract. Untrusted content/repository strings cannot escape storage.
-  - Keep registry private by default. Explicit system-domain configuration enables edge TLS termination and HTTP forwarding to registry under R1. Reserve the domain; app route collisions and app stop/remove/purge cannot seize or delete the registry system component. Test disabled exposure produces no public route.
+  - Keep registry private by default. Explicit system-domain configuration enables edge TLS termination and HTTP forwarding to registry under R1. Reserve the domain; app route collisions and app stop/remove/purge cannot seize or delete the registry system component. Test disabled exposure produces no public route or registry-specific Pesto authorization. System publication follows F2 single-owner rules and cannot be resurrected from stale Quadlet mappings.
   - Keep the F2 private runtime pull endpoint independent of public edge. Test runtime pulling while edge is unavailable, push denial for pull-only credentials and no credential exposure to control.
   - Test digest mismatch, truncated/cancelled/oversized uploads, invalid auth, wrong repository permission, storage exhaustion and restart. Return actionable protocol errors; do not publish an incomplete manifest as valid content.
-  - Test certificate provisioning/renewal failure, wrong endpoint identity and rotation under R1 with real client/upstream trust validation. Test spoofed forwarded identity and origin bypass. Never use insecure TLS flags to make acceptance pass; edge plaintext visibility is expected, not a failing confidentiality test.
+  - Test certificate provisioning/renewal failure, wrong endpoint identity and rotation under R1 with real client/upstream trust validation. Test direct client source identity and rejection of forged headers, plus trusted-upstream forwarded identity and origin bypass. Registry receives no Pesto control capability. Never use insecure TLS flags to make acceptance pass; edge plaintext visibility is expected, not a failing confidentiality test.
   - Done: C2–C6/C10, C8 standard authenticated OCI push/pull and trust/storage/authority failures. Registry compromise still has the accepted bounded auto-deploy content risk, not immunity from it.
 
 - [ ] **A4.3 — Durable outbox and control-owned event consumption** — depends on: A4.2.
@@ -52,9 +52,9 @@ Proposed work belongs in the established registry/control/edge compositions, con
   - Implement `rollback <app> [--to <release>] [--service <name>]`. A full rollback creates a new release from a historical immutable release; it never rewrites desired/history and records the selected historical source revision.
   - A service rollback creates a synthetic release from active effective configuration, replacing only the selected former service definition/digest. Retain active app-wide environment, entrypoints, routes, network declarations and all other services. Record base/donor release IDs and base source revision as provenance.
   - Validate compatibility of the donor definition with retained fields, required current secret names, volume identity and route reservations before runtime mutation. Reconcile networks from release declarations, not live Podman attachments. Historical releases do not reserve hosts indefinitely.
-  - Reacquire reservations atomically, use the existing journal, and activate only with runtime/edge/ingress evidence. Secret injection uses current values. Stopped apps refuse rollback; unrelated services remain untouched by a service rollback.
+  - Reacquire reservations atomically, use the existing journal, and activate only with runtime workload/publication and edge route evidence. Secret injection uses current values. Stopped apps refuse rollback; unrelated services remain untouched by a service rollback.
   - After composition, report actual effective config/divergence. Revision equality alone must not allow service deploy/push/auto-deploy to undo synthetic config; only a full deploy activates the desired AppSpec again.
-  - Test donor incompatibility, deleted/current missing secret, conflicting reclaimed host, missing digest, unavailable runtime/edge/ingress, partial recreate failure and volume writes. Explicit volume rollback requires operator-established compatibility; no automatic old-image restoration after possible writes.
+  - Test donor incompatibility, deleted/current missing secret, conflicting reclaimed host, missing digest, unavailable runtime/edge or uncertain publication, partial recreate failure and volume writes. Explicit volume rollback requires operator-established compatibility; no automatic old-image restoration after possible writes.
   - Done: C2–C6/C10 and C8 full/service rollback, immutable provenance and post-rollback eligibility guards across restart.
 
 - [ ] **A4.6 — Registry and rollback acceptance gate** — depends on: A4.1–5.

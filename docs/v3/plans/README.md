@@ -1,18 +1,18 @@
 # V3-alpha implementation plans
 
-Status: complete alpha roadmap aligned with ADR-003; detailed contract/proof tasks remain before dependent implementation
+Status: Alpha 1–5 roadmap aligned with ADR-003/004/006; detailed contract/proof tasks remain before dependent implementation
 
-Date: 2026-09-06
+Date: 2026-09-08
 
 ## Start here
 
 This set covers **all Alpha 1–5 work now**, split into bounded plans. It does not select mechanisms deliberately left open by the ADRs. Decision tasks produce reviewed specifications and evidence; dependent implementation tasks stop until those outputs are accepted. A complete roadmap is not blanket implementation approval.
 
-Read [design](../design.md), [ADR-001](../adr-001-v3-foundation.md), [ADR-002](../adr-002-host-ingress.md), [ADR-003](../adr-003-alpha-scope-and-trust.md), and repository `AGENTS.md` first. ADR-003 supersedes conflicting historical requirements. The [multi-host note](../multi-host-evolution.md) is an evolution constraint, not cluster scope.
+Read [design](../design.md), [ADR-001](../adr-001-v3-foundation.md), historical [ADR-002](../adr-002-host-ingress.md), [ADR-003](../adr-003-alpha-scope-and-trust.md), [ADR-004](../adr-004-merged-edge.md), and repository `AGENTS.md` first. Read [ADR-006](../adr-006-pasta-pesto-publication.md) for required Podman 6/pasta/Pesto publication; it amends ADR-004's four-container topology. ADR-003 governs other product/trust decisions. The [multi-host note](../multi-host-evolution.md) is an evolution constraint, not cluster scope.
 
 | Order | Plan | Outcome | Entry gate |
 | --- | --- | --- | --- |
-| 1 | [Alpha 1A: foundation decisions and proofs](alpha-1a-foundation-proofs.md) | Accepted confinement, capability, transport and installation contracts backed by reference-host evidence | Existing ADRs; authorized disposable test host |
+| 1 | [Alpha 1A: foundation decisions and proofs](alpha-1a-foundation-proofs.md) | Accepted container/capability, publication, transport and installation contracts backed by reference-host evidence | Existing ADRs; authorized disposable test host |
 | 2 | [Alpha 1B: installable foundation](alpha-1b-installation.md) | One verified distribution with the validated topology; recoverable fresh installation | A1A.0 resolved and applicable Alpha 1A contracts/proofs accepted |
 | 3 | [Alpha 2: first web app](alpha-2-web-app.md) | Declarative apply, digest-pinned deploy, minimal release, stop and durable recovery | Alpha 1 complete; Alpha 2 decision gate accepted |
 | 4 | [Alpha 3: multi-service security](alpha-3-multi-service.md) | Encrypted bbolt secrets, service volumes, private networks and safe partial failure | Alpha 2 complete; Alpha 3 contracts accepted |
@@ -21,13 +21,19 @@ Read [design](../design.md), [ADR-001](../adr-001-v3-foundation.md), [ADR-002](.
 
 Alpha 1A experiments are not a shipped alpha and must not claim installer readiness. Every shipped milestone must install on a clean reference host. Public UDP app routes arrive in Alpha 5; transport-level UDP correctness is proven and integrated in Alpha 1, not deferred to the first game deployment.
 
-## Topology checkpoint (resolved by ADR-004)
+## Current execution
 
-A1A.0 proved packaged-stack native publication NAT-rewrites source and has no pasta forwarder/Pesto; the maintainer abandoned the native path. A1A.1 proved no same-account host-process confinement mechanism works. [ADR-004](../adr-004-merged-edge.md) therefore replaces the host ingress role with a merged edge container and runtime-owned publication: four containers, no host ingress process, no relay IPC. Do not revive the native path, the host relay, or any parallel path.
+[ADR-006](../adr-006-pasta-pesto-publication.md) defines the required networking stack and dynamic publication mechanism used by these tasks. [Foundation execution status](foundation-execution-status.md) records the next contracts and proofs; the [reference experiment](../../../dev/v3/proofs/podman6-pasta-pesto.md) establishes feasibility, not stage acceptance. The proposed [capability contract](../adr-005-role-capabilities.md) needs runtime-only Pesto access before acceptance.
+
+## Required networking baseline
+
+Use Podman 6.1.1, pasta/Pesto 2026_07_28.f8df3f1, Netavark 2.1.0 and aardvark-dns 2.1.0, or a later explicitly validated combination. Runtime controls Pesto; systemd/Quadlet supervises the four containers. No rootlessport fallback, Gordon host ingress or host lifecycle executor for port changes. Ubuntu 26.04's default 5.7 packages are insufficient; prerequisites remain administrator-owned.
+
+The historical A1A.0/1 failures do not invalidate the Podman 6 experiment. F1/F2 still require runtime-container capability denial, safe destination identity, Podman/Pesto coexistence, established-flow withdrawal and crash/reboot proofs. Direct forwarding to workload TCP/UDP endpoints remains a proposed role refinement: decide client policy, readiness and transport cleanup before bypassing edge; do not silently discard existing UDP invariants.
 
 ## Baseline and handoff
 
-- Repository: `/home/brice/Projects/gordon`, module `github.com/bnema/gordon`.
+- Repository: Gordon, module `github.com/bnema/gordon`.
 - Inspected integration base: `origin/v3-alpha`, `93e3a9dd0fe13c116d78493e4427a54c425f57a9` (includes image-label policy, PR #254).
 - Planning branch: `docs/v3-alpha-implementation-plans`; worktree created under configured `.worktrees/`.
 - User requested the entire plan set be saved in the repository on 2026-09-06. This authorizes these documents, not unresolved architecture decisions or deployments.
@@ -59,27 +65,27 @@ New paths named in stage plans are **proposed work locations**, not existing API
 
 1. Fresh install, one host account/rootless Podman engine, no Docker/rootful runtime, cluster, v2 migration or compatibility layer. Never import the archived `v3-deprecated` system wholesale.
 2. One host executable and one component image containing the exact executable; four independent container roles with merged edge and runtime-owned publication. Readiness covers exactly this topology; never build a parallel path. No shared pod, host network/PID/IPC/devices, privilege escalation or extra capabilities. Preserve LSM/seccomp and read-only roots where practical.
-3. Only runtime receives Podman. Runtime's full-engine authority is an accepted risk, not strong isolation. Only its narrow edge publication/ingress-network reconciliation may mutate a Gordon component resource.
+3. Only runtime receives Podman and the Gordon-side Pesto control capability. Runtime's full-engine authority is an accepted risk, not strong isolation. Only its narrow edge publication/ingress-network reconciliation may mutate a Gordon component resource.
 4. Control owns desired state/listener authorization and bbolt control state; runtime owns actual state, publication execution, and separately encrypted bbolt secrets; edge owns app/public-registry routing/TLS in its merged traffic plane; registry owns OCI/authentication/outbox. No host descriptors exist in this topology. No internal TCP API, gRPC, protobuf or component bearer-token scheme. Edge traffic/credential compromise is accepted, not direct private-store or administration authority.
 5. App manifest is the configuration source. Apply has no runtime effects; full deploy alone activates pending configuration. Runtime receives pinned digests. Reject `latest`. Image labels have no configuration or display effect; inherited labels grant no management authority.
 6. Releases are immutable; execution intent is separate and durable. Recovery must not resolve a new tag, activate pending configuration, revive stopped apps or blindly replay effects.
 7. Reservations cover desired, active and in-flight state. Shared-route withdrawal is edge-owned; dedicated/final-listener withdrawal additionally requires verified runtime mapping removal and bounded transport cleanup. Uncertain withdrawal retains reservations.
 8. Secrets are service-owned/write-only, public environment is app-wide, collisions fail. Volumes are named/service-owned, never host binds/shared service volumes. Rollback cannot restore old secret values or undo writes to volumes.
 9. UDP recreate invalidates per-listener epochs before backend mutation. Sessions are bounded and disposable, never recovered. Edge restart interrupts its TCP and loses UDP; no transparent recovery promise.
-10. Firewall/sysctls and privileged host prerequisites belong to the administrator; Gordon performs no privileged setup, system-account creation or system-service installation. Public access requires the ADR-004 publication/isolation proofs and specified TLS modes. Native CrowdSec is post-alpha, not assumed protection. Web overlap uses structural HTTP-only/no-volume eligibility and application-owned concurrency safety, with finite per-service stop_timeout defaulting to 30s.
+10. Firewall/sysctls and privileged host prerequisites belong to the administrator; Gordon performs no privileged setup, system-account creation or system-service installation. Public access requires the ADR-006 publication/isolation proofs and specified TLS modes. Native CrowdSec is post-alpha, not assumed protection. Web overlap uses structural HTTP-only/no-volume eligibility and application-owned concurrency safety, with finite per-service stop_timeout defaulting to 30s.
 
 ## Approved choices, remaining contracts and proofs
 
-ADR-003 fixes bbolt control state, encrypted runtime bbolt secrets with a separate key, trusted-but-fallible edge including registry TLS, private-by-default registry publication, automatic HTTP-only/no-volume overlap, `stop_timeout = "30s"` by default, entirely rootless setup, and post-alpha CrowdSec. ADR-004 fixes the four-container merged-edge topology with runtime-owned publication, documented NAT limits, and the pragmatic alpha scope. These are not open product questions.
+ADR-003 fixes bbolt control state, encrypted runtime bbolt secrets with a separate key, trusted-but-fallible edge including registry TLS, private-by-default registry publication, automatic HTTP-only/no-volume overlap, `stop_timeout = "30s"` by default, entirely rootless setup, and post-alpha CrowdSec. ADR-004 fixes the four-container topology; ADR-006 requires source-preserving pasta/Pesto and runtime-controlled dynamic rules without inherent edge recreation. Direct source identity is distinct from trusted upstream headers and backend socket identity. These are not open product questions.
 
-The table below separates contract work from proof gates. Storage schemas, DTOs, atomicity, deadlines and concrete error handling refine approved behavior; they do not reopen the storage engine or demand a new product choice for every field. TLS modes/issuance/origin trust and the validated network topology still need decisions. Propose bounded contracts, ask material unresolved questions one at a time, and record consequential choices in focused ADRs with a critical review. Supply test vectors/evidence; do not describe an unrun proof as acceptance.
+The table below separates contract work from proof gates. Storage schemas, DTOs, atomicity, deadlines and concrete error handling refine approved behavior; they do not reopen the storage engine or demand a new product choice for every field. ADR-004 includes edge ACME issuance and short-lived control-minted public OCI push tokens. Exact TLS modes/challenges/renewal/origin trust and the concrete publication/network mechanisms still need focused contracts and evidence. Propose bounded contracts, ask material unresolved questions one at a time, and record consequential choices in focused ADRs with a critical review. Supply test vectors/evidence; do not describe an unrun proof as acceptance.
 
 | Gate | Owner task | Required output before implementation |
 | --- | --- | --- |
-| N0 | A1A.0 (complete, failed) | Native networking proof; path abandoned by ADR-004 |
+| N0 | Historical A1A.0 + Podman 6 experiment | Stack selected by ADR-006; feasibility evidence does not close F1/F2 |
 | F1 | A1A.1 (complete, failed) + A1A.2 | Mounts/socket/peer/startup contract; host-process confinement moot, container denial proofs required |
-| F2 | A1A.3–5 | Runtime publication lifecycle, traffic plane, source limits, network/private pulls; no relay IPC |
-| F3 | A1A.6 | Distribution/install configuration, identity and journal contract; exact host command syntax and Podman API subset |
+| F2 | A1A.3–5 | Pesto ownership/bootstrap/recovery, stale-address safety, traffic cleanup, direct/proxied identity and private pulls |
+| F3 | A1A.6 | Distribution/install configuration, identity and journal contract; exact host commands, required helper validation and Podman/Pesto control subset |
 | W1 | A2.1 | bbolt schema/transactions, operation serialization, reservations, edge snapshots, shutdown/reboot ownership and initial HTTP/TLS contracts |
 | S1 | A3.1 | Shared-network syntax, encrypted bbolt record/key/recovery/injection and volume ownership contracts |
 | R1 | A4.1 | Explicit public registry TLS/origin trust/authentication and bounded push-event contracts; no edge-impersonation gate |
@@ -100,7 +106,7 @@ Run from the feature worktree root unless stated otherwise. These IDs apply to e
 | C5 | `golangci-lint run ./...` | Pass before every code commit; do not widen inherited suppressions to hide new boundary problems |
 | C6 | `mockery`, then C2/C3/C5 | Regenerate after boundary changes; generated diff limited to intended interfaces |
 | C7 | `go test ./dev/v3/cmd/sandbox/... ./dev/v3/cmd/l4probe/...` | Tooling tests pass; absent tests are not evidence of transport correctness |
-| C8 | Authorized clean Ubuntu 26.04 LTS VM, Go 1.27, rootless Podman and systemd/Quadlet; run the stage's new acceptance tests | Record host/package versions, clean revision, identity, commands, assertions and sanitized results |
+| C8 | Authorized clean Ubuntu 26.04 LTS VM, Go 1.27, the required ADR-006 Podman/pasta/Pesto/helper stack and systemd/Quadlet; run the stage's new acceptance tests | Record host/package versions, clean revision, identity, commands, assertions and sanitized results |
 | C9 | In each changed `dev/v3/fixtures/*` module: `go test ./...` and `go build ./...` | Fixture modules build/test independently; root `./...` does not cover nested modules |
 | C10 | New narrow package tests with `go test ./<created-package>/...`; select exact test names once created | Each task's success, refusal and interruption assertions pass before full checks |
 
@@ -111,7 +117,7 @@ For every task record in its PR: task IDs, gate/ADR references, changed paths, t
 ### Observed planning baseline
 
 - `go version`: `go1.27.1-X:nodwarf5 linux/amd64`.
-- `golangci-lint` is available at `/home/brice/go/bin/golangci-lint`; lint was not run for this documentation-only work.
+- `golangci-lint` was available on the planning host; lint was not run for that documentation-only work.
 - `go test ./dev/v3/cmd/sandbox/... ./dev/v3/cmd/l4probe/... ./pkg/version/...`: passed; sandbox has tests, l4probe and version reported no test files.
 - No full build/test/race run, VM execution, installer run, ingress proof or deployment was performed during planning. Prior experiments are described in ADR-002 and the dev README, not upgraded to current implementation evidence.
 

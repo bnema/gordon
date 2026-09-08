@@ -2,11 +2,15 @@
 
 Status: complete — native path FAILS on the reference stack (see Results)
 Date: 2026-09-07 (executed 2026-09-07)
-Task: [alpha-1a-foundation-proofs.md](../plans/alpha-1a-foundation-proofs.md) A1A.0
+Task: [alpha-1a-foundation-proofs.md](../../../docs/v3/plans/alpha-1a-foundation-proofs.md) A1A.0
 Gate: N0 — success removes the host-ingress role and all dedicated relay/IPC tasks.
 
 This directory holds sanitized reference-host evidence only.
 No credentials, private keys, or bulk OCI payloads.
+
+## Current interpretation
+
+[ADR-004](../../../docs/v3/adr-004-merged-edge.md) abandons the source-preserving native path and the subsequent host-ingress fallback. The record below is historical evidence, not instructions to reset an engine or resume that fallback. Tests marked NOT RUN remain unproven for the selected merged-edge topology.
 
 ## Execution record (2026-09-07)
 

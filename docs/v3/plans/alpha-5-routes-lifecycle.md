@@ -1,43 +1,44 @@
 # Alpha 5: multi-protocol routes and complete app lifecycle
 
-Status: planned; entry requires Alpha 4 complete and L1 ordering/deadline/recovery contracts. ADR-003 already selects automatic HTTP-only/no-volume overlap without a concurrency declaration or safety classifier. ADR-004 fixes merged-edge publication; no relay IPC is built, only the applicable isolation/recovery objectives.
+Status: planned; entry requires Alpha 4 complete and L1 ordering/deadline/recovery contracts. ADR-003 already selects automatic HTTP-only/no-volume overlap without a concurrency declaration or safety classifier. ADR-006 requires runtime-controlled Pesto publication. No relay IPC or rootlessport fallback is built; edge transport responsibilities remain until an explicit direct-L4 contract replaces them.
 
 ## Context and scope
 
 Use the [shared baseline and checks](README.md). Deliver HTTP/TCP/UDP app routes, restart/remove/purge, stop/recovery for all protocols and the accepted automatic web-overlap algorithm after transport/recovery tests. Applications own concurrency safety; Gordon does not prove it.
 
-No generic deployment strategy/readiness selector, live UDP session migration, transparent ingress restart, cluster replicas, resource GC, backups, component updates or rollback of data. App `restart` is not permission for runtime to supervise Gordon's components.
+No generic deployment strategy/readiness selector, live UDP session migration, transparent edge restart, cluster replicas, resource GC, backups, component updates or rollback of data. App `restart` is not permission for runtime to supervise Gordon's components.
 
-Existing anchors at execution: Alpha 1 ingress IPC/listener journal, Alpha 2 control reservation/edge snapshot/deployment state, Alpha 3 service/volume/secret contracts, Alpha 4 composition/rollback/event policy, `dev/v3/fixtures/app-game-test/`, `dev/v3/cmd/l4probe/`, and existing CLI output/JSON patterns. Extend these owning boundaries rather than creating a route-owned container engine.
+Existing anchors at execution: Alpha 1 runtime publication journal and edge traffic plane, Alpha 2 control reservation/edge snapshot/deployment state, Alpha 3 service/volume/secret contracts, Alpha 4 composition/rollback/event policy, `dev/v3/fixtures/app-game-test/`, `dev/v3/cmd/l4probe/`, and existing CLI output/JSON patterns. Extend these owning boundaries rather than creating a route-owned container engine.
 
-Proposed work locations: established app/deployment/edge/ingress packages, domain tombstone/lifecycle records, runtime volume ownership adapter and CLI `restart.go`, `stop.go`, `remove.go`, `purge.go`, `routes.go`. Exact new DTOs, confirmation syntax and state transitions must be accepted at A5.1 before coding.
+Proposed work locations: established app/deployment/edge/runtime packages, domain tombstone/lifecycle records, runtime volume ownership adapter and CLI `restart.go`, `stop.go`, `remove.go`, `purge.go`, `routes.go`. Exact new DTOs, confirmation syntax and state transitions must be accepted at A5.1 before coding.
 
 ## Tasks
 
 - [ ] **A5.1 — Accept rollout and lifecycle extensions** — depends on: A4.6.
+  - Consume the direct-L4 ownership decision accepted at A1A.3/F2, including destination identity, client policy, readiness, withdrawal and established-flow/UDP cleanup. The edge-proxy tasks below apply to the currently accepted path; if F2 selects direct workload forwarding, those tasks must already be amended before execution. Do not build two selectable implementations or reopen the required stack choice.
   - Refine ADR-003's fixed structural policy: HTTP/HTTPS-only routes and no persistent volumes get overlap; others recreate. No opt-in, image label, application-safety classifier or strategy selector. State the accepted risk of duplicated jobs/migrations in a web process; the app owns graceful shutdown and schema compatibility.
   - Define multi-entrypoint TCP checks, acknowledged route switch, old-container stop signal, its effective stop_timeout (30s default), early exit/SIGKILL, and crash-safe target/deadline handling. Specify existing keep-alive/HTTP2/WebSocket cleanup within bounded shutdown rather than claiming a signal proves drain or adding a second unexplained full grace period. No application readiness or OCI HEALTHCHECK interpretation.
-  - Specify route DTO/schema extensions and protocol validation, shared SNI passthrough, public/local bind mapping under F2, CIDR/source metadata and exact withdrawal evidence. F2 transport mechanisms remain authoritative.
+  - Specify route DTO/schema extensions and protocol validation, shared SNI passthrough, public/local bind mapping under F2, direct source preservation, upstream NAT limits, restricted HTTP upstream identity and exact withdrawal evidence. Raw-transport CIDR policy is unsupported and rejected. F2 transport mechanisms remain authoritative.
   - Extend W1/S1 persistence contracts for restart/remove/purge, tombstone contents/name reservation, cross-role deletion order, operator confirmation containing the app name, and interruption recovery. Registry images retain an independent lifecycle.
-  - Define UDP stop/recreate/rollback integration: per-listener admission/forwarding closure and epoch invalidation before backend effects, both-role acknowledgement, readiness and fresh reopen. Never invalidate unrelated listeners because a global snapshot generation changes.
+  - Define UDP stop/recreate/rollback integration: per-listener admission/forwarding closure and epoch invalidation before backend effects, edge invalidation acknowledgement, verified runtime publication/route readiness and fresh reopen. Never invalidate unrelated listeners because a global snapshot generation changes.
   - Specify errors/status for incompatible rollback, uncertain withdrawal, absent/current secrets, stopped intent, incomplete cleanup and destructive confirmation failure. Re-review authorization and data-loss risks with a critical senior/red-team pass.
   - Done: L1 and lifecycle extensions accepted with precise state/effect/error tables. Overlap stays disabled until ordering/shutdown/recovery tests pass, not pending an application-concurrency proof.
 
 - [ ] **A5.2 — TCP/UDP route validation and public activation** — depends on: A5.1.
   - Extend compact/expanded entrypoints and app routes to dedicated TCP/UDP listeners and accepted SNI passthrough. HTTP routes target HTTP; TCP/SNI targets TCP; UDP targets UDP. Entrypoints alone never expose traffic.
-  - Validate protocol/port/address/CIDR syntax and all desired/active/in-flight reservation conflicts, including wildcard/specific binds, IPv4/IPv6 dual-stack overlap, shared installation listeners and reserved registry SNI. No app-port catalogue in installation config.
+  - Validate protocol/port/address syntax and reject raw-transport `trusted_cidrs` and all desired/active/in-flight reservation conflicts, including wildcard/specific binds, IPv4/IPv6 dual-stack overlap, shared installation listeners and reserved registry SNI. No app-port catalogue in installation config.
   - Reuse control's atomic reservation and snapshot publication paths. Apply remains effect-free; deploy/rollback authorize only captured release operations. Changing a route does not independently create/delete/stop a service.
-  - Edge routes opaque TCP/UDP using trusted ingress client/local metadata and enforces CIDRs; ingress remains transport-only. Test untrusted headers/payloads cannot alter policy identity. Backends requiring original kernel client source stay blocked unless F2 separately proved it.
-  - Test allowed/denied RCON peers, binary TCP traffic/half-close, shared HTTP/SNI routing, dedicated listener failure and route removal with unrelated shared traffic. Unknown/stale route snapshots fail closed.
-  - Done: C2–C6/C10 and C8 full client→ingress→edge→backend TCP/UDP paths. No direct Podman publication may substitute for routed tests.
+  - Edge proxies TCP/UDP on its published container listeners; direct peers retain their host-observed source through pasta/Pesto; upstream proxies/NAT may still rewrite it. It owns local-destination metadata and UDP associations. Test that untrusted headers/payloads cannot grant publication authority or alter trusted HTTP identity. Raw-transport CIDR policy and original backend client-source requirements remain unsupported.
+  - Test administrator-restricted RCON exposure, rejection of unsupported CIDR fields, binary TCP traffic/half-close, shared HTTP/SNI routing, dedicated listener failure and route removal with unrelated shared traffic. Unknown/stale route snapshots fail closed.
+  - Done: C2–C6/C10 and C8 full client→rootless publication→edge→backend TCP/UDP paths. Direct fixture publication without edge proxying is not a routed test.
 
 - [ ] **A5.3 — UDP recreate and withdrawal across app operations** — depends on: A5.2; F2 production transport.
-  - For each affected listener, journal and stop admission/forwarding, invalidate old epoch/associations in ingress and edge, then replace/stop the backend. Keep admission closed until runtime/route/relay readiness agrees; reopen only with a fresh non-reused epoch.
-  - Apply the same sequence to full/service deploy, rollback, restart and stop. Late backend/IPC responses from the former epoch are discarded after process/host restart too. Delayed client datagrams may establish new associations; no game parsing.
-  - Dedicated/final shared-listener withdrawal requires ingress closure plus bounded accepted-stream/association cleanup. Route-only withdrawal on a shared HTTP/SNI listener requires edge's per-route evidence and must not kill other apps' traffic. Uncertain cleanup retains the applicable reservation.
-  - Test multiple clients, unsolicited/multiple backend replies, binary fidelity, timeout/overload bounds, changed backends, edge/ingress failure between invalidations and fresh reopen, reboot and stale reply injection. Another app's UDP sessions survive unrelated deployment.
+  - For each affected listener, journal and stop admission/forwarding, invalidate old edge epoch/associations and observe acknowledgement, then replace/stop the backend. Keep admission closed until runtime publication/backend and edge route readiness agree; reopen only with a fresh non-reused epoch.
+  - Apply the same sequence to full/service deploy, rollback, restart and stop. Late backend responses from the former epoch are discarded after process/host restart too. Delayed client datagrams may establish new associations; no game parsing.
+  - Dedicated/final shared-listener withdrawal requires verified runtime mapping removal plus bounded edge stream/association cleanup; Pesto rule changes do not require edge recreation; prove their established-flow effects and bounded cleanup. Route-only withdrawal on a shared HTTP/SNI listener requires edge's per-route evidence and must not kill other apps' traffic. Uncertain cleanup retains the applicable reservation.
+  - Test multiple clients, unsolicited/multiple backend replies, binary fidelity, timeout/overload bounds, changed backends, edge/runtime failure between invalidation and fresh reopen, reboot and stale reply injection. Another app's UDP sessions survive unrelated backend replacement including unrelated Pesto rule changes; edge/pasta failure remains a separate disruptive recovery case.
   - On restart recover only authorized applied listeners/routes with empty UDP sessions. Stop intent remains stopped; partial operations resume from observations and cannot reopen a withdrawn listener to simplify cleanup.
-  - Done: C2–C6/C10 and C8 game fixture disruption/reconnection and non-cooperative withdrawal. Explicitly report interrupted TCP and lost UDP on ingress failure.
+  - Done: C2–C6/C10 and C8 game fixture disruption/reconnection and non-cooperative withdrawal. Explicitly report interrupted TCP and lost UDP on edge failure; do not infer session cleanup or uninterrupted streams from successful Pesto rule mutation.
 
 - [ ] **A5.4 — Automatic web overlap and bounded shutdown** — depends on: A5.1 ordering/deadline contract; A5.2–3 route semantics.
   - Apply structural eligibility only: HTTP/HTTPS-only routed service, no persistent volumes. Unrouted workers, pure TCP/UDP, RCON, mixed-protocol and volume-owning services recreate. Hidden background work in a web process is the application's responsibility, not a new classifier.
@@ -74,4 +75,4 @@ Use fresh reference installations; app release rollback does not authorize repla
 - [Previous: Alpha 4](alpha-4-registry-rollback.md)
 - [Design: deployment strategy](../design.md#deployment-strategy)
 - [Design: lifecycle commands](../design.md#lifecycle-commands)
-- [Host-ingress ADR](../adr-002-host-ingress.md)
+- [Merged-edge ADR](../adr-004-merged-edge.md)
