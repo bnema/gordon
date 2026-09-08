@@ -76,6 +76,10 @@ var (
 	ErrAppImageUnresolvable       = errors.New("image reference unresolvable")
 	ErrAppSecretMissing           = errors.New("required app secret missing")
 	ErrAppUnmanagedImageVolume    = errors.New("image declares unmanaged volume")
+	// ErrPruneDisabled is the prune-disabled wire code
+	// (05-api-cli.md §3): prune paths fail closed while app state
+	// exists and ownership-aware protection is not yet wired in.
+	ErrPruneDisabled = errors.New("pruning disabled while app state exists")
 
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")

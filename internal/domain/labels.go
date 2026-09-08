@@ -15,6 +15,17 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
+	// App ownership labels are stamped by the v2.50 deploy engine on every
+	// container and volume it creates (03-deployment.md §4A/B, frozen here
+	// so prune/backup guards can consume them before the engine activates).
+	// The engine wiring that stamps them lands at cutover; until then no
+	// live resource carries them and guards treat their absence on a
+	// managed resource as legacy/unknown provenance (never prune-eligible
+	// once app state exists).
+	LabelApp         = "gordon.app"
+	LabelAppService  = "gordon.app.service"
+	LabelAppRevision = "gordon.app.revision"
+
 	// Standalone service labels identify Gordon-managed L4 service containers.
 	LabelService                       = "gordon.service"
 	LabelServiceName                   = "gordon.service.name"

@@ -51,9 +51,15 @@ const (
 
 // DBInfo holds detected database information from an attachment container.
 type DBInfo struct {
-	Type        DBType
-	Version     string
-	Domain      string
+	Type    DBType
+	Version string
+	Domain  string
+	// App and Service carry the v2.50 app identity for backup targets
+	// resolved from the active record (attachment-free detection).
+	// Empty for domain-keyed (V2 attachment) detection; the backup
+	// naming/scheduling rewiring that prefers them lands at cutover.
+	App         string
+	Service     string
 	Name        string
 	Host        string
 	Port        int
