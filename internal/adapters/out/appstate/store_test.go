@@ -207,6 +207,22 @@ func TestStore_CorruptAndIncompatible(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppStateIncompatible)
 }
 
+func TestStore_GarbageSweepsStagedOrphan(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	// Staged but never committed = orphan. GC removes it; committed stays.
+	require.NoError(t, store.StageApply(ctx, testIntent("blog", "rev-orphan")))
+	require.NoError(t, store.StageApply(ctx, testIntent("blog", "rev-keep")))
+	require.NoError(t, store.CommitApply(ctx, "blog", "apply-test-rev-keep"))
+	require.NoError(t, store.CollectGarbage(ctx, "blog", nil))
+
+	_, err := store.LoadApplyIntent(ctx, "blog", "apply-test-rev-orphan")
+	require.ErrorIs(t, err, domain.ErrAppIntentNotFound)
+	_, err = store.LoadApplyIntent(ctx, "blog", "apply-test-rev-keep")
+	require.NoError(t, err)
+}
+
 func TestStore_OperationJournal(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

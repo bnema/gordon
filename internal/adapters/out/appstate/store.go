@@ -110,9 +110,13 @@ func writeAtomic(path string, data []byte) error {
 }
 
 // syncDir fsyncs a directory so renames survive a crash.
+// A missing directory is a no-op: nothing was recorded there.
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		return fmt.Errorf("appstate: open dir: %w", domain.ErrAppStateIO)
 	}
 	defer func() { _ = d.Close() }()
@@ -513,7 +517,7 @@ func (s *Store) CollectGarbage(ctx context.Context, app string, inFlight []strin
 		if err != nil {
 			return err
 		}
-		if err := s.sweepIntentsLocked(app, protected); err != nil {
+		if err := s.sweepIntentsLocked(app); err != nil {
 			return err
 		}
 		return s.sweepRevisionsLocked(app, protected)
@@ -553,9 +557,12 @@ func (s *Store) protectedRevisionsLocked(app string, inFlight []string) (map[str
 	return protected, nil
 }
 
-// sweepIntentsLocked removes applied intents, keeps staged and committed.
-func (s *Store) sweepIntentsLocked(app string, protected map[string]struct{}) error {
-	_ = protected
+// sweepIntentsLocked removes applied intents and orphaned staged intents.
+// Committed intents are never swept here: they carry unmaterialized
+// deltas that recovery must complete. Staged intents are safe to remove
+// under the exclusive store lock — any staged intent visible here is an
+// orphan, since the process staging it would hold this same lock.
+func (s *Store) sweepIntentsLocked(app string) error {
 	ids, err := s.listIntentsLocked(app)
 	if err != nil {
 		return err
@@ -565,7 +572,7 @@ func (s *Store) sweepIntentsLocked(app string, protected map[string]struct{}) er
 		if err != nil {
 			return err
 		}
-		if intent.State != domain.AppIntentApplied {
+		if intent.State != domain.AppIntentApplied && intent.State != domain.AppIntentStaged {
 			continue
 		}
 		if err := os.Remove(s.intentPath(app, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
