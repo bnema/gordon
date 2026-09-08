@@ -111,6 +111,7 @@ func TestParse_Names(t *testing.T) {
 		{"reserved app", "name = \"gordon\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n", "reserved"},
 		{"no services", "name = \"blog\"\n", "at least one service"},
 		{"dup service", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n[[service]]\nname = \"web\"\nimage = \"img:2\"\n", "duplicate service"},
+		{"dup service case", "name = \"blog\"\n[[service]]\nname = \"Web\"\nimage = \"img:1\"\n", "must match"},
 		{"normalized collision", "name = \"blog\"\n[[service]]\nname = \"a.b\"\nimage = \"img:1\"\n[[service]]\nname = \"a-b\"\nimage = \"img:2\"\n", "same runtime identifier"},
 		{"replicas", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\nreplicas = 2\n", "replicas"},
 		{"volume double dash", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n[[service.volume]]\nname = \"a--b\"\npath = \"/data\"\n", "--"},
