@@ -82,7 +82,11 @@ const (
 	AdminResourceStatus  = "status"
 	AdminResourceLogs    = "logs"
 	AdminResourceVolumes = "volumes"
-	AdminResourceAll     = "*"
+	// AdminResourceApps gates the v2.50 app surface
+	// (docs/plans/v2.50.0/05-api-cli.md §4). Enforcement sites land
+	// at cutover with the admin handlers; the constant is frozen here.
+	AdminResourceApps = "apps"
+	AdminResourceAll  = "*"
 )
 
 // Admin scope action constants.
@@ -308,6 +312,11 @@ func AdminScopeLogs(actions ...string) string {
 // AdminScopeVolumes creates an admin scope for volumes with the given actions.
 func AdminScopeVolumes(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceVolumes, strings.Join(actions, ","))
+}
+
+// AdminScopeApps creates an admin scope for apps with the given actions.
+func AdminScopeApps(actions ...string) string {
+	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceApps, strings.Join(actions, ","))
 }
 
 // AuthStatus represents status of an authentication session.
