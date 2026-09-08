@@ -62,6 +62,16 @@ var (
 	// App manifest errors
 	ErrInvalidAppSpec = errors.New("invalid app manifest")
 
+	// App state errors
+	ErrAppStateIO             = errors.New("app state storage failure")
+	ErrAppStateCorrupt        = errors.New("app state is corrupt")
+	ErrAppStateIncompatible   = errors.New("app state format is not supported by this binary")
+	ErrAppStateConflict       = errors.New("app state conflict")
+	ErrAppRevisionNotFound    = errors.New("app revision not found")
+	ErrAppIntentNotFound      = errors.New("app apply intent not found")
+	ErrAppOperationNotFound   = errors.New("app operation not found")
+	ErrAppReservationConflict = errors.New("listener reservation conflict")
+
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")
 	ErrSecretNotFound              = errors.New("secret not found")
