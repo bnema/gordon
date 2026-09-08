@@ -4,7 +4,7 @@ Status: accepted design baseline; not yet implemented
 
 Date: 2026-09-04; host-ingress amendment: 2026-09-05; alpha scope/trust amendment: 2026-09-06; merged-edge amendment: 2026-09-08
 
-Decisions: [ADR-001](adr-001-v3-foundation.md), [ADR-002: host ingress](adr-002-host-ingress.md) (superseded by ADR-004), amended by [ADR-003: alpha scope and trust](adr-003-alpha-scope-and-trust.md) and [ADR-004: merged edge](adr-004-merged-edge.md). ADR-004 takes precedence on topology.
+Decisions: [ADR-001](adr-001-v3-foundation.md), [ADR-002: host ingress](adr-002-host-ingress.md) (superseded by ADR-004), amended by [ADR-003: alpha scope and trust](adr-003-alpha-scope-and-trust.md) and [ADR-004: merged edge](adr-004-merged-edge.md). ADR-004 defines the four-container topology; [ADR-006](adr-006-pasta-pesto-publication.md) takes precedence on networking/publication: required Podman 6 and pasta/Pesto, source preservation on direct paths and dynamic forwarding without required edge recreation. Older NAT/recreation assumptions in the detailed contracts are superseded; their remaining recovery requirements still apply.
 
 Supersedes: the distributed implementation archived as `v3-deprecated`
 
@@ -249,9 +249,9 @@ Alpha 1 completion still requires clean-host proofs for runtime publication life
 
 ### TLS and explicit registry publication
 
-Registry is private by default. Explicit installation configuration of a public domain creates a reserved system route; registry remains a Gordon component, never an app subject to app stop/remove/purge. Edge may terminate public registry TLS and forward authenticated OCI requests, just as it terminates application HTTP/HTTPS. Compromised edge can read those credentials/payloads; registry confidentiality against edge and its former certificate-impersonation proof gate are removed.
+Registry is private by default. Explicit installation configuration of a public domain creates a reserved system route; registry remains a Gordon component, never an app subject to app stop/remove/purge. Edge terminates public registry TLS and forwards authenticated OCI requests using short-lived control-minted push tokens under ADR-004, just as it terminates application HTTP/HTTPS. Compromised edge can read those credentials/payloads; registry confidentiality against edge and its former certificate-impersonation proof gate are removed.
 
-Public endpoint TLS validation, certificate provisioning/renewal, supported modes and proxy-to-origin trust still need a focused contract. V2's internal CA and supplied certificates are candidates, not an approved v3 PKI topology. Cloudflare Full (strict) does not automatically trust a Gordon CA. A trusted upstream terminator is trusted for traffic it decrypts; forwarded client identity must be accepted only through a securely restricted/authenticated upstream path, not merely from a NAT-rewritten peer address. Do not assume Cloudflare or NetBird provides generic TCP/UDP identity preservation.
+ADR-004 includes ACME issuance in edge. Public endpoint TLS validation, supported challenges/modes, certificate provisioning/renewal and proxy-to-origin trust still need a focused contract. V2's internal CA and supplied certificates are candidates, not an approved v3 PKI topology. Cloudflare Full (strict) does not automatically trust a Gordon CA. A trusted upstream terminator is trusted for traffic it decrypts; forwarded client identity must be accepted only through a securely restricted/authenticated upstream path, not merely from a NAT-rewritten peer address. Do not assume Cloudflare or NetBird provides generic TCP/UDP identity preservation.
 
 Runtime pulls Gordon-hosted images through a separate authenticated private endpoint reachable by the rootless engine and independent of edge. Its credentials are pull-only; control has no push credentials and edge has no credential-store mount, although public credentials transit edge when enabled. Endpoint trust and rootless reachability must be proven.
 
@@ -458,22 +458,23 @@ listen = ":27015/udp"
 entrypoint = "game-udp"
 ```
 
-A private RCON route can bind a private address and restrict peers:
+An RCON route can bind a private host address:
 
 ```toml
 [routes.rcon]
 listen = "100.64.0.1:27020/tcp"
 entrypoint = "rcon"
-trusted_cidrs = ["100.64.0.0/10"]
 ```
+
+The administrator restricts access through host firewall or private-network policy. Rootless publication rewrites peer addresses; raw TCP/UDP `trusted_cidrs` is unsupported in alpha and must be rejected, not silently ignored.
 
 Route identity is `<app>/<route>`. Removing or changing a route never creates, stops, or deletes a service by itself.
 
 Apply validation canonicalizes DNS names to lowercase ASCII, rejects duplicate exact hosts, and initially rejects wildcard hosts. Dedicated listeners must not overlap installation-wide for the same transport protocol, including wildcard-versus-specific address binds and IPv4/IPv6 dual-stack conflicts. Installation listeners, including edge's shared HTTP/HTTPS ports, participate in this check. A route's protocol must match its target entrypoint. HTTP routes target `http` entrypoints and edge terminates public TLS; SNI passthrough targets `tcp` entrypoints and leaves TLS untouched. Registry's configured SNI is reserved and conflicts with no app route. Route and certificate conflicts fail during apply, before persistence.
 
-Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. A host/route reservation on a shared HTTP/SNI listener becomes available after no desired or in-flight reference remains and edge acknowledges its route-generation withdrawal, including route-level draining/rejection on existing streams. Ingress cannot attribute opaque shared streams to application routes and must not close unrelated traffic; the shared listener reservation remains while other authorized routes need it.
+Control reserves route hosts and listener bindings across desired AppSpecs, active routes, and in-flight operations. Reservations belonging to the same app may overlap across those states, but a candidate configuration must remain internally conflict-free. Removing a route from desired state does not free its active reservation. A host/route reservation on a shared HTTP/SNI listener becomes available after no desired or in-flight reference remains and edge acknowledges its route-generation withdrawal, including route-level draining/rejection on existing streams. The shared listener reservation remains while other authorized routes need it. Route-only withdrawal must not close unrelated traffic.
 
-Withdrawal of a dedicated listener or the final authorization for a shared listener additionally requires ingress confirmation of listener closure and bounded cleanup of accepted connections/UDP associations. Ingress owns all host sockets; edge has no host descriptors to retain. Stopping acceptance is distinct from draining/termination, and an edge ACK alone does not prove ingress cleanup. Timeout, refusal or uncertain release fails withdrawal and retains the applicable reservation. Reassignment requires verified release, with operator-controlled installation recovery if ownership remains uncertain, without restoring the withdrawn listener or granting runtime/ingress new restart authority.
+Withdrawal of a dedicated listener or the final authorization for a shared listener additionally requires verified runtime removal of the published mapping and bounded cleanup of edge connections/UDP associations. Edge owns container-network sockets; runtime executes host publication through rootless Podman. Stopping acceptance is distinct from draining/termination, and an edge ACK alone does not prove mapping removal. Timeout, refusal or uncertain release fails withdrawal and retains the applicable reservation. Reassignment requires verified release, with operator-controlled installation recovery if ownership remains uncertain. Recovery must not restore withdrawn mappings. Published-port-set changes may interrupt all edge traffic; this accepted limit does not grant runtime generic component-management authority.
 
 Historical releases do not reserve routes indefinitely: deploy and rollback revalidate and acquire reservations before runtime mutation. Apply validation and reservation changes are one atomic control-side operation; they do not change edge or Podman.
 
@@ -553,7 +554,7 @@ prepared -> mutating -> routes-published -> active
                          \-> failed
 ```
 
-Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set, edge acknowledges the intended route generation, and ingress confirms the required listener and TCP/UDP relay readiness. On restart, control observes runtime, edge and ingress before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
+Control persists the operation ID and phase before each external effect. It marks a release active only after runtime reports the intended service set, edge acknowledges the intended route generation, runtime verifies the authorized publication mappings, and edge reports the required listener readiness. On restart, control observes runtime and edge before resuming or failing an operation; it never blindly replays a mutation. Recreate services are changed in a deterministic service-name order. If a later change fails, control keeps the former route generation, performs bounded best-effort restoration of already changed recreate services subject to the volume-safety restriction above, and reports the exact mixed or restored actual state as degraded.
 
 `push --deploy` and auto-deploy use the same revision and effective-configuration checks as service-targeted deploy. If a newer AppSpec awaits deployment or a synthetic rollback has changed the effective configuration, the image push succeeds but deployment is refused until a full `gordon deploy <app>` activates the desired specification. They cannot implicitly reconcile that divergence.
 
@@ -638,11 +639,11 @@ Performs remove and deletes app-owned volumes and the tombstone after explicit c
 | --- | --- |
 | control unavailable | Existing workloads and routes continue. Administration and mutations fail. Registry queues push events durably. |
 | runtime unavailable | Existing Podman containers continue. Edge and registry continue. Runtime mutations fail clearly. |
-| ingress unavailable (fallback topology) | Relayed TCP connections terminate, UDP associations are lost, and public traffic/registry access and new host binds are unavailable. Healthy edge is not restarted merely to recover ingress. |
-| edge unavailable | Workloads and administration continue. Public app and registry access are unavailable; private runtime pulls remain independent. |
+| edge unavailable | Workloads and administration continue. Public app and registry access are unavailable; its TCP connections terminate and UDP sessions are lost. Private runtime pulls remain independent. |
+| publication change or uncertain mapping | A published-port-set change may interrupt all edge traffic. Unverified mappings prevent public readiness and uncertain withdrawal retains reservations. |
 | registry unavailable | Existing apps and routes continue. OCI push/pull fail. Cached digest-pinned images may still be deployable. |
 
-Edge persists only its last valid sanitized route snapshot and public certificates. It may start from that snapshot when control is unavailable, but public readiness also requires validated listener recovery with ingress. With no valid snapshot, it fails closed. Invalid or older snapshots never replace the active one. Ingress recovery must use authorized applied state and observed ownership, not arbitrary bind requests from edge or a pending AppSpec; the protocol and minimal persisted metadata remain gated by ADR-002.
+Edge persists only its last valid sanitized route snapshot and public certificates. It may start from that snapshot when control is unavailable, but public readiness also requires verified runtime publication and valid backends. With no valid snapshot, it fails closed. Invalid or older snapshots never replace the active one. Runtime publication recovery uses previously authorized applied state and observed ownership, not arbitrary bind requests from edge or a pending AppSpec. The publication contract defines minimal persisted metadata and observe-before-resume recovery under ADR-004. UDP listeners recover with fresh epochs and empty sessions.
 
 The general rule is that losing the control plane must not interrupt already active workloads or routes.
 
@@ -764,8 +765,8 @@ The [implementation plan set](plans/README.md) covers all Alpha 1–5 stages, in
 - One host binary and one digest-pinned component image built from one distribution identity.
 - Four role-specific serve modes from that image.
 - A locked, journaled, idempotent host installer limited to fresh install and same-generation recovery.
-- Atomic Quadlet and ingress-service generation with an installation target managed by the host binary.
-- Opaque TCP relay, bounded UDP associations, effective withdrawal and automatic listener/route recovery tests with new connections and empty UDP sessions; no firewall mutation or live UDP session migration.
+- Atomic generation of four Quadlets with an installation target managed by the host binary.
+- Edge TCP proxying, bounded UDP associations, verified runtime publication withdrawal and automatic listener/route recovery tests with new connections and empty UDP sessions; no relay IPC, firewall mutation or live UDP session migration.
 - Identity, readiness, lingering, partial-failure, and clean Ubuntu 26.04 bootstrap tests.
 - Private Unix sockets and SSH administration.
 - Socket recreation, startup-order, ownership, mode, mount, and SELinux tests.

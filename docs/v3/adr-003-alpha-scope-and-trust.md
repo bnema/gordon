@@ -6,6 +6,10 @@
 - Amends: [ADR-001](adr-001-v3-foundation.md) and [ADR-002](adr-002-host-ingress.md)
 - Related: [Consolidated design](design.md), [implementation plans](plans/README.md)
 
+## Topology precedence
+
+[ADR-004](adr-004-merged-edge.md) supersedes §5's native-versus-host-ingress checkpoint: four containers, merged edge and runtime-owned publication, with no host ingress process or relay IPC. The rest of this ADR remains applicable. The historical checkpoint below is not an instruction to retest abandoned mechanisms.
+
 ## Context and precedence
 
 Gordon is a small single-host deployment tool for an administrator who chooses the hosted applications, not a hostile multi-tenant hosting service. Applications may nevertheless be compromised. Their lack of direct access to Gordon's administration, engine and private storage remains essential.

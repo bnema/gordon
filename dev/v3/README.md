@@ -4,7 +4,7 @@ A small Go wrapper around **libvirt + cloud-init + SSH**. It creates an Ubuntu 2
 
 Gordon v3 is not implemented yet. The example apps below run directly with rootless Podman; their success is **not** evidence that Gordon's edge, installer, routes, or security policy works.
 
-[ADR-003](../../docs/v3/adr-003-alpha-scope-and-trust.md) requires a [native pasta/Pesto retest](../../docs/v3/plans/alpha-1a-foundation-proofs.md) before implementing ingress. Direct pasta was already tested; native bridge publication/version availability remains unverified. If it passes isolation, identity and lifecycle checks, omit the host role entirely. Otherwise [ADR-002](../../docs/v3/adr-002-host-ingress.md) remains the conditional confined rootless user-service fallback, with no host-network descriptors passed to edge. This wrapper installs neither topology. UDP sessions remain disposable; see the [consolidated design](../../docs/v3/design.md). The privileged libvirt setup below is optional developer-host tooling, not permission for Gordon's installer to perform privileged setup.
+[ADR-004](../../docs/v3/adr-004-merged-edge.md) selects four rootless containers with merged edge and runtime-owned publication. There is no host ingress process or relay IPC. The [native publication](proofs/a1a0-native-pasta.md) and [host-process confinement](proofs/a1a1-confinement.md) reports record negative results for abandoned paths; they do not validate the merged-edge stack. This wrapper does not install Gordon. [Alpha 1A](../../docs/v3/plans/alpha-1a-foundation-proofs.md) defines the remaining container, publication, transport and recovery proofs. UDP sessions remain disposable and published-port-set changes may interrupt all edge traffic. The privileged libvirt setup below is optional developer-host tooling, not permission for Gordon's installer to perform privileged setup.
 
 ## Ubuntu dependency caveat: socket-activation experiments
 
@@ -32,9 +32,9 @@ original binary and restore it after stopping the experimental containers and
 networks; do not replace packages on a production host using this procedure.
 
 The sandbox does not apply this workaround automatically. The direct-Podman
-examples below do not use socket activation. ADR-002 retains host sockets in
-ingress for TCP/UDP relay rather than startup activation, so this workaround is not an
-established prerequisite for the selected design. A fixed DNS helper alone does
+examples below and ADR-004's ordinary rootless publication do not use socket
+activation, so this workaround is not an established prerequisite for the selected
+design. A fixed DNS helper alone does
 not satisfy the remaining Alpha 1 security/lifecycle requirements.
 
 ## CachyOS setup (once)

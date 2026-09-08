@@ -1,6 +1,6 @@
 # Alpha 3: multi-service security and persistent data
 
-Status: planned; entry requires Alpha 2 complete and S1 record/key/recovery contracts. ADR-003 already selects encrypted runtime bbolt with a separate read-only key mount; storage-engine selection is not open. Ingress-specific effects below apply only if the fallback survives N0.
+Status: planned; entry requires Alpha 2 complete and S1 record/key/recovery contracts. ADR-003 already selects encrypted runtime bbolt with a separate read-only key mount; storage-engine selection is not open. ADR-006 requires runtime-controlled Pesto publication with the four-container topology; no host ingress, relay IPC or rootlessport fallback is implemented.
 
 ## Context and scope
 
@@ -42,7 +42,7 @@ Existing anchors to inspect at execution: Alpha 2 apps/deployment/domain/persist
   - Create/verify stable named Podman volumes keyed by app/service/volume and the accepted ownership record. Reuse them across releases; refuse unknown/foreign resources. Prevent image-declared anonymous-volume or forged-label paths from bypassing ownership.
   - Reconcile automatic app-private and per-app ingress networks, plus explicit named private memberships. All app services join the private network with service-name aliases; only routed services join ingress alongside edge.
   - Permit selected services of separate apps to join an accepted named network; no cluster-wide or implicit shared network. Edge must not join database/private networks merely because a routed frontend uses them.
-  - Keep desired network declarations in effective release configuration, never derive them from observed Podman attachments. Restore authorized attachments after runtime/edge restart; shared network teardown cannot disconnect another app.
+  - Keep desired network declarations in effective release configuration, never derive them from observed Podman attachments. Restore authorized attachments and reconcile Pesto destinations after runtime/edge restart; prevent stale rules reaching an address reused by an unrelated service. Shared network teardown cannot disconnect another app. Test that DB/cache are not exposed by public mappings and cannot reach the Pesto capability.
   - Test volume content across deploy/reboot, path/ownership collisions, forbidden sharing, network creation/attach failure, unrelated-resource exclusion and negative edge-to-database/cross-app connectivity.
   - Done: C2–C6/C10 plus C8 DB/cache/web fixture isolation and persistent counters, without direct host publication of DB/cache.
 

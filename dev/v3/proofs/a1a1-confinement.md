@@ -2,11 +2,15 @@
 
 Status: complete — no confinement candidate meets the boundary (see H1, H2); public use stays blocked
 Date: 2026-09-07
-Task: [alpha-1a-foundation-proofs.md](../plans/alpha-1a-foundation-proofs.md) A1A.1
+Task: [alpha-1a-foundation-proofs.md](../../../docs/v3/plans/alpha-1a-foundation-proofs.md) A1A.1
 Gate: proven confinement unblocks ingress transport work (A1A.2–4); failure blocks public use.
 
 This directory holds sanitized reference-host evidence only.
 No credentials, private keys, or bulk OCI payloads.
+
+## Current interpretation
+
+[ADR-004](../../../docs/v3/adr-004-merged-edge.md) removes the host ingress process. The failed candidates and blocked fallback below are historical evidence, not current implementation gates. Container/capability denial and runtime publication recovery require separate merged-edge proofs; this report does not establish them.
 
 ## Entry state (from A1A.0)
 

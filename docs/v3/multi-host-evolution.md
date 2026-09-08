@@ -4,7 +4,7 @@ Status: planning note; not a cluster specification or an amendment to accepted A
 
 Date: 2026-09-05; alpha-context update: 2026-09-06
 
-[ADR-003](adr-003-alpha-scope-and-trust.md) updates the alpha baseline: edge is trusted for application/registry traffic, native pasta is tested before committing to host ingress, and web overlap requires no concurrency declaration. References below to host ingress apply only to the conditional fallback. Future cluster concurrency/fencing questions remain future decisions; they are not a reason to restore the removed alpha eligibility gate. No cluster scope is added.
+[ADR-003](adr-003-alpha-scope-and-trust.md) defines the trusted-edge model and automatic web overlap without a concurrency declaration. [ADR-004](adr-004-merged-edge.md) selects four containers with runtime-owned publication and no host ingress or relay IPC. Future cluster concurrency/fencing questions remain future decisions, not reasons to restore removed alpha gates. No cluster scope is added.
 
 ## Purpose and scope
 
@@ -33,7 +33,7 @@ critical review before implementation.
 | Releases and operations | Releases capture immutable effective configuration and digests; operations journal effects and observed results. | Keep release identity separate from container identity and operation outcome. A future shared release could have different deployment results on different hosts. |
 | Control and runtime | Control owns desired state; runtime owns Podman and observed local resources. | Keep Podman IDs, local paths and transport mechanics at their owning boundary, not in logical app identity. |
 | Routing | Routes target stable entrypoints; edge consumes a sanitized projection. | Keep logical routing separate from resolving live backend addresses. Do not make a container IP the stable route identity. |
-| Host ingress | Ingress owns host sockets and relays opaque TCP/UDP traffic to its local edge over Unix IPC. | Keep this transport local; an upstream load balancer does not require ingress-to-edge IPC to become a cross-host API. |
+| Publication and edge | Control authorizes listener mappings, runtime executes rootless publication, and edge owns the traffic plane. | Keep host-local publication mechanics separate from route intent; a future load balancer does not require a generic cross-host component API. |
 | Persistent data | A volume belongs to a service; releases reuse it and rollback does not roll back its contents. | Do not infer volume mobility or safe replication from a reusable service definition. |
 
 These are implementation review criteria, not a request to introduce generic
@@ -113,7 +113,7 @@ opt-in for communication between apps.
 - **Unsafe failover:** a timeout is not proof that a remote process has stopped.
   Placement and recovery must address stale ownership before automated failover.
 - **Boundary erosion:** remote orchestration must not expose Podman, secrets or
-  control-private state to the load balancer, edge or ingress.
+  control-private state to the load balancer or edge.
 - **Compatibility promises:** preserving these boundaries reduces coupling; it
   does not guarantee unchanged manifests, APIs or persistent formats in a future
   cluster version. Those migrations remain separate decisions.
@@ -126,4 +126,4 @@ No new cluster behavior or security proof is approved by this planning note.
 
 - [Accepted v3 design](design.md)
 - [ADR-001: v3 foundation](adr-001-v3-foundation.md)
-- [ADR-002: host ingress](adr-002-host-ingress.md)
+- [ADR-004: merged edge](adr-004-merged-edge.md)

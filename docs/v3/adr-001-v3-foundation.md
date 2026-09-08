@@ -1,10 +1,14 @@
 # ADR-001: Rebuild Gordon v3 around isolated local components and declarative apps
 
-- Status: Accepted as amended by [ADR-002](adr-002-host-ingress.md) and [ADR-003](adr-003-alpha-scope-and-trust.md); not yet implemented
+- Status: Accepted as amended by [ADR-003](adr-003-alpha-scope-and-trust.md) and [ADR-004](adr-004-merged-edge.md); [ADR-002](adr-002-host-ingress.md) is superseded; not yet implemented
 - Date: 2026-09-04
 - Decision owners: Gordon maintainers
 - Related: [V3 design](./design.md), issue #245, PR #244
 - Supersedes: the implementation archived on branch `v3-deprecated`
+
+## Amendment — 2026-09-08
+
+[ADR-004](adr-004-merged-edge.md) takes precedence on topology: four rootless containers, merged edge, runtime-owned publication, no host ingress process or relay IPC. Native source-preserving publication and host-process confinement paths are abandoned. Historical fifth-role/relay/source-preservation requirements below do not apply. Current publication, container isolation and recovery gates are in the [design](design.md) and [Alpha 1A plan](plans/alpha-1a-foundation-proofs.md).
 
 ## Amendment — 2026-09-06
 

@@ -2,7 +2,7 @@
 
 Status: planned; entry requires complete Alpha 1 and W1 contracts before workload implementation.
 
-ADR-003 selects bbolt, default 30s per-service shutdown and the trusted-edge model. ADR-004 selects the merged edge container with runtime-owned publication; edge publication/withdrawal readiness follows its contracts, without relay IPC.
+ADR-003 selects bbolt, default 30s per-service shutdown and the trusted-edge model. ADR-004 defines merged edge; ADR-006 requires runtime-controlled Pesto publication, with direct source preservation and no routine edge recreation for rule changes.
 
 ## Context and scope
 
@@ -32,7 +32,7 @@ Proposed new work locations: `internal/domain/{app_spec,release,operation,reserv
   - Apply compares normalized state and atomically persists revisions/reservations under the W1 contract, with last-successful-write-wins and former/resulting revision/actor reporting. A new app starts stopped; repeated/changed apply preserves intent. No runtime pull, network, bind, container or edge call is permitted.
   - Reserve desired, active and in-flight identities. Removal from desired cannot release an active route. Test two apps racing for one host, failed persistence, simultaneous apply/deploy capture and internally conflicting candidates.
   - Test malformed TOML, missing/implicit service, unsupported env/secrets/volumes/multi-service/TCP/UDP fields at this stage, duplicate forms and unresolved references. No partial desired state on failure.
-  - Done: C2–C6/C10; fake runtime/edge/ingress/resolver call counts prove zero apply effects, including negative paths.
+  - Done: C2–C6/C10; fake runtime/edge/resolver call counts prove zero apply effects, including negative paths.
 
 - [ ] **A2.3 — Prepare immutable releases and constrained runtime mutations** — depends on: A2.2.
   - Resolve the captured selector to a digest before workload mutation; persist the immutable effective AppSpec, source revision, exact digest, resolved runtime definition and intended route projection. Registry unavailable or digest mismatch fails without activating a release.
@@ -43,18 +43,18 @@ Proposed new work locations: `internal/domain/{app_spec,release,operation,reserv
   - Done: C2–C6/C10 and C8 creates the intended hardened digest-pinned workload/network set without exposing traffic prematurely.
 
 - [ ] **A2.4 — Activate HTTP routes with coordinated evidence** — depends on: A2.3.
-  - Implement edge routing from the sanitized release projection and ingress listener authorization from the captured control operation. No complete manifests, stored secrets or Podman capability reach edge/ingress.
-  - Use W1 backend availability checks and recreate behavior. Mark active only after the intended runtime set, edge route generation and ingress listener/relay readiness agree. No label-driven HTTP probe or OCI healthcheck; no two-instance replacement before L1.
+  - Implement edge routing from the sanitized release projection and runtime publication authorization from the captured control operation. No complete manifests, stored secrets or Podman capability reach edge.
+  - Use W1 backend availability checks and recreate behavior. Mark active only after the intended runtime set, edge route generation/listener readiness and verified runtime publication agree. No label-driven HTTP probe or OCI healthcheck; no two-instance replacement before L1.
   - Publish complete coordinated snapshots across apps; reject invalid/older generations. Persist only last-valid edge state and app certificates. Edge restarts fail closed without a valid snapshot; backend observations must be valid before recovering public readiness.
-  - Withdrawal on a shared listener is route-level at edge, including existing-stream rejection/draining according to W1; preserve other apps. Final-listener withdrawal also requires ingress closure/cleanup. Timeout/unknown ACK retains reservations.
-  - Test partial runtime success, unavailable/lying/delayed edge ACK, ingress failure, invalid backend, concurrent publications, old snapshots, withdrawn host reuse and unrelated-route continuity. Cover client-header spoofing/CIDR checks over the real relay.
+  - Withdrawal on a shared listener is route-level at edge, including existing-stream rejection/draining according to W1; preserve other apps. Final-listener withdrawal also requires verified runtime mapping removal and bounded edge transport cleanup; Pesto rule changes must not require edge recreation; test established-flow effects under F2. Timeout/unknown ACK retains reservations.
+  - Test partial runtime success, unavailable/lying/delayed edge ACK, publication failure, invalid backend, concurrent publications, old snapshots, withdrawn host reuse and unrelated-route continuity. Cover direct HTTP access with host-observed source identity and rejected forged headers, plus trusted-upstream HTTP identity and origin-bypass rejection over the real pasta/Pesto path; reject raw-transport CIDR policy.
   - Done: C2–C6/C10 and C8 full HTTP path; status cannot claim active for a partially acknowledged operation.
 
 - [ ] **A2.5 — Minimal CLI, stop and observation-driven recovery** — depends on: A2.2–4.
   - Implement `apps apply --file`, `apps list/show`, full `deploy <app>`, `stop <app>`, `status [app]`, `logs <app>` and read-only `routes list/show`. All list/show commands support JSON; local and SSH use the same control API. Keep logs bounded/cancellable and avoid logging full untrusted payloads.
   - Full deploy of a stopped app requests running state but changes durable intent only on activation. If interrupted, its operation can resume; generic reconciliation must not resurrect the previous release. On failure keep stopped intent and clean only known partial resources.
   - Stop persists stopped intent before withdrawal/container removal and retains revisions/releases/ownership. Signal each captured active container, wait at most its effective stop_timeout, force terminate if needed and confirm cleanup before releasing reservations. Persist/reconcile the deadline across interruption; apply/queued events cannot undo stopped intent. Test early exit, force kill and stale-target/retry protection.
-  - Recovery observes runtime, edge and ingress before effects, uses active pinned definitions, and never resolves newer tags or activates pending AppSpecs. Restore edge ingress attachments after restart; do not add a generic Gordon component restart API.
+  - Recovery observes runtime publication/workloads and edge before effects, uses active pinned definitions, and never resolves newer tags or activates pending AppSpecs. Restore edge ingress attachments and reconcile Pesto destinations after restart without exposing unrelated containers through reused addresses; do not add a generic Gordon component restart API.
   - Status exposes desired revision, effective active release, source revision, execution intent, operation phase and observed/degraded resources, not a single optimistic status bit.
   - Test stop/deploy races, reboot with pending desired configuration, failed deploy while stopped, unavailable control/runtime and logs cancellation. Runtime absence must not terminate existing containers; control absence must not interrupt already active routes.
   - Done: C2–C6/C10 and C8 real local/SSH CLI + reboot recovery for both running and stopped apps.
