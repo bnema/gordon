@@ -36,6 +36,17 @@ Native socket observed mode is 0755 inside an account-owned 0700 directory. File
 
 No Gordon runtime reconciler participates. This models its absence, not a full runtime-crash journal test. Address-only rules plus eventual reconciliation do not prevent unauthorized exposure. A preventative ownership/lifecycle contract is required before accepting direct publication.
 
+## Dedicated edge-address candidate
+
+A follow-up used separate, non-overlapping synthetic edge (`10.92.0.0/24`) and app (`10.93.0.0/24`) bridges. Only edge fixtures received the fixed publication destination `10.92.0.10`. Both used the same pinned Alpine image and restrictions above.
+
+1. A Pesto TCP rule to edge A returned `edge-A` to the external client.
+2. Edge A was removed while the app fixture remained running on its separate bridge. The rule remained, but the external probe timed out rather than reaching the app.
+3. Edge B was created at the fixed edge address. Without changing the rule, the external client received `edge-B`.
+4. The rule was explicitly deleted before removing edge B. Creating another edge fixture at the same address did not restore the rule: Pesto tables stayed empty and a new external connection was refused (errno 111).
+
+This supports fixed edge destination feasibility under the manually enforced network assignment. It does not prove a durable allocator or prevent a Podman-authorized caller from placing an unrelated container on the edge network. Gordon must enforce exclusive edge network/address ownership, reject overlapping allocations and validate recovery before opening listeners. The surviving rule automatically reaches a replacement as soon as it listens; application readiness/authorization is not provided by Pesto. Established-flow cleanup and UDP remain separate gates. Both networks and all follow-up containers were removed by exact names.
+
 ## Consequences and remaining work
 
 Runtime remains the sole intended Pesto capability holder. The naive native-directory mount fails both least-mount and stable-recreation assumptions. Rule deletion is not established-flow termination. These failures block accepting this candidate, not the selected Podman/pasta stack.
