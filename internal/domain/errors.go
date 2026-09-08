@@ -73,6 +73,9 @@ var (
 	ErrAppReservationConflict     = errors.New("listener reservation conflict")
 	ErrAppTrafficProjection       = errors.New("app traffic projection failed")
 	ErrAppTrafficSnapshotConflict = errors.New("traffic snapshot conflict")
+	ErrAppImageUnresolvable       = errors.New("image reference unresolvable")
+	ErrAppSecretMissing           = errors.New("required app secret missing")
+	ErrAppUnmanagedImageVolume    = errors.New("image declares unmanaged volume")
 
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")
