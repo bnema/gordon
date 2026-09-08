@@ -16,9 +16,24 @@ implements exactly this as a replacement of the #242 traffic design
   implemented as: conflict validation runs over the merged candidate
   (active app projections + global config) BEFORE persistence of any
   apply that changes reservations, and again at deploy preflight.
-- No route publication from PENDING desired config: only `active.json`
-  definitions project into the snapshot. Stale/invalid updates keep
-  serving the previous snapshot.
+- No route publication from PENDING desired config. The traffic
+  candidate is: ACTIVE per-service definitions PLUS the journaled,
+  ready, operation-owned service transition (REVIEW FIX round 2,
+  HIGH-2 — the previous "only active.json projects" rule made the
+  frozen commit-before-publish sequence unimplementable). The op-owned
+  overlay is EXPLICITLY distinguished from pending desired: it exists
+  only inside a non-terminal journal op whose replacement passed
+  readiness, carries the op id, and dies with the op (terminal op →
+  overlay resolved into active.publish or discarded with the
+  replacement removed). Ordinary reprojection (monitor ticks, unrelated
+  app commits, terminal-failure handling) MUST NOT discard an
+  engaged overlay before its owning op resolves it.
+- Commit/publication recovery: traffic-commit-succeeded +
+  active.publish-failed → the op journal records `traffic-committed`
+  with the committed snapshot id; recovery replays ONLY
+  active.publish (+ retire) from the journaled transition, NEVER
+  re-projects from active (which would undo the shift). Conversely
+  active.publish MUST NOT precede its service's traffic commit.
 - Snapshot ownership: each traffic commit carries the op id +
   snapshot id. Concurrent commits race on snapshot id; the loser
   re-reads, re-projects, and retries (bounded, 3 attempts) or fails
@@ -211,8 +226,9 @@ P6.3 exit criteria and cutover prerequisites.
 
 ## Decision required (D3 — maintainer acceptance)
 
-1. Alias-at-create + endpoint re-attach on alias change (§4
-   consequence) — accept?
+1. Alias-at-create + CONTAINER RECREATION on alias change (§4) —
+   accept? (Review fix: re-attach was unproven and is explicitly
+   deferred to a later contract change with runtime evidence.)
 2. No route-local CIDR field beyond RCON in v2.50 (§5) — accept?
 3. RCON as explicit kind with `public` + `trusted_cidrs` pair (§6) —
    accept?

@@ -184,14 +184,32 @@ Reusing the manifest §5.2 types. Engine semantics:
 - Traffic commit covers ONLY services whose replace steps succeeded.
   Failed services keep old active backends (web) or stay stopped on
   old definition (initial deploy).
-- Op outcome: `success` (all steps succeeded), `partial` (≥1
-  succeeded AND ≥1 failed), `failed` (preflight failed or zero
-  service steps succeeded).
+- Op outcome is defined over TERMINAL PER-SERVICE DEPLOYMENT RESULTS
+  (review fix round 2, MEDIUM-5 — the old step-counting rule
+  misclassified single-service readiness failure as partial):
+  - `success`: every service terminal `deployed`, no failures.
+  - `partial`: ≥1 service terminal `deployed` AND ≥1 service terminal
+    `failed`.
+  - `failed`: ZERO services terminal `deployed` (includes preflight
+    failure, and the single-service readiness-failure case: network /
+    create / start intermediate successes do NOT count — the
+    replacement was removed and nothing activated).
+  - Post-publication cleanup failures (retire step fails AFTER
+    active.publish): service stays terminal `deployed`; the op records
+    a `cleanup-warning` (does NOT flip outcome to partial) with the
+    exact leftover identity for operator action. Removal results:
+    a fully-removed service counts as `deployed` (its desired terminal
+    state); a half-removed service counts as `failed`.
+  - Examples: (a) 1-service app, readiness timeout → `failed`, exit 1.
+    (b) web OK + worker readiness fail → `partial`, exit 2, worker
+    keeps old definition. (c) web deployed then retire fails →
+    `success` + `cleanup-warning`, exit 0.
 - Deploy output (text + JSON, no secrets): captured `REV`, `OP`,
-  per-step planned/succeeded/failed/not-run with identities
-  (container ids, digests, networks), resulting effective vs observed
-  state, retained volumes/secrets list. Exit code: `0` success,
-  `2` partial, `1` failed (exact codes frozen here; CLI maps them).
+  per-SERVICE terminal result + per-step planned/succeeded/failed/
+  not-run with identities (container ids, digests, networks), resulting
+  effective vs observed state, retained volumes/secrets list.
+  Exit code: `0` success, `2` partial, `1` failed (exact codes frozen
+  here; CLI maps them).
 - Retry of a partial op uses a NEW op id, re-captures the revision,
   and re-observes runtime — never resumes step numbers blindly.
 
@@ -212,12 +230,27 @@ third actor. Frozen resolution:
      the exact container and report `unauthorized-start-stopped`.
      Reconciliation-after-start is NOT sufficient; the container is
      actively stopped.
+   - UNSAFE-IMAGE GUARD (review fix round 2, HIGH-1 — durable
+     per-service recovery state, survives terminal ops and reboot):
+     machine 4B records `old_image_unsafe: true` for the service in
+     `ownership.json` (`services.<svc>.restart_unsafe`) BEFORE the
+     replacement can write. The monitor AND boot recovery consult this
+     flag FIRST, regardless of journal terminality: while set, they
+     MUST NOT start/restart/recreate the OLD image or digest. Only an
+     explicit operator `deploy` (any revision — the new preflight
+     re-validates) clears the flag after its own replacement passes
+     readiness. The flag's storage (ownership record) is GC-protected
+     like active references. Without this, a terminal readiness-failed
+     op + reboot would restart the old image against migrated data.
    - intent running + container exited/crashed → restart with
      backoff (existing `restartRecord` mechanism retained), bounded
      restarts then `crashed` state + diagnostic (no infinite loop).
+     Skipped while the service's `restart_unsafe` flag is set (guard
+     above takes precedence — a crash IS the case the guard exists for).
    - intent running + container missing (reboot, daemon loss) →
      recreate from ACTIVE pinned digest (never desired, never
-     re-resolved tag).
+     re-resolved tag) — unless `restart_unsafe` is set, in which case
+     report `recovery-blocked-unsafe` and do NOTHING (operator deploys).
    - in-flight op containers (journal non-terminal, id matches) →
      monitor does NOT touch them; the op owner decides.
 3. **Daemon shutdown/boot ordering**: on Gordon shutdown, monitor

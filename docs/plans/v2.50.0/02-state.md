@@ -201,7 +201,8 @@ transition (temp+rename). Never contains secret VALUES.
 ```json
 {
   "app": "blog",
-  "volumes": [{ "name": "pgdata", "service": "db", "runtime_name": "gordon-blog--db--vol-pgdata", "state": "attached" }],
+  "volumes": [{ "name": "pgdata", "service": "db", "runtime_name": "gordon-blog--db--vol--pgdata", "state": "attached" }],
+  "services": { "db": { "restart_unsafe": false } },
   "secrets": [{ "service": "db", "env": "POSTGRES_PASSWORD", "name": "postgres-password", "path": "gordon/apps/blog/db/postgres-password", "state": "referenced" }],
   "networks": [{ "name": "gordon-app-blog", "role": "private" }]
 }
@@ -246,28 +247,49 @@ transition (temp+rename). Never contains secret VALUES.
       intents and finishes their materialization (idempotent file
       writes keyed by content hash) BEFORE accepting new mutations.
       Only then is the intent moved to `applied` (GC-eligible).
-   f. Reservation AUTHORITY: the committed intent is authoritative
-      from its commit point (in-memory + on-disk intent), NOT the
-      `store.json` table — the table is a materialized CACHE rebuilt
-      from committed intents on recovery. A second apply whose
-      conflict check runs during partial materialization reads
-      intents + table and treats unmaterialized committed deltas as
-      present. Rename/fsync failure at (b) → `staged` intent + atomic
-      failure, safe to retry. Failure at (d) → recovery (e) completes
-      it; the client re-querying the intent id gets the committed
-      result (see idempotency, `05-api-cli.md` §2). Rollback after an
-      uncertain commit is NEVER promised — only forward completion.
+   f. Reservation AUTHORITY (review fix round 2 — checkpoint + deltas):
+      the AUTHORITATIVE state is (a) the `store.json` reservation table
+      AS CHECKPOINTED at each completed materialization, plus (b) the
+      ordered overlay of `committed`-but-unmaterialized intent deltas.
+      The table is authoritative for everything materialized; intents
+      are authoritative for everything committed-but-pending. Intent GC
+      is SAFE only for `applied` (fully materialized) intents — their
+      deltas are already folded into the checkpoint. Release transitions
+      (withdrawal verified, `04-network.md` §1) enter the model as
+      checkpoint updates at `active.publish`/retire time, never as intent
+      deletions. Recovery rebuilds by loading the checkpoint, then
+      replaying non-`applied` intents in ULID order. Rename/fsync failure
+      at (b) → `staged` intent + atomic failure, safe to retry. Failure
+      at (d) → recovery (e) completes it; re-query by intent id returns
+      the committed result (see idempotency, `05-api-cli.md` §2).
+      Rollback after an uncertain commit is NEVER promised — only forward
+      completion.
 3. Dry-run performs steps up to and including validation and conflict
    check against a SNAPSHOT copy — it writes nothing and reserves
    nothing.
 4. Deploy: persist journal with input + `pending` steps BEFORE first
-   effect; each step transition is an atomic journal rewrite; the
-   `active.json` pointer flips only after traffic commit for the
-   affected services (see `03-deployment.md` ordering).
+   effect; each step transition is an atomic journal rewrite. Per-service
+   `active.publish` follows that service's traffic commit (machines 4A/4B
+   in `03-deployment.md`); there is no whole-app pointer flip — the
+   previous sentence claiming otherwise is superseded. Deploy storage
+   failures (journal write/sync errors) are distinct from per-service
+   runtime failures: a storage failure halts the op with
+   `outcome-unknown`-class semantics (re-query by op/idempotency key)
+   and NEVER reports per-service `failed` for steps never engaged.
 5. `fsync` strategy: file fsync before rename, parent-dir fsync after
-   rename. Disk-full / write / sync failure → apply fails atomically
-   with `app-state-io` error; deploy fails the current step and marks
-   remaining steps `not-run`.
+   rename. PHASE-SPECIFIC I/O OUTCOMES (review fix — replaces the old
+   blanket "fails atomically" rule, which contradicted the commit
+   protocol):
+   - Definitely pre-commit (failure in §4.2a–b, before the commit
+     rename returns): NOT accepted, `app-state-io`, safe to retry.
+   - Commit durability UNCERTAIN (commit rename returned but dir-fsync
+     failed or response lost): `outcome-unknown`; the client MUST
+     re-query by intent id / idempotency key — recovery (§4.2e) will
+     have completed or will complete materialization. NEVER report
+     "not accepted".
+   - Definitely committed (commit + dir-fsync acked, crash during
+     §4.2d materialization): ACCEPTED, materialization pending;
+     recovery completes forward; re-query returns the committed result.
 
 ## 5. Reservation rules (global table in `store.json`)
 
@@ -354,7 +376,7 @@ gordon/apps/<app>/<service>/<secret-name>   # value entry (one pass item per nam
 | Between journal step N and N+1 | Resume observes runtime (container ids, attachments, route snapshot); completed steps skipped by identity match, never by sequence assumption |
 | Between stop-intent persist and container stop | On boot, intent `stopped:true` + container still running → stop the EXACT recorded container id, report `recovered-stop` |
 | During traffic commit | Snapshot ownership (see `04-network.md`): only the op holder commits; stale holder's commit rejected by snapshot id |
-| Host reboot, any state | Active pinned definitions restored; stopped stays stopped; pending desired never activated; interrupted initial deploy resurrects NOTHING (no previous active exists → app stays absent) |
+| Host reboot, any state | Load active specs + intent + `restart_unsafe` flags BEFORE traffic. Missing running-intent containers recreated from active pinned digests — EXCEPT services with `restart_unsafe: true` → report `recovery-blocked-unsafe`, do nothing. Stopped stays stopped; pending desired never activated; interrupted initial deploy resurrects NOTHING |
 | Corrupt/incompatible store | All app mutations refused with explicit error; running workloads untouched; no auto-repair |
 
 ## Decision required (D1 — maintainer acceptance)
