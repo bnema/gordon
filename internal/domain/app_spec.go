@@ -301,18 +301,17 @@ func (s AppSpec) validateEnv() error {
 
 // validateServices checks service identity uniqueness and delegates per-service rules.
 func (s AppSpec) validateServices() error {
-	seenServices := map[string]string{}
+	seenServices := map[string]struct{}{}
 	seenNormalized := map[string]string{}
 	for i := range s.Services {
 		svc := &s.Services[i]
 		if err := ValidateServiceName(svc.Name); err != nil {
 			return err
 		}
-		lower := strings.ToLower(svc.Name)
-		if _, ok := seenServices[lower]; ok {
+		if _, ok := seenServices[svc.Name]; ok {
 			return fmt.Errorf("%w: duplicate service name %q", ErrInvalidAppSpec, svc.Name)
 		}
-		seenServices[lower] = svc.Name
+		seenServices[svc.Name] = struct{}{}
 		normalized := NormalizeServiceName(svc.Name)
 		if prev, ok := seenNormalized[normalized]; ok {
 			return fmt.Errorf("%w: service name %q normalizes to the same runtime identifier as %q", ErrInvalidAppSpec, svc.Name, prev)
