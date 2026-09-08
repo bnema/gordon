@@ -22,7 +22,8 @@ const usage = `usage:
   foundationproof positive-controls <dir>
   foundationproof run-scenario --dir <dir> --bind <ip> --expect <open|confined>
   foundationproof report --dir <dir>
-  foundationproof probe-read <path>`
+  foundationproof probe-read <path>
+  foundationproof landlock-demo <dir>`
 
 type checkResult struct {
 	Check    string `json:"check"`
@@ -69,6 +70,11 @@ func run(args []string) error {
 			return errors.New(usage)
 		}
 		return probeRead(args[1])
+	case "landlock-demo":
+		if len(args) != 2 {
+			return errors.New(usage)
+		}
+		return landlockDemo(args[1])
 	default:
 		return errors.New(usage)
 	}

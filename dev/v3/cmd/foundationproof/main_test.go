@@ -108,3 +108,9 @@ func TestProbeRead(t *testing.T) {
 		t.Fatal("expected error without path")
 	}
 }
+
+func TestLandlockDemoEmptyDir(t *testing.T) {
+	if err := landlockDemo(""); err == nil {
+		t.Fatal("expected error for empty dir")
+	}
+}

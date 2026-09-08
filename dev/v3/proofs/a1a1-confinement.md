@@ -1,6 +1,6 @@
 # A1A.1 — Proof harness and confinement decision
 
-Status: in progress (harness landed; guest baseline + first profiles executed)
+Status: complete — no confinement candidate meets the boundary (see H1, H2); public use stays blocked
 Date: 2026-09-07
 Task: [alpha-1a-foundation-proofs.md](../plans/alpha-1a-foundation-proofs.md) A1A.1
 Gate: proven confinement unblocks ingress transport work (A1A.2–4); failure blocks public use.
@@ -102,8 +102,32 @@ confinement therefore **cannot meet F1–F7 on the reference guest**.
   units. Seccomp restricts calls, not file paths, so it cannot cover F1–F7
   alone.
 
-Remaining candidate: unprivileged Landlock (present in the active LSM list;
-needs no namespace or capability). Not yet tested.
+### Profile H2: unprivileged Landlock rule installation rejected (FAIL)
+
+Spike `foundationproof landlock-demo` (committed test-only tooling, no new
+dependency beyond the existing `golang.org/x/sys`) creates a ruleset
+handling read/write/readdir/execute, allows traversal on `/`, read/write on
+the IPC dir and read on `/proc`, then restricts itself. It is fail-closed:
+any enforcement error aborts before probing.
+
+On the reference guest (kernel `7.0.0-30-generic`) it aborts with
+`add rule /: invalid argument`. The same failure reproduces on the dev host
+(kernel `7.1.8`) and in a textbook C program using raw syscalls, so this is
+kernel behavior, not a Go calling-convention bug:
+
+- `landlock_create_ruleset` succeeds (returns a ruleset fd);
+- `landlock_add_rule` fails `EINVAL` for **every** rule type (1, 2, 99),
+  every attr size tried (16/24/32), and with `flags=1`;
+- even the documented `LANDLOCK_CREATE_RULESET_VERSION` query fails
+  `EINVAL`, although the installed UAPI header documents it;
+- lockdown is off (`[none]`), no `landlock=` cmdline restriction, no
+  landlock sysctl exists.
+
+Exact kernel-side reason unknown (would need kernel source/bisect — out of
+scope). Effect: no Landlock rule can be installed, so unprivileged Landlock
+cannot meet F1–F7 on the reference guest either. Both same-account
+candidates are now exhausted: unit mount namespacing is silently unapplied
+(H1) and Landlock rule installation is rejected (H2).
 
 ## Remaining procedure
 
@@ -130,14 +154,13 @@ unit profile, UID mapping, allowed resources and every allow/deny result below.
 | allowed binds/IPC usable (open) | PASS | 11/11 scenario checks pass unconstrained (TCP+UDP bind on 198.18.77.2, IPC rw) |
 | unit filesystem sandboxing (H1) | FAIL | ProtectHome/ProtectSystem/PrivateUsers accepted but silently unapplied; AppArmor denies sys_admin to systemd-executor userns |
 | NNP + seccomp enforcement | PASS | NoNewPrivs=1 holds; ~socket filter kills with SIGSYS |
-| forbidden denial under confinement | NOT RUN | needs Landlock candidate (next) |
-| traversal/unauthorized-socket denial | NOT RUN | same |
-| restart + reboot confinement retest | NOT RUN | only meaningful once a passing profile exists |
+| forbidden denial under confinement | FAIL | no installable mechanism: H1 silently unapplies, H2 rejects rule installation |
+| traversal/unauthorized-socket denial | FAIL | same — unenforceable without a working mechanism |
+| restart + reboot confinement retest | NOT RUN | moot — no passing profile exists |
 
 ## Decision
 
-- [ ] A candidate meets isolation with usable binds/IPC → accept it in a
-  focused confinement ADR with exact unit profile and critical review; A1A.2
-  may proceed.
-- [ ] No candidate meets the boundary → stop and report the blocker; public
+- [x] No candidate meets the boundary → blocker recorded above (H1+H2); public
   use stays blocked. Do not silently weaken the boundary.
+- [ ] A candidate meets isolation with usable binds/IPC → (not met) would
+  accept it in a focused confinement ADR; A1A.2 may proceed.
