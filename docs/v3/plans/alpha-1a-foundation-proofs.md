@@ -26,7 +26,7 @@ Existing tooling: `dev/v3/cmd/sandbox/`, `dev/v3/cmd/l4probe/`, `dev/v3/cmd/foun
   - Separate role-private storage from capability directories. Only runtime receives Podman; no role receives another role's store or runtime's secret key. Mount directories rather than socket inodes.
   - Specify strict HTTP/JSON version, envelope, errors, body limits and streaming cancellation. No internal bearer tokens, generic RPC or data-relay framing. A caller-supplied role/path is not identity proof.
   - Test socket deletion/recreation, wrong UID, swapped endpoint, unauthorized role, excessive body, unknown fields and malformed requests. Verify both authorized access and forbidden access from actual container contexts.
-  - Keep seccomp, LSM, user namespaces, no-new-privileges and least-authority mounts intact. Resolve the experiment's unconfined-container AppArmor observation with effective container denial tests; record active LSM enforcement and limits of evidence on other distributions.
+  - Keep seccomp, applicable LSM policies, user namespaces, dropped capabilities, no-new-privileges and least-authority mounts intact. Apply ADR-006's accepted Ubuntu rootless AppArmor exception: host AppArmor stays enabled, but a per-container profile is not an acceptance prerequisite. Prove the remaining protections with effective container denial tests; report the missing layer and limits of evidence on other distributions.
   - Done: accepted matrix and automated positive/negative tests. The installer must not guess socket paths or UID policy later.
 
 - [ ] **A1A.3 — Edge traffic plane and runtime publication lifecycle** — depends on A1A.2.
