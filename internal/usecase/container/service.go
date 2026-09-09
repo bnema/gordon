@@ -568,7 +568,23 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	if existing != nil {
 		existingID = existing.ID
 	}
-	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID); err != nil {
+	// Snapshot volume identity before orphan cleanup removes the owner.
+	// After a reboot the owner is exited (invisible to resolveExistingContainer)
+	// and cleanup deletes it, destroying the only proof of which volume holds
+	// the data. Carry its mounts as preferred volumes (same pattern as
+	// attachment redeploys) so setupVolumes reuses them instead of creating
+	// a fresh empty volume or failing closed on unverified legacy ownership.
+	// Read the snapshot from the same listing the cleanup pass consumes, so no
+	// extra ListContainers call is added to the deploy path.
+	allContainers, err := s.runtime.ListContainers(ctx, true)
+	if err != nil {
+		log.WrapErr(err, "failed to list containers for deploy, proceeding without volume snapshot")
+	}
+	preferredVolumes := namedVolumeMounts(existing)
+	if existing == nil {
+		preferredVolumes = snapshotRouteVolumeMounts(allContainers, route.Domain)
+	}
+	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID, allContainers); err != nil {
 		log.WrapErr(err, "failed to cleanup orphaned containers")
 	}
 
@@ -607,7 +623,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	}
 	envHash := hashEnvironment(envVars)
 
-	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef, nil)
+	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef, preferredVolumes)
 	if err != nil {
 		return nil, err
 	}
@@ -2668,15 +2684,35 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 	return nil
 }
 
-func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string) error {
+// snapshotRouteVolumeMounts returns the named volume mounts of the route's
+// canonical container (usually exited after a reboot) from an already-fetched
+// container listing. Only containers owned by this route contribute, so a
+// foreign workload squatting the same name can never inject its volumes.
+func snapshotRouteVolumeMounts(allContainers []*domain.Container, domainName string) map[string]namedVolumeMount {
+	for _, c := range allContainers {
+		if c.Name != managedContainerName(domainName) {
+			continue
+		}
+		if !isManagedRouteContainerForDomain(c, domainName) {
+			return nil
+		}
+		return namedVolumeMounts(c)
+	}
+	return nil
+}
+
+func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string, allContainers []*domain.Container) error {
 	log := zerowrap.FromCtx(ctx)
 	expectedName := managedContainerName(domainName)
 	expectedNewName := expectedName + "-new"
 	expectedNextName := expectedName + "-next"
 
-	allContainers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		return err
+	if allContainers == nil {
+		var err error
+		allContainers, err = s.runtime.ListContainers(ctx, true)
+		if err != nil {
+			return err
+		}
 	}
 
 	for _, c := range allContainers {
