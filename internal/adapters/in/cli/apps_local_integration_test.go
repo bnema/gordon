@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"path/filepath"
@@ -33,10 +34,36 @@ host = "blog.example.com"
 port = 8080
 `
 
-// TestAppLocalAdminComposition_EndToEnd composes the real local authority
-// wrapper, Unix listener, discovery, Unix transport, and app control plane:
-// nothing here is a test double except the AppService boundary behind the
-// admin handler.
+// TestSharedCommandLocalAdminComposition_Status executes a shared command
+// through socket discovery, the Unix transport, and the local authority.
+func TestSharedCommandLocalAdminComposition_Status(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", xdg)
+	withRemoteTarget(t, "")
+
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetRegistryDomain().Return("registry.example.test").Once()
+	configSvc.EXPECT().GetRegistryPort().Return(5000).Once()
+	configSvc.EXPECT().GetServerPort().Return(8080).Once()
+	configSvc.EXPECT().IsNetworkIsolationEnabled().Return(true).Once()
+	appSvc := inmocks.NewMockAppService(t)
+	appSvc.EXPECT().List(mock.Anything).Return([]in.AppSummary{{App: "blog", Active: "rev-1", Converged: true}}, nil).Once()
+
+	handler := adminhttp.NewHandler(adminhttp.HandlerDeps{ConfigSvc: configSvc, AppSvc: appSvc, Log: zerowrap.Default()})
+	shutdown := startLocalAuthority(t, filepath.Join(xdg, "gordon"), handler.LocalAuthority())
+	defer shutdown()
+	stubLocalAppClient(t, remote.NewLocalClient)
+
+	cmd := newStatusCmd()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	require.NoError(t, cmd.ExecuteContext(context.Background()))
+	assert.Contains(t, out.String(), "registry.example.test")
+	assert.Contains(t, out.String(), "blog")
+}
+
+// TestAppLocalAdminComposition_EndToEnd composes the real local authority,
+// Unix listener, discovery, transport, and app control plane.
 func TestAppLocalAdminComposition_EndToEnd(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", xdg)

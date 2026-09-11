@@ -71,7 +71,7 @@ func TestLocalAdminSocketServesAppSurfaceOverUnix(t *testing.T) {
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "body: %s", body)
 
-	resp, err = client.Get("http://gordon.local/admin/config")
+	resp, err = client.Get("http://gordon.local/admin/auth/tokens")
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)

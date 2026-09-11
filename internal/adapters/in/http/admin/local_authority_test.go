@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,7 +10,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/gordon/internal/adapters/dto"
 	in "github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -25,128 +23,125 @@ func localRequest(t *testing.T, handler http.Handler, method, target string) *ht
 	return rec
 }
 
-// TestLocalAuthorityInjectsLeastPrivilegeScopes proves the socket identity
-// carries explicit scopes: apps read/write and logs read, and nothing else.
 func TestLocalAuthorityInjectsLeastPrivilegeScopes(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
 	appSvc.EXPECT().List(mock.MatchedBy(func(ctx context.Context) bool {
-		if GetSubject(ctx) != LocalAuthoritySubject {
-			t.Errorf("subject = %q, want %q", GetSubject(ctx), LocalAuthoritySubject)
+		assert.Equal(t, LocalAuthoritySubject, GetSubject(ctx))
+		for _, access := range []struct{ resource, action string }{
+			{domain.AdminResourceApps, domain.AdminActionRead},
+			{domain.AdminResourceApps, domain.AdminActionWrite},
+			{domain.AdminResourceStatus, domain.AdminActionRead},
+			{domain.AdminResourceConfig, domain.AdminActionRead},
+			{domain.AdminResourceConfig, domain.AdminActionWrite},
+			{domain.AdminResourceSecrets, domain.AdminActionRead},
+			{domain.AdminResourceSecrets, domain.AdminActionWrite},
+			{domain.AdminResourceLogs, domain.AdminActionRead},
+			{domain.AdminResourceVolumes, domain.AdminActionRead},
+			{domain.AdminResourceVolumes, domain.AdminActionWrite},
+		} {
+			assert.True(t, HasAccess(ctx, access.resource, access.action), "%s:%s", access.resource, access.action)
 		}
-		return HasAccess(ctx, domain.AdminResourceApps, domain.AdminActionRead) &&
-			HasAccess(ctx, domain.AdminResourceApps, domain.AdminActionWrite) &&
-			HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead) &&
-			!HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) &&
-			!HasAccess(ctx, domain.AdminResourceVolumes, domain.AdminActionWrite) &&
-			!HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionRead)
+		assert.False(t, HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead))
+		assert.False(t, HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionWrite))
+		assert.False(t, HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionWrite))
+		assert.False(t, HasAccess(ctx, domain.AdminResourceAll, domain.AdminActionAll))
+		return true
 	})).Return([]in.AppSummary(nil), nil).Once()
 
 	rec := localRequest(t, handler.LocalAuthority(), http.MethodGet, "/admin/apps")
 	require.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestLocalAuthorityAllowsAppEndpoints(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-
-	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{}, nil).Once()
-
-	rec := localRequest(t, handler.LocalAuthority(), http.MethodGet, "/admin/apps/blog")
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestLocalAuthorityDeniesUnrelatedRoutes(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-	local := handler.LocalAuthority()
-
-	for _, target := range []string{
-		"/admin/config",
-		"/admin/auth/verify",
-		"/admin/status",
-		"/admin/health",
-		"/admin/reload",
-		"/admin/backups/blog",
-		"/admin/secrets/blog",
-		"/admin/volumes",
-		"/admin/volumes/prune",
-		"/admin/tags/repo",
-		"/admin/images",
-		"/admin/networks",
-		"/admin/tls/status",
-		"/admin/traffic/status",
-		"/someone-elses-path",
-	} {
-		rec := localRequest(t, local, http.MethodGet, target)
-		assert.Equal(t, http.StatusForbidden, rec.Code, "target %s", target)
-
-		var envelope dto.ErrorResponse
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
-		assert.Equal(t, "local administration is limited to app endpoints", envelope.Error)
+func TestLocalAuthorityCanonicalAllowlist(t *testing.T) {
+	t.Parallel()
+	allowed := []struct{ method, path string }{
+		{http.MethodGet, "/status"},
+		{http.MethodGet, "/tls/status"},
+		{http.MethodGet, "/traffic/status"},
+		{http.MethodGet, "/config"},
+		{http.MethodGet, "/networks"},
+		{http.MethodGet, "/volumes"},
+		{http.MethodPost, "/volumes/prune"},
+		{http.MethodGet, "/images"},
+		{http.MethodPost, "/images/prune"},
+		{http.MethodPost, "/reload"},
+		{http.MethodGet, "/tags/repository"},
+		{http.MethodGet, "/logs"},
+		{http.MethodGet, "/logs/blog.example.com"},
+		{http.MethodGet, "/secrets/blog.example.com"},
+		{http.MethodPost, "/secrets/blog.example.com"},
+		{http.MethodDelete, "/secrets/blog.example.com/API_KEY"},
+		{http.MethodGet, "/backups"},
+		{http.MethodGet, "/backups/status"},
+		{http.MethodGet, "/backups/blog.example.com"},
+		{http.MethodPost, "/backups/blog.example.com"},
+		{http.MethodGet, "/backups/blog.example.com/detect"},
+		{http.MethodGet, "/backups/volumes"},
+		{http.MethodGet, "/backups/volumes/status"},
+		{http.MethodGet, "/backups/volumes/blog.example.com"},
+		{http.MethodPost, "/backups/volumes/blog.example.com"},
+		{http.MethodGet, "/apps"},
+		{http.MethodPost, "/apps/apply"},
+		{http.MethodGet, "/apps/blog"},
+		{http.MethodGet, "/apps/blog/diff"},
+		{http.MethodPost, "/apps/blog/deploy"},
+		{http.MethodPost, "/apps/blog/restart"},
+		{http.MethodPost, "/apps/blog/stop"},
+		{http.MethodPost, "/apps/blog/start"},
+		{http.MethodPost, "/apps/blog/remove"},
+		{http.MethodPost, "/apps/blog/secrets/set"},
+		{http.MethodPost, "/apps/blog/secrets/delete"},
+		{http.MethodGet, "/apps/blog/operations/by-key/request-1"},
+	}
+	for _, tc := range allowed {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			assert.True(t, localPathAllowed(tc.method, tc.path))
+		})
 	}
 }
 
-func TestLocalAuthorityDeniesProcessLogsAndAllowsAppContainerLogs(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-	local := handler.LocalAuthority()
-
-	rec := localRequest(t, local, http.MethodGet, "/admin/logs")
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	// The app-specific route reaches the log handler; it answers 503 only
-	// because this focused fixture has no log service wired.
-	rec = localRequest(t, local, http.MethodGet, "/admin/logs/blog")
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+func TestLocalAuthorityDeniesNearMissesAndNonCanonicalPaths(t *testing.T) {
+	t.Parallel()
+	denied := []struct{ method, path string }{
+		{http.MethodPost, "/status"},
+		{http.MethodGet, "/reload"},
+		{http.MethodPost, "/config"},
+		{http.MethodGet, "/volumes/prune"},
+		{http.MethodGet, "/images/prune"},
+		{http.MethodGet, "/auth/verify"},
+		{http.MethodGet, "/auth/tokens"},
+		{http.MethodPost, "/auth/tokens"},
+		{http.MethodGet, "/health"},
+		{http.MethodGet, "/appsX"},
+		{http.MethodGet, "/secrets"},
+		{http.MethodDelete, "/secrets/blog"},
+		{http.MethodGet, "/images/anything"},
+		{http.MethodGet, "/tags/repository/extra"},
+		{http.MethodGet, "/backups/volumes/status/extra"},
+		{http.MethodGet, "/apps/blog/operations/by-key/key/extra"},
+		{http.MethodGet, "/"},
+	}
+	for _, tc := range denied {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			assert.False(t, localPathAllowed(tc.method, tc.path))
+		})
+	}
 }
 
-// TestLocalAuthorityClassifiesByPathOnly ensures classification uses the URL
-// path alone: a query string never widens access and a lookalike prefix never
-// matches.
-func TestLocalAuthorityClassifiesByPathOnly(t *testing.T) {
+func TestLocalAuthorityRejectsNonAdminAndTraversalRequests(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-	local := handler.LocalAuthority()
-
-	rec := localRequest(t, local, http.MethodGet, "/admin/config?x=apps")
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	rec = localRequest(t, local, http.MethodGet, "/admin/appsX")
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-
-	rec = localRequest(t, local, http.MethodGet, "/apps")
-	assert.Equal(t, http.StatusForbidden, rec.Code)
-}
-
-// TestLocalAuthorityRejectsNonCanonicalTraversal pins that a path which
-// canonicalizes outside the local allowlist is denied rather than dispatched
-// to a different admin route.
-func TestLocalAuthorityRejectsNonCanonicalTraversal(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-	local := handler.LocalAuthority()
-
+	local := appsTestHandler(t, appSvc).LocalAuthority()
 	for _, target := range []string{
+		"/apps",
+		"/admin/auth/tokens",
+		"/admin/apps/",
 		"/admin/apps/../config",
 		"/admin/apps/..%2fconfig",
 		"/admin/logs/../../config",
-		"/admin/apps/../../status",
 	} {
 		rec := localRequest(t, local, http.MethodGet, target)
-		assert.Equal(t, http.StatusForbidden, rec.Code, "target %s", target)
+		assert.Equal(t, http.StatusForbidden, rec.Code, target)
 	}
-}
-
-// TestLocalAuthorityCanonicalizesTrailingSlash ensures a trailing slash lists
-// apps rather than being denied.
-func TestLocalAuthorityCanonicalizesTrailingSlash(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
-
-	appSvc.EXPECT().List(mock.Anything).Return([]in.AppSummary(nil), nil).Once()
-
-	rec := localRequest(t, handler.LocalAuthority(), http.MethodGet, "/admin/apps/")
-	assert.Equal(t, http.StatusOK, rec.Code)
 }
