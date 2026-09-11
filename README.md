@@ -19,12 +19,14 @@ The flow is explicit: build and push an image, declare the app in a standalone T
 ## Quick Start
 
 ```bash
-# Install the latest stable release
+# Install the latest stable release to ~/.local/bin
 curl -fsSL https://gordon.bnema.dev/install.sh | sh
 
-# Start the server
+# Start the server (restart your shell first if the installer updated PATH)
 gordon serve
 ```
+
+The installer uses `~/.local/bin` without `sudo` and can add the effective install directory to Fish, Bash, or Zsh PATH configuration. Set `GORDON_UPDATE_PATH=1` to update PATH without prompting or `GORDON_UPDATE_PATH=0` to leave configuration unchanged. Override the destination with an absolute path such as `GORDON_INSTALL_DIR="$HOME/bin"`, `GORDON_INSTALL_DIR="$HOME/.local/bin"`, or `GORDON_INSTALL_DIR=/usr/local/bin`.
 
 To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://gordon.bnema.dev/docs/installation#choosing-an-install-channel).
 

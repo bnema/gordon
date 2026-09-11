@@ -29,7 +29,25 @@ Detailed installation guide for production environments.
 )
 ```
 
-Download and inspect the installer before executing it. The installer verifies the release archive checksum before installation and automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
+Download and inspect the installer before executing it. The installer verifies the release archive checksum, detects Linux/macOS and amd64/arm64, and installs Gordon to `~/.local/bin` without `sudo`. If that directory is absent from `PATH`, an interactive install can offer to add an idempotent marker block to Fish (`~/.config/fish/config.fish`), Bash (`~/.bashrc`), or Zsh (`~/.zshrc`). Restart the shell after accepting, or follow the printed command to update the current shell.
+
+For unattended installs, control PATH configuration explicitly:
+
+```bash
+# Update supported shell configuration without prompting
+curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=1 sh
+
+# Never modify shell configuration
+curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=0 sh
+
+# Use another user-local directory
+curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR="$HOME/bin" GORDON_UPDATE_PATH=1 sh
+
+# Explicit global installation (may request sudo)
+curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR=/usr/local/bin GORDON_UPDATE_PATH=0 sh
+```
+
+`GORDON_INSTALL_DIR` accepts arbitrary safe absolute destinations, including `"$HOME/bin"`, `"$HOME/.local/bin"`, and `/usr/local/bin`. PATH detection and shell configuration use that effective directory. Relative paths, PATH separators, and control characters are rejected. `GORDON_UPDATE_PATH` accepts only `0` or `1`. Do not run the default installer through `sudo`: it refuses to infer a user home and install silently under `/root`.
 
 ### Manual Installation
 
