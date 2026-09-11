@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/deployment"
 )
 
@@ -33,14 +34,15 @@ func TestPreflight_HoldsSharedGCBarrierAcrossResourceSelection(t *testing.T) {
 	rev := testRevision("blog", webService())
 	// Image resolution is the resource-selection step: it must happen
 	// inside the shared lease.
-	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:abc", "s3cr3t", nil)
+	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "s3cr3t", nil)
 	images.ExpectedCalls = nil
 	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Run(func(context.Context, string) {
 		require.True(t, held, "image resolution must run inside the shared GC lease")
-	}).Return("sha256:abc", nil).Once()
+	}).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
+		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
 	}, zerowrap.Default()).WithGCBarrier(barrier)
 
 	_, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog"})

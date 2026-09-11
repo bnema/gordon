@@ -38,7 +38,7 @@ keep_last = 3
 | `images.prune.schedule` | string | `"daily"` | Schedule preset: `hourly`, `daily`, `weekly`, `monthly` |
 | `images.prune.keep_last` | int | `3` | Number of newest non-`latest` tags kept per repository during registry cleanup (`latest` is always kept when present) |
 
-The policy validates registry names and strict SHA-256 digest syntax at manifest apply, digest resolution, deployment preflight, and immediately before each pull. It rejects malformed, userinfo-bearing, and ambiguous authorities. External tag resolution and pulls use the currently wired anonymous registry path; adding a host to `allowed_registries` does not enable authenticated private-registry access. This hostname allowlist does **not** prove that DNS resolves to a public address and does not constrain runtime egress; enforce destination-level restrictions in the host firewall or runtime network policy.
+The policy validates registry names and strict SHA-256 digest syntax at manifest apply, digest resolution, deployment preflight, and immediately before each pull. It rejects malformed, userinfo-bearing, and ambiguous authorities. External app images currently require digest-pinned references, independently of `require_digest`; external tag resolution is not available. External pulls are anonymous, so adding a host to `allowed_registries` does not enable authenticated private-registry access. This hostname allowlist does **not** prove that DNS resolves to a public address and does not constrain runtime egress; enforce destination-level restrictions in the host firewall or runtime network policy.
 
 ## Retention Behavior
 

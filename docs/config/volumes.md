@@ -1,23 +1,6 @@
 # Volumes Configuration
 
-Configure defaults for persistent app storage.
-
-## Configuration
-
-```toml
-[volumes]
-auto_create = true
-prefix = "gordon"
-preserve = true
-```
-
-## Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `auto_create` | bool | `true` | Create app-owned named volumes for Dockerfile `VOLUME` paths |
-| `prefix` | string | `"gordon"` | Prefix for Gordon-created runtime volume names |
-| `preserve` | bool | `true` | Retain app-owned volumes when workloads are removed |
+Persistent app storage is declared in each app manifest. The installation-level `[volumes]` settings apply to non-app volume management and do not control declarative app storage.
 
 ## Declarative app volumes
 
@@ -31,13 +14,13 @@ path = "/var/lib/postgresql/data"
 
 A volume name is unique within its service. Gordon creates an incarnation-owned runtime volume, records the app, app UUID, service, and logical volume ownership, and reuses it across replacement and restart. App manifests do not support bind mounts or sharing one volume between services.
 
-When `auto_create = true`, Gordon also creates app-owned named volumes for Dockerfile `VOLUME` paths that are not explicitly declared. Prefer explicit `[[service.volume]]` declarations so persistent storage is visible during review.
+Every Dockerfile `VOLUME` path must have a matching `[[service.volume]]` declaration. Deployment fails closed when an image declares an unmanaged volume.
 
 Runtime volume names are implementation details. Use `gordon volumes list` and ownership labels to inspect them; do not derive ownership from a name, rename volumes, or edit Gordon's ownership records.
 
 ## Retention
 
-With the default `preserve = true`, ordinary app operations retain data:
+Ordinary app operations retain data:
 
 - deploy and restart reuse the service's volumes;
 - removing a service retains its volumes;

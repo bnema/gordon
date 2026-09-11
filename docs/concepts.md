@@ -125,7 +125,7 @@ Deploy adds AND removes memberships without disconnecting unrelated services. Sh
 
 ## Volumes
 
-Services declare persistent storage in the app manifest. When `volumes.auto_create` is enabled, Gordon also creates app-owned named volumes for undeclared Dockerfile `VOLUME` paths:
+Services declare persistent storage in the app manifest. Every Dockerfile `VOLUME` path must be declared explicitly; deployment rejects unmanaged image volumes:
 
 ```toml
 [[service.volume]]

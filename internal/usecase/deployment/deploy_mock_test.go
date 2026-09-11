@@ -47,7 +47,7 @@ func expectDeployPreflight(
 ) {
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
-	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("sha256:abc", nil)
+	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("x", nil)
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, rev.Spec.Services[0].Image).Return(nil, nil)
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
@@ -98,10 +98,10 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
-	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:abc", nil)
+	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("x", nil)
-	runtime.EXPECT().PullImageWithAuth(mock.Anything, "127.0.0.1:5000/blog/web@sha256:abc", "gordon", "s3cret").Return(nil).Once()
-	runtime.EXPECT().InspectImageVolumes(mock.Anything, "127.0.0.1:5000/blog/web@sha256:abc").Return(nil, nil)
+	runtime.EXPECT().PullImageWithAuth(mock.Anything, "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "gordon", "s3cret").Return(nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Return(nil, nil)
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
@@ -114,7 +114,7 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 
 	// The pinned ref was pulled during preflight before image-volume inspection.
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
-		return cfg.Image == "127.0.0.1:5000/blog/web@sha256:abc" &&
+		return cfg.Image == "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" &&
 			assert.Equal(t, svcSpec.Command, cfg.Entrypoint) && assert.Empty(t, cfg.Cmd)
 	})).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
@@ -340,7 +340,7 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
-	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:abc", nil)
+	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, svcSpec.Image).Return(nil, nil)
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-uuid-blog", Volumes: []domain.AppOwnedVolume{{Name: "d", Service: "web", RuntimeName: "gordon-blog--web--vol--d", State: domain.AppResourceAttached}}}, nil).Times(4)
@@ -431,7 +431,7 @@ func TestDeploy_Mockery_MixedTCPUDPPublishesBothLoopbacks(t *testing.T) {
 
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
-	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:abc", nil)
+	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, svcSpec.Image).Return(nil, nil)
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
@@ -533,7 +533,7 @@ func TestDeploy_Mockery_InjectsAppEnvAndSecrets(t *testing.T) {
 
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
-	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("sha256:abc", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[1].Image).Return("sha256:def", nil).Once()
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("s3cr3t", nil).Twice()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, rev.Spec.Services[0].Image).Return(nil, nil).Once()
@@ -606,7 +606,7 @@ func TestStart_RunningContainerRefreshesShiftedBinds(t *testing.T) {
 			"web": {
 				EffectiveRevision: "rev-1",
 				Image:             rev.Spec.Services[0].Image,
-				Digest:            "sha256:abc",
+				Digest:            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				Container:         "c-old",
 				Spec:              rev.Spec.Services[0],
 				BackendBinds:      map[int]int{8080: 32770},
@@ -662,7 +662,7 @@ func TestStart_BindVerificationFailureFailsClosed(t *testing.T) {
 			"web": {
 				EffectiveRevision: "rev-1",
 				Image:             rev.Spec.Services[0].Image,
-				Digest:            "sha256:abc",
+				Digest:            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				Container:         "c-old",
 				Spec:              rev.Spec.Services[0],
 				BackendBinds:      map[int]int{8080: 32770},
@@ -709,7 +709,7 @@ func TestRestart_MixedServiceRefreshesBothProtocols(t *testing.T) {
 			"web": {
 				EffectiveRevision: "rev-1",
 				Image:             svcSpec.Image,
-				Digest:            "sha256:abc",
+				Digest:            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 				Container:         "c-old",
 				Spec:              svcSpec,
 				BackendBinds:      map[int]int{9000: 32770},

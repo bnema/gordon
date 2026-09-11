@@ -49,6 +49,7 @@ func preflightService(
 	t.Helper()
 	return deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
+		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
@@ -90,7 +91,7 @@ func TestPreflight_PassesAndPins(t *testing.T) {
 	images := outmocks.NewMockImageResolver(t)
 	secrets := outmocks.NewMockSecretProvider(t)
 	rev := testRevision("blog", webService())
-	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:abc", "s3cr3t", nil)
+	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "s3cr3t", nil)
 	svc := preflightService(t, state, runtime, images, secrets)
 
 	pinned, op, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog"})
@@ -100,7 +101,7 @@ func TestPreflight_PassesAndPins(t *testing.T) {
 	assert.Equal(t, "rev-1", op.InputRevision)
 	require.Len(t, op.Steps, 2)
 	assert.Equal(t, "succeeded", op.Steps[0].State)
-	assert.Contains(t, op.Steps[1].Digest, "sha256:abc")
+	assert.Contains(t, op.Steps[1].Digest, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	assert.Equal(t, "web", op.Steps[1].Service)
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 }
@@ -134,7 +135,7 @@ func TestPreflight_SecretMissingFailsClosed(t *testing.T) {
 	images := outmocks.NewMockImageResolver(t)
 	secrets := outmocks.NewMockSecretProvider(t)
 	rev := testRevision("blog", webService())
-	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:abc", "", assert.AnError)
+	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", assert.AnError)
 	svc := preflightService(t, state, runtime, images, secrets)
 
 	_, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog"})
@@ -148,7 +149,7 @@ func TestPreflight_UnmanagedImageVolumeRejected(t *testing.T) {
 	images := outmocks.NewMockImageResolver(t)
 	secrets := outmocks.NewMockSecretProvider(t)
 	rev := testRevision("blog", webService())
-	expectFullPreflight(state, runtime, images, secrets, rev, []string{"/data"}, "sha256:abc", "x", nil)
+	expectFullPreflight(state, runtime, images, secrets, rev, []string{"/data"}, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "x", nil)
 	svc := preflightService(t, state, runtime, images, secrets)
 
 	_, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog"})
@@ -168,7 +169,7 @@ func TestPreflight_RefusesUnownedExistingVolume(t *testing.T) {
 	svc := webService()
 	svc.Volumes = []domain.AppVolume{{Name: "data", Path: "/data"}}
 	rev := testRevision("blog", svc)
-	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:abc", "x", nil)
+	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "x", nil)
 	// Ownership knows no volumes; the runtime one is foreign.
 	runtime.EXPECT().VolumeExists(mock.Anything, "gordon-blog--web--vol--data").Return(true, nil).Once()
 	svcSvc := preflightService(t, state, runtime, images, secrets)
@@ -202,7 +203,7 @@ func TestPreflight_AcceptsOwnedExistingVolume(t *testing.T) {
 		}},
 	}, nil)
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
-	images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).Return("sha256:abc", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/blog/web/database-url").Return("x", nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, mock.Anything).Return(nil, nil).Once()
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
@@ -243,7 +244,7 @@ func TestPreflight_TargetedConvergedPasses(t *testing.T) {
 	state.EXPECT().Recover(mock.Anything).Return(nil).Once()
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil).Once()
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{App: "blog", ConvergedRevision: "rev-1", Converged: true}, true, nil).Once()
-	images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).Return("sha256:abc", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 	secrets.EXPECT().GetSecret(mock.Anything, mock.Anything).Return("x", nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, mock.Anything).Return(nil, nil).Once()
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
@@ -298,7 +299,7 @@ func TestPreflight_RejectsCrossAppReservationConflict(t *testing.T) {
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil).Once()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil)
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
-	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:abc", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/blog/web/database-url").Return("x", nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, svcSpec.Image).Return(nil, nil).Once()
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{

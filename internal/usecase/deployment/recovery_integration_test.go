@@ -131,7 +131,7 @@ func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
 	}))
 	seedDesired(t, ctx, store, rev)
 
-	images.EXPECT().ResolveDigest(mock.Anything, spec.Image).Return("sha256:abc", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, spec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, spec.Image).Return(nil, nil).Once()
 	runtime.EXPECT().VolumeExists(mock.Anything, mock.Anything).Return(false, nil).Once()
 	// The superseded writer cannot be removed: the replacement must abort

@@ -12,7 +12,7 @@ func TestStripImageTag(t *testing.T) {
 		{"reg.example.com/blog/web:1.4.2", "reg.example.com/blog/web"},
 		{"web:v1", "web"},
 		{"web", "web"},
-		{"reg.example.com/blog/web@sha256:abc", "reg.example.com/blog/web"},
+		{"reg.example.com/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "reg.example.com/blog/web"},
 	}
 	for _, tc := range cases {
 		if got := stripImageTag(tc.ref); got != tc.want {
