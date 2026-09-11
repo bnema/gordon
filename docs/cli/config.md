@@ -17,8 +17,9 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 ## gordon config show
 
-Display the Gordon server configuration including server settings,
-auto-route, network isolation, routes, and external route domains. Sensitive filesystem paths and upstream external route targets are redacted by default.
+Display the Gordon installation configuration including server settings,
+network isolation, volumes, and external route domains. App routes live
+under `gordon apps show`, never here. Sensitive filesystem paths and upstream external route targets are redacted by default.
 
 ```bash
 gordon config show
@@ -41,17 +42,15 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
     "registry_port": 5000,
     "registry_domain": "reg.example.com"
   },
-  "auto_route": {
-    "enabled": true,
-    "allowed_domains": ["example.com", "*.staging.example.com"]
-  },
   "network_isolation": {
     "enabled": true,
-    "prefix": "gordon_"
+    "prefix": "gordon"
   },
-  "routes": [
-    {"domain": "app.example.com", "image": "myapp:latest"}
-  ],
+  "volumes": {
+    "auto_create": true,
+    "prefix": "gordon",
+    "preserve": true
+  },
   "external_routes": [
     {"domain": "reg.example.com"}
   ]
@@ -60,13 +59,8 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
 
 External route targets and `server.data_dir` are intentionally omitted from the default admin config response because they reveal internal network and filesystem layout.
 
-### Auto-Route Allowed Domains
-
-The `auto_route.allowed_domains` field lists domain patterns that auto-route may assign to containers. Manage this list with [`gordon autoroute allow`](./autoroute.md).
-
 ## Related
 
 - [CLI Overview](./index.md)
-- [Auto-Route Commands](./autoroute.md)
 - [Status Command](./status.md)
-- [Routes Command](./routes.md)
+- [Apps Commands](./apps.md)

@@ -9,165 +9,128 @@ Your development machine likely has 8-16 cores and 16-32GB RAM. Your VPS has 1-2
 Gordon flips the typical deployment model:
 
 1. **Build locally** where you have computing power
-2. **Push the finished image** to your VPS
-3. **Gordon deploys automatically**
+2. **Push the finished image** to your VPS registry
+3. **Apply the app manifest** declaring the image
+4. **Deploy** to activate it
 
 This means faster builds, less VPS resource usage, and a simpler deployment workflow.
 
-## Push-to-Deploy
+## Push, Apply, Deploy
 
-Gordon combines a Docker registry with automatic deployment:
+Gordon combines a Docker registry with a declarative app runtime:
 
 ```
 ┌──────────────┐      push       ┌──────────────┐
 │ docker build │  ──────────────>│   Gordon     │
-│ docker push  │                 │   Registry   │
-└──────────────┘                 └──────┬───────┘
+│ docker push  │   (OCI only,    │   Registry   │
+└──────────────┘   never deploys)└──────┬───────┘
                                         │
-                                        │ event: image.pushed
+                    ┌───────────────────┴───────────────────┐
+                    │  gordon apps apply --file blog.toml   │  desired state
+                    │  gordon apps deploy blog              │  activation
+                    └───────────────────┬───────────────────┘
                                         v
                                  ┌──────────────┐
-                                 │   Deploy     │
-                                 │   Container  │
+                                 │   App        │
+                                 │  Containers  │
                                  └──────────────┘
 ```
 
-When you push an image, Gordon:
+Pushing an image only stores it. Nothing runs, no route is created, no manifest is modified. Activation is always an explicit `gordon apps deploy`.
 
-1. Stores the image in its registry
-2. Fires an `image.pushed` event
-3. Looks up the route for that image
-4. Deploys a new container
-5. Updates the proxy routing
-6. Stops the old container
+## Declarative Apps
 
-## Zero-Downtime Updates
+One standalone TOML file defines one globally named app with one or more explicitly named image-backed services. The app owns its entrypoints and routes; containers are replaceable runtime instances, not public identities.
 
-Gordon ensures your app stays available during updates:
+```toml
+name = "blog"
 
-1. **New container starts** while old container is still running
-2. **Health check** waits for new container to be ready
-3. **Traffic switches** to the new container
-4. **Old container stops** after traffic has moved
+[env]
+APP_ENV = "production"   # app-wide public env, injected into all services
+
+[[service]]
+name = "web"
+image = "gordon.mydomain.com/blog:1.4.2"
+
+[[service.http]]
+host = "blog.mydomain.com"
+port = 3000
+
+[service.secrets]        # ENV name -> secret name (values stay in pass)
+DATABASE_URL = "database-url"
+```
+
+- `apps apply --file FILE` validates and persists desired configuration only.
+- `deploy APP` activates it. `apply --deploy` chains both using exactly the revision accepted by apply.
+- `--dry-run` validates and previews without persistence or runtime effects.
+- Version tags are recommended, not constrained to SemVer. `latest` remains valid; explicit deploy re-resolves mutable tags while restart uses the active pinned content.
+- The file is intended for Git: it must never contain secret values. Service-specific values use `secrets` even when non-confidential.
+- Staging is an ordinary app in another TOML file. There is no pin, no preview environments, and no historical rollback command.
+
+## Updates
+
+For HTTP services without volumes, Gordon keeps the old container serving until the replacement passes readiness, then switches traffic, drains with a bounded deadline, and retires that service's old container. Deployment stops at the first service failure: already successful services are preserved, later services stay unchanged.
 
 ```
 Time ─────────────────────────────────────────────>
 
 Old Container:  [═══════════════════]
-                                    ↓ stop
+                                    ↓ retire
 New Container:           [═════════════════════════>
                          ↑ start    ↑ traffic routed
 ```
 
+TCP, UDP, mixed, and volume-owning services replace with interruption — no zero-downtime promise. An open UDP socket is not application readiness. Gordon never restarts an old volume-owning image automatically after a replacement may have written data.
+
 ## Deletion and Cleanup Lifecycle
 
-Gordon separates configuration removal from destructive data cleanup:
+Gordon separates workload removal from destructive data cleanup:
 
-- **configured** — an entity exists in Gordon configuration, such as a route in `gordon.toml`.
-- **active** — an entity has runtime state, such as a running Gordon-managed container.
-- **preserved** — state intentionally kept after configuration removal, such as volumes or attachment data.
-- **orphaned** — runtime state no longer referenced by configuration and requiring follow-up cleanup or diagnosis.
-- **purged** — state explicitly deleted by a destructive cleanup command.
-- **retained** — preserved state that Gordon reports so operators can decide whether to keep or purge it later.
+- **desired** — the persisted manifest revision waiting to be activated.
+- **active** — the pinned, running definition (never inferred from containers).
+- **stopped** — durable stopped intent: workloads are down, data preserved, reboot keeps them stopped.
+- **retained** — volumes and secrets kept after app removal under the old internal UUID, visible but never implicitly adopted by a new app reusing the name.
 
-Safe deletion is the default. Removing a route reconciles active route containers so the app is no longer served or restarted by Gordon's monitor. Stateful data such as volumes and attachment data is preserved unless a later purge command explicitly requests deletion.
+Safe removal is the default. `gordon apps remove` withdraws workloads and frees the name; volumes and secrets are retained as owned orphans. There is deliberately no `purge`: destructive volume deletion requires a separately accepted destructive-action contract. Ordinary apply/deploy/restart/stop/remove never delete user volumes.
 
-Cleanup reports use additive-only JSON fields so humans and automation can rely on stable keys while Gordon adds more details over time.
+## App HTTP Hosts
 
-Current runtime cleanup capabilities are intentionally conservative:
-
-- Gordon can identify managed route and attachment containers by labels such as `gordon.managed`, `gordon.route`, and `gordon.attachment`.
-- Gordon can stop and remove containers.
-- Existing volume attribution is limited for older volumes; Gordon may need naming heuristics when labels do not identify owner, mount path, or category.
-- Updating runtime restart policy and relabeling existing volumes are runtime-dependent capabilities and should be treated as best-effort when added.
-
-## Routes
-
-Routes map domains to container images:
+An app's HTTP interfaces declare the hosts Gordon serves:
 
 ```toml
-[routes]
-"app.example.com" = { image = "myapp:latest" }
-"api.example.com" = { image = "myapi:v2.1.0" }
+[[service.http]]
+host = "app.example.com"
+port = 3000
 ```
-
-Route domains must be plain hostnames such as `app.example.com`. Gordon rejects `http://` and `https://` prefixes, `.local` and `.internal` suffixes, localhost names, and IP literals. Legacy `http://...` keys are still read for backward compatibility and rewritten on the next save.
 
 When a request comes in for `app.example.com`, Gordon:
 
-1. Looks up the route configuration
-2. Finds the running container for `myapp:latest`
-3. Proxies the request to that container
+1. Looks up the host in the ACTIVE projection (merged with installation external routes)
+2. Finds the recorded loopback backend for that host (never a container IP — rootless-first)
+3. Proxies the request to that backend
 
-### Route Domains
+Hostnames must be plain hostnames. `https` behavior per host follows the `tls` mode (`auto`, `always`, `never`).
 
-Routes use plain hostnames. HTTPS is enabled by default for routes; see the [routes example](./config/routes.md#development-setup) with `dev-app.example.com`. Cloudflare is one deployment option, but Gordon can also terminate TLS with its built-in listener and certificates issued by Gordon's internal CA, with static certificates, or with public ACME certificates when `[tls.acme]` is enabled. ACME supports HTTP-01 and Cloudflare DNS-01 challenge modes.
+## Networks
 
-```toml
-[routes]
-"dev-app.example.com" = { image = "internal-app:latest", https = false }
-```
-
-## Network Isolation
-
-Each app runs in its own isolated Docker network:
-
-```
-┌────────────────────────────────────────────────┐
-│ gordon-app-mydomain-com                        │
-│                                                │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐  │
-│  │   App    │───>│ Postgres │    │  Redis   │  │
-│  │ :3000    │    │ :5432    │    │ :6379    │  │
-│  └──────────┘    └──────────┘    └──────────┘  │
-│                                                │
-└────────────────────────────────────────────────┘
-```
-
-Benefits:
-
-- Containers can't access each other's services
-- Services are only accessible by name within their network
-- No port conflicts between apps
-
-## Attachments
-
-Attachments are service dependencies for your apps:
+Each app gets a private network automatically. Services can additionally join named shared networks, created and reused only within verified Gordon ownership:
 
 ```toml
-[attachments]
-"app.mydomain.com" = ["postgres:latest", "redis:latest"]
+[[network.shared]]
+network = "backend"
+services = ["web", "worker"]
 ```
 
-Gordon deploys attachments to the same network as your app. Services are accessible by their image name:
-
-```javascript
-// In your app
-const db = await connect("postgresql://postgres:5432/mydb");
-const cache = await connect("redis://redis:6379");
-```
-
-## Network Groups
-
-Network groups allow multiple apps to share services:
-
-```toml
-[network_groups]
-"backend" = ["app.mydomain.com", "api.mydomain.com"]
-
-[attachments]
-"backend" = ["shared-postgres:latest", "shared-redis:latest"]
-```
-
-Both `app.mydomain.com` and `api.mydomain.com` can access the shared services.
+Deploy adds AND removes memberships without disconnecting unrelated services. Short DNS names resolve privately; app-qualified aliases apply on shared networks.
 
 ## Volumes
 
-Gordon automatically creates persistent storage from Dockerfile `VOLUME` directives:
+Gordon automatically creates persistent storage from Dockerfile `VOLUME` directives, and services can declare named volumes:
 
-```dockerfile
-FROM postgres:18
-VOLUME ["/var/lib/postgresql/data"]
+```toml
+[[service.volume]]
+name = "web-data"
+path = "/data"
 ```
 
 Volume behavior:
@@ -176,109 +139,63 @@ Volume behavior:
 - **prefix**: Volume names are prefixed with `gordon-` (configurable)
 - **preserve**: Volumes persist across container updates (default: true)
 
-## Environment Variables
+Docker/Podman own named volumes; Gordon tracks app/service/volume ownership. No app bind mounts, no service-shared volumes. Replacement reuses volumes. Removed services leave volumes retained and visible — never automatically deleted.
 
-Gordon loads environment variables from files based on the domain:
+## Environment and Secrets
 
-```
-~/.gordon/env/
-├── app_mydomain_com.env
-├── api_mydomain_com.env
-└── admin_mydomain_com.env
-```
+App-wide public env is declared in the manifest:
 
-Domain dots become underscores: `app.mydomain.com` → `app_mydomain_com.env`
-
-Variables are merged in order:
-
-1. Dockerfile `ENV` directives (lowest priority)
-2. `.env` file values (highest priority)
-
-### Secret Providers
-
-Environment files support secret provider syntax:
-
-```bash
-# From Unix password manager (pass)
-DATABASE_PASSWORD=${pass:myapp/db-password}
-
-# From SOPS encrypted files
-API_SECRET=${sops:secrets.yaml:api.secret}
+```toml
+[env]
+APP_ENV = "production"
 ```
 
-## Configuration Hot-Reload
+Service-specific values use `secrets` even when non-confidential:
 
-Gordon watches its config file and reloads automatically:
+```toml
+[service.secrets]
+DATABASE_URL = "database-url"
+```
 
-1. Edit `~/.config/gordon/gordon.toml`
-2. Save the file
-3. Gordon reloads hot-reloaded settings such as attachments, network groups, and routes
-4. Containers and proxy config sync to match the new configuration
+Secret values stay in pass under `gordon/apps/<uuid>/<service>/<name>`, keyed by the stable internal UUID so a removed app's secrets are never adopted by a new app reusing the name. Secret updates affect the next deploy/restart, not running containers. Write values with `gordon apps secrets set`; only key names are ever echoed back, never values.
 
-Route file edits now reload automatically again.
+## Installation Reload
 
-You can also trigger a reload:
+Gordon watches `gordon.toml` and reloads installation-only settings (entrypoints, TLS, limits, external routes). Reload never activates pending app desired state, never re-resolves image tags, and never starts app workloads.
 
 ```bash
 gordon reload
 ```
 
-`gordon reload` sends `SIGUSR1` to the running Gordon process.
+`gordon reload` sends `SIGUSR1` to the running Gordon process. `gordon.toml` holds installation settings only — app workloads live in app files.
 
 ## Event System
 
-Gordon uses an internal event system for coordination:
-
-| Event | Trigger | Action |
-|-------|---------|--------|
-| `image.pushed` | Image pushed to registry | Deploy container |
-| `config.reload` | Config file changed or `gordon reload` sends `SIGUSR1` | Reload config, sync containers, and refresh proxy state |
-| `manual.deploy` | `gordon deploy <domain>` command | Deploy specific route |
-| `container.deployed` | Container started | Update proxy cache |
+Gordon uses an internal event system for coordination. Registry storage events no longer deploy anything: push events never deploy, create routes, or modify manifests.
 
 ## Backups and Recovery
 
-Gordon can run logical PostgreSQL backups for attachment containers.
+Gordon runs PostgreSQL logical backups and volume archives to S3 for explicitly declared app targets. Declarations live in the app manifest (`[[service.database]]`, `[service.backup]`); storage infrastructure (destinations, schedules, retention) stays global.
 
-Current design:
+Stored backups are never deleted when declarations change — only schedules update on deploy.
 
-1. Detect PostgreSQL attachments attached to a route
-2. Execute `pg_dump -Fc` through Gordon runtime operations
-3. Store backup artifacts on local filesystem storage
-4. Expose backup actions through admin API and CLI
-
-This is intentionally scoped for operational safety and predictable behavior.
-Future extensions can add physical backups, PITR, and remote object storage adapters.
 For configuration details and usage examples, see the [Backups Configuration guide](./config/backups.md), [Backup CLI reference](./cli/backup.md), and [Configuration Reference](./config/reference.md).
 
-## Container Labels
+## Container Identity
 
-Gordon uses labels to track managed containers:
+Gordon stamps app ownership labels on every container and volume it creates:
 
 | Label | Purpose |
 |-------|---------|
-| `gordon.managed=true` | Identifies Gordon-managed containers |
-| `gordon.domain` | Domain this container serves |
-| `gordon.image` | Image name and tag |
-| `gordon.route` | Route this container handles |
-| `gordon.attachment=true` | Container is an attachment service |
-| `gordon.attached-to` | Which route this attachment serves |
+| `gordon.managed=true` | Identifies Gordon-managed resources |
+| `gordon.app` | App public name |
+| `gordon.app.service` | Service name |
+| `gordon.app.revision` | Active revision that created it |
 
-## Proxy Port Selection
-
-When a container exposes multiple ports, Gordon needs to know which one serves HTTP:
-
-```dockerfile
-FROM gitea/gitea:latest
-LABEL gordon.proxy.port=3000  # Route HTTP to port 3000
-EXPOSE 22   # SSH
-EXPOSE 3000 # HTTP
-```
-
-Without the label, Gordon uses the first exposed port.
+Queries by logical identity use labels, never name parsing. Unknown resources (no labels, old labels) are preserved, never adopted or deleted.
 
 ## Related
 
 - [Configuration Reference](./config/index.md)
-- [Docker Labels Reference](./reference/docker-labels.md)
-- [Environment Variables](./config/env.md) 
+- [Apps CLI](./cli/apps.md)
+- [Getting Started](./getting-started.md)

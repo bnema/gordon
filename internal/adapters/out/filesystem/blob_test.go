@@ -439,7 +439,7 @@ func TestBlobStorage_FinishBlobUpload(t *testing.T) {
 
 	// Finish upload - use testDigest1 (validation will pass, but hash won't match)
 	// This tests the flow, actual digest verification happens in verifyUploadDigest
-	err = storage.FinishBlobUpload(uuid, testDigest1)
+	err = storage.FinishBlobUpload("myapp", uuid, testDigest1)
 	// This will fail because content doesn't match digest
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "digest")
@@ -462,7 +462,7 @@ func TestBlobStorage_CancelBlobUpload(t *testing.T) {
 	require.NoError(t, err)
 
 	// Cancel upload
-	err = storage.CancelBlobUpload(uuid)
+	err = storage.CancelBlobUpload("myapp", uuid)
 	require.NoError(t, err)
 
 	// Verify upload file is gone
@@ -477,7 +477,7 @@ func TestBlobStorage_CancelBlobUpload_NotFound(t *testing.T) {
 	storage, err := NewBlobStorage(tmpDir, log)
 	require.NoError(t, err)
 
-	err = storage.CancelBlobUpload("00000000-0000-4000-a000-000000000000")
+	err = storage.CancelBlobUpload("myapp", "00000000-0000-4000-a000-000000000000")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "upload not found")
@@ -570,7 +570,7 @@ func TestBlobStorage_CompleteUploadFlow(t *testing.T) {
 	assert.Equal(t, expectedTotal, totalSize)
 
 	// 3. Cancel upload (since we can't easily compute the real digest)
-	err = storage.CancelBlobUpload(uuid)
+	err = storage.CancelBlobUpload(repoName, uuid)
 	require.NoError(t, err)
 }
 
@@ -611,7 +611,7 @@ func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		finalizeErrs <- storage.FinishBlobUpload(uuid, digestForData(fullyAppended))
+		finalizeErrs <- storage.FinishBlobUpload("myapp", uuid, digestForData(fullyAppended))
 	}()
 
 	wg.Wait()
@@ -642,7 +642,7 @@ func TestBlobStorage_ConcurrentAppendAndFinalize(t *testing.T) {
 		require.Equal(t, appenders, appendCount)
 
 		retryDigest := digestForData(fullyAppended)
-		err = storage.FinishBlobUpload(uuid, retryDigest)
+		err = storage.FinishBlobUpload("myapp", uuid, retryDigest)
 		require.NoError(t, err)
 
 		reader, err := storage.GetBlob(retryDigest)
@@ -673,7 +673,7 @@ func TestBlobStorage_AppendAfterFinalize(t *testing.T) {
 	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
 	require.NoError(t, err)
 
-	err = storage.FinishBlobUpload(uuid, digestForData(blobData))
+	err = storage.FinishBlobUpload("myapp", uuid, digestForData(blobData))
 	require.NoError(t, err)
 
 	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader([]byte("more")), -1, 0)
@@ -696,7 +696,7 @@ func TestBlobStorage_FinishBlobUploadMarksBlobAsRecentlyFinalized(t *testing.T) 
 	old := time.Now().Add(-2 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(uploadPath, old, old))
 
-	require.NoError(t, storage.FinishBlobUpload(uuid, digestForData(blobData)))
+	require.NoError(t, storage.FinishBlobUpload("myapp", uuid, digestForData(blobData)))
 	modTime, err := storage.GetBlobModTime(digestForData(blobData))
 	require.NoError(t, err)
 	assert.WithinDuration(t, time.Now(), modTime, time.Minute)
@@ -716,11 +716,11 @@ func TestBlobStorage_FailedFinalizeRetryable(t *testing.T) {
 	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(blobData), -1, 0)
 	require.NoError(t, err)
 
-	err = storage.FinishBlobUpload(uuid, testDigest1)
+	err = storage.FinishBlobUpload("myapp", uuid, testDigest1)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "digest verification failed")
 
-	err = storage.FinishBlobUpload(uuid, digestForData(blobData))
+	err = storage.FinishBlobUpload("myapp", uuid, digestForData(blobData))
 	require.NoError(t, err)
 }
 
@@ -748,7 +748,7 @@ func TestBlobStorage_SequentialFlow(t *testing.T) {
 	}
 
 	digest := digestForData(blobData)
-	err = storage.FinishBlobUpload(uuid, digest)
+	err = storage.FinishBlobUpload("myapp", uuid, digest)
 	require.NoError(t, err)
 
 	reader, err := storage.GetBlob(digest)
@@ -758,6 +758,75 @@ func TestBlobStorage_SequentialFlow(t *testing.T) {
 	storedData, err := io.ReadAll(reader)
 	require.NoError(t, err)
 	assert.Equal(t, blobData, storedData)
+}
+
+func TestBlobStorage_UploadBoundToRepository(t *testing.T) {
+	storage, err := NewBlobStorage(t.TempDir(), testLogger())
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("owner")
+	require.NoError(t, err)
+
+	// A known upload UUID is not a bearer token for another repository.
+	data := []byte("foreign attempt")
+	_, err = storage.AppendBlobChunk("intruder", uuid, bytes.NewReader(data), -1, 0)
+	assert.ErrorIs(t, err, domain.ErrUploadNotFound)
+
+	err = storage.FinishBlobUpload("intruder", uuid, digestForData(data))
+	assert.ErrorIs(t, err, domain.ErrUploadNotFound)
+
+	err = storage.CancelBlobUpload("intruder", uuid)
+	assert.ErrorIs(t, err, domain.ErrUploadNotFound)
+
+	// The owner can still complete the upload.
+	_, err = storage.AppendBlobChunk("owner", uuid, bytes.NewReader(data), -1, 0)
+	require.NoError(t, err)
+	require.NoError(t, storage.FinishBlobUpload("owner", uuid, digestForData(data)))
+}
+
+func TestBlobStorage_BlobOwnershipPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	storage, err := NewBlobStorage(dir, testLogger())
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+	data := []byte("owned content")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(data), -1, 0)
+	require.NoError(t, err)
+	digest := digestForData(data)
+	require.NoError(t, storage.FinishBlobUpload("myapp", uuid, digest))
+
+	owned, err := storage.BlobOwnedByRepository("myapp", digest)
+	require.NoError(t, err)
+	assert.True(t, owned)
+
+	foreign, err := storage.BlobOwnedByRepository("other", digest)
+	require.NoError(t, err)
+	assert.False(t, foreign)
+
+	// Ownership survives a restart of the storage adapter.
+	reopened, err := NewBlobStorage(dir, testLogger())
+	require.NoError(t, err)
+	owned, err = reopened.BlobOwnedByRepository("myapp", digest)
+	require.NoError(t, err)
+	assert.True(t, owned)
+}
+
+func TestBlobStorage_FailedFinishDoesNotRecordOwnership(t *testing.T) {
+	storage, err := NewBlobStorage(t.TempDir(), testLogger())
+	require.NoError(t, err)
+
+	uuid, err := storage.StartBlobUpload("myapp")
+	require.NoError(t, err)
+	data := []byte("mismatched content")
+	_, err = storage.AppendBlobChunk("myapp", uuid, bytes.NewReader(data), -1, 0)
+	require.NoError(t, err)
+
+	require.Error(t, storage.FinishBlobUpload("myapp", uuid, testDigest1))
+	owned, err := storage.BlobOwnedByRepository("myapp", testDigest1)
+	require.NoError(t, err)
+	assert.False(t, owned)
 }
 
 func digestForData(data []byte) string {

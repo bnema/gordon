@@ -134,6 +134,30 @@ func TestHandler_GetManifest_NestedName(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// TestHandler_ReservedLookingRepositoryIsServedExactly proves the handler
+// dispatches on the same repository the parser resolves from the last
+// route marker, so authorization cannot name a different repository than
+// the one accessed.
+func TestHandler_ReservedLookingRepositoryIsServedExactly(t *testing.T) {
+	registrySvc := inmocks.NewMockRegistryService(t)
+
+	handler := NewHandler(registrySvc, testLogger(), DefaultMaxBlobChunkSize)
+
+	registrySvc.EXPECT().GetManifest(mock.Anything, "manifests/victim", "latest").Return(&domain.Manifest{
+		Name:        "manifests/victim",
+		Reference:   "latest",
+		ContentType: "application/vnd.docker.distribution.manifest.v2+json",
+		Data:        []byte(`{"schemaVersion": 2}`),
+	}, nil)
+
+	req := httptest.NewRequest("GET", "/v2/manifests/victim/manifests/latest", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
 func TestHandler_PutManifest_Success(t *testing.T) {
 	registrySvc := inmocks.NewMockRegistryService(t)
 
@@ -316,7 +340,7 @@ func TestHandler_BlobUpload_PUT_Finalize(t *testing.T) {
 
 	chunkData := []byte("final chunk")
 	registrySvc.EXPECT().AppendBlobChunk(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", mock.Anything, mock.Anything, mock.Anything).Return(int64(len(chunkData)), nil)
-	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
+	registrySvc.EXPECT().FinishUpload(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()
@@ -465,7 +489,7 @@ func TestHandler_BlobUpload_PATCH_RespectsConfiguredMaxBlobChunkSize(t *testing.
 			_, _ = io.ReadAll(data)
 		}).
 		Return(int64(0), &http.MaxBytesError{Limit: 5})
-	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000").Return(nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("chunk content")))
 	rec := httptest.NewRecorder()
@@ -508,7 +532,7 @@ func TestHandler_BlobUpload_PATCH_MaxBlobSizeExceededReturnsSizeInvalidAndCancel
 		int64(6),
 		int64(10),
 	).Return(int64(0), domain.ErrBlobSizeExceeded)
-	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000").Return(nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("123456")))
 	rec := httptest.NewRecorder()
@@ -531,7 +555,7 @@ func TestHandler_BlobUpload_PATCH_ContentLengthTooLargeReturnsSizeInvalidAndCanc
 		int64(11),
 		int64(10),
 	).Return(int64(0), domain.ErrBlobSizeExceeded)
-	registrySvc.EXPECT().CancelUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000").Return(nil)
+	registrySvc.EXPECT().CancelUpload(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000").Return(nil)
 
 	req := httptest.NewRequest("PATCH", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000", bytes.NewReader([]byte("12345678901")))
 	rec := httptest.NewRecorder()
@@ -555,7 +579,7 @@ func TestHandler_BlobUpload_PUT_FinalizeUnderMaxBlobSize(t *testing.T) {
 		int64(len(chunkData)),
 		int64(10),
 	).Return(int64(len(chunkData)), nil)
-	registrySvc.EXPECT().FinishUpload(mock.Anything, "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
+	registrySvc.EXPECT().FinishUpload(mock.Anything, "myapp", "550e8400-e29b-41d4-a716-446655440000", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
 	req := httptest.NewRequest("PUT", "/v2/myapp/blobs/uploads/550e8400-e29b-41d4-a716-446655440000?digest=sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4", bytes.NewReader(chunkData))
 	rec := httptest.NewRecorder()

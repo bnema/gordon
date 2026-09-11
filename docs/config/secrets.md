@@ -1,6 +1,6 @@
 # Secrets Configuration
 
-Configure how Gordon stores and retrieves sensitive data.
+Configure how Gordon stores and retrieves sensitive data. Two separate stores exist: installation secrets (this page) and app secret values (managed with `gordon apps secrets`, values in pass under `gordon/apps/<uuid>/<service>/<name>`).
 
 ## Configuration
 
@@ -52,11 +52,9 @@ token_secret = "gordon/auth/token_secret"  # Path in pass store
 - Standard Unix tooling
 - Works with team GPG keys
 
-**Route secrets storage:**
-- `gordon secrets set` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
+**Installation secrets storage:**
+- `gordon secrets set <domain> --from-file` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
 - Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
-- Attachment secrets are stored under `gordon/env/attachments/<container-name>/<KEY>` with a `.keys` manifest
-- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 
 ### SOPS
 
@@ -79,7 +77,6 @@ sops secrets.yaml
 
 **Usage in env files:**
 ```bash
-# ~/.gordon/env/app_mydomain_com.env
 API_SECRET=${sops:secrets.yaml:api.secret}
 DB_PASSWORD=${sops:secrets.yaml:database.password}
 ```
@@ -93,15 +90,6 @@ DB_PASSWORD=${sops:secrets.yaml:database.password}
 - Absolute paths are rejected to prevent arbitrary file access
 - Path traversal (`..`) is blocked
 - Only relative paths from your config directory are allowed
-
-**Route secrets storage:**
-- Domain secrets stay in `.env` files
-- Use `${sops:...}` syntax to resolve encrypted values
-
-**Attachment secrets storage:**
-- Attachment secrets are stored in `gordon-<container-name>.env` files alongside domain env files
-- Use `${sops:...}` syntax inside attachment env files to resolve encrypted values
-- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 
 ### Unsafe (Development Only)
 
@@ -119,11 +107,6 @@ secrets_backend = "unsafe"
 │   └── auth/
 │       └── token_secret
 ```
-
-**Attachment secrets:**
-- Stored as `gordon-<container-name>.env` files in the env directory
-- Example: `gordon-app__mydomain__com-postgres.env`
-- Use `gordon secrets set <domain> --attachment <service> KEY=value` to manage them
 
 **Usage:**
 ```bash
@@ -151,8 +134,18 @@ API_KEY=${pass:myapp/api-key}
 ```bash
 # ${sops:<file>:<key.path>}
 DATABASE_PASSWORD=${sops:secrets.yaml:database.password}
-API_SECRET=${sops:production.yaml:api.secret.key}
+API_SECRET=${sops:production.yaml:api.key}
 ```
+
+## App Secret Values
+
+App secret names are registered in the app manifest (`[service.secrets]` maps ENV name to secret name); values are written separately and stay in pass:
+
+```bash
+gordon apps secrets set blog --service web DATABASE_URL=...
+```
+
+Values affect the next deploy/restart, never running containers. Only key names are ever echoed back, never values. See [App Manifest](./apps.md) and [Apps CLI](../cli/apps.md).
 
 ## Examples
 
@@ -182,29 +175,10 @@ enabled = false
 secrets_backend = "unsafe"
 ```
 
-### Enterprise with SOPS
-
-```toml
-[auth]
-enabled = true
-secrets_backend = "sops"
-token_secret = "gordon/auth/token_secret"
-```
-
-Environment file:
-```bash
-# ~/.gordon/env/app_company_com.env
-NODE_ENV=production
-DATABASE_URL=postgresql://db:5432/app
-DATABASE_PASSWORD=${sops:secrets.yaml:database.password}
-API_KEY=${sops:secrets.yaml:api.key}
-JWT_SECRET=${sops:secrets.yaml:jwt.secret}
-```
-
 ## Security Recommendations
 
 1. **Production**: Always use `pass` or `sops` backend
-2. **Never commit**: Don't commit unencrypted secrets to git
+2. **Never commit**: Don't commit unencrypted secrets to git (app files must never contain secret values)
 3. **Rotate regularly**: Regenerate tokens and passwords periodically
 4. **Least privilege**: Use separate secrets per environment
 5. **Path validation**: SOPS provider rejects absolute paths and path traversal attempts for security
@@ -212,5 +186,5 @@ JWT_SECRET=${sops:secrets.yaml:jwt.secret}
 ## Related
 
 - [Authentication](./auth.md)
-- [Environment Variables](./env.md)
+- [App Manifest](./apps.md)
 - [Configuration Overview](./index.md)

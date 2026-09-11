@@ -165,8 +165,8 @@ func (_c *MockBackupService_ListBackups_Call) Run(run func(ctx context.Context, 
 	return _c
 }
 
-func (_c *MockBackupService_ListBackups_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_ListBackups_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockBackupService_ListBackups_Call) Return(databaseBackupJobs []domain.DatabaseBackupJob, err error) *MockBackupService_ListBackups_Call {
+	_c.Call.Return(databaseBackupJobs, err)
 	return _c
 }
 
@@ -365,8 +365,8 @@ func (_c *MockBackupService_RunBackup_Call) Run(run func(ctx context.Context, do
 	return _c
 }
 
-func (_c *MockBackupService_RunBackup_Call) Return(v *domain.DatabaseBackupResult, err error) *MockBackupService_RunBackup_Call {
-	_c.Call.Return(v, err)
+func (_c *MockBackupService_RunBackup_Call) Return(databaseBackupResult *domain.DatabaseBackupResult, err error) *MockBackupService_RunBackup_Call {
+	_c.Call.Return(databaseBackupResult, err)
 	return _c
 }
 
@@ -427,8 +427,8 @@ func (_c *MockBackupService_Status_Call) Run(run func(ctx context.Context)) *Moc
 	return _c
 }
 
-func (_c *MockBackupService_Status_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_Status_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockBackupService_Status_Call) Return(databaseBackupJobs []domain.DatabaseBackupJob, err error) *MockBackupService_Status_Call {
+	_c.Call.Return(databaseBackupJobs, err)
 	return _c
 }
 

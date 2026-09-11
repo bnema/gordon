@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outiface "github.com/bnema/gordon/internal/boundaries/out"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
@@ -18,16 +17,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestService_DetectDatabases_PostgresAttachment(t *testing.T) {
+func newAppBackedService(runtime *outmocks.MockContainerRuntime, storage *outmocks.MockBackupStorage, sources []AppDatabaseSource) *Service {
+	svc := NewService(runtime, storage, domain.BackupConfig{}, zerowrap.Default())
+	svc.WithAppSources(func(context.Context) ([]AppDatabaseSource, error) {
+		return sources, nil
+	})
+	return svc
+}
+
+func pgSource(host string) []AppDatabaseSource {
+	return []AppDatabaseSource{{
+		App:         "blog",
+		Service:     "db",
+		Name:        "postgres",
+		Image:       "postgres:17",
+		ContainerID: "db123",
+		Ports:       []int{5432},
+		Hosts:       []string{host},
+	}}
+}
+
+func TestService_DetectDatabases_PostgresAppSource(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 
-	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
-		{Name: "postgres", Image: "postgres:17", ContainerID: "db1", Status: "running"},
-	})
-
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+	svc := newAppBackedService(runtime, storage, []AppDatabaseSource{{
+		App:         "blog",
+		Service:     "db",
+		Name:        "postgres",
+		Image:       "postgres:17",
+		ContainerID: "db1",
+		Ports:       []int{5432},
+		Hosts:       []string{"app.example.com"},
+	}})
 
 	dbs, err := svc.DetectDatabases(context.Background(), "app.example.com")
 	require.NoError(t, err)
@@ -39,12 +61,6 @@ func TestService_DetectDatabases_PostgresAttachment(t *testing.T) {
 func TestService_RunBackup_Postgres(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
-		{Name: "postgres", Image: "postgres:17", ContainerID: "db123", Status: "running"},
-	})
-
 	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
 		if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
 			return false
@@ -74,7 +90,7 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 		}),
 	).Return("/tmp/backup.bak", nil)
 
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+	svc := newAppBackedService(runtime, storage, pgSource("app.example.com"))
 
 	result, err := svc.RunBackup(context.Background(), "app.example.com", "postgres")
 	require.NoError(t, err)
@@ -87,12 +103,6 @@ func TestService_RunBackup_Postgres(t *testing.T) {
 func TestService_RunBackup_CleansUpDumpWhenPgDumpFails(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
-		{Name: "postgres", Image: "postgres:17", ContainerID: "db123", Status: "running"},
-	})
-
 	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
 		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("pg_dump -Fc"))
 	})).Return(&outiface.ExecResult{ExitCode: 2, Stderr: []byte("dump failed")}, nil)
@@ -101,7 +111,7 @@ func TestService_RunBackup_CleansUpDumpWhenPgDumpFails(t *testing.T) {
 		return len(cmd) == 3 && cmd[0] == "sh" && cmd[1] == "-c" && bytes.Contains([]byte(cmd[2]), []byte("rm -f"))
 	})).Return(&outiface.ExecResult{ExitCode: 0}, nil)
 
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+	svc := newAppBackedService(runtime, storage, pgSource("app.example.com"))
 
 	result, err := svc.RunBackup(context.Background(), "app.example.com", "postgres")
 	require.Error(t, err)
@@ -134,15 +144,10 @@ func TestPostgresDumpCommandUsesEnvVar(t *testing.T) {
 func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
-		"a.example.com": {},
-		"b.example.com": {},
-		"c.example.com": {},
-		"d.example.com": {},
-		"e.example.com": {},
-	})
+	sources := []AppDatabaseSource{}
+	for _, host := range []string{"a.example.com", "b.example.com", "c.example.com", "d.example.com", "e.example.com"} {
+		sources = append(sources, AppDatabaseSource{App: "app", Service: "web", Name: "web", Hosts: []string{host}})
+	}
 
 	unblock := make(chan struct{})
 	defer close(unblock)
@@ -159,7 +164,7 @@ func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testi
 		},
 	).Times(4)
 
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+	svc := newAppBackedService(runtime, storage, sources)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -182,15 +187,6 @@ func TestServiceStatusReturnsWhenContextCancelledDuringSemaphoreAcquire(t *testi
 func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
-		"app.example.com": {},
-	})
-	containerSvc.EXPECT().ListAttachments(mock.Anything, "app.example.com").Return([]domain.Attachment{
-		{Name: "postgres", Image: "postgres:17", ContainerID: "db123", Status: "running"},
-	})
-
 	runtime.EXPECT().ExecInContainer(mock.Anything, "db123", mock.MatchedBy(func(cmd []string) bool {
 		if len(cmd) != 3 || cmd[0] != "sh" || cmd[1] != "-c" {
 			return false
@@ -217,7 +213,10 @@ func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
 
 	storage.EXPECT().ApplyRetention(mock.Anything, "app.example.com", domain.RetentionPolicy{Daily: 7}).Return(0, nil)
 
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{Retention: domain.RetentionPolicy{Daily: 7}}, zerowrap.Default())
+	svc := NewService(runtime, storage, domain.BackupConfig{Retention: domain.RetentionPolicy{Daily: 7}}, zerowrap.Default())
+	svc.WithAppSources(func(context.Context) ([]AppDatabaseSource, error) {
+		return pgSource("app.example.com"), nil
+	})
 
 	err := svc.RunForSchedule(context.Background(), domain.ScheduleDaily)
 	require.NoError(t, err)
@@ -226,9 +225,7 @@ func TestService_RunForSchedule_StoresTierAndAppliesRetention(t *testing.T) {
 func TestService_RunForSchedule_RejectsInvalidSchedule(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	storage := outmocks.NewMockBackupStorage(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	svc := NewService(runtime, storage, containerSvc, domain.BackupConfig{}, zerowrap.Default())
+	svc := NewService(runtime, storage, domain.BackupConfig{}, zerowrap.Default())
 
 	err := svc.RunForSchedule(context.Background(), domain.BackupSchedule("every-minute"))
 	require.Error(t, err)

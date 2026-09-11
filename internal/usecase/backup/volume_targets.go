@@ -94,6 +94,12 @@ func volumeBackupDomain(c *domain.Container) string {
 	if c == nil || c.Labels == nil {
 		return ""
 	}
+	// Declarative-apps engine (v2.50): containers carry gordon.app /
+	// gordon.app.service instead of legacy route labels. The app name
+	// is the backup scope; service granularity stays in the target.
+	if app := c.Labels[domain.LabelApp]; app != "" {
+		return app
+	}
 	if c.Labels[domain.LabelAttachment] == "true" {
 		return c.Labels[domain.LabelAttachedTo]
 	}

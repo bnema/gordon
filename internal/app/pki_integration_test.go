@@ -9,24 +9,28 @@ import (
 	"time"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
-	"github.com/bnema/gordon/internal/boundaries/out/mocks"
-	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
-func newRoutesMock(t *testing.T, domains ...string) *mocks.MockRouteChecker {
-	m := mocks.NewMockRouteChecker(t)
-	routes := make([]domain.Route, len(domains))
-	for i, d := range domains {
-		routes[i] = domain.Route{Domain: d}
+// stubAppRoutes is an ACTIVE-derived host source for PKI tests.
+type stubAppRoutes struct {
+	hosts []out.AppHost
+}
+
+func (s *stubAppRoutes) AppHosts() []out.AppHost { return s.hosts }
+
+func (s *stubAppRoutes) GetExternalRoutes() map[string]string { return nil }
+
+func newRoutesMock(_ *testing.T, domains ...string) *stubAppRoutes {
+	hosts := make([]out.AppHost, 0, len(domains))
+	for _, d := range domains {
+		hosts = append(hosts, out.AppHost{Host: d})
 	}
-	m.EXPECT().GetRoutes(mock.Anything).Return(routes).Maybe()
-	m.EXPECT().GetExternalRoutes().Return(nil).Maybe()
-	return m
+	return &stubAppRoutes{hosts: hosts}
 }
 
 func TestTLSHandshake_OnDemandCert(t *testing.T) {

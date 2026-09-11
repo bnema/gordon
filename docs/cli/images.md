@@ -59,11 +59,13 @@ gordon images prune [--dry-run] [--keep-releases <n>] [--dangling] [--registry] 
 
 By default, prune removes dangling runtime images **and** applies registry tag retention (keeping `latest` + 3 previous non-`latest` tags per repository). A confirmation prompt is shown before destructive operations.
 
+A prune only ever deletes resources it can positively prove safe. Every other candidate is reported as `protected` or `unknown` and left in place; the command still succeeds. See [Prune safety](#prune-safety).
+
 Flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dry-run` | `false` | Show prune behavior without applying changes |
+| `--dry-run` | `false` | Run the full inventory and planning, then report; nothing is deleted |
 | `--keep-releases` | `3` | Number of previous non-`latest` tags to keep per repository (`latest` is always preserved) |
 | `--dangling` | `false` | Restrict scope to dangling runtime images only |
 | `--registry` | `false` | Restrict scope to registry tag retention only |
@@ -80,7 +82,22 @@ Flags:
 
 - `latest` is always preserved when present.
 - `--keep-releases` counts non-`latest` tags, ordered by most recent first.
-- `--keep-releases=0` with registry scope enabled still runs registry cleanup but keeps no non-`latest` tags.
+- A tag named by durable app state survives beyond the retention window.
+- `--keep-releases=0` skips registry tag and blob cleanup entirely; dangling runtime prune still runs.
+
+## Prune safety
+
+Gordon prunes by ownership, not by name or age. Each candidate gets one verdict:
+
+| Verdict | Meaning |
+|---------|---------|
+| `eligible` | Every fact needed to prove the resource safe was read completely, and no durable record claims it. It is deleted. |
+| `protected` | A durable fact claims it: a desired or active app service (including stopped apps), a recovery inhibition, a staged or committed apply intent, an unfinished operation journal entry, container use, a pending upload, an ownership record, or the OCI closure of any of those. It survives. |
+| `unknown` | A fact needed to prove it safe was missing, unreadable, or unsupported. It survives. |
+
+Runtime images used by any container, running or stopped, always survive. Registry blobs reachable from a retained or protected manifest survive, including blobs shared with another tag. When a retained manifest cannot be read, the blobs whose safety depended on it become `unknown` rather than eligible.
+
+Both `--dry-run` and the executed prune return the same report: the verdict counts, the deleted identities, any deletion failures, every inventory gap, and the skipped candidates with their reason codes. A prune that deletes nothing is a success.
 
 ## gordon images tags
 
@@ -128,7 +145,8 @@ gordon images prune --dangling
 # Prune registry tags only, keeping latest + 5 previous
 gordon images prune --registry --keep-releases 5
 
-# Preview cleanup without applying
+# Inspect what prune would remove without applying
+# (also lists every skipped candidate with its reason)
 gordon images prune --dry-run
 
 # Skip confirmation prompt

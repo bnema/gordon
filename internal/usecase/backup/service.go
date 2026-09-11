@@ -14,7 +14,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -23,27 +22,28 @@ const backupExecTimeout = 30 * time.Minute
 
 // Service orchestrates backup operations.
 type Service struct {
-	runtime      out.ContainerRuntime
-	storage      out.BackupStorage
-	containerSvc in.ContainerService
-	config       domain.BackupConfig
-	log          zerowrap.Logger
+	runtime out.ContainerRuntime
+	storage out.BackupStorage
+	config  domain.BackupConfig
+	log     zerowrap.Logger
+	// appSources enumerates ACTIVE app services for database detection.
+	// Required: the pre-v2.50 attachment/container enumeration was removed
+	// with the declarative-apps cutover.
+	appSources func(ctx context.Context) ([]AppDatabaseSource, error)
 }
 
 // NewService creates a backup service.
 func NewService(
 	runtime out.ContainerRuntime,
 	storage out.BackupStorage,
-	containerSvc in.ContainerService,
 	config domain.BackupConfig,
 	log zerowrap.Logger,
 ) *Service {
 	return &Service{
-		runtime:      runtime,
-		storage:      storage,
-		containerSvc: containerSvc,
-		config:       config,
-		log:          log,
+		runtime: runtime,
+		storage: storage,
+		config:  config,
+		log:     log,
 	}
 }
 
@@ -52,14 +52,39 @@ func (s *Service) ListBackups(ctx context.Context, domainName string) ([]domain.
 	return s.storage.List(ctx, domainName, nil)
 }
 
-// DetectDatabases inspects attachments and returns detected DBs.
+// WithAppSources wires attachment-free database detection from the
+// app ACTIVE record. App-resolved targets carry (app, service)
+// identity and take precedence over domain-keyed attachments.
+func (s *Service) WithAppSources(fn func(ctx context.Context) ([]AppDatabaseSource, error)) *Service {
+	s.appSources = fn
+	return s
+}
+
+// DetectDatabases resolves database targets from the app ACTIVE record
+// via appSources. Domain-keyed callers match sources serving the
+// requested HTTP host; the resulting DBInfo carries both app identity
+// and the domain storage key. The pre-v2.50 attachment fallback was
+// removed with the declarative-apps cutover.
 func (s *Service) DetectDatabases(ctx context.Context, domainName string) ([]domain.DBInfo, error) {
-	attachments := s.containerSvc.ListAttachments(ctx, domainName)
-	dbs := make([]domain.DBInfo, 0, len(attachments))
-	for _, attachment := range attachments {
-		if db, ok := detectDatabaseFromAttachment(domainName, attachment); ok {
-			dbs = append(dbs, db)
+	if s.appSources == nil {
+		return nil, fmt.Errorf("backup database detection requires app state (no app sources wired)")
+	}
+	sources, err := s.appSources(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("detect app databases: %w", err)
+	}
+	matched := make([]AppDatabaseSource, 0, len(sources))
+	for _, source := range sources {
+		for _, host := range source.Hosts {
+			if strings.EqualFold(host, domainName) {
+				matched = append(matched, source)
+				break
+			}
 		}
+	}
+	dbs := DetectAppDatabases(matched)
+	for i := range dbs {
+		dbs[i].Domain = domainName
 	}
 	return dbs, nil
 }
@@ -75,12 +100,10 @@ func (s *Service) RunForSchedule(ctx context.Context, schedule domain.BackupSche
 		return fmt.Errorf("invalid backup schedule: %q", schedule)
 	}
 
-	routes := s.containerSvc.List(ctx)
-	domainNames := make([]string, 0, len(routes))
-	for domainName := range routes {
-		domainNames = append(domainNames, domainName)
+	domainNames, err := s.backupDomainNames(ctx)
+	if err != nil {
+		return err
 	}
-	sort.Strings(domainNames)
 
 	var firstErr error
 	for _, domainName := range domainNames {
@@ -202,14 +225,37 @@ func (s *Service) RestorePITR(context.Context, string, time.Time) error {
 	return fmt.Errorf("pitr restore not implemented yet")
 }
 
+// backupDomainNames enumerates candidate storage domains from ACTIVE app
+// services (union of served HTTP hosts). It replaces the pre-v2.50
+// route-container enumeration removed with the declarative-apps cutover.
+func (s *Service) backupDomainNames(ctx context.Context) ([]string, error) {
+	if s.appSources == nil {
+		return nil, fmt.Errorf("backup enumeration requires app state (no app sources wired)")
+	}
+	sources, err := s.appSources(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var domains []string
+	for _, source := range sources {
+		for _, host := range source.Hosts {
+			if _, ok := seen[host]; !ok {
+				seen[host] = struct{}{}
+				domains = append(domains, host)
+			}
+		}
+	}
+	sort.Strings(domains)
+	return domains, nil
+}
+
 // Status returns aggregate backup status for all managed domains.
 func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
-	routes := s.containerSvc.List(ctx)
-	domainNames := make([]string, 0, len(routes))
-	for domainName := range routes {
-		domainNames = append(domainNames, domainName)
+	domainNames, err := s.backupDomainNames(ctx)
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(domainNames)
 
 	const maxWorkers = 4
 	sem := make(chan struct{}, maxWorkers)

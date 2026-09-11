@@ -24,8 +24,8 @@ func TestResolveControlPlane_LocalAllowedWhenAuthEnabled(t *testing.T) {
 	tokenFlag = ""
 	insecureTLSFlag = false
 
-	configPath := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configPath, []byte(`[server]
+	cliConfigPath := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(cliConfigPath, []byte(`[server]
 gordon_domain = "gordon.local"
 data_dir = "`+filepath.Join(tmpDir, "data")+`"
 
@@ -35,7 +35,7 @@ secrets_backend = "unsafe"
 `), 0o600)
 	require.NoError(t, err)
 
-	handle, err := resolveControlPlane(configPath)
+	handle, err := resolveControlPlane(cliConfigPath)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 	require.NotNil(t, handle.plane)
@@ -58,8 +58,8 @@ func TestResolveControlPlane_LocalAllowedWhenAuthDisabled(t *testing.T) {
 	tokenFlag = ""
 	insecureTLSFlag = false
 
-	configPath := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configPath, []byte(`[server]
+	cliConfigPath := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(cliConfigPath, []byte(`[server]
 gordon_domain = "gordon.local"
 data_dir = "`+filepath.Join(tmpDir, "data")+`"
 
@@ -69,7 +69,7 @@ secrets_backend = "unsafe"
 `), 0o600)
 	require.NoError(t, err)
 
-	handle, err := resolveControlPlane(configPath)
+	handle, err := resolveControlPlane(cliConfigPath)
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 	require.NotNil(t, handle.plane)
@@ -92,8 +92,8 @@ func TestResolveControlPlane_ExplicitUnknownRemoteReturnsError(t *testing.T) {
 	tokenFlag = ""
 	insecureTLSFlag = false
 
-	configPath := filepath.Join(tmpDir, "gordon.toml")
-	err := os.WriteFile(configPath, []byte(`[server]
+	cliConfigPath := filepath.Join(tmpDir, "gordon.toml")
+	err := os.WriteFile(cliConfigPath, []byte(`[server]
 gordon_domain = "gordon.local"
 data_dir = "`+filepath.Join(tmpDir, "data")+`"
 
@@ -103,7 +103,7 @@ secrets_backend = "unsafe"
 `), 0o600)
 	require.NoError(t, err)
 
-	handle, err := resolveControlPlane(configPath)
+	handle, err := resolveControlPlane(cliConfigPath)
 	require.Error(t, err)
 	require.Nil(t, handle)
 	require.Contains(t, err.Error(), "does-not-exist")

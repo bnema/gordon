@@ -17,7 +17,7 @@ On your Gordon server:
 ```bash
 gordon auth token generate \
   --subject ci-deploy \
-  --scopes "push,pull,admin:routes:read,admin:config:write" \
+  --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 0
 ```
 
@@ -42,7 +42,7 @@ chmod +x /usr/local/bin/gordon
 export GORDON_TOKEN="$GORDON_TOKEN"
 gordon push --build \
   --remote "$GORDON_REMOTE" \
-  --no-confirm
+
 ```
 
 Gordon auto-detects the version from CI environment variables:
@@ -69,7 +69,7 @@ docker push gordon.example.com/myapp:v1.0.0
 ```
 
 This requires the token subject (`ci-deploy`) as the username.
-Gordon auto-deploys when it receives the image.
+Pushing only stores the image; deploy explicitly with `gordon apps deploy` afterwards.
 
 ## CI System Examples
 
@@ -89,7 +89,7 @@ pipeline {
                     curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 \
                       -o /usr/local/bin/gordon
                     chmod +x /usr/local/bin/gordon
-                    gordon push --build --remote "$GORDON_REMOTE" --no-confirm
+                    gordon push --build --remote "$GORDON_REMOTE"
                 '''
             }
         }
@@ -120,8 +120,7 @@ jobs:
           name: Deploy
           command: |
             gordon push --build \
-              --remote "$GORDON_REMOTE" \
-              --no-confirm
+              --remote "$GORDON_REMOTE"
 
 workflows:
   deploy:
@@ -153,7 +152,7 @@ steps:
       - apk add --no-cache curl
       - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
       - chmod +x /usr/local/bin/gordon
-      - gordon push --build --remote "$GORDON_REMOTE" --no-confirm
+      - gordon push --build --remote "$GORDON_REMOTE"
 
 trigger:
   event:
@@ -164,9 +163,9 @@ trigger:
 
 | Workflow | Required Scopes |
 |----------|----------------|
-| Build + push + deploy | `push,pull,admin:routes:read,admin:config:write` |
-| Push only (no deploy) | `push,pull,admin:routes:read` |
-| docker push (auto-deploy) | `push,pull` |
+| Build + push, then apply + deploy | `push,pull,admin:apps:read,admin:apps:write` |
+| Push only (no deploy) | `push,pull` |
+| docker push, then apply + deploy | `push,pull` + `admin:apps:read,admin:apps:write` for the CLI step |
 
 ## Troubleshooting
 
@@ -174,14 +173,13 @@ trigger:
 
 The token is invalid or has been revoked. Generate a new one.
 
-### "no route configured for image"
+### "deploy target not found" / app has no desired state
 
-The route must exist before pushing. Create it with:
+Push only stores the image. Declare the app first:
 
 ```bash
-gordon routes add myapp.example.com myapp
-# or for first deploy:
-gordon bootstrap myapp.example.com myapp
+gordon apps apply --file myapp.toml --remote "$GORDON_REMOTE"
+gordon apps deploy myapp --remote "$GORDON_REMOTE"
 ```
 
 ### Version shows "latest"

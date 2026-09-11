@@ -87,8 +87,8 @@ Admin scopes (for remote CLI):
 | Scope | Permission |
 |-------|------------|
 | `admin:*:*` | Full admin access |
-| `admin:routes:read` | Read-only routes access |
-| `admin:routes:write` | Routes write access |
+| `admin:apps:read` | Read-only apps access (list, show, diff, status) |
+| `admin:apps:write` | App mutations (apply, deploy, lifecycle, secrets) |
 | `admin:config:read` | Read-only config access |
 | `admin:config:write` | Config write access |
 | `admin:status:read` | Read-only status/health |
@@ -143,9 +143,18 @@ gordon auth token generate --subject temp --expiry 30d
 
 Authentication is enabled by default. If you set `auth.enabled=false`, Gordon switches to local-only mode:
 
-- `/admin/*` endpoints are not registered.
+- `/admin/*` endpoints are not registered on the TCP listener.
 - `/v2/*` registry endpoints are restricted to loopback (`127.0.0.1` / `::1`).
 - Remote registry and remote admin access are disabled.
+
+Local `gordon apps` commands keep working through an owner-only administration socket:
+
+- The daemon listens on `$XDG_RUNTIME_DIR/gordon/admin.sock`, falling back to `~/.gordon/run/admin.sock` only when the preferred location is unavailable, not when it is unsafe. The CLI also probes `/run/user/<uid>/gordon/admin.sock` when its own `XDG_RUNTIME_DIR` is unset. An unsafe selected candidate fails closed instead of silently selecting another daemon.
+- The runtime directory is `0700` and the socket `0600`, both owned by the effective user. A foreign owner, group/other permission bits, or a symlink makes the daemon refuse to start and the CLI refuse to connect; an existing live listener is never replaced.
+- The socket exposes only app administration and app log reads. The implicit `local-owner` principal receives exactly `admin:apps:read`, `admin:apps:write`, and `admin:logs:read`; configuration, auth, prune, route, backup, and volume routes are denied.
+- Unix platforms only. Never share, mount, or forward the socket: filesystem access to it is the credential.
+
+With neither a running daemon nor an explicit remote, app commands fail with `daemon-unavailable`. An explicit `--remote`/`GORDON_REMOTE` is authoritative and never falls back to the local socket.
 
 Use this only when Gordon is intended for local machine usage.
 

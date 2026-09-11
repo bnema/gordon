@@ -2,6 +2,28 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
+## v2.50.0: Declarative Apps (breaking)
+
+v2.50 replaces route-container management with declarative apps. One standalone TOML file defines one app; `gordon apps apply` persists desired state and `gordon apps deploy` activates it. Push transfers OCI content only and never deploys.
+
+Follow [Migrate to Gordon v2.50](./migrate-to-v2.50.md) for the complete cutover procedure, including explicit migration from domain-scoped secrets to app- and service-scoped secrets.
+
+### Removed
+
+- `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]` (+ `_allowed_domains`), `network_services`-as-apps, `[previews]` keys in `gordon.toml`. Gordon fails boot/reload closed with a `config-retired` diagnostic naming the fix when any of them is present — never a silent migration.
+- CLI: `pin`, `preview`, `attachments`, `bootstrap`, `autoroute allow`, `routes add/remove/purge`, push deploy/route inference, implicit deploys on push/reload, label/env-file inference. Removed HTTP mutation endpoints answer `410 Gone`.
+- Scopes `admin:routes:*` are replaced by `admin:apps:read` (list, show, diff, status) and `admin:apps:write` (apply, deploy, lifecycle, secrets). Regenerate CI tokens, e.g. `--scopes "push,pull,admin:apps:read,admin:apps:write"`.
+- No historical rollback command: roll back by applying a manifest that references the previous tag and deploying again.
+
+### Manual migration
+
+1. Back up databases/volumes and pass entries with the existing procedures. Record original ownership and image versions. No update hook deletes volumes: unknown resources are preserved, never adopted.
+2. Delete the removed keys from `gordon.toml` (installation settings only: entrypoints, TLS, limits, external routes, images policy, backups destinations stay).
+3. Write one `<app>.toml` per app (see [App Manifest](./config/apps.md)): services, `[[service.http]]` hosts, `[service.secrets]` names, volumes, `[[network.shared]]`, backup declarations.
+4. Migrate secret values explicitly with `gordon apps secrets set` after applying each manifest. Gordon does not copy `gordon/env/<domain>/...` entries into `gordon/apps/<uuid>/<service>/...`; follow the [v2.50 secrets migration procedure](./migrate-to-v2.50.md#2-migrate-domain-secrets).
+5. `gordon apps apply --file <app>.toml`, then `gordon apps deploy <app>`.
+6. Staging is an ordinary app in another file. A binary downgrade against the new app-state format is unsupported: restore the old installation/config/state and backups through an operator-approved procedure.
+
 ## Route-Domain Validation
 
 Route keys must be plain hostnames. Use inline tables like `"app.example.com" = { image = "myapp:latest" }`. Gordon still reads legacy `http://...` route entries for backward compatibility and rewrites them on the next save. Update `[routes]`, CLI commands, and automation that reference the old values.
@@ -114,7 +136,7 @@ registry_domain = "gordon.example.com"
 gordon_domain = "gordon.example.com"
 ```
 
-If you do not migrate, `gordon status --remote ...` and `gordon routes list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
+If you do not migrate, `gordon status --remote ...` and `gordon apps list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
 
 ### Staged Registry Host Rename
 
@@ -214,7 +236,7 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 - `gordon auth show-token` prints the stored token for a remote
 - `gordon auth logout` removes the stored token locally
 - Automatic token exchange: the CLI transparently exchanges long-lived tokens for ephemeral ones before API calls
-- Admin scopes (`admin:*:*`, `admin:routes:read`, etc.) allow fine-grained access control for remote CLI operations
+- Admin scopes (`admin:*:*`, `admin:apps:read`, `admin:apps:write`, etc.) allow fine-grained access control for remote CLI operations
 
 **Migration steps:**
 
@@ -294,8 +316,8 @@ gordon auth token generate --subject admin --scopes "push,pull,admin:*:*" --expi
 # Read-only monitoring
 gordon auth token generate --subject monitor --scopes "admin:status:read" --expiry 30d
 
-# CI deploy with route read + config write
-gordon auth token generate --subject ci --scopes "push,pull,admin:routes:read,admin:config:write" --expiry 0
+# CI deploy with app read + write
+gordon auth token generate --subject ci --scopes "push,pull,admin:apps:read,admin:apps:write" --expiry 0
 ```
 
 See [Token Scopes](./config/auth.md#token-scopes) for the full list.

@@ -32,19 +32,19 @@ import (
 // copy-on-read semantics. Generated mocks cannot easily replicate this
 // pattern because the interface methods return slices/maps by value and
 // callers may modify the returned data; a hand-rolled fake ensures each
-// GetRoutes/GetExternalRoutes call returns a defensive copy.
+// AppHosts/GetExternalRoutes call returns a defensive copy.
 type fakeRoutes struct {
 	mu       sync.Mutex
-	routes   []domain.Route
+	hosts    []out.AppHost
 	external map[string]string
 }
 
-func (f *fakeRoutes) GetRoutes(_ context.Context) []domain.Route {
+func (f *fakeRoutes) AppHosts() []out.AppHost {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	routesCopy := make([]domain.Route, len(f.routes))
-	copy(routesCopy, f.routes)
-	return routesCopy
+	hostsCopy := make([]out.AppHost, len(f.hosts))
+	copy(hostsCopy, f.hosts)
+	return hostsCopy
 }
 
 func (f *fakeRoutes) GetExternalRoutes() map[string]string {
@@ -303,10 +303,10 @@ func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "one.example.com"},
-			{Domain: "two.example.com"},
-			{Domain: "three.example.com"},
+		hosts: []out.AppHost{
+			{Host: "one.example.com"},
+			{Host: "two.example.com"},
+			{Host: "three.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
@@ -348,11 +348,18 @@ func TestServiceReconcileLimitsMissingObtainsPerRun(t *testing.T) {
 	assert.Len(t, storeState.All(), 3)
 }
 
+// stubAppRoutes is an ACTIVE-derived host source for public-TLS tests.
+type stubAppRoutes struct {
+	hosts []out.AppHost
+}
+
+func (s *stubAppRoutes) AppHosts() []out.AppHost { return s.hosts }
+
+func (s *stubAppRoutes) GetExternalRoutes() map[string]string { return nil }
+
 func TestServiceSetAdditionalHosts_ImmediatelyRevokesRemovedManagementDomain(t *testing.T) {
 	ctx := t.Context()
-	routes := outmocks.NewMockRouteChecker(t)
-	routes.EXPECT().GetRoutes(mock.Anything).Return(nil).Maybe()
-	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	routes := &stubAppRoutes{}
 	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
 	store, _ := newMockCertificateStore(t)
 
@@ -417,9 +424,9 @@ func TestServiceReconcileRotatesBatchAfterFailedObtain(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "b.example.com"},
-			{Domain: "a.example.com"},
+		hosts: []out.AppHost{
+			{Host: "b.example.com"},
+			{Host: "a.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
@@ -471,9 +478,9 @@ func TestServiceLoadUsesZeroCursorWhenLoadStateFails(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "b.example.com"},
-			{Domain: "a.example.com"},
+		hosts: []out.AppHost{
+			{Host: "b.example.com"},
+			{Host: "a.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
@@ -515,9 +522,9 @@ func TestServiceReconcileUsesInMemoryCursorWhenPersistFails(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "b.example.com"},
-			{Domain: "a.example.com"},
+		hosts: []out.AppHost{
+			{Host: "b.example.com"},
+			{Host: "a.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
@@ -570,9 +577,9 @@ func TestServiceReconcilePersistsBatchCursorAcrossRestart(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "b.example.com"},
-			{Domain: "a.example.com"},
+		hosts: []out.AppHost{
+			{Host: "b.example.com"},
+			{Host: "a.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, func(_ context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
@@ -628,8 +635,8 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
@@ -684,7 +691,7 @@ func TestServiceReconcileObtainsMissingHTTP01Cert(t *testing.T) {
 
 func TestServiceReconcile_SerializesConcurrentRuns(t *testing.T) {
 	ctx := context.Background()
-	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	routes := &fakeRoutes{hosts: []out.AppHost{{Host: "app.example.com"}}}
 	obtainStarted := make(chan struct{}, 2)
 	releaseObtain := make(chan struct{})
 
@@ -743,7 +750,7 @@ func TestServiceReconcile_SerializesConcurrentRuns(t *testing.T) {
 
 func TestServiceReconcileResolvesMissingEffectiveChallenge(t *testing.T) {
 	ctx := context.Background()
-	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	routes := &fakeRoutes{hosts: []out.AppHost{{Host: "app.example.com"}}}
 	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
 	store, _ := newMockCertificateStore(t)
 	cfg := Config{
@@ -787,8 +794,8 @@ func TestServiceStatusReportsCoverage(t *testing.T) {
 	})
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 	cfg := Config{
@@ -837,8 +844,8 @@ func TestServiceGetCertificateReturnsErrTLSRouteNotCovered(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 	// Make Obtain fail so no cert is cached.
@@ -888,8 +895,8 @@ func TestServiceReconcileDNS01BrokenResolverReturnsErrTLSRouteNotCovered(t *test
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 	issuer, _ := newMockPublicCertificateIssuer(t, nil, nil)
@@ -960,7 +967,7 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 		// Certificate field is zero — will be populated by Load.
 	})
 
-	routes := &fakeRoutes{routes: []domain.Route{{Domain: "test.example.com"}}}
+	routes := &fakeRoutes{hosts: []out.AppHost{{Host: "test.example.com"}}}
 	cfg := Config{Enabled: true}
 
 	svc := NewService(cfg, ServiceDeps{
@@ -991,7 +998,7 @@ func TestServiceLoadParsesPEMIntoTLSCertificate(t *testing.T) {
 
 func TestServiceStatusReportsRouteErrorAfterObtainFailure(t *testing.T) {
 	ctx := context.Background()
-	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	routes := &fakeRoutes{hosts: []out.AppHost{{Host: "app.example.com"}}}
 	issuer, _ := newMockPublicCertificateIssuer(t, func(_ context.Context, _ out.CertificateOrder) (*out.StoredCertificate, error) {
 		return nil, fmt.Errorf("acme unavailable token=sk-secret")
 	}, nil)
@@ -1042,7 +1049,7 @@ func TestServiceStatusCoverageUsesServingCertDespiteTransientError(t *testing.T)
 	cfg := Config{Enabled: true}
 	svc := NewService(cfg, ServiceDeps{
 		Config: cfg,
-		Routes: &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}},
+		Routes: &fakeRoutes{hosts: []out.AppHost{{Host: "app.example.com"}}},
 		Store:  store,
 	})
 	require.NoError(t, svc.Load(ctx))
@@ -1075,8 +1082,8 @@ func TestServiceStatusRedactsSensitiveStrings(t *testing.T) {
 	})
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 	cfg := Config{

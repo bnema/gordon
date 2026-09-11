@@ -13,31 +13,9 @@ import (
 // Remote implementations call admin HTTP APIs.
 // Local implementations call services directly in-process.
 type ControlPlane interface {
-	ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error)
-	GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error)
-	GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error)
-	FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error)
-	AddRoute(ctx context.Context, route domain.Route) error
-	UpdateRoute(ctx context.Context, route domain.Route) error
-	RemoveRoute(ctx context.Context, routeDomain string) error
-	Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error)
-
-	ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
+	ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
 	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error
 	DeleteSecret(ctx context.Context, secretDomain, key string) error
-	SetAttachmentSecrets(ctx context.Context, domain, service string, secrets map[string]string) error
-	DeleteAttachmentSecret(ctx context.Context, domain, service, key string) error
-
-	GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error)
-	GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error)
-	ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error)
-	CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error)
-	FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error)
-	AddAttachment(ctx context.Context, domainOrGroup, image string) error
-	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
-	GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error)
-	AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error
-	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
 
 	GetStatus(ctx context.Context) (*remote.Status, error)
 	GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error)
@@ -45,9 +23,6 @@ type ControlPlane interface {
 	Reload(ctx context.Context) error
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 	GetConfig(ctx context.Context) (*remote.Config, error)
-	DeployIntent(ctx context.Context, imageName string) error
-	Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error)
-	Restart(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error)
 	ListTags(ctx context.Context, repository string) ([]string, error)
 
 	ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error)

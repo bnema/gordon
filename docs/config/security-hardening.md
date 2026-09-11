@@ -24,8 +24,9 @@ Container and deploy logs can include environment-derived output. Gordon gates l
 gordon auth token generate --subject ops --scopes "admin:logs:read" --expiry 30d
 ```
 
-- `/admin/logs` and deploy failure logs require `admin:logs:read`.
+- `/admin/logs`, app failure diagnostics, and deploy failure logs require `admin:logs:read`.
 - `admin:status:read` does not grant log access.
+- Operation errors returned to `admin:apps:read` callers are stable and log-free. Application diagnostics are a separate field, redacted of known secret values before storage, and returned only to callers holding `admin:logs:read`. Mutation responses never include application output.
 - Common secret patterns are redacted before logs are returned.
 
 ## Volume pruning scope
@@ -95,7 +96,16 @@ enabled = true
 internal = true
 ```
 
-`internal = false` remains the compatibility default because some applications and attachments need direct egress during startup.
+`internal = false` remains the compatibility default because some applications need direct egress during startup.
+
+Every app container joins an incarnation-owned private network derived from the app's internal UUID; shared memberships come only from explicit `[[network.shared]]` declarations, and memory/CPU/PID limits apply on every create and recovery path.
+
+## Registry exposure
+
+- With `auth.enabled = true`, registry requests are authenticated and repository-scoped; the public proxy forwards registry domains to the internal registry.
+- With `auth.enabled = false`, the registry is local-only: the public proxy refuses registry-domain requests, and the registry handler accepts only direct loopback connections carrying the instance credentials.
+- Registry requests are parsed once into a validated operation used by both authorization and dispatch, so the repository a token is checked against is exactly the repository served.
+- Blob and upload access is repository-scoped: an upload UUID is usable only by the repository that started it, and a blob is served only to a repository that completed an upload of that digest.
 
 ## Container runtime profile
 

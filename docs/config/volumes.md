@@ -161,5 +161,5 @@ docker volume prune
 
 ## Related
 
-- [Attachments](./attachments.md)
+- [App Manifest](./apps.md)
 - [Configuration Overview](./index.md)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	in "github.com/bnema/gordon/internal/boundaries/in"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
@@ -14,68 +15,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type previewContainerService struct {
-	*inmocks.MockContainerService
-	preview func(context.Context, string) (*domain.CleanupReport, error)
-}
-
-func (s *previewContainerService) PreviewRemovedRouteCleanup(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
-	if s.preview == nil {
-		return nil, nil
-	}
-	return s.preview(ctx, routeDomain)
-}
-
 func TestLocalControlPlane_GetStatus(t *testing.T) {
 	t.Parallel()
 
 	configSvc := inmocks.NewMockConfigService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
+	appSvc := inmocks.NewMockAppService(t)
 
 	ctx := context.Background()
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.local", Image: "repo/app:latest"}})
 	configSvc.EXPECT().GetRegistryDomain().Return("registry.local")
 	configSvc.EXPECT().GetRegistryPort().Return(5000)
 	configSvc.EXPECT().GetServerPort().Return(80)
-	configSvc.EXPECT().IsAutoRouteEnabled().Return(true)
 	configSvc.EXPECT().IsNetworkIsolationEnabled().Return(true)
-	containerSvc.EXPECT().List(mock.Anything).Return(map[string]*domain.Container{
-		"app.local": {ID: "abc123", Status: "running"},
-	})
+	appSvc.EXPECT().List(mock.Anything).Return([]in.AppSummary{
+		{App: "blog", Desired: "rev-1", Active: "rev-1", Converged: true},
+	}, nil)
 
-	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
+	cp := &localControlPlane{configSvc: configSvc, appSvc: appSvc}
 	status, err := cp.GetStatus(ctx)
 	require.NoError(t, err)
-	require.Equal(t, 1, status.Routes)
+	require.Equal(t, 1, status.Apps)
 	require.Equal(t, "registry.local", status.RegistryDomain)
-	require.Equal(t, "running", status.ContainerStatus["app.local"])
-}
-
-func TestLocalControlPlane_DeployUsesInternalDeployContext(t *testing.T) {
-	t.Parallel()
-
-	configSvc := inmocks.NewMockConfigService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	ctx := context.Background()
-	route := &domain.Route{Domain: "app.local", Image: "repo/app:latest"}
-
-	require.False(t, domain.IsInternalDeploy(ctx))
-
-	configSvc.EXPECT().GetRoute(mock.Anything, "app.local").Return(route, nil)
-	containerSvc.EXPECT().Deploy(mock.Anything, *route).RunAndReturn(func(deployCtx context.Context, deployedRoute domain.Route) (*domain.Container, error) {
-		require.True(t, domain.IsInternalDeploy(deployCtx))
-		require.Equal(t, *route, deployedRoute)
-		return &domain.Container{ID: "container-1"}, nil
-	})
-
-	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
-	result, err := cp.Deploy(ctx, "app.local")
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, "deployed", result.Status)
-	require.Equal(t, "app.local", result.Domain)
-	require.Equal(t, "container-1", result.ContainerID)
+	require.Equal(t, "active", status.ContainerStatus["blog"])
 }
 
 func TestLocalControlPlane_Backups(t *testing.T) {
@@ -158,6 +118,28 @@ func TestLocalControlPlane_ListVolumeBackupsWrapsServiceError(t *testing.T) {
 	assert.Nil(t, jobs)
 }
 
+func TestLocalControlPlane_PruneVolumesPreservesPlan(t *testing.T) {
+	t.Parallel()
+
+	volumeSvc := inmocks.NewMockVolumeService(t)
+	report := &domain.VolumePruneReport{Plan: domain.PruneReport{
+		Candidates: []domain.PruneCandidateReport{{
+			Kind: domain.PruneResourceVolume, Ref: "released-volume", Verdict: domain.PruneVerdictEligible,
+			Reasons: []domain.PruneReason{domain.PruneReasonEligibleReleasedVolume},
+		}},
+	}}
+	volumeSvc.EXPECT().PruneVolumes(mock.Anything, true).Return(report, nil, nil)
+
+	cp := &localControlPlane{volumeSvc: volumeSvc}
+	result, err := cp.PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true})
+
+	require.NoError(t, err)
+	require.Len(t, result.Plan.Candidates, 1)
+	assert.Equal(t, 1, result.Plan.Eligible)
+	assert.Equal(t, "released-volume", result.Plan.Candidates[0].Ref)
+	assert.False(t, result.Plan.Applied)
+}
+
 func TestLocalControlPlane_ListTags(t *testing.T) {
 	t.Parallel()
 
@@ -168,87 +150,6 @@ func TestLocalControlPlane_ListTags(t *testing.T) {
 	tags, err := cp.ListTags(context.Background(), "repo/app")
 	require.NoError(t, err)
 	require.Equal(t, []string{"v1.0.0", "latest"}, tags)
-}
-
-func TestLocalControlPlane_RemoveRoutePersistsConfigThenReconcilesRuntime(t *testing.T) {
-	t.Parallel()
-
-	configSvc := inmocks.NewMockConfigService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	report := &domain.CleanupReport{
-		Domain: "app.local",
-		RemovedContainers: []domain.CleanupContainer{{
-			ID:   "container-1",
-			Name: "gordon-app.local",
-		}},
-	}
-
-	removeCall := configSvc.EXPECT().RemoveRoute(mock.Anything, "app.local").Return(nil).Once()
-	cleanupCall := containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.local").Return(report, nil).Once()
-	mock.InOrder(removeCall, cleanupCall)
-
-	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
-	err := cp.RemoveRoute(context.Background(), "app.local")
-	require.NoError(t, err)
-}
-
-func TestLocalControlPlane_RestartWithAttachments(t *testing.T) {
-	t.Parallel()
-
-	containerSvc := inmocks.NewMockContainerService(t)
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil)
-	containerSvc.EXPECT().Restart(mock.Anything, "app.local", true).Return(nil)
-
-	cp := &localControlPlane{containerSvc: containerSvc}
-	result, err := cp.Restart(context.Background(), "app.local", true)
-	require.NoError(t, err)
-	require.Equal(t, "app.local", result.Domain)
-}
-
-func TestLocalControlPlane_ListRoutesWithDetailsSyncsBeforeListing(t *testing.T) {
-	t.Parallel()
-
-	containerSvc := inmocks.NewMockContainerService(t)
-	syncCall := containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil).Once()
-	listCall := containerSvc.EXPECT().ListRoutesWithDetails(mock.Anything).Return([]domain.RouteInfo{{
-		Domain:          "app.local",
-		Image:           "repo/app:latest",
-		ContainerID:     "container-1",
-		ContainerStatus: "running",
-	}}).Once()
-	mock.InOrder(syncCall, listCall)
-
-	cp := &localControlPlane{containerSvc: containerSvc}
-	routes, err := cp.ListRoutesWithDetails(context.Background())
-	require.NoError(t, err)
-	require.Len(t, routes, 1)
-	require.Equal(t, "app.local", routes[0].Domain)
-	require.Equal(t, "repo/app:latest", routes[0].Image)
-	require.Equal(t, "container-1", routes[0].ContainerID)
-	require.Equal(t, "running", routes[0].ContainerStatus)
-}
-
-func TestLocalControlPlane_ListRoutesWithDetails_IncludesConfiguredRouteWithoutRuntimeDetail(t *testing.T) {
-	t.Parallel()
-
-	configSvc := inmocks.NewMockConfigService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{
-		Domain: "app.local",
-		Image:  "repo/app:latest",
-	}}).Once()
-	containerSvc.EXPECT().SyncContainers(mock.Anything).Return(nil).Once()
-	containerSvc.EXPECT().ListRoutesWithDetails(mock.Anything).Return(nil).Once()
-
-	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
-	routes, err := cp.ListRoutesWithDetails(context.Background())
-	require.NoError(t, err)
-	require.Len(t, routes, 1)
-	require.Equal(t, "app.local", routes[0].Domain)
-	require.Equal(t, "repo/app:latest", routes[0].Image)
-	require.Empty(t, routes[0].ContainerID)
-	require.Empty(t, routes[0].ContainerStatus)
 }
 
 func TestLocalControlPlane_GetTLSStatusWithoutService(t *testing.T) {
@@ -273,36 +174,4 @@ func TestLocalControlPlane_GetContainerLogs(t *testing.T) {
 	lines, err := cp.GetContainerLogs(context.Background(), "app.local", 50)
 	require.NoError(t, err)
 	require.Equal(t, []string{"line1", "line2"}, lines)
-}
-
-func TestLocalControlPlane_GetRouteCleanupPreview_ReturnsNilReportWithoutPanic(t *testing.T) {
-	ctx := context.Background()
-	volumeSvc := inmocks.NewMockVolumeService(t)
-	containerSvc := &previewContainerService{
-		MockContainerService: inmocks.NewMockContainerService(t),
-		preview: func(context.Context, string) (*domain.CleanupReport, error) {
-			return nil, nil
-		},
-	}
-	cp := &localControlPlane{containerSvc: containerSvc, volumeSvc: volumeSvc}
-
-	report, err := cp.GetRouteCleanupPreview(ctx, "app.local")
-	require.NoError(t, err)
-	assert.Nil(t, report)
-}
-
-func TestLocalControlPlane_RemoveRouteReconcilesRuntimeWhenRouteAlreadyMissing(t *testing.T) {
-	ctx := context.Background()
-	configSvc := inmocks.NewMockConfigService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	report := &domain.CleanupReport{Domain: "app.local"}
-
-	configSvc.EXPECT().RemoveRoute(mock.Anything, "app.local").Return(domain.ErrRouteNotFound).Once()
-	containerSvc.EXPECT().ReconcileRemovedRoute(mock.Anything, "app.local").Return(report, nil).Once()
-
-	cp := &localControlPlane{configSvc: configSvc, containerSvc: containerSvc}
-	resp, err := cp.RemoveRouteWithCleanup(ctx, "app.local")
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, dto.CleanupReportFromDomain(report), resp.Cleanup)
 }

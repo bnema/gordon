@@ -1,12 +1,12 @@
 package dto
 
 // ConfigResponse represents server configuration.
+// ConfigResponse represents installation configuration. App routes live
+// under apps show, never here.
 type ConfigResponse struct {
 	Server           ServerConfig           `json:"server"`
-	AutoRoute        AutoRouteConfig        `json:"auto_route"`
 	NetworkIsolation NetworkIsolationConfig `json:"network_isolation"`
 	Volumes          VolumesConfig          `json:"volumes"`
-	Routes           []Route                `json:"routes"`
 	ExternalRoutes   []ExternalRoute        `json:"external_routes"`
 }
 
@@ -16,11 +16,6 @@ type ServerConfig struct {
 	RegistryPort   int    `json:"registry_port"`
 	RegistryDomain string `json:"registry_domain"`
 	DataDir        string `json:"data_dir,omitempty"`
-}
-
-// AutoRouteConfig represents auto-route config details.
-type AutoRouteConfig struct {
-	Enabled bool `json:"enabled"`
 }
 
 // NetworkIsolationConfig represents network isolation settings.

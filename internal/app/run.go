@@ -70,13 +70,17 @@ import (
 	"github.com/bnema/gordon/pkg/version"
 
 	// Use cases
+	"github.com/bnema/gordon/internal/adapters/out/appsecrets"
+	"github.com/bnema/gordon/internal/adapters/out/appstate"
+	"github.com/bnema/gordon/internal/adapters/out/imageref"
+	"github.com/bnema/gordon/internal/usecase/apps"
+	"github.com/bnema/gordon/internal/usecase/apptraffic"
 	"github.com/bnema/gordon/internal/usecase/auth"
-	"github.com/bnema/gordon/internal/usecase/auto"
-	"github.com/bnema/gordon/internal/usecase/auto/preview"
 	"github.com/bnema/gordon/internal/usecase/backup"
 	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	cronSvc "github.com/bnema/gordon/internal/usecase/cron"
+	"github.com/bnema/gordon/internal/usecase/deployment"
 	"github.com/bnema/gordon/internal/usecase/health"
 	"github.com/bnema/gordon/internal/usecase/images"
 	"github.com/bnema/gordon/internal/usecase/logs"
@@ -117,6 +121,12 @@ type Config struct {
 		ProxyAllowedIPs       []string `mapstructure:"proxy_allowed_ips"`
 		RegistryListenAddr    string   `mapstructure:"registry_listen_address"`
 	} `mapstructure:"server"`
+
+	Apps struct {
+		// RevisionRetention bounds unreferenced-revision GC per app.
+		// Zero or negative restores the compiled default (8).
+		RevisionRetention int `mapstructure:"revision_retention"`
+	} `mapstructure:"apps"`
 
 	Logging struct {
 		Level  string `mapstructure:"level"`
@@ -244,6 +254,12 @@ type Config struct {
 		SecurityProfile string  `mapstructure:"security_profile"` // compat or strict
 	} `mapstructure:"containers"`
 
+	NetworkIsolation struct {
+		Enabled  bool   `mapstructure:"enabled"`
+		Prefix   string `mapstructure:"network_prefix"`
+		Internal bool   `mapstructure:"internal"`
+	} `mapstructure:"network_isolation"`
+
 	Telemetry telemetry.Config `mapstructure:"telemetry"`
 
 	TLS struct {
@@ -285,7 +301,6 @@ type services struct {
 	imageSvc              *images.Service
 	volumeSvc             *volumesSvc.Service
 	proxySvc              *proxy.Service
-	standaloneServiceSvc  in.StandaloneServiceService
 	serviceSecretProvider out.SecretProvider
 	authSvc               *auth.Service
 	authHandler           *authhandler.Handler
@@ -294,20 +309,28 @@ type services struct {
 	httpsProxyHandler     http.Handler
 	internalRegUser       string
 	internalRegPass       string
-	previewStore          *filesystem.PreviewStore
-	previewService        *preview.Service
 	envDir                string
 	maxBlobChunkSize      int64
 	maxBlobSize           int64
 	caAdapter             *pkiadapter.CA
 	pkiSvc                *pkiusecase.Service
-	reloadCoordinator     *reloadCoordinator
-	publicTLSSvc          in.PublicTLSService
-	publicTLSRuntime      publicTLSRuntime
-	trafficManager        *trafficadapter.Manager
-	tlsHTTPEntryPoints    map[string]struct{}
-	smartHTTPEntryPoints  map[string]struct{}
-	registryHandler       interface {
+	appState              out.AppState
+	// gcBarrier serializes resource acquisition and its durable
+	// protection publication against destructive prune.
+	gcBarrier            out.GCBarrier
+	appDeploySvc         *deployment.Service
+	appSvc               in.AppService
+	appActivator         *apptraffic.Activator
+	appHostIndex         *apptraffic.HostIndex
+	appTrafficPublisher  *appTrafficPublisher
+	appMonitor           *appMonitor
+	reloadCoordinator    *reloadCoordinator
+	publicTLSSvc         in.PublicTLSService
+	publicTLSRuntime     publicTLSRuntime
+	trafficManager       *trafficadapter.Manager
+	tlsHTTPEntryPoints   map[string]struct{}
+	smartHTTPEntryPoints map[string]struct{}
+	registryHandler      interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
 }
@@ -370,7 +393,7 @@ func Run(ctx context.Context, configPath string) error {
 	}
 
 	// Register event handlers
-	cleanupHandlers, err := registerEventHandlers(ctx, svc, cfg)
+	cleanupHandlers, err := registerEventHandlers(ctx, svc)
 	if err != nil {
 		return err
 	}
@@ -414,8 +437,43 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if err := validateEntrypointMigration(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
+	if err := validateRetiredAppConfig(v); err != nil {
+		return nil, Config{}, err
+	}
 
 	return v, cfg, nil
+}
+
+// retiredAppConfigKeys are pre-v2.50 application keys removed with the
+// declarative-apps cutover. Presence fails boot/reload closed with a
+// config-retired diagnostic naming the fix — never a silent migration.
+var retiredAppConfigKeys = []struct {
+	key  string
+	hint string
+}{
+	{"routes", "declare [[service.http]] in an app file, then 'gordon apps apply'"},
+	{"attachments", "declare [[service]] + volumes; attachments are removed"},
+	{"network_groups", "declare [[network.shared]] with ownership verification"},
+	{"services", "one [[service]] per app file"},
+	{"service_routes", "declare [[service.http]] instead"},
+	{"auto", "feature removed; declare explicit interfaces"},
+	{"auto_route", "feature removed; declare explicit interfaces"},
+	{"auto_route_allowed_domains", "feature removed; declare explicit interfaces"},
+	{"network_isolation", "installation network policy; per-app isolation is declared via [[network.shared]] in app files"},
+	{"previews", "staging is an ordinary app file"},
+}
+
+// validateRetiredAppConfig rejects obsolete application configuration
+// BEFORE any app/runtime mutation, at startup and reload. InConfig
+// (not IsSet) targets explicit file keys only — installation defaults
+// registered via SetDefault must not trip the rejection.
+func validateRetiredAppConfig(v *viper.Viper) error {
+	for _, retired := range retiredAppConfigKeys {
+		if v.InConfig(retired.key) {
+			return fmt.Errorf("config-retired: key %q was removed in v2.50; %s", retired.key, retired.hint)
+		}
+	}
+	return nil
 }
 
 func validateEntrypointMigration(v *viper.Viper, cfg Config) error {
@@ -618,7 +676,7 @@ func (si *serviceInit) initPKI() error {
 		return si.log.WrapErr(err, "failed to initialize internal CA")
 	}
 	si.svc.caAdapter = caAdapter
-	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.svc.configSvc, []string{si.cfg.Server.GordonDomain}, si.log)
+	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.appRoutes(), []string{si.cfg.Server.GordonDomain}, si.log)
 	return nil
 }
 
@@ -688,7 +746,7 @@ func (si *serviceInit) initPublicTLS() error {
 	}
 
 	svc := publictls.NewService(publicTLSCfg, publictls.ServiceDeps{
-		Routes:          si.svc.configSvc,
+		Routes:          si.appRoutes(),
 		Issuer:          issuer,
 		Store:           store,
 		ZoneResolver:    zoneResolver,
@@ -752,7 +810,272 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 		return err
 	}
 	si.svc.trafficManager = trafficadapter.NewManager()
+	return si.initApps()
+}
+
+// appDatabaseSources enumerates ACTIVE app services for attachment-free
+// backup detection. Ports come from TCP/UDP interfaces + readiness;
+// image/container from the effective record.
+func appDatabaseSources(store out.AppState) func(ctx context.Context) ([]backup.AppDatabaseSource, error) {
+	return func(ctx context.Context) ([]backup.AppDatabaseSource, error) {
+		apps, err := store.ListApps(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var sources []backup.AppDatabaseSource
+		for _, app := range apps {
+			active, ok, err := store.LoadActive(ctx, app)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				continue
+			}
+			for name, eff := range active.Services {
+				if eff.Container == "" {
+					continue
+				}
+				sources = append(sources, backup.AppDatabaseSource{
+					App:         app,
+					Service:     name,
+					Name:        name,
+					Image:       eff.Image,
+					ContainerID: eff.Container,
+					Ports:       servicePorts(eff.Spec),
+					Hosts:       serviceHosts(eff.Spec),
+				})
+			}
+		}
+		return sources, nil
+	}
+}
+
+// serviceHosts collects the HTTP hosts a service serves.
+func serviceHosts(spec domain.AppService) []string {
+	seen := map[string]struct{}{}
+	var hosts []string
+	for _, h := range spec.HTTP {
+		if h.Host == "" {
+			continue
+		}
+		if _, ok := seen[h.Host]; !ok {
+			seen[h.Host] = struct{}{}
+			hosts = append(hosts, h.Host)
+		}
+	}
+	return hosts
+}
+
+// servicePorts collects candidate ports from interfaces + readiness.
+func servicePorts(spec domain.AppService) []int {
+	seen := map[int]struct{}{}
+	var ports []int
+	for _, tcp := range spec.TCP {
+		if tcp.Port > 0 {
+			if _, ok := seen[tcp.Port]; !ok {
+				seen[tcp.Port] = struct{}{}
+				ports = append(ports, tcp.Port)
+			}
+		}
+	}
+	for _, udp := range spec.UDP {
+		if udp.Port > 0 {
+			if _, ok := seen[udp.Port]; !ok {
+				seen[udp.Port] = struct{}{}
+				ports = append(ports, udp.Port)
+			}
+		}
+	}
+	if spec.Readiness.Port > 0 {
+		if _, ok := seen[spec.Readiness.Port]; !ok {
+			ports = append(ports, spec.Readiness.Port)
+		}
+	}
+	return ports
+}
+
+// containerResourceLimits converts the installation container settings into
+// the runtime-neutral limits applied to every app workload on create and
+// recovery. An invalid size is a startup error: silently ignoring a
+// configured limit would defeat the resource contract.
+func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
+	limits := deployment.ResourceLimits{PidsLimit: cfg.Containers.PidsLimit}
+	if cfg.Containers.MemoryLimit != "" {
+		parsed, err := bytesize.Parse(cfg.Containers.MemoryLimit)
+		if err != nil {
+			return limits, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
+		}
+		limits.MemoryBytes = parsed
+	}
+	if cfg.Containers.CPULimit > 0 {
+		limits.NanoCPUs = int64(cfg.Containers.CPULimit * float64(time.Second))
+	}
+	return limits, nil
+}
+
+// initApps wires the single v2.50 app engine: bbolt state, image digests,
+// pass-backed secrets, deployment/lifecycle execution, and traffic
+// activation. The daemon is the sole app-state writer; CLI reaches the
+// engine only through the admin /apps surface.
+func (si *serviceInit) initApps() error {
+	dataDir := resolveDataDir(si.cfg.Server.DataDir)
+	store, err := appstate.NewStore(dataDir, si.log)
+	if err != nil {
+		return si.log.WrapErr(err, "failed to open app state")
+	}
+	store.WithRevisionRetention(si.cfg.Apps.RevisionRetention)
+	si.svc.appState = store
+	// One process-wide GC barrier owns the ordering between resource
+	// acquisition/publication and destructive prune.
+	si.svc.gcBarrier = newGCBarrier()
+	if si.svc.backupSvc != nil {
+		si.svc.backupSvc.WithAppSources(appDatabaseSources(store))
+	}
+	if si.svc.imageSvc != nil {
+		si.svc.imageSvc.WithPrunePorts(store, si.svc.runtime, si.svc.gcBarrier)
+	}
+	if si.svc.volumeSvc != nil {
+		si.svc.volumeSvc.WithPrunePorts(store, si.svc.runtime, si.svc.gcBarrier)
+	}
+	registryDomain := si.svc.configSvc.GetRegistryDomain()
+	imagePolicy := domain.ImageSourcePolicy{
+		AllowedRegistries:    si.cfg.Images.AllowedRegistries,
+		RequireDigest:        si.cfg.Images.RequireDigest,
+		InstallationRegistry: registryDomain,
+	}
+	resolver := imageref.NewResolver(registryDomain, si.svc.manifestStorage, nil).WithPolicy(imagePolicy)
+	// The publisher is the single serialized HTTP/L4 boundary: raw
+	// activations, fail-closed recovery withdrawal, and reload all go
+	// through it. It resolves writers/permission paths late-bound.
+	si.svc.appTrafficPublisher = newAppTrafficPublisher(si.svc, si.cfg)
+	limits, err := containerResourceLimits(si.cfg)
+	if err != nil {
+		return err
+	}
+	si.svc.appDeploySvc = deployment.NewService(deployment.Deps{
+		State:   store,
+		Runtime: si.svc.runtime,
+		Images:  resolver,
+		Secrets: si.svc.serviceSecretProvider,
+		Registry: deployment.RegistryConfig{
+			Domain:      registryDomain,
+			PullAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(si.svc.configSvc.GetRegistryPort())),
+			Username:    si.svc.internalRegUser,
+			Password:    si.svc.internalRegPass,
+		},
+		Networks: deployment.NetworkConfig{
+			Prefix:   si.cfg.NetworkIsolation.Prefix,
+			Internal: si.cfg.NetworkIsolation.Internal,
+		},
+		Limits:      limits,
+		ImagePolicy: imagePolicy,
+		Traffic:     si.svc.appTrafficPublisher,
+	}, si.log).WithGCBarrier(si.svc.gcBarrier)
+	si.svc.appActivator = apptraffic.NewActivator(si.log)
+	si.svc.appSvc = apps.NewAppServiceImpl(store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
+		WithEntrypoints(appEntrypointListeners(si.cfg)).
+		WithGCBarrier(si.svc.gcBarrier)
+	// Health checks resolve from ACTIVE state (loopback backends).
+	si.svc.healthSvc = health.NewService(store, si.svc.runtime, httpprober.New(), si.log)
+	// ACTIVE-derived host index for the proxy: rebuilt after every
+	// activation and at boot. Wired here (store is open); the proxy
+	// itself was built earlier in initRuntimeAndProxy.
+	si.svc.appHostIndex = apptraffic.NewHostIndex()
+	if si.svc.proxySvc != nil {
+		si.svc.proxySvc.WithAppTargets(si.svc.appHostIndex)
+	}
 	return nil
+}
+
+// appRouteSource adapts the ACTIVE-derived host index plus installation
+// external routes to the route-source interfaces (PKI AppRoutes,
+// public-TLS RouteSource). bbolt stays authoritative; this adapter only
+// projects. Fail-closed: unwired index yields zero app hosts. The index
+// is late-bound (built after PKI/public-TLS), so it resolves per call.
+type appRouteSource struct {
+	index    func() *apptraffic.HostIndex
+	external func() map[string]string
+}
+
+// AppHosts implements out.AppHostSource.
+func (s *appRouteSource) AppHosts() []out.AppHost {
+	if s == nil || s.index == nil {
+		return nil
+	}
+	index := s.index()
+	if index == nil {
+		return nil
+	}
+	return index.AppHosts()
+}
+
+// GetExternalRoutes implements the installation half of out.AppRoutes
+// and the public-TLS RouteSource.
+func (s *appRouteSource) GetExternalRoutes() map[string]string {
+	if s == nil || s.external == nil {
+		return nil
+	}
+	return s.external()
+}
+
+// GetRoutes implements the public-TLS RouteSource as a consumer-local
+// adapter: host-only entries, Image explicitly unused (no app meaning).
+func (s *appRouteSource) GetRoutes(context.Context) []domain.Route {
+	hosts := s.AppHosts()
+	routes := make([]domain.Route, 0, len(hosts))
+	for _, h := range hosts {
+		routes = append(routes, domain.Route{Domain: h.Host})
+	}
+	return routes
+}
+
+// appRoutes returns the shared ACTIVE-derived route source, late-bound
+// to the host index built in initApps.
+func (si *serviceInit) appRoutes() *appRouteSource {
+	return &appRouteSource{
+		index:    func() *apptraffic.HostIndex { return si.svc.appHostIndex },
+		external: func() map[string]string { return si.svc.configSvc.GetExternalRoutes() },
+	}
+}
+
+// appEntrypointPolicies maps installation entrypoints to the projection
+// policy (trusted CIDRs, raw-fallback behavior, transport limits).
+func appEntrypointPolicies(cfg Config) map[string]apptraffic.EntrypointPolicy {
+	policies := make(map[string]apptraffic.EntrypointPolicy, len(cfg.EntryPoints))
+	for name, entry := range cfg.EntryPoints {
+		policies[name] = apptraffic.EntrypointPolicy{
+			Name:                    name,
+			Address:                 entry.Address,
+			Protocol:                entry.Protocol,
+			TrustedCIDRs:            entry.TrustedCIDRs,
+			RawFallback:             entry.RawFallback,
+			RawFallbackTrustedCIDRs: entry.RawFallbackTrustedCIDRs,
+			AllowPublicRawFallback:  entry.AllowPublicRawFallback,
+		}
+	}
+	return policies
+}
+
+// appEntrypointListeners maps installation entrypoints to the canonical
+// listener an app L4 publish declaration must match exactly.
+func appEntrypointListeners(cfg Config) map[string]domain.EntryPointListener {
+	listeners := make(map[string]domain.EntryPointListener, len(cfg.EntryPoints))
+	for name, entry := range cfg.EntryPoints {
+		listeners[name] = domain.EntryPointListener{Address: entry.Address, Protocol: entry.Protocol}
+	}
+	return listeners
+}
+
+// rebuildAppHostIndex re-projects ACTIVE state into the proxy host index
+// and applies the full HTTP/L4 traffic graph through the serialized
+// publisher. Call after every activation (deploy/start/restart/stop/
+// remove) and at boot; callers decide whether a failure is fatal to the
+// mutation.
+func rebuildAppHostIndex(ctx context.Context, svc *services) error {
+	if svc.appTrafficPublisher == nil {
+		return nil
+	}
+	return svc.appTrafficPublisher.RebuildTraffic(ctx)
 }
 
 func (si *serviceInit) initRuntimeAndProxy() error {
@@ -782,8 +1105,7 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	}
 	si.svc.maxBlobChunkSize = proxyCfg.maxBlobChunkSize
 	si.svc.maxBlobSize = proxyCfg.maxBlobSize
-	si.svc.proxySvc = proxy.NewService(si.svc.runtime, si.svc.containerSvc, si.svc.configSvc, proxyCfg.proxyConfig)
-	si.svc.standaloneServiceSvc = servicecfg.NewServiceWithSecretProvider(si.svc.runtime, si.svc.serviceSecretProvider)
+	si.svc.proxySvc = proxy.NewService(si.svc.configSvc, proxyCfg.proxyConfig)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
@@ -818,14 +1140,11 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 				return tlsErr
 			}
 		}
-		if err := applyTrafficRuntimeConfig(reloadCtx, si.svc.trafficManager, reloadCfg, si.svc.configSvc); err != nil {
+		if err := si.svc.appTrafficPublisher.RebuildWithConfig(reloadCtx, reloadCfg); err != nil {
 			return err
 		}
 		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
 		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
-		if err := reconcileStandaloneServices(reloadCtx, si.svc.standaloneServiceSvc, reloadCfg); err != nil {
-			return err
-		}
 		si.svc.containerSvc.UpdateConfig(containerCfg)
 		return nil
 	})
@@ -840,12 +1159,13 @@ func (si *serviceInit) initHandlers() {
 		si.svc.authHandler = authhandler.NewHandler(si.svc.authSvc, internalAuth, si.log)
 	}
 
-	prober := httpprober.New()
-	si.svc.healthSvc = health.NewService(si.svc.configSvc, si.svc.containerSvc, prober, si.log)
+	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.runtime, si.log)
+	// initApps (via initRuntimeProxyAndTraffic) runs before initHandlers,
+	// so the host index is already open here.
+	if si.svc.appHostIndex != nil {
+		si.svc.logSvc.WithAppTargets(si.svc.appHostIndex)
+	}
 
-	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.containerSvc, si.svc.runtime, si.log)
-
-	initPreviewService(si.ctx, si.cfg, si.svc, si.log)
 	if si.svc.trafficManager == nil {
 		si.svc.trafficManager = trafficadapter.NewManager()
 	}
@@ -862,173 +1182,12 @@ func (si *serviceInit) initHandlers() {
 		Log:             si.log,
 		BackupSvc:       si.svc.backupSvc,
 		VolumeBackupSvc: si.svc.volumeBackupSvc,
-		PreviewSvc:      si.svc.previewService,
 		ImageSvc:        si.svc.imageSvc,
 		VolumeSvc:       si.svc.volumeSvc,
 		PublicTLSSvc:    si.svc.publicTLSSvc,
 		TrafficSvc:      si.svc.trafficManager,
+		AppSvc:          si.svc.appSvc,
 	})
-}
-
-// initPreviewService sets up the preview store, service, and TTL ticker.
-func initPreviewService(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) {
-	previewStorePath := filepath.Join(resolveDataDir(cfg.Server.DataDir), "previews.json")
-	svc.previewStore = filesystem.NewPreviewStore(previewStorePath)
-	previewConfig := svc.configSvc.GetPreviewConfig()
-	svc.previewService = preview.NewService(svc.previewStore, previewConfig.TTL).
-		WithDeployer(svc.containerSvc).
-		WithRouteManager(svc.configSvc).
-		WithVolumeCloner(svc.runtime).
-		WithRegistryDomain(svc.configSvc.GetRegistryDomain()).
-		WithEnvLoader(svc.envLoader)
-	if err := svc.previewService.Load(ctx); err != nil {
-		log.Warn().Err(err).Msg("failed to load previews")
-	}
-
-	// Derive sweep interval from TTL: half the TTL, capped at 1 hour, minimum 1 minute.
-	sweepInterval := max(min(previewConfig.TTL/2, time.Hour), time.Minute)
-
-	svc.previewService.StartTicker(ctx, sweepInterval, func(ctx context.Context, p domain.PreviewRoute) {
-		teardownTrackedPreview(ctx, svc, p)
-	}, func(ctx context.Context) {
-		gcOrphanedPreviews(ctx, svc, previewConfig)
-	})
-}
-
-// teardownTrackedPreview removes all resources for a tracked preview that has expired.
-func teardownTrackedPreview(ctx context.Context, svc *services, p domain.PreviewRoute) {
-	log := zerowrap.FromCtx(ctx)
-	for _, containerName := range p.Containers {
-		if err := svc.runtime.StopContainer(ctx, containerName); err != nil {
-			log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to stop preview container")
-		}
-		if err := svc.runtime.RemoveContainer(ctx, containerName, true); err != nil {
-			log.Warn().Err(err).Str("container", containerName).Str("preview", p.Domain).Msg("failed to remove preview container")
-		}
-	}
-	for _, volName := range p.Volumes {
-		if err := svc.runtime.RemoveVolume(ctx, volName, true); err != nil {
-			log.Warn().Err(err).Str("volume", volName).Str("preview", p.Domain).Msg("failed to remove preview volume")
-		}
-	}
-	// Remove network (naming convention: {networkPrefix}-{domain-sanitized}).
-	networkPrefix := svc.configSvc.GetNetworkPrefix()
-	networkName := networkPrefix + "-" + strings.ReplaceAll(p.Domain, ".", "-")
-	if err := svc.runtime.RemoveNetwork(ctx, networkName); err != nil {
-		log.Warn().Err(err).Str("network", networkName).Str("preview", p.Domain).Msg("failed to remove preview network")
-	}
-	// Remove route from config so proxy stops routing to this domain.
-	if err := svc.configSvc.RemoveRoute(ctx, p.Domain); err != nil {
-		if errors.Is(err, domain.ErrRouteNotFound) {
-			log.Debug().Str("domain", p.Domain).Msg("preview route already removed from config")
-		} else {
-			log.Warn().Err(err).Str("domain", p.Domain).Msg("failed to remove preview route from config")
-		}
-	}
-	svc.proxySvc.InvalidateTarget(ctx, p.Domain)
-}
-
-// gcOrphanedPreviews finds and tears down untracked preview containers.
-func gcOrphanedPreviews(ctx context.Context, svc *services, previewConfig domain.PreviewConfig) {
-	log := zerowrap.FromCtx(ctx)
-	orphans := svc.previewService.CollectOrphans(ctx, svc.runtime, previewConfig.TagPatterns, previewConfig.Separator)
-	for _, c := range orphans {
-		orphanDomain := c.Labels[domain.LabelDomain]
-		log.Warn().Str("container", c.Name).Str("image", c.Image).Str("domain", orphanDomain).
-			Time("created", c.Created).Msg("orphaned preview container detected, cleaning up")
-
-		// Order: stop → remove volumes/route → remove container → remove network.
-		// Network removal must happen after container removal because the runtime
-		// refuses to delete a network that still has containers attached.
-		if err := svc.runtime.StopContainer(ctx, c.Name); err != nil {
-			log.Warn().Err(err).Str("container", c.Name).Msg("failed to stop orphan container")
-		}
-
-		if orphanDomain != "" {
-			if err := cleanupOrphanDomainResources(ctx, svc, orphanDomain); err != nil {
-				log.Warn().Err(err).Str("container", c.Name).Str("domain", orphanDomain).
-					Msg("orphan resource cleanup failed, deferring container removal to next scan")
-				continue
-			}
-		}
-
-		if err := svc.runtime.RemoveContainer(ctx, c.Name, true); err != nil {
-			log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan container")
-		}
-
-		// Remove network after container is gone.
-		if orphanDomain != "" {
-			if err := removeOrphanNetwork(ctx, svc, strings.ReplaceAll(orphanDomain, ".", "-"), log); err != nil {
-				log.Warn().Err(err).Str("container", c.Name).Msg("failed to remove orphan network after container removal")
-			}
-		}
-
-		log.Info().Str("container", c.Name).Str("domain", orphanDomain).Msg("orphaned preview container cleaned up")
-	}
-
-	// Re-sync container state so stale routes disappear from routes list.
-	if len(orphans) > 0 {
-		if err := svc.containerSvc.SyncContainers(ctx); err != nil {
-			log.Warn().Err(err).Msg("failed to sync containers after orphan GC")
-		}
-	}
-}
-
-// cleanupOrphanDomainResources removes volumes and route for an orphaned
-// preview domain. Network removal is handled separately in gcOrphanedPreviews
-// after the container is removed. Returns an error if any step fails so the
-// caller can defer container removal until the next scan.
-func cleanupOrphanDomainResources(ctx context.Context, svc *services, orphanDomain string) error {
-	log := zerowrap.FromCtx(ctx)
-	domainSanitized := strings.ReplaceAll(orphanDomain, ".", "-")
-	var errs []error
-
-	errs = append(errs, removeOrphanVolumes(ctx, svc, domainSanitized, log)...)
-	errs = append(errs, removeOrphanRoute(ctx, svc, orphanDomain, log))
-	svc.proxySvc.InvalidateTarget(ctx, orphanDomain)
-
-	return errors.Join(errs...)
-}
-
-func removeOrphanVolumes(ctx context.Context, svc *services, domainSanitized string, log zerowrap.Logger) []error {
-	_, volPrefix, _ := svc.configSvc.GetVolumeConfig()
-	prefix := volPrefix + "-" + domainSanitized + "-"
-
-	volumes, err := svc.runtime.ListVolumes(ctx)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list volumes for orphan cleanup")
-		return []error{err}
-	}
-
-	var errs []error
-	for _, v := range volumes {
-		if !strings.HasPrefix(v.Name, prefix) {
-			continue
-		}
-		if err := svc.runtime.RemoveVolume(ctx, v.Name, true); err != nil {
-			log.Warn().Err(err).Str("volume", v.Name).Msg("failed to remove orphan volume")
-			errs = append(errs, err)
-		}
-	}
-	return errs
-}
-
-func removeOrphanNetwork(ctx context.Context, svc *services, domainSanitized string, log zerowrap.Logger) error {
-	name := svc.configSvc.GetNetworkPrefix() + "-" + domainSanitized
-	if err := svc.runtime.RemoveNetwork(ctx, name); err != nil {
-		log.Warn().Err(err).Str("network", name).Msg("failed to remove orphan network")
-		return err
-	}
-	return nil
-}
-
-func removeOrphanRoute(ctx context.Context, svc *services, orphanDomain string, log zerowrap.Logger) error {
-	err := svc.configSvc.RemoveRoute(ctx, orphanDomain)
-	if err == nil || errors.Is(err, domain.ErrRouteNotFound) {
-		return nil
-	}
-	log.Warn().Err(err).Str("domain", orphanDomain).Msg("failed to remove orphan route")
-	return err
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when
@@ -1500,9 +1659,9 @@ func resolveEnvDir(cfg Config) string {
 }
 
 func resolveRegistryDomains(cfg Config) (string, []string) {
-	registryDomain := cfg.Server.GordonDomain
+	registryDomain := cfg.Server.RegistryDomain
 	if registryDomain == "" {
-		registryDomain = cfg.Server.RegistryDomain
+		registryDomain = cfg.Server.GordonDomain
 	}
 	return registryDomain, append([]string{}, cfg.Server.LegacyRegistryDomains...)
 }
@@ -1613,17 +1772,6 @@ func parseTokenExpiry(expiry string) (time.Duration, error) {
 	}
 
 	return parsed, nil
-}
-
-func resolveServiceTokenExpiry(cfg Config) (time.Duration, error) {
-	expiry, err := parseTokenExpiry(cfg.Auth.TokenExpiry)
-	if err != nil {
-		return 0, err
-	}
-	if expiry <= 0 {
-		return serviceTokenDefaultTTL, nil
-	}
-	return expiry, nil
 }
 
 // loadSecret loads a secret from the configured backend.
@@ -1859,6 +2007,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateEntrypointMigration(c.v, reloadCfg); err != nil {
 		return err
 	}
+	if err := validateRetiredAppConfig(c.v); err != nil {
+		return err
+	}
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
 	if err != nil {
@@ -1996,93 +2147,10 @@ func buildDNSConfig(cfg Config) (publictls.DNSConfig, error) {
 	return dnsCfg, nil
 }
 
-func buildContainerServiceConfig(ctx context.Context, v *viper.Viper, cfg Config, svc *services, log zerowrap.Logger) (container.Config, error) {
-	if cfg.Containers.CPULimit < 0 {
-		return container.Config{}, fmt.Errorf("containers.cpu_limit must be >= 0 (got %f)", cfg.Containers.CPULimit)
-	}
-	if cfg.Containers.PidsLimit < 0 {
-		return container.Config{}, fmt.Errorf("containers.pids_limit must be >= 0 (got %d)", cfg.Containers.PidsLimit)
-	}
-	var defaultMemoryLimit int64
-	if cfg.Containers.MemoryLimit != "" {
-		parsed, err := bytesize.Parse(cfg.Containers.MemoryLimit)
-		if err != nil {
-			return container.Config{}, fmt.Errorf("invalid containers.memory_limit %q: %w", cfg.Containers.MemoryLimit, err)
-		}
-		if parsed <= 0 {
-			return container.Config{}, fmt.Errorf("containers.memory_limit must be positive (got %q)", cfg.Containers.MemoryLimit)
-		}
-		defaultMemoryLimit = parsed
-	}
-	var defaultNanoCPUs int64
-	if cfg.Containers.CPULimit > 0 {
-		defaultNanoCPUs = int64(cfg.Containers.CPULimit * 1e9)
-	}
-
-	attachmentConfig := svc.configSvc.GetAttachmentConfig()
-	registryDomain, legacyRegistryDomains := resolveRegistryDomains(cfg)
-
-	containerConfig := container.Config{
-		RegistryAuthEnabled:        cfg.Auth.Enabled,
-		RegistryDomain:             registryDomain,
-		LegacyRegistryDomains:      legacyRegistryDomains,
-		RegistryPort:               cfg.Server.RegistryPort,
-		InternalRegistryUsername:   svc.internalRegUser,
-		InternalRegistryPassword:   svc.internalRegPass,
-		PullPolicy:                 v.GetString("deploy.pull_policy"),
-		VolumeAutoCreate:           v.GetBool("volumes.auto_create"),
-		VolumePrefix:               v.GetString("volumes.prefix"),
-		VolumePreserve:             v.GetBool("volumes.preserve"),
-		NetworkIsolation:           v.GetBool("network_isolation.enabled"),
-		NetworkPrefix:              v.GetString("network_isolation.network_prefix"),
-		NetworkGroups:              attachmentConfig.NetworkGroups,
-		NetworkInternal:            v.GetBool("network_isolation.internal"),
-		Attachments:                attachmentConfig.Attachments,
-		AllowedRegistries:          cfg.Images.AllowedRegistries,
-		RequireImageDigest:         cfg.Images.RequireDigest,
-		SecurityProfile:            cfg.Containers.SecurityProfile,
-		ReadinessDelay:             v.GetDuration("deploy.readiness_delay"),
-		ReadinessMode:              v.GetString("deploy.readiness_mode"),
-		HealthTimeout:              v.GetDuration("deploy.health_timeout"),
-		StabilizationDelay:         v.GetDuration("deploy.stabilization_delay"),
-		TCPProbeTimeout:            v.GetDuration("deploy.tcp_probe_timeout"),
-		HTTPProbeTimeout:           v.GetDuration("deploy.http_probe_timeout"),
-		DrainDelay:                 v.GetDuration("deploy.drain_delay"),
-		DrainMode:                  v.GetString("deploy.drain_mode"),
-		DrainTimeout:               v.GetDuration("deploy.drain_timeout"),
-		DefaultMemoryLimit:         defaultMemoryLimit,
-		DefaultNanoCPUs:            defaultNanoCPUs,
-		DefaultPidsLimit:           cfg.Containers.PidsLimit,
-		AttachmentReadinessTimeout: v.GetDuration("deploy.attachment_readiness_timeout"),
-	}
-	if v.IsSet("deploy.drain_delay") {
-		containerConfig.DrainDelayConfigured = true
-		containerConfig.DrainDelay = v.GetDuration("deploy.drain_delay")
-	}
-
-	if containerConfig.RegistryAuthEnabled {
-		if svc.authSvc == nil {
-			return container.Config{}, fmt.Errorf("authentication service unavailable: cannot generate registry service token")
-		}
-		expiry, err := resolveServiceTokenExpiry(cfg)
-		if err != nil {
-			return container.Config{}, log.WrapErr(err, "failed to resolve service token expiry")
-		}
-		serviceToken, err := svc.authSvc.GenerateToken(ctx, serviceTokenSubject, []string{"pull"}, expiry)
-		if err != nil {
-			return container.Config{}, log.WrapErr(err, "failed to generate registry service token")
-		}
-		log.Info().
-			Str("subject", serviceTokenSubject).
-			Str("expiry", expiry.String()).
-			Msg("generated service token for container registry access")
-		containerConfig.ServiceTokenUsername = serviceTokenSubject
-		containerConfig.ServiceToken = serviceToken
-	} else {
-		log.Warn().Msg("registry auth disabled; container image pulls will use unauthenticated mode")
-	}
-
-	return containerConfig, nil
+func buildContainerServiceConfig(_ context.Context, v *viper.Viper, _ Config, _ *services, _ zerowrap.Logger) (container.Config, error) {
+	return container.Config{
+		NetworkPrefix: v.GetString("network_isolation.network_prefix"),
+	}, nil
 }
 
 // createContainerService creates the container service with configuration.
@@ -2091,7 +2159,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	if err != nil {
 		return nil, err
 	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig, svc.configSvc), nil
+	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
 }
 
 type databaseBackupSettingsConfig struct {
@@ -2178,7 +2246,7 @@ func createBackupService(cfg Config, svc *services, log zerowrap.Logger) (*files
 		Retention:  retention,
 	}
 
-	backupSvc := backup.NewService(svc.runtime, backupStorage, svc.containerSvc, backupCfg, log)
+	backupSvc := backup.NewService(svc.runtime, backupStorage, backupCfg, log)
 
 	log.Info().
 		Str("storage_dir", storageDir).
@@ -2327,46 +2395,15 @@ func validateVolumeBackupS3Settings(enabled bool, keep, maxConcurrency int, buck
 	return nil
 }
 
-// registerEventHandlers registers all event handlers.
-func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func(), error) {
-	imagePushedHandler := container.NewImagePushedHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(imagePushedHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe image pushed handler: %w", err)
-	}
-
-	// Auto-route handler for creating routes from image labels
-	registryDomain, legacyRegistryDomains := resolveRegistryDomains(cfg)
-	autoRouteHandler := container.NewAutoRouteHandler(ctx, svc.configSvc, svc.containerSvc, svc.blobStorage, registryDomain, legacyRegistryDomains...).
-		WithEnvExtractor(svc.runtime, svc.envDir)
-
-	// Preview handler for creating preview environments from tagged images
-	autoPreviewHandler := preview.NewAutoPreviewHandler(
-		ctx,
-		svc.configSvc,
-		svc.previewService,
-	)
-
-	// Dispatcher routes image push events to either auto-route or preview handler
-	dispatcher := auto.NewImagePushDispatcher(svc.configSvc, autoRouteHandler, autoPreviewHandler)
-	if err := svc.eventBus.Subscribe(dispatcher); err != nil {
-		return nil, fmt.Errorf("subscribe image push dispatcher: %w", err)
-	}
-
-	configReloadHandler := container.NewConfigReloadHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(configReloadHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe config reload handler: %w", err)
-	}
-
-	manualDeployHandler := container.NewManualDeployHandler(ctx, svc.containerSvc, svc.configSvc)
-	if err := svc.eventBus.Subscribe(manualDeployHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe manual deploy handler: %w", err)
-	}
-
-	secretsChangedHandler := container.NewSecretsChangedHandler(ctx, svc.containerSvc, svc.configSvc, container.DefaultSecretsDebounce)
-	if err := svc.eventBus.Subscribe(secretsChangedHandler); err != nil {
-		return nil, fmt.Errorf("failed to subscribe secrets changed handler: %w", err)
-	}
-
+// registerEventHandlers registers event handlers. Push-triggered
+// route creation (auto-route, previews, image-pushed deploy) is
+// retired: pushes transfer OCI content only and apps deploy
+// explicitly via `gordon apps deploy`. The pre-v2.50 route-engine
+// deploy arms (config-reload redeploy, manual SIGUSR2 deploy,
+// secrets-changed redeploy) are removed with the declarative-apps
+// cutover: reload never activates app state, and app secret changes
+// take effect on explicit deploy.
+func registerEventHandlers(ctx context.Context, svc *services) (func(), error) {
 	// Proxy cache invalidation on config reload (clears stale targets for removed routes)
 	configReloadProxyHandler := proxy.NewConfigReloadProxyHandler(ctx, svc.proxySvc)
 	if err := svc.eventBus.Subscribe(configReloadProxyHandler); err != nil {
@@ -2374,7 +2411,6 @@ func registerEventHandlers(ctx context.Context, svc *services, cfg Config) (func
 	}
 
 	cleanup := func() {
-		secretsChangedHandler.Stop()
 	}
 
 	return cleanup, nil
@@ -2414,6 +2450,26 @@ func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
 	})
 }
 
+// hostRedirectEligible reports whether a known host should be redirected
+// from plaintext to HTTPS: app hosts declared tls=never stay plain HTTP.
+func hostRedirectEligible(svc *services, host string) bool {
+	if svc.appHostIndex == nil {
+		return true
+	}
+	entry, ok := svc.appHostIndex.Lookup(host)
+	return !ok || entry.TLSMode != domain.AppTLSNever
+}
+
+// hostRequiresTLS reports whether an app host declared tls=always, which
+// must never be served over plaintext. An unwired index has no always hosts.
+func hostRequiresTLS(svc *services, host string) bool {
+	if svc.appHostIndex == nil {
+		return false
+	}
+	entry, ok := svc.appHostIndex.Lookup(host)
+	return ok && entry.TLSMode == domain.AppTLSAlways
+}
+
 // createHTTPHandlers creates HTTP handlers with middleware.
 // Returns three handlers: registry, HTTP proxy (with CIDR + onboarding), and HTTPS proxy.
 func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWriter out.AccessLogWriter) (http.Handler, http.Handler, http.Handler) {
@@ -2440,8 +2496,11 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	registryMux.Handle("/v2/", wrapRegistryForLocalMode(registryWithMiddleware, cfg, log))
 	registerAdminRoutes(registryMux, svc, cfg, trustedNets, log)
 
-	// Proxy handler
-	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, trustedNets, log)
+	// Proxy handler. Registry-domain forwarding is gated on auth: with
+	// auth disabled the registry stays local-only and public ingress can
+	// never reach it through this proxy.
+	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, trustedNets, log).
+		WithRegistryForwarding(cfg.Auth.Enabled)
 
 	// HTTP proxy handler chain: HTTPS redirect for non-proxy clients, then CIDR allowlist
 	proxyAllowedNets, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)
@@ -2450,8 +2509,12 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 		middleware.PanicRecovery(log),
 		middleware.RequestLogger(log, trustedNets),
 		middleware.SecurityHeaders,
-		middleware.HTTPSRedirect(proxyAllowedNets, effectiveProxyHTTPPort(cfg), effectiveProxyTLSPort(cfg), cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
+		middleware.HTTPSRedirectWithEligibility(proxyAllowedNets, effectiveProxyHTTPPort(cfg), effectiveProxyTLSPort(cfg), cfg.Server.ForceHTTPSRedirect, log, func(host string) bool {
 			return svc.proxySvc.IsKnownHost(context.Background(), host)
+		}, func(host string) bool {
+			return hostRedirectEligible(svc, host)
+		}, func(host string) bool {
+			return hostRequiresTLS(svc, host)
 		}),
 	}
 	if proxyCIDRMiddleware != nil {
@@ -2845,14 +2908,15 @@ func registerAdminRoutes(registryMux *http.ServeMux, svc *services, cfg Config, 
 		middleware.Chain(adminMiddlewares...)(svc.adminHandler),
 		"gordon.admin",
 	)
-	registryMux.Handle("/admin/", loopbackOnly(adminWithMiddleware, log))
+	registryMux.Handle("/admin/", adminWithMiddleware)
 }
 
 // runServers starts the HTTP servers and waits for shutdown.
 // Signal handling notes:
 // - SIGINT/SIGTERM: Triggers graceful shutdown via signal.NotifyContext
 // - SIGUSR1: Triggers config reload without restart
-// - SIGUSR2: Triggers manual deploy for a specific route
+// (SIGUSR2 manual route deploy was removed with the declarative-apps
+// cutover; app deploys are explicit via `gordon apps deploy`.)
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
 func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, reload reloadTrigger, cleanupHandlers func(), log zerowrap.Logger) error {
@@ -2881,19 +2945,13 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	signal.Notify(reloadChan, syscall.SIGUSR1)
 	defer signal.Stop(reloadChan)
 
-	// Set up SIGUSR2 for manual deploy.
-	deployChan := make(chan os.Signal, 1)
-	signal.Notify(deployChan, syscall.SIGUSR2)
-	defer signal.Stop(deployChan)
-
-	errChan := make(chan error, 3)
+	errChan := make(chan error, 4)
 
 	registryHandler, httpProxyHandler, httpsProxyHandler := createHTTPHandlers(svc, cfg, log, accessWriter)
 	svc.httpProxyHandler = httpProxyHandler
 	svc.httpsProxyHandler = httpsProxyHandler
 
-	registryAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, strconv.Itoa(cfg.Server.RegistryPort))
-	registrySrv, registryReady := startServer(registryAddr, registryHandler, "registry", nil, errChan, log)
+	registrySrv, registryReady, internalRegistrySrv, internalRegistryReady := startRegistryServers(cfg, registryHandler, errChan, log)
 
 	// closeStarted shuts down any servers that were started before an error occurred,
 	// preventing leaked listeners during partial startup failures.
@@ -2911,16 +2969,30 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	proxySrv, proxyReady, tlsSrv, _, err := startProxyServers(cfg, httpProxyHandler, httpsProxyHandler, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, log)
 	if err != nil {
-		closeStarted(registrySrv)
+		closeStarted(registrySrv, internalRegistrySrv)
 		return err
 	}
+
+	// Owner-only local administration socket. Started before readiness is
+	// announced so the CLI can reach the daemon as soon as it is usable,
+	// and closed on every exit path. TCP /admin/* registration is unchanged.
+	localAdmin, err := startLocalAdminServer(svc, errChan, log)
+	if err != nil {
+		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		shutdownTrafficManagerForStartupCleanup(svc.trafficManager, log)
+		return err
+	}
+
 	svc.tlsHTTPEntryPoints = tlsMuxHTTPServerNames(cfg)
 	svc.smartHTTPEntryPoints = smartTCPHTTPServerNames(cfg)
 
-	// Wait for the registry and HTTP proxy to bind before applying the traffic graph.
-	// This prevents auto-start races while keeping the TLS mux under one owner.
+	// Wait for both registry listeners and the HTTP proxy before applying traffic.
+	if err := waitForServerReady(internalRegistryReady, errChan); err != nil {
+		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		return err
+	}
 	if err := waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, registryReady, proxyReady, errChan); err != nil {
-		closeStarted(registrySrv, proxySrv, tlsSrv)
+		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 
@@ -2937,20 +3009,51 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
 		shutdownTrafficManagerForStartupCleanup(svc.trafficManager, log)
-		closeStarted(registrySrv, proxySrv, tlsSrv)
+		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if schedulerCleanup != nil {
 		defer schedulerCleanup()
 	}
 
-	// Recover configured routes after servers are listening (registry port is now bound).
-	syncAndRecoverConfiguredRoutes(ctx, svc.configSvc, svc.containerSvc, log)
+	// Reconcile declarative apps intended to run: recovery first, then
+	// start missing/stopped instances without duplicating running ones.
+	// Explicitly stopped apps stay stopped across reboot. This is the sole
+	// boot recovery path — the pre-v2.50 configured-route recovery was
+	// removed with the declarative-apps cutover. The periodic recovery
+	// monitor starts here and is cancelled and joined on shutdown.
+	reconcileAppsAtBoot(ctx, svc, log)
 
-	waitForShutdown(ctx, errChan, reloadChan, deployChan, reload, svc.eventBus, log)
+	waitForShutdown(ctx, errChan, reloadChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
-	gracefulShutdown(registrySrv, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, log)
+	// Stop app administration before tearing down traffic/runtime dependencies,
+	// so no new mutation can begin during shutdown.
+	localAdmin.Close()
+	registrySrvs := []*http.Server{registrySrv, internalRegistrySrv}
+	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, log)
 	return nil
+}
+
+// reconcileAppsAtBoot reconciles declarative apps intended to run,
+// rebuilds the proxy host index from reconciled ACTIVE state, then
+// starts the single periodic recovery monitor. Failures only warn: the
+// monitor still starts so a partially failed boot self-heals.
+func reconcileAppsAtBoot(ctx context.Context, svc *services, log zerowrap.Logger) {
+	if svc.appDeploySvc == nil {
+		return
+	}
+	if err := svc.appDeploySvc.ReconcileBoot(ctx); err != nil {
+		log.Warn().Err(err).Msg("failed to reconcile apps at boot")
+	}
+	if err := rebuildAppHostIndex(ctx, svc); err != nil {
+		log.Warn().Err(err).Msg("failed to rebuild app host index at boot")
+	}
+	// Exactly one monitor per process: a second boot reconciliation must
+	// not orphan a running loop in the daemon context.
+	if svc.appMonitor == nil {
+		svc.appMonitor = newAppMonitor(svc.appDeploySvc, log)
+	}
+	svc.appMonitor.Start(ctx)
 }
 
 func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) {
@@ -2966,22 +3069,8 @@ func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *
 	if err := waitForServerReady(proxyReady, errChan); err != nil {
 		return err
 	}
-	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc); err != nil {
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, svc.appHostIndex); err != nil {
 		return err
-	}
-	return reconcileStandaloneServices(ctx, svc.standaloneServiceSvc, cfg)
-}
-
-func reconcileStandaloneServices(ctx context.Context, serviceSvc in.StandaloneServiceService, cfg Config) error {
-	if serviceSvc == nil {
-		return nil
-	}
-	standaloneServices, err := servicecfg.ToDomain(cfg.Services)
-	if err != nil {
-		return fmt.Errorf("convert standalone service config: %w", err)
-	}
-	if err := serviceSvc.Reconcile(ctx, standaloneServices); err != nil {
-		return fmt.Errorf("reconcile standalone services: %w", err)
 	}
 	return nil
 }
@@ -3132,6 +3221,9 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 	if !cfg.Images.Prune.Enabled || svc == nil || svc.imageSvc == nil {
 		return nil, nil
 	}
+	// The scheduler runs the same use case and planner as manual
+	// execution. App presence is normal: apps exist on every real
+	// server, and prune decides per candidate.
 	if keepLastGetter == nil {
 		keepLastGetter = func() int { return cfg.Images.Prune.KeepLast }
 	}
@@ -3170,12 +3262,15 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 
 			log.Info().
 				Int("keep_last", keepLast).
+				Int("eligible", report.Plan.CountByVerdict(domain.PruneVerdictEligible)).
+				Int("protected", report.Plan.CountByVerdict(domain.PruneVerdictProtected)).
+				Int("unknown", report.Plan.CountByVerdict(domain.PruneVerdictUnknown)).
+				Int("deleted", len(report.Plan.Deleted)).
+				Int("failures", len(report.Plan.Failures)).
+				Int("inventory_gaps", len(report.Plan.Gaps)).
 				Int("runtime_deleted", report.Runtime.DeletedCount).
-				Int64("runtime_reclaimed_bytes", report.Runtime.SpaceReclaimed).
 				Int("registry_tags_removed", report.Registry.TagsRemoved).
 				Int("registry_blobs_removed", report.Registry.BlobsRemoved).
-				Int("registry_uploads_removed", report.Registry.UploadsRemoved).
-				Int64("registry_upload_bytes_reclaimed", report.Registry.UploadSpaceReclaimed).
 				Msg("scheduled image prune complete")
 			return nil
 		},
@@ -3213,7 +3308,7 @@ func resolveSchedulePreset(raw, name string, defaultVal domain.BackupSchedule) (
 
 // waitForShutdown blocks on the event loop, handling server errors and
 // Unix signals (reload, deploy, shutdown) until the context is cancelled.
-func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, deployChan <-chan os.Signal, reload reloadTrigger, eventBus out.EventBus, log zerowrap.Logger) {
+func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan <-chan os.Signal, reload reloadTrigger, eventBus out.EventBus, log zerowrap.Logger) {
 	for {
 		select {
 		case err := <-errChan:
@@ -3222,17 +3317,6 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 		case <-reloadChan:
 			log.Info().Msg("reload signal received (SIGUSR1)")
 			_ = reload.Trigger(ctx)
-		case <-deployChan:
-			log.Info().Msg("deploy signal received (SIGUSR2)")
-			domainName, err := readDeployRequest()
-			if err != nil {
-				log.Error().Err(err).Msg("failed to read deploy request")
-				continue
-			}
-			payload := &domain.ManualDeployPayload{Domain: domainName}
-			if err := eventBus.Publish(domain.EventManualDeploy, payload); err != nil {
-				log.Error().Err(err).Str("domain", domainName).Msg("failed to publish manual deploy event")
-			}
 		case <-ctx.Done():
 			log.Info().Msg("shutdown signal received")
 			return
@@ -3242,8 +3326,13 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan, depl
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, log zerowrap.Logger) {
+func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
+
+	// Phase 0: stop periodic app recovery first and wait for any in-flight
+	// bounded pass, so no reconcile can race runtime, traffic, or state
+	// teardown (and no goroutine is left behind).
+	monitor.Stop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -3284,14 +3373,15 @@ func gracefulShutdown(registrySrv, proxySrv, tlsSrv *http.Server, containerSvc *
 		}
 	}
 
-	// Phase 3: Stop the registry backend
-	if registrySrv != nil {
+	// Phase 3: Stop the registry backends.
+	for _, registrySrv := range registrySrvs {
+		if registrySrv == nil {
+			continue
+		}
 		if err := registrySrv.Shutdown(shutdownCtx); err != nil {
 			log.Warn().Err(err).Str("addr", registrySrv.Addr).Msg("server shutdown error")
 		}
 	}
-
-	containerSvc.StopMonitor()
 
 	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
@@ -3634,6 +3724,33 @@ func tlsMuxHTTPServerNames(cfg Config) map[string]struct{} {
 	return names
 }
 
+func startRegistryServers(cfg Config, handler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}) {
+	port := strconv.Itoa(cfg.Server.RegistryPort)
+	externalAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, port)
+	externalSrv, externalReady := startServer(externalAddr, handler, "registry", nil, errChan, log)
+	internalReady := closedReadyChannel()
+	if !needsInternalRegistryListener(cfg.Server.RegistryListenAddr) {
+		return externalSrv, externalReady, nil, internalReady
+	}
+	internalAddr := net.JoinHostPort("127.0.0.1", port)
+	internalSrv, internalReady := startServer(internalAddr, handler, "internal registry", nil, errChan, log)
+	return externalSrv, externalReady, internalSrv, internalReady
+}
+
+func closedReadyChannel() <-chan struct{} {
+	ready := make(chan struct{})
+	close(ready)
+	return ready
+}
+
+func needsInternalRegistryListener(listenAddr string) bool {
+	addr := net.ParseIP(strings.TrimSpace(listenAddr))
+	if addr == nil {
+		return listenAddr != ""
+	}
+	return !addr.IsLoopback() && !addr.IsUnspecified()
+}
+
 // startServer starts an HTTP server, returning the server instance and a channel
 // that closes once the listening socket is bound. This lets callers wait for the
 // port to be ready before taking actions that depend on it (e.g. auto-start
@@ -3683,86 +3800,6 @@ func SendReloadSignal() error {
 	}
 
 	return nil
-}
-
-// getDeployRequestFile returns the path to the deploy request file.
-func getDeployRequestFile() string {
-	return filepath.Join(os.TempDir(), "gordon-deploy-request")
-}
-
-// writeDeployRequestFile creates the deploy request file exclusively with retry.
-// This prevents race conditions when multiple deploy commands run simultaneously.
-func writeDeployRequestFile(path string, data []byte, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-
-	for {
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err == nil {
-			_, writeErr := f.Write(data)
-			f.Close()
-			if writeErr != nil {
-				_ = os.Remove(path)
-				return writeErr
-			}
-			return nil
-		}
-
-		if os.IsExist(err) {
-			if time.Now().After(deadline) {
-				return fmt.Errorf("deploy request file still present after timeout; another deploy may be in progress")
-			}
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		return err
-	}
-}
-
-// SendDeploySignal triggers a manual deploy for a specific route via SIGUSR2.
-// Returns the domain name on success for the caller to display.
-func SendDeploySignal(domain string) (string, error) {
-	deployFile := getDeployRequestFile()
-	if err := writeDeployRequestFile(deployFile, []byte(domain), 5*time.Second); err != nil {
-		return "", fmt.Errorf("failed to write deploy request: %w", err)
-	}
-
-	// Find PID and send SIGUSR2
-	process, _, err := findRunningProcess()
-	if err != nil {
-		_ = os.Remove(deployFile)
-		return "", err
-	}
-
-	if err := process.Signal(syscall.SIGUSR2); err != nil {
-		_ = os.Remove(deployFile)
-		return "", fmt.Errorf("failed to send deploy signal: %w", err)
-	}
-
-	return domain, nil
-}
-
-// readDeployRequest reads and removes the deploy request file atomically.
-// Returns empty string if file doesn't exist (may have been consumed by another handler).
-func readDeployRequest() (string, error) {
-	deployFile := getDeployRequestFile()
-
-	// Rename to a temp file first to make the read-and-delete atomic
-	tmpFile := deployFile + ".processing"
-	if err := os.Rename(deployFile, tmpFile); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("deploy request file not found (may have been processed already)")
-		}
-		return "", fmt.Errorf("failed to acquire deploy request: %w", err)
-	}
-
-	data, err := os.ReadFile(tmpFile)
-	_ = os.Remove(tmpFile) // Always clean up
-	if err != nil {
-		return "", fmt.Errorf("failed to read deploy request: %w", err)
-	}
-
-	return string(data), nil
 }
 
 // createPidFile creates a PID file for the Gordon process.
@@ -3972,7 +4009,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
-	v.SetDefault("deploy.pull_policy", container.PullPolicyIfTagChanged)
+	v.SetDefault("deploy.pull_policy", "if-tag-changed")
 	v.SetDefault("backups.databases.enabled", false)
 	v.SetDefault("backups.databases.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("backups.databases.storage_dir", "")

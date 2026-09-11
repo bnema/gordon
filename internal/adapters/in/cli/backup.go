@@ -14,11 +14,11 @@ import (
 	"github.com/bnema/gordon/pkg/bytesize"
 )
 
-var backupResolveControlPlane = func(ctx context.Context, configPath, domainName string) (*controlPlaneHandle, error) {
+var backupResolveControlPlane = func(ctx context.Context, cliConfigPath, domainName string) (*controlPlaneHandle, error) {
 	if domainName != "" {
-		return resolveControlPlaneForRouteDomain(ctx, domainName)
+		return resolveControlPlaneForDomain(ctx, domainName)
 	}
-	return resolveControlPlane(configPath)
+	return resolveControlPlane(cliConfigPath)
 }
 
 // newBackupCmd creates the backup command group.
@@ -88,9 +88,9 @@ func newBackupListCmd() *cobra.Command {
 				err    error
 			)
 			if domainName != "" {
-				handle, err = resolveControlPlaneForRouteDomain(cmd.Context(), domainName)
+				handle, err = resolveControlPlaneForDomain(cmd.Context(), domainName)
 			} else {
-				handle, err = resolveControlPlane(configPath)
+				handle, err = resolveControlPlane(cliConfigPath)
 			}
 			if err != nil {
 				return err
@@ -151,7 +151,7 @@ func newVolumeBackupListCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
+			handle, err := backupResolveControlPlane(cmd.Context(), cliConfigPath, domainName)
 			if err != nil {
 				return err
 			}
@@ -181,7 +181,7 @@ func newVolumeBackupRunCmd() *cobra.Command {
 			if len(args) == 1 {
 				domainName = args[0]
 			}
-			handle, err := backupResolveControlPlane(cmd.Context(), configPath, domainName)
+			handle, err := backupResolveControlPlane(cmd.Context(), cliConfigPath, domainName)
 			if err != nil {
 				return err
 			}
@@ -210,7 +210,7 @@ func newVolumeBackupStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show volume backup status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := backupResolveControlPlane(cmd.Context(), configPath, "")
+			handle, err := backupResolveControlPlane(cmd.Context(), cliConfigPath, "")
 			if err != nil {
 				return err
 			}
@@ -260,7 +260,7 @@ func newBackupRunCmd() *cobra.Command {
 		Short: "Run backup now",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlaneForRouteDomain(cmd.Context(), args[0])
+			handle, err := resolveControlPlaneForDomain(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -302,7 +302,7 @@ func newBackupDetectCmd() *cobra.Command {
 		Short: "Detect databases for domain",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlaneForRouteDomain(cmd.Context(), args[0])
+			handle, err := resolveControlPlaneForDomain(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
@@ -346,7 +346,7 @@ func newBackupStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show backup status",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}

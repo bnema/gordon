@@ -187,16 +187,16 @@ func (_c *MockRegistryService_BlobExists_Call) RunAndReturn(run func(ctx context
 }
 
 // CancelUpload provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) CancelUpload(ctx context.Context, uuid string) error {
-	ret := _mock.Called(ctx, uuid)
+func (_mock *MockRegistryService) CancelUpload(ctx context.Context, name string, uuid string) error {
+	ret := _mock.Called(ctx, name, uuid)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CancelUpload")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, uuid)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = returnFunc(ctx, name, uuid)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -210,12 +210,13 @@ type MockRegistryService_CancelUpload_Call struct {
 
 // CancelUpload is a helper method to define mock.On call
 //   - ctx context.Context
+//   - name string
 //   - uuid string
-func (_e *MockRegistryService_Expecter) CancelUpload(ctx any, uuid any) *MockRegistryService_CancelUpload_Call {
-	return &MockRegistryService_CancelUpload_Call{Call: _e.mock.On("CancelUpload", ctx, uuid)}
+func (_e *MockRegistryService_Expecter) CancelUpload(ctx any, name any, uuid any) *MockRegistryService_CancelUpload_Call {
+	return &MockRegistryService_CancelUpload_Call{Call: _e.mock.On("CancelUpload", ctx, name, uuid)}
 }
 
-func (_c *MockRegistryService_CancelUpload_Call) Run(run func(ctx context.Context, uuid string)) *MockRegistryService_CancelUpload_Call {
+func (_c *MockRegistryService_CancelUpload_Call) Run(run func(ctx context.Context, name string, uuid string)) *MockRegistryService_CancelUpload_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -225,9 +226,14 @@ func (_c *MockRegistryService_CancelUpload_Call) Run(run func(ctx context.Contex
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -238,7 +244,7 @@ func (_c *MockRegistryService_CancelUpload_Call) Return(err error) *MockRegistry
 	return _c
 }
 
-func (_c *MockRegistryService_CancelUpload_Call) RunAndReturn(run func(ctx context.Context, uuid string) error) *MockRegistryService_CancelUpload_Call {
+func (_c *MockRegistryService_CancelUpload_Call) RunAndReturn(run func(ctx context.Context, name string, uuid string) error) *MockRegistryService_CancelUpload_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -307,16 +313,16 @@ func (_c *MockRegistryService_DeleteManifest_Call) RunAndReturn(run func(ctx con
 }
 
 // FinishUpload provides a mock function for the type MockRegistryService
-func (_mock *MockRegistryService) FinishUpload(ctx context.Context, uuid string, digest string) error {
-	ret := _mock.Called(ctx, uuid, digest)
+func (_mock *MockRegistryService) FinishUpload(ctx context.Context, name string, uuid string, digest string) error {
+	ret := _mock.Called(ctx, name, uuid, digest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FinishUpload")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, uuid, digest)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) error); ok {
+		r0 = returnFunc(ctx, name, uuid, digest)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -330,13 +336,14 @@ type MockRegistryService_FinishUpload_Call struct {
 
 // FinishUpload is a helper method to define mock.On call
 //   - ctx context.Context
+//   - name string
 //   - uuid string
 //   - digest string
-func (_e *MockRegistryService_Expecter) FinishUpload(ctx any, uuid any, digest any) *MockRegistryService_FinishUpload_Call {
-	return &MockRegistryService_FinishUpload_Call{Call: _e.mock.On("FinishUpload", ctx, uuid, digest)}
+func (_e *MockRegistryService_Expecter) FinishUpload(ctx any, name any, uuid any, digest any) *MockRegistryService_FinishUpload_Call {
+	return &MockRegistryService_FinishUpload_Call{Call: _e.mock.On("FinishUpload", ctx, name, uuid, digest)}
 }
 
-func (_c *MockRegistryService_FinishUpload_Call) Run(run func(ctx context.Context, uuid string, digest string)) *MockRegistryService_FinishUpload_Call {
+func (_c *MockRegistryService_FinishUpload_Call) Run(run func(ctx context.Context, name string, uuid string, digest string)) *MockRegistryService_FinishUpload_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -350,10 +357,15 @@ func (_c *MockRegistryService_FinishUpload_Call) Run(run func(ctx context.Contex
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -364,7 +376,7 @@ func (_c *MockRegistryService_FinishUpload_Call) Return(err error) *MockRegistry
 	return _c
 }
 
-func (_c *MockRegistryService_FinishUpload_Call) RunAndReturn(run func(ctx context.Context, uuid string, digest string) error) *MockRegistryService_FinishUpload_Call {
+func (_c *MockRegistryService_FinishUpload_Call) RunAndReturn(run func(ctx context.Context, name string, uuid string, digest string) error) *MockRegistryService_FinishUpload_Call {
 	_c.Call.Return(run)
 	return _c
 }

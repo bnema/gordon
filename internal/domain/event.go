@@ -12,7 +12,6 @@ const (
 	EventImagePushed          EventType = "image.pushed"
 	EventImageDeleted         EventType = "image.deleted"
 	EventConfigReload         EventType = "config.reload"
-	EventManualDeploy         EventType = "manual.deploy"
 	EventContainerStop        EventType = "container.stop"
 	EventContainerStart       EventType = "container.start"
 	EventContainerHealthCheck EventType = "container.health_check"
@@ -54,11 +53,6 @@ type ConfigReloadPayload struct {
 	AddedRoutes   []string
 	RemovedRoutes []string
 	UpdatedRoutes []string
-}
-
-// ManualDeployPayload contains data for manual.deploy events.
-type ManualDeployPayload struct {
-	Domain string `json:"domain"`
 }
 
 // SecretsChangedPayload contains data for secrets.changed events.

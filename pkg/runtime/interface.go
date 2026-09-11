@@ -41,14 +41,6 @@ type ContainerConfig struct {
 	Aliases     []string          // Additional network aliases
 }
 
-// PruneReport represents the result of an image prune operation.
-type PruneReport struct {
-	// DeletedIDs contains runtime-provided image identifiers removed by prune.
-	DeletedIDs []string
-	// SpaceReclaimed is the number of bytes reclaimed by prune.
-	SpaceReclaimed int64
-}
-
 // ImageDetail represents detailed metadata for an image.
 type ImageDetail struct {
 	// ID is the runtime image identifier (for example, image ID/digest).
@@ -83,9 +75,6 @@ type Runtime interface {
 	ListImages(ctx context.Context) ([]string, error)
 	// ListImagesDetailed returns metadata for all images visible to the runtime.
 	ListImagesDetailed(ctx context.Context) ([]ImageDetail, error)
-	// PruneImages removes images eligible for prune; when danglingOnly is true,
-	// only dangling images are pruned.
-	PruneImages(ctx context.Context, danglingOnly bool) (PruneReport, error)
 
 	// Runtime information
 	Ping(ctx context.Context) error
@@ -103,7 +92,10 @@ type Runtime interface {
 	// Volume management
 	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
 	VolumeExists(ctx context.Context, volumeName string) (bool, error)
-	CreateVolume(ctx context.Context, volumeName string) error
+	// CreateVolume creates one named volume with the given labels.
+	// Labels carry ownership provenance; a caller that omits them
+	// creates an unmanaged volume that prune never adopts.
+	CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error
 	RemoveVolume(ctx context.Context, volumeName string, force bool) error
 
 	// Environment inspection

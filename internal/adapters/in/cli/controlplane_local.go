@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -12,7 +11,6 @@ import (
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/gordon/internal/usecase/config"
 )
 
 type localControlPlane struct {
@@ -22,11 +20,11 @@ type localControlPlane struct {
 	backupSvc       in.BackupService
 	volumeBackupSvc in.VolumeBackupService
 	registrySvc     in.RegistryService
-	deployCoord     in.DeployCoordinator
 	healthSvc       in.HealthService
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
+	appSvc          in.AppService
 }
 
 func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
@@ -35,12 +33,6 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 	}
 
 	registrySvc := kernel.Registry()
-	var deployCoord in.DeployCoordinator
-	if registrySvc != nil {
-		if coordinator, ok := any(registrySvc).(in.DeployCoordinator); ok {
-			deployCoord = coordinator
-		}
-	}
 
 	return &localControlPlane{
 		configSvc:       kernel.Config(),
@@ -49,281 +41,28 @@ func NewLocalControlPlane(kernel *app.Kernel) ControlPlane {
 		backupSvc:       kernel.Backup(),
 		volumeBackupSvc: kernel.VolumeBackup(),
 		registrySvc:     registrySvc,
-		deployCoord:     deployCoord,
 		healthSvc:       kernel.Health(),
 		logSvc:          kernel.Logs(),
 		volumeSvc:       kernel.Volumes(),
 		publicTLSSvc:    kernel.PublicTLS(),
+		appSvc:          kernel.Apps(),
 	}
 }
 
-func (l *localControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {
-	if l.containerSvc != nil {
-		if err := l.containerSvc.SyncContainers(ctx); err != nil {
-			return nil, err
-		}
-		detailed := l.containerSvc.ListRoutesWithDetails(ctx)
-		if l.configSvc == nil {
-			return toRemoteRouteInfos(detailed), nil
-		}
-		return mergeConfiguredRemoteRouteInfos(l.configSvc.GetRoutes(ctx), detailed), nil
-	}
-
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-
-	routes := l.configSvc.GetRoutes(ctx)
-	infos := make([]remote.RouteInfo, 0, len(routes))
-	for _, route := range routes {
-		infos = append(infos, remote.RouteInfo{Domain: route.Domain, Image: route.Image})
-	}
-	return infos, nil
-}
-
-func (l *localControlPlane) GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error) {
-	if l.healthSvc == nil {
-		return map[string]*remote.RouteHealth{}, nil
-	}
-
-	health := l.healthSvc.CheckAllRoutes(ctx)
-	result := make(map[string]*remote.RouteHealth, len(health))
-	for domainName, h := range health {
-		if h == nil {
-			continue
-		}
-		result[domainName] = &remote.RouteHealth{
-			ContainerStatus: h.ContainerStatus,
-			HTTPStatus:      h.HTTPStatus,
-			ResponseTimeMs:  h.ResponseTimeMs,
-			Healthy:         h.Healthy,
-			Error:           h.Error,
-		}
-	}
-	return result, nil
-}
-
-func (l *localControlPlane) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.GetRoute(ctx, routeDomain)
-}
-
-func (l *localControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.FindRoutesByImage(ctx, imageName), nil
-}
-
-func (l *localControlPlane) AddRoute(ctx context.Context, route domain.Route) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.AddRoute(ctx, route)
-}
-
-func (l *localControlPlane) UpdateRoute(ctx context.Context, route domain.Route) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.UpdateRoute(ctx, route)
-}
-
-func (l *localControlPlane) RemoveRoute(ctx context.Context, routeDomain string) error {
-	_, err := l.RemoveRouteWithCleanup(ctx, routeDomain)
-	return err
-}
-
-func (l *localControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	if err := l.configSvc.RemoveRoute(ctx, routeDomain); err != nil && !errors.Is(err, domain.ErrRouteNotFound) {
-		return nil, fmt.Errorf("remove route: %w", err)
-	}
-	resp := &dto.RouteDeleteResponse{Status: "removed"}
-	if l.containerSvc == nil {
-		return resp, nil
-	}
-	report, err := l.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
-	if err != nil {
-		return nil, fmt.Errorf("failed to cleanup removed route runtime state: %w", err)
-	}
-	resp.Cleanup = dto.CleanupReportFromDomain(report)
-	return resp, nil
-}
-
-func (l *localControlPlane) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
-	previewer, ok := any(l.containerSvc).(interface {
-		PreviewRemovedRouteCleanup(context.Context, string) (*domain.CleanupReport, error)
-	})
-	if !ok {
-		return nil, fmt.Errorf("route cleanup preview unavailable")
-	}
-
-	report, err := previewer.PreviewRemovedRouteCleanup(ctx, routeDomain)
-	if err != nil {
-		return nil, err
-	}
-	if report == nil {
-		return nil, nil
-	}
-	if l.volumeSvc == nil {
-		return report, nil
-	}
-
-	volumes, err := l.ListVolumes(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list volumes: %w", err)
-	}
-	if len(volumes) == 0 {
-		return report, nil
-	}
-
-	scope := newRouteResourceScope(routeDomain, l.routeCleanupVolumePrefix(), nil, report.PreservedAttachments)
-	for _, volume := range volumesForRouteDiagnosis(volumes, scope) {
-		report.PreservedVolumes = append(report.PreservedVolumes, domain.CleanupVolume{
-			Name:   volume.Name,
-			Reason: "volume preserved for explicit cleanup review",
-		})
-	}
-	return report, nil
-}
-
-func (l *localControlPlane) routeCleanupVolumePrefix() string {
-	const defaultPrefix = "gordon"
-	if l.configSvc == nil {
-		return defaultPrefix
-	}
-	if volumeCfg, ok := any(l.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
-		_, prefix, _ := volumeCfg.GetVolumeConfig()
-		if prefix != "" {
-			return prefix
-		}
-	}
-	return defaultPrefix
-}
-
-func (l *localControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	registryDomain := ""
-	if l.configSvc != nil {
-		registryDomain = l.configSvc.GetRegistryDomain()
-	}
-	normalizedImage, err := config.NormalizeBootstrapImage(req.Image, registryDomain)
-	if err != nil {
-		return nil, fmt.Errorf("invalid image: %w", err)
-	}
-
-	resp := &dto.BootstrapResponse{
-		Domain: req.Domain,
-		Image:  normalizedImage,
-		Next:   fmt.Sprintf("push %s to trigger deployment", normalizedImage),
-	}
-
-	if l.configSvc == nil {
-		return resp, fmt.Errorf("local config service unavailable")
-	}
-	needsSecrets := len(req.Env) > 0 || len(req.AttachmentEnv) > 0
-	if needsSecrets && l.secretSvc == nil {
-		return resp, fmt.Errorf("local secret service unavailable")
-	}
-
-	addStep := func(name, status string) {
-		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
-	}
-
-	err = l.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage})
-	switch err {
-	case nil:
-		addStep("route", "configured")
-	default:
-		addStep("route", "failed")
-		return resp, err
-	}
-
-	if err := l.bootstrapAttachments(ctx, req, addStep); err != nil {
-		return resp, err
-	}
-
-	if err := l.bootstrapSecrets(ctx, req, addStep); err != nil {
-		return resp, err
-	}
-
-	if err := l.bootstrapAttachmentSecrets(ctx, req, addStep); err != nil {
-		return resp, err
-	}
-
-	return resp, nil
-}
-
-func (l *localControlPlane) bootstrapAttachments(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
-	for _, attachment := range req.Attachments {
-		err := l.configSvc.AddAttachment(ctx, req.Domain, attachment)
-		if err == nil {
-			addStep("attachment:"+attachment, "created")
-			continue
-		}
-		if errors.Is(err, domain.ErrAttachmentExists) {
-			addStep("attachment:"+attachment, "noop")
-			continue
-		}
-		addStep("attachment:"+attachment, "failed")
-		return err
-	}
-
-	return nil
-}
-
-func (l *localControlPlane) bootstrapSecrets(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
-	if len(req.Env) == 0 {
-		return nil
-	}
-
-	if err := l.secretSvc.Set(ctx, req.Domain, req.Env); err != nil {
-		addStep("env", "failed")
-		return err
-	}
-
-	addStep("env", "updated")
-	return nil
-}
-
-func (l *localControlPlane) bootstrapAttachmentSecrets(ctx context.Context, req dto.BootstrapRequest, addStep func(name, status string)) error {
-	for service, env := range req.AttachmentEnv {
-		if err := l.secretSvc.SetAttachment(ctx, req.Domain, service, env); err != nil {
-			addStep("attachment_env:"+service, "failed")
-			return err
-		}
-		addStep("attachment_env:"+service, "updated")
-	}
-
-	return nil
-}
-
-func (l *localControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
+func (l *localControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
 	if l.secretSvc == nil {
 		return nil, fmt.Errorf("local secret service unavailable")
 	}
 
-	keys, attachments, err := l.secretSvc.ListKeysWithAttachments(ctx, secretDomain)
+	keys, err := l.secretSvc.ListKeys(ctx, secretDomain)
 	if err != nil {
-		return nil, fmt.Errorf("list secret keys with attachments: %w", err)
+		return nil, fmt.Errorf("list secret keys: %w", err)
 	}
 
-	result := &remote.SecretsListResult{
+	return &remote.SecretsListResult{
 		Domain: secretDomain,
 		Keys:   keys,
-	}
-	for _, att := range attachments {
-		result.Attachments = append(result.Attachments, remote.AttachmentSecrets{
-			Service: att.Service,
-			Keys:    att.Keys,
-		})
-	}
-
-	return result, nil
+	}, nil
 }
 
 func (l *localControlPlane) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
@@ -338,98 +77,6 @@ func (l *localControlPlane) DeleteSecret(ctx context.Context, secretDomain, key 
 		return fmt.Errorf("local secret service unavailable")
 	}
 	return l.secretSvc.Delete(ctx, secretDomain, key)
-}
-
-func (l *localControlPlane) SetAttachmentSecrets(ctx context.Context, domainName, service string, secrets map[string]string) error {
-	if l.secretSvc == nil {
-		return fmt.Errorf("local secret service unavailable")
-	}
-	return l.secretSvc.SetAttachment(ctx, domainName, service, secrets)
-}
-
-func (l *localControlPlane) DeleteAttachmentSecret(ctx context.Context, domainName, service, key string) error {
-	if l.secretSvc == nil {
-		return fmt.Errorf("local secret service unavailable")
-	}
-	return l.secretSvc.DeleteAttachment(ctx, domainName, service, key)
-}
-
-func (l *localControlPlane) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
-	if l.containerSvc == nil {
-		return nil, fmt.Errorf("local container service unavailable")
-	}
-	attachments, err := l.containerSvc.ListOrphanedAttachments(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list orphaned attachments: %w", err)
-	}
-	return attachments, nil
-}
-
-func (l *localControlPlane) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
-	if l.containerSvc == nil {
-		return nil, fmt.Errorf("local container service unavailable")
-	}
-	report, err := l.containerSvc.CleanupOrphanedAttachments(ctx, owner, stop)
-	if err != nil {
-		return nil, fmt.Errorf("cleanup orphaned attachments: %w", err)
-	}
-	return report, nil
-}
-
-func (l *localControlPlane) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.GetAllAttachments(ctx), nil
-}
-
-func (l *localControlPlane) GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.GetAttachmentsFor(ctx, domainOrGroup)
-}
-
-func (l *localControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.FindAttachmentTargetsByImage(ctx, imageName), nil
-}
-
-func (l *localControlPlane) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.AddAttachment(ctx, domainOrGroup, image)
-}
-
-func (l *localControlPlane) RemoveAttachment(ctx context.Context, domainOrGroup, image string) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.RemoveAttachment(ctx, domainOrGroup, image)
-}
-
-func (l *localControlPlane) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
-	if l.configSvc == nil {
-		return nil, fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.GetAutoRouteAllowedDomains(ctx)
-}
-
-func (l *localControlPlane) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.AddAutoRouteAllowedDomain(ctx, pattern)
-}
-
-func (l *localControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	if l.configSvc == nil {
-		return fmt.Errorf("local config service unavailable")
-	}
-	return l.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern)
 }
 
 func (l *localControlPlane) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
@@ -455,25 +102,39 @@ func (l *localControlPlane) GetStatus(ctx context.Context) (*remote.Status, erro
 	}
 
 	status := &remote.Status{
-		Routes:           len(l.configSvc.GetRoutes(ctx)),
+		Apps:             0,
 		RegistryDomain:   l.configSvc.GetRegistryDomain(),
 		RegistryPort:     l.configSvc.GetRegistryPort(),
 		ServerPort:       l.configSvc.GetServerPort(),
-		AutoRoute:        l.configSvc.IsAutoRouteEnabled(),
 		NetworkIsolation: l.configSvc.IsNetworkIsolationEnabled(),
 		ContainerStatus:  map[string]string{},
 	}
 
-	if l.containerSvc != nil {
-		for domainName, container := range l.containerSvc.List(ctx) {
-			if container == nil {
-				continue
+	// App fleet summary from desired/active state (no container inspection).
+	if l.appSvc != nil {
+		if apps, err := l.appSvc.List(ctx); err == nil {
+			status.Apps = len(apps)
+			for _, app := range apps {
+				status.ContainerStatus[app.App] = localAppStatusLabel(app)
 			}
-			status.ContainerStatus[domainName] = container.Status
 		}
 	}
 
 	return status, nil
+}
+
+// localAppStatusLabel renders one app's fleet status from its summary.
+func localAppStatusLabel(app in.AppSummary) string {
+	if app.Stopped {
+		return "stopped"
+	}
+	if app.Active == "" {
+		return "pending"
+	}
+	if app.Converged {
+		return "active"
+	}
+	return "deploying"
 }
 
 func (l *localControlPlane) Reload(_ context.Context) error {
@@ -500,72 +161,17 @@ func (l *localControlPlane) GetConfig(ctx context.Context) (*remote.Config, erro
 		return externalResponses[i].Domain < externalResponses[j].Domain
 	})
 	cfg := &remote.Config{
-		Routes:         l.configSvc.GetRoutes(ctx),
 		ExternalRoutes: externalResponses,
 	}
 	cfg.Server.Port = l.configSvc.GetServerPort()
 	cfg.Server.RegistryPort = l.configSvc.GetRegistryPort()
 	cfg.Server.RegistryDomain = l.configSvc.GetRegistryDomain()
-	cfg.AutoRoute.Enabled = l.configSvc.IsAutoRouteEnabled()
 	cfg.NetworkIsolation.Enabled = l.configSvc.IsNetworkIsolationEnabled()
 	cfg.NetworkIsolation.Prefix = l.configSvc.GetNetworkPrefix()
 	if volumeCfg, ok := any(l.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
 		cfg.Volumes.AutoCreate, cfg.Volumes.Prefix, cfg.Volumes.Preserve = volumeCfg.GetVolumeConfig()
 	}
 	return cfg, nil
-}
-
-func (l *localControlPlane) DeployIntent(_ context.Context, imageName string) error {
-	if l.deployCoord != nil {
-		l.deployCoord.SuppressDeployEvent(imageName)
-	}
-	return nil
-}
-
-func (l *localControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {
-	if l.containerSvc != nil && l.configSvc != nil {
-		route, err := l.configSvc.GetRoute(ctx, deployDomain)
-		if err != nil {
-			return nil, err
-		}
-		container, err := l.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
-		if err != nil {
-			return nil, err
-		}
-		result := &remote.DeployResult{Status: "deployed", Domain: deployDomain}
-		if container != nil {
-			result.ContainerID = container.ID
-		}
-		return result, nil
-	}
-
-	domainName, err := app.SendDeploySignal(deployDomain)
-	if err != nil {
-		return nil, err
-	}
-	return &remote.DeployResult{Status: "queued", Domain: domainName}, nil
-}
-
-func (l *localControlPlane) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error) {
-	if l.containerSvc == nil {
-		if withAttachments {
-			return nil, fmt.Errorf("local restart with attachments requires active local container service")
-		}
-		domainName, err := app.SendDeploySignal(restartDomain)
-		if err != nil {
-			return nil, err
-		}
-		return &remote.RestartResult{Status: "queued", Domain: domainName}, nil
-	}
-
-	if err := l.containerSvc.SyncContainers(ctx); err != nil {
-		return nil, err
-	}
-	if err := l.containerSvc.Restart(ctx, restartDomain, withAttachments); err != nil {
-		return nil, err
-	}
-
-	return &remote.RestartResult{Status: "restarted", Domain: restartDomain}, nil
 }
 
 func (l *localControlPlane) ListTags(ctx context.Context, repository string) ([]string, error) {
@@ -750,53 +356,8 @@ func (l *localControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePrun
 		VolumesRemoved: report.VolumesRemoved,
 		SpaceReclaimed: report.SpaceReclaimed,
 		Volumes:        vols,
+		Plan:           dto.PruneSummaryFromDomain(report.Plan),
 	}, nil
-}
-
-func mergeConfiguredRemoteRouteInfos(configured []domain.Route, detailed []domain.RouteInfo) []remote.RouteInfo {
-	detailedByDomain := make(map[string]domain.RouteInfo, len(detailed))
-	for _, info := range detailed {
-		detailedByDomain[info.Domain] = info
-	}
-
-	merged := make([]domain.RouteInfo, 0, len(configured))
-	for _, route := range configured {
-		info, ok := detailedByDomain[route.Domain]
-		if !ok {
-			info = domain.RouteInfo{Domain: route.Domain, Image: route.Image}
-		} else if info.Image == "" {
-			info.Image = route.Image
-		}
-		merged = append(merged, info)
-	}
-
-	return toRemoteRouteInfos(merged)
-}
-
-func toRemoteRouteInfos(routes []domain.RouteInfo) []remote.RouteInfo {
-	out := make([]remote.RouteInfo, 0, len(routes))
-	for _, route := range routes {
-		attachments := make([]dto.Attachment, 0, len(route.Attachments))
-		for _, attachment := range route.Attachments {
-			attachments = append(attachments, dto.Attachment{
-				Name:        attachment.Name,
-				Image:       attachment.Image,
-				ContainerID: attachment.ContainerID,
-				Status:      attachment.Status,
-				Network:     attachment.Network,
-			})
-		}
-
-		out = append(out, remote.RouteInfo{
-			Domain:          route.Domain,
-			Image:           route.Image,
-			ContainerID:     route.ContainerID,
-			ContainerStatus: route.ContainerStatus,
-			Network:         route.Network,
-			Attachments:     attachments,
-		})
-	}
-	return out
 }
 
 func toDTOBackupJobs(jobs []domain.BackupJob) []dto.BackupJob {

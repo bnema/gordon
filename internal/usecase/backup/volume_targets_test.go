@@ -97,6 +97,33 @@ func TestSelectVolumeBackupTargetsForScopeDedupesAfterFiltering(t *testing.T) {
 	assert.Equal(t, "gordon-shared", targets[0].VolumeName)
 }
 
+// TestSelectVolumeBackupTargetsIncludesAppLabelledContainers proves R3:
+// declarative-apps containers (gordon.app labels, no legacy route
+// labels) are selected for volume backup with the app name as scope.
+func TestSelectVolumeBackupTargetsIncludesAppLabelledContainers(t *testing.T) {
+	containers := []*domain.Container{
+		{
+			ID:   "c-app",
+			Name: "gordon-blog--web--op1234567890",
+			Labels: map[string]string{
+				domain.LabelManaged:    "true",
+				domain.LabelApp:        "blog",
+				domain.LabelAppService: "web",
+			},
+			VolumeMounts: []domain.ContainerVolumeMount{
+				{Name: "gordon-blog--web--vol--data", Type: "volume", Destination: "/data"},
+			},
+		},
+	}
+
+	targets := SelectVolumeBackupTargets(containers, "gordon")
+
+	require.Len(t, targets, 1)
+	assert.Equal(t, "blog", targets[0].Domain)
+	assert.Equal(t, "gordon-blog--web--vol--data", targets[0].VolumeName)
+	assert.Equal(t, "/data", targets[0].MountPath)
+}
+
 func TestSelectVolumeBackupTargetsRequiresDomain(t *testing.T) {
 	containers := []*domain.Container{
 		{

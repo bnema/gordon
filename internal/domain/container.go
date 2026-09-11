@@ -16,6 +16,11 @@ type Container struct {
 	Labels       map[string]string
 	VolumeMounts []ContainerVolumeMount
 	Created      time.Time
+	// StartedAt is the start timestamp of the current execution. Zero
+	// when the container never started or the runtime reports none.
+	// Readiness scoping uses it so log markers from a previous
+	// execution of the same container ID cannot satisfy a probe.
+	StartedAt time.Time
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.
@@ -71,6 +76,20 @@ type ContainerPortPublish struct {
 	Protocol      NetworkProtocol
 }
 
+// ContainerBackendPort identifies one protocol-specific container port
+// for grouped backend-bind inspection.
+type ContainerBackendPort struct {
+	ContainerPort int
+	Protocol      NetworkProtocol
+}
+
+// ContainerBackendBind is an observed protocol-specific host binding.
+type ContainerBackendBind struct {
+	ContainerPort int
+	HostPort      int
+	Protocol      NetworkProtocol
+}
+
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
 	Image           string
@@ -81,6 +100,7 @@ type ContainerConfig struct {
 	Labels          map[string]string
 	WorkingDir      string
 	Cmd             []string
+	Entrypoint      []string
 	AutoRemove      bool
 	RestartPolicy   string
 	Volumes         map[string]string // map[containerPath]volumeName

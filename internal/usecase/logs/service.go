@@ -16,36 +16,79 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
+
+// appBackendProvider resolves a host to its recorded backend.
+// Implemented by the apptraffic host index; satisfied by the same
+// provider the proxy consumes.
+type appBackendProvider interface {
+	LookupHost(host string) (domain.AppBackend, bool)
+}
 
 // Service implements the LogService interface.
 type Service struct {
 	logFilePath        string
 	fileLoggingEnabled bool
-	containerSvc       in.ContainerService
 	runtime            out.ContainerRuntime
 	log                zerowrap.Logger
+	// appTargets resolves log domains to containers, wired after the
+	// app store opens (WithAppTargets).
+	appTargets appBackendProvider
 }
 
 var execCommandContext = exec.CommandContext
 
-// NewService creates a new log service.
+// NewService creates a new log service. The app target provider is
+// wired later via WithAppTargets once the app store opens.
 func NewService(
 	logFilePath string,
 	fileLoggingEnabled bool,
-	containerSvc in.ContainerService,
 	runtime out.ContainerRuntime,
 	log zerowrap.Logger,
 ) *Service {
 	return &Service{
 		logFilePath:        logFilePath,
 		fileLoggingEnabled: fileLoggingEnabled,
-		containerSvc:       containerSvc,
 		runtime:            runtime,
 		log:                log,
 	}
+}
+
+// WithAppTargets wires the ACTIVE-derived host index for domain log
+// resolution.
+func (s *Service) WithAppTargets(provider appBackendProvider) *Service {
+	s.appTargets = provider
+	return s
+}
+
+// containerForDomain resolves a log domain to its exact container ID
+// through the ACTIVE-derived host index.
+func (s *Service) containerForDomain(domainName string) (string, error) {
+	if isContainerID(domainName) {
+		return domainName, nil
+	}
+	if s.appTargets == nil {
+		return "", fmt.Errorf("container not found for domain: %s", domainName)
+	}
+	backend, ok := s.appTargets.LookupHost(domainName)
+	if !ok || !backend.Resolved() {
+		return "", fmt.Errorf("container not found for domain: %s", domainName)
+	}
+	return backend.ContainerID, nil
+}
+
+func isContainerID(ref string) bool {
+	if len(ref) < 12 || len(ref) > 64 {
+		return false
+	}
+	for _, r := range ref {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // GetProcessLogs returns the last N lines of Gordon process logs.
@@ -357,14 +400,14 @@ func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	// Resolve the domain to its exact container
+	containerID, err := s.containerForDomain(domain)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get logs from container runtime (non-follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, false)
+	reader, err := s.runtime.GetContainerLogs(ctx, containerID, false)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}
@@ -398,14 +441,14 @@ func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initia
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	// Resolve the domain to its exact container
+	containerID, err := s.containerForDomain(domain)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get logs from container runtime (follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, true)
+	reader, err := s.runtime.GetContainerLogs(ctx, containerID, true)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}

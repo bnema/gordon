@@ -111,8 +111,12 @@ func collectRouteDomains(ctx context.Context, routes RouteSource) []string {
 	routeSet := make(map[string]struct{})
 	var domains []string
 
-	for _, r := range routes.GetRoutes(ctx) {
-		canonical, ok := domain.CanonicalRouteDomain(r.Domain)
+	for _, h := range routes.AppHosts() {
+		// tls=never interfaces stay plain HTTP: not ACME coverage candidates.
+		if h.TLSMode == domain.AppTLSNever {
+			continue
+		}
+		canonical, ok := domain.CanonicalRouteDomain(h.Host)
 		if ok {
 			if _, exists := routeSet[canonical]; !exists {
 				routeSet[canonical] = struct{}{}

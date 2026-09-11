@@ -95,25 +95,20 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	storage, err := filesystem.NewBackupStorage(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
 
-	containerSvc := &integrationContainerService{
-		routes: map[string]*domain.Container{
-			domainName: container,
-		},
-		attachments: map[string][]domain.Attachment{
-			domainName: {
-				{
-					Name:        "postgres",
-					Image:       image,
-					ContainerID: container.ID,
-					Status:      container.Status,
-					Network:     networkName,
-					Ports:       []int{5432},
-				},
+	svc := backup.NewService(runtime, storage, domain.BackupConfig{Enabled: true}, zerowrap.Default())
+	svc.WithAppSources(func(context.Context) ([]backup.AppDatabaseSource, error) {
+		return []backup.AppDatabaseSource{
+			{
+				App:         "backup-it",
+				Service:     "postgres",
+				Name:        "postgres",
+				Image:       image,
+				ContainerID: container.ID,
+				Ports:       []int{5432},
+				Hosts:       []string{domainName},
 			},
-		},
-	}
-
-	svc := backup.NewService(runtime, storage, containerSvc, domain.BackupConfig{Enabled: true}, zerowrap.Default())
+		}, nil
+	})
 
 	detected, err := svc.DetectDatabases(ctx, domainName)
 	require.NoError(t, err)
@@ -179,73 +174,5 @@ func seedPostgresData(ctx context.Context, runtime *docker.Runtime, containerID 
 	if res.ExitCode != 0 {
 		return fmt.Errorf("seed command failed: %s", strings.TrimSpace(string(res.Stderr)))
 	}
-	return nil
-}
-
-type integrationContainerService struct {
-	routes      map[string]*domain.Container
-	attachments map[string][]domain.Attachment
-}
-
-func (s *integrationContainerService) Deploy(context.Context, domain.Route) (*domain.Container, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Stop(context.Context, string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Remove(context.Context, string, bool) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Get(_ context.Context, domainName string) (*domain.Container, bool) {
-	c, ok := s.routes[domainName]
-	return c, ok
-}
-
-func (s *integrationContainerService) Restart(context.Context, string, bool) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) List(context.Context) map[string]*domain.Container {
-	out := make(map[string]*domain.Container, len(s.routes))
-	for k, v := range s.routes {
-		out[k] = v
-	}
-	return out
-}
-
-func (s *integrationContainerService) ListRoutesWithDetails(context.Context) []domain.RouteInfo {
-	return nil
-}
-
-func (s *integrationContainerService) ListAttachments(_ context.Context, domainName string) []domain.Attachment {
-	attachments := s.attachments[domainName]
-	out := make([]domain.Attachment, len(attachments))
-	copy(out, attachments)
-	return out
-}
-
-func (s *integrationContainerService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) HealthCheck(context.Context) map[string]bool {
-	return map[string]bool{}
-}
-
-func (s *integrationContainerService) SyncContainers(context.Context) error {
-	return nil
-}
-
-func (s *integrationContainerService) UpdateAttachments(map[string][]string) {
-}
-
-func (s *integrationContainerService) AutoStart(context.Context, []domain.Route) error {
-	return nil
-}
-
-func (s *integrationContainerService) Shutdown(context.Context) error {
 	return nil
 }

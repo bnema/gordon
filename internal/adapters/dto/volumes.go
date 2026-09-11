@@ -20,8 +20,10 @@ type VolumePruneRequest struct {
 }
 
 // VolumePruneResponse contains the results of a volume prune operation.
+// Plan is the same shape for dry runs and executions.
 type VolumePruneResponse struct {
-	VolumesRemoved int      `json:"volumes_removed"`
-	SpaceReclaimed int64    `json:"space_reclaimed"`
-	Volumes        []Volume `json:"volumes,omitempty"`
+	VolumesRemoved int          `json:"volumes_removed"`
+	SpaceReclaimed int64        `json:"space_reclaimed"`
+	Volumes        []Volume     `json:"volumes,omitempty"`
+	Plan           PruneSummary `json:"plan"`
 }

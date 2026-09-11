@@ -217,7 +217,7 @@ func TestCheckScopeAccess_RepoNameExtraction(t *testing.T) {
 		},
 		{
 			name:   "simple repo with blobs",
-			path:   "/v2/myrepo/blobs/sha256:abc123",
+			path:   "/v2/myrepo/blobs/sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			scopes: []string{"repository:myrepo:pull"},
 			want:   true,
 		},
@@ -253,6 +253,53 @@ func TestCheckScopeAccess_RepoNameExtraction(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			result := checkScopeAccess(req, claims, log)
 			assert.Equal(t, tt.want, result)
+		})
+	}
+}
+
+func TestCheckScopeAccess_ReservedComponentsCannotRedirectRepository(t *testing.T) {
+	log := testLogger()
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		scopes []string
+		want   bool
+	}{
+		{
+			name:   "unauthorized repo behind reserved first component",
+			method: http.MethodGet,
+			path:   "/v2/manifests/victim/manifests/latest",
+			scopes: []string{"repository:allowed:pull"},
+			want:   false,
+		},
+		{
+			name:   "authorized prefix cannot reach a nested repository",
+			method: http.MethodGet,
+			path:   "/v2/allowed/tags/victim/manifests/latest",
+			scopes: []string{"repository:allowed:pull"},
+			want:   false,
+		},
+		{
+			name:   "pull token cannot PUT a reserved-looking repository",
+			method: http.MethodPut,
+			path:   "/v2/manifests/victim/manifests/latest",
+			scopes: []string{"repository:manifests/victim:pull"},
+			want:   false,
+		},
+		{
+			name:   "exact nested repository is authorized",
+			method: http.MethodGet,
+			path:   "/v2/manifests/victim/manifests/latest",
+			scopes: []string{"repository:manifests/victim:pull"},
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims := &domain.TokenClaims{Scopes: tt.scopes}
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			assert.Equal(t, tt.want, checkScopeAccess(req, claims, log))
 		})
 	}
 }
@@ -318,10 +365,10 @@ func TestCheckScopeAccess_SpecialRoutes(t *testing.T) {
 			want:   true,
 		},
 		{
-			name:   "non-v2 path is allowed",
+			name:   "non-v2 path is denied",
 			path:   "/healthz",
 			scopes: []string{"repository:myrepo:pull"},
-			want:   true,
+			want:   false,
 		},
 		{
 			name:   "catalog path is handled",

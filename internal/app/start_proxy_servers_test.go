@@ -13,13 +13,11 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
@@ -129,9 +127,8 @@ func TestStartProxyServers_ConfiguresSmartTCPHTTPAndHTTPSRoutesWithoutPublicHTTP
 	assertTCPPortClosed(t, fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port))
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts("app.example.com")))
 
 	_, smartPortText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -170,9 +167,8 @@ func TestStartProxyServers_ConfiguresTrafficManagerHTTPSRoute(t *testing.T) {
 	require.Nil(t, tlsReady)
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts("app.example.com")))
 
 	_, portText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -212,9 +208,8 @@ func TestStartProxyServers_ConfiguresCustomTLSMuxHTTPSRoute(t *testing.T) {
 	require.Nil(t, tlsReady)
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts()))
 
 	_, customPort, err := net.SplitHostPort(cfg.EntryPoints["custom-secure"].Address)
 	require.NoError(t, err)
@@ -282,9 +277,7 @@ func TestStartProxyServers_TLSRequiresTrafficManager(t *testing.T) {
 
 func newTestPKIService(t *testing.T) *pkiusecase.Service {
 	t.Helper()
-	routes := outmocks.NewMockRouteChecker(t)
-	routes.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}}).Maybe()
-	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	routes := newRoutesMock(t, "app.example.com")
 	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
 	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, nil, zerowrap.Default())

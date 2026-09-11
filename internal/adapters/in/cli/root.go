@@ -50,16 +50,16 @@ func NewRootCmd() *cobra.Command {
 			tokenFlag = token
 			return nil
 		},
-		Short: "Gordon - A lightweight container deployment platform",
-		Long: `Gordon is a self-contained container deployment platform that combines
-a Docker registry with automatic container deployment capabilities.
+		Short: "Gordon - A self-hosted container deployment platform",
+		Long: `Gordon is a self-hosted container deployment platform: a private
+container registry, an app runtime, and a reverse proxy.
 
-It listens for image pushes and automatically deploys containers based on
-configuration rules, making it ideal for single-server deployments.
+Applications are declared in standalone TOML files and managed with
+gordon apps; push transfers OCI content only and never deploys.
 
 Commands are organized by where they run:
-  Server-only:  Run on the machine hosting Gordon (serve, auth, reload)
-  Management:   Work locally or remotely via --remote flag (routes, secrets, etc.)
+  Server-only:  Run on the machine hosting Gordon (serve, auth, ca)
+  Management:   Work locally or remotely via --remote flag (apps, secrets, etc.)
   Client-only:  CLI utilities that don't require a running Gordon server`,
 	}
 
@@ -88,34 +88,13 @@ Commands are organized by where they run:
 	caCmd.GroupID = groupServer
 	rootCmd.AddCommand(caCmd)
 
-	// Management commands (work locally or via --remote)
-	routesCmd := newRoutesCmd()
-	routesCmd.GroupID = groupManage
-	rootCmd.AddCommand(routesCmd)
-
-	attachmentsCmd := newAttachmentsCmd()
-	attachmentsCmd.GroupID = groupManage
-	rootCmd.AddCommand(attachmentsCmd)
-
 	secretsCmd := newSecretsCmd()
 	secretsCmd.GroupID = groupManage
 	rootCmd.AddCommand(secretsCmd)
 
-	deployCmd := newDeployCmd()
-	deployCmd.GroupID = groupManage
-	rootCmd.AddCommand(deployCmd)
-
-	restartCmd := newRestartCmd()
-	restartCmd.GroupID = groupManage
-	rootCmd.AddCommand(restartCmd)
-
 	pushCmd := newPushCmd()
 	pushCmd.GroupID = groupManage
 	rootCmd.AddCommand(pushCmd)
-
-	pinCmd := newPinCmd()
-	pinCmd.GroupID = groupManage
-	rootCmd.AddCommand(pinCmd)
 
 	reloadCmd := newReloadCmd()
 	reloadCmd.GroupID = groupManage
@@ -137,10 +116,6 @@ Commands are organized by where they run:
 	imagesCmd.GroupID = groupManage
 	rootCmd.AddCommand(imagesCmd)
 
-	bootstrapCmd := newBootstrapCmd()
-	bootstrapCmd.GroupID = groupManage
-	rootCmd.AddCommand(bootstrapCmd)
-
 	configCmd := newConfigCmd()
 	configCmd.GroupID = groupManage
 	rootCmd.AddCommand(configCmd)
@@ -153,14 +128,6 @@ Commands are organized by where they run:
 	volumesCmd.GroupID = groupManage
 	rootCmd.AddCommand(volumesCmd)
 
-	autorouteCmd := newAutorouteCmd()
-	autorouteCmd.GroupID = groupManage
-	rootCmd.AddCommand(autorouteCmd)
-
-	previewCmd := newPreviewCmd()
-	previewCmd.GroupID = groupManage
-	rootCmd.AddCommand(previewCmd)
-
 	tlsCmd := newTLSCmd()
 	tlsCmd.GroupID = groupManage
 	rootCmd.AddCommand(tlsCmd)
@@ -168,6 +135,10 @@ Commands are organized by where they run:
 	trafficCmd := newTrafficCmd()
 	trafficCmd.GroupID = groupManage
 	rootCmd.AddCommand(trafficCmd)
+
+	appsCmd := newAppsCmd()
+	appsCmd.GroupID = groupManage
+	rootCmd.AddCommand(appsCmd)
 
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
@@ -222,12 +193,13 @@ func IsRemoteMode() bool {
 func newReloadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reload",
-		Short: "Start containers for configured routes",
-		Long: `Starts containers for routes defined in config.toml that don't have
-a running container. Running containers are never restarted to ensure 100% uptime.
+		Short: "Reload installation configuration (never activates app state)",
+		Long: `Reloads installation-only settings (entrypoints, TLS, limits,
+external routes) after editing gordon.toml.
 
-Use this command after editing config.toml to add new routes, or after pushing
-images to the registry when the route was not yet configured.`,
+Reload never activates pending app desired state, never re-resolves
+image tags, and never starts app workloads. Apps are managed with
+gordon apps (apply, deploy, lifecycle).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client, isRemote, err := GetRemoteClient()
 			if err != nil {
@@ -291,6 +263,10 @@ func runReloadRemote(ctx context.Context, client *remote.Client) error {
 	return nil
 }
 
+// cliConfigPath for local operations. If empty, config is auto-discovered
+// from standard locations (/etc/gordon/gordon.toml, ~/.config/gordon/gordon.toml, ./gordon.toml).
+var cliConfigPath string
+
 // newLogsCmd creates the logs command.
 func newLogsCmd() *cobra.Command {
 	var follow bool
@@ -299,21 +275,25 @@ func newLogsCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "logs [domain]",
-		Short: "Show logs (Gordon process or container)",
+		Short: "Show logs (Gordon process or app-domain container)",
 		Long: `Shows logs from the Gordon process or a specific container.
 
 Without a domain argument, shows Gordon process logs.
-With a domain argument, shows container logs for that domain.
+With a domain argument, shows container logs for the app HTTP host
+served by that domain (resolved through ACTIVE app state; stopped or
+unknown hosts report "container not found").
 
 Examples:
   gordon logs                    # Gordon process logs
   gordon logs -f                 # Follow process logs
-  gordon logs myapp.local        # Container logs for myapp.local
-  gordon logs myapp.local -f     # Follow container logs
+  gordon logs myapp.example.com  # Container logs for the app serving myapp.example.com
+  gordon logs myapp.example.com -f
+
+For per-service app logs with follow/tail selection, use gordon apps logs APP.
 
 Remote mode:
   gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-  gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon logs myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			logDomain := ""
@@ -334,7 +314,7 @@ Remote mode:
 // runLogs handles the logs command logic.
 func runLogs(ctx context.Context, logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
 	if logDomain != "" {
-		handle, err := resolveControlPlaneForRouteDomain(ctx, logDomain)
+		handle, err := resolveControlPlaneForDomain(ctx, logDomain)
 		if err != nil {
 			return err
 		}

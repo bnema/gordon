@@ -36,6 +36,9 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrBlobSizeExceeded   = errors.New("blob size exceeds maximum")
 	ErrExecOutputExceeded = errors.New("container exec output exceeds maximum")
+	// ErrManifestBlobUnknown marks a manifest that references config or
+	// layer content the repository never completed an upload for.
+	ErrManifestBlobUnknown = errors.New("manifest references a blob the repository does not own")
 
 	// Network errors
 	ErrNetworkNotFound = errors.New("network not found")
@@ -58,6 +61,30 @@ var (
 	ErrConfigLoadFailed     = errors.New("failed to load configuration")
 	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
+
+	// App manifest errors
+	ErrInvalidAppSpec = errors.New("invalid app manifest")
+
+	// App state errors
+	ErrAppStateIO              = errors.New("app state storage failure")
+	ErrAppStateCorrupt         = errors.New("app state is corrupt")
+	ErrAppStateIncompatible    = errors.New("app state format is not supported by this binary")
+	ErrAppStateConflict        = errors.New("app state conflict")
+	ErrAppRevisionNotFound     = errors.New("app revision not found")
+	ErrAppIntentNotFound       = errors.New("app apply intent not found")
+	ErrAppOperationNotFound    = errors.New("app operation not found")
+	ErrAppReservationConflict  = errors.New("listener reservation conflict")
+	ErrAppTrafficProjection    = errors.New("app traffic projection failed")
+	ErrAppImageUnresolvable    = errors.New("image reference unresolvable")
+	ErrAppImageNotAllowed      = errors.New("image reference not allowed by installation policy")
+	ErrAppSecretMissing        = errors.New("required app secret missing")
+	ErrAppUnmanagedImageVolume = errors.New("image declares unmanaged volume")
+	// ErrPruneDisabled means prune could not establish a safe scope for
+	// the requested operation at all (for example, its protection or
+	// runtime ports are not wired). It is never returned merely because
+	// app state exists: protected and unknown candidates are reported
+	// per candidate and do not fail the operation.
+	ErrPruneDisabled = errors.New("pruning unavailable: cannot establish a safe prune scope")
 
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")

@@ -34,6 +34,7 @@ func toImagePruneResponse(report domain.ImagePruneReport) dto.ImagePruneResponse
 			BlobsRemoved:   report.Registry.BlobsRemoved,
 			SpaceReclaimed: report.Registry.SpaceReclaimed,
 		},
+		Plan: toPruneSummary(report.Plan),
 	}
 }
 
@@ -111,6 +112,9 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 	if req.PruneRegistry != nil {
 		opts.PruneRegistry = *req.PruneRegistry
 	}
+	if req.DryRun != nil {
+		opts.DryRun = *req.DryRun
+	}
 	if !opts.PruneDangling && !opts.PruneRegistry {
 		h.sendError(w, http.StatusBadRequest, "at least one prune scope must be enabled")
 		return
@@ -119,6 +123,10 @@ func (h *Handler) handleImagesPrune(w http.ResponseWriter, r *http.Request) {
 	report, err := h.imageSvc.Prune(ctx, opts)
 	if err != nil {
 		log.Error().Err(err).Int("keep_last", opts.KeepLast).Msg("image prune failed")
+		if errors.Is(err, domain.ErrPruneDisabled) {
+			h.sendJSON(w, http.StatusConflict, dto.AppError{Error: "prune-disabled", Message: err.Error()})
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, "failed to prune images")
 		return
 	}

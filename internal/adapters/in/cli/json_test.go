@@ -14,24 +14,6 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestRoutesList_JSONFlag_Accepted(t *testing.T) {
-	cmd := newRoutesListCmd()
-	f := cmd.Flags().Lookup("json")
-	assert.NotNil(t, f)
-	if f != nil {
-		assert.Equal(t, "false", f.DefValue)
-	}
-}
-
-func TestAttachmentsList_JSONFlag_Accepted(t *testing.T) {
-	cmd := newAttachmentsListCmd()
-	f := cmd.Flags().Lookup("json")
-	assert.NotNil(t, f)
-	if f != nil {
-		assert.Equal(t, "false", f.DefValue)
-	}
-}
-
 func TestSecretsList_JSONFlag_Accepted(t *testing.T) {
 	cmd := newSecretsListCmd()
 	f := cmd.Flags().Lookup("json")
@@ -70,15 +52,6 @@ func TestTokenList_JSONFlag_Accepted(t *testing.T) {
 
 func TestRemotesList_JSONFlag_Accepted(t *testing.T) {
 	cmd := newRemotesListCmd()
-	f := cmd.Flags().Lookup("json")
-	assert.NotNil(t, f)
-	if f != nil {
-		assert.Equal(t, "false", f.DefValue)
-	}
-}
-
-func TestPinList_JSONFlag_Accepted(t *testing.T) {
-	cmd := newPinListCmd()
 	f := cmd.Flags().Lookup("json")
 	assert.NotNil(t, f)
 	if f != nil {
@@ -172,157 +145,19 @@ func TestRemotesList_JSONShape_RoundTripsRemoteObjects(t *testing.T) {
 	assert.True(t, got[0].InsecureTLS)
 }
 
-func TestAttachmentsList_JSONShape_RoundTripsTargetPayload(t *testing.T) {
-	payload := struct {
-		Target string   `json:"target"`
-		Images []string `json:"images"`
-	}{
-		Target: "app.example.com",
-		Images: []string{"postgres:16"},
-	}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	var got struct {
-		Target string   `json:"target"`
-		Images []string `json:"images"`
-	}
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	assert.Equal(t, payload.Target, got.Target)
-	assert.Equal(t, payload.Images, got.Images)
-}
-
 func TestSecretsList_JSONShape_RoundTripsPayload(t *testing.T) {
-	payload := struct {
-		Domain      string                     `json:"domain"`
-		Keys        []string                   `json:"keys"`
-		Attachments []remote.AttachmentSecrets `json:"attachments"`
-	}{
+	payload := remote.SecretsListResult{
 		Domain: "app.example.com",
 		Keys:   []string{"API_KEY"},
-		Attachments: []remote.AttachmentSecrets{{
-			Service: "postgres",
-			Keys:    []string{"POSTGRES_PASSWORD"},
-		}},
 	}
 
 	encoded, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	var got struct {
-		Domain      string                     `json:"domain"`
-		Keys        []string                   `json:"keys"`
-		Attachments []remote.AttachmentSecrets `json:"attachments"`
-	}
+	var got remote.SecretsListResult
 	require.NoError(t, json.Unmarshal(encoded, &got))
 	assert.Equal(t, payload.Domain, got.Domain)
 	assert.Equal(t, payload.Keys, got.Keys)
-	assert.Equal(t, payload.Attachments, got.Attachments)
-}
-
-func TestSecretsList_JSONShape_NormalizesNilAttachmentsToEmptySlice(t *testing.T) {
-	payload := struct {
-		Domain      string                     `json:"domain"`
-		Keys        []string                   `json:"keys"`
-		Attachments []remote.AttachmentSecrets `json:"attachments"`
-	}{
-		Domain:      "app.example.com",
-		Keys:        []string{"API_KEY"},
-		Attachments: []remote.AttachmentSecrets{},
-	}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-	assert.Contains(t, string(encoded), `"attachments":[]`)
-
-	var got struct {
-		Domain      string                     `json:"domain"`
-		Keys        []string                   `json:"keys"`
-		Attachments []remote.AttachmentSecrets `json:"attachments"`
-	}
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	assert.NotNil(t, got.Attachments)
-	assert.Empty(t, got.Attachments)
-}
-
-func TestRoutesList_JSONShape_RoundTripsLocalPayload(t *testing.T) {
-	payload := []struct {
-		Domain string `json:"domain"`
-		Image  string `json:"image"`
-	}{
-		{Domain: "app.example.com", Image: "app:latest"},
-	}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	var got []struct {
-		Domain string `json:"domain"`
-		Image  string `json:"image"`
-	}
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	require.Len(t, got, 1)
-	assert.Equal(t, payload[0], got[0])
-}
-
-func TestRoutesStatus_JSONFlag_Accepted(t *testing.T) {
-	cmd := newRoutesStatusCmd()
-	f := cmd.Flags().Lookup("json")
-	assert.NotNil(t, f)
-	if f != nil {
-		assert.Equal(t, "false", f.DefValue)
-	}
-}
-
-func TestRoutesList_JSONShape_RoundTripsSections(t *testing.T) {
-	payload := []routeListSection{{
-		Kind: "local",
-		Name: "local",
-		Routes: []routeListItem{{
-			Domain: "app.local",
-			Image:  "myapp:latest",
-		}},
-	}}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	var got []routeListSection
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	require.Len(t, got, 1)
-	assert.Equal(t, "local", got[0].Kind)
-	assert.Equal(t, "app.local", got[0].Routes[0].Domain)
-}
-
-func TestRoutesStatus_JSONShape_RoundTripsSections(t *testing.T) {
-	payload := []routeStatusSection{{
-		Kind: "remote",
-		Name: "igor",
-		URL:  "https://gordon.supri.xyz",
-		Routes: []routeStatusItem{{
-			Domain:          "grafana.supri.xyz",
-			Image:           "grafana",
-			ContainerStatus: "running",
-			HTTPStatus:      200,
-			Network:         "gordon-shared",
-			Attachments: []routeStatusAttachment{{
-				Name:   "prometheus",
-				Image:  "prometheus:v5",
-				Status: "running",
-			}},
-		}},
-	}}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	var got []routeStatusSection
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	require.Len(t, got, 1)
-	assert.Equal(t, "igor", got[0].Name)
-	assert.Equal(t, 200, got[0].Routes[0].HTTPStatus)
-	assert.Equal(t, "prometheus", got[0].Routes[0].Attachments[0].Name)
 }
 
 func TestWriteJSON_ProducesValidIndentedJSON(t *testing.T) {

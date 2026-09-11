@@ -1,16 +1,15 @@
 # Secrets Commands
 
-Manage secrets on local or remote Gordon instances.
-
-Remote targeting uses client config or an active remote by default.
-When you provide a concrete domain and no remote is selected, Gordon can also
-auto-infer a saved remote when exactly one match is found.
-Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+Manage installation secrets on local or remote Gordon instances.
 
 Storage depends on the secrets backend:
 - `pass`: secrets are stored in pass under `gordon/env/<domain>/<KEY>`
 - `sops`: secrets live in domain `.env` files and can reference SOPS-encrypted values
 - `unsafe`: secrets are stored in plain-text domain `.env` files
+
+App secret VALUES stay in pass under
+`gordon/apps/<uuid>/<service>/<name>` and are managed with
+`gordon apps secrets`. The commands below manage installation secrets only.
 
 ## gordon secrets
 
@@ -18,15 +17,15 @@ Storage depends on the secrets backend:
 
 | Subcommand | Description |
 |------------|-------------|
-| `list` | List all secrets for a domain |
-| `set` | Set a secret value |
+| `list` | List all secret keys for a domain |
+| `set` | Set secrets for a domain from a file |
 | `remove` | Remove a secret |
 
 ---
 
 ## gordon secrets list
 
-List all secrets for a specific domain. When attachment secrets are present, they are displayed in a tree view below the domain secrets.
+List all secret key names for a specific domain. Only key names are shown, never values.
 
 ```bash
 gordon secrets list <domain>
@@ -62,13 +61,8 @@ gordon secrets list myapp.example.com --remote https://gordon.mydomain.com --tok
 Secrets for app.mydomain.com
 
 Key                       Value
-DATABASE_URL              ****
-API_KEY                   ****
-├─ [postgres]
-│  ├─ POSTGRES_USER       ****
-│  └─ POSTGRES_PASSWORD   ****
-└─ [redis]
-   └─ REDIS_PASSWORD      ****
+DATABASE_URL              (hidden)
+API_KEY                   (hidden)
 ```
 
 ### JSON Output
@@ -80,19 +74,7 @@ gordon secrets list app.mydomain.com --json
 ```json
 {
   "domain": "app.mydomain.com",
-  "secrets": {
-    "DATABASE_URL": "****",
-    "API_KEY": "****"
-  },
-  "attachments": {
-    "postgres": {
-      "POSTGRES_USER": "****",
-      "POSTGRES_PASSWORD": "****"
-    },
-    "redis": {
-      "REDIS_PASSWORD": "****"
-    }
-  }
+  "keys": ["API_KEY", "DATABASE_URL"]
 }
 ```
 
@@ -100,25 +82,24 @@ gordon secrets list app.mydomain.com --json
 
 ## gordon secrets set
 
-Set a secret value for a domain.
+Set secrets for a domain from a mode 0600 file containing one `KEY=value` pair per line.
 
 ```bash
-gordon secrets set <domain> <KEY=value>...
-gordon secrets set myapp.example.com DATABASE_URL="postgres://..."
+gordon secrets set <domain> --from-file <path>
 ```
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
-| `<domain>` | The domain name to set the secret for |
-| `<KEY=value>...` | One or more secret key/value pairs |
+| `<domain>` | The domain name to set secrets for |
 
 ### Options
 
 | Option | Description |
 |--------|-------------|
-| `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
+| `--from-file` | Read KEY=value lines from a mode 0600 file (required) |
+| `--json` | Output as JSON |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
@@ -126,18 +107,10 @@ gordon secrets set myapp.example.com DATABASE_URL="postgres://..."
 
 ```bash
 # Local
-gordon secrets set myapp.example.com DATABASE_URL="postgres://user:pass@postgres:5432/db"
-gordon secrets set myapp.example.com API_KEY="your-api-key"
+gordon secrets set myapp.example.com --from-file ./app.env
 
 # Remote (override)
-gordon secrets set myapp.example.com DATABASE_URL="$DATABASE_URL" --remote https://gordon.mydomain.com --token $TOKEN
-
-# Set attachment secrets
-gordon secrets set app.mydomain.com --attachment postgres POSTGRES_PASSWORD=secret
-gordon secrets set app.mydomain.com -a redis REDIS_PASSWORD=mysecret
-
-# Multiple secrets at once
-gordon secrets set app.mydomain.com -a postgres POSTGRES_USER=admin POSTGRES_PASSWORD=secret
+gordon secrets set myapp.example.com --from-file ./app.env --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ---
@@ -161,8 +134,7 @@ gordon secrets remove <domain> <key>
 
 | Option | Description |
 |--------|-------------|
-| `--attachment` / `-a` | Target an attachment service (e.g., postgres, redis) |
-| `--force` | Remove without confirmation |
+| `--force`, `-f` | Remove without confirmation |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | Authentication token for remote |
 
@@ -174,9 +146,6 @@ gordon secrets remove myapp.example.com DATABASE_URL
 
 # Remote (override)
 gordon secrets remove myapp.example.com DATABASE_URL --remote https://gordon.mydomain.com --token $TOKEN
-
-# Remove attachment secret
-gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
 ```
 
 ---
@@ -186,15 +155,14 @@ gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD
 ### Setting Up Application Secrets
 
 ```bash
-# Database connection
-gordon secrets set myapp.example.com DATABASE_URL="postgres://user:pass@postgres:5432/mydb"
+# Write secrets to a protected file
+cat > app.env <<'EOF'
+DATABASE_URL=postgres://user:pass@postgres:5432/mydb
+API_KEY=your-api-key
+EOF
+chmod 600 app.env
 
-# API keys
-gordon secrets set myapp.example.com STRIPE_KEY="sk_live_..."
-gordon secrets set myapp.example.com SENDGRID_KEY="SG..."
-
-# JWT secret
-gordon secrets set myapp.example.com JWT_SECRET="your-jwt-secret-here"
+gordon secrets set myapp.example.com --from-file ./app.env
 
 # Verify
 gordon secrets list myapp.example.com
@@ -207,12 +175,8 @@ gordon secrets list myapp.example.com
 export GORDON_REMOTE=https://gordon.mydomain.com
 export GORDON_TOKEN=$GORDON_TOKEN
 
-# Update secrets before deploy
-gordon secrets set myapp.example.com DATABASE_URL="$DATABASE_URL"
-gordon secrets set myapp.example.com API_KEY="$API_KEY"
-
-# Deploy
-gordon deploy myapp.example.com
+# Update secrets
+gordon secrets set myapp.example.com --from-file ./app.env
 ```
 
 ### Rotating Secrets
@@ -220,28 +184,11 @@ gordon deploy myapp.example.com
 ```bash
 # Generate new secret
 NEW_JWT_SECRET=$(openssl rand -base64 32)
+printf 'JWT_SECRET=%s\n' "$NEW_JWT_SECRET" > rotate.env
+chmod 600 rotate.env
 
 # Update the secret
-gordon secrets set myapp.example.com JWT_SECRET="$NEW_JWT_SECRET"
-
-# Redeploy to pick up new secret
-gordon deploy myapp.example.com
-```
-
-### Attachment Secrets
-
-```bash
-# Configure database credentials
-gordon secrets set app.mydomain.com -a postgres POSTGRES_USER=admin POSTGRES_PASSWORD=secret
-
-# Configure cache credentials
-gordon secrets set app.mydomain.com -a redis REDIS_PASSWORD=cache-secret
-
-# Verify
-gordon secrets list app.mydomain.com
-
-# Redeploy to pick up new secrets
-gordon deploy app.mydomain.com
+gordon secrets set myapp.example.com --from-file ./rotate.env
 ```
 
 ## Related
@@ -249,3 +196,4 @@ gordon deploy app.mydomain.com
 - [CLI Overview](./index.md)
 - [Secrets Configuration](../config/secrets.md)
 - [Environment Variables](../config/env.md)
+- [Apps Commands](./apps.md)

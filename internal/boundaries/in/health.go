@@ -9,14 +9,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// HealthService defines the contract for route health checking operations.
+// HealthService defines the contract for app health checking operations.
 type HealthService interface {
-	// CheckRoute performs a health check on a single route.
-	// It checks both container status and HTTP reachability.
-	CheckRoute(ctx context.Context, route domain.Route) *domain.RouteHealth
-
-	// CheckAllRoutes performs health checks on all configured routes.
-	// Returns a map of domain to health status.
+	// CheckAllRoutes performs health checks on all app-served HTTP hosts.
+	// Returns a map of canonical host to health status.
 	CheckAllRoutes(ctx context.Context) map[string]*domain.RouteHealth
 }
 

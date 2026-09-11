@@ -14,8 +14,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/bnema/gordon/internal/boundaries/in/mocks"
-	outMocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -30,10 +29,9 @@ func TestService_GetProcessLogs(t *testing.T) {
 		err := os.WriteFile(logPath, []byte(content), 0644)
 		require.NoError(t, err)
 
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, true, containerSvc, runtime, log)
+		svc := NewService(logPath, true, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 3)
 		require.NoError(t, err)
@@ -42,10 +40,9 @@ func TestService_GetProcessLogs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice for non-existent file", func(t *testing.T) {
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService("/nonexistent/file.log", true, containerSvc, runtime, log)
+		svc := NewService("/nonexistent/file.log", true, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 10)
 		require.NoError(t, err)
@@ -53,10 +50,9 @@ func TestService_GetProcessLogs(t *testing.T) {
 	})
 
 	t.Run("returns error when log file path not configured", func(t *testing.T) {
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService("", true, containerSvc, runtime, log)
+		svc := NewService("", true, runtime, log)
 
 		_, err := svc.GetProcessLogs(context.Background(), 10)
 		assert.Error(t, err)
@@ -70,10 +66,9 @@ func TestService_GetProcessLogs(t *testing.T) {
 		err := os.WriteFile(logPath, []byte(content), 0644)
 		require.NoError(t, err)
 
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, true, containerSvc, runtime, log)
+		svc := NewService(logPath, true, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 10)
 		require.NoError(t, err)
@@ -89,10 +84,9 @@ func TestService_GetProcessLogs(t *testing.T) {
 			execCommandContext = origExec
 		}()
 
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService("/tmp/unused.log", false, containerSvc, runtime, log)
+		svc := NewService("/tmp/unused.log", false, runtime, log)
 
 		lines, err := svc.GetProcessLogs(context.Background(), 10)
 		require.NoError(t, err)
@@ -110,10 +104,9 @@ func TestService_FollowProcessLogs(t *testing.T) {
 		err := os.WriteFile(logPath, []byte(content), 0644)
 		require.NoError(t, err)
 
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService(logPath, true, containerSvc, runtime, log)
+		svc := NewService(logPath, true, runtime, log)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -150,33 +143,35 @@ func TestService_GetContainerLogs(t *testing.T) {
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
 
 	t.Run("returns error when container not found", func(t *testing.T) {
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		containerSvc.EXPECT().Get(mock.Anything, "unknown.local").Return(nil, false)
-
-		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		svc.WithAppTargets(stubBackends{})
 
 		_, err := svc.GetContainerLogs(context.Background(), "unknown.local", 10)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "container not found")
 	})
 
-	t.Run("calls runtime with correct container ID", func(t *testing.T) {
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+	t.Run("accepts an exact container ID", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
+		const containerID = "abc123def456"
+		runtime.EXPECT().GetContainerLogs(mock.Anything, containerID, false).Return(&mockReader{}, nil)
 
-		container := &domain.Container{
-			ID:     "abc123",
-			Name:   "app.local",
-			Status: "running",
-		}
-		containerSvc.EXPECT().Get(mock.Anything, "app.local").Return(container, true)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		lines, err := svc.GetContainerLogs(context.Background(), containerID, 10)
+		require.NoError(t, err)
+		assert.Empty(t, lines)
+	})
+
+	t.Run("calls runtime with correct container ID", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
 
 		// Create a mock reader that returns empty content
 		runtime.EXPECT().GetContainerLogs(mock.Anything, "abc123", false).Return(&mockReader{}, nil)
 
-		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		svc.WithAppTargets(stubBackends{"app.local": "abc123"})
 
 		lines, err := svc.GetContainerLogs(context.Background(), "app.local", 10)
 		require.NoError(t, err)
@@ -188,17 +183,26 @@ func TestService_FollowContainerLogs(t *testing.T) {
 	log := zerowrap.New(zerowrap.Config{Level: "warn"})
 
 	t.Run("returns error when container not found", func(t *testing.T) {
-		containerSvc := mocks.NewMockContainerService(t)
-		runtime := outMocks.NewMockContainerRuntime(t)
+		runtime := mocks.NewMockContainerRuntime(t)
 
-		containerSvc.EXPECT().Get(mock.Anything, "unknown.local").Return(nil, false)
-
-		svc := NewService("/tmp/test.log", true, containerSvc, runtime, log)
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		svc.WithAppTargets(stubBackends{})
 
 		_, err := svc.FollowContainerLogs(context.Background(), "unknown.local", 10)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "container not found")
 	})
+}
+
+// stubBackends maps hosts to exact container IDs for log tests.
+type stubBackends map[string]string
+
+func (s stubBackends) LookupHost(host string) (domain.AppBackend, bool) {
+	id, ok := s[host]
+	if !ok {
+		return domain.AppBackend{}, false
+	}
+	return domain.AppBackend{Host: "127.0.0.1", Port: 18080, ContainerPort: 8080, ContainerID: id}, true
 }
 
 func TestTailLines(t *testing.T) {

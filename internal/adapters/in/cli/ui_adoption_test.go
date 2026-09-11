@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/mock"
+
 	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 )
@@ -190,7 +192,7 @@ func TestUIAdoptionRuntimeSeams(t *testing.T) {
 	}
 
 	pruneMock := climocks.NewMockimagesClient(t)
-	pruneMock.EXPECT().ListImages(context.Background()).Return([]dto.Image{}, nil).Once()
+	pruneMock.EXPECT().PruneImages(context.Background(), mock.Anything).Return(&dto.ImagePruneResponse{Plan: dto.PruneSummary{}}, nil).Once()
 
 	pruneBuf := new(bytes.Buffer)
 	if err := runImagesPrune(context.Background(), pruneMock, imagesPruneOptions{DryRun: true}, pruneBuf); err != nil {

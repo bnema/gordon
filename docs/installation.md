@@ -136,6 +136,16 @@ insecure = true
 EOF
 ```
 
+Podman assigns loopback backend ports from the host's ephemeral port range when Gordon publishes managed service ports. If an nftables output policy restricts loopback access, allow the Gordon daemon's primary UID—not its subordinate container UIDs—to connect to that range for the protocols used by managed services:
+
+```nftables
+# Confirm the range with: sysctl net.ipv4.ip_local_port_range
+meta skuid <gordon-uid> ip daddr 127.0.0.1 tcp dport 32768-60999 accept
+meta skuid <gordon-uid> ip daddr 127.0.0.1 udp dport 32768-60999 accept
+```
+
+Place these rules before any broader loopback rejection. Keep public entrypoint and administrative-port policy separate; these rules only let Gordon reach rootless Podman backends on the local host.
+
 ## Firewall Configuration
 
 Gordon needs ports accessible for the registry and the public edge entrypoint.
@@ -195,10 +205,9 @@ gordon_domain = "gordon.yourdomain.com"
 [entrypoints.edge]
 address = ":443"
 protocol = "smart_tcp"
-
-[routes]
-"app.yourdomain.com" = "myapp:latest"
 ```
+
+Application workloads live in standalone app files, not in `gordon.toml` (see [Getting Started](./getting-started.md#8-deploy-your-first-app)).
 
 See [Configuration Reference](./config/index.md) for all options.
 

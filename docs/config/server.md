@@ -102,7 +102,7 @@ Challenge behavior:
 
 HTTP-01 requires public access to external port 80 for each hostname being validated. If you use Cloudflare in DNS-only/gray-cloud mode, your firewall/NAT must allow direct public traffic to the HTTP-capable smart TCP entrypoint. A firewall rule that only allows Cloudflare source IPs on port 80 is compatible with orange-cloud proxying, but it blocks gray-cloud HTTP-01 validation; use DNS-01 or temporarily open port 80 for direct validation.
 
-Gordon automatically includes `server.gordon_domain` in public ACME coverage in addition to configured HTTPS routes. The management hostname therefore needs the same challenge reachability: public port 80 for HTTP-01, or zone-read and DNS-edit permissions for its zone with Cloudflare DNS-01.
+Gordon automatically includes `server.gordon_domain` in public ACME coverage in addition to app HTTPS hosts. The management hostname therefore needs the same challenge reachability: public port 80 for HTTP-01, or zone-read and DNS-edit permissions for its zone with Cloudflare DNS-01.
 
 Gordon limits new ACME certificate orders to `obtain_batch_size` per reconcile run (default `1`) so enabling ACME on an existing multi-route server does not burst through every route and hit Let's Encrypt rate limits. The management hostname consumes a place in the same batch; later reloads, restarts, or other explicit reconcile runs continue issuing remaining certificates.
 
@@ -116,7 +116,7 @@ DNS-01 uses the Cloudflare API to create TXT records, then checks public DNS vis
 
 The defaults avoid relying on host-local DNS. This matters on hosts using Tailscale MagicDNS, split-horizon corporate DNS, or Pi-hole, where `/etc/resolv.conf` may not reflect public DNS visibility as Let's Encrypt sees it.
 
-Because Gordon's ACME challenge mode is global, `cloudflare-dns-01` requires a Cloudflare token that can read zones and edit DNS records for every zone used by configured HTTPS routes. If that is not desirable, use `http-01` until Gordon supports per-route or per-zone challenge policy.
+Because Gordon's ACME challenge mode is global, `cloudflare-dns-01` requires a Cloudflare token that can read zones and edit DNS records for every zone used by app HTTPS hosts. If that is not desirable, use `http-01` until Gordon supports per-route or per-zone challenge policy.
 
 #### Direct HTTP CA onboarding paths (`/.well-known/gordon/ca`)
 
@@ -128,7 +128,7 @@ When Gordon is serving TLS-capable edge traffic, direct cleartext HTTP clients (
 
 This lets new clients discover and trust the internal CA over plain HTTP without exposing the full application. Trusted proxy traffic (e.g. from Cloudflare) continues through the normal HTTP proxy path unaffected.
 
-On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts can use their own routes without Gordon intercepting them. If `gordon_domain` is empty, HTTPS onboarding paths are not served at all to avoid intercepting app hosts.
+On HTTPS, onboarding paths are served only on `server.gordon_domain`; app hosts are served without Gordon intercepting them. If `gordon_domain` is empty, HTTPS onboarding paths are not served at all to avoid intercepting app hosts.
 
 #### HTTP to HTTPS redirect
 
@@ -187,7 +187,7 @@ gordon_domain = "gordon.mydomain.com"
 This domain is used for:
 - Docker login and image push/pull operations
 - Admin API access (`/admin/*` endpoints)
-- CLI remote targeting (`gordon routes --remote https://gordon.mydomain.com`)
+- CLI remote targeting (`gordon apps --remote https://gordon.mydomain.com`)
 - Authentication endpoints (`/auth/*`)
 
 > **Warning:** If you are upgrading an older config, copy `server.registry_domain` to `server.gordon_domain` before restarting.
@@ -430,6 +430,6 @@ sudo firewall-cmd --reload
 
 - [Configuration Overview](./index.md)
 - [Installation Guide](../installation.md)
-- [Routes Configuration](./routes.md)
+- [App Manifest](./apps.md)
 - [Standalone Services](./services.md)
 - [Traffic Plane Configuration](./traffic.md)

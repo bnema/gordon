@@ -18,7 +18,6 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/registry"
 	"github.com/bnema/gordon/pkg/validation"
 )
@@ -28,11 +27,6 @@ const maxAdminRequestSize = 1 << 20 // 1MB
 
 // maxLogLines is the maximum allowed number of log lines that can be requested.
 const maxLogLines = 10000
-
-type registryDeployService interface {
-	in.RegistryService
-	in.DeployCoordinator
-}
 
 type reloadTrigger interface {
 	Trigger(ctx context.Context) error
@@ -50,72 +44,12 @@ type Handler struct {
 	secretSvc       in.SecretService
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
-	registrySvc     registryDeployService
-	previewSvc      previewService
+	registrySvc     in.RegistryService
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
+	appSvc          in.AppService
 	log             zerowrap.Logger
-}
-
-// Type aliases for API responses using shared DTO types.
-type routeInfoResponse = dto.RouteInfo
-type attachmentResponse = dto.Attachment
-type routeResponse = dto.Route
-
-// toAttachmentResponse converts a domain.Attachment to a dto.Attachment.
-func toAttachmentResponse(a domain.Attachment) dto.Attachment {
-	return dto.Attachment{
-		Name:        a.Name,
-		Image:       a.Image,
-		ContainerID: a.ContainerID,
-		Status:      a.Status,
-		Network:     a.Network,
-	}
-}
-
-// toRouteInfoResponse converts a domain.RouteInfo to a dto.RouteInfo.
-func toRouteInfoResponse(r domain.RouteInfo) dto.RouteInfo {
-	attachments := make([]dto.Attachment, 0, len(r.Attachments))
-	for _, a := range r.Attachments {
-		attachments = append(attachments, toAttachmentResponse(a))
-	}
-	return dto.RouteInfo{
-		Domain:          r.Domain,
-		Image:           r.Image,
-		ContainerID:     r.ContainerID,
-		ContainerStatus: r.ContainerStatus,
-		Network:         r.Network,
-		Attachments:     attachments,
-	}
-}
-
-// toRouteResponse converts a domain.Route to a dto.Route.
-func toRouteResponse(r domain.Route) dto.Route {
-	return dto.Route{
-		Domain: r.Domain,
-		Image:  r.Image,
-		HTTPS:  r.HTTPS,
-	}
-}
-
-func mergeConfiguredRouteDetails(configured []domain.Route, detailed []domain.RouteInfo) []domain.RouteInfo {
-	detailedByDomain := make(map[string]domain.RouteInfo, len(detailed))
-	for _, info := range detailed {
-		detailedByDomain[info.Domain] = info
-	}
-
-	merged := make([]domain.RouteInfo, 0, len(configured))
-	for _, route := range configured {
-		info, ok := detailedByDomain[route.Domain]
-		if !ok {
-			info = domain.RouteInfo{Domain: route.Domain, Image: route.Image}
-		} else if info.Image == "" {
-			info.Image = route.Image
-		}
-		merged = append(merged, info)
-	}
-	return merged
 }
 
 func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
@@ -194,16 +128,16 @@ type HandlerDeps struct {
 	HealthSvc       in.HealthService
 	SecretSvc       in.SecretService
 	LogSvc          in.LogService
-	RegistrySvc     registryDeployService
+	RegistrySvc     in.RegistryService
 	Log             zerowrap.Logger
 	BackupSvc       in.BackupService
 	VolumeBackupSvc in.VolumeBackupService
-	PreviewSvc      previewService
 	ImageSvc        in.ImageService
 	VolumeSvc       in.VolumeService
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
+	AppSvc          in.AppService
 }
 
 // NewHandler creates a new admin HTTP handler.
@@ -220,10 +154,10 @@ func NewHandler(deps HandlerDeps) *Handler {
 		logSvc:          deps.LogSvc,
 		volumeSvc:       deps.VolumeSvc,
 		registrySvc:     deps.RegistrySvc,
-		previewSvc:      deps.PreviewSvc,
 		reloadTrigger:   deps.ReloadTrigger,
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
+		appSvc:          deps.AppSvc,
 		log:             deps.Log,
 	}
 }
@@ -263,21 +197,22 @@ type routeHandler func(w http.ResponseWriter, r *http.Request, path string)
 
 // matchRoute returns the handler for a given path, or false if not found.
 func (h *Handler) matchRoute(path string) (routeHandler, bool) {
+	// Retired legacy mutations answer 410 Gone before any other match.
+	if isRetiredMutation(path) {
+		return h.handleRetiredMutation, true
+	}
 	// Exact match routes
 	exactRoutes := map[string]routeHandler{
-		"/networks":            func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
-		"/status":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
-		"/health":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
-		"/bootstrap":           func(w http.ResponseWriter, r *http.Request, _ string) { h.handleBootstrap(w, r) },
-		"/reload":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
-		"/config":              func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
-		"/auth/verify":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
-		"/volumes":             func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
-		"/volumes/prune":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
-		"/attachments/orphans": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentOrphans(w, r) },
-		"/attachments/prune":   func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAttachmentPrune(w, r) },
-		"/tls/status":          func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
-		"/traffic/status":      func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTrafficStatus(w, r) },
+		"/networks":       func(w http.ResponseWriter, r *http.Request, _ string) { h.handleNetworks(w, r) },
+		"/status":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleStatus(w, r) },
+		"/health":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleHealth(w, r) },
+		"/reload":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleReload(w, r) },
+		"/config":         func(w http.ResponseWriter, r *http.Request, _ string) { h.handleConfig(w, r) },
+		"/auth/verify":    func(w http.ResponseWriter, r *http.Request, _ string) { h.handleAuthVerify(w, r) },
+		"/volumes":        func(w http.ResponseWriter, r *http.Request, _ string) { h.handleListVolumes(w, r) },
+		"/volumes/prune":  func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
+		"/tls/status":     func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
+		"/traffic/status": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTrafficStatus(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true
@@ -288,21 +223,12 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		prefix  string
 		handler routeHandler
 	}{
+		{"/apps", h.handleApps},
 		{"/backups", h.handleBackups},
-		{"/attachments/by-image", h.handleAttachmentsByImage},
-		{"/attachments", h.handleAttachmentsConfig},
-		{"/routes/by-image", h.handleRoutesByImage},
-		{"/routes", h.handleRoutes},
 		{"/secrets", h.handleSecrets},
-		{"/deploy-intent", h.handleDeployIntent},
-		{"/deploy", h.handleDeploy},
-		{"/restart", h.handleRestart},
 		{"/tags", h.handleTags},
 		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
-		{"/autoroute/allowed-domains", h.handleAutoRouteAllowedDomains},
-		{"/previews", h.handlePreviewList},
-		{"/preview", h.handlePreviewAction},
 	}
 	for _, route := range prefixRoutes {
 		if path == route.prefix || strings.HasPrefix(path, route.prefix+"/") {
@@ -313,288 +239,6 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	return nil, false
 }
 
-func (h *Handler) handleAttachmentOrphans(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
-		return
-	}
-	if h.containerSvc == nil {
-		log := zerowrap.FromCtx(ctx)
-		log.Error().Msg("container service not available for orphaned attachment listing")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
-		return
-	}
-	attachments, err := h.containerSvc.ListOrphanedAttachments(ctx)
-	if err != nil {
-		log := zerowrap.FromCtx(ctx)
-		log.Error().Err(err).Msg("failed to list orphaned attachments")
-		h.sendError(w, http.StatusInternalServerError, "failed to list orphaned attachments")
-		return
-	}
-	h.sendJSON(w, http.StatusOK, map[string]any{"attachments": attachments})
-}
-
-func (h *Handler) handleAttachmentPrune(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-	if h.containerSvc == nil {
-		log := zerowrap.FromCtx(ctx)
-		log.Error().Msg("container service not available for orphaned attachment cleanup")
-		h.sendError(w, http.StatusInternalServerError, "container service not available")
-		return
-	}
-	stop := r.URL.Query().Get("stop") == "true"
-	owner := r.URL.Query().Get("owner")
-	var report *domain.CleanupReport
-	var err error
-	report, err = h.containerSvc.CleanupOrphanedAttachments(ctx, owner, stop)
-	if err != nil {
-		log := zerowrap.FromCtx(ctx)
-		log.Error().Err(err).Str("owner", owner).Bool("stop", stop).Msg("failed to cleanup orphaned attachments")
-		h.sendError(w, http.StatusInternalServerError, "failed to cleanup orphaned attachments")
-		return
-	}
-	h.sendJSON(w, http.StatusOK, report)
-}
-
-// handleAttachmentsByImage handles GET /admin/attachments/by-image/{image} endpoint.
-// Returns all attachment targets associated with the given image name.
-func (h *Handler) handleAttachmentsByImage(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
-		return
-	}
-
-	imageName := strings.TrimPrefix(path, "/attachments/by-image/")
-	if imageName == "" || imageName == "/attachments/by-image" {
-		h.sendError(w, http.StatusBadRequest, "image name required in path")
-		return
-	}
-
-	imageName, err := url.PathUnescape(imageName)
-	if err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
-		return
-	}
-
-	targets := h.configSvc.FindAttachmentTargetsByImage(ctx, imageName)
-
-	h.sendJSON(w, http.StatusOK, dto.AttachmentTargetsByImageResponse{
-		Image:   imageName,
-		Targets: targets,
-	})
-}
-
-// handleDeployIntent handles /admin/deploy-intent/:image endpoint.
-// It registers a deploy intent, suppressing event-based deploys for the image.
-func (h *Handler) handleDeployIntent(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	if h.registrySvc == nil {
-		h.sendError(w, http.StatusServiceUnavailable, "registry service unavailable")
-		return
-	}
-
-	rawName := strings.TrimPrefix(path, "/deploy-intent/")
-	if rawName == "" || rawName == "/deploy-intent" {
-		h.sendError(w, http.StatusBadRequest, "image name required")
-		return
-	}
-
-	imageName, err := url.PathUnescape(rawName)
-	if err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
-		return
-	}
-
-	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("image", imageName).Msg("deploy intent registered, suppressing image.pushed events")
-
-	h.registrySvc.SuppressDeployEvent(imageName)
-
-	h.sendJSON(w, http.StatusOK, map[string]string{
-		"status": "ok",
-		"image":  imageName,
-	})
-}
-
-func (h *Handler) handleBootstrap(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-	var req dto.BootstrapRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid bootstrap JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	if req.Domain == "" {
-		h.sendError(w, http.StatusBadRequest, "domain is required")
-		return
-	}
-
-	if req.Image == "" {
-		h.sendError(w, http.StatusBadRequest, "image is required")
-		return
-	}
-
-	normalizedImage, err := config.NormalizeBootstrapImage(req.Image, h.configSvc.GetRegistryDomain())
-	if err != nil {
-		h.sendError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	if err := h.validateBootstrapPermissions(ctx, req); err != nil {
-		h.sendError(w, http.StatusForbidden, err.Error())
-		return
-	}
-
-	resp := dto.BootstrapResponse{
-		Domain: req.Domain,
-		Image:  normalizedImage,
-		Next:   fmt.Sprintf("push %s to trigger deployment", normalizedImage),
-	}
-	addStep := func(name, status string) {
-		resp.Steps = append(resp.Steps, dto.BootstrapStep{Name: name, Status: status})
-	}
-
-	err = h.configSvc.AddRoute(ctx, domain.Route{Domain: req.Domain, Image: normalizedImage, HTTPS: true})
-	switch {
-	case err == nil:
-		addStep("route", "configured")
-	case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
-		addStep("route", "failed")
-		h.sendError(w, http.StatusBadRequest, err.Error())
-		return
-	case errors.Is(err, domain.ErrRouteConflict):
-		addStep("route", "failed")
-		h.sendError(w, http.StatusConflict, err.Error())
-		return
-	default:
-		addStep("route", "failed")
-		log.Error().Err(err).Str("domain", req.Domain).Str("image", req.Image).Msg("failed to bootstrap route")
-		h.sendJSON(w, http.StatusInternalServerError, resp)
-		return
-	}
-
-	if err := h.bootstrapAttachments(ctx, h.configSvc, req.Domain, req.Attachments, &resp.Steps); err != nil {
-		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachments")
-		h.sendJSON(w, http.StatusInternalServerError, resp)
-		return
-	}
-
-	if err := h.bootstrapSecrets(ctx, h.secretSvc, req.Domain, req.Env, &resp.Steps); err != nil {
-		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap env")
-		h.sendJSON(w, http.StatusInternalServerError, resp)
-		return
-	}
-
-	if err := h.bootstrapAttachmentSecrets(ctx, h.secretSvc, req.Domain, req.AttachmentEnv, &resp.Steps); err != nil {
-		log.Error().Err(err).Str("domain", req.Domain).Msg("failed to bootstrap attachment env")
-		h.sendJSON(w, http.StatusInternalServerError, resp)
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) validateBootstrapPermissions(ctx context.Context, req dto.BootstrapRequest) error {
-	if (len(req.Env) > 0 || len(req.AttachmentEnv) > 0) && !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-		return errors.New("insufficient permissions for secrets:write")
-	}
-	if len(req.Attachments) > 0 && !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		return errors.New("insufficient permissions for config:write")
-	}
-
-	return nil
-}
-
-func (h *Handler) bootstrapAttachments(ctx context.Context, configSvc in.ConfigService, domainName string, attachments []string, steps *[]dto.BootstrapStep) error {
-	for _, attachment := range attachments {
-		err := configSvc.AddAttachment(ctx, domainName, attachment)
-		switch {
-		case err == nil:
-			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "created"})
-		case errors.Is(err, domain.ErrAttachmentExists):
-			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "noop"})
-		default:
-			*steps = append(*steps, dto.BootstrapStep{Name: "attachment:" + attachment, Status: "failed"})
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (h *Handler) bootstrapSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, env map[string]string, steps *[]dto.BootstrapStep) error {
-	if len(env) == 0 {
-		return nil
-	}
-
-	if err := secretSvc.Set(ctx, domainName, env); err != nil {
-		*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "failed"})
-		return err
-	}
-
-	*steps = append(*steps, dto.BootstrapStep{Name: "env", Status: "updated"})
-	return nil
-}
-
-func (h *Handler) bootstrapAttachmentSecrets(ctx context.Context, secretSvc in.SecretService, domainName string, attachmentEnv map[string]map[string]string, steps *[]dto.BootstrapStep) error {
-	for service, env := range attachmentEnv {
-		if err := secretSvc.SetAttachment(ctx, domainName, service, env); err != nil {
-			*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "failed"})
-			return err
-		}
-
-		*steps = append(*steps, dto.BootstrapStep{Name: "attachment_env:" + service, Status: "updated"})
-	}
-
-	return nil
-}
-
-// sendJSON sends a JSON response.
 func (h *Handler) sendJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -609,436 +253,6 @@ func (h *Handler) sendError(w http.ResponseWriter, status int, message string) {
 }
 
 // handleRoutes handles /admin/routes endpoints.
-func (h *Handler) handleRoutes(w http.ResponseWriter, r *http.Request, path string) {
-	// Parse domain from path if present
-	routeDomain := strings.TrimPrefix(path, "/routes/")
-	if routeDomain == "/routes" {
-		routeDomain = ""
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		h.handleRoutesGet(w, r, routeDomain)
-	case http.MethodPost:
-		h.handleRoutesPost(w, r)
-	case http.MethodPut:
-		h.handleRoutesPut(w, r, routeDomain)
-	case http.MethodDelete:
-		h.handleRoutesDelete(w, r, routeDomain)
-	default:
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (h *Handler) handleRoutesGet(w http.ResponseWriter, r *http.Request, routeDomain string) {
-	ctx := r.Context()
-
-	// Check read permission
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:read")
-		return
-	}
-
-	if routeDomain == "" {
-		if r.URL.Query().Get("detailed") == "true" {
-			if err := h.containerSvc.SyncContainers(ctx); err != nil {
-				h.log.Error().Err(err).Msg("failed to sync containers before detailed route listing")
-				h.sendError(w, http.StatusInternalServerError, "failed to list routes")
-				return
-			}
-			configured := h.configSvc.GetRoutes(ctx)
-			routes := mergeConfiguredRouteDetails(configured, h.containerSvc.ListRoutesWithDetails(ctx))
-			response := make([]routeInfoResponse, 0, len(routes))
-			for _, route := range routes {
-				response = append(response, toRouteInfoResponse(route))
-			}
-			h.sendJSON(w, http.StatusOK, dto.RoutesDetailResponse{Routes: response})
-			return
-		}
-
-		routes := h.configSvc.GetRoutes(ctx)
-		response := make([]routeResponse, 0, len(routes))
-		for _, route := range routes {
-			response = append(response, toRouteResponse(route))
-		}
-		h.sendJSON(w, http.StatusOK, dto.RoutesResponse{Routes: response})
-		return
-	}
-
-	if parentDomain, ok := strings.CutSuffix(routeDomain, "/cleanup"); ok {
-		if parentDomain == "" {
-			h.sendError(w, http.StatusBadRequest, "domain required in path")
-			return
-		}
-		h.handleRouteCleanupPreview(w, r, parentDomain)
-		return
-	}
-
-	if parentDomain, ok := strings.CutSuffix(routeDomain, "/attachments"); ok {
-		if parentDomain == "" {
-			h.sendError(w, http.StatusBadRequest, "domain required in path")
-			return
-		}
-		attachments := h.containerSvc.ListAttachments(ctx, parentDomain)
-		response := make([]attachmentResponse, 0, len(attachments))
-		for _, attachment := range attachments {
-			response = append(response, toAttachmentResponse(attachment))
-		}
-		h.sendJSON(w, http.StatusOK, dto.AttachmentsResponse{Attachments: response})
-		return
-	}
-
-	route, err := h.configSvc.GetRoute(ctx, routeDomain)
-	if err != nil {
-		h.sendError(w, http.StatusNotFound, "route not found")
-		return
-	}
-	h.sendJSON(w, http.StatusOK, toRouteResponse(*route))
-}
-
-func (h *Handler) handleRouteCleanupPreview(w http.ResponseWriter, r *http.Request, routeDomain string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
-		return
-	}
-	if !HasAccess(ctx, domain.AdminResourceVolumes, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for volumes:read")
-		return
-	}
-
-	previewer, ok := any(h.containerSvc).(interface {
-		PreviewRemovedRouteCleanup(context.Context, string) (*domain.CleanupReport, error)
-	})
-	if !ok {
-		log.Error().Str("domain", routeDomain).Msg("route cleanup preview unavailable")
-		h.sendError(w, http.StatusInternalServerError, "route cleanup preview unavailable")
-		return
-	}
-
-	report, err := previewer.PreviewRemovedRouteCleanup(ctx, routeDomain)
-	if err != nil {
-		switch {
-		case errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteDomainEmpty):
-			h.sendError(w, http.StatusBadRequest, "invalid route domain")
-		default:
-			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to inspect route cleanup state")
-			h.sendError(w, http.StatusInternalServerError, "failed to inspect route cleanup state")
-		}
-		return
-	}
-
-	if h.volumeSvc == nil {
-		log.Error().Str("domain", routeDomain).Msg("volume service not available for route cleanup preview")
-		h.sendError(w, http.StatusServiceUnavailable, "volume service not available")
-		return
-	}
-
-	volumes, err := h.volumeSvc.ListVolumes(ctx)
-	if err != nil {
-		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to list volumes for route cleanup preview")
-		h.sendError(w, http.StatusInternalServerError, "failed to inspect route cleanup state")
-		return
-	}
-	report.PreservedVolumes = append(
-		report.PreservedVolumes,
-		matchingRouteCleanupVolumes(routeDomain, h.routeCleanupVolumePrefix(), volumes, report.PreservedAttachments)...,
-	)
-
-	h.sendJSON(w, http.StatusOK, dto.CleanupReportFromDomain(report))
-}
-
-func (h *Handler) routeCleanupVolumePrefix() string {
-	const defaultPrefix = "gordon"
-	if h.configSvc == nil {
-		return defaultPrefix
-	}
-	if volumeCfg, ok := any(h.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
-		_, prefix, _ := volumeCfg.GetVolumeConfig()
-		if prefix != "" {
-			return prefix
-		}
-	}
-	return defaultPrefix
-}
-
-type routeCleanupVolumeScope struct {
-	containerNames map[string]struct{}
-	volumePrefixes []string
-}
-
-func newRouteCleanupVolumeScope(routeDomain, volumePrefix string, attachments []domain.CleanupAttachment) routeCleanupVolumeScope {
-	if volumePrefix == "" {
-		volumePrefix = "gordon"
-	}
-	scope := routeCleanupVolumeScope{
-		containerNames: make(map[string]struct{}),
-		volumePrefixes: []string{volumePrefix + "-" + strings.ReplaceAll(routeDomain, ".", "-") + "-"},
-	}
-	for _, name := range []string{
-		fmt.Sprintf("gordon-%s", routeDomain),
-		fmt.Sprintf("gordon-%s-new", routeDomain),
-		fmt.Sprintf("gordon-%s-next", routeDomain),
-	} {
-		scope.containerNames[name] = struct{}{}
-	}
-	for _, attachment := range attachments {
-		if attachment.Name == "" {
-			continue
-		}
-		scope.containerNames[attachment.Name] = struct{}{}
-		scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+attachment.Name+"-")
-		for _, name := range routeAttachmentContainerNamesForCleanup(routeDomain, attachment.Name) {
-			scope.containerNames[name] = struct{}{}
-			scope.volumePrefixes = append(scope.volumePrefixes, volumePrefix+"-"+name+"-")
-		}
-	}
-	return scope
-}
-
-func routeAttachmentContainerNamesForCleanup(routeDomain, serviceName string) []string {
-	if serviceName == "" {
-		return nil
-	}
-	return []string{
-		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainer(routeDomain), serviceName),
-		fmt.Sprintf("gordon-%s-%s", domain.SanitizeDomainForContainerLegacy(routeDomain), serviceName),
-	}
-}
-
-func matchingRouteCleanupVolumes(routeDomain, volumePrefix string, volumes []*domain.VolumeInfo, attachments []domain.CleanupAttachment) []domain.CleanupVolume {
-	scope := newRouteCleanupVolumeScope(routeDomain, volumePrefix, attachments)
-	matched := make([]domain.CleanupVolume, 0)
-	for _, volume := range volumes {
-		if volume == nil || !scope.matches(volume) {
-			continue
-		}
-		matched = append(matched, domain.CleanupVolume{
-			Name:          volume.Name,
-			ContainerPath: "",
-			Reason:        "volume preserved for explicit cleanup review",
-		})
-	}
-	return matched
-}
-
-func (s routeCleanupVolumeScope) matches(volume *domain.VolumeInfo) bool {
-	if volume == nil {
-		return false
-	}
-	for _, containerName := range volume.Containers {
-		if _, ok := s.containerNames[containerName]; ok {
-			return true
-		}
-	}
-	for _, prefix := range s.volumePrefixes {
-		if strings.HasPrefix(volume.Name, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *Handler) handleRoutesPost(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
-		return
-	}
-
-	// Limit request body size
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-	var req struct {
-		Domain string `json:"domain"`
-		Image  string `json:"image"`
-		HTTPS  *bool  `json:"https"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid route JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	route := domain.Route{Domain: req.Domain, Image: req.Image, HTTPS: true}
-	if req.HTTPS != nil {
-		route.HTTPS = *req.HTTPS
-	}
-
-	if err := h.configSvc.AddRoute(ctx, route); err != nil {
-		log.Error().Err(err).Str("domain", route.Domain).Msg("failed to add route")
-		switch {
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, domain.ErrRouteConflict):
-			h.sendError(w, http.StatusConflict, err.Error())
-		default:
-			h.sendError(w, http.StatusInternalServerError, "failed to add route")
-		}
-		return
-	}
-
-	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route added")
-	h.sendJSON(w, http.StatusCreated, toRouteResponse(route))
-}
-
-func (h *Handler) handleRoutesPut(w http.ResponseWriter, r *http.Request, routeDomain string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
-		return
-	}
-
-	if routeDomain == "" {
-		h.sendError(w, http.StatusBadRequest, "domain required in path")
-		return
-	}
-
-	// Limit request body size
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-	var req struct {
-		Image string `json:"image"`
-		HTTPS *bool  `json:"https"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid route JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	storedRoute, err := h.configSvc.GetRoute(ctx, routeDomain)
-	if err != nil {
-		if errors.Is(err, domain.ErrRouteNotFound) {
-			h.sendError(w, http.StatusNotFound, "route not found")
-			return
-		}
-		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to load route")
-		h.sendError(w, http.StatusInternalServerError, "failed to update route")
-		return
-	}
-	if storedRoute == nil {
-		h.sendError(w, http.StatusNotFound, "route not found")
-		return
-	}
-
-	route := *storedRoute
-	route.Domain = routeDomain
-	route.Image = req.Image
-	if req.HTTPS != nil {
-		route.HTTPS = *req.HTTPS
-	}
-
-	if err := h.configSvc.UpdateRoute(ctx, route); err != nil {
-		log.Error().Err(err).Str("domain", routeDomain).Msg("failed to update route")
-		switch {
-		case errors.Is(err, domain.ErrRouteNotFound):
-			h.sendError(w, http.StatusNotFound, "route not found")
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid), errors.Is(err, domain.ErrRouteImageEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		default:
-			h.sendError(w, http.StatusInternalServerError, "failed to update route")
-		}
-		return
-	}
-
-	log.Info().Str("domain", route.Domain).Str("image", route.Image).Msg("route updated")
-	h.sendJSON(w, http.StatusOK, toRouteResponse(route))
-}
-
-func (h *Handler) handleRoutesDelete(w http.ResponseWriter, r *http.Request, routeDomain string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:write")
-		return
-	}
-
-	if routeDomain == "" {
-		h.sendError(w, http.StatusBadRequest, "domain required in path")
-		return
-	}
-
-	if err := h.configSvc.RemoveRoute(ctx, routeDomain); err != nil {
-		switch {
-		case errors.Is(err, domain.ErrRouteNotFound):
-			log.Debug().Str("domain", routeDomain).Msg("route already absent, reconciling runtime state")
-		case errors.Is(err, domain.ErrRouteDomainEmpty), errors.Is(err, domain.ErrRouteDomainInvalid):
-			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-			h.sendError(w, http.StatusBadRequest, "invalid route domain")
-			return
-		default:
-			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to remove route")
-			h.sendError(w, http.StatusInternalServerError, "failed to remove route")
-			return
-		}
-	}
-
-	var cleanup *dto.CleanupReport
-	if h.containerSvc != nil {
-		report, err := h.containerSvc.ReconcileRemovedRoute(ctx, routeDomain)
-		if err != nil {
-			log.Error().Err(err).Str("domain", routeDomain).Msg("failed to cleanup removed route runtime state")
-			h.sendError(w, http.StatusInternalServerError, "route removed but runtime cleanup failed")
-			return
-		}
-		cleanup = dto.CleanupReportFromDomain(report)
-	}
-
-	log.Info().Str("domain", routeDomain).Msg("route removed")
-	h.sendJSON(w, http.StatusOK, dto.RouteDeleteResponse{Status: "removed", Cleanup: cleanup})
-}
-
-// handleRoutesByImage handles GET /admin/routes/by-image/{image} endpoint.
-// Returns all routes associated with the given image name.
-func (h *Handler) handleRoutesByImage(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-
-	if !HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for routes:read")
-		return
-	}
-
-	rawImageName := strings.TrimPrefix(path, "/routes/by-image/")
-	if rawImageName == "" || rawImageName == "/routes/by-image" {
-		h.sendError(w, http.StatusBadRequest, "image name required in path")
-		return
-	}
-
-	imageName, err := url.PathUnescape(rawImageName)
-	if err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid image name encoding")
-		return
-	}
-
-	routes := h.configSvc.FindRoutesByImage(ctx, imageName)
-
-	response := make([]routeResponse, 0, len(routes))
-	for _, route := range routes {
-		response = append(response, toRouteResponse(route))
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.RoutesByImageResponse{
-		Image:  imageName,
-		Routes: response,
-	})
-}
-
 func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1083,34 +297,6 @@ func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path str
 	}
 
 	secretDomain := parts[0]
-
-	// Check for attachment sub-path: /secrets/{domain}/attachments/{service}[/{key}]
-	if len(parts) >= 2 && parts[1] == "attachments" {
-		switch r.Method {
-		case http.MethodPost:
-			// Expected path: /secrets/{domain}/attachments/{service}
-			if len(parts) != 3 {
-				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}")
-				return
-			}
-			service := parts[2]
-			h.handleAttachmentSecrets(w, r, secretDomain, service, "")
-			return
-		case http.MethodDelete:
-			// Expected path: /secrets/{domain}/attachments/{service}/{key}
-			if len(parts) != 4 {
-				h.sendError(w, http.StatusBadRequest, "invalid attachment path: expected /secrets/{domain}/attachments/{service}/{key}")
-				return
-			}
-			service := parts[2]
-			attachmentKey := parts[3]
-			h.handleAttachmentSecrets(w, r, secretDomain, service, attachmentKey)
-			return
-		default:
-			h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-	}
 
 	secretKey := ""
 	if len(parts) > 1 {
@@ -1193,83 +379,18 @@ func (h *Handler) handleSecretsGet(w http.ResponseWriter, r *http.Request, secre
 		return
 	}
 
-	// List secrets for domain (names only, not values) including attachments
-	keys, attachments, err := h.secretSvc.ListKeysWithAttachments(ctx, secretDomain)
+	// List secrets for domain (names only, not values).
+	keys, err := h.secretSvc.ListKeys(ctx, secretDomain)
 	if err != nil {
 		log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
 		h.sendError(w, http.StatusBadRequest, "invalid domain")
 		return
 	}
 
-	// Convert attachments to DTO format
-	var attachmentDTOs []dto.AttachmentSecretsResponse
-	for _, att := range attachments {
-		attachmentDTOs = append(attachmentDTOs, dto.AttachmentSecretsResponse{
-			Service: att.Service,
-			Keys:    att.Keys,
-		})
-	}
-
 	h.sendJSON(w, http.StatusOK, dto.SecretsListResponse{
-		Domain:      secretDomain,
-		Keys:        keys,
-		Attachments: attachmentDTOs,
+		Domain: secretDomain,
+		Keys:   keys,
 	})
-}
-
-// handleAttachmentSecrets handles /admin/secrets/{domain}/attachments/{service}[/{key}] endpoints.
-func (h *Handler) handleAttachmentSecrets(w http.ResponseWriter, r *http.Request, secretDomain, service, key string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	switch r.Method {
-	case http.MethodPost:
-		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-		var data map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-			log.Warn().Err(err).Msg("invalid attachment secrets JSON")
-			h.sendError(w, http.StatusBadRequest, "invalid JSON")
-			return
-		}
-
-		if err := h.secretSvc.SetAttachment(ctx, secretDomain, service, data); err != nil {
-			log.Error().Err(err).Str("domain", secretDomain).Str("service", service).Msg("failed to set attachment secrets")
-			h.sendError(w, http.StatusBadRequest, "invalid domain or service")
-			return
-		}
-
-		log.Info().Str("domain", secretDomain).Str("service", service).Int("count", len(data)).Msg("attachment secrets set")
-		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
-
-	case http.MethodDelete:
-		if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-			h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-			return
-		}
-
-		if key == "" {
-			h.sendError(w, http.StatusBadRequest, "key required in path")
-			return
-		}
-
-		if err := h.secretSvc.DeleteAttachment(ctx, secretDomain, service, key); err != nil {
-			log.Error().Err(err).Str("domain", secretDomain).Str("service", service).Str("key", key).Msg("failed to delete attachment secret")
-			h.sendError(w, http.StatusBadRequest, "invalid domain or service")
-			return
-		}
-
-		log.Info().Str("domain", secretDomain).Str("service", service).Str("key", key).Msg("attachment secret deleted")
-		h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
-
-	default:
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
 }
 
 // handleHealth handles /admin/health endpoint.
@@ -1308,6 +429,9 @@ func (h *Handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleStatus handles /admin/status endpoint.
+// Reports installation identity plus the app fleet summary from
+// desired/active state (no container inspection). Per-service detail
+// lives under `apps show APP`.
 func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -1322,30 +446,40 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routes := h.configSvc.GetRoutes(ctx)
-
-	// Get container statuses
+	// App fleet summary from desired/active state.
 	statuses := make(map[string]string)
-	for _, route := range routes {
-		status := "unknown"
-		container, ok := h.containerSvc.Get(ctx, route.Domain)
-		if ok && container != nil {
-			status = container.Status
+	if h.appSvc != nil {
+		if apps, err := h.appSvc.List(ctx); err == nil {
+			for _, app := range apps {
+				statuses[app.App] = appStatusLabel(app)
+			}
 		}
-		statuses[route.Domain] = status
 	}
 
 	status := dto.StatusResponse{
-		Routes:            len(routes),
+		Apps:              len(statuses),
 		RegistryDomain:    h.configSvc.GetRegistryDomain(),
 		RegistryPort:      h.configSvc.GetRegistryPort(),
 		ServerPort:        h.configSvc.GetServerPort(),
-		AutoRoute:         h.configSvc.IsAutoRouteEnabled(),
 		NetworkIsolation:  h.configSvc.IsNetworkIsolationEnabled(),
 		ContainerStatuses: statuses,
 	}
 
 	h.sendJSON(w, http.StatusOK, status)
+}
+
+// appStatusLabel renders one app's fleet status from its summary.
+func appStatusLabel(app in.AppSummary) string {
+	if app.Stopped {
+		return "stopped"
+	}
+	if app.Active == "" {
+		return "pending"
+	}
+	if app.Converged {
+		return "active"
+	}
+	return "deploying"
 }
 
 // handleBackups handles /admin/backups endpoints.
@@ -1637,12 +771,6 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	routes := h.configSvc.GetRoutes(ctx)
-	routeResponses := make([]dto.Route, 0, len(routes))
-	for _, route := range routes {
-		routeResponses = append(routeResponses, toRouteResponse(route))
-	}
-
 	externalRoutes := h.configSvc.GetExternalRoutes()
 	externalResponses := make([]dto.ExternalRoute, 0, len(externalRoutes))
 	for domain := range externalRoutes {
@@ -1657,14 +785,10 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 			RegistryPort:   h.configSvc.GetRegistryPort(),
 			RegistryDomain: h.configSvc.GetRegistryDomain(),
 		},
-		AutoRoute: dto.AutoRouteConfig{
-			Enabled: h.configSvc.IsAutoRouteEnabled(),
-		},
 		NetworkIsolation: dto.NetworkIsolationConfig{
 			Enabled: h.configSvc.IsNetworkIsolationEnabled(),
 			Prefix:  h.configSvc.GetNetworkPrefix(),
 		},
-		Routes:         routeResponses,
 		ExternalRoutes: externalResponses,
 	}
 	if volumeCfg, ok := any(h.configSvc).(interface{ GetVolumeConfig() (bool, string, bool) }); ok {
@@ -1676,126 +800,6 @@ func (h *Handler) handleConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleDeploy handles /admin/deploy/:domain endpoint.
 // POST triggers a deployment for the specified domain.
-func (h *Handler) handleDeploy(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	// Parse domain from path
-	deployDomain := strings.TrimPrefix(path, "/deploy/")
-	if deployDomain == "" || deployDomain == "/deploy" {
-		h.sendError(w, http.StatusBadRequest, "domain required in path")
-		return
-	}
-	if err := validation.ValidateDomainParam(deployDomain); err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid domain")
-		return
-	}
-
-	// Get the route for this domain
-	route, err := h.configSvc.GetRoute(ctx, deployDomain)
-	if err != nil {
-		h.sendError(w, http.StatusNotFound, "route not found")
-		return
-	}
-
-	// Deploy is an internal server-side action: pull from local registry path.
-	container, err := h.containerSvc.Deploy(domain.WithInternalDeploy(ctx), *route)
-	if err != nil {
-		log.Error().Err(err).Str("domain", deployDomain).Msg("failed to deploy container")
-		if deployErr, ok := errors.AsType[*domain.DeployFailureError](err); ok {
-			response := dto.DeployErrorResponse{
-				Error: deployErr.Error(),
-				Cause: deployErr.Cause,
-				Hint:  deployErr.Hint,
-			}
-			if HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead) {
-				response.Logs = domain.RedactSecretLines(deployErr.Logs)
-			}
-			h.sendJSON(w, http.StatusInternalServerError, response)
-			return
-		}
-		h.sendError(w, http.StatusInternalServerError, "failed to deploy container")
-		return
-	}
-
-	// Clear deploy event suppression now that the explicit deploy has completed.
-	// This re-enables event-based deploys for future direct docker pushes.
-	if route.Image != "" && h.registrySvc != nil {
-		// Use the registry package's image name normaliser so digest-form refs
-		// and multi-segment paths are handled correctly.
-		imageName := registry.ExtractImageName(route.Image)
-		h.registrySvc.ClearDeployEventSuppression(imageName)
-	}
-
-	log.Info().Str("domain", deployDomain).Str("container_id", container.ID).Msg("container deployed via admin API")
-	h.sendJSON(w, http.StatusOK, dto.DeployResponse{
-		Status:      "deployed",
-		ContainerID: container.ID,
-		Domain:      deployDomain,
-	})
-}
-
-// handleRestart handles /admin/restart/:domain endpoint.
-func (h *Handler) handleRestart(w http.ResponseWriter, r *http.Request, path string) {
-	if r.Method != http.MethodPost {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	restartDomain := strings.TrimPrefix(path, "/restart/")
-	if restartDomain == "" || restartDomain == "/restart" {
-		h.sendError(w, http.StatusBadRequest, "domain required in path")
-		return
-	}
-	if err := validation.ValidateDomainParam(restartDomain); err != nil {
-		h.sendError(w, http.StatusBadRequest, "invalid domain")
-		return
-	}
-
-	withAttachments := r.URL.Query().Get("attachments") == "true"
-
-	// Use a detached context so the restart completes even if the HTTP client
-	// disconnects. Podman restart can take 30+ seconds (SIGTERM + wait + start).
-	restartCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
-	defer cancel()
-
-	if err := h.containerSvc.Restart(restartCtx, restartDomain, withAttachments); err != nil {
-		log.Error().Err(err).Str("domain", restartDomain).Msg("failed to restart container")
-		if errors.Is(err, domain.ErrContainerNotFound) {
-			h.sendError(w, http.StatusNotFound, "container not found")
-			return
-		}
-		h.sendError(w, http.StatusInternalServerError, "failed to restart container")
-		return
-	}
-
-	log.Info().Str("domain", restartDomain).Bool("with_attachments", withAttachments).Msg("container restarted via admin API")
-	h.sendJSON(w, http.StatusOK, dto.RestartResponse{
-		Status: "restarted",
-		Domain: restartDomain,
-	})
-}
-
-// handleTags handles /admin/tags/:repository endpoint.
 func (h *Handler) handleTags(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -2047,233 +1051,7 @@ func (h *Handler) streamContainerLogs(w http.ResponseWriter, r *http.Request, lo
 	}
 }
 
-// handleAttachmentsConfig handles /admin/attachments endpoints for config-level attachments.
-func (h *Handler) handleAttachmentsConfig(w http.ResponseWriter, r *http.Request, path string) {
-	// Parse target (domain or group) from path
-	target := strings.TrimPrefix(path, "/attachments/")
-	if target == "/attachments" {
-		target = ""
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		h.handleAttachmentsConfigGet(w, r, target)
-	case http.MethodPost:
-		h.handleAttachmentsConfigPost(w, r, target)
-	case http.MethodDelete:
-		h.handleAttachmentsConfigDelete(w, r, target)
-	default:
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (h *Handler) handleAttachmentsConfigGet(w http.ResponseWriter, r *http.Request, target string) {
-	ctx := r.Context()
-
-	// Check read permission
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
-		return
-	}
-
-	if target == "" {
-		// List all attachments
-		attachments := h.configSvc.GetAllAttachments(ctx)
-		h.sendJSON(w, http.StatusOK, dto.AttachmentsConfigResponse{Attachments: attachments})
-		return
-	}
-
-	// List attachments for specific target
-	images, err := h.configSvc.GetAttachmentsFor(ctx, target)
-	if err != nil {
-		if errors.Is(err, domain.ErrAttachmentNotFound) {
-			h.sendError(w, http.StatusNotFound, "no attachments found for target")
-			return
-		}
-		h.sendError(w, http.StatusInternalServerError, "failed to get attachments")
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.AttachmentConfigResponse{Target: target, Images: images})
-}
-
-func (h *Handler) handleAttachmentsConfigPost(w http.ResponseWriter, r *http.Request, target string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	if target == "" {
-		h.sendError(w, http.StatusBadRequest, "target (domain or group) required in path")
-		return
-	}
-
-	// Limit request body size
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-	var req dto.AttachmentAddRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid attachment JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	if err := h.configSvc.AddAttachment(ctx, target, req.Image); err != nil {
-		log.Error().Err(err).Str("target", target).Str("image", req.Image).Msg("failed to add attachment")
-		switch {
-		case errors.Is(err, domain.ErrAttachmentExists):
-			h.sendError(w, http.StatusConflict, "attachment already exists")
-		case errors.Is(err, domain.ErrAttachmentImageEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, domain.ErrAttachmentTargetEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		default:
-			h.sendError(w, http.StatusInternalServerError, "failed to add attachment")
-		}
-		return
-	}
-
-	log.Info().Str("target", target).Str("image", req.Image).Msg("attachment added")
-	h.sendJSON(w, http.StatusCreated, dto.AttachmentStatusResponse{Status: "added"})
-}
-
-func (h *Handler) handleAttachmentsConfigDelete(w http.ResponseWriter, r *http.Request, target string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check write permission
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	if target == "" {
-		h.sendError(w, http.StatusBadRequest, "target (domain or group) required in path")
-		return
-	}
-
-	// Parse image from path: /attachments/{target}/{image}
-	// target at this point contains "{domain}/{image}" or just "{domain}"
-	parts := strings.SplitN(target, "/", 2)
-	if len(parts) != 2 {
-		h.sendError(w, http.StatusBadRequest, "image required in path: /attachments/{target}/{image}")
-		return
-	}
-
-	domainOrGroup := parts[0]
-	image := parts[1]
-
-	if err := h.configSvc.RemoveAttachment(ctx, domainOrGroup, image); err != nil {
-		log.Error().Err(err).Str("target", domainOrGroup).Str("image", image).Msg("failed to remove attachment")
-		switch {
-		case errors.Is(err, domain.ErrAttachmentNotFound):
-			h.sendError(w, http.StatusNotFound, "attachment not found")
-		case errors.Is(err, domain.ErrAttachmentImageEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		case errors.Is(err, domain.ErrAttachmentTargetEmpty):
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		default:
-			h.sendError(w, http.StatusInternalServerError, "failed to remove attachment")
-		}
-		return
-	}
-
-	log.Info().Str("target", domainOrGroup).Str("image", image).Msg("attachment removed")
-	h.sendJSON(w, http.StatusOK, dto.AttachmentStatusResponse{Status: "removed"})
-}
-
-func (h *Handler) handleAutoRouteAllowedDomains(w http.ResponseWriter, r *http.Request, path string) {
-	switch r.Method {
-	case http.MethodGet:
-		h.handleAutoRouteAllowedDomainsGet(w, r)
-	case http.MethodPost:
-		h.handleAutoRouteAllowedDomainsPost(w, r)
-	case http.MethodDelete:
-		h.handleAutoRouteAllowedDomainsDelete(w, r, path)
-	default:
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-func (h *Handler) handleAutoRouteAllowedDomainsGet(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:read")
-		return
-	}
-
-	domains, err := h.configSvc.GetAutoRouteAllowedDomains(ctx)
-	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, "failed to get auto-route allowed domains")
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.AutoRouteAllowedDomainsResponse{Domains: domains})
-}
-
-func (h *Handler) handleAutoRouteAllowedDomainsPost(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-	var req dto.AutoRouteAllowedDomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Warn().Err(err).Msg("invalid auto-route allowlist JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	if err := h.configSvc.AddAutoRouteAllowedDomain(ctx, req.Pattern); err != nil {
-		if errors.Is(err, domain.ErrInvalidDomainPattern) {
-			h.sendError(w, http.StatusBadRequest, err.Error())
-		} else {
-			log.Error().Err(err).Str("pattern", req.Pattern).Msg("failed to add auto-route allowed domain")
-			h.sendError(w, http.StatusInternalServerError, "failed to add auto-route allowed domain")
-		}
-		return
-	}
-
-	h.sendJSON(w, http.StatusCreated, dto.AutoRouteStatusResponse{Status: "added"})
-}
-
-func (h *Handler) handleAutoRouteAllowedDomainsDelete(w http.ResponseWriter, r *http.Request, path string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
-		return
-	}
-
-	raw := strings.TrimPrefix(path, "/autoroute/allowed-domains/")
-	if raw == path || raw == "" || raw == "/" {
-		h.sendError(w, http.StatusBadRequest, "missing domain pattern")
-		return
-	}
-	pattern, err := url.PathUnescape(raw)
-	if err != nil || strings.TrimSpace(pattern) == "" {
-		h.sendError(w, http.StatusBadRequest, "invalid domain pattern")
-		return
-	}
-
-	if err := h.configSvc.RemoveAutoRouteAllowedDomain(ctx, pattern); err != nil {
-		log.Error().Err(err).Str("pattern", pattern).Msg("failed to remove auto-route allowed domain")
-		h.sendError(w, http.StatusInternalServerError, "failed to remove auto-route allowed domain")
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.AutoRouteStatusResponse{Status: "removed"})
-}
-
-// handleAuthVerify handles /admin/auth/verify endpoint.
-// Validates authentication session and returns token status.
+// handleAuthVerify handles /admin/auth/verify.
 func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

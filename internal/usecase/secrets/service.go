@@ -19,8 +19,6 @@ var (
 	ErrDomainTooLong       = errors.New("domain exceeds maximum length of 253 characters")
 	ErrDomainPathTraversal = errors.New("domain contains path traversal sequence")
 	ErrDomainInvalidChars  = errors.New("domain contains invalid characters")
-	ErrServiceEmpty        = errors.New("service name cannot be empty")
-	ErrInvalidServiceName  = errors.New("invalid service name: must start with a letter, contain only lowercase letters, numbers, and hyphens, be at most 63 characters, and not end with a hyphen")
 )
 
 // Service implements the SecretService interface.
@@ -89,43 +87,6 @@ func (s *Service) ListKeys(ctx context.Context, domain string) ([]string, error)
 
 	log.Debug().Int("count", len(keys)).Msg("listed secret keys")
 	return keys, nil
-}
-
-// ListKeysWithAttachments returns the list of secret keys for a domain
-// along with any attachment secrets for containers associated with the domain.
-func (s *Service) ListKeysWithAttachments(ctx context.Context, domain string) ([]string, []out.AttachmentSecrets, error) {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "ListKeysWithAttachments",
-		"domain":              domain,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if err := ValidateDomain(domain); err != nil {
-		log.Warn().Err(err).Msg("domain validation failed")
-		return nil, nil, err
-	}
-
-	// Get domain secrets
-	keys, err := s.store.ListKeys(domain)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to list secret keys")
-		return nil, nil, err
-	}
-
-	// Get attachment secrets
-	attachments, err := s.store.ListAttachmentKeys(domain)
-	if err != nil {
-		log.Warn().Err(err).Msg("failed to list attachment secrets, continuing without them")
-		attachments = nil // Don't fail, just return empty attachments
-	}
-
-	log.Debug().
-		Int("domain_keys", len(keys)).
-		Int("attachments", len(attachments)).
-		Msg("listed secret keys with attachments")
-
-	return keys, attachments, nil
 }
 
 // GetAll returns all secrets for a domain as a key-value map.
@@ -201,118 +162,6 @@ func (s *Service) Delete(ctx context.Context, domain, key string) error {
 
 	log.Info().Msg("secret deleted")
 	return nil
-}
-
-// SetAttachment sets or updates multiple secrets for an attachment container.
-func (s *Service) SetAttachment(ctx context.Context, domainName, service string, secrets map[string]string) error {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "SetAttachment",
-		"domain":              domainName,
-		"service":             service,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if err := ValidateDomain(domainName); err != nil {
-		log.Warn().Err(err).Msg("domain validation failed")
-		return err
-	}
-
-	if err := validateServiceName(service); err != nil {
-		log.Warn().Err(err).Msg("service name validation failed")
-		return err
-	}
-
-	containerName := resolveContainerName(domainName, service)
-
-	if err := s.store.SetAttachment(containerName, secrets); err != nil {
-		log.Error().Err(err).Msg("failed to set attachment secrets")
-		return err
-	}
-
-	s.publishSecretsChanged(ctx, domainName, "set", sortedKeys(secrets))
-
-	log.Info().Int("count", len(secrets)).Str("container", containerName).Msg("attachment secrets set")
-	return nil
-}
-
-// DeleteAttachment removes a specific secret key from an attachment container.
-func (s *Service) DeleteAttachment(ctx context.Context, domainName, service, key string) error {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "DeleteAttachment",
-		"domain":              domainName,
-		"service":             service,
-		"key":                 key,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if err := ValidateDomain(domainName); err != nil {
-		log.Warn().Err(err).Msg("domain validation failed")
-		return err
-	}
-
-	if err := validateServiceName(service); err != nil {
-		log.Warn().Err(err).Msg("service name validation failed")
-		return err
-	}
-
-	containerName := resolveContainerName(domainName, service)
-
-	if err := s.store.DeleteAttachment(containerName, key); err != nil {
-		log.Error().Err(err).Msg("failed to delete attachment secret")
-		return err
-	}
-
-	s.publishSecretsChanged(ctx, domainName, "delete", []string{key})
-
-	log.Info().Str("container", containerName).Msg("attachment secret deleted")
-	return nil
-}
-
-// validateServiceName checks that a service name is safe and follows Docker-style conventions.
-func validateServiceName(service string) error {
-	if service == "" {
-		return ErrServiceEmpty
-	}
-	// DNS labels are limited to 63 characters (RFC 1035)
-	if len(service) > 63 {
-		return ErrInvalidServiceName
-	}
-	// Docker-style: lowercase letter start, then lowercase alphanumeric + hyphens
-	for i, c := range service {
-		if i == 0 {
-			if c < 'a' || c > 'z' {
-				return ErrInvalidServiceName
-			}
-			continue
-		}
-		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-			return ErrInvalidServiceName
-		}
-	}
-	// Trailing hyphen is not allowed in DNS labels
-	if service[len(service)-1] == '-' {
-		return ErrInvalidServiceName
-	}
-	return nil
-}
-
-// resolveContainerName builds the container name from a domain and service.
-// Ensures the total name does not exceed Docker's 255-character limit.
-func resolveContainerName(domainName, service string) string {
-	sanitized := domain.SanitizeDomainForContainer(domainName)
-	name := "gordon-" + sanitized + "-" + service
-
-	// Docker container names are limited to 255 characters
-	if len(name) > 255 {
-		// Truncate the domain part to fit, keeping room for "gordon-", "-", and service name
-		maxDomainLen := 255 - 7 - 1 - len(service) // 7 for "gordon-", 1 for "-"
-		if maxDomainLen > 0 {
-			name = "gordon-" + sanitized[:maxDomainLen] + "-" + service
-		}
-	}
-	return name
 }
 
 // ValidateDomain validates that a domain is safe to use for secret storage.

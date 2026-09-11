@@ -28,6 +28,7 @@ type Kernel struct {
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
+	appSvc          in.AppService
 	cleanup         func()
 }
 
@@ -90,6 +91,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			logSvc:          svc.logSvc,
 			volumeSvc:       svc.volumeSvc,
 			publicTLSSvc:    svc.publicTLSSvc,
+			appSvc:          svc.appSvc,
 			cleanup:         wrappedCleanup,
 		}, nil
 	} else {
@@ -149,5 +151,7 @@ func (k *Kernel) Logs() in.LogService { return k.logSvc }
 func (k *Kernel) Volumes() in.VolumeService { return k.volumeSvc }
 
 func (k *Kernel) PublicTLS() in.PublicTLSService { return k.publicTLSSvc }
+
+func (k *Kernel) Apps() in.AppService { return k.appSvc }
 
 func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }

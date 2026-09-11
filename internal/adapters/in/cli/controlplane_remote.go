@@ -17,48 +17,7 @@ func NewRemoteControlPlane(client *remote.Client) ControlPlane {
 	return &remoteControlPlane{client: client}
 }
 
-func (r *remoteControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {
-	return r.client.ListRoutesWithDetails(ctx)
-}
-
-func (r *remoteControlPlane) GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error) {
-	return r.client.GetHealth(ctx)
-}
-
-func (r *remoteControlPlane) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	return r.client.GetRoute(ctx, routeDomain)
-}
-
-func (r *remoteControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
-	return r.client.FindRoutesByImage(ctx, imageName)
-}
-
-func (r *remoteControlPlane) AddRoute(ctx context.Context, route domain.Route) error {
-	return r.client.AddRoute(ctx, route)
-}
-
-func (r *remoteControlPlane) UpdateRoute(ctx context.Context, route domain.Route) error {
-	return r.client.UpdateRoute(ctx, route)
-}
-
-func (r *remoteControlPlane) RemoveRoute(ctx context.Context, routeDomain string) error {
-	_, err := r.RemoveRouteWithCleanup(ctx, routeDomain)
-	return err
-}
-
-func (r *remoteControlPlane) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
-	return r.client.RemoveRouteWithCleanup(ctx, routeDomain)
-}
-
-func (r *remoteControlPlane) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
-	return r.client.GetRouteCleanupPreview(ctx, routeDomain)
-}
-
-func (r *remoteControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	return r.client.Bootstrap(ctx, req)
-}
-
-func (r *remoteControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
+func (r *remoteControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
 	return r.client.ListSecretsWithAttachments(ctx, secretDomain)
 }
 
@@ -68,54 +27,6 @@ func (r *remoteControlPlane) SetSecrets(ctx context.Context, secretDomain string
 
 func (r *remoteControlPlane) DeleteSecret(ctx context.Context, secretDomain, key string) error {
 	return r.client.DeleteSecret(ctx, secretDomain, key)
-}
-
-func (r *remoteControlPlane) SetAttachmentSecrets(ctx context.Context, domainName, service string, secrets map[string]string) error {
-	return r.client.SetAttachmentSecrets(ctx, domainName, service, secrets)
-}
-
-func (r *remoteControlPlane) DeleteAttachmentSecret(ctx context.Context, domainName, service, key string) error {
-	return r.client.DeleteAttachmentSecret(ctx, domainName, service, key)
-}
-
-func (r *remoteControlPlane) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
-	return r.client.ListOrphanedAttachments(ctx)
-}
-
-func (r *remoteControlPlane) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
-	return r.client.CleanupOrphanedAttachments(ctx, owner, stop)
-}
-
-func (r *remoteControlPlane) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {
-	return r.client.GetAllAttachmentsConfig(ctx)
-}
-
-func (r *remoteControlPlane) GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error) {
-	return r.client.GetAttachmentsConfig(ctx, domainOrGroup)
-}
-
-func (r *remoteControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
-	return r.client.FindAttachmentTargetsByImage(ctx, imageName)
-}
-
-func (r *remoteControlPlane) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
-	return r.client.AddAttachment(ctx, domainOrGroup, image)
-}
-
-func (r *remoteControlPlane) RemoveAttachment(ctx context.Context, domainOrGroup, image string) error {
-	return r.client.RemoveAttachment(ctx, domainOrGroup, image)
-}
-
-func (r *remoteControlPlane) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
-	return r.client.GetAutoRouteAllowedDomains(ctx)
-}
-
-func (r *remoteControlPlane) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	return r.client.AddAutoRouteAllowedDomain(ctx, pattern)
-}
-
-func (r *remoteControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	return r.client.RemoveAutoRouteAllowedDomain(ctx, pattern)
 }
 
 func (r *remoteControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
@@ -140,18 +51,6 @@ func (r *remoteControlPlane) ListNetworks(ctx context.Context) ([]*domain.Networ
 
 func (r *remoteControlPlane) GetConfig(ctx context.Context) (*remote.Config, error) {
 	return r.client.GetConfig(ctx)
-}
-
-func (r *remoteControlPlane) DeployIntent(ctx context.Context, imageName string) error {
-	return r.client.DeployIntent(ctx, imageName)
-}
-
-func (r *remoteControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {
-	return r.client.Deploy(ctx, deployDomain)
-}
-
-func (r *remoteControlPlane) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error) {
-	return r.client.Restart(ctx, restartDomain, withAttachments)
 }
 
 func (r *remoteControlPlane) ListTags(ctx context.Context, repository string) ([]string, error) {

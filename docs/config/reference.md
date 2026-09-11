@@ -138,17 +138,11 @@ drain_delay = "2s"                           # Wait after cache invalidation bef
 security_profile = "compat"                  # "compat" or "strict"
 
 # =============================================================================
-# AUTO-ROUTE
-# =============================================================================
-[auto_route]
-enabled = false                              # Create routes from image labels automatically
-
-# =============================================================================
 # NETWORK ISOLATION
 # =============================================================================
 [network_isolation]
-enabled = true                               # Enable per-app Docker networks
-network_prefix = "gordon"                    # Prefix for created networks
+enabled = true                               # Installation network policy for Gordon-managed networks
+network_prefix = "gordon"                    # Prefix filter for `gordon networks list`
 internal = false                             # Create Docker internal networks (blocks direct egress)
 
 # =============================================================================
@@ -159,13 +153,9 @@ auto_create = true                           # Auto-create volumes from Dockerfi
 prefix = "gordon"                            # Volume name prefix
 preserve = true                              # Keep volumes when containers are removed
 
-# =============================================================================
-# ROUTES
-# =============================================================================
-[routes]
-# "domain.com" = { image = "image:tag" }
-# "insecure.domain.com" = { image = "image:tag", https = false }
-# Legacy "http://domain.com" keys are read for compatibility and rewritten on save.
+# REMOVED in v2.50: [routes], [attachments], [network_groups],
+# [[services]]-as-apps, [service_routes], [auto_route], [previews].
+# Declare apps in standalone files (see ./apps.md).
 
 # =============================================================================
 # EXTERNAL ROUTES
@@ -194,18 +184,6 @@ preserve = true                              # Keep volumes when containers are 
 # protocol = "tcp"
 # publish = "127.0.0.1:38016"
 # trusted_cidrs = ["100.64.0.0/10"]
-
-# =============================================================================
-# NETWORK GROUPS
-# =============================================================================
-[network_groups]
-# "group-name" = ["domain1.com", "domain2.com"]
-
-# =============================================================================
-# ATTACHMENTS
-# =============================================================================
-[attachments]
-# "domain-or-group" = ["image1:tag", "image2:tag"]
 
 # =============================================================================
 # BACKUPS
@@ -265,7 +243,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `tls.acme.email` | `""` | ACME account email when enabled |
 | `tls.acme.challenge` | `"auto"` | ACME challenge mode: `auto`, `http-01`, or `cloudflare-dns-01` |
 | `tls.acme.obtain_batch_size` | `1` | Maximum new ACME certificate orders per reconcile run |
-| `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, `/admin/*` disabled) |
+| `auth.enabled` | `true` | Enable authentication; when `false`, run local-only mode (loopback-only `/v2/*`, TCP `/admin/*` not registered, owner-only admin socket for local `gordon apps`) |
 | `auth.secrets_backend` | `"unsafe"` | Secrets storage |
 | `auth.token_expiry` | `"30d"` | 30 days |
 | `auth.access_token_ttl` | `"15m"` | Ephemeral access token lifetime |
@@ -307,7 +285,6 @@ keep_last = 3                                # Keep N newest tags per repository
 | `deploy.drain_timeout` | `"30s"` | Max wait for in-flight request drain before old stop |
 | `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
 | `containers.security_profile` | `"compat"` | Runtime hardening profile: `compat` preserves existing behavior, `strict` enables read-only rootfs and narrower capabilities |
-| `auto_route.enabled` | `false` | Auto-route disabled |
 | `network_isolation.enabled` | `true` | Network isolation enabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |
 | `network_isolation.internal` | `false` | Create Docker internal networks without direct external egress |
@@ -419,5 +396,6 @@ gordon serve
 - [Telemetry](./telemetry.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
+- [App Manifest](./apps.md)
 - [Standalone Services](./services.md)
 - [Images](./images.md)

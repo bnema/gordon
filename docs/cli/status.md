@@ -1,10 +1,10 @@
 # Status Command
 
-Show Gordon server status and container health.
+Show Gordon server status and the app fleet summary.
 
 ## gordon status
 
-Display server configuration and container status for all routes.
+Display installation identity plus one status line per app (from desired/active state, no container inspection). Per-service detail lives under `gordon apps show APP` and `gordon apps status APP`.
 
 ```bash
 gordon status
@@ -24,14 +24,13 @@ Gordon Status
 Gordon Domain: gordon.example.com
 Registry Port: 5000
 Server Port: 8088
-Routes: 3
-Auto-Route: true
+Apps: 3
 Network Isolation: false
 
 Container Status:
-  app.example.com: running
-  api.example.com: running
-  worker.example.com: stopped
+  blog: active
+  shop: deploying
+  old-site: stopped
 ```
 
 ### Information Displayed
@@ -40,22 +39,19 @@ Container Status:
 |-------|-------------|
 | Gordon Domain | Public Gordon domain from configuration |
 | Registry Port | Docker registry port |
-| Server Port | Gordon HTTP proxy port |
-| Routes | Total configured routes |
-| Auto-Route | Whether auto-routing is enabled |
-| Network Isolation | Whether network isolation is enabled |
-| Container Status | Status of each route's container |
+| Server Port | Gordon admin port |
+| Routes | Total apps in desired/active state |
+| Network Isolation | Whether installation network policy is enabled |
+| Container Status | Fleet status per app (see states below) |
 
-### Container States
+### App States
 
 | State | Description |
 |-------|-------------|
-| running | Container is running and healthy |
-| restarting | Container is in runtime restart backoff or restart cycle |
-| stopped | Container was stopped |
-| exited | Container exited (check logs for errors) |
-| paused | Container is paused |
-| unknown | Unable to determine container state |
+| active | App deployed and converged on desired state |
+| deploying | Desired state diverges from effective state |
+| pending | App applied but never deployed |
+| stopped | Durable stopped intent (stays stopped across reboot) |
 
 ## Flags
 
@@ -90,11 +86,11 @@ export GORDON_TOKEN=your-token
 gordon status
 ```
 
-### Quick Health Check
+### Quick Fleet Check
 
 ```bash
-# Check if all containers are running
-gordon status --remote https://gordon.mydomain.com --token $TOKEN | grep -E "(running|stopped|exited)"
+# Check for non-converged apps
+gordon status --remote https://gordon.mydomain.com --token $TOKEN | grep -E "(deploying|pending|stopped)"
 ```
 
 ## Required Permissions (Remote Only)
@@ -109,5 +105,6 @@ gordon auth token generate --subject admin --scopes admin:status:read
 ## Related
 
 - [Serve Command](./serve.md)
-- [Routes Command](./routes.md)
+- [Apps Commands](./apps.md)
+- [CLI Overview](./index.md)
 - [Remote CLI Management](/wiki/guides/remote-cli.md)

@@ -75,7 +75,7 @@ Volume backup objects are stored under:
 
 ## Notes
 
-- Volume backups include named volumes mounted by Gordon-managed route or attachment containers.
+- Volume backups include named volumes mounted by Gordon-managed app containers (labeled `gordon.app`).
 - Bind mounts, tmpfs mounts, anonymous volumes, and non-Gordon volumes are excluded.
 - Live volume archives are best-effort; consistency requires application quiesce, pause, or stop.
 - Automated volume restore is not part of the MVP.
@@ -84,6 +84,6 @@ Volume backup objects are stored under:
 
 ## Related
 
-- [Attachments Configuration](./attachments.md)
+- [App Manifest](./apps.md)
 - [CLI Backup Command](../cli/backup.md)
 - [Configuration Reference](./reference.md)

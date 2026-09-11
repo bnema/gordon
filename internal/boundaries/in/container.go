@@ -9,59 +9,14 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// ContainerService defines the contract for container management operations.
+// ContainerService defines the contract for container runtime reads and
+// lifecycle retained by the v2.50 cutover. The route-container engine
+// (deploy/restart/remove/reconcile/attachments/sync/autostart) was
+// removed with the declarative-apps cutover; the deployment engine owns
+// workload effects through out.ContainerRuntime directly.
 type ContainerService interface {
-	// Deploy creates and starts a container for the given route.
-	Deploy(ctx context.Context, route domain.Route) (*domain.Container, error)
-
-	// Stop stops a running container.
-	Stop(ctx context.Context, containerID string) error
-
-	// Remove removes a container, optionally forcing removal.
-	Remove(ctx context.Context, containerID string, force bool) error
-
-	// ReconcileRemovedRoute removes active route runtime containers after the
-	// route has been removed from configuration, preserving stateful resources.
-	ReconcileRemovedRoute(ctx context.Context, domain string) (*domain.CleanupReport, error)
-
-	// Get retrieves a container by domain name.
-	Get(ctx context.Context, domain string) (*domain.Container, bool)
-
-	// Restart restarts a running container for the given domain.
-	// If withAttachments is true, also restarts attachment containers.
-	Restart(ctx context.Context, domain string, withAttachments bool) error
-
-	// List returns all managed containers.
-	List(ctx context.Context) map[string]*domain.Container
-
-	// ListRoutesWithDetails returns routes with network and attachment info.
-	ListRoutesWithDetails(ctx context.Context) []domain.RouteInfo
-
-	// ListAttachments returns attachments for a domain.
-	ListAttachments(ctx context.Context, domain string) []domain.Attachment
-
-	// ListOrphanedAttachments returns running attachment containers no longer configured.
-	ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error)
-
-	// CleanupOrphanedAttachments optionally stops/removes orphaned attachment containers.
-	// When owner is non-empty, cleanup is scoped to that attachment owner.
-	CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error)
-
 	// ListNetworks returns Gordon-managed networks.
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
-
-	// HealthCheck performs health checks on all containers.
-	HealthCheck(ctx context.Context) map[string]bool
-
-	// SyncContainers synchronizes containers with configured routes.
-	SyncContainers(ctx context.Context) error
-
-	// UpdateAttachments updates the attachment configuration in the container service.
-	// This is called after a config reload to propagate attachment changes without restart.
-	UpdateAttachments(attachments map[string][]string)
-
-	// AutoStart starts containers for the provided routes that aren't running.
-	AutoStart(ctx context.Context, routes []domain.Route) error
 
 	// Shutdown gracefully shuts down all managed containers.
 	Shutdown(ctx context.Context) error
