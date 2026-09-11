@@ -54,13 +54,23 @@ func TestResolver_ExternalNeedsRemote(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppImageUnresolvable)
 }
 
+func TestResolver_RejectsMalformedRemoteDigest(t *testing.T) {
+	r := NewResolver("reg.example.com", &stubManifests{}, &recordingRemote{digest: "sha256:not-a-digest"})
+	_, err := r.ResolveDigest(context.Background(), "docker.io/library/nginx:1.0")
+	require.ErrorIs(t, err, domain.ErrAppImageUnresolvable)
+}
+
 // recordingRemote records whether the connector was consulted.
 type recordingRemote struct {
 	called bool
+	digest string
 }
 
 func (r *recordingRemote) ResolveDigest(context.Context, string) (string, error) {
 	r.called = true
+	if r.digest != "" {
+		return r.digest, nil
+	}
 	return "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil
 }
 

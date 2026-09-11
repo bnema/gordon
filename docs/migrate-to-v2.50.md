@@ -11,7 +11,7 @@ Use this guide before starting the v2.50 daemon with production traffic.
 3. Record every current domain, image tag or digest, attachment, network relationship, volume, and secret key.
 4. Keep the previous signed Gordon binary and its matching configuration and state backup available for rollback.
 
-Do not delete old containers, volumes, pass entries, or registry tags during the migration. Gordon treats resources without proven app ownership as unknown and preserves them.
+Do not delete old containers, volumes, pass entries, or registry tags during the migration. Gordon's ownership-aware reconciliation and prune paths preserve resources whose ownership cannot be proven. Runtime-native cleanup commands and manual deletion do not provide that guarantee.
 
 ## 1. Update the installation configuration
 
@@ -70,7 +70,7 @@ Deploy and restart the app to verify that it uses the new app-scoped entries. Ke
 
 ## 3. Transfer existing volume data
 
-Gordon preserves existing volumes but does not adopt them. After applying the manifest, let Gordon create the new app-owned volumes, then transfer the data with your container runtime's tools while the workload is stopped. Do not edit `state.db`, rename volumes, or alter ownership labels.
+Gordon's reconciliation and prune paths leave existing unowned volumes untouched, but Gordon does not adopt them. After applying the manifest, let Gordon create the new app-owned volumes, then transfer the data with your container runtime's tools while the workload is stopped. Do not run runtime-wide volume prune, edit `state.db`, rename volumes, or alter ownership labels.
 
 Use a database-native backup and restore for databases instead of copying live database files. Keep the old volumes unchanged until the new app has passed data, deploy, restart, and rollback-readiness checks. Refer to the Docker or Podman documentation for runtime-specific copy and inspection commands.
 

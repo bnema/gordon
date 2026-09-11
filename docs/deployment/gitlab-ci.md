@@ -4,8 +4,8 @@ Automated deployment with GitLab CI/CD using Gordon's push command.
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Generated deployment token
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. A least-privilege token: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the pipeline applies or deploys apps
 3. GitLab CI/CD variables configured
 
 ## Quick Setup

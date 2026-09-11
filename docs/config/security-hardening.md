@@ -26,21 +26,23 @@ gordon auth token generate --subject ops --scopes "admin:logs:read" --expiry 30d
 
 - `/admin/logs`, app failure diagnostics, and deploy failure logs require `admin:logs:read`.
 - `admin:status:read` does not grant log access.
-- Operation errors returned to `admin:apps:read` callers are stable and log-free. Application diagnostics are a separate field, redacted of known secret values before storage, and returned only to callers holding `admin:logs:read`. Mutation responses never include application output.
-- Common secret patterns are redacted before logs are returned.
+- Operation errors returned to `admin:apps:read` callers are stable and log-free. Application diagnostics are a separate field, redacted of the affected service's resolved secret values before storage, and returned only to callers holding `admin:logs:read`. If a declared secret cannot be resolved for redaction, Gordon drops the diagnostics instead of storing unredacted output. Mutation responses never include application output.
+- Process and container log sources remain operator-owned data. Gordon redacts common credential patterns when serving logs through its API, but this is defense in depth rather than proof that arbitrary application output is secret-free. Restrict filesystem, journal, runtime, backup, and `admin:logs:read` access accordingly.
 
 ## Volume pruning scope
 
-Volume pruning only removes unused Docker volumes explicitly managed by Gordon (`gordon.managed=true`). It ignores unrelated Docker volumes even if they are unused.
+Volume pruning removes a volume only when Gordon has a durable `released` ownership record, the runtime app/incarnation/service labels agree with that record, and no container mounts it. A `gordon.managed=true` label by itself is not deletion authority; retained, unknown, contradictory, and unrelated volumes survive.
+
+Use `gordon volumes prune --dry-run` before deletion. Do not substitute `docker volume prune` or an equivalent runtime command: runtime-native pruning bypasses Gordon's ownership and retention checks.
 
 Use dedicated admin scopes:
 
 - `admin:volumes:read` for listing volumes.
 - `admin:volumes:write` for prune operations.
 
-## Pass migration plaintext handling
+## Pass import plaintext handling
 
-When Gordon migrates legacy plaintext `.env` files into `pass`, it removes the plaintext source after a successful migration and does not leave `.env.migrated` copies by default. If pass entries already exist, migration fails closed and leaves the plaintext file in place for manual operator review rather than deleting potentially unique values.
+With the `pass` backend, Gordon imports eligible plaintext `.env` files at startup. It removes a source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon fails closed and leaves the plaintext source in place for operator review.
 
 ## External image registries
 
@@ -53,8 +55,8 @@ require_digest = true
 ```
 
 - `docker.io` and Docker Hub's canonical pull host `registry-1.docker.io` are equivalent.
-- Private registries are accepted only when their exact hostname+port is configured.
-- `require_digest = true` requires allowlisted external images to use `@sha256:<64 hex chars>`.
+- Other registries are accepted only when their exact hostname+port is configured. Allowlisting does not configure credentials; external resolution and pulls are anonymous unless the runtime already has suitable access.
+- `require_digest = true` requires every image, including Gordon registry images, to use `@sha256:<64 hex chars>`.
 - The allowlist restricts hostnames, not resolved IPs. It cannot prove a DNS hostname is non-private and does not replace firewall or runtime egress controls.
 
 ## Smart TCP Raw Fallback

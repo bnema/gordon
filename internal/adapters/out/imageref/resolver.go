@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // ManifestReader is the manifest-storage subset the resolver needs.
@@ -61,7 +62,7 @@ func (r *Resolver) ResolveDigest(ctx context.Context, ref string) (string, error
 	}
 	// Already pinned: digest refs pass through after validation.
 	if _, digest, ok := strings.Cut(trimmed, "@"); ok {
-		if !strings.HasPrefix(digest, "sha256:") || len(digest) != 7+64 {
+		if err := validation.ValidateImageDigest(digest); err != nil {
 			return "", fmt.Errorf("imageref: reference %q has invalid digest: %w", ref, domain.ErrAppImageUnresolvable)
 		}
 	}
@@ -89,6 +90,9 @@ func (r *Resolver) ResolveDigest(ctx context.Context, ref string) (string, error
 	digest, err := r.remote.ResolveDigest(ctx, trimmed)
 	if err != nil {
 		return "", fmt.Errorf("imageref: remote %q: %w", ref, domain.ErrAppImageUnresolvable)
+	}
+	if err := validation.ValidateImageDigest(digest); err != nil {
+		return "", fmt.Errorf("imageref: remote %q returned invalid digest: %w", ref, domain.ErrAppImageUnresolvable)
 	}
 	return digest, nil
 }

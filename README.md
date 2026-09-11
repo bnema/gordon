@@ -155,13 +155,13 @@ gordon apps deploy blog --remote prod
 - Domain-to-container routing through a smart TCP edge reverse proxy
 - HTTP zero-downtime updates (old container serves until replacement passes readiness)
 - Remote CLI management (daemon is the sole writer)
-- Persistent volumes from Dockerfile VOLUME directives, never deleted by Gordon
+- Declarative per-service volumes, retained across lifecycle operations
 - Per-service secrets in pass, app-wide public env in the manifest
 - Per-app private networks plus opt-in shared networks
 - Single binary
 
 > [!NOTE]
-> Gordon exposes public traffic through entrypoints such as `[entrypoints.edge]` with `protocol = "smart_tcp"`. It can terminate TLS via static certificates, public ACME certificates, or its internal CA. Cloudflare and upstream reverse proxies are optional deployment choices, not requirements.
+> Gordon exposes public traffic through entrypoints such as `[entrypoints.edge]` with `protocol = "smart_tcp"`. It can terminate TLS via static certificates, public ACME certificates, or its internal CA. Cloudflare and upstream reverse proxies are optional deployment choices, not requirements. Use Gordon's ownership-aware volume commands; runtime commands such as `docker volume prune` bypass Gordon's retention checks.
 
 ## Documentation
 

@@ -44,11 +44,15 @@ func (p ImageSourcePolicy) ValidateImageSource(ref string) error {
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
 	}
-	repository, _ := splitRepositoryReference(rest)
+	repository, reference := splitRepositoryReference(rest)
 	if err := validation.ValidateRepositoryName(repository); err != nil {
 		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
 	}
-	if p.RequireDigest && !strings.Contains(rest, "@") {
+	if strings.Contains(rest, "@") {
+		if err := validation.ValidateImageDigest(reference); err != nil {
+			return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
+		}
+	} else if p.RequireDigest {
 		return fmt.Errorf("%w: registry policy requires an immutable digest", ErrAppImageNotAllowed)
 	}
 	if p.registryAllowed(host) {

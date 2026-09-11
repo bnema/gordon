@@ -50,10 +50,27 @@ func TestImageSourcePolicy_AlwaysAllowsInstallationRegistry(t *testing.T) {
 }
 
 func TestImageSourcePolicy_RequireDigest(t *testing.T) {
-	policy := domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}, RequireDigest: true}
+	policy := domain.ImageSourcePolicy{
+		AllowedRegistries:    []string{"registry.example.com"},
+		RequireDigest:        true,
+		InstallationRegistry: "gordon.example.com",
+	}
 	require.NoError(t, policy.ValidateImageSource("registry.example.com/team/app@"+testDigest202))
+	require.NoError(t, policy.ValidateImageSource("gordon.example.com/team/app@"+testDigest202))
 	assert.ErrorIs(t, policy.ValidateImageSource("registry.example.com/team/app:1.0"), domain.ErrAppImageNotAllowed)
+	assert.ErrorIs(t, policy.ValidateImageSource("gordon.example.com/team/app:1.0"), domain.ErrAppImageNotAllowed)
 	assert.ErrorIs(t, policy.ValidateImageSource("nginx"), domain.ErrAppImageNotAllowed)
+}
+
+func TestImageSourcePolicy_RejectsMalformedDigests(t *testing.T) {
+	policy := domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com"}
+	for _, digest := range []string{
+		"sha256:short",
+		"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaag",
+		"sha512:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	} {
+		assert.ErrorIs(t, policy.ValidateImageSource("gordon.example.com/team/app@"+digest), domain.ErrAppImageNotAllowed, digest)
+	}
 }
 
 func TestImageSourcePolicy_CanonicalizesHostAndDefaultPort(t *testing.T) {

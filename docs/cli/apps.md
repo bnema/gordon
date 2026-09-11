@@ -10,13 +10,13 @@ re-queried by key before retrying (never retry under a fresh key).
 
 ## Local and remote targets
 
-With no `--remote`/`GORDON_REMOTE` selected, commands reach the daemon
-through its owner-only administration socket
-(`$XDG_RUNTIME_DIR/gordon/admin.sock`, falling back to
-`~/.gordon/run/admin.sock`). This works with `auth.enabled=false`: the
-socket is owner-only, carries no bearer token, and grants the
-`local-owner` principal only app administration and app log reads.
-An explicit remote is authoritative and never falls back to the socket.
+With no `--remote`/`GORDON_REMOTE` selected, commands discover the daemon's
+owner-only administration socket. The CLI checks `$XDG_RUNTIME_DIR/gordon/admin.sock`
+when set, then `/run/user/<uid>/gordon/admin.sock`, then `~/.gordon/run/admin.sock`.
+It accepts only a safe owner-owned socket. This works with `auth.enabled=false`:
+the socket carries no bearer token and grants the `local-owner` principal only
+app administration and app log reads. An explicit remote is authoritative and
+never falls back to the socket.
 See [Local-only Mode](../config/auth.md#local-only-mode).
 
 ## gordon apps

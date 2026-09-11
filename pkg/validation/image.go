@@ -1,6 +1,26 @@
 package validation
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
+
+const sha256DigestLength = len("sha256:") + 64
+
+// ValidateImageDigest validates the only digest format accepted for image
+// references and resolved deployment pins: sha256 followed by exactly 64
+// lowercase hexadecimal characters.
+func ValidateImageDigest(digest string) error {
+	if len(digest) != sha256DigestLength || !strings.HasPrefix(digest, "sha256:") {
+		return fmt.Errorf("image digest must be sha256:<64 hex chars>")
+	}
+	for _, c := range digest[len("sha256:"):] {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return fmt.Errorf("image digest must be sha256:<64 hex chars>")
+		}
+	}
+	return nil
+}
 
 // ParseImageReference parses an image reference into name and tag/digest.
 // Supports formats:

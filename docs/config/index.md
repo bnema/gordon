@@ -21,10 +21,9 @@ address = ":443"
 protocol = "smart_tcp"
 ```
 
-Application workloads live in standalone app files, not in `gordon.toml` — see [App Manifest](./apps.md). The pre-v2.50 `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed; Gordon refuses to start when any of them is present.
-```
+Application workloads live in standalone app files, not in `gordon.toml` — see [App Manifest](./apps.md). Retired workload keys such as `[routes]`, `[attachments]`, `[network_groups]`, app-like `[[services]]`, `[service_routes]`, `[auto_route]`, and `[previews]` are rejected at startup.
 
-> **Note:** `gordon_domain` is the canonical key. Migrate older `registry_domain` values before restarting.
+> **Note:** `gordon_domain` is the canonical registry and Admin API host.
 >
 > For a staged registry host rename, set the new `server.gordon_domain` and keep old Gordon registry hosts in `server.legacy_registry_domains` until clients move. See [Server](./server.md#gordon-domain) and [Upgrading](../upgrading.md#staged-registry-host-rename).
 
@@ -139,7 +138,7 @@ monthly = 12
 # Images
 [images]
 allowed_registries = []                   # Additional exact registry hostname+port entries
-require_digest = false                    # Require digests for allowlisted external registries
+require_digest = false                    # Require SHA-256 digests for every image registry
 
 [images.prune]
 enabled = false
@@ -221,7 +220,7 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `telemetry.logs` | `true` |
 | `telemetry.trace_sample_rate` | `1.0` |
 
-When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is not registered on the TCP listener and `/v2/*` is loopback-only. Local `gordon apps` commands use the daemon's owner-only admin socket (`$XDG_RUNTIME_DIR/gordon/admin.sock`, falling back to `~/.gordon/run/admin.sock`); see [Authentication](./auth.md#local-only-mode).
+When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is not registered on the TCP listener and `/v2/*` is loopback-only. Local `gordon apps` commands discover the daemon's owner-only admin socket in `$XDG_RUNTIME_DIR/gordon`, `/run/user/<uid>/gordon`, or `~/.gordon/run`; the daemon itself uses the XDG location when configured and otherwise the home fallback. See [Authentication](./auth.md#local-only-mode).
 
 ## Hot Reload
 

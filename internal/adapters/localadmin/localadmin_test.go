@@ -118,6 +118,48 @@ func TestEnsureDirRejectsOwnerOwnedWritableAncestor(t *testing.T) {
 	assert.NoDirExists(t, filepath.Join(ancestor, "nested"))
 }
 
+type fileInfoWithOwner struct {
+	os.FileInfo
+	uid uint32
+}
+
+func (fi fileInfoWithOwner) Sys() any {
+	return &syscall.Stat_t{Uid: fi.uid}
+}
+
+func TestValidatePathComponentRejectsForeignOwnedAncestors(t *testing.T) {
+	base, err := os.Lstat(t.TempDir())
+	require.NoError(t, err)
+
+	for _, mode := range []fs.FileMode{0o755, 0o700} {
+		t.Run(mode.String(), func(t *testing.T) {
+			fi := fileInfoWithOwner{FileInfo: fileInfoWithMode{FileInfo: base, mode: os.ModeDir | mode}, uid: 2000}
+			err := validatePathComponentForUID(fi, "/runtime", 1000)
+			require.Error(t, err)
+			assert.ErrorIs(t, err, ErrUnsafePath)
+			assert.Contains(t, err.Error(), "owned by uid 2000")
+		})
+	}
+}
+
+type fileInfoWithMode struct {
+	os.FileInfo
+	mode fs.FileMode
+}
+
+func (fi fileInfoWithMode) Mode() fs.FileMode { return fi.mode }
+
+func TestValidatePathComponentAllowsRootOwnedStickyAncestor(t *testing.T) {
+	base, err := os.Lstat(t.TempDir())
+	require.NoError(t, err)
+	fi := fileInfoWithOwner{
+		FileInfo: fileInfoWithMode{FileInfo: base, mode: os.ModeDir | os.ModeSticky | 0o777},
+		uid:      0,
+	}
+
+	assert.NoError(t, validatePathComponentForUID(fi, "/tmp", 1000))
+}
+
 func TestValidateDirAllowsStickyRootAncestor(t *testing.T) {
 	root := os.TempDir()
 	fi, err := os.Lstat(root)

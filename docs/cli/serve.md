@@ -69,7 +69,7 @@ Gordon responds to these signals:
 | `SIGTERM` | Graceful shutdown |
 | `SIGINT` | Graceful shutdown (Ctrl+C) |
 | `SIGUSR1` | Reload installation configuration |
-| `SIGUSR2` | Manual redeploy request for a configured route (legacy domain path) |
+| `SIGUSR2` | Reserved; no app deployment action |
 
 ### Running with systemd
 
@@ -159,19 +159,13 @@ gordon reload
 
 ## gordon logs
 
-Display Gordon process logs or container logs.
+Display Gordon process logs. Use `gordon apps logs APP --service SVC` for application container output.
 
 ### Synopsis
 
 ```bash
-gordon logs [domain] [options]
+gordon logs [options]
 ```
-
-### Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `[domain]` | Optional. Container domain to view logs for. Without this, shows Gordon process logs. |
 
 ### Options
 
@@ -183,10 +177,8 @@ gordon logs [domain] [options]
 | `--remote, -r` | | | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | | | Authentication token for remote |
 
-Remote targeting uses client config or an active remote by default.
-When you provide a concrete domain and no remote is selected, Gordon can also
-auto-infer a saved remote when exactly one match is found.
-Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+Remote targeting uses client config or an active remote by default. Use
+`--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 Remote log access requires an admin token with `admin:logs:read` (or `admin:*:*`). `admin:status:read` is not sufficient for logs.
 
@@ -199,14 +191,12 @@ gordon logs -f           # Follow logs
 gordon logs -n 100       # Last 100 lines
 gordon logs -f -n 200    # Follow, starting from last 200 lines
 
-# Container logs
-gordon logs myapp.example.com           # Last 50 lines from container
-gordon logs myapp.example.com -f        # Follow container logs
-gordon logs myapp.example.com -n 100    # Last 100 lines from container
+# App service logs
+gordon apps logs blog --service web
+gordon apps logs blog --service web --follow --remote prod
 
-# Remote mode (override)
+# Remote process logs (override)
 gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-gordon logs myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Log Locations
@@ -221,9 +211,9 @@ tail -f ~/.gordon/logs/gordon.log
 # With systemd
 journalctl --user -u gordon -f
 
-# Container logs via docker (local alternative)
-docker logs --tail 50 myapp.example.com
-docker logs -f myapp.example.com
+# App service logs through Gordon
+gordon apps logs blog --service web --tail 50
+gordon apps logs blog --service web --follow
 ```
 
 ---

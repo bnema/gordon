@@ -28,7 +28,7 @@ Management commands run locally through in-process services by default. Add `--r
 | `gordon backups` | Manage database backups | [backup](./backup.md) |
 | `gordon config show` | Show server configuration | [config](./config.md) |
 | `gordon images` | List and prune images | [images](./images.md) |
-| `gordon logs` | Display Gordon process or app-domain container logs | [serve](./serve.md#gordon-logs) |
+| `gordon logs` | Display Gordon process logs | [serve](./serve.md#gordon-logs) |
 | `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
 | `gordon push` | Tag and push an image (never deploys) | [push](./push.md) |
 | `gordon reload` | Reload installation configuration | [serve](./serve.md#gordon-reload) |
@@ -72,12 +72,11 @@ gordon apps remove blog
 gordon push myapp --build --remote prod
 
 # View logs
-gordon logs                          # Gordon process logs
-gordon logs -f                       # Follow process logs
-gordon logs -n 100                   # Last 100 lines
-gordon logs myapp.example.com       # Container logs for the app serving myapp.example.com
-gordon logs myapp.example.com -f    # Follow container logs
-gordon apps logs blog               # Per-service app logs
+gordon logs                                      # Gordon process logs
+gordon logs -f                                   # Follow process logs
+gordon logs -n 100                               # Last 100 process-log lines
+gordon apps logs blog --service web              # App service logs
+gordon apps logs blog --service web --follow     # Follow app service logs
 
 # Check version
 gordon version

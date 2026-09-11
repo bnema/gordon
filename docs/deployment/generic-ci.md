@@ -5,7 +5,7 @@ Deploy with Gordon from any CI/CD system.
 ## Requirements
 
 - Docker available on CI runner (for building images)
-- Network access to your Gordon server (HTTPS)
+- Network access to the public Gordon HTTPS domain; do not expose or target the loopback `server.registry_port`
 - Gordon binary (optional but recommended)
 
 ## Recommended: gordon push
@@ -160,6 +160,8 @@ trigger:
 ```
 
 ## Token Scopes Reference
+
+Use the minimum scopes for the steps the pipeline performs. A repository restriction limits registry access only; it does not narrow `admin:*` permissions.
 
 | Workflow | Required Scopes |
 |----------|----------------|

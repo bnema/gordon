@@ -75,6 +75,19 @@ func TestApply_RejectsImageOutsideRegistryAllowlistBeforeStoreAccess(t *testing.
 	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
 }
 
+func TestApply_RequireDigestIncludesInstallationRegistry(t *testing.T) {
+	store := outmocks.NewMockAppState(t)
+	spec := testSpec("blog")
+	spec.Services[0].Image = "gordon.example.com/team/app:1"
+	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(domain.ImageSourcePolicy{
+		InstallationRegistry: "gordon.example.com",
+		RequireDigest:        true,
+	})
+
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
+}
+
 // TestApply_HoldsSharedGCLease proves apply holds the shared GC lease for
 // its whole mutation, so prune cannot snapshot a half-published apply.
 func TestApply_HoldsSharedGCLease(t *testing.T) {

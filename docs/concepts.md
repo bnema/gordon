@@ -125,7 +125,7 @@ Deploy adds AND removes memberships without disconnecting unrelated services. Sh
 
 ## Volumes
 
-Gordon automatically creates persistent storage from Dockerfile `VOLUME` directives, and services can declare named volumes:
+Services declare persistent storage in the app manifest. When `volumes.auto_create` is enabled, Gordon also creates app-owned named volumes for undeclared Dockerfile `VOLUME` paths:
 
 ```toml
 [[service.volume]]
@@ -133,13 +133,9 @@ name = "web-data"
 path = "/data"
 ```
 
-Volume behavior:
+Docker/Podman own the named volumes; Gordon records app UUID, service, and logical volume ownership. App manifests allow neither bind mounts nor service-shared volumes. Replacement and restart reuse volumes. Removing a service or app retains its volumes under the original app UUID, and a new app reusing the public name never adopts them.
 
-- **auto_create**: Volumes are created automatically (default: true)
-- **prefix**: Volume names are prefixed with `gordon-` (configurable)
-- **preserve**: Volumes persist across container updates (default: true)
-
-Docker/Podman own named volumes; Gordon tracks app/service/volume ownership. No app bind mounts, no service-shared volumes. Replacement reuses volumes. Removed services leave volumes retained and visible — never automatically deleted.
+Use `gordon volumes prune --dry-run` to inspect Gordon's ownership-aware plan. Do not use `docker volume prune` or an equivalent runtime command for Gordon data: it bypasses Gordon's retention checks and can delete unmounted retained volumes.
 
 ## Environment and Secrets
 

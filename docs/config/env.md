@@ -20,7 +20,7 @@ dir = "~/.gordon/env"  # Default location
 The `[env]` directory backs the installation secret store:
 
 - With the `pass` backend, `gordon secrets set <domain> --from-file` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores). Env files are not used for secrets.
-- Existing `.env` files are migrated on startup and renamed to `.env.migrated`.
+- With the `pass` backend, Gordon imports eligible plaintext `.env` files into pass at startup and removes each source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon leaves the source file in place for operator review.
 - With the `sops` or `unsafe` backend, env files remain the source of truth; use `${sops:...}` syntax for encrypted values when `secrets_backend = "sops"`.
 
 App containers do NOT read these files: services receive the app file's `[env]` plus their resolved `[service.secrets]` at deploy time (see [App Manifest](./apps.md)).

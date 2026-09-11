@@ -149,7 +149,7 @@ Authentication is enabled by default. If you set `auth.enabled=false`, Gordon sw
 
 Local `gordon apps` commands keep working through an owner-only administration socket:
 
-- The daemon listens on `$XDG_RUNTIME_DIR/gordon/admin.sock`, falling back to `~/.gordon/run/admin.sock` only when the preferred location is unavailable, not when it is unsafe. The CLI also probes `/run/user/<uid>/gordon/admin.sock` when its own `XDG_RUNTIME_DIR` is unset. An unsafe selected candidate fails closed instead of silently selecting another daemon.
+- When `XDG_RUNTIME_DIR` is set, the daemon uses `$XDG_RUNTIME_DIR/gordon/admin.sock`; an invalid or unsafe preferred path fails closed and never falls back. When `XDG_RUNTIME_DIR` is unset, the daemon uses `~/.gordon/run/admin.sock`. The CLI probes `$XDG_RUNTIME_DIR/gordon/admin.sock` when set, then `/run/user/<uid>/gordon/admin.sock`, then `~/.gordon/run/admin.sock`, accepting only a safe owner-owned socket.
 - The runtime directory is `0700` and the socket `0600`, both owned by the effective user. A foreign owner, group/other permission bits, or a symlink makes the daemon refuse to start and the CLI refuse to connect; an existing live listener is never replaced.
 - The socket exposes only app administration and app log reads. The implicit `local-owner` principal receives exactly `admin:apps:read`, `admin:apps:write`, and `admin:logs:read`; configuration, auth, prune, route, backup, and volume routes are denied.
 - Unix platforms only. Never share, mount, or forward the socket: filesystem access to it is the credential.

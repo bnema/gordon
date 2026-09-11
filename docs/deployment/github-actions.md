@@ -4,8 +4,8 @@ Two approaches for deploying with GitHub Actions: the `gordon push` CLI (recomme
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Deployment token generated with the required scopes
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
 ## Recommended: gordon push

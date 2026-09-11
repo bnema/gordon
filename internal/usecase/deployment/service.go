@@ -16,6 +16,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/validation"
 )
 
 // Deps are the driven adapters owned by the deployment engine.
@@ -465,6 +466,9 @@ func (s *Service) appSecretID(ctx context.Context, app string) (string, error) {
 }
 
 func (s *Service) preflightImage(ctx context.Context, image, digest string) (string, error) {
+	if err := validation.ValidateImageDigest(digest); err != nil {
+		return "", fmt.Errorf("deployment: image %q resolved to invalid digest: %w", image, domain.ErrAppImageUnresolvable)
+	}
 	if err := s.validateImageSource(image, digest); err != nil {
 		return "", err
 	}

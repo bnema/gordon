@@ -62,7 +62,7 @@ docker push gordon.example.com/myapp:v1.2.0
 
 ## Registry Access
 
-Gordon's registry is served through the main gordon domain over HTTPS on port 443. The internal registry port (5000) is never exposed externally. All push methods use `https://gordon.example.com/v2/...`.
+Clients use the main Gordon domain over HTTPS, normally on port 443. Gordon binds `server.registry_port` to `127.0.0.1`; the public edge proxies authenticated registry requests to that loopback listener. Do not publish or forward the loopback registry port. With `auth.enabled=false`, registry access is loopback-only and the public edge refuses registry-domain requests.
 
 ### Network Topologies
 
@@ -89,15 +89,15 @@ gordon auth token generate \
   --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 90d
 
-# Scoped to a specific repository
+# Repository-scoped registry token for push only
 gordon auth token generate \
   --subject ci-bot \
   --repo myapp \
-  --scopes "push,pull,admin:apps:read,admin:apps:write" \
+  --scopes "push,pull" \
   --expiry 90d
 ```
 
-Set the generated token as `GORDON_TOKEN` in your CI environment.
+Set the generated token as `GORDON_TOKEN` in your CI environment. `--repo` limits registry push/pull to that repository; it does not constrain `admin:*` scopes. Use a separate least-privilege token for app administration when repository and deployment duties must be isolated.
 
 ## Version Strategies
 

@@ -54,7 +54,7 @@ token_secret = "gordon/auth/token_secret"  # Path in pass store
 
 **Installation secrets storage:**
 - `gordon secrets set <domain> --from-file` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
-- Existing `.env` files are auto-migrated on startup and renamed to `.env.migrated`
+- Eligible plaintext `.env` files are imported into pass at startup and removed only after all entries are stored successfully; conflicts or failures leave the source file for operator review
 
 ### SOPS
 

@@ -32,13 +32,13 @@ keep_last = 3
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `images.allowed_registries` | array | `[]` | Additional registry hostname+port entries. Docker Hub (`docker.io`, canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add private registries explicitly and include non-default ports, e.g. `"registry.internal:5000"`. Hostnames are case-insensitive; one trailing dot and port `443` are canonicalized. |
-| `images.require_digest` | bool | `false` | Require allowlisted external image references to use a valid `@sha256:<64 hex chars>` digest. Gordon registry images are exempt. |
+| `images.allowed_registries` | array | `[]` | Additional registry hostname+port entries. Docker Hub (`docker.io`, canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Include non-default ports, e.g. `"registry.example.com:5000"`. Hostnames are case-insensitive; one trailing dot and port `443` are canonicalized. This setting does not configure registry credentials. |
+| `images.require_digest` | bool | `false` | Require every image reference, including Gordon registry images, to use a valid `@sha256:<64 hex chars>` digest. |
 | `images.prune.enabled` | bool | `false` | Enables scheduled image cleanup |
 | `images.prune.schedule` | string | `"daily"` | Schedule preset: `hourly`, `daily`, `weekly`, `monthly` |
 | `images.prune.keep_last` | int | `3` | Number of newest non-`latest` tags kept per repository during registry cleanup (`latest` is always kept when present) |
 
-The policy validates registry names at manifest apply, deployment preflight, and immediately before each pull. It rejects malformed, userinfo-bearing, and ambiguous authorities. This hostname allowlist does **not** prove that DNS resolves to a public address and does not constrain runtime egress; enforce destination-level restrictions in the host firewall or runtime network policy.
+The policy validates registry names and strict SHA-256 digest syntax at manifest apply, digest resolution, deployment preflight, and immediately before each pull. It rejects malformed, userinfo-bearing, and ambiguous authorities. External tag resolution and pulls use the currently wired anonymous registry path; adding a host to `allowed_registries` does not enable authenticated private-registry access. This hostname allowlist does **not** prove that DNS resolves to a public address and does not constrain runtime egress; enforce destination-level restrictions in the host firewall or runtime network policy.
 
 ## Retention Behavior
 

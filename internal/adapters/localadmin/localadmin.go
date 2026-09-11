@@ -174,12 +174,19 @@ func validateExistingAncestorChain(dir string) error {
 }
 
 func validatePathComponent(fi os.FileInfo, path string) error {
+	return validatePathComponentForUID(fi, path, uint32(os.Geteuid())) // #nosec G115 -- Unix effective UIDs fit uid_t.
+}
+
+func validatePathComponentForUID(fi os.FileInfo, path string, euid uint32) error {
 	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
 		return fmt.Errorf("%w: path component %s is not a real directory", ErrUnsafePath, path)
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("%w: cannot determine owner of %s", ErrUnsafePath, path)
+	}
+	if st.Uid != 0 && st.Uid != euid {
+		return fmt.Errorf("%w: path component %s is owned by uid %d, not root or %d", ErrUnsafePath, path, st.Uid, euid)
 	}
 	writable := fi.Mode().Perm()&0o022 != 0
 	stickyRoot := st.Uid == 0 && fi.Mode()&os.ModeSticky != 0
@@ -223,6 +230,9 @@ func validateDirIdentity(fi os.FileInfo, dir string) error {
 // ValidateSocket reports whether path is an owner-owned Unix socket without
 // group/other permission bits and without a symlink at the final component.
 func ValidateSocket(path string) error {
+	if err := validateParentChain(filepath.Dir(path)); err != nil {
+		return err
+	}
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return err
