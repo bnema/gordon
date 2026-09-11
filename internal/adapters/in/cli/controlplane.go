@@ -9,9 +9,7 @@ import (
 )
 
 // ControlPlane defines command operations available to CLI execution paths.
-//
-// Remote implementations call admin HTTP APIs.
-// Local implementations call services directly in-process.
+// Both explicit remote and local-daemon implementations call admin HTTP APIs.
 type ControlPlane interface {
 	ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
 	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error

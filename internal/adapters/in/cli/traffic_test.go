@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -81,12 +81,12 @@ func TestTrafficStatusJSONOutput(t *testing.T) {
 
 func TestRunTrafficStatusUsesControlPlane(t *testing.T) {
 	status := &dto.TrafficStatusResponse{LastReloadStatus: "ok"}
-	cp := &trafficStatusPlane{status: status}
+	cp := mocks.NewMockControlPlane(t)
+	cp.EXPECT().GetTrafficStatus(context.Background()).Return(status, nil).Once()
 
 	var buf bytes.Buffer
 	require.NoError(t, runTrafficStatus(context.Background(), cp, &buf, true))
 
-	assert.True(t, cp.called)
 	assert.Contains(t, buf.String(), `"last_reload_status": "ok"`)
 }
 
@@ -108,25 +108,4 @@ func TestRemoteTrafficStatusControlPlaneStillRenders(t *testing.T) {
 	assert.Contains(t, output, "Reload")
 	assert.Contains(t, output, "ok")
 	assert.Contains(t, output, "udp=3")
-}
-
-func TestLocalTrafficStatusReturnsActionableDaemonGuidance(t *testing.T) {
-	_, err := (&localControlPlane{}).GetTrafficStatus(context.Background())
-	require.Error(t, err)
-	assert.True(t, errors.Is(err, domain.ErrTrafficStatusUnavailable))
-	assert.Contains(t, err.Error(), "in-process CLI control plane")
-	assert.Contains(t, err.Error(), "running Gordon daemon")
-	assert.Contains(t, err.Error(), "--remote")
-	assert.Contains(t, err.Error(), "GORDON_REMOTE")
-}
-
-type trafficStatusPlane struct {
-	ControlPlane
-	status *dto.TrafficStatusResponse
-	called bool
-}
-
-func (p *trafficStatusPlane) GetTrafficStatus(context.Context) (*dto.TrafficStatusResponse, error) {
-	p.called = true
-	return p.status, nil
 }

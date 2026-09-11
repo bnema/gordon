@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/app"
 )
 
 type controlPlaneHandle struct {
@@ -24,16 +23,27 @@ func (h *controlPlaneHandle) close() {
 	}
 }
 
-func resolveControlPlane(cliConfigPath string) (*controlPlaneHandle, error) {
+var newLocalControlPlaneClient = remote.NewLocalClient
+
+func resolveDaemonClient() (*remote.Client, bool, error) {
 	client, isRemote, err := GetRemoteClient()
+	if err != nil || isRemote {
+		return client, isRemote, err
+	}
+
+	client, err = newLocalControlPlaneClient()
+	if err != nil {
+		return nil, false, fmt.Errorf("local control plane unavailable: %w", err)
+	}
+	return client, false, nil
+}
+
+func resolveControlPlane(_ string) (*controlPlaneHandle, error) {
+	client, isRemote, err := resolveDaemonClient()
 	if err != nil {
 		return nil, err
 	}
-	if isRemote {
-		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
-	}
-
-	return resolveLocalControlPlane(cliConfigPath)
+	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: isRemote}, nil
 }
 
 func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHandle {
@@ -60,16 +70,4 @@ func resolveControlPlaneWithInference(ctx context.Context, infer func(context.Co
 		return newRemoteControlPlaneHandle(resolved), nil
 	}
 	return resolveControlPlane(cliConfigPath)
-}
-
-func resolveLocalControlPlane(cliConfigPath string) (*controlPlaneHandle, error) {
-	kernel, err := app.NewKernelQuiet(cliConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
-	}
-
-	return &controlPlaneHandle{
-		plane:   NewLocalControlPlane(kernel),
-		closeFn: kernel.Close,
-	}, nil
 }

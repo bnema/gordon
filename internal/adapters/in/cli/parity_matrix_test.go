@@ -19,7 +19,7 @@ var uiAdoptionExpectations = []uiAdoptionExpectation{
 	{
 		family:    "root/server",
 		file:      "root.go",
-		functions: []string{"newVersionCmd", "runReloadRemote", "runLogsRemote", "streamLogsRemote", "showContainerLogsLocal"},
+		functions: []string{"newVersionCmd", "runProcessLogs", "runContainerLogs"},
 	},
 	{
 		family:    "backups",
@@ -31,6 +31,37 @@ var uiAdoptionExpectations = []uiAdoptionExpectation{
 		file:      "images.go",
 		functions: []string{"runImagesList", "runImagesPrune"},
 	},
+}
+
+func TestDaemonCommandResolverCoverage(t *testing.T) {
+	checks := []struct {
+		command string
+		file    string
+		call    string
+	}{
+		{command: "status", file: "status.go", call: "resolveControlPlane("},
+		{command: "traffic status", file: "traffic_status.go", call: "trafficResolveControlPlane("},
+		{command: "config", file: "config.go", call: "resolveControlPlane("},
+		{command: "volumes", file: "volumes.go", call: "resolveControlPlane("},
+		{command: "networks", file: "networks.go", call: "resolveControlPlane("},
+		{command: "backup", file: "backup.go", call: "resolveControlPlane"},
+		{command: "secrets", file: "secrets.go", call: "resolveControlPlaneForDomain("},
+		{command: "images list/prune", file: "images.go", call: "resolveDaemonClient("},
+		{command: "images tags", file: "images.go", call: "resolveControlPlaneForRepository("},
+		{command: "push", file: "push.go", call: "resolveControlPlane("},
+	}
+
+	for _, check := range checks {
+		t.Run(check.command, func(t *testing.T) {
+			content, err := os.ReadFile(check.file)
+			if err != nil {
+				t.Fatalf("read %s: %v", check.file, err)
+			}
+			if !strings.Contains(string(content), check.call) {
+				t.Fatalf("%s must dispatch through shared daemon resolver %q", check.command, check.call)
+			}
+		})
+	}
 }
 
 func TestLocalParityMatrix(t *testing.T) {

@@ -70,9 +70,7 @@ func newImagesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "images",
 		Short: "List and prune images",
-		Long: `Inspect and clean up runtime and registry images.
-
-These commands currently require remote mode with a configured target.`,
+		Long:  `Inspect and clean up runtime and registry images through the selected daemon.`,
 	}
 
 	cmd.AddCommand(newImagesListCmd())
@@ -89,14 +87,10 @@ func newImagesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List runtime images and registry tags",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote, err := GetRemoteClient()
+			client, _, err := resolveDaemonClient()
 			if err != nil {
 				return err
 			}
-			if !isRemote {
-				return fmt.Errorf("images commands require a configured remote target")
-			}
-
 			return runImagesList(cmd.Context(), client, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -121,14 +115,10 @@ Only resources proven safe are deleted: every candidate gets an eligible,
 protected, or unknown verdict, and protected or unknown candidates are
 reported and left in place. A prune that deletes nothing succeeds.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote, err := GetRemoteClient()
+			client, _, err := resolveDaemonClient()
 			if err != nil {
 				return err
 			}
-			if !isRemote {
-				return fmt.Errorf("images commands require a configured remote target")
-			}
-
 			return runImagesPrune(cmd.Context(), client, opts, cmd.OutOrStdout())
 		},
 	}
