@@ -203,6 +203,8 @@ monthly = 0                                  # Keep N monthly backups per DB
 # IMAGES
 # =============================================================================
 [images]
+# Defaults: docker.io/registry-1.docker.io, ghcr.io, quay.io, Gordon registry.
+# Add private or other registries as exact hostname+port entries.
 allowed_registries = []
 require_digest = false
 
@@ -319,7 +321,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
 | `backups.retention.weekly` | `0` | Keep no weekly backups by default |
 | `backups.retention.monthly` | `0` | Keep no monthly backups by default |
-| `images.allowed_registries` | `[]` | Explicit external registry allowlist; empty rejects explicit external registries; dangerous local/private registries are always rejected |
+| `images.allowed_registries` | `[]` | Additional exact hostname+port entries. Defaults allow Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's registry; private registries must be added explicitly. This hostname allowlist is not DNS/IP or runtime egress enforcement. |
 | `images.require_digest` | `false` | Require digest-pinned references for allowlisted external registries |
 | `images.prune.enabled` | `false` | Scheduled image cleanup disabled |
 | `images.prune.schedule` | `"daily"` | Cleanup schedule preset |

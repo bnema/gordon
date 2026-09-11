@@ -26,7 +26,8 @@ type Service struct {
 	// barrier is the process-wide GC barrier. An apply holds the shared
 	// lease from validation through durable publication, so prune can
 	// never snapshot between a staged intent and its materialization.
-	barrier out.GCBarrier
+	barrier     out.GCBarrier
+	imagePolicy domain.ImageSourcePolicy
 }
 
 // NewService creates the apps use case over an AppState store.
@@ -38,6 +39,13 @@ func NewService(store out.AppState, log zerowrap.Logger) *Service {
 // that never run prune.
 func (s *Service) WithGCBarrier(barrier out.GCBarrier) *Service {
 	s.barrier = barrier
+	return s
+}
+
+// WithImagePolicy supplies the installation registry policy enforced while
+// validating manifests, before any desired state is persisted.
+func (s *Service) WithImagePolicy(policy domain.ImageSourcePolicy) *Service {
+	s.imagePolicy = policy
 	return s
 }
 
@@ -125,6 +133,11 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 
 	if err := spec.Validate(); err != nil {
 		return nil, nil, err
+	}
+	for _, service := range spec.Services {
+		if err := s.imagePolicy.ValidateImageSource(service.Image); err != nil {
+			return nil, nil, fmt.Errorf("apps: service %q image %q: %w", service.Name, service.Image, err)
+		}
 	}
 	if err := s.validateEntrypointCompatibility(spec); err != nil {
 		return nil, nil, err

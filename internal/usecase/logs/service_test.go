@@ -146,23 +146,30 @@ func TestService_GetContainerLogs(t *testing.T) {
 		runtime := mocks.NewMockContainerRuntime(t)
 
 		svc := NewService("/tmp/test.log", true, runtime, log)
-		svc.WithAppTargets(stubBackends{})
+		svc.WithAppState(stubActiveApps{})
 
-		_, err := svc.GetContainerLogs(context.Background(), "unknown.local", 10)
+		_, err := svc.GetContainerLogs(context.Background(), "unknown/web", 10)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "container not found")
+		assert.Contains(t, err.Error(), "active app/service not found")
 	})
 
-	t.Run("accepts an exact container ID", func(t *testing.T) {
-		runtime := mocks.NewMockContainerRuntime(t)
-		const containerID = "abc123def456"
-		runtime.EXPECT().GetContainerLogs(mock.Anything, containerID, false).Return(&mockReader{}, nil)
+	for _, tc := range []struct {
+		name string
+		ref  string
+	}{
+		{name: "raw Docker ID", ref: "abc123def456"},
+		{name: "foreign container ID", ref: "fedcba654321"},
+		{name: "stale container ID", ref: "012345abcdef"},
+	} {
+		t.Run("rejects "+tc.name+" without calling the runtime", func(t *testing.T) {
+			runtime := mocks.NewMockContainerRuntime(t)
 
-		svc := NewService("/tmp/test.log", true, runtime, log)
-		lines, err := svc.GetContainerLogs(context.Background(), containerID, 10)
-		require.NoError(t, err)
-		assert.Empty(t, lines)
-	})
+			svc := NewService("/tmp/test.log", true, runtime, log)
+			_, err := svc.GetContainerLogs(context.Background(), tc.ref, 10)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "app/service")
+		})
+	}
 
 	t.Run("calls runtime with correct container ID", func(t *testing.T) {
 		runtime := mocks.NewMockContainerRuntime(t)
@@ -171,9 +178,11 @@ func TestService_GetContainerLogs(t *testing.T) {
 		runtime.EXPECT().GetContainerLogs(mock.Anything, "abc123", false).Return(&mockReader{}, nil)
 
 		svc := NewService("/tmp/test.log", true, runtime, log)
-		svc.WithAppTargets(stubBackends{"app.local": "abc123"})
+		svc.WithAppState(stubActiveApps{"app": {App: "app", Services: map[string]domain.AppEffectiveService{
+			"web": {Container: "abc123"},
+		}}})
 
-		lines, err := svc.GetContainerLogs(context.Background(), "app.local", 10)
+		lines, err := svc.GetContainerLogs(context.Background(), "app/web", 10)
 		require.NoError(t, err)
 		assert.Empty(t, lines)
 	})
@@ -186,23 +195,28 @@ func TestService_FollowContainerLogs(t *testing.T) {
 		runtime := mocks.NewMockContainerRuntime(t)
 
 		svc := NewService("/tmp/test.log", true, runtime, log)
-		svc.WithAppTargets(stubBackends{})
+		svc.WithAppState(stubActiveApps{})
 
-		_, err := svc.FollowContainerLogs(context.Background(), "unknown.local", 10)
+		_, err := svc.FollowContainerLogs(context.Background(), "unknown/web", 10)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "container not found")
+		assert.Contains(t, err.Error(), "active app/service not found")
+	})
+
+	t.Run("rejects raw container ID without calling the runtime", func(t *testing.T) {
+		runtime := mocks.NewMockContainerRuntime(t)
+
+		svc := NewService("/tmp/test.log", true, runtime, log)
+		_, err := svc.FollowContainerLogs(context.Background(), "abc123def456", 10)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "app/service")
 	})
 }
 
-// stubBackends maps hosts to exact container IDs for log tests.
-type stubBackends map[string]string
+type stubActiveApps map[string]domain.AppActive
 
-func (s stubBackends) LookupHost(host string) (domain.AppBackend, bool) {
-	id, ok := s[host]
-	if !ok {
-		return domain.AppBackend{}, false
-	}
-	return domain.AppBackend{Host: "127.0.0.1", Port: 18080, ContainerPort: 8080, ContainerID: id}, true
+func (s stubActiveApps) LoadActive(_ context.Context, app string) (domain.AppActive, bool, error) {
+	active, ok := s[app]
+	return active, ok, nil
 }
 
 func TestTailLines(t *testing.T) {

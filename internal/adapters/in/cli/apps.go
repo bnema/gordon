@@ -854,10 +854,8 @@ func runAppStatus(ctx context.Context, plane AppControlPlane, app string, out io
 	return nil
 }
 
-// appLogReader streams container logs by container ref. At cutover the
-// service-to-container mapping comes from the active record and this is
-// backed by the daemon log transport; until then callers supply the
-// remote client's container-log methods with the recorded container id.
+// appLogReader streams logs by Gordon app/service reference. The daemon
+// resolves the reference through its authoritative ACTIVE record.
 type appLogReader interface {
 	GetContainerLogs(ctx context.Context, ref string, lines int) ([]string, error)
 	StreamContainerLogs(ctx context.Context, ref string, lines int) (<-chan string, error)
@@ -970,5 +968,5 @@ func appLogRef(show *dto.AppShowResponse, service string) (string, error) {
 	if svc.Container == "" {
 		return "", fmt.Errorf("service %s has no recorded container yet", service)
 	}
-	return svc.Container, nil
+	return show.App + "/" + service, nil
 }

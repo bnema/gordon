@@ -892,8 +892,9 @@ func (h *Handler) handleLogs(w http.ResponseWriter, r *http.Request, path string
 	}
 
 	if logDomain != "" {
-		if err := validation.ValidateDomainParam(logDomain); err != nil {
-			h.sendError(w, http.StatusBadRequest, "invalid domain")
+		parts := strings.Split(logDomain, "/")
+		if len(parts) != 2 || validation.ValidateDomainParam(parts[0]) != nil || validation.ValidateDomainParam(parts[1]) != nil {
+			h.sendError(w, http.StatusBadRequest, "invalid app/service reference")
 			return
 		}
 	}

@@ -176,8 +176,9 @@ Shows effective vs observed state per service.
 gordon apps logs APP [--service SVC] [--follow] [--tail N] [--json]
 ```
 
-Streams container logs by container ref. `--service` is required when the
-app has several services.
+Streams logs for a service in the app's active deployment. `--service` is
+required when the app has several services. Raw Docker container IDs and stale
+service containers are not accepted.
 
 ---
 

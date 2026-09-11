@@ -85,12 +85,12 @@ func NewLocalClient() (*Client, error) {
 // given Unix socket. It sends no Authorization header and never exchanges a
 // token, so it works with auth.enabled=false.
 func NewLocalClientForSocket(socketPath string) *Client {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
-		// Never consult environment proxies for the local socket.
+		// Never consult environment proxies for the local socket. DialContext
+		// authenticates SO_PEERCRED before the transport can write request bytes.
 		Proxy: nil,
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "unix", socketPath)
+			return localadmin.DialContext(ctx, socketPath)
 		},
 	}
 

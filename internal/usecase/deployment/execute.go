@@ -740,6 +740,9 @@ func stripImageTag(ref string) string {
 // internal credentials. A missing registry config disables pulling
 // (tests and pre-pulled environments).
 func (s *Service) pullImage(ctx context.Context, image string) (string, error) {
+	if err := s.validateImageSource(image, ""); err != nil {
+		return "", err
+	}
 	if s.deps.Registry.Domain == "" {
 		return image, nil
 	}

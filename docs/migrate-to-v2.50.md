@@ -26,6 +26,15 @@ Remove workload declarations that v2.50 no longer accepts from `gordon.toml`:
 
 Keep installation-level settings such as entrypoints, TLS, limits, registry policy, external routes, backup destinations, logging, and authentication.
 
+Review every app image registry before applying manifests. v2.50 allows Docker Hub (`docker.io`, including its canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry by default. Add each other registry, including private registries, as an exact hostname and optional non-default port:
+
+```toml
+[images]
+allowed_registries = ["registry.internal:5000"]
+```
+
+Hostname matching is case-insensitive, ignores one trailing dot, and treats port `443` as the default. The allowlist is checked during manifest apply, deployment preflight, and immediately before pull. It controls registry names only: it does not prove that DNS resolves to a public IP or enforce runtime egress. Use firewall or runtime network policy when destination-level restrictions are required.
+
 Create one app manifest per workload. See [App Manifest](./config/apps.md).
 
 ```toml

@@ -84,8 +84,8 @@ prefix = "gordon"
 preserve = true
 
 [images]
-# Explicit external registries must be listed here. Gordon's own registry is
-# always allowed; localhost/private/link-local registries are always rejected.
+# Docker Hub, ghcr.io, quay.io, and Gordon's registry are always allowed.
+# Add other registries as exact hostname+port entries, including private ones.
 allowed_registries = []
 # Require @sha256:<digest> for allowlisted external registries.
 require_digest = false

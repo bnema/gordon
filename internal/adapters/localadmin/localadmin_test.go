@@ -1,12 +1,15 @@
 package localadmin
 
 import (
+	"context"
 	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +105,31 @@ func TestEnsureDirTightensPermissions(t *testing.T) {
 	fi, err := os.Lstat(dir)
 	require.NoError(t, err)
 	assert.Equal(t, fs.FileMode(0o700), fi.Mode().Perm())
+}
+
+func TestEnsureDirRejectsOwnerOwnedWritableAncestor(t *testing.T) {
+	ancestor := t.TempDir()
+	require.NoError(t, os.Chmod(ancestor, 0o770))
+
+	dir := filepath.Join(ancestor, "nested", "gordon")
+	err := EnsureDir(dir)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnsafePath)
+	assert.NoDirExists(t, filepath.Join(ancestor, "nested"))
+}
+
+func TestValidateDirAllowsStickyRootAncestor(t *testing.T) {
+	root := os.TempDir()
+	fi, err := os.Lstat(root)
+	require.NoError(t, err)
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Uid != 0 || fi.Mode()&os.ModeSticky == 0 || fi.Mode().Perm()&0o022 == 0 {
+		t.Skip("system temporary directory is not writable sticky-root")
+	}
+
+	dir := filepath.Join(t.TempDir(), "gordon")
+	require.NoError(t, os.Mkdir(dir, DirPermissions))
+	assert.NoError(t, ValidateDir(dir))
 }
 
 func TestEnsureDirRejectsSymlinkDirectory(t *testing.T) {
@@ -281,6 +309,37 @@ func TestClientDirCandidatesOrderAndDedupe(t *testing.T) {
 			filepath.Join(home, ".gordon", "run"),
 		}, ClientDirCandidates())
 	})
+}
+
+func TestDialContextRejectsPeerUIDMismatchBeforeUse(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "gordon")
+	ln, _, err := Listen(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, acceptErr := ln.Accept()
+		if acceptErr == nil {
+			accepted <- conn
+		}
+	}()
+
+	_, err = dialContextForUID(context.Background(), SocketPath(dir), uint32(os.Geteuid()+1))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPeerUIDMismatch)
+
+	select {
+	case conn := <-accepted:
+		defer conn.Close()
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+		buf := make([]byte, 1)
+		n, readErr := conn.Read(buf)
+		assert.Zero(t, n, "no request bytes may be sent before peer authentication")
+		assert.Error(t, readErr)
+	case <-time.After(time.Second):
+		t.Fatal("server did not accept authenticated connection attempt")
+	}
 }
 
 func TestListenRefusesForeignOwnedSocketDirectory(t *testing.T) {

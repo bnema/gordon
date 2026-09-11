@@ -627,6 +627,9 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 		Manifests []struct {
 			Digest string `json:"digest"`
 		} `json:"manifests"`
+		Subject *struct {
+			Digest string `json:"digest"`
+		} `json:"subject"`
 	}
 	if err := json.Unmarshal(data, &document); err != nil {
 		return manifestReferences{}, "", err
@@ -634,7 +637,7 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 
 	refs := manifestReferences{
 		blobs:          make([]string, 0, len(document.Layers)+1),
-		childManifests: make([]string, 0, len(document.Manifests)),
+		childManifests: make([]string, 0, len(document.Manifests)+1),
 	}
 	if document.Config.Digest != "" {
 		refs.blobs = append(refs.blobs, document.Config.Digest)
@@ -648,6 +651,9 @@ func parseManifestDocument(data []byte) (manifestReferences, string, error) {
 		if child.Digest != "" {
 			refs.childManifests = append(refs.childManifests, child.Digest)
 		}
+	}
+	if document.Subject != nil && document.Subject.Digest != "" {
+		refs.childManifests = append(refs.childManifests, document.Subject.Digest)
 	}
 
 	mediaType := document.MediaType

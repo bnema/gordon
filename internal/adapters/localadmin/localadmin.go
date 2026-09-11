@@ -183,8 +183,8 @@ func validatePathComponent(fi os.FileInfo, path string) error {
 	}
 	writable := fi.Mode().Perm()&0o022 != 0
 	stickyRoot := st.Uid == 0 && fi.Mode()&os.ModeSticky != 0
-	if writable && !stickyRoot && int(st.Uid) != os.Geteuid() {
-		return fmt.Errorf("%w: path component %s is writable by another user", ErrUnsafePath, path)
+	if writable && !stickyRoot {
+		return fmt.Errorf("%w: path component %s is replaceable", ErrUnsafePath, path)
 	}
 	return nil
 }

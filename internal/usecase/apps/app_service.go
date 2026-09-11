@@ -17,12 +17,13 @@ import (
 // daemon owns this implementation; CLI always reaches it via the daemon.
 // All mutations run recovery-before-mutation through the engine.
 type AppServiceImpl struct {
-	store     out.AppState
-	deploy    deployEngine
-	secrets   out.SecretWriter
-	log       zerowrap.Logger
-	listeners map[string]domain.EntryPointListener
-	barrier   out.GCBarrier
+	store       out.AppState
+	deploy      deployEngine
+	secrets     out.SecretWriter
+	log         zerowrap.Logger
+	listeners   map[string]domain.EntryPointListener
+	barrier     out.GCBarrier
+	imagePolicy domain.ImageSourcePolicy
 }
 
 // deployEngine is the subset of the deployment engine the app service needs.
@@ -53,11 +54,20 @@ func (s *AppServiceImpl) WithGCBarrier(barrier out.GCBarrier) *AppServiceImpl {
 	return s
 }
 
+// WithImagePolicy supplies the registry policy used for manifest validation.
+func (s *AppServiceImpl) WithImagePolicy(policy domain.ImageSourcePolicy) *AppServiceImpl {
+	s.imagePolicy = policy
+	return s
+}
+
 var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.
 func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error) {
-	core := NewService(s.store, s.log).WithEntrypoints(s.listeners).WithGCBarrier(s.barrier)
+	core := NewService(s.store, s.log).
+		WithEntrypoints(s.listeners).
+		WithGCBarrier(s.barrier).
+		WithImagePolicy(s.imagePolicy)
 	applyResult, dryResult, err := core.Apply(ctx, spec, source, dryRun)
 	if err != nil {
 		return nil, nil, err

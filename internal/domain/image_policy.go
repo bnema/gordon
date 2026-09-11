@@ -3,20 +3,18 @@ package domain
 import (
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/gordon/pkg/validation"
 )
 
+var defaultImageRegistries = []string{"docker.io", "ghcr.io", "quay.io"}
+
 // ImageSourcePolicy is the installation policy for every image reference
-// the daemon resolves, pulls, or runs. It is validated before resolution
-// and again before any pull, including boot, restart, and recovery, so a
-// digest-pinned reference can never bypass the registry allowlist or the
-// local/private address restriction.
+// the daemon validates, resolves, pulls, or runs.
 type ImageSourcePolicy struct {
-	// AllowedRegistries restricts which registry hosts may be contacted.
-	// An empty list allows any public registry; the entry "*" allows any
-	// host. Hosts compare case-insensitively.
+	// AllowedRegistries adds explicit hostname+port entries to the defaults.
 	AllowedRegistries []string
 	// RequireDigest rejects mutable tag references.
 	RequireDigest bool
@@ -24,23 +22,28 @@ type ImageSourcePolicy struct {
 	InstallationRegistry string
 }
 
-// ValidateImageSource checks one reference against the policy. Both the
-// repository grammar and the registry host are validated; local and
-// private addresses are always rejected, even when allowlisted, because
-// the runtime would otherwise be coerced into contacting daemon-local or
-// internal services.
+// Validate checks every configured registry authority.
+func (p ImageSourcePolicy) Validate() error {
+	entries := append([]string{}, p.AllowedRegistries...)
+	if p.InstallationRegistry != "" {
+		entries = append(entries, p.InstallationRegistry)
+	}
+	for _, entry := range entries {
+		if _, err := canonicalRegistryHost(entry); err != nil {
+			return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
+		}
+	}
+	return nil
+}
+
+// ValidateImageSource checks one reference against the installation registry
+// allowlist. The allowlist controls names the runtime may contact; it does not
+// constrain where DNS resolves or provide runtime network egress enforcement.
 func (p ImageSourcePolicy) ValidateImageSource(ref string) error {
-	trimmed := strings.TrimSpace(ref)
-	if trimmed == "" {
-		return fmt.Errorf("%w: empty image reference", ErrAppImageNotAllowed)
+	host, rest, err := parseImageRegistry(strings.TrimSpace(ref))
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
 	}
-
-	host, rest := splitRegistryHost(trimmed)
-	host = normalizeRegistryHost(host)
-	if host == "" {
-		host = "docker.io"
-	}
-
 	repository, _ := splitRepositoryReference(rest)
 	if err := validation.ValidateRepositoryName(repository); err != nil {
 		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
@@ -48,49 +51,116 @@ func (p ImageSourcePolicy) ValidateImageSource(ref string) error {
 	if p.RequireDigest && !strings.Contains(rest, "@") {
 		return fmt.Errorf("%w: registry policy requires an immutable digest", ErrAppImageNotAllowed)
 	}
-
-	if installation := normalizeRegistryHost(p.InstallationRegistry); installation != "" && host == installation {
+	if p.registryAllowed(host) {
 		return nil
 	}
-	if IsLocalOrPrivateHost(host) {
-		return fmt.Errorf("%w: registry %q resolves to a local or private address", ErrAppImageNotAllowed, host)
-	}
-	if !p.registryAllowed(host) {
-		return fmt.Errorf("%w: registry %q is not allowlisted", ErrAppImageNotAllowed, host)
-	}
-	return nil
+	return fmt.Errorf("%w: registry %q is not allowlisted", ErrAppImageNotAllowed, host)
 }
 
-// registryAllowed reports whether the host is permitted by the allowlist.
 func (p ImageSourcePolicy) registryAllowed(host string) bool {
-	if len(p.AllowedRegistries) == 0 {
-		return true
+	entries := append(append([]string{}, defaultImageRegistries...), p.AllowedRegistries...)
+	if p.InstallationRegistry != "" {
+		entries = append(entries, p.InstallationRegistry)
 	}
-	for _, allowed := range p.AllowedRegistries {
-		allowed = normalizeRegistryHost(allowed)
-		if allowed == "*" || allowed == host {
+	for _, entry := range entries {
+		allowed, err := canonicalRegistryHost(entry)
+		if err == nil && dockerRegistryAlias(allowed) == dockerRegistryAlias(host) {
 			return true
 		}
 	}
 	return false
 }
 
-// splitRegistryHost splits an image reference into its registry host and
-// the remainder. Following Docker's rule, the first path component is a
-// registry only when it contains a dot or a colon, or is "localhost".
-func splitRegistryHost(ref string) (string, string) {
-	first, rest, ok := strings.Cut(ref, "/")
-	if !ok {
-		return "", ref
+func parseImageRegistry(ref string) (string, string, error) {
+	if ref == "" || strings.Contains(ref, "://") || strings.Contains(ref, "\\") {
+		return "", "", fmt.Errorf("malformed image reference")
 	}
-	if strings.ContainsAny(first, ".:") || strings.EqualFold(first, "localhost") {
-		return first, rest
+	first, rest, explicit := strings.Cut(ref, "/")
+	if !explicit || (!strings.ContainsAny(first, ".:") && !strings.EqualFold(first, "localhost")) {
+		first, rest = "docker.io", ref
 	}
-	return "", ref
+	if strings.Contains(first, "@") || rest == "" {
+		return "", "", fmt.Errorf("malformed registry host")
+	}
+	host, err := canonicalRegistryHost(first)
+	if err != nil {
+		return "", "", err
+	}
+	return host, rest, nil
 }
 
-// splitRepositoryReference splits a repository path from its tag or
-// digest reference (the reference is empty when the path is untagged).
+// canonicalRegistryHost safely normalizes a hostname or IP plus optional port.
+// HTTPS's default port is omitted so host and host:443 are equivalent.
+func canonicalRegistryHost(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "/@?#") {
+		return "", fmt.Errorf("malformed registry host %q", value)
+	}
+	host, port, err := splitRegistryAuthority(value)
+	if err != nil {
+		return "", err
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if host == "" || strings.Contains(host, "..") || (net.ParseIP(host) == nil && !validRegistryHostname(host)) {
+		return "", fmt.Errorf("malformed registry host %q", value)
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != port {
+			return "", fmt.Errorf("malformed registry port %q", port)
+		}
+		if n != 443 {
+			return net.JoinHostPort(host, port), nil
+		}
+	}
+	return host, nil
+}
+
+func splitRegistryAuthority(value string) (string, string, error) {
+	if strings.HasPrefix(value, "[") {
+		if strings.HasSuffix(value, "]") {
+			return strings.TrimSuffix(strings.TrimPrefix(value, "["), "]"), "", nil
+		}
+		host, port, err := net.SplitHostPort(value)
+		if err != nil {
+			return "", "", fmt.Errorf("malformed registry host %q", value)
+		}
+		return host, port, nil
+	}
+	if strings.Count(value, ":") == 1 {
+		host, port, _ := strings.Cut(value, ":")
+		if host == "" || port == "" {
+			return "", "", fmt.Errorf("malformed registry host %q", value)
+		}
+		return host, port, nil
+	}
+	if strings.Contains(value, ":") && net.ParseIP(value) == nil {
+		return "", "", fmt.Errorf("ambiguous registry host %q", value)
+	}
+	return value, "", nil
+}
+
+func validRegistryHostname(host string) bool {
+	for _, label := range strings.Split(host, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
+				return false
+			}
+		}
+	}
+	return len(host) <= 253
+}
+
+func dockerRegistryAlias(host string) string {
+	if host == "registry-1.docker.io" {
+		return "docker.io"
+	}
+	return host
+}
+
 func splitRepositoryReference(rest string) (string, string) {
 	if base, digest, ok := strings.Cut(rest, "@"); ok {
 		return base, digest
@@ -101,35 +171,21 @@ func splitRepositoryReference(rest string) (string, string) {
 	return rest, ""
 }
 
-// normalizeRegistryHost lowercases a registry host and strips a trailing
-// dot so comparisons are stable.
-func normalizeRegistryHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	return strings.TrimSuffix(host, ".")
-}
-
-// IsLocalOrPrivateHost reports whether a registry host names a loopback,
-// private, link-local, unspecified, or multicast address (or localhost).
+// IsLocalOrPrivateHost reports whether a literal registry host is local or
+// non-public. It does not resolve DNS names and must not be treated as an
+// egress guarantee.
 func IsLocalOrPrivateHost(host string) bool {
-	hostname := normalizeRegistryHost(host)
-	if h, _, err := net.SplitHostPort(hostname); err == nil {
+	hostname, err := canonicalRegistryHost(host)
+	if err != nil {
+		return true
+	}
+	if h, _, splitErr := net.SplitHostPort(hostname); splitErr == nil {
 		hostname = h
 	}
 	hostname = strings.Trim(hostname, "[]")
-	if hostname == "" {
-		return true
-	}
 	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
 		return true
 	}
 	ip := net.ParseIP(hostname)
-	if ip == nil {
-		return false
-	}
-	return ip.IsLoopback() ||
-		ip.IsPrivate() ||
-		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsUnspecified() ||
-		ip.IsMulticast()
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast())
 }

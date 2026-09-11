@@ -360,7 +360,7 @@ func TestAppLogRef_Selection(t *testing.T) {
 
 	ref, err := appLogRef(multi, "db")
 	require.NoError(t, err)
-	assert.Equal(t, "ctr-db", ref)
+	assert.Equal(t, "blog/db", ref)
 
 	_, err = appLogRef(multi, "missing")
 	require.Error(t, err)
@@ -370,7 +370,7 @@ func TestAppLogRef_Selection(t *testing.T) {
 	}}}
 	ref, err = appLogRef(single, "")
 	require.NoError(t, err)
-	assert.Equal(t, "ctr-solo", ref)
+	assert.Equal(t, "solo/web", ref)
 
 	empty := &dto.AppShowResponse{App: "new", Active: dto.AppActiveDTO{Services: map[string]dto.AppActiveServiceDTO{
 		"web": {},

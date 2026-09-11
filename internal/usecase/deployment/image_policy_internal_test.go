@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -31,6 +33,19 @@ func TestValidateImageSource_RejectsPrivateRegistryDigest(t *testing.T) {
 	assert.ErrorIs(t, svc.validateImageSource("other.example.com/team/app", digest), domain.ErrAppImageNotAllowed)
 	require.NoError(t, svc.validateImageSource("registry.example.com/team/app", digest))
 	require.NoError(t, svc.validateImageSource("gordon.example.com/blog/web", digest))
+}
+
+func TestPullImage_RechecksRegistryPolicyImmediatelyBeforePull(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{
+		Runtime:     runtime,
+		Registry:    RegistryConfig{Domain: "gordon.example.com"},
+		ImagePolicy: domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com"},
+	}, zerowrap.Default())
+
+	_, err := svc.pullImage(context.Background(), "registry.example.com/team/app@sha256:"+strings.Repeat("a", 64))
+
+	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
 }
 
 func TestValidateImageSource_RequireDigestAppliesToTags(t *testing.T) {

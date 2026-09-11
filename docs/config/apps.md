@@ -91,7 +91,7 @@ RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
 
 `publish` must match the entrypoint listener it attaches to exactly: the same host, port, and transport. The traffic manager binds the entrypoint address, so a declaration that differs (for example a loopback bind on a wildcard entrypoint, or a different port) is rejected at apply time instead of being silently widened. `0.0.0.0` and an omitted host are the same wildcard.
 
-Unqualified image references resolve only against the Gordon installation's registry. Explicit external registries remain subject to `images.allowed_registries`, `images.require_digest`, and SSRF restrictions; the policy is enforced before resolution and again before every pull, including boot, restart, and recovery.
+Image registry names are validated during manifest apply, deployment preflight, and immediately before every pull, including boot, restart, and recovery. Docker Hub (`docker.io` and canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are allowed by default. Add other registries, including private registries and their non-default ports, with `images.allowed_registries`; see [Images](./images.md). This is a hostname allowlist, not DNS/IP validation or runtime egress enforcement.
 
 ## Environment and Secrets
 

@@ -943,6 +943,9 @@ func (si *serviceInit) initApps() error {
 		RequireDigest:        si.cfg.Images.RequireDigest,
 		InstallationRegistry: registryDomain,
 	}
+	if err := imagePolicy.Validate(); err != nil {
+		return fmt.Errorf("invalid image registry policy: %w", err)
+	}
 	resolver := imageref.NewResolver(registryDomain, si.svc.manifestStorage, nil).WithPolicy(imagePolicy)
 	// The publisher is the single serialized HTTP/L4 boundary: raw
 	// activations, fail-closed recovery withdrawal, and reload all go
@@ -974,7 +977,8 @@ func (si *serviceInit) initApps() error {
 	si.svc.appActivator = apptraffic.NewActivator(si.log)
 	si.svc.appSvc = apps.NewAppServiceImpl(store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
-		WithGCBarrier(si.svc.gcBarrier)
+		WithGCBarrier(si.svc.gcBarrier).
+		WithImagePolicy(imagePolicy)
 	// Health checks resolve from ACTIVE state (loopback backends).
 	si.svc.healthSvc = health.NewService(store, si.svc.runtime, httpprober.New(), si.log)
 	// ACTIVE-derived host index for the proxy: rebuilt after every
@@ -1161,9 +1165,9 @@ func (si *serviceInit) initHandlers() {
 
 	si.svc.logSvc = logs.NewService(resolveLogFilePath(si.cfg), si.cfg.Logging.File.Enabled, si.svc.runtime, si.log)
 	// initApps (via initRuntimeProxyAndTraffic) runs before initHandlers,
-	// so the host index is already open here.
-	if si.svc.appHostIndex != nil {
-		si.svc.logSvc.WithAppTargets(si.svc.appHostIndex)
+	// so durable ACTIVE state is already open here.
+	if si.svc.appState != nil {
+		si.svc.logSvc.WithAppState(si.svc.appState)
 	}
 
 	if si.svc.trafficManager == nil {

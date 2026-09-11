@@ -111,6 +111,7 @@ func TestResolver_AllowsInstallationAndAllowlistedRefs(t *testing.T) {
 func TestResolver_RequireDigestRejectsTags(t *testing.T) {
 	const digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	r := NewResolver("reg.example.com", &stubManifests{}, &recordingRemote{}).WithPolicy(domain.ImageSourcePolicy{
+		AllowedRegistries:    []string{"registry.example.com"},
 		RequireDigest:        true,
 		InstallationRegistry: "reg.example.com",
 	})

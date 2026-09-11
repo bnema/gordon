@@ -20,11 +20,9 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// appBackendProvider resolves a host to its recorded backend.
-// Implemented by the apptraffic host index; satisfied by the same
-// provider the proxy consumes.
-type appBackendProvider interface {
-	LookupHost(host string) (domain.AppBackend, bool)
+// appStateProvider resolves app services from the durable ACTIVE record.
+type appStateProvider interface {
+	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
 }
 
 // Service implements the LogService interface.
@@ -33,15 +31,13 @@ type Service struct {
 	fileLoggingEnabled bool
 	runtime            out.ContainerRuntime
 	log                zerowrap.Logger
-	// appTargets resolves log domains to containers, wired after the
-	// app store opens (WithAppTargets).
-	appTargets appBackendProvider
+	// appState resolves log references to containers recorded in ACTIVE.
+	appState appStateProvider
 }
 
 var execCommandContext = exec.CommandContext
 
-// NewService creates a new log service. The app target provider is
-// wired later via WithAppTargets once the app store opens.
+// NewService creates a new log service. App state is wired after the store opens.
 func NewService(
 	logFilePath string,
 	fileLoggingEnabled bool,
@@ -56,39 +52,30 @@ func NewService(
 	}
 }
 
-// WithAppTargets wires the ACTIVE-derived host index for domain log
-// resolution.
-func (s *Service) WithAppTargets(provider appBackendProvider) *Service {
-	s.appTargets = provider
+// WithAppState wires the durable ACTIVE app-state reader used for log resolution.
+func (s *Service) WithAppState(provider appStateProvider) *Service {
+	s.appState = provider
 	return s
 }
 
-// containerForDomain resolves a log domain to its exact container ID
-// through the ACTIVE-derived host index.
-func (s *Service) containerForDomain(domainName string) (string, error) {
-	if isContainerID(domainName) {
-		return domainName, nil
+// containerForService resolves an app/service reference exclusively through ACTIVE.
+func (s *Service) containerForService(ctx context.Context, ref string) (string, error) {
+	app, service, ok := strings.Cut(ref, "/")
+	if !ok || app == "" || service == "" || strings.Contains(service, "/") || s.appState == nil {
+		return "", fmt.Errorf("invalid app/service log reference: %s", ref)
 	}
-	if s.appTargets == nil {
-		return "", fmt.Errorf("container not found for domain: %s", domainName)
+	active, found, err := s.appState.LoadActive(ctx, app)
+	if err != nil {
+		return "", fmt.Errorf("failed to load active app %s: %w", app, err)
 	}
-	backend, ok := s.appTargets.LookupHost(domainName)
-	if !ok || !backend.Resolved() {
-		return "", fmt.Errorf("container not found for domain: %s", domainName)
+	if !found {
+		return "", fmt.Errorf("active app/service not found: %s", ref)
 	}
-	return backend.ContainerID, nil
-}
-
-func isContainerID(ref string) bool {
-	if len(ref) < 12 || len(ref) > 64 {
-		return false
+	target, found := active.Services[service]
+	if !found || target.Container == "" {
+		return "", fmt.Errorf("active app/service not found: %s", ref)
 	}
-	for _, r := range ref {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
-			return false
-		}
-	}
-	return true
+	return target.Container, nil
 }
 
 // GetProcessLogs returns the last N lines of Gordon process logs.
@@ -400,8 +387,8 @@ func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Resolve the domain to its exact container
-	containerID, err := s.containerForDomain(domain)
+	// Resolve the app/service to its ACTIVE container.
+	containerID, err := s.containerForService(ctx, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -441,8 +428,8 @@ func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initia
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Resolve the domain to its exact container
-	containerID, err := s.containerForDomain(domain)
+	// Resolve the app/service to its ACTIVE container.
+	containerID, err := s.containerForService(ctx, domain)
 	if err != nil {
 		return nil, err
 	}

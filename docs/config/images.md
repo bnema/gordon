@@ -18,7 +18,8 @@ The CLI `gordon images prune` runs the same use case and planner as the schedule
 
 ```toml
 [images]
-allowed_registries = []
+# Docker Hub, ghcr.io, quay.io, and Gordon's registry are already allowed.
+allowed_registries = ["registry.internal:5000"]
 require_digest = false
 
 [images.prune]
@@ -31,11 +32,13 @@ keep_last = 3
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `images.allowed_registries` | array | `[]` | Allowlist for external image registries. Empty allows any public registry; a non-empty list restricts resolution and pulls to those hosts (and `*` allows any). Unqualified image names such as `nginx:latest` are treated as Docker Hub (`docker.io`) for policy checks. Gordon always allows its configured registry and always rejects localhost/private/link-local/unspecified registries, even when allowlisted. Include ports when needed, e.g. `"registry.example.com:5000"`. |
+| `images.allowed_registries` | array | `[]` | Additional registry hostname+port entries. Docker Hub (`docker.io`, canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add private registries explicitly and include non-default ports, e.g. `"registry.internal:5000"`. Hostnames are case-insensitive; one trailing dot and port `443` are canonicalized. |
 | `images.require_digest` | bool | `false` | Require allowlisted external image references to use a valid `@sha256:<64 hex chars>` digest. Gordon registry images are exempt. |
 | `images.prune.enabled` | bool | `false` | Enables scheduled image cleanup |
 | `images.prune.schedule` | string | `"daily"` | Schedule preset: `hourly`, `daily`, `weekly`, `monthly` |
 | `images.prune.keep_last` | int | `3` | Number of newest non-`latest` tags kept per repository during registry cleanup (`latest` is always kept when present) |
+
+The policy validates registry names at manifest apply, deployment preflight, and immediately before each pull. It rejects malformed, userinfo-bearing, and ambiguous authorities. This hostname allowlist does **not** prove that DNS resolves to a public address and does not constrain runtime egress; enforce destination-level restrictions in the host firewall or runtime network policy.
 
 ## Retention Behavior
 

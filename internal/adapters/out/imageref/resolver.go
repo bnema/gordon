@@ -34,7 +34,12 @@ type Resolver struct {
 
 // NewResolver wires local manifest resolution with an optional remote.
 func NewResolver(registryDomain string, manifests ManifestReader, remote RemoteResolver) *Resolver {
-	return &Resolver{registryDomain: registryDomain, manifests: manifests, remote: remote}
+	return &Resolver{
+		registryDomain: registryDomain,
+		manifests:      manifests,
+		remote:         remote,
+		policy:         domain.ImageSourcePolicy{InstallationRegistry: registryDomain},
+	}
 }
 
 // WithPolicy installs the installation image-source policy. Every

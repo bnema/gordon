@@ -138,7 +138,7 @@ monthly = 12
 
 # Images
 [images]
-allowed_registries = []                   # Explicit external registries allowed for app images
+allowed_registries = []                   # Additional exact registry hostname+port entries
 require_digest = false                    # Require digests for allowlisted external registries
 
 [images.prune]
@@ -146,6 +146,8 @@ enabled = false
 schedule = "daily"
 keep_last = 3
 ```
+
+Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's registry are allowed by default. Add private or other registries with exact hostname+port entries. This hostname policy does not enforce resolved IP destinations or runtime egress; see [Images](./images.md).
 
 ## Configuration Sections
 

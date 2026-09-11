@@ -476,8 +476,8 @@ func (s *Service) preflightImage(ctx context.Context, image, digest string) (str
 
 // validateImageSource enforces the installation image policy on a
 // reference before any pull. Both the manifest reference and the pinned
-// digest are checked, so a digest-pinned ref cannot bypass the allowlist
-// or the local/private address restriction on deploy or recovery.
+// digest are checked, so a digest-pinned ref cannot bypass the hostname
+// and port allowlist on deploy or recovery.
 func (s *Service) validateImageSource(image, digest string) error {
 	ref := strings.TrimSpace(image)
 	if digest != "" && !strings.Contains(ref, "@") {

@@ -106,6 +106,91 @@ func TestPrune_MovedTagKeepsActiveDigestClosure(t *testing.T) {
 	assert.NotContains(t, blobs.deletedBlobs, layerDigest)
 }
 
+// TestPrune_SubjectClosureProtectsManifestConfigAndLayers proves a retained
+// artifact manifest keeps its subject manifest and that subject's blobs.
+func TestPrune_SubjectClosureProtectsManifestConfigAndLayers(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	subject := testDigest("subject-manifest")
+	configDigest := testDigest("subject-config")
+	layerDigest := testDigest("subject-layer")
+
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"attestation"}
+	manifests.modTimes[manifestRefKey("app", "attestation")] = now
+	manifests.manifests[manifestRefKey("app", "attestation")] = mustSubjectManifestJSON(t, subject)
+	manifests.manifests[manifestRefKey("app", subject)] = mustManifestJSON(t, configDigest, layerDigest)
+
+	blobs := &fakeBlobStorage{
+		blobs: []string{subject, configDigest, layerDigest},
+		blobModTimes: map[string]time.Time{
+			subject: now.Add(-72 * time.Hour), configDigest: now.Add(-72 * time.Hour), layerDigest: now.Add(-72 * time.Hour),
+		},
+	}
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{snapshot: &domain.PruneProtectionSnapshot{}}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, blobs.deletedBlobs)
+	for _, digest := range []string{subject, configDigest, layerDigest} {
+		assert.Contains(t, candidateRefs(report.Plan.CandidatesOfKind(domain.PruneResourceOCIBlob, domain.PruneVerdictProtected)), digest)
+	}
+}
+
+func TestPrune_MissingSubjectFailsClosed(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	orphan := testDigest("orphan")
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"attestation"}
+	manifests.modTimes[manifestRefKey("app", "attestation")] = now
+	manifests.manifests[manifestRefKey("app", "attestation")] = mustSubjectManifestJSON(t, testDigest("missing-subject"))
+	blobs := &fakeBlobStorage{blobs: []string{orphan}, blobModTimes: map[string]time.Time{orphan: now.Add(-72 * time.Hour)}}
+
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{snapshot: &domain.PruneProtectionSnapshot{}}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, blobs.deletedBlobs)
+	assert.Contains(t, candidateRefs(report.Plan.CandidatesOfKind(domain.PruneResourceOCIBlob, domain.PruneVerdictUnknown)), orphan)
+}
+
+func TestPrune_SubjectCycleTerminatesAndProtectsClosure(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	a := testDigest("subject-a")
+	b := testDigest("subject-b")
+	manifests := newFakeManifestStorage()
+	manifests.repositories = []string{"app"}
+	manifests.tagsByRepo["app"] = []string{"attestation"}
+	manifests.modTimes[manifestRefKey("app", "attestation")] = now
+	manifests.manifests[manifestRefKey("app", "attestation")] = mustSubjectManifestJSON(t, a)
+	manifests.manifests[manifestRefKey("app", a)] = mustSubjectManifestJSON(t, b)
+	manifests.manifests[manifestRefKey("app", b)] = mustSubjectManifestJSON(t, a)
+	blobs := &fakeBlobStorage{blobs: []string{a, b}, blobModTimes: map[string]time.Time{a: now.Add(-72 * time.Hour), b: now.Add(-72 * time.Hour)}}
+
+	svc, _ := newPruneService(t, manifests, blobs, &fakeProtectionStore{snapshot: &domain.PruneProtectionSnapshot{}}, &fakePruneRuntime{})
+	report, err := svc.Prune(context.Background(), domain.ImagePruneOptions{KeepLast: 1, PruneRegistry: true})
+	require.NoError(t, err)
+
+	assert.Empty(t, blobs.deletedBlobs)
+	protected := candidateRefs(report.Plan.CandidatesOfKind(domain.PruneResourceOCIBlob, domain.PruneVerdictProtected))
+	assert.Contains(t, protected, a)
+	assert.Contains(t, protected, b)
+}
+
+func mustSubjectManifestJSON(t *testing.T, subject string) []byte {
+	t.Helper()
+	return []byte(`{"mediaType":"application/vnd.oci.image.manifest.v1+json","subject":{"digest":"` + subject + `"}}`)
+}
+
+func candidateRefs(candidates []domain.PruneCandidateReport) []string {
+	refs := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		refs = append(refs, candidate.Ref)
+	}
+	return refs
+}
+
 // TestPrune_ExternalRepositoryDigestRootDoesNotDisablePruning proves a
 // durable digest root whose repository has no local content does not make
 // the registry closure incomplete: external images never introduce local

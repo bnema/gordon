@@ -44,18 +44,18 @@ When Gordon migrates legacy plaintext `.env` files into `pass`, it removes the p
 
 ## External image registries
 
-Gordon's configured registry is always allowed. Explicit external registries must be allowlisted:
+Docker Hub, `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add every other registry hostname and non-default port explicitly:
 
 ```toml
 [images]
-allowed_registries = ["docker.io", "ghcr.io", "registry.example.com:5000"]
+allowed_registries = ["registry.internal:5000"]
 require_digest = true
 ```
 
-- Empty `allowed_registries` rejects explicit external registries.
-- `localhost`, loopback, private, link-local, unspecified, and metadata-style registries are rejected.
+- `docker.io` and Docker Hub's canonical pull host `registry-1.docker.io` are equivalent.
+- Private registries are accepted only when their exact hostname+port is configured.
 - `require_digest = true` requires allowlisted external images to use `@sha256:<64 hex chars>`.
-- Include ports in allowlist entries when the registry uses a non-default port.
+- The allowlist restricts hostnames, not resolved IPs. It cannot prove a DNS hostname is non-private and does not replace firewall or runtime egress controls.
 
 ## Smart TCP Raw Fallback
 
