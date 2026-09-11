@@ -319,17 +319,20 @@ Without this setting, Cloudflare traffic receives `403 Forbidden: Only certifica
 
 > **Note:** This is separate from `[api.rate_limit] trusted_proxies`, which controls IP extraction from `X-Forwarded-For`. Both should list your proxy IPs. See [Proxy Origin IP Allowlist](./config/server.md#proxy-origin-ip-allowlist) for details.
 
-## Installing a Specific Version or Pre-Release
+## Choosing an Install Channel
 
 ```bash
-# Install an exact version
-curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 bash
+# Install an exact release
+curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 sh
 
-# Install the latest pre-release instead of the latest stable release
-curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 bash
+# Install the latest pre-release
+curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 sh
+
+# Build the current next branch commit from source
+curl -fsSL https://gordon.bnema.dev/install | GORDON_CHANNEL=next sh
 ```
 
-By default, the installer resolves `latest` to the newest stable release and verifies the downloaded checksum before installing.
+Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
 
 ## Verify Installation
 

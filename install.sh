@@ -2,12 +2,14 @@
 set -e
 
 # Gordon installer script
-# Usage: curl -fsSL https://gordon.bnema.dev/install | bash
-# Usage with pre-release: curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 bash
+# Usage: curl -fsSL https://gordon.bnema.dev/install | sh
+# Usage with pre-release: curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 sh
+# Usage with next source build: curl -fsSL https://gordon.bnema.dev/install | GORDON_CHANNEL=next sh
 
 REPO="bnema/gordon"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${GORDON_INSTALL_DIR:-/usr/local/bin}"
 VERSION="${GORDON_VERSION:-latest}"
+CHANNEL="${GORDON_CHANNEL:-stable}"
 
 echo "Installing Gordon..."
 
@@ -42,6 +44,144 @@ case "$ARCH" in
 esac
 
 echo "Detected: ${OS}/${ARCH}"
+
+install_binary_atomically() {
+    binary=$1
+    destination=$2
+    destination_dir=${destination%/*}
+    staging="${destination}.install.$$"
+
+    if [ -w "$destination_dir" ]; then
+        trap 'rm -f "$staging"; rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+        install -m 0755 "$binary" "$staging"
+        mv -f "$staging" "$destination"
+    else
+        echo "sudo required to install to ${destination_dir}"
+        sudo install -m 0755 "$binary" "$staging"
+        if ! sudo mv -f "$staging" "$destination"; then
+            sudo rm -f "$staging"
+            return 1
+        fi
+    fi
+}
+
+version_at_least() {
+    actual=$1
+    required=$2
+    actual_major=${actual%%.*}
+    actual_minor=${actual#*.}
+    actual_minor=${actual_minor%%.*}
+    required_major=${required%%.*}
+    required_minor=${required#*.}
+    required_minor=${required_minor%%.*}
+
+    [ "$actual_major" -gt "$required_major" ] || {
+        [ "$actual_major" -eq "$required_major" ] && [ "$actual_minor" -ge "$required_minor" ]
+    }
+}
+
+install_next() {
+    if [ -n "${GORDON_VERSION:-}" ]; then
+        echo "Error: GORDON_VERSION cannot be used with GORDON_CHANNEL=next"
+        exit 1
+    fi
+    if [ -n "${GORDON_PRERELEASE:-}" ]; then
+        echo "Error: GORDON_PRERELEASE cannot be used with GORDON_CHANNEL=next"
+        exit 1
+    fi
+    if ! command -v go >/dev/null 2>&1; then
+        echo "Error: GORDON_CHANNEL=next requires Go"
+        exit 1
+    fi
+
+    echo "WARNING: UNVERIFIED DEVELOPMENT BUILD"
+    echo "The next channel builds source locally from the current next branch commit."
+    echo "It is not covered by the signed release checksum path and may be unstable."
+    echo "Resolving the current next commit..."
+    COMMIT_DATA=$(curl -fsSL -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/repos/${REPO}/commits/next" 2>/dev/null || echo "")
+    COMMIT=$(printf '%s\n' "$COMMIT_DATA" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]*\)".*/\1/p' | head -n 1)
+    case "$COMMIT" in
+        *[!0-9a-fA-F]*|'') COMMIT="" ;;
+    esac
+    if [ "${#COMMIT}" -ne 40 ]; then
+        echo "Error: Could not resolve an exact next commit SHA from the GitHub API"
+        exit 1
+    fi
+
+    TMP_DIR=$(mktemp -d)
+    trap 'rm -rf "$TMP_DIR"' EXIT HUP INT TERM
+    SOURCE_TARBALL="$TMP_DIR/source.tar.gz"
+    SOURCE_URL="https://codeload.github.com/${REPO}/tar.gz/${COMMIT}"
+    echo "Downloading source pinned to ${COMMIT}..."
+    if ! curl -fsSL "$SOURCE_URL" -o "$SOURCE_TARBALL"; then
+        echo "Error: Failed to download source for ${COMMIT}"
+        exit 1
+    fi
+
+    SOURCE_ROOT="gordon-${COMMIT}"
+    if ! tar -tzf "$SOURCE_TARBALL" >"$TMP_DIR/archive.list"; then
+        echo "Error: Invalid source archive"
+        exit 1
+    fi
+    if [ ! -s "$TMP_DIR/archive.list" ] ||
+        grep -Ev "^${SOURCE_ROOT}(/.*)?$" "$TMP_DIR/archive.list" >/dev/null ||
+        grep -E '(^|/)\.\.?(/|$)' "$TMP_DIR/archive.list" >/dev/null ||
+        tar -tvzf "$SOURCE_TARBALL" | grep -Ev '^[-d]' >/dev/null; then
+        echo "Error: Source archive contains an unsafe path or entry type"
+        exit 1
+    fi
+    tar -xzf "$SOURCE_TARBALL" -C "$TMP_DIR"
+    SOURCE_DIR="$TMP_DIR/$SOURCE_ROOT"
+    if [ ! -f "$SOURCE_DIR/go.mod" ] || [ ! -f "$SOURCE_DIR/main.go" ]; then
+        echo "Error: Source archive is missing go.mod or the root command"
+        exit 1
+    fi
+
+    REQUIRED_GO=$(awk '$1 == "go" { print $2; exit }' "$SOURCE_DIR/go.mod")
+    case "$REQUIRED_GO" in
+        [0-9]*.[0-9]*) ;;
+        *) echo "Error: Source go.mod has no valid Go version"; exit 1 ;;
+    esac
+    INSTALLED_GO=$(go env GOVERSION 2>/dev/null || true)
+    INSTALLED_GO=${INSTALLED_GO#go}
+    case "$INSTALLED_GO" in
+        [0-9]*.[0-9]*) ;;
+        *) echo "Error: Could not determine installed Go version"; exit 1 ;;
+    esac
+    if ! version_at_least "$INSTALLED_GO" "$REQUIRED_GO"; then
+        echo "Error: Source requires Go ${REQUIRED_GO} or newer; found ${INSTALLED_GO}"
+        exit 1
+    fi
+
+    BUILD_DATE=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    NEXT_VERSION="next-${COMMIT}"
+    BINARY="$TMP_DIR/gordon"
+    echo "Building ${NEXT_VERSION} for ${OS}/${ARCH}..."
+    if ! (cd "$SOURCE_DIR" && CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" GOTOOLCHAIN=local \
+        go build -trimpath -ldflags "-s -w -X main.version=${NEXT_VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+        -o "$BINARY" .); then
+        echo "Error: Failed to build Gordon from source"
+        exit 1
+    fi
+    if [ ! -f "$BINARY" ] || [ -L "$BINARY" ]; then
+        echo "Error: Build did not produce a regular Gordon binary"
+        exit 1
+    fi
+
+    echo "Installing to ${INSTALL_DIR}..."
+    install_binary_atomically "$BINARY" "$INSTALL_DIR/gordon"
+    echo "Installed unverified next build ${COMMIT}."
+}
+
+case "$CHANNEL" in
+    next)
+        install_next
+        exit 0
+        ;;
+    stable|'') ;;
+    *) echo "Error: Unsupported GORDON_CHANNEL: $CHANNEL"; exit 1 ;;
+esac
 
 # Construct download URL
 TARBALL="gordon_${OS}_${ARCH}.tar.gz"
@@ -147,12 +287,7 @@ if [ ! -f "$BINARY" ] || [ -L "$BINARY" ]; then
 fi
 
 echo "Installing to ${INSTALL_DIR}..."
-if [ -w "$INSTALL_DIR" ]; then
-    install -m 0755 "$BINARY" "$INSTALL_DIR/gordon"
-else
-    echo "sudo required to install to ${INSTALL_DIR}"
-    sudo install -m 0755 "$BINARY" "$INSTALL_DIR/gordon"
-fi
+install_binary_atomically "$BINARY" "$INSTALL_DIR/gordon"
 
 # Verify installation
 if command -v gordon >/dev/null 2>&1; then

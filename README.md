@@ -19,12 +19,14 @@ The flow is explicit: build and push an image, declare the app in a standalone T
 ## Quick Start
 
 ```bash
-# Install
+# Install the latest stable release
 curl -fsSL https://gordon.bnema.dev/install.sh | sh
 
 # Start the server
 gordon serve
 ```
+
+To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://gordon.bnema.dev/docs/installation#choosing-an-install-channel).
 
 Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://gordon.bnema.dev/docs/getting-started) for full setup.
 
