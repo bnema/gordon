@@ -40,6 +40,74 @@ func (_m *MockControlPlane) EXPECT() *MockControlPlane_Expecter {
 	return &MockControlPlane_Expecter{mock: &_m.Mock}
 }
 
+// ApplyApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
+	ret := _mock.Called(ctx, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ApplyApp")
+	}
+
+	var r0 *dto.AppApplyResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.AppApplyRequest) (*dto.AppApplyResponse, error)); ok {
+		return returnFunc(ctx, req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.AppApplyRequest) *dto.AppApplyResponse); ok {
+		r0 = returnFunc(ctx, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppApplyResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, dto.AppApplyRequest) error); ok {
+		r1 = returnFunc(ctx, req)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_ApplyApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyApp'
+type MockControlPlane_ApplyApp_Call struct {
+	*mock.Call
+}
+
+// ApplyApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - req dto.AppApplyRequest
+func (_e *MockControlPlane_Expecter) ApplyApp(ctx any, req any) *MockControlPlane_ApplyApp_Call {
+	return &MockControlPlane_ApplyApp_Call{Call: _e.mock.On("ApplyApp", ctx, req)}
+}
+
+func (_c *MockControlPlane_ApplyApp_Call) Run(run func(ctx context.Context, req dto.AppApplyRequest)) *MockControlPlane_ApplyApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 dto.AppApplyRequest
+		if args[1] != nil {
+			arg1 = args[1].(dto.AppApplyRequest)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_ApplyApp_Call) Return(appApplyResponse *dto.AppApplyResponse, err error) *MockControlPlane_ApplyApp_Call {
+	_c.Call.Return(appApplyResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_ApplyApp_Call) RunAndReturn(run func(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error)) *MockControlPlane_ApplyApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // BackupStatus provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	ret := _mock.Called(ctx)
@@ -98,6 +166,69 @@ func (_c *MockControlPlane_BackupStatus_Call) Return(backupJobs []dto.BackupJob,
 }
 
 func (_c *MockControlPlane_BackupStatus_Call) RunAndReturn(run func(ctx context.Context) ([]dto.BackupJob, error)) *MockControlPlane_BackupStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeleteAppSecret provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error {
+	ret := _mock.Called(ctx, app, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeleteAppSecret")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSecretDeleteRequest) error); ok {
+		r0 = returnFunc(ctx, app, req)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockControlPlane_DeleteAppSecret_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteAppSecret'
+type MockControlPlane_DeleteAppSecret_Call struct {
+	*mock.Call
+}
+
+// DeleteAppSecret is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppSecretDeleteRequest
+func (_e *MockControlPlane_Expecter) DeleteAppSecret(ctx any, app any, req any) *MockControlPlane_DeleteAppSecret_Call {
+	return &MockControlPlane_DeleteAppSecret_Call{Call: _e.mock.On("DeleteAppSecret", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_DeleteAppSecret_Call) Run(run func(ctx context.Context, app string, req dto.AppSecretDeleteRequest)) *MockControlPlane_DeleteAppSecret_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppSecretDeleteRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppSecretDeleteRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_DeleteAppSecret_Call) Return(err error) *MockControlPlane_DeleteAppSecret_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockControlPlane_DeleteAppSecret_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error) *MockControlPlane_DeleteAppSecret_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -161,6 +292,86 @@ func (_c *MockControlPlane_DeleteSecret_Call) Return(err error) *MockControlPlan
 }
 
 func (_c *MockControlPlane_DeleteSecret_Call) RunAndReturn(run func(ctx context.Context, secretDomain string, key string) error) *MockControlPlane_DeleteSecret_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DeployApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DeployApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppDeployRequest) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, dto.AppDeployRequest) string); ok {
+		r1 = returnFunc(ctx, app, req)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, dto.AppDeployRequest) error); ok {
+		r2 = returnFunc(ctx, app, req)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_DeployApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeployApp'
+type MockControlPlane_DeployApp_Call struct {
+	*mock.Call
+}
+
+// DeployApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppDeployRequest
+func (_e *MockControlPlane_Expecter) DeployApp(ctx any, app any, req any) *MockControlPlane_DeployApp_Call {
+	return &MockControlPlane_DeployApp_Call{Call: _e.mock.On("DeployApp", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_DeployApp_Call) Run(run func(ctx context.Context, app string, req dto.AppDeployRequest)) *MockControlPlane_DeployApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppDeployRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppDeployRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_DeployApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_DeployApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_DeployApp_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)) *MockControlPlane_DeployApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -229,6 +440,74 @@ func (_c *MockControlPlane_DetectDatabases_Call) Return(databaseInfos []dto.Data
 }
 
 func (_c *MockControlPlane_DetectDatabases_Call) RunAndReturn(run func(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error)) *MockControlPlane_DetectDatabases_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DiffApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DiffApp")
+	}
+
+	var r0 *dto.AppDiffResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDiffResponse, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDiffResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDiffResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_DiffApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DiffApp'
+type MockControlPlane_DiffApp_Call struct {
+	*mock.Call
+}
+
+// DiffApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) DiffApp(ctx any, app any) *MockControlPlane_DiffApp_Call {
+	return &MockControlPlane_DiffApp_Call{Call: _e.mock.On("DiffApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_DiffApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_DiffApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_DiffApp_Call) Return(appDiffResponse *dto.AppDiffResponse, err error) *MockControlPlane_DiffApp_Call {
+	_c.Call.Return(appDiffResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_DiffApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDiffResponse, error)) *MockControlPlane_DiffApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -619,6 +898,68 @@ func (_c *MockControlPlane_GetTrafficStatus_Call) Return(trafficStatusResponse *
 }
 
 func (_c *MockControlPlane_GetTrafficStatus_Call) RunAndReturn(run func(ctx context.Context) (*dto.TrafficStatusResponse, error)) *MockControlPlane_GetTrafficStatus_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListApps provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListApps")
+	}
+
+	var r0 []dto.AppSummaryDTO
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]dto.AppSummaryDTO, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []dto.AppSummaryDTO); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]dto.AppSummaryDTO)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_ListApps_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListApps'
+type MockControlPlane_ListApps_Call struct {
+	*mock.Call
+}
+
+// ListApps is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockControlPlane_Expecter) ListApps(ctx any) *MockControlPlane_ListApps_Call {
+	return &MockControlPlane_ListApps_Call{Call: _e.mock.On("ListApps", ctx)}
+}
+
+func (_c *MockControlPlane_ListApps_Call) Run(run func(ctx context.Context)) *MockControlPlane_ListApps_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_ListApps_Call) Return(appSummaryDTOs []dto.AppSummaryDTO, err error) *MockControlPlane_ListApps_Call {
+	_c.Call.Return(appSummaryDTOs, err)
+	return _c
+}
+
+func (_c *MockControlPlane_ListApps_Call) RunAndReturn(run func(ctx context.Context) ([]dto.AppSummaryDTO, error)) *MockControlPlane_ListApps_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1019,6 +1360,80 @@ func (_c *MockControlPlane_ListVolumes_Call) RunAndReturn(run func(ctx context.C
 	return _c
 }
 
+// OperationByKey provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) OperationByKey(ctx context.Context, app string, key string) (*dto.AppDeployResponse, error) {
+	ret := _mock.Called(ctx, app, key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OperationByKey")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.AppDeployResponse, error)); ok {
+		return returnFunc(ctx, app, key)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, key)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, key)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_OperationByKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OperationByKey'
+type MockControlPlane_OperationByKey_Call struct {
+	*mock.Call
+}
+
+// OperationByKey is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - key string
+func (_e *MockControlPlane_Expecter) OperationByKey(ctx any, app any, key any) *MockControlPlane_OperationByKey_Call {
+	return &MockControlPlane_OperationByKey_Call{Call: _e.mock.On("OperationByKey", ctx, app, key)}
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) Run(run func(ctx context.Context, app string, key string)) *MockControlPlane_OperationByKey_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) Return(appDeployResponse *dto.AppDeployResponse, err error) *MockControlPlane_OperationByKey_Call {
+	_c.Call.Return(appDeployResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) RunAndReturn(run func(ctx context.Context, app string, key string) (*dto.AppDeployResponse, error)) *MockControlPlane_OperationByKey_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PruneVolumes provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
 	ret := _mock.Called(ctx, req)
@@ -1134,6 +1549,160 @@ func (_c *MockControlPlane_Reload_Call) Return(err error) *MockControlPlane_Relo
 }
 
 func (_c *MockControlPlane_Reload_Call) RunAndReturn(run func(ctx context.Context) error) *MockControlPlane_Reload_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RemoveApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_RemoveApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveApp'
+type MockControlPlane_RemoveApp_Call struct {
+	*mock.Call
+}
+
+// RemoveApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) RemoveApp(ctx any, app any) *MockControlPlane_RemoveApp_Call {
+	return &MockControlPlane_RemoveApp_Call{Call: _e.mock.On("RemoveApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_RemoveApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_RemoveApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_RemoveApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RestartApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) RestartApp(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, service)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RestartApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, service)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, service)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) string); ok {
+		r1 = returnFunc(ctx, app, service)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, string) error); ok {
+		r2 = returnFunc(ctx, app, service)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_RestartApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RestartApp'
+type MockControlPlane_RestartApp_Call struct {
+	*mock.Call
+}
+
+// RestartApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+func (_e *MockControlPlane_Expecter) RestartApp(ctx any, app any, service any) *MockControlPlane_RestartApp_Call {
+	return &MockControlPlane_RestartApp_Call{Call: _e.mock.On("RestartApp", ctx, app, service)}
+}
+
+func (_c *MockControlPlane_RestartApp_Call) Run(run func(ctx context.Context, app string, service string)) *MockControlPlane_RestartApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_RestartApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_RestartApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_RestartApp_Call) RunAndReturn(run func(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RestartApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1286,6 +1855,69 @@ func (_c *MockControlPlane_RunVolumeBackups_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// SetAppSecrets provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
+	ret := _mock.Called(ctx, app, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAppSecrets")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSecretSetRequest) error); ok {
+		r0 = returnFunc(ctx, app, req)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockControlPlane_SetAppSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAppSecrets'
+type MockControlPlane_SetAppSecrets_Call struct {
+	*mock.Call
+}
+
+// SetAppSecrets is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppSecretSetRequest
+func (_e *MockControlPlane_Expecter) SetAppSecrets(ctx any, app any, req any) *MockControlPlane_SetAppSecrets_Call {
+	return &MockControlPlane_SetAppSecrets_Call{Call: _e.mock.On("SetAppSecrets", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_SetAppSecrets_Call) Run(run func(ctx context.Context, app string, req dto.AppSecretSetRequest)) *MockControlPlane_SetAppSecrets_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppSecretSetRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppSecretSetRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_SetAppSecrets_Call) Return(err error) *MockControlPlane_SetAppSecrets_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockControlPlane_SetAppSecrets_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSecretSetRequest) error) *MockControlPlane_SetAppSecrets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SetSecrets provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
 	ret := _mock.Called(ctx, secretDomain, secrets)
@@ -1345,6 +1977,222 @@ func (_c *MockControlPlane_SetSecrets_Call) Return(err error) *MockControlPlane_
 }
 
 func (_c *MockControlPlane_SetSecrets_Call) RunAndReturn(run func(ctx context.Context, secretDomain string, secrets map[string]string) error) *MockControlPlane_SetSecrets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ShowApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ShowApp")
+	}
+
+	var r0 *dto.AppShowResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppShowResponse, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppShowResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppShowResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_ShowApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ShowApp'
+type MockControlPlane_ShowApp_Call struct {
+	*mock.Call
+}
+
+// ShowApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) ShowApp(ctx any, app any) *MockControlPlane_ShowApp_Call {
+	return &MockControlPlane_ShowApp_Call{Call: _e.mock.On("ShowApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_ShowApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_ShowApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_ShowApp_Call) Return(appShowResponse *dto.AppShowResponse, err error) *MockControlPlane_ShowApp_Call {
+	_c.Call.Return(appShowResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_ShowApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppShowResponse, error)) *MockControlPlane_ShowApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StartApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StartApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_StartApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartApp'
+type MockControlPlane_StartApp_Call struct {
+	*mock.Call
+}
+
+// StartApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) StartApp(ctx any, app any) *MockControlPlane_StartApp_Call {
+	return &MockControlPlane_StartApp_Call{Call: _e.mock.On("StartApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_StartApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_StartApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StartApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_StartApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StartApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_StartApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StopApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StopApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_StopApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StopApp'
+type MockControlPlane_StopApp_Call struct {
+	*mock.Call
+}
+
+// StopApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) StopApp(ctx any, app any) *MockControlPlane_StopApp_Call {
+	return &MockControlPlane_StopApp_Call{Call: _e.mock.On("StopApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_StopApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_StopApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StopApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_StopApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StopApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_StopApp_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -10,11 +10,12 @@ import (
 )
 
 type remoteControlPlane struct {
+	*remoteAppControlPlane
 	client *remote.Client
 }
 
 func NewRemoteControlPlane(client *remote.Client) ControlPlane {
-	return &remoteControlPlane{client: client}
+	return &remoteControlPlane{remoteAppControlPlane: &remoteAppControlPlane{client: client}, client: client}
 }
 
 func (r *remoteControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {

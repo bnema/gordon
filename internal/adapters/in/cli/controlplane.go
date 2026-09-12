@@ -11,6 +11,8 @@ import (
 // ControlPlane defines command operations available to CLI execution paths.
 // Both explicit remote and local-daemon implementations call admin HTTP APIs.
 type ControlPlane interface {
+	AppControlPlane
+
 	ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
 	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error
 	DeleteSecret(ctx context.Context, secretDomain, key string) error
