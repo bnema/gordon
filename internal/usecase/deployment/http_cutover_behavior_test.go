@@ -114,7 +114,14 @@ func TestDeploy_HTTPZeroDowntimeBehavior(t *testing.T) {
 		_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
 		done <- err
 	}()
-	<-probeStarted
+	select {
+	case <-probeStarted:
+	case err := <-done:
+		require.NoError(t, err)
+		t.Fatal("deploy completed before readiness probe started")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for readiness probe")
+	}
 	for range 20 {
 		resp, err := http.Get(front.URL) //nolint:noctx // bounded local test server
 		require.NoError(t, err)

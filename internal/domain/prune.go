@@ -922,6 +922,7 @@ func (s *PruneProtectionSnapshot) WithRoots(roots ...ProtectionRoot) *PruneProte
 		clone.Roots = make([]ProtectionRoot, 0, len(s.Roots)+len(roots))
 		clone.Roots = append(clone.Roots, s.Roots...)
 		clone.VolumeClaims = append([]VolumeClaim(nil), s.VolumeClaims...)
+		clone.ImageClaims = append([]ImageClaim(nil), s.ImageClaims...)
 		clone.Gaps = append([]InventoryGap(nil), s.Gaps...)
 	}
 	for _, root := range roots {

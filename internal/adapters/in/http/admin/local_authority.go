@@ -78,7 +78,7 @@ func localSecretPathAllowed(method string, parts []string) bool {
 }
 
 func localLogPathAllowed(method string, parts []string) bool {
-	return (len(parts) == 1 || len(parts) == 2 && parts[1] != "") && method == http.MethodGet
+	return (len(parts) == 1 || len(parts) == 3 && parts[1] != "" && parts[2] != "") && method == http.MethodGet
 }
 
 func localTagPathAllowed(method string, parts []string) bool {
@@ -141,8 +141,11 @@ func localAppRouteShape(parts []string) string {
 }
 
 func localBackupPathAllowed(method string, parts []string) bool {
-	if len(parts) == 2 && parts[1] != "" && parts[1] != "status" && parts[1] != "volumes" {
-		return method == http.MethodGet || method == http.MethodPost
+	if len(parts) == 2 {
+		if parts[1] == "volumes" {
+			return method == http.MethodPost
+		}
+		return parts[1] != "" && parts[1] != "status" && (method == http.MethodGet || method == http.MethodPost)
 	}
 	if len(parts) == 3 && parts[1] == "volumes" && parts[2] != "" && parts[2] != "status" {
 		return method == http.MethodGet || method == http.MethodPost

@@ -28,6 +28,7 @@ func mockDeps(t *testing.T) (*outmocks.MockAppState, *outmocks.MockContainerRunt
 
 func mockRevision() domain.AppDesiredRevision {
 	svc := webService()
+	svc.Image = "docker.io/example/web:1.4.2"
 	svc.Readiness.Timeout = time.Second
 	return domain.AppDesiredRevision{
 		Revision: "rev-1", App: "blog",
@@ -89,6 +90,7 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	svcSpec := webService()
+	svcSpec.Image = "registry.example.com/blog/web:1.4.2"
 	svcSpec.HTTP = nil
 	svcSpec.Readiness = domain.AppReadiness{}
 	rev := domain.AppDesiredRevision{
@@ -522,7 +524,7 @@ func TestDeploy_Mockery_InjectsAppEnvAndSecrets(t *testing.T) {
 			Services: []domain.AppService{
 				svcSpec,
 				{
-					Name: "worker", Image: "registry.example.com/blog/worker:1.4.2",
+					Name: "worker", Image: "docker.io/example/worker:1.4.2",
 					StopGrace: 10 * time.Second,
 					Readiness: domain.AppReadiness{Timeout: 30 * time.Second},
 					Secrets:   map[string]string{},
@@ -534,7 +536,7 @@ func TestDeploy_Mockery_InjectsAppEnvAndSecrets(t *testing.T) {
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
-	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[1].Image).Return("sha256:def", nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[1].Image).Return("sha256:"+strings.Repeat("b", 64), nil).Once()
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("s3cr3t", nil).Twice()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, rev.Spec.Services[0].Image).Return(nil, nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, rev.Spec.Services[1].Image).Return(nil, nil).Once()

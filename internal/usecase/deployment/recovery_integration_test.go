@@ -142,6 +142,7 @@ func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
 
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string) (int, error) { return 500, nil },
 		func(context.Context, string) error { return assert.AnError },

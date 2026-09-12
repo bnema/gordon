@@ -117,13 +117,21 @@ func TestDiffAppSpec_DeterministicAndRedacted(t *testing.T) {
 		Readiness: domain.AppReadiness{Type: "none", Timeout: 30 * time.Second},
 	})
 	after.Services[0].Image = "registry.example.com/blog/web:1.5.0"
+	after.Services[0].StopGrace = 20 * time.Second
 	after.Services[0].Secrets = map[string]string{"DATABASE_URL": "database-url-v2"}
+	after.Services[0].Databases = []domain.AppDatabase{{Name: "main", Type: "postgres", Schedule: "daily"}}
+	after.Services[0].Backup = domain.AppBackup{Postgres: []string{"main"}}
+	after.Networks = []domain.AppSharedNetwork{{Network: "shared", Services: []string{"web"}}}
 	after.Env["NEW_KEY"] = "v"
 
 	diff := domain.DiffAppSpec(after, before)
 	assert.Equal(t, []string{"service/worker"}, diff.Added)
 	assert.Empty(t, diff.Removed)
 	assert.Contains(t, diff.Changed, "service/web/image")
+	assert.Contains(t, diff.Changed, "service/web/stop_grace")
+	assert.Contains(t, diff.Changed, "service/web/databases")
+	assert.Contains(t, diff.Changed, "service/web/backup")
+	assert.Contains(t, diff.Changed, "networks")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url-v2")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url")
 	assert.Contains(t, diff.Changed, "env")

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/google/uuid"
@@ -88,7 +89,7 @@ func NewStore(dataDir string, log zerowrap.Logger) (*Store, error) {
 	if err := os.MkdirAll(root, dirPerm); err != nil {
 		return nil, fmt.Errorf("appstate: create store root: %w", domain.ErrAppStateIO)
 	}
-	db, err := bolt.Open(filepath.Join(root, stateFile), 0o600, nil)
+	db, err := bolt.Open(filepath.Join(root, stateFile), 0o600, &bolt.Options{Timeout: 5 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("appstate: open state db: %w", domain.ErrAppStateIO)
 	}
@@ -1306,7 +1307,7 @@ func archiveRetainedOwnershipLocked(tx *bolt.Tx, bucket *bolt.Bucket) error {
 // operational state, then resets the app record so the next write assigns
 // a fresh incarnation UUID.
 func clearIncarnationStateLocked(bucket *bolt.Bucket, app string) error {
-	for _, key := range [][]byte{keyOwnership, keyDesired, keyActive, keyIntent} {
+	for _, key := range [][]byte{keyOwnership, keyDesired, keyActive, keyIntent, keyInhibitions} {
 		if err := bucket.Delete(key); err != nil {
 			return fmt.Errorf("appstate: retire %s: %w", app, domain.ErrAppStateIO)
 		}
@@ -1434,6 +1435,9 @@ func checkBackendConflicts(existing []domain.AppListenerReservation, binds []dom
 // new set, preserving every other claim (old and replacement coexist
 // until the old container's verified withdrawal).
 func replaceContainerClaims(existing []domain.AppListenerReservation, binds []domain.AppListenerReservation) []domain.AppListenerReservation {
+	if len(binds) == 0 {
+		return existing
+	}
 	kept := existing[:0]
 	for _, res := range existing {
 		if res.Owner == domain.OwnerGordonBackend && res.App == binds[0].App && res.ContainerID == binds[0].ContainerID {

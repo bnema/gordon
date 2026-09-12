@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"net"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -696,6 +697,9 @@ func DiffAppSpec(desired, effective AppSpec) AppDiff {
 	if !equalStringMaps(desired.Env, effective.Env) {
 		diff.Changed = append(diff.Changed, "env")
 	}
+	if !reflect.DeepEqual(desired.Networks, effective.Networks) {
+		diff.Changed = append(diff.Changed, "networks")
+	}
 	sort.Strings(diff.Added)
 	sort.Strings(diff.Removed)
 	sort.Strings(diff.Changed)
@@ -710,6 +714,9 @@ func diffService(name string, desired, effective AppService) []string {
 	}
 	if strings.Join(desired.Command, "\x00") != strings.Join(effective.Command, "\x00") {
 		changed = append(changed, "service/"+name+"/command")
+	}
+	if desired.StopGrace != effective.StopGrace {
+		changed = append(changed, "service/"+name+"/stop_grace")
 	}
 	if desired.Readiness != effective.Readiness {
 		changed = append(changed, "service/"+name+"/readiness")
@@ -727,6 +734,12 @@ func diffService(name string, desired, effective AppService) []string {
 	}
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
+	}
+	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
+		changed = append(changed, "service/"+name+"/databases")
+	}
+	if !reflect.DeepEqual(desired.Backup, effective.Backup) {
+		changed = append(changed, "service/"+name+"/backup")
 	}
 	return changed
 }

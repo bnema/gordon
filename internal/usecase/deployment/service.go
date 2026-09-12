@@ -101,6 +101,9 @@ type Service struct {
 // NewService creates the deployment engine. All deps are required;
 // Secrets may be nil only in tests that never reach secret preflight.
 func NewService(deps Deps, log zerowrap.Logger) *Service {
+	if deps.ImagePolicy.InstallationRegistry == "" {
+		deps.ImagePolicy.InstallationRegistry = deps.Registry.Domain
+	}
 	return &Service{
 		deps:    deps,
 		log:     log,

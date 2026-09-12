@@ -2,6 +2,7 @@ package deployment_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func testRevision(app string, services ...domain.AppService) domain.AppDesiredRe
 
 func webService() domain.AppService {
 	return domain.AppService{
-		Name: "web", Image: "registry.example.com/blog/web:1.4.2",
+		Name: "web", Image: "docker.io/example/web:1.4.2",
 		Readiness: domain.AppReadiness{Type: "http", Path: "/healthz"},
 		HTTP:      []domain.AppHTTPInterface{{Host: "blog.example.com", Port: 8080, TLS: "auto"}},
 		Secrets:   map[string]string{"DATABASE_URL": "database-url"},
@@ -266,19 +267,21 @@ func TestPreflight_MutableTagReresolved(t *testing.T) {
 	svcSpec.Image = "registry.example.com/blog/web:latest"
 	rev := testRevision("blog", svcSpec)
 
+	firstDigest := "sha256:" + strings.Repeat("a", 64)
+	secondDigest := "sha256:" + strings.Repeat("b", 64)
 	state, runtime, images, secrets := newDeps()
-	expectFullPreflight(state, runtime, images, secrets, rev, nil, "sha256:first", "x", nil)
+	expectFullPreflight(state, runtime, images, secrets, rev, nil, firstDigest, "x", nil)
 	svc := preflightService(t, state, runtime, images, secrets)
 	_, op1, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog"})
 	require.NoError(t, err)
-	assert.Contains(t, op1.Steps[1].Digest, "sha256:first")
+	assert.Contains(t, op1.Steps[1].Digest, firstDigest)
 
 	state2, runtime2, images2, secrets2 := newDeps()
-	expectFullPreflight(state2, runtime2, images2, secrets2, rev, nil, "sha256:second", "x", nil)
+	expectFullPreflight(state2, runtime2, images2, secrets2, rev, nil, secondDigest, "x", nil)
 	svc2 := preflightService(t, state2, runtime2, images2, secrets2)
 	_, op2, err := svc2.Preflight(ctx, deployment.DeployInput{App: "blog"})
 	require.NoError(t, err)
-	assert.Contains(t, op2.Steps[1].Digest, "sha256:second")
+	assert.Contains(t, op2.Steps[1].Digest, secondDigest)
 	assert.NotEqual(t, op1.Op, op2.Op)
 }
 
