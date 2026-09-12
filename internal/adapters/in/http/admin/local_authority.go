@@ -150,5 +150,5 @@ func localBackupPathAllowed(method string, parts []string) bool {
 	if len(parts) == 3 && parts[1] == "volumes" && parts[2] != "" && parts[2] != "status" {
 		return method == http.MethodGet || method == http.MethodPost
 	}
-	return len(parts) == 3 && parts[1] != "" && parts[1] != "volumes" && parts[2] == "detect" && method == http.MethodGet
+	return false
 }

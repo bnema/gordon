@@ -24,7 +24,7 @@ var uiAdoptionExpectations = []uiAdoptionExpectation{
 	{
 		family:    "backups",
 		file:      "backup.go",
-		functions: []string{"newBackupListCmd", "newBackupRunCmd", "newBackupDetectCmd", "newBackupStatusCmd"},
+		functions: []string{"printBackupJobs", "printVolumeBackupJobs"},
 	},
 	{
 		family:    "images",

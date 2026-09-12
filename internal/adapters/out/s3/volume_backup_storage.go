@@ -84,8 +84,8 @@ func (s *VolumeBackupStorage) StoreVolumeArchive(ctx context.Context, job domain
 	if s.bucket == "" {
 		return "", fmt.Errorf("s3 bucket is required")
 	}
-	if job.Domain == "" {
-		return "", fmt.Errorf("backup domain is required")
+	if job.App == "" {
+		return "", fmt.Errorf("backup app is required")
 	}
 	if job.VolumeName == "" {
 		return "", fmt.Errorf("backup volume name is required")
@@ -105,7 +105,7 @@ func (s *VolumeBackupStorage) StoreVolumeArchive(ctx context.Context, job domain
 		Body:        data,
 		ContentType: aws.String(contentTypeForCompression(compression)),
 		Metadata: map[string]string{
-			"gordon-domain":      job.Domain,
+			"gordon-app":         job.App,
 			"gordon-volume":      job.VolumeName,
 			"gordon-container":   job.ContainerName,
 			"gordon-mount-path":  job.MountPath,
@@ -143,8 +143,8 @@ func (s *VolumeBackupStorage) GetVolumeArchive(ctx context.Context, artifactRef 
 }
 
 // ListVolumeArchives lists completed volume archive backups for a domain.
-func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, domainName string) ([]domain.VolumeBackupJob, error) {
-	listPrefix := s.domainPrefix(domainName)
+func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, app string) ([]domain.VolumeBackupJob, error) {
+	listPrefix := s.appPrefix(app)
 	jobs := make([]domain.VolumeBackupJob, 0)
 	var token *string
 	for {
@@ -160,7 +160,7 @@ func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, domainName
 			if obj.Key == nil {
 				continue
 			}
-			job, ok := s.jobFromKey(domainName, *obj.Key)
+			job, ok := s.jobFromKey(app, *obj.Key)
 			if !ok {
 				continue
 			}
@@ -212,7 +212,7 @@ func (s *VolumeBackupStorage) DeleteVolumeArchive(ctx context.Context, artifactR
 }
 
 // ApplyVolumeRetention deletes old completed volume archives according to the keep count.
-func (s *VolumeBackupStorage) ApplyVolumeRetention(ctx context.Context, domainName string, policy domain.VolumeBackupRetentionPolicy) (int, error) {
+func (s *VolumeBackupStorage) ApplyVolumeRetention(ctx context.Context, app string, policy domain.VolumeBackupRetentionPolicy) (int, error) {
 	if policy.Keep < 0 {
 		return 0, fmt.Errorf("volume backup retention keep cannot be negative")
 	}
@@ -220,7 +220,7 @@ func (s *VolumeBackupStorage) ApplyVolumeRetention(ctx context.Context, domainNa
 		return 0, nil
 	}
 
-	jobs, err := s.ListVolumeArchives(ctx, domainName)
+	jobs, err := s.ListVolumeArchives(ctx, app)
 	if err != nil {
 		return 0, err
 	}
@@ -258,15 +258,18 @@ func (s *VolumeBackupStorage) objectKey(job domain.VolumeBackupJob) string {
 		ext = "tar.gz"
 	}
 	fileName := fmt.Sprintf("%s-%s.%s", started.Format(volumeBackupTimestampLayout), sanitizeS3KeyComponent(id), ext)
-	parts := []string{s.prefix, "domains", sanitizeS3KeyComponent(job.Domain), "volumes", sanitizeS3KeyComponent(job.VolumeName), fileName}
+	parts := []string{s.prefix, "apps", sanitizeS3KeyComponent(job.App), "volumes", sanitizeS3KeyComponent(job.VolumeName), fileName}
 	return joinS3Key(parts...)
 }
 
-func (s *VolumeBackupStorage) domainPrefix(domainName string) string {
-	if strings.TrimSpace(domainName) == "" {
-		return joinS3Key(s.prefix, "domains") + "/"
+// appPrefix is the object prefix of one app's volume archives, or of every
+// app when app is empty. Object keys are app-based; artifacts written by
+// older versions under a domain prefix are never read or migrated here.
+func (s *VolumeBackupStorage) appPrefix(app string) string {
+	if strings.TrimSpace(app) == "" {
+		return joinS3Key(s.prefix, "apps") + "/"
 	}
-	return joinS3Key(s.prefix, "domains", sanitizeS3KeyComponent(domainName), "volumes") + "/"
+	return joinS3Key(s.prefix, "apps", sanitizeS3KeyComponent(app), "volumes") + "/"
 }
 
 func (s *VolumeBackupStorage) artifactRef(key string) string {
@@ -290,18 +293,18 @@ func (s *VolumeBackupStorage) keyFromArtifactRef(artifactRef string) (string, er
 	return strings.TrimPrefix(artifactRef, "/"), nil
 }
 
-func (s *VolumeBackupStorage) jobFromKey(domainName, key string) (domain.VolumeBackupJob, bool) {
+func (s *VolumeBackupStorage) jobFromKey(app, key string) (domain.VolumeBackupJob, bool) {
 	var rel string
-	if strings.TrimSpace(domainName) == "" {
-		rel = strings.TrimPrefix(key, joinS3Key(s.prefix, "domains")+"/")
+	if strings.TrimSpace(app) == "" {
+		rel = strings.TrimPrefix(key, joinS3Key(s.prefix, "apps")+"/")
 		parts := strings.Split(rel, "/")
 		if len(parts) != 4 || parts[1] != "volumes" {
 			return domain.VolumeBackupJob{}, false
 		}
-		domainName = parts[0]
+		app = parts[0]
 		rel = strings.Join(parts[2:], "/")
 	} else {
-		rel = strings.TrimPrefix(key, joinS3Key(s.prefix, "domains", sanitizeS3KeyComponent(domainName), "volumes")+"/")
+		rel = strings.TrimPrefix(key, joinS3Key(s.prefix, "apps", sanitizeS3KeyComponent(app), "volumes")+"/")
 	}
 	parts := strings.Split(rel, "/")
 	if len(parts) != 2 {
@@ -318,7 +321,7 @@ func (s *VolumeBackupStorage) jobFromKey(domainName, key string) (domain.VolumeB
 	}
 	return domain.VolumeBackupJob{
 		ID:          id,
-		Domain:      domainName,
+		App:         app,
 		VolumeName:  volumeName,
 		Type:        domain.BackupTypeVolumeArchive,
 		Status:      domain.BackupStatusCompleted,

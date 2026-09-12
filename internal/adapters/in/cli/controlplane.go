@@ -25,13 +25,12 @@ type ControlPlane interface {
 	GetConfig(ctx context.Context) (*remote.Config, error)
 	ListTags(ctx context.Context, repository string) ([]string, error)
 
-	ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error)
+	ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error)
 	BackupStatus(ctx context.Context) ([]dto.BackupJob, error)
-	RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error)
-	DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error)
-	ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error)
+	RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error)
+	ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error)
 	VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error)
-	RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error)
+	RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error)
 
 	GetProcessLogs(ctx context.Context, lines int) ([]string, error)
 	GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error)

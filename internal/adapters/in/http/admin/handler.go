@@ -66,8 +66,9 @@ func toBackupJobResponse(job domain.BackupJob) dto.BackupJob {
 
 	return dto.BackupJob{
 		ID:          job.ID,
-		Domain:      job.Domain,
-		DBName:      job.DBName,
+		App:         job.App,
+		Service:     job.Service,
+		Database:    job.DBName,
 		Schedule:    string(job.Schedule),
 		Type:        string(job.Type),
 		Status:      string(job.Status),
@@ -91,32 +92,20 @@ func toVolumeBackupJobResponse(job domain.VolumeBackupJob) dto.VolumeBackupJob {
 	}
 
 	return dto.VolumeBackupJob{
-		ID:            job.ID,
-		Domain:        job.Domain,
-		ContainerName: job.ContainerName,
-		ContainerID:   job.ContainerID,
-		VolumeName:    job.VolumeName,
-		MountPath:     job.MountPath,
-		Compression:   job.Metadata["compression"],
-		Type:          string(job.Type),
-		Status:        string(job.Status),
-		StartedAt:     startedAt,
-		CompletedAt:   completedAt,
-		SizeBytes:     job.SizeBytes,
-		ArtifactRef:   job.ArtifactRef,
-		Error:         job.Error,
-	}
-}
-
-func toDatabaseInfoResponse(db domain.DBInfo) dto.DatabaseInfo {
-	return dto.DatabaseInfo{
-		Type:        string(db.Type),
-		Name:        db.Name,
-		Version:     db.Version,
-		Host:        db.Host,
-		Port:        db.Port,
-		ContainerID: db.ContainerID,
-		ImageName:   db.ImageName,
+		ID:                job.ID,
+		App:               job.App,
+		Service:           job.Service,
+		VolumeName:        job.VolumeName,
+		RuntimeVolumeName: job.RuntimeVolumeName,
+		MountPath:         job.MountPath,
+		Compression:       job.Metadata["compression"],
+		Type:              string(job.Type),
+		Status:            string(job.Status),
+		StartedAt:         startedAt,
+		CompletedAt:       completedAt,
+		SizeBytes:         job.SizeBytes,
+		ArtifactRef:       job.ArtifactRef,
+		Error:             job.Error,
 	}
 }
 
@@ -503,18 +492,13 @@ func (h *Handler) handleBackups(w http.ResponseWriter, r *http.Request, path str
 	suffix := strings.TrimPrefix(path, "/backups/")
 	parts := strings.Split(suffix, "/")
 	if len(parts) == 0 || parts[0] == "" {
-		h.sendError(w, http.StatusBadRequest, "domain required in path")
+		h.sendError(w, http.StatusBadRequest, "app required in path")
 		return
 	}
 
 	backupDomain := parts[0]
 	if len(parts) == 1 {
-		h.handleBackupsDomain(w, r, backupDomain)
-		return
-	}
-
-	if len(parts) == 2 && parts[1] == "detect" {
-		h.handleBackupsDetect(w, r, backupDomain)
+		h.handleBackupsApp(w, r, backupDomain)
 		return
 	}
 
@@ -586,7 +570,7 @@ func (h *Handler) handleVolumeBackupsDomain(w http.ResponseWriter, r *http.Reque
 			h.sendError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		jobs, err := h.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, req.Volume)
+		jobs, err := h.volumeBackupSvc.RunVolumeBackups(ctx, backupDomain, req.Service, req.Volume)
 		backups := mapVolumeBackupJobsResponse(jobs)
 		if err != nil {
 			if len(backups) > 0 {
@@ -621,25 +605,25 @@ func (h *Handler) handleBackupsStatus(w http.ResponseWriter, r *http.Request) {
 	h.sendJSON(w, http.StatusOK, dto.BackupsResponse{Backups: mapBackupJobsResponse(jobs)})
 }
 
-func (h *Handler) handleBackupsDomain(w http.ResponseWriter, r *http.Request, backupDomain string) {
+func (h *Handler) handleBackupsApp(w http.ResponseWriter, r *http.Request, app string) {
 	switch r.Method {
 	case http.MethodGet:
-		h.handleBackupsDomainList(w, r, backupDomain)
+		h.handleBackupsAppList(w, r, app)
 	case http.MethodPost:
-		h.handleBackupsDomainRun(w, r, backupDomain)
+		h.handleBackupsAppRun(w, r, app)
 	default:
 		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
-func (h *Handler) handleBackupsDomainList(w http.ResponseWriter, r *http.Request, backupDomain string) {
+func (h *Handler) handleBackupsAppList(w http.ResponseWriter, r *http.Request, app string) {
 	ctx := r.Context()
 	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
 		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
 		return
 	}
 
-	jobs, err := h.backupSvc.ListBackups(ctx, backupDomain)
+	jobs, err := h.backupSvc.ListBackups(ctx, app)
 	if err != nil {
 		h.sendError(w, http.StatusInternalServerError, "failed to list backups")
 		return
@@ -648,7 +632,7 @@ func (h *Handler) handleBackupsDomainList(w http.ResponseWriter, r *http.Request
 	h.sendJSON(w, http.StatusOK, dto.BackupsResponse{Backups: mapBackupJobsResponse(jobs)})
 }
 
-func (h *Handler) handleBackupsDomainRun(w http.ResponseWriter, r *http.Request, backupDomain string) {
+func (h *Handler) handleBackupsAppRun(w http.ResponseWriter, r *http.Request, app string) {
 	ctx := r.Context()
 	if !HasAccess(ctx, domain.AdminResourceConfig, domain.AdminActionWrite) {
 		h.sendError(w, http.StatusForbidden, "insufficient permissions for config:write")
@@ -662,46 +646,22 @@ func (h *Handler) handleBackupsDomainRun(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	result, err := h.backupSvc.RunBackup(ctx, backupDomain, req.DB)
+	result, err := h.backupSvc.RunBackup(ctx, app, req.Service, req.Database)
 	if err != nil {
 		log := zerowrap.FromCtx(ctx)
-		log.Error().Err(err).Str("domain", backupDomain).Msg("backup run failed")
+		log.Error().Err(err).Str("app", app).Msg("backup run failed")
 		h.sendError(w, http.StatusInternalServerError, "failed to run backup")
 		return
 	}
 	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("domain", backupDomain).Str("db", req.DB).Str("job_id", result.Job.ID).Msg("backup completed via admin API")
+	log.Info().Str("app", app).Str("service", req.Service).Str("database", req.Database).
+		Str("job_id", result.Job.ID).Msg("backup completed via admin API")
 
 	job := toBackupJobResponse(result.Job)
 	h.sendJSON(w, http.StatusOK, dto.BackupRunResponse{
 		Status: "completed",
 		Backup: &job,
 	})
-}
-
-func (h *Handler) handleBackupsDetect(w http.ResponseWriter, r *http.Request, backupDomain string) {
-	ctx := r.Context()
-	if r.Method != http.MethodGet {
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	if !HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for status:read")
-		return
-	}
-
-	dbs, err := h.backupSvc.DetectDatabases(ctx, backupDomain)
-	if err != nil {
-		h.sendError(w, http.StatusInternalServerError, "failed to detect databases")
-		return
-	}
-
-	response := make([]dto.DatabaseInfo, 0, len(dbs))
-	for _, db := range dbs {
-		response = append(response, toDatabaseInfoResponse(db))
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.BackupDetectResponse{Databases: response})
 }
 
 func mapBackupJobsResponse(jobs []domain.BackupJob) []dto.BackupJob {

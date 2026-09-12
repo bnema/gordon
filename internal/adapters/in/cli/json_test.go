@@ -86,7 +86,7 @@ func TestPinList_JSONShape_RoundTripsTags(t *testing.T) {
 
 func TestBackupList_JSONShape_RoundTripsJobs(t *testing.T) {
 	startedAt := time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)
-	jobs := []domain.BackupJob{{ID: "b1", Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted, StartedAt: startedAt}}
+	jobs := []domain.BackupJob{{ID: "b1", App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted, StartedAt: startedAt}}
 
 	payload, err := json.Marshal(jobs)
 	require.NoError(t, err)
@@ -95,7 +95,9 @@ func TestBackupList_JSONShape_RoundTripsJobs(t *testing.T) {
 	require.NoError(t, json.Unmarshal(payload, &got))
 	require.Len(t, got, 1)
 	assert.Equal(t, "b1", got[0].ID)
-	assert.Equal(t, "app.example.com", got[0].Domain)
+	assert.Equal(t, "shop", got[0].App)
+	assert.Equal(t, "api", got[0].Service)
+	assert.Equal(t, "orders", got[0].DBName)
 }
 
 func TestTokenList_JSONShape_RoundTripsTokens(t *testing.T) {

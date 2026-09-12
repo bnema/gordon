@@ -50,8 +50,8 @@ func expandTilde(path string) string {
 }
 
 // Store saves backup data and returns the absolute storage path.
-func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error) {
-	domainPart := sanitizeBackupPathComponent(domainName)
+func (s *BackupStorage) Store(_ context.Context, app, dbName string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error) {
+	appPart := sanitizeBackupPathComponent(app)
 	dbPart := sanitizeBackupPathComponent(dbName)
 	schedulePart := string(schedule)
 	if schedulePart == "" {
@@ -59,7 +59,7 @@ func (s *BackupStorage) Store(_ context.Context, domainName, dbName string, sche
 	}
 	schedulePart = sanitizeBackupPathComponent(schedulePart)
 
-	backupDir := filepath.Join(s.rootDir, domainPart, dbPart, schedulePart)
+	backupDir := filepath.Join(s.rootDir, appPart, dbPart, schedulePart)
 	if err := os.MkdirAll(backupDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create backup path: %w", err)
 	}
@@ -107,9 +107,9 @@ func (s *BackupStorage) Get(_ context.Context, path string) (io.ReadCloser, erro
 }
 
 // List returns backups for a domain, optionally filtered by schedule.
-func (s *BackupStorage) List(_ context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.BackupJob, error) {
-	domainRoot := filepath.Join(s.rootDir, sanitizeBackupPathComponent(domainName))
-	if _, err := os.Stat(domainRoot); err != nil {
+func (s *BackupStorage) List(_ context.Context, app string, schedule *domain.BackupSchedule) ([]domain.BackupJob, error) {
+	appRoot := filepath.Join(s.rootDir, sanitizeBackupPathComponent(app))
+	if _, err := os.Stat(appRoot); err != nil {
 		if os.IsNotExist(err) {
 			return []domain.BackupJob{}, nil
 		}
@@ -117,7 +117,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 	}
 
 	jobs := make([]domain.BackupJob, 0)
-	err := filepath.WalkDir(domainRoot, func(path string, d os.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(appRoot, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -125,7 +125,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 			return nil
 		}
 
-		rel, err := filepath.Rel(domainRoot, path)
+		rel, err := filepath.Rel(appRoot, path)
 		if err != nil {
 			return nil
 		}
@@ -153,7 +153,7 @@ func (s *BackupStorage) List(_ context.Context, domainName string, schedule *dom
 
 		jobs = append(jobs, domain.BackupJob{
 			ID:        base,
-			Domain:    domainName,
+			App:       app,
 			DBName:    dbName,
 			Schedule:  sched,
 			Type:      domain.BackupTypeLogical,
@@ -185,8 +185,8 @@ func (s *BackupStorage) Delete(_ context.Context, path string) error {
 }
 
 // ApplyRetention removes old backups according to the schedule policy.
-func (s *BackupStorage) ApplyRetention(ctx context.Context, domainName string, policy domain.RetentionPolicy) (int, error) {
-	jobs, err := s.List(ctx, domainName, nil)
+func (s *BackupStorage) ApplyRetention(ctx context.Context, app string, policy domain.RetentionPolicy) (int, error) {
+	jobs, err := s.List(ctx, app, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -215,7 +215,7 @@ func (s *BackupStorage) ApplyRetention(ctx context.Context, domainName string, p
 				}
 				return deleted, err
 			}
-			if err := s.removeEmptyBackupDirs(group[idx].FilePath, domainName); err != nil {
+			if err := s.removeEmptyBackupDirs(group[idx].FilePath, app); err != nil {
 				return deleted, err
 			}
 			deleted++

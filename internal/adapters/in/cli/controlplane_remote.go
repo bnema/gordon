@@ -58,24 +58,20 @@ func (r *remoteControlPlane) ListTags(ctx context.Context, repository string) ([
 	return r.client.ListTags(ctx, repository)
 }
 
-func (r *remoteControlPlane) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
-	return r.client.ListBackups(ctx, backupDomain)
+func (r *remoteControlPlane) ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error) {
+	return r.client.ListBackups(ctx, app)
 }
 
 func (r *remoteControlPlane) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	return r.client.BackupStatus(ctx)
 }
 
-func (r *remoteControlPlane) RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error) {
-	return r.client.RunBackup(ctx, backupDomain, dbName)
+func (r *remoteControlPlane) RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
+	return r.client.RunBackup(ctx, app, service, database)
 }
 
-func (r *remoteControlPlane) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
-	return r.client.DetectDatabases(ctx, backupDomain)
-}
-
-func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
-	jobs, err := r.client.ListVolumeBackups(ctx, backupDomain)
+func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error) {
+	jobs, err := r.client.ListVolumeBackups(ctx, app)
 	if err != nil {
 		return nil, fmt.Errorf("list volume backups: %w", err)
 	}
@@ -90,8 +86,8 @@ func (r *remoteControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.Volu
 	return jobs, nil
 }
 
-func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	result, err := r.client.RunVolumeBackups(ctx, backupDomain, volumeName)
+func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
+	result, err := r.client.RunVolumeBackups(ctx, app, service, volume)
 	if err != nil {
 		return result, fmt.Errorf("run volume backups: %w", err)
 	}

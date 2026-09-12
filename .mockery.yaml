@@ -21,6 +21,7 @@ packages:
       ContainerLogWriter:
       TokenStore:
       AppState:
+      AppStateReader:
       ImageResolver:
       SecretWriter:
       DomainSecretStore:

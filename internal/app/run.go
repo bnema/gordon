@@ -813,91 +813,6 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 	return si.initApps()
 }
 
-// appDatabaseSources enumerates ACTIVE app services for attachment-free
-// backup detection. Ports come from TCP/UDP interfaces + readiness;
-// image/container from the effective record.
-func appDatabaseSources(store out.AppState) func(ctx context.Context) ([]backup.AppDatabaseSource, error) {
-	return func(ctx context.Context) ([]backup.AppDatabaseSource, error) {
-		apps, err := store.ListApps(ctx)
-		if err != nil {
-			return nil, err
-		}
-		var sources []backup.AppDatabaseSource
-		for _, app := range apps {
-			active, ok, err := store.LoadActive(ctx, app)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				continue
-			}
-			for name, eff := range active.Services {
-				if eff.Container == "" {
-					continue
-				}
-				sources = append(sources, backup.AppDatabaseSource{
-					App:         app,
-					Service:     name,
-					Name:        name,
-					Image:       eff.Image,
-					ContainerID: eff.Container,
-					Ports:       servicePorts(eff.Spec),
-					Hosts:       serviceHosts(eff.Spec),
-				})
-			}
-		}
-		return sources, nil
-	}
-}
-
-// serviceHosts collects the HTTP hosts a service serves.
-func serviceHosts(spec domain.AppService) []string {
-	seen := map[string]struct{}{}
-	var hosts []string
-	for _, h := range spec.HTTP {
-		if h.Host == "" {
-			continue
-		}
-		if _, ok := seen[h.Host]; !ok {
-			seen[h.Host] = struct{}{}
-			hosts = append(hosts, h.Host)
-		}
-	}
-	return hosts
-}
-
-// servicePorts collects candidate ports from interfaces + readiness.
-func servicePorts(spec domain.AppService) []int {
-	seen := map[int]struct{}{}
-	var ports []int
-	for _, tcp := range spec.TCP {
-		if tcp.Port > 0 {
-			if _, ok := seen[tcp.Port]; !ok {
-				seen[tcp.Port] = struct{}{}
-				ports = append(ports, tcp.Port)
-			}
-		}
-	}
-	for _, udp := range spec.UDP {
-		if udp.Port > 0 {
-			if _, ok := seen[udp.Port]; !ok {
-				seen[udp.Port] = struct{}{}
-				ports = append(ports, udp.Port)
-			}
-		}
-	}
-	if spec.Readiness.Port > 0 {
-		if _, ok := seen[spec.Readiness.Port]; !ok {
-			ports = append(ports, spec.Readiness.Port)
-		}
-	}
-	return ports
-}
-
-// containerResourceLimits converts the installation container settings into
-// the runtime-neutral limits applied to every app workload on create and
-// recovery. An invalid size is a startup error: silently ignoring a
-// configured limit would defeat the resource contract.
 func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
 	limits := deployment.ResourceLimits{PidsLimit: cfg.Containers.PidsLimit}
 	if cfg.Containers.MemoryLimit != "" {
@@ -929,7 +844,10 @@ func (si *serviceInit) initApps() error {
 	// acquisition/publication and destructive prune.
 	si.svc.gcBarrier = newGCBarrier()
 	if si.svc.backupSvc != nil {
-		si.svc.backupSvc.WithAppSources(appDatabaseSources(store))
+		si.svc.backupSvc.WithAppState(store)
+	}
+	if si.svc.volumeBackupSvc != nil {
+		si.svc.volumeBackupSvc.WithAppState(store)
 	}
 	if si.svc.imageSvc != nil {
 		si.svc.imageSvc.WithPrunePorts(store, si.svc.runtime, si.svc.gcBarrier)
@@ -2273,7 +2191,7 @@ func createVolumeBackupService(ctx context.Context, cfg Config, svc *services, l
 		return nil, nil, domain.VolumeBackupConfig{}, log.WrapErr(err, "failed to create volume backup storage")
 	}
 
-	volumeSvc := backup.NewVolumeService(svc.runtime, svc.runtime, storage, volumeCfg, log)
+	volumeSvc := backup.NewVolumeService(svc.runtime, storage, volumeCfg, log)
 	log.Info().
 		Str("bucket", volumeCfg.S3Bucket).
 		Str("prefix", volumeCfg.S3Prefix).
@@ -3200,7 +3118,7 @@ func startVolumeBackupScheduler(ctx context.Context, cfg Config, svc *services, 
 		"Volume Backups",
 		domain.CronSchedule{Interval: volumeCfg.Interval},
 		func(jobCtx context.Context) error {
-			if _, err := svc.volumeBackupSvc.RunVolumeBackups(jobCtx, "", ""); err != nil {
+			if err := svc.volumeBackupSvc.RunVolumeBackupsForSchedule(jobCtx, ""); err != nil {
 				return err
 			}
 			log.Info().
