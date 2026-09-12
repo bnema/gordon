@@ -280,7 +280,11 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 			}
 		}
 	}
-	op, err := svc.Deploy(ctx, app, req.Revision, req.Service)
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	op, err := svc.Deploy(ctx, app, req.Revision, req.Service, key)
 	if err != nil && (op == nil || isMappedPreflightError(err, op)) {
 		h.sendAppOpError(w, err)
 		return
@@ -303,15 +307,19 @@ func (h *Handler) handleAppLifecycle(w http.ResponseWriter, r *http.Request, app
 	if !ok {
 		return
 	}
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
 	var domainOp *domain.AppOperation
 	var err error
 	switch verb {
 	case "stop":
-		domainOp, err = svc.Stop(ctx, app)
+		domainOp, err = svc.Stop(ctx, app, key)
 	case "start":
-		domainOp, err = svc.Start(ctx, app)
+		domainOp, err = svc.Start(ctx, app, key)
 	case "remove":
-		domainOp, err = svc.Remove(ctx, app)
+		domainOp, err = svc.Remove(ctx, app, key)
 	default:
 		h.sendError(w, http.StatusNotFound, "route not found")
 		return
@@ -338,8 +346,12 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	if !ok {
 		return
 	}
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
 	service := r.URL.Query().Get("service")
-	op, err := svc.Restart(ctx, app, service)
+	op, err := svc.Restart(ctx, app, service, key)
 	if err != nil && op == nil {
 		h.sendAppOpError(w, err)
 		return
@@ -349,6 +361,21 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 		status = http.StatusConflict
 	}
 	h.sendJSON(w, status, toAppDeployResponse(app, op, false))
+}
+
+func appIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" || len(key) > 128 {
+		http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
+		return "", false
+	}
+	for _, char := range key {
+		if char < '!' || char > '~' {
+			http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
+			return "", false
+		}
+	}
+	return key, true
 }
 
 // handleAppOpLookup serves GET /apps/{app}/operations/{key}.

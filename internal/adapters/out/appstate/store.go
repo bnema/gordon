@@ -1256,6 +1256,39 @@ func (s *Store) LoadOperation(ctx context.Context, app, opID string) (domain.App
 	return op, nil
 }
 
+// LoadLatestOperation implements out.AppState.
+func (s *Store) LoadLatestOperation(ctx context.Context, app string) (domain.AppOperation, bool, error) {
+	if err := checkCtx(ctx); err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	var latest domain.AppOperation
+	found := false
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket, err := appBucket(tx, app, false)
+		if err != nil {
+			return err
+		}
+		ops, err := subBucket(bucket, subOps, false)
+		if err != nil || ops == nil {
+			return err
+		}
+		return ops.ForEach(func(_, raw []byte) error {
+			var op domain.AppOperation
+			if err := unmarshal(raw, &op, "operation"); err != nil {
+				return err
+			}
+			if !found || op.StartedAt.After(latest.StartedAt) {
+				latest, found = op, true
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	return latest, found, nil
+}
+
 // RetireApp implements out.AppState. In one transaction it archives the
 // live incarnation's ownership record (with every resource marked
 // retained), drops the live ownership record, resets the app's UUID so a

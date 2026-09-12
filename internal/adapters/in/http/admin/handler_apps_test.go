@@ -41,6 +41,9 @@ func appsRequest(t *testing.T, handler *Handler, method, target string, body any
 		reader = bytes.NewReader(raw)
 	}
 	req := httptest.NewRequest(method, target, reader)
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", "test-operation-key")
+	}
 	req = req.WithContext(ctxWithScopes(scopes...))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -100,7 +103,7 @@ func TestHandler_AppDeploy_MapsOp(t *testing.T) {
 			{ID: "service.web.replace", State: domain.AppStepSucceeded, Before: "c-old", After: "c-new"},
 		},
 	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "").Return(op, nil).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(op, nil).Once()
 
 	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
 		dto.AppDeployRequest{}, "admin:apps:write")

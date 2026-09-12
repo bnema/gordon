@@ -3034,7 +3034,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	// so no new mutation can begin during shutdown.
 	localAdmin.Close()
 	registrySrvs := []*http.Server{registrySrv, internalRegistrySrv}
-	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, log)
+	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appState, log)
 	return nil
 }
 
@@ -3330,7 +3330,7 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan <-cha
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, log zerowrap.Logger) {
+func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, appState out.AppState, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	// Phase 0: stop periodic app recovery first and wait for any in-flight
@@ -3390,9 +3390,19 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
 	}
+	closeAppState(appState, log)
 
 	cleanupInternalCredentials()
 	log.Info().Msg("Gordon stopped")
+}
+
+func closeAppState(state out.AppState, log zerowrap.Logger) {
+	if state == nil {
+		return
+	}
+	if err := state.Close(); err != nil {
+		log.Warn().Err(err).Msg("app state close error")
+	}
 }
 
 // startProxyServers sets up the HTTP proxy server and, when tls_port != 0,

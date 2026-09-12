@@ -13,6 +13,9 @@ import (
 // cross-process coordination is owned by the implementation
 // (store.lock flock). No secret values pass through this boundary.
 type AppState interface {
+	// Close releases the durable store and its process lock.
+	Close() error
+
 	// Recover completes committed-but-unmaterialized apply intents
 	// before any new mutation is accepted (recovery-before-mutation).
 	Recover(ctx context.Context) error
@@ -102,6 +105,9 @@ type AppState interface {
 
 	// LoadOperation returns one operation journal record.
 	LoadOperation(ctx context.Context, app, opID string) (domain.AppOperation, error)
+
+	// LoadLatestOperation returns the most recently started operation.
+	LoadLatestOperation(ctx context.Context, app string) (domain.AppOperation, bool, error)
 
 	// SaveActive persists the per-service effective state.
 	SaveActive(ctx context.Context, active domain.AppActive) error

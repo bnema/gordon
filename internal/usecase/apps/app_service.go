@@ -147,12 +147,25 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 		Services:          map[string]in.AppServiceView{},
 		Stopped:           intent.Stopped,
 	}
+	ownership, err := s.store.LoadOwnership(ctx, app)
+	if err != nil {
+		return nil, err
+	}
 	for name, svc := range active.Services {
 		detail.Services[name] = in.AppServiceView{
 			EffectiveRevision: svc.EffectiveRevision,
 			Digest:            svc.Digest,
 			Container:         svc.Container,
+			RestartUnsafe:     ownership.Services[name].RestartUnsafe,
 		}
+	}
+	latest, ok, err := s.store.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		detail.LastOp = latest.Op
+		detail.LastOutcome = latest.Outcome
 	}
 	return detail, nil
 }
@@ -174,8 +187,11 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 }
 
 // Deploy implements in.AppService.
-func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service})
+func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
+	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
+		return op, nil
+	}
+	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
 	if err != nil && result == nil {
 		return nil, err
 	}
@@ -190,8 +206,11 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service stri
 }
 
 // Stop implements in.AppService.
-func (s *AppServiceImpl) Stop(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Stop(ctx, app, "")
+func (s *AppServiceImpl) Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
+		return op, nil
+	}
+	result, err := s.deploy.Stop(ctx, app, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -203,8 +222,11 @@ func (s *AppServiceImpl) Stop(ctx context.Context, app string) (*domain.AppOpera
 }
 
 // Start implements in.AppService.
-func (s *AppServiceImpl) Start(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Start(ctx, app, "")
+func (s *AppServiceImpl) Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
+		return op, nil
+	}
+	result, err := s.deploy.Start(ctx, app, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -216,8 +238,11 @@ func (s *AppServiceImpl) Start(ctx context.Context, app string) (*domain.AppOper
 }
 
 // Restart implements in.AppService.
-func (s *AppServiceImpl) Restart(ctx context.Context, app, service string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Restart(ctx, app, service, "")
+func (s *AppServiceImpl) Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error) {
+	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
+		return op, nil
+	}
+	result, err := s.deploy.Restart(ctx, app, service, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +254,11 @@ func (s *AppServiceImpl) Restart(ctx context.Context, app, service string) (*dom
 }
 
 // Remove implements in.AppService.
-func (s *AppServiceImpl) Remove(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Remove(ctx, app, "")
+func (s *AppServiceImpl) Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
+		return op, nil
+	}
+	result, err := s.deploy.Remove(ctx, app, idempotencyKey)
 	if err != nil {
 		return nil, err
 	}
@@ -239,6 +267,17 @@ func (s *AppServiceImpl) Remove(ctx context.Context, app string) (*domain.AppOpe
 		return nil, err
 	}
 	return &op, nil
+}
+
+func (s *AppServiceImpl) replayOperation(ctx context.Context, app, key string) (*domain.AppOperation, bool) {
+	if key == "" {
+		return nil, false
+	}
+	op, err := s.store.LoadOperation(ctx, app, key)
+	if err != nil {
+		return nil, false
+	}
+	return &op, true
 }
 
 // OperationByKey implements in.AppService.

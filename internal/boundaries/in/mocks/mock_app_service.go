@@ -197,8 +197,8 @@ func (_c *MockAppService_DeleteSecret_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // Deploy provides a mock function for the type MockAppService
-func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision string, service string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app, revision, service)
+func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision string, service string, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, revision, service, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Deploy")
@@ -206,18 +206,18 @@ func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision st
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app, revision, service)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, revision, service, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app, revision, service)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, revision, service, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
-		r1 = returnFunc(ctx, app, revision, service)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, revision, service, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -234,11 +234,12 @@ type MockAppService_Deploy_Call struct {
 //   - app string
 //   - revision string
 //   - service string
-func (_e *MockAppService_Expecter) Deploy(ctx any, app any, revision any, service any) *MockAppService_Deploy_Call {
-	return &MockAppService_Deploy_Call{Call: _e.mock.On("Deploy", ctx, app, revision, service)}
+//   - idempotencyKey string
+func (_e *MockAppService_Expecter) Deploy(ctx any, app any, revision any, service any, idempotencyKey any) *MockAppService_Deploy_Call {
+	return &MockAppService_Deploy_Call{Call: _e.mock.On("Deploy", ctx, app, revision, service, idempotencyKey)}
 }
 
-func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app string, revision string, service string)) *MockAppService_Deploy_Call {
+func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app string, revision string, service string, idempotencyKey string)) *MockAppService_Deploy_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -256,11 +257,16 @@ func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app stri
 		if args[3] != nil {
 			arg3 = args[3].(string)
 		}
+		var arg4 string
+		if args[4] != nil {
+			arg4 = args[4].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -271,7 +277,7 @@ func (_c *MockAppService_Deploy_Call) Return(appOperation *domain.AppOperation, 
 	return _c
 }
 
-func (_c *MockAppService_Deploy_Call) RunAndReturn(run func(ctx context.Context, app string, revision string, service string) (*domain.AppOperation, error)) *MockAppService_Deploy_Call {
+func (_c *MockAppService_Deploy_Call) RunAndReturn(run func(ctx context.Context, app string, revision string, service string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Deploy_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -479,8 +485,8 @@ func (_c *MockAppService_OperationByKey_Call) RunAndReturn(run func(ctx context.
 }
 
 // Remove provides a mock function for the type MockAppService
-func (_mock *MockAppService) Remove(ctx context.Context, app string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app)
+func (_mock *MockAppService) Remove(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Remove")
@@ -488,18 +494,18 @@ func (_mock *MockAppService) Remove(ctx context.Context, app string) (*domain.Ap
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -514,80 +520,12 @@ type MockAppService_Remove_Call struct {
 // Remove is a helper method to define mock.On call
 //   - ctx context.Context
 //   - app string
-func (_e *MockAppService_Expecter) Remove(ctx any, app any) *MockAppService_Remove_Call {
-	return &MockAppService_Remove_Call{Call: _e.mock.On("Remove", ctx, app)}
+//   - idempotencyKey string
+func (_e *MockAppService_Expecter) Remove(ctx any, app any, idempotencyKey any) *MockAppService_Remove_Call {
+	return &MockAppService_Remove_Call{Call: _e.mock.On("Remove", ctx, app, idempotencyKey)}
 }
 
-func (_c *MockAppService_Remove_Call) Run(run func(ctx context.Context, app string)) *MockAppService_Remove_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppService_Remove_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_Remove_Call {
-	_c.Call.Return(appOperation, err)
-	return _c
-}
-
-func (_c *MockAppService_Remove_Call) RunAndReturn(run func(ctx context.Context, app string) (*domain.AppOperation, error)) *MockAppService_Remove_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Restart provides a mock function for the type MockAppService
-func (_mock *MockAppService) Restart(ctx context.Context, app string, service string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app, service)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Restart")
-	}
-
-	var r0 *domain.AppOperation
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app, service)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app, service)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.AppOperation)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, app, service)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAppService_Restart_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Restart'
-type MockAppService_Restart_Call struct {
-	*mock.Call
-}
-
-// Restart is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - service string
-func (_e *MockAppService_Expecter) Restart(ctx any, app any, service any) *MockAppService_Restart_Call {
-	return &MockAppService_Restart_Call{Call: _e.mock.On("Restart", ctx, app, service)}
-}
-
-func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app string, service string)) *MockAppService_Restart_Call {
+func (_c *MockAppService_Remove_Call) Run(run func(ctx context.Context, app string, idempotencyKey string)) *MockAppService_Remove_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -610,12 +548,92 @@ func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app str
 	return _c
 }
 
+func (_c *MockAppService_Remove_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_Remove_Call {
+	_c.Call.Return(appOperation, err)
+	return _c
+}
+
+func (_c *MockAppService_Remove_Call) RunAndReturn(run func(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Remove_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Restart provides a mock function for the type MockAppService
+func (_mock *MockAppService) Restart(ctx context.Context, app string, service string, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, service, idempotencyKey)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Restart")
+	}
+
+	var r0 *domain.AppOperation
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, service, idempotencyKey)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, service, idempotencyKey)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.AppOperation)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, idempotencyKey)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppService_Restart_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Restart'
+type MockAppService_Restart_Call struct {
+	*mock.Call
+}
+
+// Restart is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+//   - idempotencyKey string
+func (_e *MockAppService_Expecter) Restart(ctx any, app any, service any, idempotencyKey any) *MockAppService_Restart_Call {
+	return &MockAppService_Restart_Call{Call: _e.mock.On("Restart", ctx, app, service, idempotencyKey)}
+}
+
+func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app string, service string, idempotencyKey string)) *MockAppService_Restart_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
 func (_c *MockAppService_Restart_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_Restart_Call {
 	_c.Call.Return(appOperation, err)
 	return _c
 }
 
-func (_c *MockAppService_Restart_Call) RunAndReturn(run func(ctx context.Context, app string, service string) (*domain.AppOperation, error)) *MockAppService_Restart_Call {
+func (_c *MockAppService_Restart_Call) RunAndReturn(run func(ctx context.Context, app string, service string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Restart_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -758,8 +776,8 @@ func (_c *MockAppService_Show_Call) RunAndReturn(run func(ctx context.Context, a
 }
 
 // Start provides a mock function for the type MockAppService
-func (_mock *MockAppService) Start(ctx context.Context, app string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app)
+func (_mock *MockAppService) Start(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Start")
@@ -767,18 +785,18 @@ func (_mock *MockAppService) Start(ctx context.Context, app string) (*domain.App
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -793,11 +811,12 @@ type MockAppService_Start_Call struct {
 // Start is a helper method to define mock.On call
 //   - ctx context.Context
 //   - app string
-func (_e *MockAppService_Expecter) Start(ctx any, app any) *MockAppService_Start_Call {
-	return &MockAppService_Start_Call{Call: _e.mock.On("Start", ctx, app)}
+//   - idempotencyKey string
+func (_e *MockAppService_Expecter) Start(ctx any, app any, idempotencyKey any) *MockAppService_Start_Call {
+	return &MockAppService_Start_Call{Call: _e.mock.On("Start", ctx, app, idempotencyKey)}
 }
 
-func (_c *MockAppService_Start_Call) Run(run func(ctx context.Context, app string)) *MockAppService_Start_Call {
+func (_c *MockAppService_Start_Call) Run(run func(ctx context.Context, app string, idempotencyKey string)) *MockAppService_Start_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -807,9 +826,14 @@ func (_c *MockAppService_Start_Call) Run(run func(ctx context.Context, app strin
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -820,14 +844,14 @@ func (_c *MockAppService_Start_Call) Return(appOperation *domain.AppOperation, e
 	return _c
 }
 
-func (_c *MockAppService_Start_Call) RunAndReturn(run func(ctx context.Context, app string) (*domain.AppOperation, error)) *MockAppService_Start_Call {
+func (_c *MockAppService_Start_Call) RunAndReturn(run func(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Start_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Stop provides a mock function for the type MockAppService
-func (_mock *MockAppService) Stop(ctx context.Context, app string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app)
+func (_mock *MockAppService) Stop(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Stop")
@@ -835,18 +859,18 @@ func (_mock *MockAppService) Stop(ctx context.Context, app string) (*domain.AppO
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, app)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -861,11 +885,12 @@ type MockAppService_Stop_Call struct {
 // Stop is a helper method to define mock.On call
 //   - ctx context.Context
 //   - app string
-func (_e *MockAppService_Expecter) Stop(ctx any, app any) *MockAppService_Stop_Call {
-	return &MockAppService_Stop_Call{Call: _e.mock.On("Stop", ctx, app)}
+//   - idempotencyKey string
+func (_e *MockAppService_Expecter) Stop(ctx any, app any, idempotencyKey any) *MockAppService_Stop_Call {
+	return &MockAppService_Stop_Call{Call: _e.mock.On("Stop", ctx, app, idempotencyKey)}
 }
 
-func (_c *MockAppService_Stop_Call) Run(run func(ctx context.Context, app string)) *MockAppService_Stop_Call {
+func (_c *MockAppService_Stop_Call) Run(run func(ctx context.Context, app string, idempotencyKey string)) *MockAppService_Stop_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -875,9 +900,14 @@ func (_c *MockAppService_Stop_Call) Run(run func(ctx context.Context, app string
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -888,7 +918,7 @@ func (_c *MockAppService_Stop_Call) Return(appOperation *domain.AppOperation, er
 	return _c
 }
 
-func (_c *MockAppService_Stop_Call) RunAndReturn(run func(ctx context.Context, app string) (*domain.AppOperation, error)) *MockAppService_Stop_Call {
+func (_c *MockAppService_Stop_Call) RunAndReturn(run func(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Stop_Call {
 	_c.Call.Return(run)
 	return _c
 }

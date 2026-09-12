@@ -35,21 +35,21 @@ type AppService interface {
 
 	// Deploy activates a captured revision (empty revision means the
 	// desired head; empty service means all services).
-	Deploy(ctx context.Context, app, revision, service string) (*domain.AppOperation, error)
+	Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Stop persists the durable stopped intent and stops exact containers.
-	Stop(ctx context.Context, app string) (*domain.AppOperation, error)
+	Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Start clears the stopped intent and ensures running from active.
-	Start(ctx context.Context, app string) (*domain.AppOperation, error)
+	Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Restart restarts from pinned digests without re-resolution.
 	// Empty service means all services.
-	Restart(ctx context.Context, app, service string) (*domain.AppOperation, error)
+	Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Remove withdraws workloads; volumes and secrets are retained as
 	// owned orphans and the name stays reserved.
-	Remove(ctx context.Context, app string) (*domain.AppOperation, error)
+	Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// OperationByKey recovers an ambiguous mutation outcome by the
 	// client-supplied idempotency key.
