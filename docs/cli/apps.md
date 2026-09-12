@@ -4,9 +4,12 @@ Validate, persist, inspect, and operate applications.
 
 All mutations are executed by the daemon through the admin API.
 Without a reachable daemon the commands fail with `daemon-unavailable`
-instead of writing locally. Mutations are idempotent: every request
-carries a client-generated key, and ambiguous outcomes must be
-re-queried by key before retrying (never retry under a fresh key).
+instead of writing locally. Mutations are idempotent: every request carries a
+client-generated key, and the daemon binds that key to the exact request.
+Repeating a key replays the recorded result; reusing it for a different request
+is refused. An interrupted operation is never executed twice, so an ambiguous
+outcome is re-queried by key before any retry (never retry under a fresh
+key). Unknown apps are reported as `app not found` and create no state.
 
 ## Local and remote targets
 
@@ -71,8 +74,10 @@ Lists applications with one row per app (`active`, `stopped`, or `pending`).
 gordon apps show APP [--json]
 ```
 
-Shows desired revision, per-service effective state (ids and digests only,
-never secret values), stopped intent, and the last operation.
+Shows desired revision and acceptance status, pending state, per-service
+effective revision, container, digest, and restart safety, the resources the
+app owns (volumes, secret paths, image references — never secret values),
+stopped intent, and the last operation with its outcome.
 
 ---
 
@@ -176,9 +181,9 @@ Shows effective vs observed state per service.
 gordon apps logs APP [--service SVC] [--follow] [--tail N] [--json]
 ```
 
-Streams logs for a service in the app's active deployment. `--service` is
-required when the app has several services. Raw Docker container IDs and stale
-service containers are not accepted.
+Streams logs for a service in the app's active deployment. The app name and
+`--service` are the only accepted identity: domains and raw container IDs are
+never accepted. `--service` is required when the app has several services.
 
 ---
 

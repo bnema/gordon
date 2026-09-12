@@ -87,8 +87,8 @@ gordon traffic status --remote prod --json
 
 # Backups
 gordon backups list
-gordon backups run app.example.com
-gordon backups detect app.example.com
+gordon backups run shop --service api --database orders
+gordon backups volume run shop --service api --volume data
 gordon backups status
 
 # Images

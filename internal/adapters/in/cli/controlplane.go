@@ -46,9 +46,7 @@ type ControlPlane interface {
 	RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error)
 
 	GetProcessLogs(ctx context.Context, lines int) ([]string, error)
-	GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error)
 	StreamProcessLogs(ctx context.Context, lines int) (<-chan string, error)
-	StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error)
 
 	ListVolumes(ctx context.Context) ([]dto.Volume, error)
 	PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error)

@@ -245,33 +245,23 @@ func newLogsCmd() *cobra.Command {
 	var logsConfigPath string
 
 	cmd := &cobra.Command{
-		Use:   "logs [domain]",
-		Short: "Show logs (Gordon process or app-domain container)",
-		Long: `Shows logs from the Gordon process or a specific container.
+		Use:   "logs",
+		Short: "Show Gordon process logs",
+		Long: `Shows logs from the Gordon daemon process.
 
-Without a domain argument, shows Gordon process logs.
-With a domain argument, shows container logs for the app HTTP host
-served by that domain (resolved through ACTIVE app state; stopped or
-unknown hosts report "container not found").
+Application workload output is read with gordon apps logs APP --service SVC,
+which resolves the app's active container through the daemon.
 
 Examples:
-  gordon logs                    # Gordon process logs
-  gordon logs -f                 # Follow process logs
-  gordon logs myapp.example.com  # Container logs for the app serving myapp.example.com
-  gordon logs myapp.example.com -f
-
-For per-service app logs with follow/tail selection, use gordon apps logs APP.
+  gordon logs        # Gordon process logs
+  gordon logs -f     # Follow process logs
+  gordon logs -n 100 # Last 100 lines
 
 Remote mode:
-  gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-  gordon logs myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN`,
-		Args: cobra.MaximumNArgs(1),
+  gordon logs --remote https://gordon.mydomain.com --token $TOKEN`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			logDomain := ""
-			if len(args) > 0 {
-				logDomain = args[0]
-			}
-			return runLogs(cmd.Context(), logsConfigPath, logDomain, follow, lines, cmd.OutOrStdout())
+			return runLogs(cmd.Context(), logsConfigPath, follow, lines, cmd.OutOrStdout())
 		},
 	}
 
@@ -283,16 +273,7 @@ Remote mode:
 }
 
 // runLogs handles the logs command logic.
-func runLogs(ctx context.Context, logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
-	if logDomain != "" {
-		handle, err := resolveControlPlaneForDomain(ctx, logDomain)
-		if err != nil {
-			return err
-		}
-		defer handle.close()
-		return runContainerLogs(ctx, handle.plane, logDomain, follow, lines, out)
-	}
-
+func runLogs(ctx context.Context, logsConfigPath string, follow bool, lines int, out io.Writer) error {
 	handle, err := resolveControlPlane(logsConfigPath)
 	if err != nil {
 		return err
@@ -321,35 +302,6 @@ func runProcessLogs(ctx context.Context, cp ControlPlane, follow bool, lines int
 	logLines, err := cp.GetProcessLogs(ctx, lines)
 	if err != nil {
 		return fmt.Errorf("failed to get process logs: %w", err)
-	}
-	for _, line := range logLines {
-		if err := cliWriteLine(out, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func runContainerLogs(ctx context.Context, cp ControlPlane, logDomain string, follow bool, lines int, out io.Writer) error {
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	if follow {
-		ch, err := cp.StreamContainerLogs(ctx, logDomain, lines)
-		if err != nil {
-			return fmt.Errorf("failed to stream container logs: %w", err)
-		}
-		for line := range ch {
-			if err := cliWriteLine(out, line); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
-	logLines, err := cp.GetContainerLogs(ctx, logDomain, lines)
-	if err != nil {
-		return fmt.Errorf("failed to get container logs: %w", err)
 	}
 	for _, line := range logLines {
 		if err := cliWriteLine(out, line); err != nil {
