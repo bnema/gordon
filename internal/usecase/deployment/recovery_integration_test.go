@@ -362,6 +362,11 @@ func TestRemove_KeepsStateWhenAContainerCannotBeRemoved(t *testing.T) {
 		return intent.Stopped
 	})).Return(nil).Once()
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
+	// The claim journal is written before the runtime effects and stays
+	// non-terminal: an interrupted remove is never recorded as finished.
+	state.EXPECT().SaveOperation(mock.Anything, mock.MatchedBy(func(op domain.AppOperation) bool {
+		return op.Op != "" && op.Kind == "remove" && !op.Terminal()
+	})).Return(nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(assert.AnError).Once()
 
 	svc := deployment.NewService(deployment.Deps{
@@ -373,7 +378,7 @@ func TestRemove_KeepsStateWhenAContainerCannotBeRemoved(t *testing.T) {
 	// ACTIVE and the stopped intent were never discarded: the monitor can
 	// still converge the survivor.
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
-	state.AssertNotCalled(t, "SaveOperation", mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "RetireApp", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
 }
 

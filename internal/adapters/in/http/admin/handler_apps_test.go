@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -137,6 +138,44 @@ func TestHandler_AppSecretsSet_Forwards(t *testing.T) {
 	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/secrets/set",
 		dto.AppSecretSetRequest{Service: "web", Secrets: map[string]string{"DATABASE_URL": "v"}}, "admin:apps:write")
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestHandler_AppLifecycle_UnknownAppIsNotFound proves a lifecycle
+// mutation of a name with no app identity is a 404, not a 500 or a silent
+// success.
+func TestHandler_AppLifecycle_UnknownAppIsNotFound(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	appSvc.EXPECT().Stop(mock.Anything, "ghost", "test-operation-key").
+		Return(nil, fmt.Errorf("deployment: app %q does not exist: %w", "ghost", domain.ErrAppNotFound)).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/ghost/stop", nil, "admin:apps:write")
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	var envelope dto.AppError
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "app-not-found", envelope.Error)
+}
+
+// TestHandler_AppLifecycle_ReplayConflictCarriesJournal proves a replayed
+// key that never finished returns 409 with the stored journal, so the
+// caller can inspect what was recorded instead of guessing.
+func TestHandler_AppLifecycle_ReplayConflictCarriesJournal(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	op := &domain.AppOperation{
+		Op: "test-operation-key", Kind: "remove", App: "blog",
+		Steps: []domain.AppOperationStep{{ID: "service.web.remove", State: domain.AppStepPending}},
+	}
+	appSvc.EXPECT().Remove(mock.Anything, "blog", "test-operation-key").
+		Return(op, domain.ErrAppStateConflict).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/remove", nil, "admin:apps:write")
+	require.Equal(t, http.StatusConflict, rec.Code)
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, "test-operation-key", resp.Op)
 }
 
 func TestHandler_AppOpLookup_Recovers(t *testing.T) {

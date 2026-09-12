@@ -40,19 +40,20 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	if err := s.deps.State.Recover(ctx); err != nil {
 		return nil, fmt.Errorf("deployment: recover before stop: %w", err)
 	}
-	if opID == "" {
-		opID = newOpID()
-	}
 	op := domain.AppOperation{
-		Op: opID, Kind: "stop", App: app,
+		Kind: "stop", App: app,
 		StartedAt: time.Now().UTC(),
-		Steps:     []domain.AppOperationStep{{ID: "intent.stopped", State: domain.AppStepPending}},
+		Request:   domain.AppOperationRequestFor("stop", app, "", ""),
 	}
-	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
-		return nil, fmt.Errorf("deployment: persist stop journal: %w", err)
+	op, owned, err := s.claimOperation(ctx, opID, op, []domain.AppOperationStep{{ID: "intent.stopped", State: domain.AppStepPending}})
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return replayedLifecycleResult(op), replayError(op)
 	}
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
-		App: app, Stopped: true, UpdatedBy: opID, UpdatedAt: time.Now().UTC(),
+		App: app, Stopped: true, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, fmt.Errorf("deployment: persist stopped intent: %w", err)
 	}
@@ -61,7 +62,7 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	if err != nil {
 		return nil, fmt.Errorf("deployment: load active: %w", err)
 	}
-	result := &LifecycleResult{Op: opID, App: app, Verb: "stop", Services: map[string]ServiceResult{}}
+	result := &LifecycleResult{Op: op.Op, App: app, Verb: "stop", Services: map[string]ServiceResult{}}
 	var failures []string
 	for _, name := range sortedServiceNames(active) {
 		container := active.Services[name].Container
@@ -131,19 +132,20 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 	if err := s.deps.State.Recover(ctx); err != nil {
 		return nil, fmt.Errorf("deployment: recover before start: %w", err)
 	}
-	if opID == "" {
-		opID = newOpID()
-	}
 	op := domain.AppOperation{
-		Op: opID, Kind: "start", App: app,
+		Kind: "start", App: app,
 		StartedAt: time.Now().UTC(),
-		Steps:     []domain.AppOperationStep{{ID: "intent.running", State: domain.AppStepPending}},
+		Request:   domain.AppOperationRequestFor("start", app, "", ""),
 	}
-	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
-		return nil, fmt.Errorf("deployment: persist start journal: %w", err)
+	op, owned, err := s.claimOperation(ctx, opID, op, []domain.AppOperationStep{{ID: "intent.running", State: domain.AppStepPending}})
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return replayedLifecycleResult(op), replayError(op)
 	}
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
-		App: app, Stopped: false, UpdatedBy: opID, UpdatedAt: time.Now().UTC(),
+		App: app, Stopped: false, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, fmt.Errorf("deployment: clear stopped intent: %w", err)
 	}
@@ -152,7 +154,7 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 	if err != nil {
 		return nil, fmt.Errorf("deployment: load active: %w", err)
 	}
-	result := &LifecycleResult{Op: opID, App: app, Verb: "start", Services: map[string]ServiceResult{}}
+	result := &LifecycleResult{Op: op.Op, App: app, Verb: "start", Services: map[string]ServiceResult{}}
 	for _, name := range sortedServiceNames(active) {
 		eff := active.Services[name]
 		step := domain.AppOperationStep{ID: "service." + name + ".start", State: domain.AppStepPending, Before: eff.Container}
@@ -188,9 +190,6 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	if err := s.deps.State.Recover(ctx); err != nil {
 		return nil, fmt.Errorf("deployment: recover before restart: %w", err)
 	}
-	if opID == "" {
-		opID = newOpID()
-	}
 	active, ok, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
 		return nil, fmt.Errorf("deployment: load active: %w", err)
@@ -206,10 +205,18 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		names = []string{service}
 	}
 	op := domain.AppOperation{
-		Op: opID, Kind: "restart", App: app,
+		Kind: "restart", App: app,
 		StartedAt: time.Now().UTC(),
+		Request:   domain.AppOperationRequestFor("restart", app, "", service),
 	}
-	result := &LifecycleResult{Op: opID, App: app, Verb: "restart", Services: map[string]ServiceResult{}}
+	op, owned, err := s.claimOperation(ctx, opID, op, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return replayedLifecycleResult(op), replayError(op)
+	}
+	result := &LifecycleResult{Op: op.Op, App: app, Verb: "restart", Services: map[string]ServiceResult{}}
 	var failures []string
 	for _, name := range names {
 		eff := active.Services[name]
@@ -301,27 +308,32 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 	if err := s.deps.State.Recover(ctx); err != nil {
 		return nil, fmt.Errorf("deployment: recover before remove: %w", err)
 	}
-	if opID == "" {
-		opID = newOpID()
-	}
 	op := domain.AppOperation{
-		Op: opID, Kind: "remove", App: app,
+		Kind: "remove", App: app,
 		StartedAt: time.Now().UTC(),
+		Request:   domain.AppOperationRequestFor("remove", app, "", ""),
+	}
+	op, owned, err := s.claimOperation(ctx, opID, op, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		return replayedLifecycleResult(op), replayError(op)
 	}
 	active, _, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
 		return nil, fmt.Errorf("deployment: load active: %w", err)
 	}
-	result := &LifecycleResult{Op: opID, App: app, Verb: "remove", Services: map[string]ServiceResult{}}
+	result := &LifecycleResult{Op: op.Op, App: app, Verb: "remove", Services: map[string]ServiceResult{}}
 	// Durable stopped intent and per-container inhibition precede every
 	// runtime effect: a crash between here and the container stop must
 	// never leave a generation that recovery could restart.
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
-		App: app, Stopped: true, UpdatedBy: opID, UpdatedAt: time.Now().UTC(),
+		App: app, Stopped: true, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
 		return nil, fmt.Errorf("deployment: persist stopped intent before remove: %w", err)
 	}
-	steps, err := s.removeServiceContainers(ctx, app, opID, active, result)
+	steps, err := s.removeServiceContainers(ctx, app, op.Op, active, result)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +355,12 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 		return result, err
 	}
 	return result, nil
+}
+
+// replayedLifecycleResult projects a replayed journal into a lifecycle
+// result without touching any workload.
+func replayedLifecycleResult(op domain.AppOperation) *LifecycleResult {
+	return &LifecycleResult{Op: op.Op, App: op.App, Verb: op.Kind, Outcome: op.Outcome}
 }
 
 // refuseInhibitedRestart blocks a restart of a generation whose recovery

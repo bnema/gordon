@@ -45,12 +45,12 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	pinned, op, err := s.preflightLocked(ctx, input)
-	if err != nil {
-		if op != nil {
-			return journaledDeployResult(input, op), err
-		}
-		return nil, err
+	pinned, op, replayed, err := s.preflightLocked(ctx, input)
+	if replayed || err != nil {
+		// The key already answered this request: its stored journal is
+		// the result and no workload is touched again. A failed preflight
+		// returns the journal together with its error.
+		return journaledOrNil(input, op, err)
 	}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].name < pinned[j].name })
 
@@ -136,6 +136,15 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
 	}
 	return result, nil
+}
+
+// journaledOrNil reports a preflight that already answered the request
+// key: the stored journal when there is one, the bare error otherwise.
+func journaledOrNil(input DeployInput, op *domain.AppOperation, err error) (*DeployResult, error) {
+	if op == nil {
+		return nil, err
+	}
+	return journaledDeployResult(input, op), err
 }
 
 func journaledDeployResult(input DeployInput, op *domain.AppOperation) *DeployResult {

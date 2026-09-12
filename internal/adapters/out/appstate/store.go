@@ -1227,6 +1227,135 @@ func (s *Store) SaveOperation(ctx context.Context, op domain.AppOperation) error
 	})
 }
 
+// AppExists implements out.AppState: a read-only live-identity check
+// that never creates an app bucket.
+func (s *Store) AppExists(ctx context.Context, app string) (bool, error) {
+	if err := checkCtx(ctx); err != nil {
+		return false, err
+	}
+	exists := false
+	err := s.db.View(func(tx *bolt.Tx) error {
+		bucket, err := appBucket(tx, app, false)
+		if err != nil {
+			return err
+		}
+		if bucket == nil {
+			return nil
+		}
+		known, err := appHasLiveIdentityLocked(bucket)
+		if err != nil {
+			return err
+		}
+		exists = known
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+// ClaimOperation implements out.AppState: one atomic check-and-write for
+// a mutation request key.
+func (s *Store) ClaimOperation(ctx context.Context, candidate domain.AppOperation) (domain.AppOperation, bool, error) {
+	if err := checkCtx(ctx); err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	if candidate.Op == "" {
+		return domain.AppOperation{}, false, fmt.Errorf("appstate: claim operation without a key: %w", domain.ErrInvalidAppSpec)
+	}
+	var existing domain.AppOperation
+	claimed := false
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := appBucket(tx, candidate.App, false)
+		if err != nil {
+			return err
+		}
+		if stored, ok, err := claimedOperation(bucket, candidate); err != nil {
+			return err
+		} else if ok {
+			existing = stored
+			return nil
+		}
+		if bucket == nil {
+			return fmt.Errorf("appstate: app %q has no state: %w", candidate.App, domain.ErrAppNotFound)
+		}
+		known, err := appHasLiveIdentityLocked(bucket)
+		if err != nil {
+			return err
+		}
+		if !known {
+			return fmt.Errorf("appstate: app %q has no live identity: %w", candidate.App, domain.ErrAppNotFound)
+		}
+		writeBucket, err := appBucket(tx, candidate.App, true)
+		if err != nil {
+			return err
+		}
+		if _, err := ensureAppRecordLocked(writeBucket, candidate.App, true); err != nil {
+			return err
+		}
+		ops, err := subBucket(writeBucket, subOps, true)
+		if err != nil {
+			return err
+		}
+		if err := putRecord(ops, []byte(candidate.Op), candidate); err != nil {
+			return err
+		}
+		existing = candidate
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	return existing, claimed, nil
+}
+
+// claimedOperation returns the journal already stored under the candidate
+// key when its request identity matches. A key answering a different
+// request identity is a conflict, never a replay.
+func claimedOperation(bucket *bolt.Bucket, candidate domain.AppOperation) (domain.AppOperation, bool, error) {
+	if bucket == nil {
+		return domain.AppOperation{}, false, nil
+	}
+	ops, err := subBucket(bucket, subOps, false)
+	if err != nil || ops == nil {
+		return domain.AppOperation{}, false, err
+	}
+	raw := ops.Get([]byte(candidate.Op))
+	if raw == nil {
+		return domain.AppOperation{}, false, nil
+	}
+	var stored domain.AppOperation
+	if err := unmarshal(raw, &stored, "operation"); err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	if stored.Request != candidate.Request {
+		return domain.AppOperation{}, false, fmt.Errorf(
+			"appstate: operation key %s already answered a different request: %w",
+			candidate.Op, domain.ErrAppStateConflict,
+		)
+	}
+	return stored, true, nil
+}
+
+// appHasLiveIdentityLocked reports whether an existing app bucket holds a
+// live identity: desired state, active state, or an ownership
+// incarnation. Operation journals alone are not identity — a retired app
+// keeps them so its own key still replays, while a new key must never
+// recreate state for the freed name.
+func appHasLiveIdentityLocked(bucket *bolt.Bucket) (bool, error) {
+	if bucket.Get(keyDesired) != nil || bucket.Get(keyActive) != nil {
+		return true, nil
+	}
+	var ownership domain.AppOwnership
+	found, err := getRecord(bucket, keyOwnership, &ownership, "ownership")
+	if err != nil {
+		return false, err
+	}
+	return found && ownership.ID != "", nil
+}
+
 // LoadOperation implements out.AppState.
 func (s *Store) LoadOperation(ctx context.Context, app, opID string) (domain.AppOperation, error) {
 	if err := checkCtx(ctx); err != nil {

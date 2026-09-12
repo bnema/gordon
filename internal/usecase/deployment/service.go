@@ -5,6 +5,7 @@ package deployment
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"sort"
@@ -275,10 +276,11 @@ func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedSer
 		return nil, nil, err
 	}
 	defer release()
-	return s.preflightLocked(ctx, input)
+	pinned, op, _, err := s.preflightLocked(ctx, input)
+	return pinned, op, err
 }
 
-func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, error) {
+func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, bool, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "Preflight",
@@ -287,42 +289,43 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 	log := zerowrap.FromCtx(ctx)
 
 	if err := s.deps.State.Recover(ctx); err != nil {
-		return nil, nil, fmt.Errorf("deployment: recover before preflight: %w", err)
+		return nil, nil, false, fmt.Errorf("deployment: recover before preflight: %w", err)
 	}
 	rev, err := s.resolveRevision(ctx, input)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if input.Service != "" {
 		if err := s.checkConverged(ctx, input.App, rev); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
 	}
 
-	opID := input.Op
-	if opID == "" {
-		opID = newOpID()
-	}
-	op := &domain.AppOperation{
-		Op:            opID,
+	op := domain.AppOperation{
 		Kind:          "deploy",
 		App:           input.App,
 		InputRevision: rev.Revision,
 		StartedAt:     time.Now().UTC(),
-		Steps:         []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+		Request:       domain.AppOperationRequestFor("deploy", input.App, input.Revision, input.Service),
 	}
-	if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
-		return nil, nil, fmt.Errorf("deployment: persist journal before effects: %w", err)
+	op, owned, err := s.claimOperation(ctx, input.Op, op, []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}})
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if !owned {
+		// The key already answered this request: its journal is the
+		// result, and no effect may run again.
+		return nil, &op, true, replayError(op)
 	}
 
 	pinned, err := s.preflightServices(ctx, input.App, rev, input.Service)
 	if err != nil {
 		op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepFailed, Error: err.Error()}
 		op.Outcome = domain.AppOutcomeFailed
-		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+		if saveErr := s.deps.State.SaveOperation(ctx, op); saveErr != nil {
 			log.Warn().Err(saveErr).Msg("deployment: failed to record preflight failure")
 		}
-		return nil, op, err
+		return nil, &op, false, err
 	}
 	op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepSucceeded}
 	for _, p := range pinned {
@@ -334,30 +337,88 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 			Image:   p.runtimeImage,
 		})
 	}
-	if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
-		return nil, nil, fmt.Errorf("deployment: persist pinned table: %w", err)
+	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
+		return nil, nil, false, fmt.Errorf("deployment: persist pinned table: %w", err)
 	}
-	log.Info().Str("op", opID).Str("revision", rev.Revision).Int("services", len(pinned)).Msg("deployment: preflight passed")
-	return pinned, op, nil
+	log.Info().Str("op", op.Op).Str("revision", rev.Revision).Int("services", len(pinned)).Msg("deployment: preflight passed")
+	return pinned, &op, false, nil
+}
+
+// claimOperation is the single claim point before any mutation effect.
+// A keyed request is claimed atomically: the first claim persists the
+// in-flight journal and reports owned=true; a repeat returns the stored
+// journal and reports owned=false. A key that already answered a
+// different request fails with ErrAppStateConflict, and a key for a name
+// with no app identity fails with ErrAppNotFound without writing
+// anything. An unkeyed request (internal recovery paths) starts a fresh
+// journal under a generated id.
+func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppOperation, steps []domain.AppOperationStep) (domain.AppOperation, bool, error) {
+	op.Steps = steps
+	if key == "" {
+		op.Op = newOpID()
+		if err := s.deps.State.SaveOperation(ctx, op); err != nil {
+			return domain.AppOperation{}, false, fmt.Errorf("deployment: persist journal before effects: %w", err)
+		}
+		return op, true, nil
+	}
+	op.Op = key
+	existing, claimed, err := s.deps.State.ClaimOperation(ctx, op)
+	if err != nil {
+		return domain.AppOperation{}, false, err
+	}
+	if !claimed {
+		return existing, false, nil
+	}
+	return op, true, nil
+}
+
+// replayError reports a replayed key whose journal never reached a
+// terminal outcome: the operation is still in flight or was interrupted,
+// so its effects must not run again.
+func replayError(op domain.AppOperation) error {
+	if op.Terminal() {
+		return nil
+	}
+	return fmt.Errorf("deployment: operation %s has not reached a terminal outcome: %w", op.Op, domain.ErrAppStateConflict)
 }
 
 // resolveRevision loads the captured revision (default: current desired).
+// A revision that cannot be resolved on a name with no app identity at
+// all reports ErrAppNotFound: the failure is the missing app, not the
+// missing revision.
 func (s *Service) resolveRevision(ctx context.Context, input DeployInput) (domain.AppDesiredRevision, error) {
 	if input.Revision != "" {
 		rev, err := s.deps.State.LoadRevision(ctx, input.App, input.Revision)
-		if err != nil {
-			return domain.AppDesiredRevision{}, err
+		if err != nil && errors.Is(err, domain.ErrAppRevisionNotFound) {
+			if knownErr := s.requireKnownApp(ctx, input.App); knownErr != nil {
+				return domain.AppDesiredRevision{}, knownErr
+			}
 		}
-		return rev, nil
+		return rev, err
 	}
 	rev, ok, err := s.deps.State.LoadDesired(ctx, input.App)
 	if err != nil {
 		return domain.AppDesiredRevision{}, err
 	}
 	if !ok {
+		if knownErr := s.requireKnownApp(ctx, input.App); knownErr != nil {
+			return domain.AppDesiredRevision{}, knownErr
+		}
 		return domain.AppDesiredRevision{}, fmt.Errorf("deployment: app %q has no desired state: %w", input.App, domain.ErrAppRevisionNotFound)
 	}
 	return rev, nil
+}
+
+// requireKnownApp refuses a mutation of a name with no live app identity.
+func (s *Service) requireKnownApp(ctx context.Context, app string) error {
+	exists, err := s.deps.State.AppExists(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: app existence: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("deployment: app %q does not exist: %w", app, domain.ErrAppNotFound)
+	}
+	return nil
 }
 
 // checkConverged refuses service-targeted deploy on desired/effective divergence.

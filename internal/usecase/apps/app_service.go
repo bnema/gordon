@@ -186,98 +186,71 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 	return domain.DiffAppSpec(desired.Spec, activeSpec(active)), nil
 }
 
-// Deploy implements in.AppService.
+// Deploy implements in.AppService. A repeated idempotency key replays its
+// stored journal: the engine claims the key atomically before any effect,
+// so a duplicate request never deploys twice.
 func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
-	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
-		return op, nil
-	}
 	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
-	if err != nil && result == nil {
+	if result == nil {
 		return nil, err
 	}
-	op, loadErr := s.store.LoadOperation(ctx, app, result.Op)
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	if err != nil {
-		return &op, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Stop implements in.AppService.
 func (s *AppServiceImpl) Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
-	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
-		return op, nil
-	}
 	result, err := s.deploy.Stop(ctx, app, idempotencyKey)
-	if err != nil {
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Start implements in.AppService.
 func (s *AppServiceImpl) Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
-	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
-		return op, nil
-	}
 	result, err := s.deploy.Start(ctx, app, idempotencyKey)
-	if err != nil {
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Restart implements in.AppService.
 func (s *AppServiceImpl) Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error) {
-	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
-		return op, nil
-	}
 	result, err := s.deploy.Restart(ctx, app, service, idempotencyKey)
-	if err != nil {
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Remove implements in.AppService.
 func (s *AppServiceImpl) Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
-	if op, ok := s.replayOperation(ctx, app, idempotencyKey); ok {
-		return op, nil
-	}
 	result, err := s.deploy.Remove(ctx, app, idempotencyKey)
-	if err != nil {
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
-func (s *AppServiceImpl) replayOperation(ctx context.Context, app, key string) (*domain.AppOperation, bool) {
-	if key == "" {
-		return nil, false
+// operationResult loads the journal an engine call produced. A call that
+// failed after its journal was claimed returns both, so callers can
+// inspect the recorded outcome instead of losing it.
+func (s *AppServiceImpl) operationResult(ctx context.Context, app, opID string, callErr error) (*domain.AppOperation, error) {
+	if opID == "" {
+		return nil, callErr
 	}
-	op, err := s.store.LoadOperation(ctx, app, key)
+	op, err := s.store.LoadOperation(ctx, app, opID)
 	if err != nil {
-		return nil, false
+		if callErr != nil {
+			return nil, callErr
+		}
+		return nil, err
 	}
-	return &op, true
+	if callErr != nil {
+		return &op, callErr
+	}
+	return &op, nil
 }
 
 // OperationByKey implements in.AppService.

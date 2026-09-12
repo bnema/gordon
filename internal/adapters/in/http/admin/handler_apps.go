@@ -462,6 +462,7 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 		}
 	}
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
+		errors.Is(err, domain.ErrAppNotFound) ||
 		errors.Is(err, domain.ErrAppReservationConflict) ||
 		errors.Is(err, domain.ErrAppImageUnresolvable) ||
 		errors.Is(err, domain.ErrAppSecretMissing) ||
@@ -485,6 +486,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "secret-missing", err.Error(), "", "set the secret, then redeploy")
 	case errors.Is(err, domain.ErrAppUnmanagedImageVolume):
 		h.sendAppError(w, http.StatusBadRequest, "unmanaged-image-volume", err.Error(), "", "")
+	case errors.Is(err, domain.ErrAppNotFound):
+		h.sendAppError(w, http.StatusNotFound, "app-not-found", err.Error(), "", "check the app name")
 	case errors.Is(err, domain.ErrAppRevisionNotFound),
 		errors.Is(err, domain.ErrAppIntentNotFound),
 		errors.Is(err, domain.ErrAppOperationNotFound):
