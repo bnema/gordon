@@ -1,10 +1,9 @@
 package cli
 
-// Tests for the unreachable v2.50 app CLI surface (apps.go). The commands
-// are not registered in root.go until cutover; these tests exercise the
-// run functions directly against a scripted AppControlPlane fake: JSON
-// parity (text and --json carry equivalent semantics), no secret values in
-// output, plan-contract errors, and outcome-unknown guidance.
+// Tests for the app CLI surface (apps.go). The commands go through one
+// ControlPlane served by the generated mock: JSON parity (text and --json
+// carry equivalent semantics), no secret values in output, plan-contract
+// errors, and outcome-unknown guidance.
 
 import (
 	"bytes"
@@ -19,80 +18,18 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
-// fakeAppPlane scripts AppControlPlane responses for CLI tests.
-type fakeAppPlane struct {
-	applyResp   *dto.AppApplyResponse
-	applyErr    error
-	listResp    []dto.AppSummaryDTO
-	showResp    *dto.AppShowResponse
-	diffResp    *dto.AppDiffResponse
-	deployResp  *dto.AppDeployResponse
-	deployKey   string
-	deployErr   error
-	lifecycleFn func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
-	setErr      error
-	setGot      dto.AppSecretSetRequest
-	setGotApp   string
-	deleteErr   error
-}
-
-func (f *fakeAppPlane) ApplyApp(_ context.Context, _ dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
-	if f.applyErr != nil {
-		return nil, f.applyErr
-	}
-	return f.applyResp, nil
-}
-
-func (f *fakeAppPlane) ListApps(_ context.Context) ([]dto.AppSummaryDTO, error) {
-	return f.listResp, nil
-}
-
-func (f *fakeAppPlane) ShowApp(_ context.Context, _ string) (*dto.AppShowResponse, error) {
-	return f.showResp, nil
-}
-
-func (f *fakeAppPlane) DiffApp(_ context.Context, _ string) (*dto.AppDiffResponse, error) {
-	return f.diffResp, nil
-}
-
-func (f *fakeAppPlane) DeployApp(_ context.Context, _ string, _ dto.AppDeployRequest) (*dto.AppDeployResponse, string, error) {
-	return f.deployResp, f.deployKey, f.deployErr
-}
-
-func (f *fakeAppPlane) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
-	return f.lifecycleFn(ctx, app)
-}
-
-func (f *fakeAppPlane) StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
-	return f.lifecycleFn(ctx, app)
-}
-
-func (f *fakeAppPlane) RestartApp(_ context.Context, _ string, _ string) (*dto.AppDeployResponse, string, error) {
-	return f.deployResp, f.deployKey, f.deployErr
-}
-
-func (f *fakeAppPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
-	return f.lifecycleFn(ctx, app)
-}
-
-func (f *fakeAppPlane) OperationByKey(_ context.Context, _, _ string) (*dto.AppDeployResponse, error) {
-	return f.deployResp, f.deployErr
-}
-
-func (f *fakeAppPlane) SetAppSecrets(_ context.Context, app string, req dto.AppSecretSetRequest) error {
-	f.setGotApp = app
-	f.setGot = req
-	return f.setErr
-}
-
-func (f *fakeAppPlane) DeleteAppSecret(_ context.Context, _ string, _ dto.AppSecretDeleteRequest) error {
-	return f.deleteErr
+// appPlane returns the generated control plane mock for one test.
+func appPlane(t *testing.T) *climocks.MockControlPlane {
+	t.Helper()
+	return climocks.NewMockControlPlane(t)
 }
 
 func writeManifest(t *testing.T, content string) string {
@@ -103,7 +40,7 @@ func writeManifest(t *testing.T, content string) string {
 }
 
 func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
 	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, "x.toml", true, true, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--dry-run")
@@ -111,7 +48,7 @@ func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
 }
 
 func TestRunAppsApply_RequiresFile(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
 	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, "", false, false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--file")
@@ -123,7 +60,8 @@ func TestRunAppsApply_JSONParity(t *testing.T) {
 		Pending: true, Intent: "apply-123",
 		Diff: dto.AppDiffSection{Added: []string{"service.web"}},
 	}
-	plane := &fakeAppPlane{applyResp: want}
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(want, nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
 		writeManifest(t, "[app]\nname = \"blog\"\n"), false, false, true))
@@ -133,10 +71,11 @@ func TestRunAppsApply_JSONParity(t *testing.T) {
 }
 
 func TestRunAppsApply_ChainsAcceptedRevision(t *testing.T) {
-	plane := &fakeAppPlane{
-		applyResp:  &dto.AppApplyResponse{App: "blog", ResultingRevision: "rev-b", Pending: true, Intent: "apply-1"},
-		deployResp: &dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"},
-	}
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(
+		&dto.AppApplyResponse{App: "blog", ResultingRevision: "rev-b", Pending: true, Intent: "apply-1"}, nil).Once()
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
+		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
 		writeManifest(t, "x"), false, true, false))
@@ -144,10 +83,11 @@ func TestRunAppsApply_ChainsAcceptedRevision(t *testing.T) {
 }
 
 func TestRunAppsApply_ChainedJSONIsOneDocument(t *testing.T) {
-	plane := &fakeAppPlane{
-		applyResp:  &dto.AppApplyResponse{App: "blog", ResultingRevision: "rev-b", Pending: true, Intent: "apply-1"},
-		deployResp: &dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"},
-	}
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(
+		&dto.AppApplyResponse{App: "blog", ResultingRevision: "rev-b", Pending: true, Intent: "apply-1"}, nil).Once()
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
+		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
 		writeManifest(t, "x"), false, true, true))
@@ -161,10 +101,11 @@ func TestRunAppsApply_ChainedJSONIsOneDocument(t *testing.T) {
 }
 
 func TestRunAppsList_JSONParityAndSorting(t *testing.T) {
-	plane := &fakeAppPlane{listResp: []dto.AppSummaryDTO{
+	plane := appPlane(t)
+	plane.EXPECT().ListApps(mock.Anything).Return([]dto.AppSummaryDTO{
 		{App: "zeta", Converged: true},
 		{App: "alpha", Stopped: true},
-	}}
+	}, nil)
 	var out bytes.Buffer
 	require.NoError(t, runAppsList(context.Background(), plane, &out, true))
 	var got []dto.AppSummaryDTO
@@ -179,7 +120,8 @@ func TestRunAppsList_JSONParityAndSorting(t *testing.T) {
 }
 
 func TestRunAppsList_EmptyJSONIsArray(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
+	plane.EXPECT().ListApps(mock.Anything).Return(nil, nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsList(context.Background(), plane, &out, true))
 	assert.JSONEq(t, `[]`, strings.TrimSpace(out.String()))
@@ -195,7 +137,8 @@ func TestRunAppsShow_JSONParity(t *testing.T) {
 		Intent: dto.AppIntentDTO{Stopped: true},
 		LastOp: &dto.AppLastOpDTO{Op: "op-9", Outcome: "failed"},
 	}
-	plane := &fakeAppPlane{showResp: want}
+	plane := appPlane(t)
+	plane.EXPECT().ShowApp(mock.Anything, "blog").Return(want, nil)
 	var out bytes.Buffer
 	require.NoError(t, runAppsShow(context.Background(), plane, "blog", &out, true))
 	var got dto.AppShowResponse
@@ -208,7 +151,13 @@ func TestRunAppsShow_JSONParity(t *testing.T) {
 }
 
 func TestRunAppsSecretsSet_NeverEchoesValues(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
+	var gotApp string
+	var gotReq dto.AppSecretSetRequest
+	plane.EXPECT().SetAppSecrets(mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, app string, req dto.AppSecretSetRequest) {
+			gotApp, gotReq = app, req
+		}).Return(nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsSecretsSet(context.Background(), plane, strings.NewReader(""),
 		&out, "blog", []string{"password=s3cr3t-hunter2", "token=abc"}, "web", false, false))
@@ -217,13 +166,13 @@ func TestRunAppsSecretsSet_NeverEchoesValues(t *testing.T) {
 	assert.NotContains(t, text, "abc")
 	assert.Contains(t, text, "password")
 	assert.Contains(t, text, "token")
-	assert.Equal(t, "blog", plane.setGotApp)
-	assert.Equal(t, "web", plane.setGot.Service)
-	assert.Equal(t, map[string]string{"password": "s3cr3t-hunter2", "token": "abc"}, plane.setGot.Secrets)
+	assert.Equal(t, "blog", gotApp)
+	assert.Equal(t, "web", gotReq.Service)
+	assert.Equal(t, map[string]string{"password": "s3cr3t-hunter2", "token": "abc"}, gotReq.Secrets)
 }
 
 func TestRunAppsSecretsSet_RequiresService(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
 	err := runAppsSecretsSet(context.Background(), plane, strings.NewReader(""),
 		&bytes.Buffer{}, "blog", []string{"k=v"}, "", false, false)
 	require.Error(t, err)
@@ -231,7 +180,10 @@ func TestRunAppsSecretsSet_RequiresService(t *testing.T) {
 }
 
 func TestRunAppsSecretsSet_StdinAndValidation(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
+	var gotReq dto.AppSecretSetRequest
+	plane.EXPECT().SetAppSecrets(mock.Anything, "blog", mock.Anything).
+		Run(func(_ context.Context, _ string, req dto.AppSecretSetRequest) { gotReq = req }).Return(nil).Once()
 	var out bytes.Buffer
 	stdin := strings.NewReader("from_stdin=stdin-value\n\nempty_val=\n")
 	require.NoError(t, runAppsSecretsSet(context.Background(), plane, stdin,
@@ -240,7 +192,7 @@ func TestRunAppsSecretsSet_StdinAndValidation(t *testing.T) {
 		"from_stdin": "stdin-value",
 		"empty_val":  "",
 		"from_flag":  "flag-value",
-	}, plane.setGot.Secrets)
+	}, gotReq.Secrets)
 
 	err := runAppsSecretsSet(context.Background(), plane, strings.NewReader(""),
 		&bytes.Buffer{}, "blog", []string{"no-equals-here"}, "web", false, false)
@@ -249,10 +201,9 @@ func TestRunAppsSecretsSet_StdinAndValidation(t *testing.T) {
 }
 
 func TestRunAppDeploy_OutcomeUnknownMentionsKey(t *testing.T) {
-	plane := &fakeAppPlane{
-		deployKey: "key-abc",
-		deployErr: &remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/deploy", Err: errors.New("boom")},
-	}
+	plane := appPlane(t)
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
+		nil, "key-abc", &remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/deploy", Err: errors.New("boom")}).Once()
 	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outcome-unknown")
@@ -261,18 +212,16 @@ func TestRunAppDeploy_OutcomeUnknownMentionsKey(t *testing.T) {
 }
 
 func TestRunAppDeploy_ConflictRendersJournal(t *testing.T) {
-	plane := &fakeAppPlane{
-		deployKey: "key-9",
-		deployErr: &remote.AppOpConflictError{
-			StatusCode: http.StatusConflict, Status: "409 Conflict",
-			Response: dto.AppDeployResponse{
-				Op: "op-9", App: "blog", Revision: "rev-b", Outcome: "failed",
-				Services: map[string]dto.AppServiceResultDTO{
-					"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "nope"},
-				},
+	plane := appPlane(t)
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(nil, "key-9", &remote.AppOpConflictError{
+		StatusCode: http.StatusConflict, Status: "409 Conflict",
+		Response: dto.AppDeployResponse{
+			Op: "op-9", App: "blog", Revision: "rev-b", Outcome: "failed",
+			Services: map[string]dto.AppServiceResultDTO{
+				"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "nope"},
 			},
 		},
-	}
+	}).Once()
 	var out bytes.Buffer
 	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, false)
 	require.Error(t, err, "conflict must retain failure semantics")
@@ -286,18 +235,16 @@ func TestRunAppDeploy_ConflictRendersJournal(t *testing.T) {
 }
 
 func TestRunAppDeploy_ConflictJSONRendersJournal(t *testing.T) {
-	plane := &fakeAppPlane{
-		deployKey: "key-9",
-		deployErr: &remote.AppOpConflictError{
-			StatusCode: http.StatusConflict, Status: "409 Conflict",
-			Response: dto.AppDeployResponse{
-				Op: "op-9", App: "blog", Revision: "rev-b", Outcome: "failed",
-				Services: map[string]dto.AppServiceResultDTO{
-					"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "nope"},
-				},
+	plane := appPlane(t)
+	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(nil, "key-9", &remote.AppOpConflictError{
+		StatusCode: http.StatusConflict, Status: "409 Conflict",
+		Response: dto.AppDeployResponse{
+			Op: "op-9", App: "blog", Revision: "rev-b", Outcome: "failed",
+			Services: map[string]dto.AppServiceResultDTO{
+				"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "nope"},
 			},
 		},
-	}
+	}).Once()
 	var out bytes.Buffer
 	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, true)
 	require.Error(t, err)
@@ -308,19 +255,16 @@ func TestRunAppDeploy_ConflictJSONRendersJournal(t *testing.T) {
 }
 
 func TestRunAppLifecycle_ConflictRendersJournal(t *testing.T) {
-	plane := &fakeAppPlane{
-		lifecycleFn: func(_ context.Context, _ string) (*dto.AppDeployResponse, string, error) {
-			return nil, "key-7", &remote.AppOpConflictError{
-				StatusCode: http.StatusConflict, Status: "409 Conflict",
-				Response: dto.AppDeployResponse{
-					Op: "op-7", App: "blog", Outcome: "partial",
-					Services: map[string]dto.AppServiceResultDTO{
-						"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "busy"},
-					},
-				},
-			}
+	plane := appPlane(t)
+	plane.EXPECT().StopApp(mock.Anything, "blog").Return(nil, "key-7", &remote.AppOpConflictError{
+		StatusCode: http.StatusConflict, Status: "409 Conflict",
+		Response: dto.AppDeployResponse{
+			Op: "op-7", App: "blog", Outcome: "partial",
+			Services: map[string]dto.AppServiceResultDTO{
+				"web": {Result: "failed", EffectiveRevision: "rev-b", Error: "busy"},
+			},
 		},
-	}
+	}).Once()
 	var out bytes.Buffer
 	err := runAppLifecycle(context.Background(), plane.StopApp, "stop", "blog", &out, false)
 	require.Error(t, err)
@@ -380,7 +324,7 @@ func TestAppLogRef_Selection(t *testing.T) {
 	assert.Contains(t, err.Error(), "no recorded container")
 }
 
-func TestResolveAppControlPlane_FailsWithoutDaemon(t *testing.T) {
+func TestResolveAppPlane_FailsWithoutDaemon(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("GORDON_REMOTE", "")
 	t.Setenv("GORDON_TOKEN", "")
@@ -392,7 +336,7 @@ func TestResolveAppControlPlane_FailsWithoutDaemon(t *testing.T) {
 	newLocalAppClient = func() (*remote.Client, error) { return nil, remote.ErrDaemonUnavailable }
 	t.Cleanup(func() { newLocalAppClient = restore })
 
-	_, err := resolveAppControlPlane()
+	_, err := resolveAppPlane()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "daemon-unavailable")
 }
@@ -450,10 +394,12 @@ func TestAppCommandSurface(t *testing.T) {
 }
 
 func TestRunAppsDiff_TextAndJSON(t *testing.T) {
-	plane := &fakeAppPlane{diffResp: &dto.AppDiffResponse{
+	diff := &dto.AppDiffResponse{
 		App:  "blog",
 		Diff: dto.AppDiffSection{Added: []string{"b"}, Removed: []string{"a"}, Changed: []string{"c"}},
-	}}
+	}
+	plane := appPlane(t)
+	plane.EXPECT().DiffApp(mock.Anything, "blog").Return(diff, nil).Times(2)
 	var out bytes.Buffer
 	require.NoError(t, runAppsDiff(context.Background(), plane, "blog", &out, false))
 	text := out.String()
@@ -465,16 +411,17 @@ func TestRunAppsDiff_TextAndJSON(t *testing.T) {
 	require.NoError(t, runAppsDiff(context.Background(), plane, "blog", &out, true))
 	var got dto.AppDiffResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
-	assert.Equal(t, *plane.diffResp, got)
+	assert.Equal(t, *diff, got)
 
-	plane.diffResp = &dto.AppDiffResponse{App: "blog"}
+	plane.EXPECT().DiffApp(mock.Anything, "blog").Return(&dto.AppDiffResponse{App: "blog"}, nil).Once()
 	out.Reset()
 	require.NoError(t, runAppsDiff(context.Background(), plane, "blog", &out, false))
 	assert.Contains(t, out.String(), "No differences")
 }
 
 func TestRunAppsSecretsDelete(t *testing.T) {
-	plane := &fakeAppPlane{}
+	plane := appPlane(t)
+	plane.EXPECT().DeleteAppSecret(mock.Anything, "blog", dto.AppSecretDeleteRequest{Service: "web", Key: "password"}).Return(nil).Times(2)
 	var out bytes.Buffer
 	require.NoError(t, runAppsSecretsDelete(context.Background(), plane, &out, "blog", "password", "web", false))
 	assert.Contains(t, out.String(), "password")
@@ -492,13 +439,11 @@ func TestRunAppsSecretsDelete(t *testing.T) {
 
 func TestRunAppRestart_AndLifecycle(t *testing.T) {
 	resp := &dto.AppDeployResponse{Op: "op-2", App: "blog", Revision: "rev-b", Outcome: "success"}
-	plane := &fakeAppPlane{
-		deployResp: resp,
-		lifecycleFn: func(_ context.Context, app string) (*dto.AppDeployResponse, string, error) {
-			assert.Equal(t, "blog", app)
-			return resp, "key-lc", nil
-		},
-	}
+	plane := appPlane(t)
+	plane.EXPECT().RestartApp(mock.Anything, "blog", "").Return(resp, "key-lc", nil).Times(2)
+	plane.EXPECT().StopApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
+	plane.EXPECT().StartApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
+	plane.EXPECT().RemoveApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppRestart(context.Background(), plane, "blog", "", &out, false))
 	assert.Contains(t, out.String(), "success")
@@ -515,23 +460,23 @@ func TestRunAppRestart_AndLifecycle(t *testing.T) {
 		assert.Contains(t, out.String(), "op-2")
 	}
 
-	unknown := &fakeAppPlane{
-		lifecycleFn: func(_ context.Context, _ string) (*dto.AppDeployResponse, string, error) {
-			return nil, "key-x", &remote.OutcomeUnknownError{Method: "POST", Path: "/x", Err: errors.New("boom")}
-		},
-	}
+	unknown := appPlane(t)
+	unknown.EXPECT().StopApp(mock.Anything, "blog").Return(
+		nil, "key-x", &remote.OutcomeUnknownError{Method: "POST", Path: "/x", Err: errors.New("boom")}).Once()
 	err := runAppLifecycle(context.Background(), unknown.StopApp, "stop", "blog", &bytes.Buffer{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "key-x")
 }
 
 func TestRunAppStatus_Observed(t *testing.T) {
-	plane := &fakeAppPlane{showResp: &dto.AppShowResponse{
+	show := &dto.AppShowResponse{
 		App: "blog",
 		Active: dto.AppActiveDTO{Converged: true, Services: map[string]dto.AppActiveServiceDTO{
 			"web": {EffectiveRevision: "rev-b", Container: "ctr-b"},
 		}},
-	}}
+	}
+	plane := appPlane(t)
+	plane.EXPECT().ShowApp(mock.Anything, "blog").Return(show, nil).Times(2)
 	var out bytes.Buffer
 	require.NoError(t, runAppStatus(context.Background(), plane, "blog", &out, false))
 	assert.Contains(t, out.String(), "ctr-b")
@@ -540,7 +485,7 @@ func TestRunAppStatus_Observed(t *testing.T) {
 	require.NoError(t, runAppStatus(context.Background(), plane, "blog", &out, true))
 	var got dto.AppShowResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
-	assert.Equal(t, *plane.showResp, got)
+	assert.Equal(t, *show, got)
 }
 
 // fakeAppLogReader scripts container log reads for app log tests.
@@ -566,7 +511,8 @@ func TestRunAppLogs_TextJSONFollow(t *testing.T) {
 	show := &dto.AppShowResponse{App: "blog", Active: dto.AppActiveDTO{Services: map[string]dto.AppActiveServiceDTO{
 		"web": {Container: "ctr-web"},
 	}}}
-	plane := &fakeAppPlane{showResp: show}
+	plane := appPlane(t)
+	plane.EXPECT().ShowApp(mock.Anything, "blog").Return(show, nil).Times(3)
 	reader := &fakeAppLogReader{lines: []string{"l1", "l2"}, stream: []string{"s1"}}
 
 	var out bytes.Buffer

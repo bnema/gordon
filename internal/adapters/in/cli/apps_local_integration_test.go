@@ -97,8 +97,10 @@ func TestAppLocalAdminComposition_EndToEnd(t *testing.T) {
 	// The CLI resolves the socket through real discovery and the Unix transport.
 	stubLocalAppClient(t, remote.NewLocalClient)
 
-	plane, err := resolveAppControlPlane()
+	handle, err := resolveAppPlane()
 	require.NoError(t, err)
+	defer handle.close()
+	plane := handle.plane
 
 	ctx := context.Background()
 

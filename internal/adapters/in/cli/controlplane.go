@@ -11,7 +11,20 @@ import (
 // ControlPlane defines command operations available to CLI execution paths.
 // Both explicit remote and local-daemon implementations call admin HTTP APIs.
 type ControlPlane interface {
-	AppControlPlane
+	// App lifecycle and reads. App mutations are daemon-owned for both
+	// the explicit remote and the owner-only local admin socket.
+	ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error)
+	ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error)
+	ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error)
+	DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error)
+	DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)
+	StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
+	StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
+	RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error)
+	RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
+	OperationByKey(ctx context.Context, app, key string) (*dto.AppDeployResponse, error)
+	SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error
+	DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error
 
 	ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
 	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error

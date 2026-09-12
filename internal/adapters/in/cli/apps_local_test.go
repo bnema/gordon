@@ -90,15 +90,17 @@ func stubLocalAppClient(t *testing.T, fn func() (*remote.Client, error)) {
 	t.Cleanup(func() { newLocalAppClient = restore })
 }
 
-func TestResolveAppControlPlane_UsesLocalAdminSocket(t *testing.T) {
+func TestResolveAppPlane_UsesLocalAdminSocket(t *testing.T) {
 	socketPath := startUnixAppPlane(t)
 	withRemoteTarget(t, "")
 	stubLocalAppClient(t, func() (*remote.Client, error) {
 		return remote.NewLocalClientForSocket(socketPath), nil
 	})
 
-	plane, err := resolveAppControlPlane()
+	handle, err := resolveAppPlane()
 	require.NoError(t, err)
+	defer handle.close()
+	plane := handle.plane
 
 	apps, err := plane.ListApps(context.Background())
 	require.NoError(t, err)
@@ -120,7 +122,7 @@ func TestResolveAppControlPlane_UsesLocalAdminSocket(t *testing.T) {
 
 // TestResolveAppControlPlane_LocalAndRemoteDTOParity asserts the shared DTO
 // seam yields identical values over both transports.
-func TestResolveAppControlPlane_LocalAndRemoteDTOParity(t *testing.T) {
+func TestControlPlane_LocalAndRemoteDTOParity(t *testing.T) {
 	fixture := appPlaneFixtureHandler(t)
 
 	tcp := httptest.NewServer(fixture)
@@ -133,8 +135,8 @@ func TestResolveAppControlPlane_LocalAndRemoteDTOParity(t *testing.T) {
 	go func() { _ = unixSrv.Serve(ln) }()
 	t.Cleanup(func() { _ = unixSrv.Close() })
 
-	localPlane := NewRemoteAppControlPlane(remote.NewLocalClientForSocket(localadmin.SocketPath(dir)))
-	remotePlane := NewRemoteAppControlPlane(remote.NewClient(tcp.URL))
+	localPlane := NewRemoteControlPlane(remote.NewLocalClientForSocket(localadmin.SocketPath(dir)))
+	remotePlane := NewRemoteControlPlane(remote.NewClient(tcp.URL))
 
 	ctx := context.Background()
 
@@ -160,7 +162,7 @@ func TestResolveAppControlPlane_LocalAndRemoteDTOParity(t *testing.T) {
 // TestResolveAppControlPlane_ExplicitRemoteNeverProbesLocal pins that an
 // explicit remote is authoritative: the local socket is never consulted, and
 // a remote failure never falls back to it.
-func TestResolveAppControlPlane_ExplicitRemoteNeverProbesLocal(t *testing.T) {
+func TestResolveAppPlane_ExplicitRemoteNeverProbesLocal(t *testing.T) {
 	t.Run("remote succeeds", func(t *testing.T) {
 		tcp := httptest.NewServer(appPlaneFixtureHandler(t))
 		t.Cleanup(tcp.Close)
@@ -172,8 +174,10 @@ func TestResolveAppControlPlane_ExplicitRemoteNeverProbesLocal(t *testing.T) {
 			return nil, remote.ErrDaemonUnavailable
 		})
 
-		plane, err := resolveAppControlPlane()
+		handle, err := resolveAppPlane()
 		require.NoError(t, err)
+		defer handle.close()
+		plane := handle.plane
 
 		apps, err := plane.ListApps(context.Background())
 		require.NoError(t, err)
@@ -194,8 +198,10 @@ func TestResolveAppControlPlane_ExplicitRemoteNeverProbesLocal(t *testing.T) {
 			return remote.NewLocalClientForSocket("/nonexistent/admin.sock"), nil
 		})
 
-		plane, err := resolveAppControlPlane()
+		handle, err := resolveAppPlane()
 		require.NoError(t, err, "client construction succeeds; the failure must surface on the request")
+		defer handle.close()
+		plane := handle.plane
 
 		_, err = plane.ListApps(context.Background())
 		require.Error(t, err)
@@ -203,13 +209,13 @@ func TestResolveAppControlPlane_ExplicitRemoteNeverProbesLocal(t *testing.T) {
 	})
 }
 
-func TestResolveAppControlPlane_ReportsDaemonUnavailable(t *testing.T) {
+func TestResolveAppPlane_ReportsDaemonUnavailable(t *testing.T) {
 	withRemoteTarget(t, "")
 	stubLocalAppClient(t, func() (*remote.Client, error) {
 		return nil, remote.ErrDaemonUnavailable
 	})
 
-	_, err := resolveAppControlPlane()
+	_, err := resolveAppPlane()
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "daemon-unavailable")
 	assert.ErrorIs(t, err, remote.ErrDaemonUnavailable)

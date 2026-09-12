@@ -9,13 +9,63 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+// remoteControlPlane delegates every CLI operation to one daemon client:
+// the explicit remote or the owner-only local admin socket.
 type remoteControlPlane struct {
-	*remoteAppControlPlane
 	client *remote.Client
 }
 
+// NewRemoteControlPlane creates the daemon-backed control plane.
 func NewRemoteControlPlane(client *remote.Client) ControlPlane {
-	return &remoteControlPlane{remoteAppControlPlane: &remoteAppControlPlane{client: client}, client: client}
+	return &remoteControlPlane{client: client}
+}
+
+func (r *remoteControlPlane) ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
+	return r.client.ApplyApp(ctx, req)
+}
+
+func (r *remoteControlPlane) ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error) {
+	return r.client.ListApps(ctx)
+}
+
+func (r *remoteControlPlane) ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error) {
+	return r.client.ShowApp(ctx, app)
+}
+
+func (r *remoteControlPlane) DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error) {
+	return r.client.DiffApp(ctx, app)
+}
+
+func (r *remoteControlPlane) DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error) {
+	return r.client.DeployApp(ctx, app, req)
+}
+
+func (r *remoteControlPlane) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.StopApp(ctx, app)
+}
+
+func (r *remoteControlPlane) StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.StartApp(ctx, app)
+}
+
+func (r *remoteControlPlane) RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error) {
+	return r.client.RestartApp(ctx, app, service)
+}
+
+func (r *remoteControlPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.RemoveApp(ctx, app)
+}
+
+func (r *remoteControlPlane) OperationByKey(ctx context.Context, app, key string) (*dto.AppDeployResponse, error) {
+	return r.client.OperationByKey(ctx, app, key)
+}
+
+func (r *remoteControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
+	return r.client.SetAppSecrets(ctx, app, req)
+}
+
+func (r *remoteControlPlane) DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error {
+	return r.client.DeleteAppSecret(ctx, app, req)
 }
 
 func (r *remoteControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
