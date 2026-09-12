@@ -304,10 +304,15 @@ func runAppsList(ctx context.Context, plane AppControlPlane, out io.Writer, json
 	for _, name := range names {
 		a := byName[name]
 		state := "active"
-		if a.Stopped {
+		switch {
+		case a.Stopped:
 			state = "stopped"
-		} else if !a.Converged {
+		case a.Pending:
 			state = "pending"
+		case a.Active == "":
+			state = "applied"
+		case a.LastOutcome != "" && a.LastOutcome != "success":
+			state += " (" + a.LastOutcome + ")"
 		}
 		if err := cliWriteLine(out, cliRenderListItem(fmt.Sprintf("%s (%s)", name, state))); err != nil {
 			return err
@@ -359,8 +364,16 @@ func runAppsShow(ctx context.Context, plane AppControlPlane, app string, out io.
 			return err
 		}
 	}
-	if resp.LastOp.Op != "" {
-		return cliWriteLine(out, cliRenderMeta("last-op:", resp.LastOp.Op+" ("+resp.LastOp.Outcome+")"))
+	if resp.LastOp != nil && resp.LastOp.Op != "" {
+		if err := cliWriteLine(out, cliRenderMeta("last-op:", resp.LastOp.Op+" ("+resp.LastOp.Outcome+")")); err != nil {
+			return err
+		}
+	}
+	owned := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Images...)
+	owned = append(owned, resp.Retained.Secrets...)
+	if len(owned) > 0 {
+		sort.Strings(owned)
+		return cliWriteLine(out, cliRenderMeta("retained:", strings.Join(owned, " ")))
 	}
 	return nil
 }
@@ -779,7 +792,7 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 }
 
 func renderDeploySummaries(out io.Writer, resp *dto.AppDeployResponse) error {
-	if len(resp.Effective.Services) > 0 {
+	if resp.Effective != nil && len(resp.Effective.Services) > 0 {
 		pairs := make([]string, 0, len(resp.Effective.Services))
 		for name, rev := range resp.Effective.Services {
 			pairs = append(pairs, name+"="+rev)
@@ -789,10 +802,14 @@ func renderDeploySummaries(out io.Writer, resp *dto.AppDeployResponse) error {
 			return err
 		}
 	}
-	if len(resp.Retained.Volumes) > 0 || len(resp.Retained.Secrets) > 0 {
-		retained := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Secrets...)
-		sort.Strings(retained)
-		if err := cliWriteLine(out, cliRenderMeta("retained:", strings.Join(retained, " "))); err != nil {
+	if resp.Retained == nil {
+		return nil
+	}
+	owned := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Images...)
+	owned = append(owned, resp.Retained.Secrets...)
+	if len(owned) > 0 {
+		sort.Strings(owned)
+		if err := cliWriteLine(out, cliRenderMeta("retained:", strings.Join(owned, " "))); err != nil {
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package in
 
 import (
 	"context"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -83,13 +84,20 @@ type AppDryRunResult struct {
 	Diff  domain.AppDiff
 }
 
-// AppSummary is one row of the app list: names and revisions only.
+// AppSummary is one row of the app list: revisions, acceptance status,
+// and the latest recorded outcome.
 type AppSummary struct {
-	App       string
-	Desired   string
-	Active    string
-	Converged bool
-	Stopped   bool
+	App           string
+	Desired       string
+	DesiredStatus string
+	Active        string
+	Converged     bool
+	// Pending reports desired state that the active revision has not
+	// reached yet. It is derived from desired vs ACTIVE, never from a
+	// journal.
+	Pending     bool
+	Stopped     bool
+	LastOutcome string
 }
 
 // AppServiceView is one service's effective state for inspection.
@@ -101,15 +109,29 @@ type AppServiceView struct {
 	RestartUnsafe     bool
 }
 
-// AppDetail inspects desired + active + intent + last op for one app.
+// AppRetainedView lists the resources the app owns and would retain on
+// removal: runtime volume names, secret paths, and pinned image
+// references. It never carries secret values.
+type AppRetainedView struct {
+	Volumes []string
+	Secrets []string
+	Images  []string
+}
+
+// AppDetail inspects desired + active + intent + ownership + last op for
+// one app.
 type AppDetail struct {
 	App               string
 	DesiredRevision   string
 	DesiredStatus     string
+	Pending           bool
 	Converged         bool
 	ConvergedRevision string
 	Services          map[string]AppServiceView
 	Stopped           bool
+	Retained          AppRetainedView
 	LastOp            string
+	LastOpKind        string
 	LastOutcome       string
+	LastOpStartedAt   time.Time
 }

@@ -193,7 +193,7 @@ func TestRunAppsShow_JSONParity(t *testing.T) {
 			"web": {EffectiveRevision: "rev-a", Container: "ctr-a", RestartUnsafe: true},
 		}},
 		Intent: dto.AppIntentDTO{Stopped: true},
-		LastOp: dto.AppLastOpDTO{Op: "op-9", Outcome: "failed"},
+		LastOp: &dto.AppLastOpDTO{Op: "op-9", Outcome: "failed"},
 	}
 	plane := &fakeAppPlane{showResp: want}
 	var out bytes.Buffer
@@ -337,8 +337,8 @@ func TestRenderAppDeployResponse_SortedServices(t *testing.T) {
 			"db":  {Result: "failed", EffectiveRevision: "rev-a", Error: "nope", RestartUnsafe: true},
 		},
 		CleanupWarnings: []dto.AppCleanupWarningDTO{{Service: "web", Leftover: "ctr-old", Detail: "retire failed"}},
-		Effective:       dto.AppEffectiveDTO{Services: map[string]string{"web": "rev-b", "db": "rev-a"}},
-		Retained:        dto.AppRetainedDTO{Volumes: []string{"blog-db"}},
+		Effective:       &dto.AppEffectiveDTO{Services: map[string]string{"web": "rev-b", "db": "rev-a"}},
+		Retained:        &dto.AppRetainedDTO{Volumes: []string{"blog-db"}},
 	}
 	var out bytes.Buffer
 	require.NoError(t, renderAppDeployResponse(&out, resp))

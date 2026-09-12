@@ -93,7 +93,8 @@ func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source 
 	}, nil, nil
 }
 
-// List implements in.AppService.
+// List implements in.AppService. Names whose only remaining record is a
+// retired operation journal are not apps any more and are not listed.
 func (s *AppServiceImpl) List(ctx context.Context) ([]in.AppSummary, error) {
 	apps, err := s.store.ListApps(ctx)
 	if err != nil {
@@ -102,35 +103,72 @@ func (s *AppServiceImpl) List(ctx context.Context) ([]in.AppSummary, error) {
 	sort.Strings(apps)
 	summaries := make([]in.AppSummary, 0, len(apps))
 	for _, app := range apps {
-		desired, _, err := s.store.LoadDesired(ctx, app)
+		live, err := s.store.AppExists(ctx, app)
 		if err != nil {
 			return nil, err
 		}
-		active, ok, err := s.store.LoadActive(ctx, app)
+		if !live {
+			continue
+		}
+		summary, err := s.summary(ctx, app)
 		if err != nil {
 			return nil, err
-		}
-		intent, err := s.store.LoadIntent(ctx, app)
-		if err != nil {
-			return nil, err
-		}
-		summary := in.AppSummary{App: app, Desired: desired.Revision, Stopped: intent.Stopped}
-		if ok {
-			summary.Active = active.ConvergedRevision
-			summary.Converged = active.Converged
 		}
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }
 
+// summary builds one list row from desired + ACTIVE + intent + the latest
+// journal outcome.
+func (s *AppServiceImpl) summary(ctx context.Context, app string) (in.AppSummary, error) {
+	desired, _, err := s.store.LoadDesired(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	active, ok, err := s.store.LoadActive(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	intent, err := s.store.LoadIntent(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	summary := in.AppSummary{
+		App:           app,
+		Desired:       desired.Revision,
+		DesiredStatus: desired.Status,
+		Pending:       desiredPending(desired.Revision, active, ok),
+		Stopped:       intent.Stopped,
+	}
+	if ok {
+		summary.Active = active.ConvergedRevision
+		summary.Converged = active.Converged
+	}
+	latest, hasOp, err := s.store.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	if hasOp {
+		summary.LastOutcome = latest.Outcome
+	}
+	return summary, nil
+}
+
 // Show implements in.AppService.
 func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, error) {
+	live, err := s.store.AppExists(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	if !live {
+		return nil, fmt.Errorf("apps: app %q does not exist: %w", app, domain.ErrAppNotFound)
+	}
 	desired, _, err := s.store.LoadDesired(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	active, _, err := s.store.LoadActive(ctx, app)
+	active, ok, err := s.store.LoadActive(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +180,7 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 		App:               app,
 		DesiredRevision:   desired.Revision,
 		DesiredStatus:     desired.Status,
+		Pending:           desiredPending(desired.Revision, active, ok),
 		Converged:         active.Converged,
 		ConvergedRevision: active.ConvergedRevision,
 		Services:          map[string]in.AppServiceView{},
@@ -151,6 +190,7 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 	if err != nil {
 		return nil, err
 	}
+	detail.Retained = retainedView(ownership)
 	for name, svc := range active.Services {
 		detail.Services[name] = in.AppServiceView{
 			EffectiveRevision: svc.EffectiveRevision,
@@ -165,9 +205,44 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 	}
 	if ok {
 		detail.LastOp = latest.Op
+		detail.LastOpKind = latest.Kind
 		detail.LastOutcome = latest.Outcome
+		detail.LastOpStartedAt = latest.StartedAt
 	}
 	return detail, nil
+}
+
+// desiredPending reports desired state the active revision has not
+// reached. It reads desired vs ACTIVE only: a journal outcome never
+// decides convergence.
+func desiredPending(desiredRevision string, active domain.AppActive, hasActive bool) bool {
+	if desiredRevision == "" {
+		return false
+	}
+	return !hasActive || !active.Converged || active.ConvergedRevision != desiredRevision
+}
+
+// retainedView lists the resources the app owns and would retain on
+// removal, sorted for stable output.
+func retainedView(ownership domain.AppOwnership) in.AppRetainedView {
+	view := in.AppRetainedView{}
+	for _, volume := range ownership.Volumes {
+		name := volume.RuntimeName
+		if name == "" {
+			name = volume.Name
+		}
+		view.Volumes = append(view.Volumes, name)
+	}
+	for _, secret := range ownership.Secrets {
+		view.Secrets = append(view.Secrets, secret.Path)
+	}
+	for _, image := range ownership.Images {
+		view.Images = append(view.Images, image.Reference)
+	}
+	sort.Strings(view.Volumes)
+	sort.Strings(view.Secrets)
+	sort.Strings(view.Images)
+	return view
 }
 
 // Diff implements in.AppService.

@@ -56,10 +56,13 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 
 	active, _, err := s.deps.State.LoadActive(ctx, input.App)
 	if err != nil {
-		return journaledDeployResult(input, op), fmt.Errorf("deployment: load active: %w", err)
+		loadErr := fmt.Errorf("deployment: load active: %w", err)
+		s.failOperation(ctx, op, loadErr, "error")
+		return journaledDeployResult(input, op), loadErr
 	}
 	rev, err := s.resolveRevision(ctx, input)
 	if err != nil {
+		s.failOperation(ctx, op, err, "error")
 		return journaledDeployResult(input, op), err
 	}
 
@@ -77,57 +80,7 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		return result, err
 	}
 	for i, p := range pinned {
-		stepID := "service." + p.name + ".replace"
-		before := ""
-		if eff, ok := active.Services[p.name]; ok {
-			before = eff.Container
-		}
-		svcResult, interrupted := s.deployService(ctx, input.App, rev.Revision, p, op.Op, before)
-		result.Services[p.name] = svcResult
-		if interrupted {
-			result.Interrupted = append(result.Interrupted, p.name)
-		}
-		if svcResult.Result == "failed" {
-			op.Steps[i+1] = domain.AppOperationStep{
-				ID:          stepID,
-				State:       domain.AppStepFailed,
-				Service:     p.name,
-				Digest:      p.digest,
-				Image:       p.runtimeImage,
-				Error:       svcResult.Error,
-				Diagnostics: svcResult.Diagnostics,
-				Before:      before,
-				After:       svcResult.After,
-			}
-			op.Outcome = ComputeOutcome(result.Services)
-			if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-				log.Warn().Err(saveErr).Msg("deployment: failed to record service failure")
-			}
-			// Fail fast: later services stay unchanged.
-			return result, fmt.Errorf("deployment: service %q failed at %s: %s: %w",
-				p.name, stepID, svcResult.Error, domain.ErrAppStateConflict)
-		}
-		op.Steps[i+1] = domain.AppOperationStep{
-			ID:      stepID,
-			State:   domain.AppStepSucceeded,
-			Service: p.name,
-			Digest:  p.digest,
-			Image:   p.runtimeImage,
-			Before:  before,
-			After:   svcResult.After,
-		}
-		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-			log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
-		}
-		// Publish per-service effective state immediately: the proxy
-		// switches to the new binds at publication. Retire the replaced
-		// container only AFTER publication (no outage on crash between
-		// the two); a retire failure is a cleanup warning, not an
-		// outcome flip.
-		if err := s.publishService(ctx, input.App, rev.Revision, p, svcResult, op.Op); err != nil {
-			return result, err
-		}
-		if err := s.cutoverService(ctx, input.App, p, &svcResult, result, op); err != nil {
+		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
 			return result, err
 		}
 	}
@@ -136,6 +89,101 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
 	}
 	return result, nil
+}
+
+// runServiceStep executes one pinned service in the journal: replace,
+// publish ACTIVE, then cutover traffic and retire the replaced container.
+// The step is recorded as succeeded only after the runtime effect, the
+// ACTIVE publication, and the traffic apply all succeeded, so a journaled
+// success is never ahead of what is routed.
+func (s *Service) runServiceStep(
+	ctx context.Context,
+	app, revision string,
+	index int,
+	p pinnedService,
+	op *domain.AppOperation,
+	active domain.AppActive,
+	result *DeployResult,
+	log zerowrap.Logger,
+) error {
+	before := ""
+	if eff, ok := active.Services[p.name]; ok {
+		before = eff.Container
+	}
+	svcResult, interrupted := s.deployService(ctx, app, revision, p, op.Op, before)
+	result.Services[p.name] = svcResult
+	if interrupted {
+		result.Interrupted = append(result.Interrupted, p.name)
+	}
+	stepID := "service." + p.name + ".replace"
+	step := domain.AppOperationStep{
+		ID: stepID, Service: p.name,
+		Digest: p.digest, Image: p.runtimeImage,
+		Before: before, After: svcResult.After,
+	}
+	fail := func(err error) error {
+		step.State = domain.AppStepFailed
+		step.Error = err.Error()
+		step.Diagnostics = svcResult.Diagnostics
+		op.Steps[index] = step
+		op.Outcome = ComputeOutcome(result.Services)
+		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+			log.Warn().Err(saveErr).Msg("deployment: failed to record service failure")
+		}
+		return err
+	}
+	if svcResult.Result == "failed" {
+		// Fail fast: later services stay unchanged.
+		return fail(fmt.Errorf("deployment: service %q failed at %s: %s: %w",
+			p.name, stepID, svcResult.Error, domain.ErrAppStateConflict))
+	}
+	// Publish per-service effective state first: the proxy switches to the
+	// new binds at publication. Retire the replaced container only AFTER
+	// publication (no outage on crash between the two); a retire failure
+	// is a cleanup warning, not an outcome flip.
+	if err := s.publishService(ctx, app, revision, p, svcResult, op.Op); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		result.Services[p.name] = svcResult
+		return fail(err)
+	}
+	if err := s.cutoverService(ctx, app, p, &svcResult, result); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		result.Services[p.name] = svcResult
+		return fail(err)
+	}
+	step.State = domain.AppStepSucceeded
+	op.Steps[index] = step
+	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
+	}
+	return nil
+}
+
+// failOperation records a terminal failure on an already claimed
+// journal, so a keyed repeat replays a terminal outcome instead of
+// reading a permanently in-flight claim. stepID names the failing phase
+// (a service step, a traffic publication, or a bare error). Journal-write
+// failures are logged, never returned: the caller already holds a more
+// specific error, and the next mutation's recovery pass converges state.
+func (s *Service) failOperation(ctx context.Context, op *domain.AppOperation, err error, stepID string) {
+	op.Outcome = domain.AppOutcomeFailed
+	op.Steps = append(op.Steps, domain.AppOperationStep{
+		ID: stepID, State: domain.AppStepFailed, Error: err.Error(),
+	})
+	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(saveErr).Str("op", op.Op).Msg("deployment: failed to record operation failure")
+	}
+}
+
+// failTrafficPublication records that the final graph apply was rejected.
+// The workload steps already ran and stay accurate, but the operation is a
+// failure: routing did not accept the published state, so a later replay
+// of the same key must never read success.
+func (s *Service) failTrafficPublication(ctx context.Context, op *domain.AppOperation, err error) {
+	s.failOperation(ctx, op, err, "traffic.publish")
 }
 
 // journaledOrNil reports a preflight that already answered the request
@@ -254,21 +302,13 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 	return step, nil
 }
 
-// cutoverService refreshes traffic after publication, then retires the
-// replaced container. A traffic failure marks the service failed and
-// aborts the deploy: ACTIVE is published but the new service is not
+// cutoverService applies traffic after publication, then retires the
+// replaced container. A traffic failure is returned to the caller, which
+// records the failed step: ACTIVE is published but the new service is not
 // routable, so the operation must not report success. The old container
 // is retained when traffic activation fails.
-func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult, op *domain.AppOperation) error {
+func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult) error {
 	if trafficErr := s.refreshTraffic(ctx, app); trafficErr != nil {
-		svcResult.Error = trafficErr.Error()
-		svcResult.Result = "failed"
-		result.Services[p.name] = *svcResult
-		op.Outcome = ComputeOutcome(result.Services)
-		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-			log := zerowrap.FromCtx(ctx)
-			log.Warn().Err(saveErr).Msg("deployment: failed to record traffic failure")
-		}
 		return trafficErr
 	}
 	if svcResult.Retire != "" {

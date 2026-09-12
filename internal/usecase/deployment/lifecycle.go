@@ -55,12 +55,16 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
 		App: app, Stopped: true, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
-		return nil, fmt.Errorf("deployment: persist stopped intent: %w", err)
+		intentErr := fmt.Errorf("deployment: persist stopped intent: %w", err)
+		s.failOperation(ctx, &op, intentErr, "error")
+		return nil, intentErr
 	}
 	op.Steps[0].State = domain.AppStepSucceeded
 	active, _, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
-		return nil, fmt.Errorf("deployment: load active: %w", err)
+		activeErr := fmt.Errorf("deployment: load active: %w", err)
+		s.failOperation(ctx, &op, activeErr, "error")
+		return nil, activeErr
 	}
 	result := &LifecycleResult{Op: op.Op, App: app, Verb: "stop", Services: map[string]ServiceResult{}}
 	var failures []string
@@ -80,6 +84,7 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 		log.Warn().Err(err).Msg("deployment: failed to record stop outcome")
 	}
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
 	if len(failures) > 0 {
@@ -147,12 +152,16 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
 		App: app, Stopped: false, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
-		return nil, fmt.Errorf("deployment: clear stopped intent: %w", err)
+		intentErr := fmt.Errorf("deployment: clear stopped intent: %w", err)
+		s.failOperation(ctx, &op, intentErr, "error")
+		return nil, intentErr
 	}
 	op.Steps[0].State = domain.AppStepSucceeded
 	active, _, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
-		return nil, fmt.Errorf("deployment: load active: %w", err)
+		activeErr := fmt.Errorf("deployment: load active: %w", err)
+		s.failOperation(ctx, &op, activeErr, "error")
+		return nil, activeErr
 	}
 	result := &LifecycleResult{Op: op.Op, App: app, Verb: "start", Services: map[string]ServiceResult{}}
 	for _, name := range sortedServiceNames(active) {
@@ -169,6 +178,7 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		log.Warn().Err(err).Msg("deployment: failed to record start outcome")
 	}
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
 	return result, nil
@@ -232,6 +242,7 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		return result, fmt.Errorf("deployment: persist restart journal: %w", err)
 	}
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
 	if len(failures) > 0 {
@@ -322,7 +333,9 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 	}
 	active, _, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
-		return nil, fmt.Errorf("deployment: load active: %w", err)
+		activeErr := fmt.Errorf("deployment: load active: %w", err)
+		s.failOperation(ctx, &op, activeErr, "error")
+		return nil, activeErr
 	}
 	result := &LifecycleResult{Op: op.Op, App: app, Verb: "remove", Services: map[string]ServiceResult{}}
 	// Durable stopped intent and per-container inhibition precede every
@@ -331,10 +344,14 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 	if err := s.deps.State.SaveIntent(ctx, domain.AppStopIntent{
 		App: app, Stopped: true, UpdatedBy: op.Op, UpdatedAt: time.Now().UTC(),
 	}); err != nil {
-		return nil, fmt.Errorf("deployment: persist stopped intent before remove: %w", err)
+		intentErr := fmt.Errorf("deployment: persist stopped intent before remove: %w", err)
+		s.failOperation(ctx, &op, intentErr, "error")
+		return nil, intentErr
 	}
 	steps, err := s.removeServiceContainers(ctx, app, op.Op, active, result)
 	if err != nil {
+		op.Steps = steps
+		s.failOperation(ctx, &op, err, "error")
 		return nil, err
 	}
 	op.Steps = steps
@@ -345,13 +362,16 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 	// reapply would reuse the UUID and inherit the old secrets and
 	// volumes.
 	if err := s.deps.State.RetireApp(ctx, app); err != nil {
-		return nil, fmt.Errorf("deployment: retire incarnation: %w", err)
+		retireErr := fmt.Errorf("deployment: retire incarnation: %w", err)
+		s.failOperation(ctx, &op, retireErr, "error")
+		return nil, retireErr
 	}
 	op.Outcome = domain.AppOutcomeSuccess
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record remove outcome")
 	}
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
 	return result, nil
@@ -534,14 +554,18 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 		result.Services[name] = svcResult
 		return true
 	}
-	step.State = domain.AppStepSucceeded
-	step.After = svcResult.After
 	result.Services[name] = svcResult
+	// The step is recorded as succeeded only after the effective state is
+	// published: a journaled success is never ahead of what the proxy can
+	// reach.
 	if err := s.publishService(ctx, app, rev.Revision, pinned, svcResult, opID); err != nil {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
 		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
+		return true
 	}
+	step.State = domain.AppStepSucceeded
+	step.After = svcResult.After
 	return true
 }
 
@@ -563,6 +587,9 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}
+	// The service is running and its re-inspected loopback binds are
+	// persisted, so the step may succeed: the graph apply for this app
+	// follows once, after the loop.
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
 	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}

@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -189,8 +190,9 @@ func (h *Handler) handleAppList(w http.ResponseWriter, r *http.Request) {
 	items := make([]dto.AppSummaryDTO, 0, len(summaries))
 	for _, s := range summaries {
 		items = append(items, dto.AppSummaryDTO{
-			App: s.App, Desired: s.Desired, Active: s.Active,
-			Converged: s.Converged, Stopped: s.Stopped,
+			App: s.App, Desired: s.Desired, DesiredStatus: s.DesiredStatus,
+			Active: s.Active, Converged: s.Converged, Pending: s.Pending,
+			Stopped: s.Stopped, LastOutcome: s.LastOutcome,
 		})
 	}
 	if items == nil {
@@ -221,18 +223,31 @@ func (h *Handler) handleAppShow(w http.ResponseWriter, r *http.Request, app stri
 			EffectiveRevision: view.EffectiveRevision,
 			Digest:            view.Digest,
 			Container:         view.Container,
+			RestartUnsafe:     view.RestartUnsafe,
 		}
 	}
-	h.sendJSON(w, http.StatusOK, dto.AppShowResponse{
+	resp := dto.AppShowResponse{
 		App:     detail.App,
-		Desired: dto.AppDesiredDTO{Revision: detail.DesiredRevision, Status: detail.DesiredStatus},
+		Desired: dto.AppDesiredDTO{Revision: detail.DesiredRevision, Status: detail.DesiredStatus, Pending: detail.Pending},
 		Active: dto.AppActiveDTO{
 			Converged:         detail.Converged,
 			ConvergedRevision: detail.ConvergedRevision,
 			Services:          services,
 		},
 		Intent: dto.AppIntentDTO{Stopped: detail.Stopped},
-	})
+		Retained: dto.AppRetainedDTO{
+			Volumes: detail.Retained.Volumes,
+			Secrets: detail.Retained.Secrets,
+			Images:  detail.Retained.Images,
+		},
+	}
+	if detail.LastOp != "" {
+		resp.LastOp = &dto.AppLastOpDTO{
+			Op: detail.LastOp, Kind: detail.LastOpKind,
+			Outcome: detail.LastOutcome, StartedAt: detail.LastOpStartedAt,
+		}
+	}
+	h.sendJSON(w, http.StatusOK, resp)
 }
 
 // handleAppDiff returns the normalized desired-vs-active diff.
@@ -293,7 +308,7 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, op, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
 // handleAppLifecycle runs stop/start/remove verbs.
@@ -332,7 +347,7 @@ func (h *Handler) handleAppLifecycle(w http.ResponseWriter, r *http.Request, app
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, domainOp, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, domainOp, false))
 }
 
 // handleAppRestart restarts from pinned digests.
@@ -360,7 +375,7 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, op, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
 func appIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -395,7 +410,8 @@ func (h *Handler) handleAppOpLookup(w http.ResponseWriter, r *http.Request, app,
 		return
 	}
 	// Application diagnostics require the logs read scope; an apps-read
-	// actor receives the stable error only.
+	// actor receives the stable error only. The lookup answers with the
+	// journal alone: no app read is added to a journal query.
 	includeDiagnostics := HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead)
 	h.sendJSON(w, http.StatusOK, toAppDeployResponse(app, op, includeDiagnostics))
 }
@@ -551,9 +567,32 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		}
 		resp.Steps = append(resp.Steps, entry)
 	}
-	resp.Effective = dto.AppEffectiveDTO{ConvergedRevision: op.InputRevision}
-	if op.Outcome == domain.AppOutcomeSuccess {
-		resp.Effective.Converged = true
+	return resp
+}
+
+// appMutationResponse maps one operation journal to the wire DTO and
+// attaches current app state. Effective revisions, convergence, and owned
+// resources come from desired + ACTIVE + ownership, never from the
+// journal. An app that no longer exists (removal) omits both sections.
+func (h *Handler) appMutationResponse(ctx context.Context, svc in.AppService, app string, op *domain.AppOperation, includeDiagnostics bool) dto.AppDeployResponse {
+	resp := toAppDeployResponse(app, op, includeDiagnostics)
+	detail, err := svc.Show(ctx, app)
+	if err != nil {
+		return resp
+	}
+	effective := &dto.AppEffectiveDTO{
+		Converged:         detail.Converged,
+		ConvergedRevision: detail.ConvergedRevision,
+		Services:          map[string]string{},
+	}
+	for name, view := range detail.Services {
+		effective.Services[name] = view.EffectiveRevision
+	}
+	resp.Effective = effective
+	resp.Retained = &dto.AppRetainedDTO{
+		Volumes: detail.Retained.Volumes,
+		Secrets: detail.Retained.Secrets,
+		Images:  detail.Retained.Images,
 	}
 	return resp
 }

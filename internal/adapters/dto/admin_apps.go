@@ -1,5 +1,7 @@
 package dto
 
+import "time"
+
 // App admin DTOs use stable wire-facing field names.
 // No secret values exist in any shape here: secret references carry
 // paths and env keys only. The versioned error envelope is a deliberate
@@ -84,19 +86,17 @@ type AppEffectiveDTO struct {
 	Services          map[string]string `json:"services"`
 }
 
-// AppObservedDTO carries observed runtime state (ids, never secrets).
-type AppObservedDTO struct {
-	Running []string `json:"running"`
-	Stopped []string `json:"stopped"`
-}
-
-// AppRetainedDTO lists retained resources (names/paths, never values).
+// AppRetainedDTO lists the resources an app owns and would retain on
+// removal (names and paths, never values).
 type AppRetainedDTO struct {
 	Volumes []string `json:"volumes"`
 	Secrets []string `json:"secrets"`
+	Images  []string `json:"images"`
 }
 
 // AppDeployResponse reports deploy outcome with terminal results.
+// Effective and Retained are filled from current app state when the app
+// still exists; they are omitted when it does not.
 type AppDeployResponse struct {
 	Op              string                         `json:"op"`
 	App             string                         `json:"app"`
@@ -105,15 +105,16 @@ type AppDeployResponse struct {
 	Services        map[string]AppServiceResultDTO `json:"services"`
 	Steps           []AppStepDTO                   `json:"steps"`
 	CleanupWarnings []AppCleanupWarningDTO         `json:"cleanup_warnings,omitempty"`
-	Effective       AppEffectiveDTO                `json:"effective"`
-	Observed        AppObservedDTO                 `json:"observed"`
-	Retained        AppRetainedDTO                 `json:"retained"`
+	Effective       *AppEffectiveDTO               `json:"effective,omitempty"`
+	Retained        *AppRetainedDTO                `json:"retained,omitempty"`
 }
 
 // AppDesiredDTO summarizes desired state.
 type AppDesiredDTO struct {
 	Revision string `json:"revision,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Pending reports desired state ACTIVE has not reached yet.
+	Pending bool `json:"pending"`
 }
 
 // AppActiveServiceDTO is one effective service for inspection.
@@ -138,26 +139,32 @@ type AppIntentDTO struct {
 
 // AppLastOpDTO references the latest operation.
 type AppLastOpDTO struct {
-	Op      string `json:"op"`
-	Outcome string `json:"outcome"`
+	Op        string    `json:"op"`
+	Kind      string    `json:"kind,omitempty"`
+	Outcome   string    `json:"outcome,omitempty"`
+	StartedAt time.Time `json:"started_at,omitzero"`
 }
 
-// AppShowResponse inspects desired + active + intent + op ref.
+// AppShowResponse inspects desired + active + intent + ownership + op ref.
 type AppShowResponse struct {
-	App     string        `json:"app"`
-	Desired AppDesiredDTO `json:"desired"`
-	Active  AppActiveDTO  `json:"active"`
-	Intent  AppIntentDTO  `json:"intent"`
-	LastOp  AppLastOpDTO  `json:"last_op,omitempty"`
+	App      string         `json:"app"`
+	Desired  AppDesiredDTO  `json:"desired"`
+	Active   AppActiveDTO   `json:"active"`
+	Intent   AppIntentDTO   `json:"intent"`
+	Retained AppRetainedDTO `json:"retained"`
+	LastOp   *AppLastOpDTO  `json:"last_op,omitempty"`
 }
 
 // AppSummaryDTO is one row of the app list.
 type AppSummaryDTO struct {
-	App       string `json:"app"`
-	Desired   string `json:"desired,omitempty"`
-	Active    string `json:"active,omitempty"`
-	Converged bool   `json:"converged"`
-	Stopped   bool   `json:"stopped"`
+	App           string `json:"app"`
+	Desired       string `json:"desired,omitempty"`
+	DesiredStatus string `json:"desired_status,omitempty"`
+	Active        string `json:"active,omitempty"`
+	Converged     bool   `json:"converged"`
+	Pending       bool   `json:"pending"`
+	Stopped       bool   `json:"stopped"`
+	LastOutcome   string `json:"last_outcome,omitempty"`
 }
 
 // AppDiffResponse reports normalized desired-vs-active diff.

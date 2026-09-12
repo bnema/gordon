@@ -362,10 +362,14 @@ func TestRemove_KeepsStateWhenAContainerCannotBeRemoved(t *testing.T) {
 		return intent.Stopped
 	})).Return(nil).Once()
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
-	// The claim journal is written before the runtime effects and stays
-	// non-terminal: an interrupted remove is never recorded as finished.
+	// The claim journal is written before the runtime effects and is
+	// rewritten terminally when the removal cannot complete: a repeat of
+	// the same key replays the failure instead of reading a stuck claim.
 	state.EXPECT().SaveOperation(mock.Anything, mock.MatchedBy(func(op domain.AppOperation) bool {
 		return op.Op != "" && op.Kind == "remove" && !op.Terminal()
+	})).Return(nil).Once()
+	state.EXPECT().SaveOperation(mock.Anything, mock.MatchedBy(func(op domain.AppOperation) bool {
+		return op.Op != "" && op.Outcome == domain.AppOutcomeFailed && op.Terminal()
 	})).Return(nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(assert.AnError).Once()
 
