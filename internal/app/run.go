@@ -1030,9 +1030,6 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 	si.svc.proxySvc = proxy.NewService(si.svc.configSvc, proxyCfg.proxyConfig)
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
-	// The proxy service implements out.ProxyCacheInvalidator via InvalidateTarget().
-	si.svc.containerSvc.SetProxyCacheInvalidator(si.svc.proxySvc)
-	si.svc.containerSvc.SetProxyDrainWaiter(si.svc.proxySvc)
 	return nil
 }
 
@@ -1123,7 +1120,6 @@ func injectTelemetryMetrics(cfg Config, svc *services, log zerowrap.Logger) {
 		log.Warn().Err(err).Msg("failed to create telemetry metrics, continuing without metrics")
 		return
 	}
-	svc.containerSvc.SetMetrics(gordonMetrics)
 	svc.registrySvc.SetMetrics(gordonMetrics)
 	svc.eventBus.SetMetrics(gordonMetrics)
 }

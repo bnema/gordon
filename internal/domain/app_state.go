@@ -15,13 +15,6 @@ const AppStoreVersion = 1
 // even beyond this limit. Configurable in main installation config.
 const AppDefaultRevisionRetention = 8
 
-// AppRevisionRetention is the compiled default retention, kept for
-// callers that cannot reach a Store. Prefer Store.Retention, which
-// honors the configured apps.revision_retention installation value.
-//
-// Deprecated: read the installation config or Store.Retention instead.
-const AppRevisionRetention = AppDefaultRevisionRetention
-
 // App intent states for the durable apply protocol.
 const (
 	AppIntentStaged    = "staged"

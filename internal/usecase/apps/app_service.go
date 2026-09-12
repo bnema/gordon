@@ -17,13 +17,13 @@ import (
 // daemon owns this implementation; CLI always reaches it via the daemon.
 // All mutations run recovery-before-mutation through the engine.
 type AppServiceImpl struct {
-	store       out.AppState
-	deploy      deployEngine
-	secrets     out.SecretWriter
-	log         zerowrap.Logger
-	listeners   map[string]domain.EntryPointListener
-	barrier     out.GCBarrier
-	imagePolicy domain.ImageSourcePolicy
+	store   out.AppState
+	deploy  deployEngine
+	secrets out.SecretWriter
+	log     zerowrap.Logger
+	// core is the single configured apps service. It is built once and
+	// reconfigured in place, never reconstructed per request.
+	core *Service
 }
 
 // deployEngine is the subset of the deployment engine the app service needs.
@@ -37,26 +37,32 @@ type deployEngine interface {
 
 // NewAppServiceImpl wires the driving-port implementation.
 func NewAppServiceImpl(store out.AppState, deploy deployEngine, secrets out.SecretWriter, log zerowrap.Logger) *AppServiceImpl {
-	return &AppServiceImpl{store: store, deploy: deploy, secrets: secrets, log: log}
+	return &AppServiceImpl{
+		store:   store,
+		deploy:  deploy,
+		secrets: secrets,
+		log:     log,
+		core:    NewService(store, log),
+	}
 }
 
 // WithEntrypoints supplies the installation entrypoint listeners used to
 // validate L4 publish declarations at apply time.
 func (s *AppServiceImpl) WithEntrypoints(listeners map[string]domain.EntryPointListener) *AppServiceImpl {
-	s.listeners = listeners
+	s.core.WithEntrypoints(listeners)
 	return s
 }
 
 // WithGCBarrier supplies the process-wide GC barrier used to serialize an
 // apply against destructive prune.
 func (s *AppServiceImpl) WithGCBarrier(barrier out.GCBarrier) *AppServiceImpl {
-	s.barrier = barrier
+	s.core.WithGCBarrier(barrier)
 	return s
 }
 
 // WithImagePolicy supplies the registry policy used for manifest validation.
 func (s *AppServiceImpl) WithImagePolicy(policy domain.ImageSourcePolicy) *AppServiceImpl {
-	s.imagePolicy = policy
+	s.core.WithImagePolicy(policy)
 	return s
 }
 
@@ -64,11 +70,7 @@ var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.
 func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error) {
-	core := NewService(s.store, s.log).
-		WithEntrypoints(s.listeners).
-		WithGCBarrier(s.barrier).
-		WithImagePolicy(s.imagePolicy)
-	applyResult, dryResult, err := core.Apply(ctx, spec, source, dryRun)
+	applyResult, dryResult, err := s.core.Apply(ctx, spec, source, dryRun)
 	if err != nil {
 		return nil, nil, err
 	}

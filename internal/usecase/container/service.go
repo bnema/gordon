@@ -8,8 +8,6 @@
 //   - ListNetworks: read-only inventory of Gordon-managed networks.
 //   - Shutdown: graceful teardown (log writer close; containers are left
 //     running across Gordon restarts by design).
-//   - UpdateConfig/SetMetrics/SetProxyCacheInvalidator/SetProxyDrainWaiter:
-//     wiring hooks kept for reload/metrics registration.
 package container
 
 import (
@@ -19,7 +17,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -31,15 +28,12 @@ type Config struct {
 
 // Service implements the ContainerService interface.
 type Service struct {
-	runtime          out.ContainerRuntime
-	envLoader        out.EnvLoader
-	eventBus         out.EventPublisher
-	logWriter        out.ContainerLogWriter
-	cacheInvalidator out.ProxyCacheInvalidator
-	drainWaiter      out.ProxyDrainWaiter
-	config           Config
-	metrics          *telemetry.Metrics
-	mu               sync.RWMutex
+	runtime   out.ContainerRuntime
+	envLoader out.EnvLoader
+	eventBus  out.EventPublisher
+	logWriter out.ContainerLogWriter
+	config    Config
+	mu        sync.RWMutex
 }
 
 // NewService creates a new container service.
@@ -57,25 +51,6 @@ func NewService(
 		logWriter: logWriter,
 		config:    config,
 	}
-}
-
-// SetMetrics sets telemetry metrics.
-func (s *Service) SetMetrics(m *telemetry.Metrics) {
-	s.metrics = m
-}
-
-// SetProxyCacheInvalidator sets the proxy cache invalidator.
-func (s *Service) SetProxyCacheInvalidator(inv out.ProxyCacheInvalidator) {
-	s.mu.Lock()
-	s.cacheInvalidator = inv
-	s.mu.Unlock()
-}
-
-// SetProxyDrainWaiter sets the proxy in-flight drain waiter.
-func (s *Service) SetProxyDrainWaiter(waiter out.ProxyDrainWaiter) {
-	s.mu.Lock()
-	s.drainWaiter = waiter
-	s.mu.Unlock()
 }
 
 // ListNetworks returns Gordon-managed networks (prefix-filtered,

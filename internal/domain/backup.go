@@ -195,12 +195,3 @@ type VolumeArchiveResult struct {
 	Stream   io.ReadCloser
 	Metadata VolumeArchiveMetadata
 }
-
-// Backup labels for container metadata.
-const (
-	LabelBackupEnabled  = "gordon.backup"
-	LabelBackupType     = "gordon.backup.type"
-	LabelBackupVersion  = "gordon.backup.version"
-	LabelBackupSchedule = "gordon.backup.schedule"
-	LabelBackupSidecar  = "gordon.backup.sidecar"
-)
