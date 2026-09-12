@@ -21,6 +21,10 @@ type LifecycleResult struct {
 	Verb     string
 	Outcome  string
 	Services map[string]ServiceResult
+	// Warnings are operation-level leftovers that belong to no single
+	// service, such as a private network that could not be verified or
+	// removed.
+	Warnings []CleanupWarning
 }
 
 // Stop persists the durable stopped intent first, then stops and removes
@@ -80,7 +84,7 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(result.Services)
+	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record stop outcome")
 	}
@@ -178,7 +182,7 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		op.Steps = append(op.Steps, step)
 	}
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(result.Services)
+	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record start outcome")
 	}
@@ -243,7 +247,7 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(result.Services)
+	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		return result, fmt.Errorf("deployment: persist restart journal: %w", err)
 	}
@@ -360,6 +364,23 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 		s.failOperation(ctx, &op, err, "error")
 		return nil, err
 	}
+	// Every exact container is confirmed gone, so the app's private
+	// networks are reclaimed immediately, while the ownership record is
+	// still live and its UUID can be verified against the runtime names
+	// and labels. Shared networks stay, and retained volumes, secrets, and
+	// images are never touched.
+	ownership, err := s.deps.State.LoadOwnership(ctx, app)
+	if err != nil {
+		retireErr := fmt.Errorf("deployment: load ownership before reclamation: %w", err)
+		s.failOperation(ctx, &op, retireErr, "error")
+		return nil, retireErr
+	}
+	networkWarnings, err := s.reclaimPrivateNetworks(ctx, app, ownership)
+	if err != nil {
+		s.failOperation(ctx, &op, err, "error")
+		return nil, err
+	}
+	result.Warnings = append(result.Warnings, networkWarnings...)
 	op.Steps = steps
 	// End the incarnation atomically: the ownership record is archived
 	// with its resources retained under the old UUID, the app UUID is
@@ -373,7 +394,7 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 		return nil, retireErr
 	}
 	op.Outcome = domain.AppOutcomeSuccess
-	op.Warnings = journalWarnings(result.Services)
+	op.Warnings = journalWarnings(append(collectCleanupWarnings(result.Services), result.Warnings...))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record remove outcome")
 	}

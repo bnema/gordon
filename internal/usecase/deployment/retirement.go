@@ -152,12 +152,12 @@ func collectCleanupWarnings(results map[string]ServiceResult) []CleanupWarning {
 	return warnings
 }
 
-// journalWarnings maps leftovers into the bounded journal shape. Service
-// names are filled from the owning service so a warning is always
+// journalWarnings maps leftovers into the bounded journal shape. The
+// service name travels with each warning, so a leftover is always
 // attributable without parsing its text.
-func journalWarnings(results map[string]ServiceResult) []domain.AppOperationWarning {
+func journalWarnings(leftovers []CleanupWarning) []domain.AppOperationWarning {
 	var warnings []domain.AppOperationWarning
-	for _, warning := range collectCleanupWarnings(results) {
+	for _, warning := range leftovers {
 		warnings = append(warnings, domain.AppOperationWarning{
 			Service:  warning.Service,
 			Leftover: warning.Leftover,

@@ -84,7 +84,7 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(result.Services)
+	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	result.CleanupWarnings = collectCleanupWarnings(result.Services)
 	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
@@ -127,7 +127,7 @@ func (s *Service) runServiceStep(
 		step.Error = err.Error()
 		step.Diagnostics = svcResult.Diagnostics
 		op.Steps[index] = step
-		op.Warnings = journalWarnings(result.Services)
+		op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 		op.Outcome = ComputeOutcome(result.Services)
 		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 			log.Warn().Err(saveErr).Msg("deployment: failed to record service failure")

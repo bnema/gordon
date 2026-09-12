@@ -77,6 +77,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 		state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
 		state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
+		state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 		state.EXPECT().RetireApp(mock.Anything, "blog").Return(nil).Once()
 		state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
