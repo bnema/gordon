@@ -42,6 +42,17 @@ func (h *HostIndex) Replace(entries []RouteEntry) {
 	h.entries = append([]RouteEntry(nil), entries...)
 }
 
+// Entries returns a copy of the projected entries, for a caller that
+// builds a candidate index and publishes it through another one.
+func (h *HostIndex) Entries() []RouteEntry {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return append([]RouteEntry(nil), h.entries...)
+}
+
 // Lookup returns the projected entry for a canonical host.
 func (h *HostIndex) Lookup(host string) (RouteEntry, bool) {
 	if h == nil {
