@@ -132,10 +132,11 @@ func TestRedactDiagnostics_DropsWhenSecretUnreadable(t *testing.T) {
 func TestStopService_StopFailureSurfaces(t *testing.T) {
 	state := outmocks.NewMockAppState(t)
 	runtime := outmocks.NewMockContainerRuntime(t)
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(errors.New("cannot stop")).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(errors.New("cannot stop")).Once()
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{}}, zerowrap.Default())
-	step, err := svc.stopService(context.Background(), "blog", "web", "c-1")
+	eff := domain.AppEffectiveService{Container: "c-1", Spec: domain.AppService{Name: "web", StopGrace: time.Second}}
+	step, err := svc.stopService(context.Background(), "blog", "web", eff)
 
 	require.Error(t, err)
 	assert.Equal(t, domain.AppStepFailed, step.State)
@@ -149,9 +150,10 @@ func TestStopService_WithdrawFailureBlocksStop(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{fail: true}}, zerowrap.Default())
-	step, err := svc.stopService(context.Background(), "blog", "web", "c-1")
+	eff := domain.AppEffectiveService{Container: "c-1", Spec: domain.AppService{Name: "web", StopGrace: time.Second}}
+	step, err := svc.stopService(context.Background(), "blog", "web", eff)
 
 	require.Error(t, err)
 	assert.Equal(t, domain.AppStepFailed, step.State)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 }

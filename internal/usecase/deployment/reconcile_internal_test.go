@@ -59,9 +59,10 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(i domain.AppRecoveryInhibition) bool {
 		return i.App == "blog" && i.Service == "legacy" && i.ContainerID == "c-legacy" && i.Reason == "removed"
 	})).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-legacy", false).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-legacy").Return(nil).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "legacy", "c-legacy").Return(nil).Once()
 	var saved domain.AppActive
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, a domain.AppActive) error {
 		saved = a
@@ -102,7 +103,7 @@ func TestReconcileRemovedServices_WithdrawFailureAbortsBeforeStop(t *testing.T) 
 	require.Error(t, err)
 	require.Len(t, steps, 1)
 	assert.Equal(t, domain.AppStepFailed, steps[0].State)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 }
 

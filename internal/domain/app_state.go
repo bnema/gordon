@@ -222,10 +222,21 @@ type AppOperation struct {
 	StartedAt     time.Time          `json:"started_at"`
 	Steps         []AppOperationStep `json:"steps"`
 	Outcome       string             `json:"outcome,omitempty"`
+	// Warnings are bounded, operator-actionable leftovers of this
+	// operation: a container that could not be removed, or a backend
+	// claim that could not be released. They never carry log content.
+	Warnings []AppOperationWarning `json:"warnings,omitempty"`
 	// Request is the immutable request identity this journal answers.
 	// Records written by older binaries decode it as the zero value;
 	// such a record is only reachable through its own key.
 	Request AppOperationRequest `json:"request,omitempty"`
+}
+
+// AppOperationWarning records one bounded leftover of an operation.
+type AppOperationWarning struct {
+	Service  string `json:"service,omitempty"`
+	Leftover string `json:"leftover,omitempty"`
+	Detail   string `json:"detail"`
 }
 
 // Terminal reports whether the operation reached a terminal outcome. A

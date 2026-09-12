@@ -192,7 +192,7 @@ func TestRemove_TerminalKeyReplaySkipsRuntime(t *testing.T) {
 	assert.Equal(t, domain.AppOutcomeSuccess, result.Outcome)
 	state.AssertNotCalled(t, "SaveIntent", mock.Anything, mock.Anything)
 	state.AssertNotCalled(t, "RetireApp", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestStop_PendingKeyReplayConflicts proves a stop replay of an unfinished
@@ -215,7 +215,7 @@ func TestStop_PendingKeyReplayConflicts(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 	require.NotNil(t, result)
 	state.AssertNotCalled(t, "SaveIntent", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestRestart_ClaimCarriesServiceIdentity proves the restart claim records
@@ -237,5 +237,5 @@ func TestRestart_ClaimCarriesServiceIdentity(t *testing.T) {
 	_, err := svc.Restart(ctx, "blog", "web", "key-1")
 
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }

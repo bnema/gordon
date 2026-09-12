@@ -70,7 +70,7 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	var failures []string
 	for _, name := range sortedServiceNames(active) {
 		container := active.Services[name].Container
-		step, err := s.stopService(ctx, app, name, container)
+		step, err := s.stopService(ctx, app, name, active.Services[name])
 		op.Steps = append(op.Steps, step)
 		if err != nil {
 			result.Services[name] = ServiceResult{Result: "failed", Before: container, Error: err.Error()}
@@ -80,6 +80,7 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
+	op.Warnings = journalWarnings(result.Services)
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record stop outcome")
 	}
@@ -93,10 +94,13 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	return result, nil
 }
 
-// stopService withdraws one service, then stops and removes its exact
-// container. A withdrawal or runtime failure is reported, never treated as
-// a successful stop.
-func (s *Service) stopService(ctx context.Context, app, name, container string) (domain.AppOperationStep, error) {
+// stopService withdraws one service, then retires its exact container
+// with the effective grace. A withdrawal or runtime failure is reported,
+// never treated as a successful stop. The confirmed disappearance
+// releases the container's backend claims and its recovery inhibition:
+// a stopped app is never revived by recovery.
+func (s *Service) stopService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, error) {
+	container := eff.Container
 	step := domain.AppOperationStep{ID: "service." + name + ".stop", State: domain.AppStepPending, Before: container}
 	fail := func(err error) (domain.AppOperationStep, error) {
 		step.State = domain.AppStepFailed
@@ -107,11 +111,11 @@ func (s *Service) stopService(ctx context.Context, app, name, container string) 
 		return fail(err)
 	}
 	if container != "" {
-		if err := s.deps.Runtime.StopContainer(ctx, container); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return fail(fmt.Errorf("deployment: stop %s/%s container %s: %w", app, name, container, err))
-		}
-		if err := s.deps.Runtime.RemoveContainer(ctx, container, false); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return fail(fmt.Errorf("deployment: remove %s/%s container %s: %w", app, name, container, err))
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: name, Grace: serviceStopGrace(eff), ClearInhibition: true,
+		}, container)
+		if !retired.Gone {
+			return fail(fmt.Errorf("deployment: stop %s/%s container %s: %s", app, name, container, cleanupDetail(retired)))
 		}
 		step.After = container
 	}
@@ -174,6 +178,7 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		op.Steps = append(op.Steps, step)
 	}
 	op.Outcome = ComputeOutcome(result.Services)
+	op.Warnings = journalWarnings(result.Services)
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record start outcome")
 	}
@@ -238,6 +243,7 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
+	op.Warnings = journalWarnings(result.Services)
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		return result, fmt.Errorf("deployment: persist restart journal: %w", err)
 	}
@@ -277,7 +283,7 @@ func (s *Service) restartOneService(ctx context.Context, app, name string, eff d
 	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
 		return fail(err.Error())
 	}
-	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container); err != nil {
+	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
@@ -367,6 +373,7 @@ func (s *Service) removeLocked(ctx context.Context, app, opID string) (*Lifecycl
 		return nil, retireErr
 	}
 	op.Outcome = domain.AppOutcomeSuccess
+	op.Warnings = journalWarnings(result.Services)
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record remove outcome")
 	}
@@ -412,11 +419,11 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 			if err := s.inhibitRecovery(ctx, app, name, container, "removed", opID); err != nil {
 				return nil, err
 			}
-			if err := s.deps.Runtime.StopContainer(ctx, container); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-				return nil, fmt.Errorf("deployment: remove %q/%q: container %s still running: %w", app, name, container, err)
-			}
-			if err := s.deps.Runtime.RemoveContainer(ctx, container, false); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-				return nil, fmt.Errorf("deployment: remove %q/%q: container %s not removed: %w", app, name, container, err)
+			retired := s.retireContainer(ctx, app, retireOptions{
+				Service: name, Grace: serviceStopGrace(active.Services[name]), ClearInhibition: true,
+			}, container)
+			if !retired.Gone {
+				return nil, fmt.Errorf("deployment: remove %q/%q: container %s not confirmed gone: %s", app, name, container, cleanupDetail(retired))
 			}
 		}
 		step.State = domain.AppStepSucceeded
@@ -546,7 +553,7 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage, appEnv: maps.Clone(rev.Spec.Env),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
 	}
-	svcResult, _ := s.deployService(ctx, app, rev.Revision, pinned, opID, eff.Container)
+	svcResult, _ := s.deployService(ctx, app, rev.Revision, pinned, opID, eff.Container, serviceStopGrace(eff))
 	if svcResult.Result == "failed" {
 		step.State = domain.AppStepFailed
 		step.Error = svcResult.Error
@@ -564,9 +571,28 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
 		return true
 	}
+	// The replaced container is only retired once the replacement is
+	// published: it must not be removed while a crash could leave the
+	// service with no routable generation at all.
+	if svcResult.Retire != "" {
+		s.retireAfterPublish(ctx, app, pinned, &svcResult, result)
+	}
 	step.State = domain.AppStepSucceeded
 	step.After = svcResult.After
 	return true
+}
+
+// retireAfterPublish retires the container a published replacement
+// superseded. The replaced generation keeps its inhibition: the new
+// generation's publication already cleared it, and a still-unpublished
+// replacement never reaches here.
+func (s *Service) retireAfterPublish(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *LifecycleResult) {
+	retired := s.retireContainer(ctx, app, retireOptions{
+		Service: p.name, Grace: svcResult.RetireGrace,
+	}, svcResult.Retire)
+	service := result.Services[p.name]
+	service.CleanupWarnings = append(service.CleanupWarnings, retired.Warnings...)
+	result.Services[p.name] = service
 }
 
 // verifyRunningService withdraws a running or freshly started generation,

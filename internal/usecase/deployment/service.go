@@ -226,6 +226,13 @@ type ServiceResult struct {
 	// Retire is the exact container ID to stop+remove AFTER the new
 	// effective state is published. Empty when nothing retires.
 	Retire string
+	// RetireGrace is the effective stop grace of the container named by
+	// Retire: the generation being stopped, never its replacement.
+	RetireGrace time.Duration
+	// CleanupWarnings are bounded leftovers of this service's terminal
+	// path: a candidate that could not be removed, or a backend claim
+	// that could not be released.
+	CleanupWarnings []CleanupWarning
 	// Diagnostics is bounded, redacted failure output of the failed
 	// candidate. It is never embedded in Error and is persisted to the
 	// journal for logs-scoped retrieval only.

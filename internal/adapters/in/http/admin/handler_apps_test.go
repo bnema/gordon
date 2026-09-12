@@ -131,6 +131,34 @@ func TestHandler_AppDeploy_MapsOp(t *testing.T) {
 	assert.Equal(t, []string{"gordon-blog--web--vol--data"}, resp.Retained.Volumes)
 }
 
+// TestHandler_AppDeploy_MapsCleanupWarnings proves bounded leftovers of a
+// successful mutation reach the wire instead of being dropped.
+func TestHandler_AppDeploy_MapsCleanupWarnings(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	op := &domain.AppOperation{
+		Op: "op-1", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Outcome: domain.AppOutcomeSuccess,
+		Steps:   []domain.AppOperationStep{{ID: "service.web.replace", State: domain.AppStepSucceeded}},
+		Warnings: []domain.AppOperationWarning{{
+			Service: "web", Leftover: "ctr-old", Detail: "remove: still present",
+		}},
+	}
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(op, nil).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog"}, nil).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
+		dto.AppDeployRequest{}, "admin:apps:write")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Len(t, resp.CleanupWarnings, 1)
+	assert.Equal(t, "web", resp.CleanupWarnings[0].Service)
+	assert.Equal(t, "ctr-old", resp.CleanupWarnings[0].Leftover)
+	assert.Equal(t, "remove: still present", resp.CleanupWarnings[0].Detail)
+}
+
 func TestHandler_AppList_RequiresScope(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)

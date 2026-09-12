@@ -81,7 +81,7 @@ func TestDeploy_HTTPZeroDowntimeBehavior(t *testing.T) {
 	ready := make(chan struct{})
 	traffic := &switchingTraffic{backend: "old", ready: ready}
 	retired := make(chan struct{})
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old").RunAndReturn(func(context.Context, string) error {
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
 		assert.Equal(t, "new", traffic.current(), "old backend retired before traffic switched")
 		close(retired)
 		return nil

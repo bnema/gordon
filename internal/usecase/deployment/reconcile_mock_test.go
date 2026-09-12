@@ -133,12 +133,12 @@ func TestReconcileRunning_StoppedIntentStopsRevivedExactIDWithoutRemoval(t *test
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running"}, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	require.NoError(t, svc.ReconcileRunning(ctx))
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 	assert.GreaterOrEqual(t, traffic.rebuildCount(), 1, "a stopped app is republished without its backend")
 }
@@ -160,7 +160,7 @@ func TestReconcileRunning_AbstainsWhenStoppedContainerAlreadyDown(t *testing.T) 
 
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	require.NoError(t, svc.ReconcileRunning(ctx))
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
 }
 
@@ -223,6 +223,8 @@ func TestReconcileRunning_ConfirmedMissingWithdrawsWithoutReconstruction(t *test
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(nil, fmt.Errorf("inspect: %w", domain.ErrContainerNotFound)).Once()
+	// A confirmed-missing container must not keep its loopback claims.
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
 
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	err := svc.ReconcileRunning(ctx)
@@ -282,7 +284,7 @@ func TestReconcileRunning_InhibitedGenerationIsNeverStarted(t *testing.T) {
 	assert.Contains(t, err.Error(), "recovery inhibited")
 	runtime.AssertNotCalled(t, "InspectContainer", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	assert.Equal(t, []string{"blog/web"}, traffic.withdrawn(),
 		"an inhibited generation must not stay published")
 }
@@ -311,7 +313,7 @@ func TestReconcileRunning_NativeRestartRaceIsNotCharged(t *testing.T) {
 
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	require.NoError(t, svc.ReconcileRunning(ctx))
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	assert.Equal(t, 1, traffic.rebuildCount())
 }
 
@@ -344,7 +346,7 @@ func TestReconcileRunning_NativeRestartRefreshesChangedBinds(t *testing.T) {
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	require.NoError(t, svc.ReconcileRunning(ctx))
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	assert.Equal(t, 1, traffic.rebuildCount(), "a changed bind is republished once")
 }
 
@@ -366,7 +368,7 @@ func TestReconcileRunning_RestartingObservesAndRetries(t *testing.T) {
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	require.NoError(t, svc.ReconcileRunning(ctx))
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestReconcileRunning_PausedRefusesNonDestructiveRecovery(t *testing.T) {
@@ -389,7 +391,7 @@ func TestReconcileRunning_PausedRefusesNonDestructiveRecovery(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "paused")
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -515,7 +517,7 @@ func TestReconcileRunning_RebuildFailureDoesNotRestartHealthyContainer(t *testin
 	err := svc.ReconcileRunning(ctx)
 	require.Error(t, err)
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -535,16 +537,17 @@ func TestReconcileRunning_UnhealthyRestartsOnlyAfterConsecutiveObservations(t *t
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: startedAt}, nil)
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-1").Return("unhealthy", true, nil)
-	runtime.EXPECT().RestartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 
 	svc := recoveringService(t, state, runtime, traffic, nil)
 	// First observation only arms the streak.
 	require.NoError(t, svc.ReconcileRunning(ctx))
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 
-	// The second consecutive unhealthy observation restarts the exact ID.
+	// The second consecutive unhealthy observation restarts the exact ID
+	// with the effective stop grace.
 	require.NoError(t, svc.ReconcileRunning(ctx))
-	runtime.AssertCalled(t, "RestartContainer", mock.Anything, "c-1")
+	runtime.AssertCalled(t, "RestartContainer", mock.Anything, "c-1", domain.AppDefaultStopGrace)
 }
 
 func TestReconcileRunning_HealthStartingWaits(t *testing.T) {
@@ -568,7 +571,7 @@ func TestReconcileRunning_HealthStartingWaits(t *testing.T) {
 	for range 3 {
 		require.NoError(t, svc.ReconcileRunning(ctx))
 	}
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestReconcileRunning_NoHealthcheckNeverRestartsOnReadiness(t *testing.T) {
@@ -600,7 +603,7 @@ func TestReconcileRunning_NoHealthcheckNeverRestartsOnReadiness(t *testing.T) {
 		return 500, nil
 	})
 	require.Error(t, svc.ReconcileRunning(ctx), "the unseen execution fails readiness and stays withdrawn")
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
 }
 
@@ -701,7 +704,7 @@ func TestReconcileRunning_OldExecutionMarkerCannotSatisfyReadiness(t *testing.T)
 	err := svc.ReconcileRunning(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "log readiness timeout")
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRunning_CrashLoopIsChargedEvenWhenStartsSucceed proves the
@@ -799,5 +802,5 @@ func TestReconcileRunning_FailedReadinessPersistsNoBinds(t *testing.T) {
 	require.Error(t, svc.ReconcileRunning(ctx))
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 	assert.Zero(t, traffic.rebuildCount())
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }

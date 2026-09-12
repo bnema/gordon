@@ -31,7 +31,7 @@ func TestRemove_ConcurrentSameKeyExecutesOnce(t *testing.T) {
 	require.NoError(t, store.SaveActive(ctx, active))
 
 	// Removal effects must run exactly once for the key.
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 
 	svc := deployment.NewService(deployment.Deps{
@@ -93,5 +93,5 @@ func TestRemove_UnknownAppCreatesNoState(t *testing.T) {
 	apps, err := store.ListApps(ctx)
 	require.NoError(t, err)
 	assert.NotContains(t, apps, "ghost")
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 }

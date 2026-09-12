@@ -556,6 +556,11 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		}
 		resp.Services[service] = entry
 	}
+	for _, warning := range op.Warnings {
+		resp.CleanupWarnings = append(resp.CleanupWarnings, dto.AppCleanupWarningDTO{
+			Service: warning.Service, Leftover: warning.Leftover, Detail: warning.Detail,
+		})
+	}
 	resp.Steps = make([]dto.AppStepDTO, 0, len(op.Steps))
 	for _, step := range op.Steps {
 		entry := dto.AppStepDTO{

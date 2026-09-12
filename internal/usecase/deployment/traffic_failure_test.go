@@ -85,7 +85,7 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	assert.Equal(t, domain.AppStepFailed, step.State, "the service step must not claim success before traffic applied")
 	// The replaced container is retained: ACTIVE is published but the graph
 	// never accepted the new routing.
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old")
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
 }
 
 // TestStop_TrafficFailureRecordsTerminalFailure proves a rejected graph
@@ -101,8 +101,10 @@ func TestStop_TrafficFailureRecordsTerminalFailure(t *testing.T) {
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
 
 	var saved []domain.AppOperation
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).RunAndReturn(

@@ -78,7 +78,7 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		stopCtx, cancelStop := context.WithTimeout(context.Background(), 20*time.Second)
-		_ = runtime.StopContainer(stopCtx, container.ID)
+		_ = runtime.StopContainer(stopCtx, container.ID, domain.AppDefaultStopGrace)
 		cancelStop()
 
 		removeCtx, cancelRemove := context.WithTimeout(context.Background(), 20*time.Second)
