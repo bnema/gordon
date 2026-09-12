@@ -3,13 +3,10 @@ package domain
 // Label keys used by Gordon for container and image metadata.
 const (
 	// Container labels
-	LabelDomain     = "gordon.domain"
-	LabelImage      = "gordon.image"
-	LabelManaged    = "gordon.managed"
-	LabelRoute      = "gordon.route"
-	LabelAttachment = "gordon.attachment"
-	LabelAttachedTo = "gordon.attached-to"
-	LabelCreated    = "gordon.created"
+	LabelDomain  = "gordon.domain"
+	LabelImage   = "gordon.image"
+	LabelManaged = "gordon.managed"
+	LabelCreated = "gordon.created"
 	// LabelEnvHash stores a SHA-256 hash of the effective environment
 	// variables at deploy time, used to detect env drift without
 	// exposing secret values.

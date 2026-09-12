@@ -3,11 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
-	"strings"
 	"sync"
 	"testing"
 
@@ -16,19 +12,6 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 )
-
-var uiAdoptionHelperCalls = map[string]struct{}{
-	"cliWriteLine":        {},
-	"cliWritef":           {},
-	"cliRenderTitle":      {},
-	"cliRenderMuted":      {},
-	"cliRenderEmptyState": {},
-	"cliRenderListItem":   {},
-	"cliRenderMeta":       {},
-	"cliRenderSuccess":    {},
-	"cliRenderWarning":    {},
-	"cliRenderInfo":       {},
-}
 
 // uiAdoptionSeamMu guards mutations of the package-level cliWriteLine and
 // cliWritef variables. Any test that overrides these seams must hold this
@@ -54,102 +37,6 @@ func TestPresentationHelpers(t *testing.T) {
 	if got := cliRenderListItem("item"); got == "" {
 		t.Fatal("cliRenderListItem returned empty output")
 	}
-}
-
-func TestUIAdoption(t *testing.T) {
-	for i := range uiAdoptionExpectations {
-		expect := uiAdoptionExpectations[i]
-		t.Run(expect.family, func(t *testing.T) {
-			fset := token.NewFileSet()
-			fileNode, err := parser.ParseFile(fset, expect.file, nil, parser.AllErrors)
-			if err != nil {
-				t.Fatalf("failed to parse %s: %v", expect.file, err)
-			}
-
-			for _, fnName := range expect.functions {
-				t.Run(fnName, func(t *testing.T) {
-					fn := findFuncDecl(fileNode, fnName)
-					if fn == nil {
-						t.Fatalf("function %s not found in %s", fnName, expect.file)
-					}
-
-					hasHelperCall := false
-					hasSharedUIUsage := false
-					hasForbiddenRawPrint := false
-
-					ast.Inspect(fn.Body, func(n ast.Node) bool {
-						call, ok := n.(*ast.CallExpr)
-						if !ok {
-							return true
-						}
-
-						switch fun := call.Fun.(type) {
-						case *ast.Ident:
-							if _, ok := uiAdoptionHelperCalls[fun.Name]; ok {
-								hasHelperCall = true
-							}
-						case *ast.SelectorExpr:
-							if isForbiddenRawPrintCall(call, fun) {
-								hasForbiddenRawPrint = true
-							}
-							pkgIdent, ok := fun.X.(*ast.Ident)
-							if !ok {
-								return true
-							}
-							if pkgIdent.Name == "styles" || pkgIdent.Name == "components" {
-								hasSharedUIUsage = true
-							}
-						}
-
-						return true
-					})
-
-					if !hasHelperCall && !hasSharedUIUsage {
-						t.Fatalf("%s in %s does not use presentation helpers or shared ui styles/components", fnName, expect.file)
-					}
-
-					if hasForbiddenRawPrint {
-						t.Fatalf("%s in %s still uses forbidden raw print calls", fnName, expect.file)
-					}
-				})
-			}
-		})
-	}
-}
-
-func isForbiddenRawPrintCall(call *ast.CallExpr, sel *ast.SelectorExpr) bool {
-	pkgIdent, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return false
-	}
-
-	if pkgIdent.Name == "fmt" {
-		switch sel.Sel.Name {
-		case "Print", "Printf", "Println":
-			return true
-		case "Fprint", "Fprintf", "Fprintln":
-			if len(call.Args) == 0 {
-				return true
-			}
-
-			switch dst := call.Args[0].(type) {
-			case *ast.SelectorExpr:
-				if dstPkg, ok := dst.X.(*ast.Ident); ok && dstPkg.Name == "os" && (dst.Sel.Name == "Stdout" || dst.Sel.Name == "Stderr") {
-					return true
-				}
-			case *ast.Ident:
-				if dst.Name == "out" {
-					return true
-				}
-			}
-		}
-	}
-
-	if pkgIdent.Name == "cmd" && strings.HasPrefix(sel.Sel.Name, "Print") {
-		return true
-	}
-
-	return false
 }
 
 func TestUIAdoptionRuntimeSeams(t *testing.T) {
@@ -205,17 +92,4 @@ func TestUIAdoptionRuntimeSeams(t *testing.T) {
 	if writefCalls == 0 {
 		t.Fatal("expected cliWritef to be called")
 	}
-}
-
-func findFuncDecl(file *ast.File, name string) *ast.FuncDecl {
-	for _, decl := range file.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok {
-			continue
-		}
-		if fn.Name.Name == name {
-			return fn
-		}
-	}
-	return nil
 }

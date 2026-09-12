@@ -238,7 +238,7 @@ func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
 		publishedAt = step
 		return nil
 	}).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old").RunAndReturn(func(context.Context, string) error {
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
 		step++
 		retiredAt = step
 		return nil
@@ -290,6 +290,9 @@ func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
 		return len(claims) == 1 && claims[0].Port == 18080 && claims[0].Owner == domain.OwnerGordonBackend && claims[0].ContainerID == "c-new"
 	})).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(nil).Once()
+	// The failed candidate's claims are released: a candidate that never
+	// became effective must not keep a loopback reservation.
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(io.NopCloser(strings.NewReader("boom\n")), nil).Once()
 
 	svc := deployment.NewService(
@@ -307,7 +310,7 @@ func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
 	assert.NotContains(t, result.Services["web"].Error, "logs:", "raw logs must never be embedded in the public error")
 	require.Len(t, result.Services["web"].Diagnostics, 1, "failure diagnostics are kept separately")
 	assert.Equal(t, "boom", result.Services["web"].Diagnostics[0])
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old")
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-old", false)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
 }
@@ -356,8 +359,10 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 	}, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	// The superseded writer's confirmed disappearance releases its claims.
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
 	expectNetworkProvision(runtime, "app-uuid-blog", 1)
 	// The volume-owning replacement must be inhibited before it can
 	// write, and released only after the new generation is published.
@@ -641,7 +646,7 @@ func TestStart_RunningContainerRefreshesShiftedBinds(t *testing.T) {
 	require.Contains(t, result.Services, "web")
 	assert.Equal(t, "deployed", result.Services["web"].Result)
 	assert.Equal(t, map[int]int{8080: 32771}, result.Services["web"].BackendBinds)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -685,7 +690,7 @@ func TestStart_BindVerificationFailureFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "failed", result.Services["web"].Result)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 	// The stale bind is withdrawn through the canonical boundary
 	// (fail-closed projection); deployment writes no ACTIVE binds itself.
@@ -723,7 +728,7 @@ func TestRestart_MixedServiceRefreshesBothProtocols(t *testing.T) {
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
-	runtime.EXPECT().RestartContainer(mock.Anything, "c-old").Return(nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return([]domain.ContainerBackendBind{
 		{ContainerPort: 9000, HostPort: 32771, Protocol: domain.NetworkProtocolTCP},
 		{ContainerPort: 9000, HostPort: 32781, Protocol: domain.NetworkProtocolUDP},

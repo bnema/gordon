@@ -83,12 +83,9 @@ max_size = 100                               # Max size in MB before rotation
 max_backups = 3                              # Number of old files to keep
 max_age = 28                                 # Days to keep old files
 
-[logging.container_logs]
-enabled = true                               # Enable container log collection
-dir = ""                                     # Log directory (default: {data_dir}/container-logs)
-max_size = 100                               # Max size in MB before rotation
-max_backups = 3                              # Number of old files to keep
-max_age = 28                                 # Days to keep old files
+# Workload logs are streamed from the container runtime with
+# `gordon apps logs APP --service SERVICE`. The accepted
+# logging.container_logs fields are not connected to a production file sink.
 
 [logging.access_log]
 enabled = false                              # Dedicated HTTP access log for reverse-proxy traffic
@@ -260,10 +257,6 @@ keep_last = 3                                # Keep N newest tags per repository
 | `logging.file.max_size` | `100` | 100 MB |
 | `logging.file.max_backups` | `3` | Keep 3 old files |
 | `logging.file.max_age` | `28` | 28 days |
-| `logging.container_logs.enabled` | `true` | Container logs enabled |
-| `logging.container_logs.max_size` | `100` | 100 MB |
-| `logging.container_logs.max_backups` | `3` | Keep 3 old files |
-| `logging.container_logs.max_age` | `28` | 28 days |
 | `logging.access_log.enabled` | `false` | Dedicated HTTP access log disabled |
 | `logging.access_log.format` | `"json"` | Access log format (`json`, `clf`, `combined`) |
 | `logging.access_log.output` | `"stdout"` | Access log sink (`stdout`, `file`, `journald`) |

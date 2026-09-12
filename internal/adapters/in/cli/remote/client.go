@@ -624,10 +624,10 @@ func (c *Client) PruneImages(ctx context.Context, req dto.ImagePruneRequest) (*d
 }
 
 // ListBackups returns backups globally or for a domain.
-func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
+func (c *Client) ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error) {
 	path := "/backups"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+	if app != "" {
+		path += "/" + url.PathEscape(app)
 	}
 
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
@@ -643,7 +643,8 @@ func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.Ba
 	return result.Backups, nil
 }
 
-// BackupStatus returns aggregate backup status.
+// BackupStatus returns stored backups plus declared targets that have no
+// completed backup yet.
 func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/backups/status", nil)
 	if err != nil {
@@ -658,13 +659,15 @@ func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	return result.Backups, nil
 }
 
-// RunBackup triggers a backup for a domain.
-func (c *Client) RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error) {
-	if backupDomain == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
+// RunBackup runs one declared database backup of one app. service and
+// database are explicit selectors.
+func (c *Client) RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
+	if app == "" {
+		return nil, fmt.Errorf("app cannot be empty")
 	}
 
-	resp, err := c.request(ctx, http.MethodPost, "/backups/"+url.PathEscape(backupDomain), dto.BackupRunRequest{DB: dbName})
+	resp, err := c.request(ctx, http.MethodPost, "/backups/"+url.PathEscape(app),
+		dto.BackupRunRequest{Service: service, Database: database})
 	if err != nil {
 		return nil, err
 	}
@@ -677,30 +680,11 @@ func (c *Client) RunBackup(ctx context.Context, backupDomain, dbName string) (*d
 	return &result, nil
 }
 
-// DetectDatabases detects supported databases for a domain.
-func (c *Client) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
-	if backupDomain == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
-	}
-
-	resp, err := c.request(ctx, http.MethodGet, "/backups/"+url.PathEscape(backupDomain)+"/detect", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dto.BackupDetectResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Databases, nil
-}
-
-// ListVolumeBackups returns volume backups globally or for a domain.
-func (c *Client) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
+// ListVolumeBackups returns volume backups globally or for one app.
+func (c *Client) ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error) {
 	path := "/backups/volumes"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+	if app != "" {
+		path += "/" + url.PathEscape(app)
 	}
 
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
@@ -729,14 +713,15 @@ func (c *Client) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob,
 	return result.Backups, nil
 }
 
-// RunVolumeBackups triggers volume backups.
-func (c *Client) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	path := "/backups/volumes"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+// RunVolumeBackups runs one declared volume backup of one app. service
+// and volume are explicit selectors.
+func (c *Client) RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
+	if app == "" {
+		return nil, fmt.Errorf("app cannot be empty")
 	}
+	path := "/backups/volumes/" + url.PathEscape(app)
 
-	resp, err := c.request(ctx, http.MethodPost, path, dto.VolumeBackupRunRequest{Volume: volumeName})
+	resp, err := c.request(ctx, http.MethodPost, path, dto.VolumeBackupRunRequest{Service: service, Volume: volume})
 	if err != nil {
 		return nil, err
 	}

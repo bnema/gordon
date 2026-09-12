@@ -430,20 +430,20 @@ func TestParseErrorResponse_NonJSON(t *testing.T) {
 
 func TestRunVolumeBackups_PartialContentReturnsResultAndError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/backups/volumes/app.example.com", r.URL.Path)
+		require.Equal(t, "/admin/backups/volumes/shop", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusPartialContent)
 		require.NoError(t, json.NewEncoder(w).Encode(dto.VolumeBackupRunResponse{
 			Status:  "partial",
-			Backups: []dto.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data", Status: "completed"}},
+			Backups: []dto.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: "completed"}},
 			Error:   "one volume failed",
 		}))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	result, err := client.RunVolumeBackups(context.Background(), "app.example.com", "")
+	result, err := client.RunVolumeBackups(context.Background(), "shop", "api", "data")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "one volume failed")

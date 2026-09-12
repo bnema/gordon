@@ -3,7 +3,6 @@ package deployment
 import (
 	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -45,21 +44,24 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	pinned, op, err := s.preflightLocked(ctx, input)
-	if err != nil {
-		if op != nil {
-			return journaledDeployResult(input, op), err
-		}
-		return nil, err
+	pinned, op, replayed, err := s.preflightLocked(ctx, input)
+	if replayed || err != nil {
+		// The key already answered this request: its stored journal is
+		// the result and no workload is touched again. A failed preflight
+		// returns the journal together with its error.
+		return journaledOrNil(input, op, err)
 	}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].name < pinned[j].name })
 
 	active, _, err := s.deps.State.LoadActive(ctx, input.App)
 	if err != nil {
-		return journaledDeployResult(input, op), fmt.Errorf("deployment: load active: %w", err)
+		loadErr := fmt.Errorf("deployment: load active: %w", err)
+		s.failOperation(ctx, op, loadErr, "error")
+		return journaledDeployResult(input, op), loadErr
 	}
 	rev, err := s.resolveRevision(ctx, input)
 	if err != nil {
+		s.failOperation(ctx, op, err, "error")
 		return journaledDeployResult(input, op), err
 	}
 
@@ -77,65 +79,123 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		return result, err
 	}
 	for i, p := range pinned {
-		stepID := "service." + p.name + ".replace"
-		before := ""
-		if eff, ok := active.Services[p.name]; ok {
-			before = eff.Container
-		}
-		svcResult, interrupted := s.deployService(ctx, input.App, rev.Revision, p, op.Op, before)
-		result.Services[p.name] = svcResult
-		if interrupted {
-			result.Interrupted = append(result.Interrupted, p.name)
-		}
-		if svcResult.Result == "failed" {
-			op.Steps[i+1] = domain.AppOperationStep{
-				ID:          stepID,
-				State:       domain.AppStepFailed,
-				Service:     p.name,
-				Digest:      p.digest,
-				Image:       p.runtimeImage,
-				Error:       svcResult.Error,
-				Diagnostics: svcResult.Diagnostics,
-				Before:      before,
-				After:       svcResult.After,
-			}
-			op.Outcome = ComputeOutcome(result.Services)
-			if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-				log.Warn().Err(saveErr).Msg("deployment: failed to record service failure")
-			}
-			// Fail fast: later services stay unchanged.
-			return result, fmt.Errorf("deployment: service %q failed at %s: %s: %w",
-				p.name, stepID, svcResult.Error, domain.ErrAppStateConflict)
-		}
-		op.Steps[i+1] = domain.AppOperationStep{
-			ID:      stepID,
-			State:   domain.AppStepSucceeded,
-			Service: p.name,
-			Digest:  p.digest,
-			Image:   p.runtimeImage,
-			Before:  before,
-			After:   svcResult.After,
-		}
-		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-			log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
-		}
-		// Publish per-service effective state immediately: the proxy
-		// switches to the new binds at publication. Retire the replaced
-		// container only AFTER publication (no outage on crash between
-		// the two); a retire failure is a cleanup warning, not an
-		// outcome flip.
-		if err := s.publishService(ctx, input.App, rev.Revision, p, svcResult, op.Op); err != nil {
-			return result, err
-		}
-		if err := s.cutoverService(ctx, input.App, p, &svcResult, result, op); err != nil {
+		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
 			return result, err
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
+	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
+	result.CleanupWarnings = collectCleanupWarnings(result.Services)
 	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
 	}
 	return result, nil
+}
+
+// runServiceStep executes one pinned service in the journal: replace,
+// publish ACTIVE, then cutover traffic and retire the replaced container.
+// The step is recorded as succeeded only after the runtime effect, the
+// ACTIVE publication, and the traffic apply all succeeded, so a journaled
+// success is never ahead of what is routed.
+func (s *Service) runServiceStep(
+	ctx context.Context,
+	app, revision string,
+	index int,
+	p pinnedService,
+	op *domain.AppOperation,
+	active domain.AppActive,
+	result *DeployResult,
+	log zerowrap.Logger,
+) error {
+	before := ""
+	if eff, ok := active.Services[p.name]; ok {
+		before = eff.Container
+	}
+	svcResult, interrupted := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name))
+	result.Services[p.name] = svcResult
+	if interrupted {
+		result.Interrupted = append(result.Interrupted, p.name)
+	}
+	stepID := "service." + p.name + ".replace"
+	step := domain.AppOperationStep{
+		ID: stepID, Service: p.name,
+		Digest: p.digest, Image: p.runtimeImage,
+		Before: before, After: svcResult.After,
+	}
+	fail := func(err error) error {
+		step.State = domain.AppStepFailed
+		step.Error = err.Error()
+		step.Diagnostics = svcResult.Diagnostics
+		op.Steps[index+1] = step
+		op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
+		op.Outcome = ComputeOutcome(result.Services)
+		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+			log.Warn().Err(saveErr).Msg("deployment: failed to record service failure")
+		}
+		return err
+	}
+	if svcResult.Result == "failed" {
+		// Fail fast: later services stay unchanged.
+		return fail(fmt.Errorf("deployment: service %q failed at %s: %s: %w",
+			p.name, stepID, svcResult.Error, domain.ErrAppStateConflict))
+	}
+	// Publish per-service effective state first: the proxy switches to the
+	// new binds at publication. Retire the replaced container only AFTER
+	// publication (no outage on crash between the two); a retire failure
+	// is a cleanup warning, not an outcome flip.
+	if err := s.publishService(ctx, app, revision, p, svcResult, op.Op); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		result.Services[p.name] = svcResult
+		return fail(err)
+	}
+	if err := s.cutoverService(ctx, app, p, &svcResult, result); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		result.Services[p.name] = svcResult
+		return fail(err)
+	}
+	result.Services[p.name] = svcResult
+	step.State = domain.AppStepSucceeded
+	op.Steps[index+1] = step
+	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
+	}
+	return nil
+}
+
+// failOperation records a terminal failure on an already claimed
+// journal, so a keyed repeat replays a terminal outcome instead of
+// reading a permanently in-flight claim. stepID names the failing phase
+// (a service step, a traffic publication, or a bare error). Journal-write
+// failures are logged, never returned: the caller already holds a more
+// specific error, and the next mutation's recovery pass converges state.
+func (s *Service) failOperation(ctx context.Context, op *domain.AppOperation, err error, stepID string) {
+	op.Outcome = domain.AppOutcomeFailed
+	op.Steps = append(op.Steps, domain.AppOperationStep{
+		ID: stepID, State: domain.AppStepFailed, Error: err.Error(),
+	})
+	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(saveErr).Str("op", op.Op).Msg("deployment: failed to record operation failure")
+	}
+}
+
+// failTrafficPublication records that the final graph apply was rejected.
+// The workload steps already ran and stay accurate, but the operation is a
+// failure: routing did not accept the published state, so a later replay
+// of the same key must never read success.
+func (s *Service) failTrafficPublication(ctx context.Context, op *domain.AppOperation, err error) {
+	s.failOperation(ctx, op, err, "traffic.publish")
+}
+
+// journaledOrNil reports a preflight that already answered the request
+// key: the stored journal when there is one, the bare error otherwise.
+func journaledOrNil(input DeployInput, op *domain.AppOperation, err error) (*DeployResult, error) {
+	if op == nil {
+		return nil, err
+	}
+	return journaledDeployResult(input, op), err
 }
 
 func journaledDeployResult(input DeployInput, op *domain.AppOperation) *DeployResult {
@@ -151,7 +211,9 @@ func journaledDeployResult(input DeployInput, op *domain.AppOperation) *DeployRe
 // the new revision no longer declares. A failure marks the operation
 // failed and aborts before any new state is published.
 func (s *Service) reconcileRemovalsForDeploy(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService, op *domain.AppOperation, result *DeployResult, log zerowrap.Logger) error {
-	removalSteps, removed, err := s.reconcileRemovedServices(ctx, app, active, pinned)
+	removalSteps, removed, warnings, err := s.reconcileRemovedServices(ctx, app, active, pinned)
+	op.Warnings = append(op.Warnings, journalWarnings(warnings)...)
+	result.CleanupWarnings = append(result.CleanupWarnings, warnings...)
 	if err != nil {
 		op.Steps = append(op.Steps, removalSteps...)
 		op.Outcome = domain.AppOutcomeFailed
@@ -177,7 +239,7 @@ func (s *Service) reconcileRemovalsForDeploy(ctx context.Context, app string, ac
 // with its data retained, its backend claims released, and its ACTIVE
 // entry deleted. A failure leaves the remaining services untouched and
 // stops the deploy before any new state is published.
-func (s *Service) reconcileRemovedServices(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService) ([]domain.AppOperationStep, []string, error) {
+func (s *Service) reconcileRemovedServices(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService) ([]domain.AppOperationStep, []string, []CleanupWarning, error) {
 	desired := make(map[string]struct{}, len(pinned))
 	for _, p := range pinned {
 		desired[p.name] = struct{}{}
@@ -191,37 +253,39 @@ func (s *Service) reconcileRemovedServices(ctx context.Context, app string, acti
 	sort.Strings(names)
 
 	steps := make([]domain.AppOperationStep, 0, len(names))
+	var cleanupWarnings []CleanupWarning
 	for _, name := range names {
 		eff := active.Services[name]
-		step, err := s.retireRemovedService(ctx, app, name, eff)
+		step, warnings, err := s.retireRemovedService(ctx, app, name, eff)
 		steps = append(steps, step)
+		cleanupWarnings = append(cleanupWarnings, warnings...)
 		if err != nil {
-			return steps, names, err
+			return steps, names, cleanupWarnings, err
 		}
 		delete(active.Services, name)
 	}
 	if len(names) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err := s.deps.State.SaveActive(ctx, active); err != nil {
-		return steps, names, fmt.Errorf("deployment: persist service removals: %w", err)
+		return steps, names, cleanupWarnings, fmt.Errorf("deployment: persist service removals: %w", err)
 	}
-	return steps, names, nil
+	return steps, names, cleanupWarnings, nil
 }
 
 // retireRemovedService withdraws one removed service and removes its exact
 // container, releasing its claims only after withdrawal succeeded.
-func (s *Service) retireRemovedService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, error) {
+func (s *Service) retireRemovedService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, []CleanupWarning, error) {
 	step := domain.AppOperationStep{
 		ID:      "service." + name + ".remove",
 		State:   domain.AppStepPending,
 		Service: name,
 		Before:  eff.Container,
 	}
-	fail := func(err error) (domain.AppOperationStep, error) {
+	fail := func(err error) (domain.AppOperationStep, []CleanupWarning, error) {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
-		return step, err
+		return step, nil, err
 	}
 	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
 		return fail(err)
@@ -230,58 +294,50 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 		if err := s.inhibitRecovery(ctx, app, name, eff.Container, "removed", ""); err != nil {
 			return fail(err)
 		}
-		if err := s.deps.Runtime.StopContainer(ctx, eff.Container); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return fail(fmt.Errorf("deployment: stop removed %s/%s container %s: %w", app, name, eff.Container, err))
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: name, Grace: serviceStopGrace(eff), ClearInhibition: true,
+		}, eff.Container)
+		if !retired.Gone {
+			return fail(fmt.Errorf("deployment: remove %s/%s container %s: %s", app, name, eff.Container, cleanupDetail(retired)))
 		}
-		if err := s.deps.Runtime.RemoveContainer(ctx, eff.Container, false); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return fail(fmt.Errorf("deployment: remove %s/%s container %s: %w", app, name, eff.Container, err))
-		}
-		if err := s.deps.State.ReleaseBackendBinds(ctx, app, eff.Container); err != nil {
-			return fail(fmt.Errorf("deployment: release removed %s/%s binds: %w", app, name, err))
-		}
+		step.State = domain.AppStepSucceeded
+		step.After = ""
+		return step, retired.Warnings, nil
 	}
 	step.State = domain.AppStepSucceeded
 	step.After = ""
-	return step, nil
+	return step, nil, nil
 }
 
-// cutoverService refreshes traffic after publication, then retires the
-// replaced container. A traffic failure marks the service failed and
-// aborts the deploy: ACTIVE is published but the new service is not
+// cutoverService applies traffic after publication, then retires the
+// replaced container. A traffic failure is returned to the caller, which
+// records the failed step: ACTIVE is published but the new service is not
 // routable, so the operation must not report success. The old container
 // is retained when traffic activation fails.
-func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult, op *domain.AppOperation) error {
+func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult) error {
 	if trafficErr := s.refreshTraffic(ctx, app); trafficErr != nil {
-		svcResult.Error = trafficErr.Error()
-		svcResult.Result = "failed"
-		result.Services[p.name] = *svcResult
-		op.Outcome = ComputeOutcome(result.Services)
-		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
-			log := zerowrap.FromCtx(ctx)
-			log.Warn().Err(saveErr).Msg("deployment: failed to record traffic failure")
-		}
 		return trafficErr
 	}
 	if svcResult.Retire != "" {
 		drainWithDeadline(ctx, p.spec.StopGrace)
-		if err := s.retireReplaced(ctx, app, svcResult.Retire); err != nil {
-			result.CleanupWarnings = append(result.CleanupWarnings, CleanupWarning{
-				Service:  p.name,
-				Leftover: svcResult.Retire,
-				Detail:   err.Error(),
-			})
-		}
+		// The replaced generation keeps its inhibition: only a published
+		// replacement may clear it.
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: p.name, Grace: svcResult.RetireGrace,
+		}, svcResult.Retire)
+		svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, retired.Warnings...)
 	}
 	return nil
 }
 
-// deployService replaces one service. It returns the terminal result and
-// whether the service saw interruption.
-func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string) (ServiceResult, bool) {
+// deployService replaces one service. beforeGrace is the effective stop
+// grace of the container being replaced. It returns the terminal result
+// and whether the service saw interruption.
+func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
 	if httpEligible(p.spec) {
-		return s.deployHTTP(ctx, app, revision, p, opID, before)
+		return s.deployHTTP(ctx, app, revision, p, opID, before, beforeGrace)
 	}
-	return s.deployInterrupted(ctx, app, revision, p, opID, before)
+	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
 }
 
 // httpEligible reports HTTP-only services without volumes.
@@ -297,7 +353,7 @@ func httpEligible(spec domain.AppService) bool {
 // to the new loopback binds at publication, the old container drains,
 // and only then is the old container retired by exact ID. Retire never
 // precedes publication (no outage window on crash between the two).
-func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinnedService, opID, before string) (ServiceResult, bool) {
+func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
 	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
 	if err != nil {
 		return s.failResult(revision, before, "", err), false
@@ -307,7 +363,7 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 		// the failed replacement still exists, then remove only that
 		// candidate.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
-		_ = s.deps.Runtime.RemoveContainer(ctx, created.ID, true)
+		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
 		return ServiceResult{
 			Result:            "failed",
 			EffectiveRevision: revision,
@@ -315,6 +371,7 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 			After:             created.ID,
 			Error:             err.Error(),
 			Diagnostics:       tail,
+			CleanupWarnings:   cleanup,
 		}, false
 	}
 	return ServiceResult{
@@ -325,6 +382,7 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 		BackendBinds:      binds,
 		UDPBackendBinds:   udpBinds,
 		Retire:            retireContainerID(before, created.ID),
+		RetireGrace:       beforeGrace,
 	}, false
 }
 
@@ -357,26 +415,10 @@ func retireContainerID(before, after string) string {
 	return before
 }
 
-// retireReplaced stops and removes a replaced container by exact ID
-// and releases its backend claims after verified withdrawal. Removal
-// never carries volume-deletion flags.
-func (s *Service) retireReplaced(ctx context.Context, app, containerID string) error {
-	if err := s.deps.Runtime.StopContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("deployment: retire stop %s: %w", containerID, err)
-	}
-	if err := s.deps.Runtime.RemoveContainer(ctx, containerID, false); err != nil {
-		return fmt.Errorf("deployment: retire remove %s: %w", containerID, err)
-	}
-	if err := s.deps.State.ReleaseBackendBinds(ctx, app, containerID); err != nil {
-		return fmt.Errorf("deployment: retire release binds %s: %w", containerID, err)
-	}
-	return nil
-}
-
 // deployInterrupted stops the old instance after preflight, then creates
 // the replacement. Volume-owning failures never restart the old image:
 // the replacement may already have written data.
-func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string) (ServiceResult, bool) {
+func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
 	// A volume-owning replacement may write while the old generation
 	// still exists and could be revived by native restart policy.
 	// Inhibit that generation durably BEFORE the write can happen, so
@@ -390,14 +432,15 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 		}
 	}
 	if before != "" {
-		// The superseded writer must be confirmed stopped before a new
-		// writer can touch the same data: a failed stop aborts the
-		// replacement instead of allowing overlapping writers.
-		if err := s.deps.Runtime.StopContainer(ctx, before); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return s.failResult(revision, before, "", fmt.Errorf("deployment: stop superseded container %s: %w", before, err)), true
-		}
-		if err := s.deps.Runtime.RemoveContainer(ctx, before, false); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
-			return s.failResult(revision, before, "", fmt.Errorf("deployment: remove superseded container %s: %w", before, err)), true
+		// The superseded writer must be confirmed gone before a new
+		// writer can touch the same data: a failed retirement aborts the
+		// replacement instead of allowing overlapping writers, and the
+		// generation keeps its inhibition and its claims.
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: p.name, Grace: beforeGrace,
+		}, before)
+		if !retired.Gone {
+			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired))), true
 		}
 	}
 	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
@@ -408,7 +451,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 		// Capture redacted diagnostics while the candidate still exists,
 		// then remove only that candidate.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
-		_ = s.deps.Runtime.RemoveContainer(ctx, created.ID, true)
+		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
 		return ServiceResult{
 			Result:            "failed",
 			EffectiveRevision: revision,
@@ -417,6 +460,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 			RestartUnsafe:     len(p.spec.Volumes) > 0,
 			Error:             err.Error(),
 			Diagnostics:       tail,
+			CleanupWarnings:   cleanup,
 		}, true
 	}
 	return ServiceResult{
@@ -566,17 +610,16 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		return nil, nil, nil, fmt.Errorf("deployment: create container: %w", err)
 	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
-		_ = s.deps.Runtime.RemoveContainer(ctx, created.ID, true)
+		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return nil, nil, nil, err
 	}
 	if err := s.deps.Runtime.StartContainer(ctx, created.ID); err != nil {
-		_ = s.deps.Runtime.RemoveContainer(ctx, created.ID, true)
+		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return nil, nil, nil, fmt.Errorf("deployment: start container: %w", err)
 	}
 	binds, udpBinds, err := s.readBackendBinds(ctx, app, p.spec.Name, created.ID, backendPorts(p.spec))
 	if err != nil {
-		_ = s.deps.Runtime.StopContainer(ctx, created.ID)
-		_ = s.deps.Runtime.RemoveContainer(ctx, created.ID, true)
+		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return nil, nil, nil, err
 	}
 	return created, binds, udpBinds, nil
@@ -657,8 +700,7 @@ func (s *Service) readBackendBinds(ctx context.Context, app, service, containerI
 		return binds, udpBinds, nil
 	}
 	if err := s.deps.State.RegisterBackendBinds(ctx, claims); err != nil {
-		_ = s.deps.Runtime.StopContainer(ctx, containerID)
-		_ = s.deps.Runtime.RemoveContainer(ctx, containerID, true)
+		s.retireCandidate(ctx, app, service, containerID)
 		return nil, nil, err
 	}
 	return binds, udpBinds, nil

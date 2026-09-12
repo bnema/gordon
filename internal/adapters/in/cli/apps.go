@@ -50,17 +50,18 @@ func resolveAppClient() (*remote.Client, error) {
 	return localClient, nil
 }
 
-// resolveAppControlPlane returns the daemon-backed app plane. App mutations
-// are daemon-owned for BOTH local and remote paths (05-api-cli.md §1): the
-// explicit remote when one is selected, otherwise the owner-only local admin
-// socket. When neither is reachable the command fails with daemon-unavailable
-// — there is no local-write fallback.
-func resolveAppControlPlane() (AppControlPlane, error) {
+// resolveAppPlane returns the daemon-backed control plane for app commands.
+// App operations are daemon-owned for BOTH local and remote paths
+// (05-api-cli.md §1): the explicit remote when one is selected, otherwise
+// the owner-only local admin socket. When neither is reachable the command
+// fails with daemon-unavailable — there is no local-write fallback. The
+// returned handle owns the client and must be closed by the caller.
+func resolveAppPlane() (*controlPlaneHandle, error) {
 	client, err := resolveAppClient()
 	if err != nil {
 		return nil, err
 	}
-	return NewRemoteAppControlPlane(client), nil
+	return &controlPlaneHandle{plane: NewRemoteControlPlane(client)}, nil
 }
 
 // appMutationError translates ambiguous transport outcomes into the
@@ -147,10 +148,12 @@ With --deploy, chains exactly the accepted revision into a deploy after
 persistence succeeds; the two outcomes are reported separately because a
 deploy may fail after the apply succeeded.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppsApply(cmd.Context(), plane, os.Stdin, cmd.OutOrStdout(), file, dryRun, chainDeploy, jsonOut)
 		},
 	}
@@ -161,7 +164,7 @@ deploy may fail after the apply succeeded.`,
 	return cmd
 }
 
-func runAppsApply(ctx context.Context, plane AppControlPlane, _ io.Reader, out io.Writer, file string, dryRun, chainDeploy, jsonOut bool) error {
+func runAppsApply(ctx context.Context, plane ControlPlane, _ io.Reader, out io.Writer, file string, dryRun, chainDeploy, jsonOut bool) error {
 	if dryRun && chainDeploy {
 		return fmt.Errorf("cannot combine --dry-run with --deploy: dry-run persists nothing to deploy")
 	}
@@ -269,10 +272,12 @@ func newAppsListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List applications",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppsList(cmd.Context(), plane, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -280,7 +285,7 @@ func newAppsListCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppsList(ctx context.Context, plane AppControlPlane, out io.Writer, jsonOut bool) error {
+func runAppsList(ctx context.Context, plane ControlPlane, out io.Writer, jsonOut bool) error {
 	apps, err := plane.ListApps(ctx)
 	if err != nil {
 		return err
@@ -304,10 +309,15 @@ func runAppsList(ctx context.Context, plane AppControlPlane, out io.Writer, json
 	for _, name := range names {
 		a := byName[name]
 		state := "active"
-		if a.Stopped {
+		switch {
+		case a.Stopped:
 			state = "stopped"
-		} else if !a.Converged {
+		case a.Pending:
 			state = "pending"
+		case a.Active == "":
+			state = "applied"
+		case a.LastOutcome != "" && a.LastOutcome != "success":
+			state += " (" + a.LastOutcome + ")"
 		}
 		if err := cliWriteLine(out, cliRenderListItem(fmt.Sprintf("%s (%s)", name, state))); err != nil {
 			return err
@@ -324,10 +334,12 @@ func newAppsShowCmd() *cobra.Command {
 		Short: "Show desired and active state for an app",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppsShow(cmd.Context(), plane, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -335,7 +347,7 @@ func newAppsShowCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppsShow(ctx context.Context, plane AppControlPlane, app string, out io.Writer, jsonOut bool) error {
+func runAppsShow(ctx context.Context, plane ControlPlane, app string, out io.Writer, jsonOut bool) error {
 	resp, err := plane.ShowApp(ctx, app)
 	if err != nil {
 		return err
@@ -359,8 +371,16 @@ func runAppsShow(ctx context.Context, plane AppControlPlane, app string, out io.
 			return err
 		}
 	}
-	if resp.LastOp.Op != "" {
-		return cliWriteLine(out, cliRenderMeta("last-op:", resp.LastOp.Op+" ("+resp.LastOp.Outcome+")"))
+	if resp.LastOp != nil && resp.LastOp.Op != "" {
+		if err := cliWriteLine(out, cliRenderMeta("last-op:", resp.LastOp.Op+" ("+resp.LastOp.Outcome+")")); err != nil {
+			return err
+		}
+	}
+	owned := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Images...)
+	owned = append(owned, resp.Retained.Secrets...)
+	if len(owned) > 0 {
+		sort.Strings(owned)
+		return cliWriteLine(out, cliRenderMeta("retained:", strings.Join(owned, " ")))
 	}
 	return nil
 }
@@ -401,10 +421,12 @@ func newAppsDiffCmd() *cobra.Command {
 		Short: "Show the normalized desired-vs-active diff",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppsDiff(cmd.Context(), plane, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -412,7 +434,7 @@ func newAppsDiffCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppsDiff(ctx context.Context, plane AppControlPlane, app string, out io.Writer, jsonOut bool) error {
+func runAppsDiff(ctx context.Context, plane ControlPlane, app string, out io.Writer, jsonOut bool) error {
 	resp, err := plane.DiffApp(ctx, app)
 	if err != nil {
 		return err
@@ -465,10 +487,12 @@ func newAppsSecretsSetCmd() *cobra.Command {
 		Short: "Write app secret values",
 		Args:  cobra.MinimumNArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			if len(args) == 0 {
 				return fmt.Errorf("missing APP argument")
 			}
@@ -481,7 +505,7 @@ func newAppsSecretsSetCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppsSecretsSet(ctx context.Context, plane AppControlPlane, stdin io.Reader, out io.Writer, app string, pairs []string, service string, fromStdin, jsonOut bool) error {
+func runAppsSecretsSet(ctx context.Context, plane ControlPlane, stdin io.Reader, out io.Writer, app string, pairs []string, service string, fromStdin, jsonOut bool) error {
 	if app == "" {
 		return fmt.Errorf("missing APP argument")
 	}
@@ -525,10 +549,12 @@ func newAppsSecretsDeleteCmd() *cobra.Command {
 		Short: "Delete an app secret value",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppsSecretsDelete(cmd.Context(), plane, cmd.OutOrStdout(), args[0], args[1], service, jsonOut)
 		},
 	}
@@ -537,7 +563,7 @@ func newAppsSecretsDeleteCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppsSecretsDelete(ctx context.Context, plane AppControlPlane, out io.Writer, app, key, service string, jsonOut bool) error {
+func runAppsSecretsDelete(ctx context.Context, plane ControlPlane, out io.Writer, app, key, service string, jsonOut bool) error {
 	if service == "" {
 		return fmt.Errorf("missing required flag --service: secrets are service-scoped")
 	}
@@ -594,10 +620,12 @@ func newAppDeployCmd() *cobra.Command {
 		Short: "Activate an app revision",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -607,7 +635,7 @@ func newAppDeployCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppDeploy(ctx context.Context, plane AppControlPlane, app, revision, service string, out io.Writer, jsonOut bool) error {
+func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out io.Writer, jsonOut bool) error {
 	resp, key, err := plane.DeployApp(ctx, app, dto.AppDeployRequest{Revision: revision, Service: service})
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "deploy", app, key, err, jsonOut); ok {
@@ -630,10 +658,12 @@ func newAppRestartCmd() *cobra.Command {
 		Short: "Restart an app from pinned digests",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppRestart(cmd.Context(), plane, args[0], service, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -642,7 +672,7 @@ func newAppRestartCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppRestart(ctx context.Context, plane AppControlPlane, app, service string, out io.Writer, jsonOut bool) error {
+func runAppRestart(ctx context.Context, plane ControlPlane, app, service string, out io.Writer, jsonOut bool) error {
 	resp, key, err := plane.RestartApp(ctx, app, service)
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "restart", app, key, err, jsonOut); ok {
@@ -664,10 +694,12 @@ func newAppStopCmd() *cobra.Command {
 		Short: "Stop an app (preserves all data)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppLifecycle(cmd.Context(), plane.StopApp, "stop", args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -683,10 +715,12 @@ func newAppStartCmd() *cobra.Command {
 		Short: "Start a stopped app from active state",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppLifecycle(cmd.Context(), plane.StartApp, "start", args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -702,10 +736,12 @@ func newAppRemoveCmd() *cobra.Command {
 		Short: "Remove app workloads (volumes and secrets are retained)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppLifecycle(cmd.Context(), plane.RemoveApp, "remove", args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -779,7 +815,7 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 }
 
 func renderDeploySummaries(out io.Writer, resp *dto.AppDeployResponse) error {
-	if len(resp.Effective.Services) > 0 {
+	if resp.Effective != nil && len(resp.Effective.Services) > 0 {
 		pairs := make([]string, 0, len(resp.Effective.Services))
 		for name, rev := range resp.Effective.Services {
 			pairs = append(pairs, name+"="+rev)
@@ -789,10 +825,14 @@ func renderDeploySummaries(out io.Writer, resp *dto.AppDeployResponse) error {
 			return err
 		}
 	}
-	if len(resp.Retained.Volumes) > 0 || len(resp.Retained.Secrets) > 0 {
-		retained := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Secrets...)
-		sort.Strings(retained)
-		if err := cliWriteLine(out, cliRenderMeta("retained:", strings.Join(retained, " "))); err != nil {
+	if resp.Retained == nil {
+		return nil
+	}
+	owned := append(append([]string(nil), resp.Retained.Volumes...), resp.Retained.Images...)
+	owned = append(owned, resp.Retained.Secrets...)
+	if len(owned) > 0 {
+		sort.Strings(owned)
+		if err := cliWriteLine(out, cliRenderMeta("retained:", strings.Join(owned, " "))); err != nil {
 			return err
 		}
 	}
@@ -807,10 +847,12 @@ func newAppStatusCmd() *cobra.Command {
 		Short: "Show effective vs observed state for an app",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			plane, err := resolveAppControlPlane()
+			handle, err := resolveAppPlane()
 			if err != nil {
 				return err
 			}
+			defer handle.close()
+			plane := handle.plane
 			return runAppStatus(cmd.Context(), plane, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -818,7 +860,7 @@ func newAppStatusCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppStatus(ctx context.Context, plane AppControlPlane, app string, out io.Writer, jsonOut bool) error {
+func runAppStatus(ctx context.Context, plane ControlPlane, app string, out io.Writer, jsonOut bool) error {
 	resp, err := plane.ShowApp(ctx, app)
 	if err != nil {
 		return err
@@ -889,7 +931,7 @@ func newAppLogsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plane := NewRemoteAppControlPlane(client)
+			plane := NewRemoteControlPlane(client)
 			return runAppLogs(cmd.Context(), plane, &remoteAppLogReader{client: client}, args[0], service, follow, tail, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -900,7 +942,7 @@ func newAppLogsCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppLogs(ctx context.Context, plane AppControlPlane, reader appLogReader, app, service string, follow bool, tail int, out io.Writer, jsonOut bool) error {
+func runAppLogs(ctx context.Context, plane ControlPlane, reader appLogReader, app, service string, follow bool, tail int, out io.Writer, jsonOut bool) error {
 	if follow && jsonOut {
 		return fmt.Errorf("cannot combine --json with --follow: follow streams plain log lines")
 	}

@@ -38,6 +38,144 @@ func (_m *MockAppState) EXPECT() *MockAppState_Expecter {
 	return &MockAppState_Expecter{mock: &_m.Mock}
 }
 
+// AppExists provides a mock function for the type MockAppState
+func (_mock *MockAppState) AppExists(ctx context.Context, app string) (bool, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AppExists")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (bool, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) bool); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppState_AppExists_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppExists'
+type MockAppState_AppExists_Call struct {
+	*mock.Call
+}
+
+// AppExists is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockAppState_Expecter) AppExists(ctx any, app any) *MockAppState_AppExists_Call {
+	return &MockAppState_AppExists_Call{Call: _e.mock.On("AppExists", ctx, app)}
+}
+
+func (_c *MockAppState_AppExists_Call) Run(run func(ctx context.Context, app string)) *MockAppState_AppExists_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppState_AppExists_Call) Return(b bool, err error) *MockAppState_AppExists_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockAppState_AppExists_Call) RunAndReturn(run func(ctx context.Context, app string) (bool, error)) *MockAppState_AppExists_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ClaimOperation provides a mock function for the type MockAppState
+func (_mock *MockAppState) ClaimOperation(ctx context.Context, candidate domain.AppOperation) (domain.AppOperation, bool, error) {
+	ret := _mock.Called(ctx, candidate)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ClaimOperation")
+	}
+
+	var r0 domain.AppOperation
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppOperation) (domain.AppOperation, bool, error)); ok {
+		return returnFunc(ctx, candidate)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppOperation) domain.AppOperation); ok {
+		r0 = returnFunc(ctx, candidate)
+	} else {
+		r0 = ret.Get(0).(domain.AppOperation)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, domain.AppOperation) bool); ok {
+		r1 = returnFunc(ctx, candidate)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, domain.AppOperation) error); ok {
+		r2 = returnFunc(ctx, candidate)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockAppState_ClaimOperation_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClaimOperation'
+type MockAppState_ClaimOperation_Call struct {
+	*mock.Call
+}
+
+// ClaimOperation is a helper method to define mock.On call
+//   - ctx context.Context
+//   - candidate domain.AppOperation
+func (_e *MockAppState_Expecter) ClaimOperation(ctx any, candidate any) *MockAppState_ClaimOperation_Call {
+	return &MockAppState_ClaimOperation_Call{Call: _e.mock.On("ClaimOperation", ctx, candidate)}
+}
+
+func (_c *MockAppState_ClaimOperation_Call) Run(run func(ctx context.Context, candidate domain.AppOperation)) *MockAppState_ClaimOperation_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.AppOperation
+		if args[1] != nil {
+			arg1 = args[1].(domain.AppOperation)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppState_ClaimOperation_Call) Return(existing domain.AppOperation, claimed bool, err error) *MockAppState_ClaimOperation_Call {
+	_c.Call.Return(existing, claimed, err)
+	return _c
+}
+
+func (_c *MockAppState_ClaimOperation_Call) RunAndReturn(run func(ctx context.Context, candidate domain.AppOperation) (domain.AppOperation, bool, error)) *MockAppState_ClaimOperation_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ClearRecoveryInhibition provides a mock function for the type MockAppState
 func (_mock *MockAppState) ClearRecoveryInhibition(ctx context.Context, app string, service string, containerID string) error {
 	ret := _mock.Called(ctx, app, service, containerID)
@@ -103,6 +241,50 @@ func (_c *MockAppState_ClearRecoveryInhibition_Call) Return(err error) *MockAppS
 }
 
 func (_c *MockAppState_ClearRecoveryInhibition_Call) RunAndReturn(run func(ctx context.Context, app string, service string, containerID string) error) *MockAppState_ClearRecoveryInhibition_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Close provides a mock function for the type MockAppState
+func (_mock *MockAppState) Close() error {
+	ret := _mock.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for Close")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func() error); ok {
+		r0 = returnFunc()
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAppState_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
+type MockAppState_Close_Call struct {
+	*mock.Call
+}
+
+// Close is a helper method to define mock.On call
+func (_e *MockAppState_Expecter) Close() *MockAppState_Close_Call {
+	return &MockAppState_Close_Call{Call: _e.mock.On("Close")}
+}
+
+func (_c *MockAppState_Close_Call) Run(run func()) *MockAppState_Close_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockAppState_Close_Call) Return(err error) *MockAppState_Close_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAppState_Close_Call) RunAndReturn(run func() error) *MockAppState_Close_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -769,6 +951,78 @@ func (_c *MockAppState_LoadIntent_Call) Return(appStopIntent domain.AppStopInten
 }
 
 func (_c *MockAppState_LoadIntent_Call) RunAndReturn(run func(ctx context.Context, app string) (domain.AppStopIntent, error)) *MockAppState_LoadIntent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// LoadLatestOperation provides a mock function for the type MockAppState
+func (_mock *MockAppState) LoadLatestOperation(ctx context.Context, app string) (domain.AppOperation, bool, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LoadLatestOperation")
+	}
+
+	var r0 domain.AppOperation
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (domain.AppOperation, bool, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		r0 = ret.Get(0).(domain.AppOperation)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) bool); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockAppState_LoadLatestOperation_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadLatestOperation'
+type MockAppState_LoadLatestOperation_Call struct {
+	*mock.Call
+}
+
+// LoadLatestOperation is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockAppState_Expecter) LoadLatestOperation(ctx any, app any) *MockAppState_LoadLatestOperation_Call {
+	return &MockAppState_LoadLatestOperation_Call{Call: _e.mock.On("LoadLatestOperation", ctx, app)}
+}
+
+func (_c *MockAppState_LoadLatestOperation_Call) Run(run func(ctx context.Context, app string)) *MockAppState_LoadLatestOperation_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppState_LoadLatestOperation_Call) Return(appOperation domain.AppOperation, b bool, err error) *MockAppState_LoadLatestOperation_Call {
+	_c.Call.Return(appOperation, b, err)
+	return _c
+}
+
+func (_c *MockAppState_LoadLatestOperation_Call) RunAndReturn(run func(ctx context.Context, app string) (domain.AppOperation, bool, error)) *MockAppState_LoadLatestOperation_Call {
 	_c.Call.Return(run)
 	return _c
 }

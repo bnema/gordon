@@ -9,12 +9,63 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+// remoteControlPlane delegates every CLI operation to one daemon client:
+// the explicit remote or the owner-only local admin socket.
 type remoteControlPlane struct {
 	client *remote.Client
 }
 
+// NewRemoteControlPlane creates the daemon-backed control plane.
 func NewRemoteControlPlane(client *remote.Client) ControlPlane {
 	return &remoteControlPlane{client: client}
+}
+
+func (r *remoteControlPlane) ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
+	return r.client.ApplyApp(ctx, req)
+}
+
+func (r *remoteControlPlane) ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error) {
+	return r.client.ListApps(ctx)
+}
+
+func (r *remoteControlPlane) ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error) {
+	return r.client.ShowApp(ctx, app)
+}
+
+func (r *remoteControlPlane) DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error) {
+	return r.client.DiffApp(ctx, app)
+}
+
+func (r *remoteControlPlane) DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error) {
+	return r.client.DeployApp(ctx, app, req)
+}
+
+func (r *remoteControlPlane) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.StopApp(ctx, app)
+}
+
+func (r *remoteControlPlane) StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.StartApp(ctx, app)
+}
+
+func (r *remoteControlPlane) RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error) {
+	return r.client.RestartApp(ctx, app, service)
+}
+
+func (r *remoteControlPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	return r.client.RemoveApp(ctx, app)
+}
+
+func (r *remoteControlPlane) OperationByKey(ctx context.Context, app, key string) (*dto.AppDeployResponse, error) {
+	return r.client.OperationByKey(ctx, app, key)
+}
+
+func (r *remoteControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
+	return r.client.SetAppSecrets(ctx, app, req)
+}
+
+func (r *remoteControlPlane) DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error {
+	return r.client.DeleteAppSecret(ctx, app, req)
 }
 
 func (r *remoteControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
@@ -57,24 +108,20 @@ func (r *remoteControlPlane) ListTags(ctx context.Context, repository string) ([
 	return r.client.ListTags(ctx, repository)
 }
 
-func (r *remoteControlPlane) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
-	return r.client.ListBackups(ctx, backupDomain)
+func (r *remoteControlPlane) ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error) {
+	return r.client.ListBackups(ctx, app)
 }
 
 func (r *remoteControlPlane) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	return r.client.BackupStatus(ctx)
 }
 
-func (r *remoteControlPlane) RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error) {
-	return r.client.RunBackup(ctx, backupDomain, dbName)
+func (r *remoteControlPlane) RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
+	return r.client.RunBackup(ctx, app, service, database)
 }
 
-func (r *remoteControlPlane) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
-	return r.client.DetectDatabases(ctx, backupDomain)
-}
-
-func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
-	jobs, err := r.client.ListVolumeBackups(ctx, backupDomain)
+func (r *remoteControlPlane) ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error) {
+	jobs, err := r.client.ListVolumeBackups(ctx, app)
 	if err != nil {
 		return nil, fmt.Errorf("list volume backups: %w", err)
 	}
@@ -89,8 +136,8 @@ func (r *remoteControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.Volu
 	return jobs, nil
 }
 
-func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	result, err := r.client.RunVolumeBackups(ctx, backupDomain, volumeName)
+func (r *remoteControlPlane) RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
+	result, err := r.client.RunVolumeBackups(ctx, app, service, volume)
 	if err != nil {
 		return result, fmt.Errorf("run volume backups: %w", err)
 	}
@@ -101,16 +148,8 @@ func (r *remoteControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]s
 	return r.client.GetProcessLogs(ctx, lines)
 }
 
-func (r *remoteControlPlane) GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error) {
-	return r.client.GetContainerLogs(ctx, logDomain, lines)
-}
-
 func (r *remoteControlPlane) StreamProcessLogs(ctx context.Context, lines int) (<-chan string, error) {
 	return r.client.StreamProcessLogs(ctx, lines)
-}
-
-func (r *remoteControlPlane) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
-	return r.client.StreamContainerLogs(ctx, logDomain, lines)
 }
 
 func (r *remoteControlPlane) ListVolumes(ctx context.Context) ([]dto.Volume, error) {

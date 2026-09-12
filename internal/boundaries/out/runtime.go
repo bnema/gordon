@@ -17,8 +17,14 @@ type ContainerRuntime interface {
 	// Container lifecycle
 	CreateContainer(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error)
 	StartContainer(ctx context.Context, containerID string) error
-	StopContainer(ctx context.Context, containerID string) error
-	RestartContainer(ctx context.Context, containerID string) error
+	// StopContainer stops one exact container, giving it grace to exit
+	// before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	StopContainer(ctx context.Context, containerID string, grace time.Duration) error
+	// RestartContainer restarts one exact container, giving it grace to
+	// exit before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	RestartContainer(ctx context.Context, containerID string, grace time.Duration) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 	RenameContainer(ctx context.Context, containerID, newName string) error
 

@@ -20,12 +20,12 @@ Commands are organized by where they run:
 
 ## Management Commands (local or remote)
 
-Management commands run locally through in-process services by default. Add `--remote` to target another Gordon instance.
+Management commands use the authenticated daemon API. By default they connect through the owner-only local Unix socket; add `--remote` to use authenticated HTTP/TLS against another Gordon instance.
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
 | `gordon apps` | Manage applications (apply, deploy, lifecycle) | [apps](./apps.md) |
-| `gordon backups` | Manage database backups | [backup](./backup.md) |
+| `gordon backups` | Manage declared app database and volume backups | [backup](./backup.md) |
 | `gordon config show` | Show server configuration | [config](./config.md) |
 | `gordon images` | List and prune images | [images](./images.md) |
 | `gordon logs` | Display Gordon process logs | [serve](./serve.md#gordon-logs) |
@@ -87,8 +87,8 @@ gordon traffic status --remote prod --json
 
 # Backups
 gordon backups list
-gordon backups run app.example.com
-gordon backups detect app.example.com
+gordon backups run shop --service api --database orders
+gordon backups volume run shop --service api --volume data
 gordon backups status
 
 # Images

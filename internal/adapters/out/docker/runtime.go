@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -333,8 +334,9 @@ func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) erro
 	return nil
 }
 
-// StopContainer stops a container.
-func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
+// StopContainer stops a container, giving it grace to exit before the
+// runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) StopContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -343,8 +345,7 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout})
+	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to stop container")
@@ -356,8 +357,9 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// RestartContainer restarts a container.
-func (r *Runtime) RestartContainer(ctx context.Context, containerID string) error {
+// RestartContainer restarts a container, giving it grace to exit before
+// the runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) RestartContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -366,8 +368,7 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: &timeout})
+	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to restart container")
@@ -377,6 +378,21 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 
 	log.Info().Msg("container restarted")
 	return nil
+}
+
+// stopTimeout converts a stop grace into the runtime API's whole-second
+// timeout. A non-positive grace returns nil, which keeps the runtime's
+// own default instead of an immediate kill. A fractional grace rounds up
+// so the container never receives less time than the spec asked for.
+func stopTimeout(grace time.Duration) *int {
+	if grace <= 0 {
+		return nil
+	}
+	seconds := int(math.Ceil(grace.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return &seconds
 }
 
 // RemoveContainer removes a container.

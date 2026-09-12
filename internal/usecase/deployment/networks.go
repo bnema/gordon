@@ -155,3 +155,72 @@ func recordNetworkOwnership(ownership *domain.AppOwnership, prefix string, share
 	}
 	ownership.Networks = merged
 }
+
+// reclaimPrivateNetworks removes the incarnation-owned private networks of
+// one app immediately after every exact container is confirmed gone, while
+// the ownership record is still live. The runtime name is re-derived from
+// the incarnation UUID and the observed labels must prove that exact
+// ownership, so a name reused by another incarnation can never be
+// deleted. Shared networks are never removed: they belong to the
+// installation, and other apps may still be attached. An unattached,
+// ownership-verified network is removed; anything else is left in place
+// and reported as a bounded warning, never silently deleted.
+func (s *Service) reclaimPrivateNetworks(ctx context.Context, app string, ownership domain.AppOwnership) ([]CleanupWarning, error) {
+	if ownership.ID == "" {
+		return nil, nil
+	}
+	expectedName := domain.AppPrivateNetworkName(s.deps.Networks.Prefix, ownership.ID)
+	private := make([]string, 0, len(ownership.Networks))
+	for _, network := range ownership.Networks {
+		if network.Role != domain.AppNetworkRolePrivate {
+			continue
+		}
+		if network.Name != expectedName {
+			// A record naming anything but this incarnation's derived
+			// network is never deleted: the name may belong to a
+			// different incarnation.
+			continue
+		}
+		private = append(private, network.Name)
+	}
+	if len(private) == 0 {
+		return nil, nil
+	}
+	observed, err := s.deps.Runtime.ListNetworks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("deployment: list networks for reclamation: %w", err)
+	}
+	byName := make(map[string]*domain.NetworkInfo, len(observed))
+	for _, network := range observed {
+		if network == nil {
+			continue
+		}
+		byName[network.Name] = network
+	}
+	expected := domain.AppPrivateNetworkLabels(app, ownership.ID)
+	var warnings []CleanupWarning
+	for _, name := range private {
+		network, ok := byName[name]
+		if !ok {
+			continue // already gone
+		}
+		if !domain.NetworkOwnedBy(network.Labels, expected) {
+			warnings = append(warnings, CleanupWarning{
+				Leftover: name,
+				Detail:   "private network labels do not prove this incarnation; left in place",
+			})
+			continue
+		}
+		if len(network.Containers) > 0 {
+			warnings = append(warnings, CleanupWarning{
+				Leftover: name,
+				Detail:   "private network still has attached containers; left in place",
+			})
+			continue
+		}
+		if err := s.deps.Runtime.RemoveNetwork(ctx, name); err != nil {
+			return warnings, fmt.Errorf("deployment: remove private network %q: %w", name, err)
+		}
+	}
+	return warnings, nil
+}

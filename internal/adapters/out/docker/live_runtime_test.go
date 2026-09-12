@@ -51,7 +51,7 @@ func liveCreate(t *testing.T, runtime *Runtime, ctx context.Context, config *dom
 	t.Cleanup(func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = runtime.StopContainer(cleanup, created.ID)
+		_ = runtime.StopContainer(cleanup, created.ID, domain.AppDefaultStopGrace)
 		_ = runtime.RemoveContainer(cleanup, created.ID, true)
 	})
 	require.NoError(t, runtime.StartContainer(ctx, created.ID))

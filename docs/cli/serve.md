@@ -159,7 +159,9 @@ gordon reload
 
 ## gordon logs
 
-Display Gordon process logs. Use `gordon apps logs APP --service SVC` for application container output.
+Display Gordon daemon process logs. Application workload output is read with
+`gordon apps logs APP --service SVC`, which resolves the app's active container
+through the daemon.
 
 ### Synopsis
 

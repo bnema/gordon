@@ -411,7 +411,7 @@ func (s *Service) convergeStoppedService(ctx context.Context, app, name string, 
 	if container.Status != string(domain.ContainerStatusRunning) && !isTransitionalStatus(container.Status) {
 		return nil
 	}
-	if err := s.deps.Runtime.StopContainer(serviceCtx, eff.Container); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
+	if err := s.deps.Runtime.StopContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil && !errors.Is(err, domain.ErrContainerNotFound) {
 		return fmt.Errorf("deployment: stopped app %q service %q: stop %s: %w", app, name, eff.Container, err)
 	}
 	s.log.Info().Str("app", app).Str("service", name).Str("container", eff.Container).
@@ -530,8 +530,16 @@ func (s *Service) recoveryInspectError(ctx context.Context, app, name string, ef
 	if !errors.Is(err, domain.ErrContainerNotFound) {
 		return fmt.Errorf("deployment: app %q service %q inspect %s: %w", app, name, eff.Container, err)
 	}
+	// The container is confirmed gone: its loopback reservations must not
+	// outlive it, or a later workload that reuses the port would collide
+	// with a claim no container holds.
+	releaseErr := s.deps.State.ReleaseBackendBinds(ctx, app, eff.Container)
+	if releaseErr != nil {
+		releaseErr = fmt.Errorf("deployment: release claims of gone container %s: %w", eff.Container, releaseErr)
+	}
 	return errors.Join(
 		s.withdrawForRecovery(ctx, app, name),
+		releaseErr,
 		fmt.Errorf("deployment: app %q service %q container %s is gone; traffic withdrawn, no reconstruction: %w",
 			app, name, eff.Container, domain.ErrContainerNotFound),
 	)
@@ -660,7 +668,7 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	if !s.backoff.allow(key) {
 		return false, false, nil
 	}
-	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container); err != nil {
+	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil {
 		s.backoff.recordFailure(key)
 		return false, false, fmt.Errorf("deployment: app %q service %q restart unhealthy %s: %w", app, name, eff.Container, err)
 	}

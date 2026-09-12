@@ -16,9 +16,6 @@ func TestLabelConstantsValues(t *testing.T) {
 		{domain.LabelDomain, "gordon.domain"},
 		{domain.LabelImage, "gordon.image"},
 		{domain.LabelManaged, "gordon.managed"},
-		{domain.LabelRoute, "gordon.route"},
-		{domain.LabelAttachment, "gordon.attachment"},
-		{domain.LabelAttachedTo, "gordon.attached-to"},
 		{domain.LabelCreated, "gordon.created"},
 	}
 	for _, tt := range tests {

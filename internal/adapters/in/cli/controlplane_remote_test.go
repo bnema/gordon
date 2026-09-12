@@ -30,14 +30,14 @@ func TestRemoteControlPlane_RunVolumeBackupsPreservesPartialResult(t *testing.T)
 		w.WriteHeader(http.StatusPartialContent)
 		require.NoError(t, json.NewEncoder(w).Encode(dto.VolumeBackupRunResponse{
 			Status:  "partial",
-			Backups: []dto.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data"}},
+			Backups: []dto.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data"}},
 			Error:   "one volume failed",
 		}))
 	}))
 	t.Cleanup(server.Close)
 
 	cp := NewRemoteControlPlane(remote.NewClient(server.URL))
-	result, err := cp.RunVolumeBackups(context.Background(), "app.example.com", "")
+	result, err := cp.RunVolumeBackups(context.Background(), "shop", "api", "data")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "run volume backups")

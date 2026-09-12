@@ -118,17 +118,13 @@ No restart needed — Podman reads this on each pull/push.
 
 ### "unknown: image not found"
 
-**Cause:** Image was pushed but no route configured.
+**Cause:** The app manifest references an image that is unavailable to the runtime.
 
-**Solution:** Add route to config:
-```toml
-[routes]
-"app.mydomain.com" = "myapp:latest"
-```
+**Solution:** Push the image to the configured registry, verify the service's `image` reference in the app manifest, then apply and deploy the accepted revision:
 
-Then reload:
 ```bash
-gordon reload
+gordon apps apply --file app.toml
+gordon apps deploy app
 ```
 
 ## Deployment Issues
@@ -161,9 +157,9 @@ gordon reload
 
 **Solutions:**
 
-1. Check container logs:
+1. Check workload logs:
    ```bash
-   docker logs gordon-app-mydomain-com
+   gordon apps logs blog --service web
    ```
 
 2. Check Gordon logs:
@@ -234,18 +230,14 @@ gordon reload
 
 **Solutions:**
 
-1. Check attachments are configured:
-   ```toml
-   [attachments]
-   "app.mydomain.com" = ["postgres:latest"]
-   ```
+1. Check that both services declare the same shared network in the app manifest.
 
-2. Check containers are in same network:
+2. Check containers are attached to that network:
    ```bash
-   docker network inspect gordon-app-mydomain-com
+   docker network inspect NETWORK_NAME
    ```
 
-3. Use correct hostname (image name before colon):
+3. Use the service name as the internal hostname:
    ```javascript
    // Correct
    connect("postgresql://postgres:5432/mydb")
@@ -369,15 +361,9 @@ enabled = true
 path = "~/.gordon/logs/gordon.log"
 ```
 
-### Container logs missing
+### Workload logs unavailable
 
-**Cause:** Container log collection disabled.
-
-**Solution:**
-```toml
-[logging.container_logs]
-enabled = true  # default: true
-```
+`gordon apps logs APP --service SERVICE` reads directly from the container runtime. Confirm that the app has an active deployment, use the exact service name, and check the runtime's logging driver and retention settings. Gordon does not write workload logs to `logging.container_logs` files.
 
 ## Diagnostic Commands
 
@@ -398,11 +384,11 @@ docker network ls | grep gordon
 # List volumes
 docker volume ls | grep gordon
 
-# Check container logs
-docker logs gordon-app-mydomain-com
+# Check workload logs through Gordon
+gordon apps logs blog --service web
 
-# Inspect container
-docker inspect gordon-app-mydomain-com
+# Inspect runtime containers when diagnosing locally
+docker ps -f "label=gordon.app=blog"
 
 # Check connectivity
 curl -v http://localhost:5000/v2/

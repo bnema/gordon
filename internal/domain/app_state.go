@@ -15,13 +15,6 @@ const AppStoreVersion = 1
 // even beyond this limit. Configurable in main installation config.
 const AppDefaultRevisionRetention = 8
 
-// AppRevisionRetention is the compiled default retention, kept for
-// callers that cannot reach a Store. Prefer Store.Retention, which
-// honors the configured apps.revision_retention installation value.
-//
-// Deprecated: read the installation config or Store.Retention instead.
-const AppRevisionRetention = AppDefaultRevisionRetention
-
 // App intent states for the durable apply protocol.
 const (
 	AppIntentStaged    = "staged"
@@ -194,6 +187,25 @@ type AppOperationStep struct {
 	Diagnostics []string `json:"diagnostics,omitempty"`
 }
 
+// AppOperationRequest is the immutable identity of the mutation request
+// one journal record answers: kind, app, requested revision, requested
+// service. It is persisted with the claim so reusing one idempotency key
+// for a different request is rejected instead of silently replaying
+// another request's result. It never carries a secret value.
+type AppOperationRequest struct {
+	Kind     string `json:"kind"`
+	App      string `json:"app"`
+	Revision string `json:"revision,omitempty"`
+	Service  string `json:"service,omitempty"`
+}
+
+// AppOperationRequestFor builds the request identity of one app
+// mutation from the caller's inputs: the resolved revision is never
+// part of it, so a repeat of the same request always matches.
+func AppOperationRequestFor(kind, app, revision, service string) AppOperationRequest {
+	return AppOperationRequest{Kind: kind, App: app, Revision: revision, Service: service}
+}
+
 // AppOperation is one durable operation journal record.
 type AppOperation struct {
 	Op            string             `json:"op"`
@@ -203,6 +215,28 @@ type AppOperation struct {
 	StartedAt     time.Time          `json:"started_at"`
 	Steps         []AppOperationStep `json:"steps"`
 	Outcome       string             `json:"outcome,omitempty"`
+	// Warnings are bounded, operator-actionable leftovers of this
+	// operation: a container that could not be removed, or a backend
+	// claim that could not be released. They never carry log content.
+	Warnings []AppOperationWarning `json:"warnings,omitempty"`
+	// Request is the immutable request identity this journal answers.
+	// Records written by older binaries decode it as the zero value;
+	// such a record is only reachable through its own key.
+	Request AppOperationRequest `json:"request,omitempty"`
+}
+
+// AppOperationWarning records one bounded leftover of an operation.
+type AppOperationWarning struct {
+	Service  string `json:"service,omitempty"`
+	Leftover string `json:"leftover,omitempty"`
+	Detail   string `json:"detail"`
+}
+
+// Terminal reports whether the operation reached a terminal outcome. A
+// non-terminal operation is either in flight or was interrupted; its
+// effects must never be re-executed under the same key.
+func (o AppOperation) Terminal() bool {
+	return o.Outcome != ""
 }
 
 // AppApplyIntent is one durable apply intent.

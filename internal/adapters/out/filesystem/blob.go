@@ -573,7 +573,16 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 	var bytesReclaimed int64
 
 	for _, entry := range entries {
-		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".repo") {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".repo") {
+			uploadPath := filepath.Join(uploadsDir, strings.TrimSuffix(entry.Name(), ".repo"))
+			if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
+				if err := os.Remove(filepath.Join(uploadsDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+					s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove orphan upload sidecar")
+				}
+			}
 			continue
 		}
 

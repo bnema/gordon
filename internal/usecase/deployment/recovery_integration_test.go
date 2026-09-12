@@ -77,7 +77,7 @@ func TestRecoveryInhibition_RefusesInhibitedGenerationAfterReboot(t *testing.T) 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "recovery inhibited")
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, "c-old")
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-old")
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-old", mock.Anything)
 	runtime.AssertCalled(t, "InspectContainer", mock.Anything, "c-worker")
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
@@ -137,7 +137,7 @@ func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
 	// The superseded writer cannot be removed: the replacement must abort
 	// rather than risk overlapping writers, and the inhibition written
 	// before the stop attempt stays in place.
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
 
 	svc := deployment.NewService(deployment.Deps{
@@ -167,7 +167,7 @@ func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
 	require.Error(t, bootErr)
 	assert.Contains(t, bootErr.Error(), "recovery inhibited")
 	runtime2.AssertNotCalled(t, "StartContainer", mock.Anything, "c-old")
-	runtime2.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-old")
+	runtime2.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-old", mock.Anything)
 	runtime2.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -197,7 +197,7 @@ func TestRemove_InhibitsBeforeRuntimeWithdrawal(t *testing.T) {
 		order = append(order, "inhibited")
 		return nil
 	}).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").RunAndReturn(func(context.Context, string) error {
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
 		order = append(order, "stopped")
 		return nil
 	}).Once()
@@ -205,6 +205,13 @@ func TestRemove_InhibitsBeforeRuntimeWithdrawal(t *testing.T) {
 		order = append(order, "removed")
 		return nil
 	}).Once()
+	// Confirmed disappearance releases the container's backend claims and
+	// clears its recovery inhibition before the incarnation is retired.
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
+	// Ownership is read while it is still live; the name-only record owns
+	// no network, so nothing is reclaimed.
+	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 	// The incarnation is retired atomically after the workload is gone.
 	state.EXPECT().RetireApp(mock.Anything, "blog").RunAndReturn(func(context.Context, string) error {
 		order = append(order, "retired")
@@ -239,14 +246,14 @@ func TestBootStoppedConvergenceStopsRevivedContainer(t *testing.T) {
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running"}, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default())
 	require.NoError(t, svc.ReconcileBoot(ctx))
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -275,7 +282,7 @@ func TestBootRefusesInhibitedGenerationBeforeAnyRuntimeEffect(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "recovery inhibited")
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 }
 
@@ -343,7 +350,7 @@ func TestRestart_RefusesInhibitedGeneration(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "failed", result.Services["web"].Result)
 	assert.Contains(t, result.Services["web"].Error, "recovery inhibited")
-	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestRemove_KeepsStateWhenAContainerCannotBeRemoved proves remove never
@@ -362,18 +369,30 @@ func TestRemove_KeepsStateWhenAContainerCannotBeRemoved(t *testing.T) {
 		return intent.Stopped
 	})).Return(nil).Once()
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(assert.AnError).Once()
+	// The claim journal is written before the runtime effects and is
+	// rewritten terminally when the removal cannot complete: a repeat of
+	// the same key replays the failure instead of reading a stuck claim.
+	state.EXPECT().SaveOperation(mock.Anything, mock.MatchedBy(func(op domain.AppOperation) bool {
+		return op.Op != "" && op.Kind == "remove" && !op.Terminal()
+	})).Return(nil).Once()
+	state.EXPECT().SaveOperation(mock.Anything, mock.MatchedBy(func(op domain.AppOperation) bool {
+		return op.Op != "" && op.Outcome == domain.AppOutcomeFailed && op.Terminal()
+	})).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(assert.AnError).Once()
 
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default())
 	_, err := svc.Remove(ctx, "blog", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "still running")
+	assert.Contains(t, err.Error(), "not confirmed gone")
 	// ACTIVE and the stopped intent were never discarded: the monitor can
-	// still converge the survivor.
+	// still converge the survivor. The survivor's claims and inhibition
+	// stay in place too: only a confirmed disappearance releases them.
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
-	state.AssertNotCalled(t, "SaveOperation", mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "RetireApp", mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -391,8 +410,13 @@ func TestRemovalOfMissingContainerIsIdempotent(t *testing.T) {
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-1").Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(domain.ErrContainerNotFound).Once()
+	// Not-found is confirmation: the stale claims and the inhibition of
+	// the disappeared container are released.
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
+	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 	state.EXPECT().RetireApp(mock.Anything, "blog").Return(nil).Once()
 
 	svc := deployment.NewService(deployment.Deps{

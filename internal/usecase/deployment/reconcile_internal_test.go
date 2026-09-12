@@ -59,9 +59,10 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(i domain.AppRecoveryInhibition) bool {
 		return i.App == "blog" && i.Service == "legacy" && i.ContainerID == "c-legacy" && i.Reason == "removed"
 	})).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-legacy", false).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-legacy").Return(nil).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "legacy", "c-legacy").Return(nil).Once()
 	var saved domain.AppActive
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, a domain.AppActive) error {
 		saved = a
@@ -69,12 +70,13 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	}).Once()
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default())
-	steps, removed, err := svc.reconcileRemovedServices(ctx, "blog", active, []pinnedService{
+	steps, removed, warnings, err := svc.reconcileRemovedServices(ctx, "blog", active, []pinnedService{
 		{name: "web", spec: domain.AppService{Name: "web"}},
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"legacy"}, removed)
+	assert.Empty(t, warnings)
 	require.Len(t, steps, 1)
 	assert.Equal(t, domain.AppStepSucceeded, steps[0].State)
 	assert.Equal(t, []string{"blog/legacy"}, traffic.withdrawn)
@@ -97,12 +99,12 @@ func TestReconcileRemovedServices_WithdrawFailureAbortsBeforeStop(t *testing.T) 
 	}}
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default())
-	steps, _, err := svc.reconcileRemovedServices(context.Background(), "blog", active, nil)
+	steps, _, _, err := svc.reconcileRemovedServices(context.Background(), "blog", active, nil)
 
 	require.Error(t, err)
 	require.Len(t, steps, 1)
 	assert.Equal(t, domain.AppStepFailed, steps[0].State)
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 }
 
@@ -116,9 +118,10 @@ func TestReconcileRemovedServices_NoopWhenAllActiveServicesRemain(t *testing.T) 
 	}}
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{}}, zerowrap.Default())
-	steps, removed, err := svc.reconcileRemovedServices(context.Background(), "blog", active, []pinnedService{{name: "web"}})
+	steps, removed, warnings, err := svc.reconcileRemovedServices(context.Background(), "blog", active, []pinnedService{{name: "web"}})
 
 	require.NoError(t, err)
 	assert.Empty(t, steps)
 	assert.Empty(t, removed)
+	assert.Empty(t, warnings)
 }

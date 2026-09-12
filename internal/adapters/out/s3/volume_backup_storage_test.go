@@ -89,7 +89,8 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 
 	artifact, err := storage.StoreVolumeArchive(context.Background(), domain.VolumeBackupJob{
 		ID:            "job/1",
-		Domain:        "app.example.com",
+		App:           "app.example.com",
+		Service:       "api",
 		ContainerName: "app",
 		VolumeName:    "gordon-app-data",
 		MountPath:     "/data",
@@ -98,13 +99,14 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 	}, bytes.NewReader([]byte("archive")))
 	require.NoError(t, err)
 
-	assert.Equal(t, "s3://gordon-backups/prod/gordon/domains/app.example.com/volumes/gordon-app-data/20260619T020000Z-job_1.tar.zst", artifact)
+	assert.Equal(t, "s3://gordon-backups/prod/gordon/apps/app.example.com/volumes/gordon-app-data/20260619T020000Z-job_1.tar.zst", artifact)
 	assert.Equal(t, "application/zstd", aws.ToString(uploader.last.ContentType))
 
 	jobs, err := storage.ListVolumeArchives(context.Background(), "app.example.com")
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	assert.Equal(t, domain.BackupStatusCompleted, jobs[0].Status)
+	assert.Equal(t, "api", jobs[0].Service)
 	assert.Equal(t, "app", jobs[0].ContainerName)
 	assert.Equal(t, "/data", jobs[0].MountPath)
 	assert.Equal(t, string(domain.VolumeBackupCompressionZstd), jobs[0].Metadata["compression"])
@@ -123,10 +125,10 @@ func TestVolumeBackupStorageRetentionUsesParsedKeyTimestamp(t *testing.T) {
 	client := newFakeVolumeS3Client()
 	storage := NewVolumeBackupStorageWithClients(domain.VolumeBackupConfig{S3Bucket: "bucket"}, client, &fakeVolumeUploader{client: client})
 	keys := []string{
-		"domains/app.example.com/volumes/gordon-data/20260619T010000Z-a.tar.zst",
-		"domains/app.example.com/volumes/gordon-data/20260619T020000Z-b.tar.zst",
-		"domains/app.example.com/volumes/gordon-data/20260619T030000Z-c.tar.zst",
-		"domains/app.example.com/volumes/gordon-data/not-a-backup.tar.zst",
+		"apps/app.example.com/volumes/gordon-data/20260619T010000Z-a.tar.zst",
+		"apps/app.example.com/volumes/gordon-data/20260619T020000Z-b.tar.zst",
+		"apps/app.example.com/volumes/gordon-data/20260619T030000Z-c.tar.zst",
+		"apps/app.example.com/volumes/gordon-data/not-a-backup.tar.zst",
 	}
 	for _, key := range keys {
 		client.objects[key] = []byte("x")
@@ -136,8 +138,8 @@ func TestVolumeBackupStorageRetentionUsesParsedKeyTimestamp(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, deleted)
-	assert.Equal(t, []string{"domains/app.example.com/volumes/gordon-data/20260619T010000Z-a.tar.zst"}, client.deleted)
-	assert.Contains(t, client.objects, "domains/app.example.com/volumes/gordon-data/not-a-backup.tar.zst")
+	assert.Equal(t, []string{"apps/app.example.com/volumes/gordon-data/20260619T010000Z-a.tar.zst"}, client.deleted)
+	assert.Contains(t, client.objects, "apps/app.example.com/volumes/gordon-data/not-a-backup.tar.zst")
 }
 
 func TestVolumeBackupStorageRejectsWrongBucketArtifact(t *testing.T) {

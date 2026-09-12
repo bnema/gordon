@@ -2294,16 +2294,16 @@ func (_c *MockContainerRuntime_RenameContainer_Call) RunAndReturn(run func(ctx c
 }
 
 // RestartContainer provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) RestartContainer(ctx context.Context, containerID string) error {
-	ret := _mock.Called(ctx, containerID)
+func (_mock *MockContainerRuntime) RestartContainer(ctx context.Context, containerID string, grace time.Duration) error {
+	ret := _mock.Called(ctx, containerID, grace)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestartContainer")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, containerID)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Duration) error); ok {
+		r0 = returnFunc(ctx, containerID, grace)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2318,11 +2318,12 @@ type MockContainerRuntime_RestartContainer_Call struct {
 // RestartContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx any, containerID any) *MockContainerRuntime_RestartContainer_Call {
-	return &MockContainerRuntime_RestartContainer_Call{Call: _e.mock.On("RestartContainer", ctx, containerID)}
+//   - grace time.Duration
+func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx any, containerID any, grace any) *MockContainerRuntime_RestartContainer_Call {
+	return &MockContainerRuntime_RestartContainer_Call{Call: _e.mock.On("RestartContainer", ctx, containerID, grace)}
 }
 
-func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.Context, containerID string)) *MockContainerRuntime_RestartContainer_Call {
+func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.Context, containerID string, grace time.Duration)) *MockContainerRuntime_RestartContainer_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2332,9 +2333,14 @@ func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.C
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 time.Duration
+		if args[2] != nil {
+			arg2 = args[2].(time.Duration)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -2345,7 +2351,7 @@ func (_c *MockContainerRuntime_RestartContainer_Call) Return(err error) *MockCon
 	return _c
 }
 
-func (_c *MockContainerRuntime_RestartContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string) error) *MockContainerRuntime_RestartContainer_Call {
+func (_c *MockContainerRuntime_RestartContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, grace time.Duration) error) *MockContainerRuntime_RestartContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2408,16 +2414,16 @@ func (_c *MockContainerRuntime_StartContainer_Call) RunAndReturn(run func(ctx co
 }
 
 // StopContainer provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) StopContainer(ctx context.Context, containerID string) error {
-	ret := _mock.Called(ctx, containerID)
+func (_mock *MockContainerRuntime) StopContainer(ctx context.Context, containerID string, grace time.Duration) error {
+	ret := _mock.Called(ctx, containerID, grace)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StopContainer")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, containerID)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Duration) error); ok {
+		r0 = returnFunc(ctx, containerID, grace)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2432,11 +2438,12 @@ type MockContainerRuntime_StopContainer_Call struct {
 // StopContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) StopContainer(ctx any, containerID any) *MockContainerRuntime_StopContainer_Call {
-	return &MockContainerRuntime_StopContainer_Call{Call: _e.mock.On("StopContainer", ctx, containerID)}
+//   - grace time.Duration
+func (_e *MockContainerRuntime_Expecter) StopContainer(ctx any, containerID any, grace any) *MockContainerRuntime_StopContainer_Call {
+	return &MockContainerRuntime_StopContainer_Call{Call: _e.mock.On("StopContainer", ctx, containerID, grace)}
 }
 
-func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Context, containerID string)) *MockContainerRuntime_StopContainer_Call {
+func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Context, containerID string, grace time.Duration)) *MockContainerRuntime_StopContainer_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2446,9 +2453,14 @@ func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Cont
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 time.Duration
+		if args[2] != nil {
+			arg2 = args[2].(time.Duration)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -2459,7 +2471,7 @@ func (_c *MockContainerRuntime_StopContainer_Call) Return(err error) *MockContai
 	return _c
 }
 
-func (_c *MockContainerRuntime_StopContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string) error) *MockContainerRuntime_StopContainer_Call {
+func (_c *MockContainerRuntime_StopContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, grace time.Duration) error) *MockContainerRuntime_StopContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -13,6 +13,9 @@ import (
 // cross-process coordination is owned by the implementation
 // (store.lock flock). No secret values pass through this boundary.
 type AppState interface {
+	// Close releases the durable store and its process lock.
+	Close() error
+
 	// Recover completes committed-but-unmaterialized apply intents
 	// before any new mutation is accepted (recovery-before-mutation).
 	Recover(ctx context.Context) error
@@ -33,6 +36,13 @@ type AppState interface {
 
 	// LoadCheckpoint returns the global reservation checkpoint.
 	LoadCheckpoint(ctx context.Context) (domain.AppStoreCheckpoint, error)
+
+	// AppExists reports whether the app has a live identity: desired
+	// state, active state, or an ownership incarnation. It never creates
+	// state. A retired app whose only remaining record is an operation
+	// journal does not exist (its own key still replays through
+	// ClaimOperation).
+	AppExists(ctx context.Context, app string) (bool, error)
 
 	// RegisterBackendBinds records Gordon-generated loopback backend
 	// binds (owner gordon-backend) in the global checkpoint. It fails
@@ -100,8 +110,22 @@ type AppState interface {
 	// SaveOperation persists an operation journal record atomically.
 	SaveOperation(ctx context.Context, op domain.AppOperation) error
 
+	// ClaimOperation is the single atomic check-and-write point for one
+	// mutation request key. Absent key: the candidate is persisted as an
+	// in-flight journal and claimed is true. Same key with the same
+	// request identity: the stored journal is returned and claimed is
+	// false, meaning the caller must not execute the request's effects
+	// again. Same key with a different request identity:
+	// ErrAppStateConflict. Absent key for an app with no desired, active,
+	// or ownership incarnation: ErrAppNotFound, writing nothing. A
+	// concurrent claim of the same key never creates a second journal.
+	ClaimOperation(ctx context.Context, candidate domain.AppOperation) (existing domain.AppOperation, claimed bool, err error)
+
 	// LoadOperation returns one operation journal record.
 	LoadOperation(ctx context.Context, app, opID string) (domain.AppOperation, error)
+
+	// LoadLatestOperation returns the most recently started operation.
+	LoadLatestOperation(ctx context.Context, app string) (domain.AppOperation, bool, error)
 
 	// SaveActive persists the per-service effective state.
 	SaveActive(ctx context.Context, active domain.AppActive) error

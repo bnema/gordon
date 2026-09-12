@@ -800,7 +800,7 @@ func TestHandler_BackupsStatus(t *testing.T) {
 	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().Status(mock.Anything).Return([]domain.BackupJob{{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted, FilePath: "/var/lib/gordon/backups/private.bak"}}, nil)
+	backupSvc.EXPECT().Status(mock.Anything).Return([]domain.BackupJob{{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted, FilePath: "/var/lib/gordon/backups/private.bak"}}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -817,18 +817,19 @@ func TestHandler_BackupsStatus(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "app.example.com")
+	assert.Contains(t, rec.Body.String(), "shop")
+	assert.Contains(t, rec.Body.String(), "orders")
 	assert.NotContains(t, rec.Body.String(), "file_path")
 }
 
-func TestHandler_BackupsListDomain(t *testing.T) {
+func TestHandler_BackupsListApp(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().ListBackups(mock.Anything, "app.example.com").Return([]domain.BackupJob{{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().ListBackups(mock.Anything, "shop").Return([]domain.BackupJob{{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -838,24 +839,24 @@ func TestHandler_BackupsListDomain(t *testing.T) {
 		d.BackupSvc = backupSvc
 	})
 
-	req := httptest.NewRequest("GET", "/admin/backups/app.example.com", nil)
+	req := httptest.NewRequest("GET", "/admin/backups/shop", nil)
 	req = req.WithContext(ctxWithScopes("admin:status:read"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "app.example.com")
+	assert.Contains(t, rec.Body.String(), "shop")
 }
 
-func TestHandler_BackupsRunDomain(t *testing.T) {
+func TestHandler_BackupsRunApp(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().RunBackup(mock.Anything, "app.example.com", "postgres").Return(&domain.BackupResult{Job: domain.BackupJob{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -865,8 +866,8 @@ func TestHandler_BackupsRunDomain(t *testing.T) {
 		d.BackupSvc = backupSvc
 	})
 
-	body := bytes.NewBufferString(`{"db":"postgres"}`)
-	req := httptest.NewRequest("POST", "/admin/backups/app.example.com", body)
+	body := bytes.NewBufferString(`{"service":"api","database":"orders"}`)
+	req := httptest.NewRequest("POST", "/admin/backups/shop", body)
 	req = req.WithContext(ctxWithScopes("admin:config:write"))
 	rec := httptest.NewRecorder()
 
@@ -879,15 +880,15 @@ func TestHandler_BackupsRunDomain(t *testing.T) {
 func TestHandler_VolumeBackupsRunDomain_ReturnsPartialResults(t *testing.T) {
 	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
 	runErr := errors.New("one volume failed")
-	jobs := []domain.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data", Status: domain.BackupStatusCompleted}}
-	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "app.example.com", "gordon-app-data").Return(jobs, runErr)
+	jobs := []domain.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: domain.BackupStatusCompleted}}
+	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "shop", "api", "data").Return(jobs, runErr)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.VolumeBackupSvc = volumeBackupSvc
 	})
 
-	body := bytes.NewBufferString(`{"volume":"gordon-app-data"}`)
-	req := httptest.NewRequest("POST", "/admin/backups/volumes/app.example.com", body)
+	body := bytes.NewBufferString(`{"service":"api","volume":"data"}`)
+	req := httptest.NewRequest("POST", "/admin/backups/volumes/shop", body)
 	req = req.WithContext(ctxWithScopes("admin:config:write"))
 	rec := httptest.NewRecorder()
 
@@ -904,13 +905,13 @@ func TestHandler_VolumeBackupsRunDomain_ReturnsPartialResults(t *testing.T) {
 
 func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorWithoutResults(t *testing.T) {
 	volumeBackupSvc := inmocks.NewMockVolumeBackupService(t)
-	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "app.example.com", "").Return(nil, errors.New("runtime unavailable"))
+	volumeBackupSvc.EXPECT().RunVolumeBackups(mock.Anything, "shop", "", "").Return(nil, errors.New("runtime unavailable"))
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.VolumeBackupSvc = volumeBackupSvc
 	})
 
-	req := httptest.NewRequest("POST", "/admin/backups/volumes/app.example.com", bytes.NewBufferString(`{}`))
+	req := httptest.NewRequest("POST", "/admin/backups/volumes/shop", bytes.NewBufferString(`{}`))
 	req = req.WithContext(ctxWithScopes("admin:config:write"))
 	rec := httptest.NewRecorder()
 
@@ -920,14 +921,14 @@ func TestHandler_VolumeBackupsRunDomain_ReturnsServerErrorWithoutResults(t *test
 	assert.Contains(t, rec.Body.String(), "failed to run volume backups")
 }
 
-func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
+func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
 	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
-	backupSvc.EXPECT().RunBackup(mock.Anything, "app.example.com", "postgres").Return(&domain.BackupResult{Job: domain.BackupJob{Domain: "app.example.com", DBName: "postgres", Status: domain.BackupStatusCompleted}}, nil)
+	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
@@ -937,8 +938,8 @@ func TestHandler_BackupsRunDomain_ChunkedBodyIsDecoded(t *testing.T) {
 		d.BackupSvc = backupSvc
 	})
 
-	body := bytes.NewBufferString(`{"db":"postgres"}`)
-	req := httptest.NewRequest("POST", "/admin/backups/app.example.com", body)
+	body := bytes.NewBufferString(`{"service":"api","database":"orders"}`)
+	req := httptest.NewRequest("POST", "/admin/backups/shop", body)
 	req.ContentLength = -1
 	req = req.WithContext(ctxWithScopes("admin:config:write"))
 	rec := httptest.NewRecorder()
@@ -984,33 +985,6 @@ func TestHandler_LogsRequireLogsReadAndRedact(t *testing.T) {
 		assert.NotContains(t, body, "hunter2")
 		assert.NotContains(t, body, "abc123")
 	})
-}
-
-func TestHandler_BackupsDetectDomain(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-	backupSvc := inmocks.NewMockBackupService(t)
-
-	backupSvc.EXPECT().DetectDatabases(mock.Anything, "app.example.com").Return([]domain.DBInfo{{Type: domain.DBTypePostgreSQL, Name: "postgres", Port: 5432}}, nil)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-		d.BackupSvc = backupSvc
-	})
-
-	req := httptest.NewRequest("GET", "/admin/backups/app.example.com/detect", nil)
-	req = req.WithContext(ctxWithScopes("admin:status:read"))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "postgres")
 }
 
 func TestHandler_ImagesGet_ReturnsMappedList(t *testing.T) {

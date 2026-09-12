@@ -17,13 +17,13 @@ import (
 // daemon owns this implementation; CLI always reaches it via the daemon.
 // All mutations run recovery-before-mutation through the engine.
 type AppServiceImpl struct {
-	store       out.AppState
-	deploy      deployEngine
-	secrets     out.SecretWriter
-	log         zerowrap.Logger
-	listeners   map[string]domain.EntryPointListener
-	barrier     out.GCBarrier
-	imagePolicy domain.ImageSourcePolicy
+	store   out.AppState
+	deploy  deployEngine
+	secrets out.SecretWriter
+	log     zerowrap.Logger
+	// core is the single configured apps service. It is built once and
+	// reconfigured in place, never reconstructed per request.
+	core *Service
 }
 
 // deployEngine is the subset of the deployment engine the app service needs.
@@ -37,26 +37,32 @@ type deployEngine interface {
 
 // NewAppServiceImpl wires the driving-port implementation.
 func NewAppServiceImpl(store out.AppState, deploy deployEngine, secrets out.SecretWriter, log zerowrap.Logger) *AppServiceImpl {
-	return &AppServiceImpl{store: store, deploy: deploy, secrets: secrets, log: log}
+	return &AppServiceImpl{
+		store:   store,
+		deploy:  deploy,
+		secrets: secrets,
+		log:     log,
+		core:    NewService(store, log),
+	}
 }
 
 // WithEntrypoints supplies the installation entrypoint listeners used to
 // validate L4 publish declarations at apply time.
 func (s *AppServiceImpl) WithEntrypoints(listeners map[string]domain.EntryPointListener) *AppServiceImpl {
-	s.listeners = listeners
+	s.core.WithEntrypoints(listeners)
 	return s
 }
 
 // WithGCBarrier supplies the process-wide GC barrier used to serialize an
 // apply against destructive prune.
 func (s *AppServiceImpl) WithGCBarrier(barrier out.GCBarrier) *AppServiceImpl {
-	s.barrier = barrier
+	s.core.WithGCBarrier(barrier)
 	return s
 }
 
 // WithImagePolicy supplies the registry policy used for manifest validation.
 func (s *AppServiceImpl) WithImagePolicy(policy domain.ImageSourcePolicy) *AppServiceImpl {
-	s.imagePolicy = policy
+	s.core.WithImagePolicy(policy)
 	return s
 }
 
@@ -64,11 +70,7 @@ var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.
 func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error) {
-	core := NewService(s.store, s.log).
-		WithEntrypoints(s.listeners).
-		WithGCBarrier(s.barrier).
-		WithImagePolicy(s.imagePolicy)
-	applyResult, dryResult, err := core.Apply(ctx, spec, source, dryRun)
+	applyResult, dryResult, err := s.core.Apply(ctx, spec, source, dryRun)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,7 +95,8 @@ func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source 
 	}, nil, nil
 }
 
-// List implements in.AppService.
+// List implements in.AppService. Names whose only remaining record is a
+// retired operation journal are not apps any more and are not listed.
 func (s *AppServiceImpl) List(ctx context.Context) ([]in.AppSummary, error) {
 	apps, err := s.store.ListApps(ctx)
 	if err != nil {
@@ -102,35 +105,72 @@ func (s *AppServiceImpl) List(ctx context.Context) ([]in.AppSummary, error) {
 	sort.Strings(apps)
 	summaries := make([]in.AppSummary, 0, len(apps))
 	for _, app := range apps {
-		desired, _, err := s.store.LoadDesired(ctx, app)
+		live, err := s.store.AppExists(ctx, app)
 		if err != nil {
 			return nil, err
 		}
-		active, ok, err := s.store.LoadActive(ctx, app)
+		if !live {
+			continue
+		}
+		summary, err := s.summary(ctx, app)
 		if err != nil {
 			return nil, err
-		}
-		intent, err := s.store.LoadIntent(ctx, app)
-		if err != nil {
-			return nil, err
-		}
-		summary := in.AppSummary{App: app, Desired: desired.Revision, Stopped: intent.Stopped}
-		if ok {
-			summary.Active = active.ConvergedRevision
-			summary.Converged = active.Converged
 		}
 		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }
 
+// summary builds one list row from desired + ACTIVE + intent + the latest
+// journal outcome.
+func (s *AppServiceImpl) summary(ctx context.Context, app string) (in.AppSummary, error) {
+	desired, _, err := s.store.LoadDesired(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	active, ok, err := s.store.LoadActive(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	intent, err := s.store.LoadIntent(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	summary := in.AppSummary{
+		App:           app,
+		Desired:       desired.Revision,
+		DesiredStatus: desired.Status,
+		Pending:       desiredPending(desired.Revision, active, ok),
+		Stopped:       intent.Stopped,
+	}
+	if ok {
+		summary.Active = active.ConvergedRevision
+		summary.Converged = active.Converged
+	}
+	latest, hasOp, err := s.store.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return in.AppSummary{}, err
+	}
+	if hasOp {
+		summary.LastOutcome = latest.Outcome
+	}
+	return summary, nil
+}
+
 // Show implements in.AppService.
 func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, error) {
+	live, err := s.store.AppExists(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	if !live {
+		return nil, fmt.Errorf("apps: app %q does not exist: %w", app, domain.ErrAppNotFound)
+	}
 	desired, _, err := s.store.LoadDesired(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	active, _, err := s.store.LoadActive(ctx, app)
+	active, ok, err := s.store.LoadActive(ctx, app)
 	if err != nil {
 		return nil, err
 	}
@@ -142,19 +182,69 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 		App:               app,
 		DesiredRevision:   desired.Revision,
 		DesiredStatus:     desired.Status,
+		Pending:           desiredPending(desired.Revision, active, ok),
 		Converged:         active.Converged,
 		ConvergedRevision: active.ConvergedRevision,
 		Services:          map[string]in.AppServiceView{},
 		Stopped:           intent.Stopped,
 	}
+	ownership, err := s.store.LoadOwnership(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	detail.Retained = retainedView(ownership)
 	for name, svc := range active.Services {
 		detail.Services[name] = in.AppServiceView{
 			EffectiveRevision: svc.EffectiveRevision,
 			Digest:            svc.Digest,
 			Container:         svc.Container,
+			RestartUnsafe:     ownership.Services[name].RestartUnsafe,
 		}
 	}
+	latest, ok, err := s.store.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
+		detail.LastOp = latest.Op
+		detail.LastOpKind = latest.Kind
+		detail.LastOutcome = latest.Outcome
+		detail.LastOpStartedAt = latest.StartedAt
+	}
 	return detail, nil
+}
+
+// desiredPending reports desired state the active revision has not
+// reached. It reads desired vs ACTIVE only: a journal outcome never
+// decides convergence.
+func desiredPending(desiredRevision string, active domain.AppActive, hasActive bool) bool {
+	if desiredRevision == "" {
+		return false
+	}
+	return !hasActive || !active.Converged || active.ConvergedRevision != desiredRevision
+}
+
+// retainedView lists the resources the app owns and would retain on
+// removal, sorted for stable output.
+func retainedView(ownership domain.AppOwnership) in.AppRetainedView {
+	view := in.AppRetainedView{}
+	for _, volume := range ownership.Volumes {
+		name := volume.RuntimeName
+		if name == "" {
+			name = volume.Name
+		}
+		view.Volumes = append(view.Volumes, name)
+	}
+	for _, secret := range ownership.Secrets {
+		view.Secrets = append(view.Secrets, secret.Path)
+	}
+	for _, image := range ownership.Images {
+		view.Images = append(view.Images, image.Reference)
+	}
+	sort.Strings(view.Volumes)
+	sort.Strings(view.Secrets)
+	sort.Strings(view.Images)
+	return view
 }
 
 // Diff implements in.AppService.
@@ -173,70 +263,69 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 	return domain.DiffAppSpec(desired.Spec, activeSpec(active)), nil
 }
 
-// Deploy implements in.AppService.
-func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service})
-	if err != nil && result == nil {
+// Deploy implements in.AppService. A repeated idempotency key replays its
+// stored journal: the engine claims the key atomically before any effect,
+// so a duplicate request never deploys twice.
+func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
+	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
+	if result == nil {
 		return nil, err
 	}
-	op, loadErr := s.store.LoadOperation(ctx, app, result.Op)
-	if loadErr != nil {
-		return nil, loadErr
-	}
-	if err != nil {
-		return &op, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Stop implements in.AppService.
-func (s *AppServiceImpl) Stop(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Stop(ctx, app, "")
-	if err != nil {
+func (s *AppServiceImpl) Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	result, err := s.deploy.Stop(ctx, app, idempotencyKey)
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Start implements in.AppService.
-func (s *AppServiceImpl) Start(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Start(ctx, app, "")
-	if err != nil {
+func (s *AppServiceImpl) Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	result, err := s.deploy.Start(ctx, app, idempotencyKey)
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Restart implements in.AppService.
-func (s *AppServiceImpl) Restart(ctx context.Context, app, service string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Restart(ctx, app, service, "")
-	if err != nil {
+func (s *AppServiceImpl) Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error) {
+	result, err := s.deploy.Restart(ctx, app, service, idempotencyKey)
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
-	if err != nil {
-		return nil, err
-	}
-	return &op, nil
+	return s.operationResult(ctx, app, result.Op, err)
 }
 
 // Remove implements in.AppService.
-func (s *AppServiceImpl) Remove(ctx context.Context, app string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Remove(ctx, app, "")
-	if err != nil {
+func (s *AppServiceImpl) Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error) {
+	result, err := s.deploy.Remove(ctx, app, idempotencyKey)
+	if result == nil {
 		return nil, err
 	}
-	op, err := s.store.LoadOperation(ctx, app, result.Op)
+	return s.operationResult(ctx, app, result.Op, err)
+}
+
+// operationResult loads the journal an engine call produced. A call that
+// failed after its journal was claimed returns both, so callers can
+// inspect the recorded outcome instead of losing it.
+func (s *AppServiceImpl) operationResult(ctx context.Context, app, opID string, callErr error) (*domain.AppOperation, error) {
+	if opID == "" {
+		return nil, callErr
+	}
+	op, err := s.store.LoadOperation(ctx, app, opID)
 	if err != nil {
+		if callErr != nil {
+			return nil, callErr
+		}
 		return nil, err
+	}
+	if callErr != nil {
+		return &op, callErr
 	}
 	return &op, nil
 }

@@ -5,6 +5,10 @@ Gordon has two backup flows:
 - **Database backups**: PostgreSQL logical dumps via `pg_dump`, stored on the local filesystem.
 - **Volume backups**: best-effort filesystem archives of Gordon-managed named volumes, uploaded to S3.
 
+Backups are identified by app, service, and the declared database or volume
+(see [Apps](../config/apps.md)). Domains are routing addresses and are never a
+backup identity.
+
 ## Database backups
 
 ```toml
@@ -64,19 +68,24 @@ keep = 14
 | `backups.volumes.s3.prefix` | `""` | Object key prefix |
 | `backups.volumes.s3.endpoint` | `""` | Optional S3-compatible endpoint |
 | `backups.volumes.s3.path_style` | `false` | Use path-style addressing for S3-compatible storage |
-| `backups.volumes.retention.keep` | `14` | Completed archives to keep per domain + volume |
+| `backups.volumes.retention.keep` | `14` | Completed archives to keep per app + volume |
 
-Volume backup objects are stored under:
+Volume backup objects are stored under the canonical app name:
 
 ```text
-<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.gz   # gzip
-<prefix>/domains/<domain>/volumes/<volume>/<timestamp>-<id>.tar.zst  # zstd
+<prefix>/apps/<app>/volumes/<volume>/<timestamp>-<id>.tar.gz   # gzip
+<prefix>/apps/<app>/volumes/<volume>/<timestamp>-<id>.tar.zst  # zstd
 ```
+
+Objects written by earlier versions under a domain prefix are not read or
+migrated: back them up and re-run the app's volume backups if you need them in
+the current layout.
 
 ## Notes
 
-- Volume backups include named volumes mounted by Gordon-managed app containers (labeled `gordon.app`).
-- Bind mounts, tmpfs mounts, anonymous volumes, and non-Gordon volumes are excluded.
+- Volume backups archive the app's declared volumes that its backup declaration references.
+- Bind mounts, tmpfs mounts, anonymous volumes, and undeclared volumes are never backed up.
+- Database backups archive the app's declared PostgreSQL databases that its backup declaration references.
 - Live volume archives are best-effort; consistency requires application quiesce, pause, or stop.
 - Automated volume restore is not part of the MVP.
 - Snapshots are not generic across Docker/Podman volumes and require backend-specific support such as ZFS, Btrfs, LVM, EBS, or a snapshot-capable volume driver.

@@ -220,13 +220,10 @@ data_dir = "~/.gordon"  # Default for user installations
 ├── registry/           # Container images and manifests
 │   ├── blobs/
 │   └── manifests/
-├── env/                # Environment files per domain
-│   ├── app_mydomain_com.env
-│   └── api_mydomain_com.env
-├── logs/               # Application and container logs
+├── env/                # Installation secret-store data
+├── logs/               # Gordon process and file-based access logs
 │   ├── gordon.log
-│   ├── proxy.log
-│   └── containers/
+│   └── access.log
 └── secrets/            # Secrets (unsafe backend only)
 ```
 

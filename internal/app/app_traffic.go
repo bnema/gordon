@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/usecase/apptraffic"
 )
 
 // appTrafficPublisher is the single serialized HTTP/L4 publication
@@ -22,6 +23,12 @@ type appTrafficPublisher struct {
 	gate chan struct{}
 	svc  *services
 	cfg  Config
+	// applyGraph applies one prepared configuration. The publication
+	// projects and validates a candidate against this call and swaps the
+	// live host index only after it returns nil, so a rejected graph can
+	// never leave the index ahead of the dataplane. It is a field so
+	// publication ordering is testable without a live traffic manager.
+	applyGraph func(ctx context.Context, cfg Config, hosts appHostRoutes) error
 }
 
 var _ out.AppTrafficRefresher = (*appTrafficPublisher)(nil)
@@ -31,6 +38,9 @@ var _ out.AppTrafficRefresher = (*appTrafficPublisher)(nil)
 // reload applied.
 func newAppTrafficPublisher(svc *services, cfg Config) *appTrafficPublisher {
 	publisher := &appTrafficPublisher{gate: make(chan struct{}, 1), svc: svc, cfg: cfg}
+	publisher.applyGraph = func(ctx context.Context, cfg Config, hosts appHostRoutes) error {
+		return applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, hosts)
+	}
 	publisher.gate <- struct{}{}
 	return publisher
 }
@@ -96,7 +106,20 @@ func (p *appTrafficPublisher) WithdrawService(ctx context.Context, app, service 
 	if err := p.withdrawFromState(ctx, app, service); err != nil {
 		return err
 	}
-	return p.rebuild(ctx, p.cfg)
+	err := p.rebuild(ctx, p.cfg)
+	if err == nil {
+		return nil
+	}
+	// The graph apply failed while the durable ACTIVE record already
+	// dropped the service's binds. The read model still has to follow: a
+	// stale index entry could dial a loopback port that has been
+	// recycled by another workload, so the proxy must fail closed. The
+	// error is returned unchanged so the caller keeps its publication
+	// inhibition and retries the graph.
+	if candidate, projErr := p.projectCandidate(ctx, p.cfg); projErr == nil && candidate != nil {
+		p.svc.appHostIndex.Replace(candidate.Entries())
+	}
+	return err
 }
 
 // withdrawFromState drops the recorded binds of one service in ACTIVE.
@@ -126,18 +149,41 @@ func (p *appTrafficPublisher) withdrawFromState(ctx context.Context, app, servic
 	return nil
 }
 
-// rebuild projects ACTIVE into the host index and applies the graph.
-// The caller holds the publisher mutex. Index projection is skipped when
-// app state is not wired (the graph apply still tolerates that); the
-// graph apply itself always runs so a reload is never silently dropped.
+// rebuild projects ACTIVE into a candidate host view, applies the full
+// graph against that candidate, and publishes the candidate only after
+// the dataplane accepted it. The caller holds the publication gate. On
+// any failure the live index and the applied graph both stay at their
+// previous generation: the proxy never serves routing the dataplane
+// rejected, and no retirement ever follows an unpublished switch.
 func (p *appTrafficPublisher) rebuild(ctx context.Context, cfg Config) error {
-	if p.svc.appActivator != nil && p.svc.appHostIndex != nil && p.svc.appState != nil {
-		if err := p.svc.appActivator.RebuildHostIndex(ctx, p.svc.appHostIndex, p.svc.appState, appEntrypointPolicies(cfg)); err != nil {
-			return fmt.Errorf("rebuild app host index: %w", err)
-		}
+	candidate, err := p.projectCandidate(ctx, cfg)
+	if err != nil {
+		return err
 	}
-	if err := applyTrafficRuntimeConfig(ctx, p.svc.trafficManager, cfg, p.svc.configSvc, p.svc.appHostIndex); err != nil {
+	var hosts appHostRoutes
+	if candidate != nil {
+		hosts = candidate
+	}
+	if err := p.applyGraph(ctx, cfg, hosts); err != nil {
 		return fmt.Errorf("apply traffic graph: %w", err)
 	}
+	if candidate != nil {
+		p.svc.appHostIndex.Replace(candidate.Entries())
+	}
 	return nil
+}
+
+// projectCandidate builds the detached host view for one publication.
+// The candidate never touches the live index: a failing projection leaves
+// what the proxy serves untouched. It returns nil when app state is not
+// wired, in which case the graph carries configuration routes only.
+func (p *appTrafficPublisher) projectCandidate(ctx context.Context, cfg Config) (*apptraffic.HostIndex, error) {
+	if p.svc.appActivator == nil || p.svc.appState == nil || p.svc.appHostIndex == nil {
+		return nil, nil
+	}
+	candidate := apptraffic.NewHostIndex()
+	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg)); err != nil {
+		return nil, fmt.Errorf("project app host index: %w", err)
+	}
+	return candidate, nil
 }

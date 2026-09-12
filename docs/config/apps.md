@@ -103,7 +103,8 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 - Named volumes only; no bind mounts, no service-shared volumes. Replacement reuses volumes; removed services leave volumes retained and visible.
 - A volume declared `readonly = true` is mounted read-only in the container; the service cannot modify protected data.
-- `[[service.database]]` declares databases explicitly (no image inference). Backup schedules activate from active state on deploy; stored backups are never deleted when declarations change.
+- `[[service.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).
+- `[service.backup]` lists the declared databases (`postgres`) and volumes (`volume`) that are backup targets. A declared database or volume that is not referenced here is never backed up. Schedules follow the declaration through deploys; stored backups are never deleted when declarations change.
 
 ## Readiness
 

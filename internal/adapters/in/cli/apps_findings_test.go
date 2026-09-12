@@ -7,19 +7,22 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
 func TestRunAppsApply_DryRunOmitsEmptyRevisionAndRendersDiff(t *testing.T) {
-	plane := &fakeAppPlane{applyResp: &dto.AppApplyResponse{
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(&dto.AppApplyResponse{
 		App:    "blog",
 		Noop:   false,
 		Diff:   dto.AppDiffSection{Added: []string{"service.web"}},
 		Intent: "apply-7",
-	}}
+	}, nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
 		writeManifest(t, "[app]\nname = \"blog\"\n"), true, false, false))
@@ -31,7 +34,9 @@ func TestRunAppsApply_DryRunOmitsEmptyRevisionAndRendersDiff(t *testing.T) {
 }
 
 func TestRunAppsApply_NoopOmitsEmptyRevision(t *testing.T) {
-	plane := &fakeAppPlane{applyResp: &dto.AppApplyResponse{App: "blog", Noop: true}}
+	plane := appPlane(t)
+	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).
+		Return(&dto.AppApplyResponse{App: "blog", Noop: true}, nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
 		writeManifest(t, "x"), true, false, false))
@@ -40,7 +45,8 @@ func TestRunAppsApply_NoopOmitsEmptyRevision(t *testing.T) {
 }
 
 func TestRunAppLogs_RejectsJSONWithFollow(t *testing.T) {
-	plane := &fakeAppPlane{showResp: &dto.AppShowResponse{App: "blog"}}
+	// The JSON/follow rejection happens before any read.
+	plane := appPlane(t)
 	err := runAppLogs(context.Background(), plane, &fakeAppLogReader{}, "blog", "web", true, 50, &bytes.Buffer{}, true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--json")
@@ -55,24 +61,15 @@ func TestAppLogRef_ZeroServicesAccurateError(t *testing.T) {
 }
 
 func TestRunStatusCmd_AppsLabelAndSortedHelpers(t *testing.T) {
-	plane := &statusFakePlane{status: &remote.Status{
+	plane := climocks.NewMockControlPlane(t)
+	plane.EXPECT().GetStatus(mock.Anything).Return(&remote.Status{
 		Apps: 2, RegistryDomain: "g.example.com",
 		ContainerStatus: map[string]string{"zeta": "active", "alpha": "stopped"},
-	}}
+	}, nil).Once()
 	var out bytes.Buffer
 	require.NoError(t, runStatusCmd(context.Background(), plane, &out))
 	text := out.String()
 	assert.Contains(t, text, "Apps:")
 	assert.NotContains(t, text, "Routes:")
 	assert.Less(t, strings.Index(text, "alpha"), strings.Index(text, "zeta"))
-}
-
-type statusFakePlane struct {
-	ControlPlane
-	status *remote.Status
-	err    error
-}
-
-func (f *statusFakePlane) GetStatus(context.Context) (*remote.Status, error) {
-	return f.status, f.err
 }

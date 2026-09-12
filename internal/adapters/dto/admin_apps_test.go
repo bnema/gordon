@@ -71,12 +71,11 @@ func TestAppDeployResponseKeys(t *testing.T) {
 		CleanupWarnings: []AppCleanupWarningDTO{
 			{Service: "web", Leftover: "ctr-old", Detail: "retire failed after publish"},
 		},
-		Effective: AppEffectiveDTO{Converged: true, Services: map[string]string{"web": "rev-new"}},
-		Observed:  AppObservedDTO{Running: []string{"ctr-new"}},
-		Retained:  AppRetainedDTO{Volumes: []string{"blog-db"}, Secrets: []string{"db/password"}},
+		Effective: &AppEffectiveDTO{Converged: true, Services: map[string]string{"web": "rev-new"}},
+		Retained:  &AppRetainedDTO{Volumes: []string{"blog-db"}, Secrets: []string{"db/password"}},
 	}
 	keys := dtoJSONKeys(t, resp)
-	for _, key := range []string{"op", "app", "revision", "outcome", "services", "steps", "cleanup_warnings", "effective", "observed", "retained"} {
+	for _, key := range []string{"op", "app", "revision", "outcome", "services", "steps", "cleanup_warnings", "effective", "retained"} {
 		assert.Contains(t, keys, key)
 	}
 	svc := keys["services"].(map[string]any)["web"].(map[string]any)
@@ -88,15 +87,15 @@ func TestAppDeployResponseKeys(t *testing.T) {
 func TestAppShowResponseKeys(t *testing.T) {
 	resp := AppShowResponse{
 		App:     "blog",
-		Desired: AppDesiredDTO{Revision: "rev-new", Status: "pending"},
+		Desired: AppDesiredDTO{Revision: "rev-new", Status: "pending", Pending: true},
 		Active: AppActiveDTO{Converged: false, Services: map[string]AppActiveServiceDTO{
 			"web": {EffectiveRevision: "rev-old", Digest: "sha256:abc", Container: "ctr-old", RestartUnsafe: true},
 		}},
 		Intent: AppIntentDTO{Stopped: false},
-		LastOp: AppLastOpDTO{Op: "op-abc", Outcome: "success"},
+		LastOp: &AppLastOpDTO{Op: "op-abc", Outcome: "success"},
 	}
 	keys := dtoJSONKeys(t, resp)
-	for _, key := range []string{"app", "desired", "active", "intent", "last_op"} {
+	for _, key := range []string{"app", "desired", "active", "intent", "retained", "last_op"} {
 		assert.Contains(t, keys, key)
 	}
 	web := keys["active"].(map[string]any)["services"].(map[string]any)["web"].(map[string]any)
@@ -119,9 +118,8 @@ func TestAppResponsesCarryNoSecretValues(t *testing.T) {
 			Services: map[string]AppServiceResultDTO{
 				"web": {Result: "failed", EffectiveRevision: "rev-x", Error: "boom"},
 			},
-			Effective: AppEffectiveDTO{Services: map[string]string{"web": "rev-x"}},
-			Observed:  AppObservedDTO{Running: []string{"ctr-x"}, Stopped: []string{}},
-			Retained:  AppRetainedDTO{Volumes: []string{"blog-db"}, Secrets: []string{"db/password"}},
+			Effective: &AppEffectiveDTO{Services: map[string]string{"web": "rev-x"}},
+			Retained:  &AppRetainedDTO{Volumes: []string{"blog-db"}, Secrets: []string{"db/password"}},
 		},
 		AppShowResponse{
 			App:     "blog",

@@ -2,6 +2,7 @@ package in
 
 import (
 	"context"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -35,21 +36,21 @@ type AppService interface {
 
 	// Deploy activates a captured revision (empty revision means the
 	// desired head; empty service means all services).
-	Deploy(ctx context.Context, app, revision, service string) (*domain.AppOperation, error)
+	Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Stop persists the durable stopped intent and stops exact containers.
-	Stop(ctx context.Context, app string) (*domain.AppOperation, error)
+	Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Start clears the stopped intent and ensures running from active.
-	Start(ctx context.Context, app string) (*domain.AppOperation, error)
+	Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Restart restarts from pinned digests without re-resolution.
 	// Empty service means all services.
-	Restart(ctx context.Context, app, service string) (*domain.AppOperation, error)
+	Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Remove withdraws workloads; volumes and secrets are retained as
 	// owned orphans and the name stays reserved.
-	Remove(ctx context.Context, app string) (*domain.AppOperation, error)
+	Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// OperationByKey recovers an ambiguous mutation outcome by the
 	// client-supplied idempotency key.
@@ -83,13 +84,20 @@ type AppDryRunResult struct {
 	Diff  domain.AppDiff
 }
 
-// AppSummary is one row of the app list: names and revisions only.
+// AppSummary is one row of the app list: revisions, acceptance status,
+// and the latest recorded outcome.
 type AppSummary struct {
-	App       string
-	Desired   string
-	Active    string
-	Converged bool
-	Stopped   bool
+	App           string
+	Desired       string
+	DesiredStatus string
+	Active        string
+	Converged     bool
+	// Pending reports desired state that the active revision has not
+	// reached yet. It is derived from desired vs ACTIVE, never from a
+	// journal.
+	Pending     bool
+	Stopped     bool
+	LastOutcome string
 }
 
 // AppServiceView is one service's effective state for inspection.
@@ -101,15 +109,29 @@ type AppServiceView struct {
 	RestartUnsafe     bool
 }
 
-// AppDetail inspects desired + active + intent + last op for one app.
+// AppRetainedView lists the resources the app owns and would retain on
+// removal: runtime volume names, secret paths, and pinned image
+// references. It never carries secret values.
+type AppRetainedView struct {
+	Volumes []string
+	Secrets []string
+	Images  []string
+}
+
+// AppDetail inspects desired + active + intent + ownership + last op for
+// one app.
 type AppDetail struct {
 	App               string
 	DesiredRevision   string
 	DesiredStatus     string
+	Pending           bool
 	Converged         bool
 	ConvergedRevision string
 	Services          map[string]AppServiceView
 	Stopped           bool
+	Retained          AppRetainedView
 	LastOp            string
+	LastOpKind        string
 	LastOutcome       string
+	LastOpStartedAt   time.Time
 }

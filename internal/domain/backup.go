@@ -49,43 +49,24 @@ const (
 	BackupStatusFailed    BackupJobStatus = "failed"
 )
 
-// DBInfo holds detected database information from an attachment container.
-type DBInfo struct {
-	Type    DBType
-	Version string
-	Domain  string
-	// App and Service carry the v2.50 app identity for backup targets
-	// resolved from the active record (attachment-free detection).
-	// Empty for domain-keyed (V2 attachment) detection; the backup
-	// naming/scheduling rewiring that prefers them lands at cutover.
+// DatabaseTarget is one declarative database backup target: the app name
+// is the identity, the service and database select the exact declaration
+// inside the app's ACTIVE record. Schedule is the declared backup
+// schedule of that database.
+type DatabaseTarget struct {
 	App         string
 	Service     string
-	Name        string
-	Host        string
-	Port        int
+	Database    string
+	Schedule    BackupSchedule
 	ContainerID string
-	ImageName   string
-	// Credentials contains sensitive values (passwords/tokens).
-	// Never log or expose this map in API responses.
-	Credentials map[string]string `json:"-"`
-}
-
-// ClearCredentials clears sensitive credential values from DBInfo.
-func (d *DBInfo) ClearCredentials() {
-	if d == nil || d.Credentials == nil {
-		return
-	}
-	for k := range d.Credentials {
-		d.Credentials[k] = ""
-		delete(d.Credentials, k)
-	}
-	d.Credentials = nil
 }
 
 // BackupJob represents a scheduled or manual backup operation.
 type BackupJob struct {
-	ID          string
-	Domain      string
+	ID string
+	// App is the canonical backup identity: an app name, never a domain.
+	App         string
+	Service     string
 	DBName      string
 	Schedule    BackupSchedule
 	Type        BackupType
@@ -164,29 +145,35 @@ type VolumeBackupConfig struct {
 
 // VolumeBackupJob represents a filesystem archive backup of a named volume.
 type VolumeBackupJob struct {
-	ID            string
-	Domain        string
-	ContainerName string
-	ContainerID   string
-	VolumeName    string
-	MountPath     string
-	Type          BackupType
-	Status        BackupJobStatus
-	StartedAt     time.Time
-	CompletedAt   time.Time
-	SizeBytes     int64
-	ArtifactRef   string
-	Error         string
-	Metadata      map[string]string
+	ID string
+	// App is the canonical backup identity: an app name, never a domain.
+	App               string
+	Service           string
+	ContainerName     string
+	ContainerID       string
+	VolumeName        string
+	RuntimeVolumeName string
+	MountPath         string
+	Type              BackupType
+	Status            BackupJobStatus
+	StartedAt         time.Time
+	CompletedAt       time.Time
+	SizeBytes         int64
+	ArtifactRef       string
+	Error             string
+	Metadata          map[string]string
 }
 
-// VolumeBackupTarget identifies one selected volume backup source.
+// VolumeBackupTarget identifies one declared volume backup source:
+// app, service, and the declared volume name. RuntimeVolumeName is the
+// runtime volume the archive is exported from, and MountPath is the
+// declared mount path inside that volume.
 type VolumeBackupTarget struct {
-	Domain        string
-	ContainerName string
-	ContainerID   string
-	VolumeName    string
-	MountPath     string
+	App               string
+	Service           string
+	VolumeName        string
+	RuntimeVolumeName string
+	MountPath         string
 }
 
 // VolumeArchiveRequest describes a volume archive export request.
@@ -208,12 +195,3 @@ type VolumeArchiveResult struct {
 	Stream   io.ReadCloser
 	Metadata VolumeArchiveMetadata
 }
-
-// Backup labels for container metadata.
-const (
-	LabelBackupEnabled  = "gordon.backup"
-	LabelBackupType     = "gordon.backup.type"
-	LabelBackupVersion  = "gordon.backup.version"
-	LabelBackupSchedule = "gordon.backup.schedule"
-	LabelBackupSidecar  = "gordon.backup.sidecar"
-)

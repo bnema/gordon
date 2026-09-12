@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -189,8 +190,9 @@ func (h *Handler) handleAppList(w http.ResponseWriter, r *http.Request) {
 	items := make([]dto.AppSummaryDTO, 0, len(summaries))
 	for _, s := range summaries {
 		items = append(items, dto.AppSummaryDTO{
-			App: s.App, Desired: s.Desired, Active: s.Active,
-			Converged: s.Converged, Stopped: s.Stopped,
+			App: s.App, Desired: s.Desired, DesiredStatus: s.DesiredStatus,
+			Active: s.Active, Converged: s.Converged, Pending: s.Pending,
+			Stopped: s.Stopped, LastOutcome: s.LastOutcome,
 		})
 	}
 	if items == nil {
@@ -221,18 +223,31 @@ func (h *Handler) handleAppShow(w http.ResponseWriter, r *http.Request, app stri
 			EffectiveRevision: view.EffectiveRevision,
 			Digest:            view.Digest,
 			Container:         view.Container,
+			RestartUnsafe:     view.RestartUnsafe,
 		}
 	}
-	h.sendJSON(w, http.StatusOK, dto.AppShowResponse{
+	resp := dto.AppShowResponse{
 		App:     detail.App,
-		Desired: dto.AppDesiredDTO{Revision: detail.DesiredRevision, Status: detail.DesiredStatus},
+		Desired: dto.AppDesiredDTO{Revision: detail.DesiredRevision, Status: detail.DesiredStatus, Pending: detail.Pending},
 		Active: dto.AppActiveDTO{
 			Converged:         detail.Converged,
 			ConvergedRevision: detail.ConvergedRevision,
 			Services:          services,
 		},
 		Intent: dto.AppIntentDTO{Stopped: detail.Stopped},
-	})
+		Retained: dto.AppRetainedDTO{
+			Volumes: detail.Retained.Volumes,
+			Secrets: detail.Retained.Secrets,
+			Images:  detail.Retained.Images,
+		},
+	}
+	if detail.LastOp != "" {
+		resp.LastOp = &dto.AppLastOpDTO{
+			Op: detail.LastOp, Kind: detail.LastOpKind,
+			Outcome: detail.LastOutcome, StartedAt: detail.LastOpStartedAt,
+		}
+	}
+	h.sendJSON(w, http.StatusOK, resp)
 }
 
 // handleAppDiff returns the normalized desired-vs-active diff.
@@ -280,7 +295,11 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 			}
 		}
 	}
-	op, err := svc.Deploy(ctx, app, req.Revision, req.Service)
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	op, err := svc.Deploy(ctx, app, req.Revision, req.Service, key)
 	if err != nil && (op == nil || isMappedPreflightError(err, op)) {
 		h.sendAppOpError(w, err)
 		return
@@ -289,7 +308,7 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, op, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
 // handleAppLifecycle runs stop/start/remove verbs.
@@ -303,15 +322,19 @@ func (h *Handler) handleAppLifecycle(w http.ResponseWriter, r *http.Request, app
 	if !ok {
 		return
 	}
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
 	var domainOp *domain.AppOperation
 	var err error
 	switch verb {
 	case "stop":
-		domainOp, err = svc.Stop(ctx, app)
+		domainOp, err = svc.Stop(ctx, app, key)
 	case "start":
-		domainOp, err = svc.Start(ctx, app)
+		domainOp, err = svc.Start(ctx, app, key)
 	case "remove":
-		domainOp, err = svc.Remove(ctx, app)
+		domainOp, err = svc.Remove(ctx, app, key)
 	default:
 		h.sendError(w, http.StatusNotFound, "route not found")
 		return
@@ -324,7 +347,7 @@ func (h *Handler) handleAppLifecycle(w http.ResponseWriter, r *http.Request, app
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, domainOp, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, domainOp, false))
 }
 
 // handleAppRestart restarts from pinned digests.
@@ -338,8 +361,12 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	if !ok {
 		return
 	}
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
 	service := r.URL.Query().Get("service")
-	op, err := svc.Restart(ctx, app, service)
+	op, err := svc.Restart(ctx, app, service, key)
 	if err != nil && op == nil {
 		h.sendAppOpError(w, err)
 		return
@@ -348,7 +375,22 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	if err != nil {
 		status = http.StatusConflict
 	}
-	h.sendJSON(w, status, toAppDeployResponse(app, op, false))
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
+}
+
+func appIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" || len(key) > 128 {
+		http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
+		return "", false
+	}
+	for _, char := range key {
+		if char < '!' || char > '~' {
+			http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
+			return "", false
+		}
+	}
+	return key, true
 }
 
 // handleAppOpLookup serves GET /apps/{app}/operations/{key}.
@@ -368,7 +410,8 @@ func (h *Handler) handleAppOpLookup(w http.ResponseWriter, r *http.Request, app,
 		return
 	}
 	// Application diagnostics require the logs read scope; an apps-read
-	// actor receives the stable error only.
+	// actor receives the stable error only. The lookup answers with the
+	// journal alone: no app read is added to a journal query.
 	includeDiagnostics := HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionRead)
 	h.sendJSON(w, http.StatusOK, toAppDeployResponse(app, op, includeDiagnostics))
 }
@@ -435,6 +478,7 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 		}
 	}
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
+		errors.Is(err, domain.ErrAppNotFound) ||
 		errors.Is(err, domain.ErrAppReservationConflict) ||
 		errors.Is(err, domain.ErrAppImageUnresolvable) ||
 		errors.Is(err, domain.ErrAppSecretMissing) ||
@@ -458,6 +502,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "secret-missing", err.Error(), "", "set the secret, then redeploy")
 	case errors.Is(err, domain.ErrAppUnmanagedImageVolume):
 		h.sendAppError(w, http.StatusBadRequest, "unmanaged-image-volume", err.Error(), "", "")
+	case errors.Is(err, domain.ErrAppNotFound):
+		h.sendAppError(w, http.StatusNotFound, "app-not-found", err.Error(), "", "check the app name")
 	case errors.Is(err, domain.ErrAppRevisionNotFound),
 		errors.Is(err, domain.ErrAppIntentNotFound),
 		errors.Is(err, domain.ErrAppOperationNotFound):
@@ -510,6 +556,11 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		}
 		resp.Services[service] = entry
 	}
+	for _, warning := range op.Warnings {
+		resp.CleanupWarnings = append(resp.CleanupWarnings, dto.AppCleanupWarningDTO{
+			Service: warning.Service, Leftover: warning.Leftover, Detail: warning.Detail,
+		})
+	}
 	resp.Steps = make([]dto.AppStepDTO, 0, len(op.Steps))
 	for _, step := range op.Steps {
 		entry := dto.AppStepDTO{
@@ -521,9 +572,32 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		}
 		resp.Steps = append(resp.Steps, entry)
 	}
-	resp.Effective = dto.AppEffectiveDTO{ConvergedRevision: op.InputRevision}
-	if op.Outcome == domain.AppOutcomeSuccess {
-		resp.Effective.Converged = true
+	return resp
+}
+
+// appMutationResponse maps one operation journal to the wire DTO and
+// attaches current app state. Effective revisions, convergence, and owned
+// resources come from desired + ACTIVE + ownership, never from the
+// journal. An app that no longer exists (removal) omits both sections.
+func (h *Handler) appMutationResponse(ctx context.Context, svc in.AppService, app string, op *domain.AppOperation, includeDiagnostics bool) dto.AppDeployResponse {
+	resp := toAppDeployResponse(app, op, includeDiagnostics)
+	detail, err := svc.Show(ctx, app)
+	if err != nil {
+		return resp
+	}
+	effective := &dto.AppEffectiveDTO{
+		Converged:         detail.Converged,
+		ConvergedRevision: detail.ConvergedRevision,
+		Services:          map[string]string{},
+	}
+	for name, view := range detail.Services {
+		effective.Services[name] = view.EffectiveRevision
+	}
+	resp.Effective = effective
+	resp.Retained = &dto.AppRetainedDTO{
+		Volumes: detail.Retained.Volumes,
+		Secrets: detail.Retained.Secrets,
+		Images:  detail.Retained.Images,
 	}
 	return resp
 }
