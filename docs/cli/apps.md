@@ -64,7 +64,7 @@ deploy may fail after the apply succeeded.
 gordon apps list [--json]
 ```
 
-Lists applications with one row per app (`active`, `stopped`, or `pending`).
+Lists applications with one row per app. States are `applied` when no revision is active, `pending` when desired state awaits activation, `stopped` when stopped intent is set, and otherwise `active`. A non-success last operation is appended to `active` in parentheses.
 
 ---
 

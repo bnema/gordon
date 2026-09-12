@@ -244,7 +244,7 @@ func (s *Service) runTarget(ctx context.Context, target domain.DatabaseTarget, s
 	defer dumpStream.Close()
 
 	counter := &byteCounter{}
-	path, err := s.storage.Store(ctx, target.App, target.Database, schedule, started, io.TeeReader(dumpStream, counter))
+	path, err := s.storage.Store(ctx, target.App, target.Service, target.Database, schedule, started, io.TeeReader(dumpStream, counter))
 	if err != nil {
 		return nil, err
 	}

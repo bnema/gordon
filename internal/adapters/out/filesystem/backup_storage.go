@@ -50,16 +50,17 @@ func expandTilde(path string) string {
 }
 
 // Store saves backup data and returns the absolute storage path.
-func (s *BackupStorage) Store(_ context.Context, app, dbName string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error) {
+func (s *BackupStorage) Store(_ context.Context, app, service, database string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error) {
 	appPart := sanitizeBackupPathComponent(app)
-	dbPart := sanitizeBackupPathComponent(dbName)
+	servicePart := sanitizeBackupPathComponent(service)
+	dbPart := sanitizeBackupPathComponent(database)
 	schedulePart := string(schedule)
 	if schedulePart == "" {
 		schedulePart = "manual"
 	}
 	schedulePart = sanitizeBackupPathComponent(schedulePart)
 
-	backupDir := filepath.Join(s.rootDir, appPart, dbPart, schedulePart)
+	backupDir := filepath.Join(s.rootDir, appPart, servicePart, dbPart, schedulePart)
 	if err := os.MkdirAll(backupDir, 0750); err != nil {
 		return "", fmt.Errorf("failed to create backup path: %w", err)
 	}
@@ -130,12 +131,16 @@ func (s *BackupStorage) List(_ context.Context, app string, schedule *domain.Bac
 			return nil
 		}
 		parts := strings.Split(rel, string(filepath.Separator))
-		if len(parts) != 3 {
+		if len(parts) != 4 {
+			// Pre-cutover app/database/schedule records do not contain a
+			// canonical service identity, so they cannot safely join a
+			// current app/service/database history.
 			return nil
 		}
 
-		dbName := parts[0]
-		sched := domain.BackupSchedule(parts[1])
+		service := parts[0]
+		dbName := parts[1]
+		sched := domain.BackupSchedule(parts[2])
 		if schedule != nil && *schedule != sched {
 			return nil
 		}
@@ -154,6 +159,7 @@ func (s *BackupStorage) List(_ context.Context, app string, schedule *domain.Bac
 		jobs = append(jobs, domain.BackupJob{
 			ID:        base,
 			App:       app,
+			Service:   service,
 			DBName:    dbName,
 			Schedule:  sched,
 			Type:      domain.BackupTypeLogical,
@@ -193,7 +199,7 @@ func (s *BackupStorage) ApplyRetention(ctx context.Context, app string, policy d
 
 	groups := make(map[string][]domain.BackupJob)
 	for _, job := range jobs {
-		key := fmt.Sprintf("%s|%s", job.DBName, job.Schedule)
+		key := fmt.Sprintf("%s|%s|%s", job.Service, job.DBName, job.Schedule)
 		groups[key] = append(groups[key], job)
 	}
 

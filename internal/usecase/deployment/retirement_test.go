@@ -194,6 +194,11 @@ func TestDeploy_RetirementFailureIsSurfacedAsAWarning(t *testing.T) {
 
 	require.NotEmpty(t, saved)
 	last := saved[len(saved)-1]
+	require.Len(t, last.Steps, 2)
+	assert.Equal(t, "preflight", last.Steps[0].ID)
+	assert.Equal(t, domain.AppStepSucceeded, last.Steps[0].State)
+	assert.Equal(t, "service.web.replace", last.Steps[1].ID)
+	assert.Equal(t, domain.AppStepSucceeded, last.Steps[1].State)
 	require.Len(t, last.Warnings, 1)
 	assert.Equal(t, "web", last.Warnings[0].Service)
 	assert.Equal(t, "c-old", last.Warnings[0].Leftover)

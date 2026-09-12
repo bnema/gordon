@@ -86,12 +86,8 @@ max_size = 100                           # MB before rotation
 max_backups = 3                          # Old files to keep
 max_age = 28                             # Days to keep
 
-[logging.container_logs]
-enabled = true
-dir = "~/.gordon/logs/containers"        # Default location
-max_size = 100
-max_backups = 3
-max_age = 28
+# Workload logs are streamed directly from the container runtime with
+# `gordon apps logs APP --service SERVICE`.
 
 # Telemetry (OpenTelemetry)
 [telemetry]
@@ -163,8 +159,8 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `[network_isolation]` | Installation network policy | [Network Isolation](./network-isolation.md) |
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
 | `[entrypoints]`, `[traffic]`, `[[network_services]]`, `[[services]]` | L4 and TLS passthrough traffic plane | [Traffic](./traffic.md) |
-| App files (`<app>.toml`) | Declarative apps: services, hosts, secrets, volumes | [App Manifest](./apps.md) |
-| `[backups]` | Database backups | [Backups](./backups.md) |
+| App files (`<app>.toml`) | Declarative apps: services, hosts, secrets, volumes, backup targets | [App Manifest](./apps.md) |
+| `[backups]` | Database backup storage, scheduling, and retention | [Backups](./backups.md) |
 | `[images.prune]` | Scheduled image cleanup | [Images](./images.md) |
 | Security hardening | Security controls and recommended knobs | [Security Hardening](./security-hardening.md) |
 
@@ -198,13 +194,11 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `logging.file.max_size` | `100` |
 | `logging.file.max_backups` | `3` |
 | `logging.file.max_age` | `28` |
-| `logging.container_logs.enabled` | `true` |
 | `volumes.auto_create` | `true` |
 | `volumes.prefix` | `"gordon"` |
 | `volumes.preserve` | `true` |
 | `network_isolation.enabled` | `true` |
 | `network_isolation.internal` | `false` |
-| `backups.enabled` | `false` |
 | `backups.enabled` | `false` |
 | `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
 | `images.allowed_registries` | `[]` |

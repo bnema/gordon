@@ -90,6 +90,7 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 	artifact, err := storage.StoreVolumeArchive(context.Background(), domain.VolumeBackupJob{
 		ID:            "job/1",
 		App:           "app.example.com",
+		Service:       "api",
 		ContainerName: "app",
 		VolumeName:    "gordon-app-data",
 		MountPath:     "/data",
@@ -105,6 +106,7 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, jobs, 1)
 	assert.Equal(t, domain.BackupStatusCompleted, jobs[0].Status)
+	assert.Equal(t, "api", jobs[0].Service)
 	assert.Equal(t, "app", jobs[0].ContainerName)
 	assert.Equal(t, "/data", jobs[0].MountPath)
 	assert.Equal(t, string(domain.VolumeBackupCompressionZstd), jobs[0].Metadata["compression"])

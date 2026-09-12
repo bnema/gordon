@@ -106,13 +106,6 @@ enabled = false
 # max_backups = 3
 # max_age = 28
 
-[logging.container_logs]
-enabled = true
-# dir = "~/.gordon/logs/containers"
-# max_size = 100
-# max_backups = 3
-# max_age = 28
-
 [logging.access_log]
 enabled = false
 format = "json"

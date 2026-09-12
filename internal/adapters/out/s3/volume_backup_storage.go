@@ -106,6 +106,7 @@ func (s *VolumeBackupStorage) StoreVolumeArchive(ctx context.Context, job domain
 		ContentType: aws.String(contentTypeForCompression(compression)),
 		Metadata: map[string]string{
 			"gordon-app":         job.App,
+			"gordon-service":     job.Service,
 			"gordon-volume":      job.VolumeName,
 			"gordon-container":   job.ContainerName,
 			"gordon-mount-path":  job.MountPath,
@@ -186,6 +187,7 @@ func (s *VolumeBackupStorage) hydrateVolumeBackupJobMetadata(ctx context.Context
 	if err != nil || out == nil || out.Metadata == nil {
 		return
 	}
+	job.Service = out.Metadata["gordon-service"]
 	job.ContainerName = out.Metadata["gordon-container"]
 	job.MountPath = out.Metadata["gordon-mount-path"]
 	if compression := out.Metadata["gordon-compression"]; compression != "" {

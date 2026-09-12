@@ -126,7 +126,7 @@ func (s *Service) runServiceStep(
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
 		step.Diagnostics = svcResult.Diagnostics
-		op.Steps[index] = step
+		op.Steps[index+1] = step
 		op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 		op.Outcome = ComputeOutcome(result.Services)
 		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
@@ -157,7 +157,7 @@ func (s *Service) runServiceStep(
 	}
 	result.Services[p.name] = svcResult
 	step.State = domain.AppStepSucceeded
-	op.Steps[index] = step
+	op.Steps[index+1] = step
 	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
 	}
@@ -211,7 +211,9 @@ func journaledDeployResult(input DeployInput, op *domain.AppOperation) *DeployRe
 // the new revision no longer declares. A failure marks the operation
 // failed and aborts before any new state is published.
 func (s *Service) reconcileRemovalsForDeploy(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService, op *domain.AppOperation, result *DeployResult, log zerowrap.Logger) error {
-	removalSteps, removed, err := s.reconcileRemovedServices(ctx, app, active, pinned)
+	removalSteps, removed, warnings, err := s.reconcileRemovedServices(ctx, app, active, pinned)
+	op.Warnings = append(op.Warnings, journalWarnings(warnings)...)
+	result.CleanupWarnings = append(result.CleanupWarnings, warnings...)
 	if err != nil {
 		op.Steps = append(op.Steps, removalSteps...)
 		op.Outcome = domain.AppOutcomeFailed
@@ -237,7 +239,7 @@ func (s *Service) reconcileRemovalsForDeploy(ctx context.Context, app string, ac
 // with its data retained, its backend claims released, and its ACTIVE
 // entry deleted. A failure leaves the remaining services untouched and
 // stops the deploy before any new state is published.
-func (s *Service) reconcileRemovedServices(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService) ([]domain.AppOperationStep, []string, error) {
+func (s *Service) reconcileRemovedServices(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService) ([]domain.AppOperationStep, []string, []CleanupWarning, error) {
 	desired := make(map[string]struct{}, len(pinned))
 	for _, p := range pinned {
 		desired[p.name] = struct{}{}
@@ -251,37 +253,39 @@ func (s *Service) reconcileRemovedServices(ctx context.Context, app string, acti
 	sort.Strings(names)
 
 	steps := make([]domain.AppOperationStep, 0, len(names))
+	var cleanupWarnings []CleanupWarning
 	for _, name := range names {
 		eff := active.Services[name]
-		step, err := s.retireRemovedService(ctx, app, name, eff)
+		step, warnings, err := s.retireRemovedService(ctx, app, name, eff)
 		steps = append(steps, step)
+		cleanupWarnings = append(cleanupWarnings, warnings...)
 		if err != nil {
-			return steps, names, err
+			return steps, names, cleanupWarnings, err
 		}
 		delete(active.Services, name)
 	}
 	if len(names) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if err := s.deps.State.SaveActive(ctx, active); err != nil {
-		return steps, names, fmt.Errorf("deployment: persist service removals: %w", err)
+		return steps, names, cleanupWarnings, fmt.Errorf("deployment: persist service removals: %w", err)
 	}
-	return steps, names, nil
+	return steps, names, cleanupWarnings, nil
 }
 
 // retireRemovedService withdraws one removed service and removes its exact
 // container, releasing its claims only after withdrawal succeeded.
-func (s *Service) retireRemovedService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, error) {
+func (s *Service) retireRemovedService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, []CleanupWarning, error) {
 	step := domain.AppOperationStep{
 		ID:      "service." + name + ".remove",
 		State:   domain.AppStepPending,
 		Service: name,
 		Before:  eff.Container,
 	}
-	fail := func(err error) (domain.AppOperationStep, error) {
+	fail := func(err error) (domain.AppOperationStep, []CleanupWarning, error) {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
-		return step, err
+		return step, nil, err
 	}
 	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
 		return fail(err)
@@ -296,10 +300,13 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 		if !retired.Gone {
 			return fail(fmt.Errorf("deployment: remove %s/%s container %s: %s", app, name, eff.Container, cleanupDetail(retired)))
 		}
+		step.State = domain.AppStepSucceeded
+		step.After = ""
+		return step, retired.Warnings, nil
 	}
 	step.State = domain.AppStepSucceeded
 	step.After = ""
-	return step, nil
+	return step, nil, nil
 }
 
 // cutoverService applies traffic after publication, then retires the

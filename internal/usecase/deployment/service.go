@@ -383,10 +383,13 @@ func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppO
 // terminal outcome: the operation is still in flight or was interrupted,
 // so its effects must not run again.
 func replayError(op domain.AppOperation) error {
-	if op.Terminal() {
-		return nil
+	if !op.Terminal() {
+		return fmt.Errorf("deployment: operation %s has not reached a terminal outcome: %w", op.Op, domain.ErrAppStateConflict)
 	}
-	return fmt.Errorf("deployment: operation %s has not reached a terminal outcome: %w", op.Op, domain.ErrAppStateConflict)
+	if op.Outcome != domain.AppOutcomeSuccess {
+		return fmt.Errorf("deployment: operation %s previously ended with outcome %s: %w", op.Op, op.Outcome, domain.ErrAppStateConflict)
+	}
+	return nil
 }
 
 // resolveRevision loads the captured revision (default: current desired).

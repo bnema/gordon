@@ -74,14 +74,14 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	var failures []string
 	for _, name := range sortedServiceNames(active) {
 		container := active.Services[name].Container
-		step, err := s.stopService(ctx, app, name, active.Services[name])
+		step, warnings, err := s.stopService(ctx, app, name, active.Services[name])
 		op.Steps = append(op.Steps, step)
 		if err != nil {
-			result.Services[name] = ServiceResult{Result: "failed", Before: container, Error: err.Error()}
+			result.Services[name] = ServiceResult{Result: "failed", Before: container, Error: err.Error(), CleanupWarnings: warnings}
 			failures = append(failures, name)
 			continue
 		}
-		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
+		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: "", CleanupWarnings: warnings}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
 	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
@@ -103,13 +103,13 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 // never treated as a successful stop. The confirmed disappearance
 // releases the container's backend claims and its recovery inhibition:
 // a stopped app is never revived by recovery.
-func (s *Service) stopService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, error) {
+func (s *Service) stopService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (domain.AppOperationStep, []CleanupWarning, error) {
 	container := eff.Container
 	step := domain.AppOperationStep{ID: "service." + name + ".stop", State: domain.AppStepPending, Before: container}
-	fail := func(err error) (domain.AppOperationStep, error) {
+	fail := func(err error) (domain.AppOperationStep, []CleanupWarning, error) {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
-		return step, err
+		return step, nil, err
 	}
 	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
 		return fail(err)
@@ -122,9 +122,11 @@ func (s *Service) stopService(ctx context.Context, app, name string, eff domain.
 			return fail(fmt.Errorf("deployment: stop %s/%s container %s: %s", app, name, container, cleanupDetail(retired)))
 		}
 		step.After = container
+		step.State = domain.AppStepSucceeded
+		return step, retired.Warnings, nil
 	}
 	step.State = domain.AppStepSucceeded
-	return step, nil
+	return step, nil, nil
 }
 
 // Start clears the stopped intent and ensures running from active records.
@@ -446,10 +448,12 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 			if !retired.Gone {
 				return nil, fmt.Errorf("deployment: remove %q/%q: container %s not confirmed gone: %s", app, name, container, cleanupDetail(retired))
 			}
+			result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: "", CleanupWarnings: retired.Warnings}
+		} else {
+			result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
 		}
 		step.State = domain.AppStepSucceeded
 		steps = append(steps, step)
-		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
 	}
 	return steps, nil
 }

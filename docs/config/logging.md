@@ -1,6 +1,6 @@
 # Logging Configuration
 
-Configure application and container log collection.
+Configure Gordon process and HTTP access logging. Workload logs are read directly from the container runtime.
 
 ## Configuration
 
@@ -12,13 +12,6 @@ format = "console"
 [logging.file]
 enabled = true
 path = "~/.gordon/logs/gordon.log"
-max_size = 100
-max_backups = 3
-max_age = 28
-
-[logging.container_logs]
-enabled = true
-dir = "~/.gordon/logs/containers"
 max_size = 100
 max_backups = 3
 max_age = 28
@@ -44,24 +37,19 @@ syslog_identifier = "gordon-access"
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `file.enabled` | bool | `false` | Enable file-based logging |
-| `file.path` | string | - | Path to main log file |
+| `file.enabled` | bool | `false` | Enable process file logging |
+| `file.path` | string | `{data_dir}/logs/gordon.log` | Process log path |
 | `file.max_size` | int | `100` | Max file size in MB before rotation |
 | `file.max_backups` | int | `3` | Number of old files to keep |
 | `file.max_age` | int | `28` | Days to keep old files |
 
-The Admin API and `gordon logs` read from the process log file. Keep
-`logging.file.enabled` set to `true` if you need process log streaming.
+The Admin API and `gordon logs` read from the process log file. Keep `logging.file.enabled` set to `true` if you need process log streaming.
 
-### Container Logs
+### Workload Logs
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `container_logs.enabled` | bool | `true` | Collect container stdout/stderr |
-| `container_logs.dir` | string | `{data_dir}/logs/containers` | Directory for container logs |
-| `container_logs.max_size` | int | `100` | Max file size in MB |
-| `container_logs.max_backups` | int | `3` | Old files to keep |
-| `container_logs.max_age` | int | `28` | Days to keep files |
+`gordon apps logs APP --service SERVICE` reads stdout and stderr directly from the container runtime. Gordon does not persist workload logs to files; configure retention in the container runtime's logging driver.
+
+The accepted `logging.container_logs` configuration fields are currently not connected to a production log sink and do not create files.
 
 ### Access Log
 
@@ -89,31 +77,9 @@ Use the access log for reverse-proxy traffic analysis, CrowdSec/fail2ban ingesti
 | `warn` | Warnings |
 | `error` | Errors only |
 
-## Log Directory Structure
-
-```
-~/.gordon/logs/
-├── gordon.log              # Main application logs
-├── gordon.log.1            # Rotated log
-├── gordon.log.2.gz         # Compressed old log
-└── containers/
-    ├── app_mydomain_com.log  # Container logs by domain
-    └── api_mydomain_com.log
-```
-
 ## Log Rotation
 
-Gordon uses automatic log rotation:
-
-1. **Size-based**: Rotates when file exceeds `max_size` MB
-2. **Age-based**: Removes files older than `max_age` days
-3. **Count-based**: Keeps only `max_backups` old files
-4. **Compression**: Old files are gzip compressed
-
-Example with defaults:
-- Log grows to 100MB → rotated to `gordon.log.1`
-- After 3 rotations → oldest is compressed
-- Files older than 28 days → deleted
+Process file logs and file-based access logs rotate by size and retain files by count and age. Old files are compressed.
 
 ## Examples
 
@@ -127,13 +93,6 @@ format = "console"
 [logging.file]
 enabled = true
 path = "./logs/gordon.log"
-max_size = 10
-max_backups = 2
-max_age = 7
-
-[logging.container_logs]
-enabled = true
-dir = "./logs/containers"
 max_size = 10
 max_backups = 2
 max_age = 7
@@ -160,12 +119,11 @@ max_size = 100
 max_backups = 10
 max_age = 90
 
-[logging.container_logs]
+[logging.access_log]
 enabled = true
-dir = "~/.gordon/logs/containers"
-max_size = 100
-max_backups = 10
-max_age = 90
+format = "json"
+output = "journald"
+syslog_identifier = "gordon-access"
 ```
 
 ### Minimal (Console Only)
@@ -177,60 +135,31 @@ format = "console"
 
 [logging.file]
 enabled = false
-
-[logging.container_logs]
-enabled = true
 ```
 
 ## Viewing Logs
 
-### Gordon Logs
+### Gordon Process Logs
 
 ```bash
-# Using gordon logs command
-gordon logs -f          # Follow logs
-gordon logs -n 100      # Last 100 lines
-
-# Direct file access
+gordon logs -f
+gordon logs -n 100
 tail -f ~/.gordon/logs/gordon.log
-
-# With journalctl (if using systemd)
 journalctl --user -u gordon -f
 ```
 
-### Container Logs
+### Workload Logs
 
 ```bash
-# View container logs
-tail -f ~/.gordon/logs/containers/app_mydomain_com.log
-
-# All container logs
-ls ~/.gordon/logs/containers/
+gordon apps logs blog --service web
+gordon apps logs blog --service web --follow
 ```
 
-## Log Format
-
-### Console Format
-
-```
-2024-01-15T10:30:00Z INF container deployed domain=app.mydomain.com image=myapp:latest
-2024-01-15T10:30:01Z INF proxy routing updated route=app.mydomain.com
-```
-
-### JSON Format
-
-```json
-{"level":"info","time":"2024-01-15T10:30:00Z","message":"container deployed","domain":"app.mydomain.com","image":"myapp:latest"}
-{"level":"info","time":"2024-01-15T10:30:01Z","message":"proxy routing updated","route":"app.mydomain.com"}
-```
+These commands stream from the container runtime; they do not read Gordon-managed workload log files.
 
 ## Security
 
-Log files are created with secure permissions:
-- Directories: `0700` (owner only)
-- Files: `0600` (owner only)
-
-Sensitive values (passwords, tokens) are automatically redacted.
+Process and access log files are created with owner-only permissions. Gordon redacts common credential patterns when serving logs, but application output may still contain sensitive data. Restrict process-log, journal, runtime, and `admin:logs:read` access.
 
 ## Related
 

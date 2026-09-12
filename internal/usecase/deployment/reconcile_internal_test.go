@@ -70,12 +70,13 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	}).Once()
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default())
-	steps, removed, err := svc.reconcileRemovedServices(ctx, "blog", active, []pinnedService{
+	steps, removed, warnings, err := svc.reconcileRemovedServices(ctx, "blog", active, []pinnedService{
 		{name: "web", spec: domain.AppService{Name: "web"}},
 	})
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"legacy"}, removed)
+	assert.Empty(t, warnings)
 	require.Len(t, steps, 1)
 	assert.Equal(t, domain.AppStepSucceeded, steps[0].State)
 	assert.Equal(t, []string{"blog/legacy"}, traffic.withdrawn)
@@ -98,7 +99,7 @@ func TestReconcileRemovedServices_WithdrawFailureAbortsBeforeStop(t *testing.T) 
 	}}
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default())
-	steps, _, err := svc.reconcileRemovedServices(context.Background(), "blog", active, nil)
+	steps, _, _, err := svc.reconcileRemovedServices(context.Background(), "blog", active, nil)
 
 	require.Error(t, err)
 	require.Len(t, steps, 1)
@@ -117,9 +118,10 @@ func TestReconcileRemovedServices_NoopWhenAllActiveServicesRemain(t *testing.T) 
 	}}
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{}}, zerowrap.Default())
-	steps, removed, err := svc.reconcileRemovedServices(context.Background(), "blog", active, []pinnedService{{name: "web"}})
+	steps, removed, warnings, err := svc.reconcileRemovedServices(context.Background(), "blog", active, []pinnedService{{name: "web"}})
 
 	require.NoError(t, err)
 	assert.Empty(t, steps)
 	assert.Empty(t, removed)
+	assert.Empty(t, warnings)
 }

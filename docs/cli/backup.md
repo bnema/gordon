@@ -20,14 +20,12 @@ name = "orders"
 type = "postgres"
 schedule = "daily"
 
-[[service.backup]]
-postgres = ["orders"]
-
 [[service.volume]]
 name = "data"
 path = "/var/lib/data"
 
 [service.backup]
+postgres = ["orders"]
 volume = ["data"]
 ```
 

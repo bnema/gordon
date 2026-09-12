@@ -136,7 +136,7 @@ func TestStopService_StopFailureSurfaces(t *testing.T) {
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{}}, zerowrap.Default())
 	eff := domain.AppEffectiveService{Container: "c-1", Spec: domain.AppService{Name: "web", StopGrace: time.Second}}
-	step, err := svc.stopService(context.Background(), "blog", "web", eff)
+	step, _, err := svc.stopService(context.Background(), "blog", "web", eff)
 
 	require.Error(t, err)
 	assert.Equal(t, domain.AppStepFailed, step.State)
@@ -151,7 +151,7 @@ func TestStopService_WithdrawFailureBlocksStop(t *testing.T) {
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{fail: true}}, zerowrap.Default())
 	eff := domain.AppEffectiveService{Container: "c-1", Spec: domain.AppService{Name: "web", StopGrace: time.Second}}
-	step, err := svc.stopService(context.Background(), "blog", "web", eff)
+	step, _, err := svc.stopService(context.Background(), "blog", "web", eff)
 
 	require.Error(t, err)
 	assert.Equal(t, domain.AppStepFailed, step.State)

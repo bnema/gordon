@@ -85,6 +85,36 @@ func TestDeploy_TerminalKeyReplayExecutesNoEffect(t *testing.T) {
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 }
 
+// TestDeploy_FailedTerminalKeyReplayConflicts proves a failed response does
+// not become successful merely because its idempotency key is replayed.
+func TestDeploy_FailedTerminalKeyReplayConflicts(t *testing.T) {
+	for _, outcome := range []string{domain.AppOutcomeFailed, domain.AppOutcomePartial} {
+		t.Run(outcome, func(t *testing.T) {
+			ctx := context.Background()
+			state, runtime, images, secrets := mockDeps(t)
+			rev := mockRevision()
+
+			failed := domain.AppOperation{
+				Op: "key-1", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+				Request: domain.AppOperationRequestFor("deploy", "blog", "", ""),
+				Outcome: outcome,
+				Steps:   []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepFailed, Error: "image unavailable"}},
+			}
+			state.EXPECT().Recover(mock.Anything).Return(nil).Once()
+			state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil).Once()
+			state.EXPECT().ClaimOperation(mock.Anything, mock.Anything).Return(failed, false, nil).Once()
+
+			svc := keyedService(t, state, runtime, images, secrets)
+			result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "key-1"})
+
+			require.ErrorIs(t, err, domain.ErrAppStateConflict)
+			require.NotNil(t, result)
+			assert.Equal(t, outcome, result.Outcome)
+			runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+		})
+	}
+}
+
 // TestDeploy_PendingKeyReplayConflicts proves an in-flight (or interrupted)
 // claim is never re-executed: the caller receives the journal and a
 // conflict instead of a second deployment.

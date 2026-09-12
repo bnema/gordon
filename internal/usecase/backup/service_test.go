@@ -123,8 +123,8 @@ func TestService_RunBackup_StoresUnderAppIdentity(t *testing.T) {
 	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
 		return len(cmd) == 3 && strings.HasPrefix(cmd[2], "rm -f ")
 	})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
-	storage.EXPECT().Store(mock.Anything, "shop", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, _ string, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
+	storage.EXPECT().Store(mock.Anything, "shop", "api", "orders", domain.BackupSchedule(""), mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
 			if _, err := io.Copy(io.Discard, data); err != nil {
 				return "", err
 			}
@@ -191,8 +191,8 @@ func TestService_RunForSchedule_RunsOnlyTheDeclaredSchedule(t *testing.T) {
 	runtime.EXPECT().ExecInContainer(mock.Anything, "ctr-api", mock.MatchedBy(func(cmd []string) bool {
 		return strings.HasPrefix(cmd[2], "rm -f ")
 	})).Return(&out.ExecResult{ExitCode: 0}, nil).Once()
-	storage.EXPECT().Store(mock.Anything, "shop", "users", domain.ScheduleHourly, mock.Anything, mock.Anything).
-		RunAndReturn(func(_ context.Context, _ string, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
+	storage.EXPECT().Store(mock.Anything, "shop", "api", "users", domain.ScheduleHourly, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _, _, _ string, _ domain.BackupSchedule, _ time.Time, data io.Reader) (string, error) {
 			if _, err := io.Copy(io.Discard, data); err != nil {
 				return "", err
 			}

@@ -18,27 +18,17 @@ Queries by logical identity use labels, never name parsing. Resources without th
 
 ### Legacy Labels
 
-Containers created before v2.50 may carry these labels. They are read-only provenance hints for prune/backup guards — Gordon never infers app state from them:
+Containers created before v2.50 may carry these labels. They are read-only provenance hints for prune guards — Gordon never infers app state from them:
 
 | Label | Value | Description |
 |-------|-------|-------------|
 | `gordon.domain` | Domain name | Pre-v2.50 domain this container served |
 | `gordon.image` | Image:tag | Original image from configuration |
 | `gordon.route` | Domain name | Pre-v2.50 route this container handled |
-| `gordon.attachment` | `"true"` | Pre-v2.50 attachment service marker |
-| `gordon.attached-to` | Domain/group | Pre-v2.50 attachment target |
 
-### Backup Labels
+### Backup Metadata
 
-Labels used by the backup subsystem:
-
-| Label | Value | Description |
-|-------|-------|-------------|
-| `gordon.backup` | `"true"` / `"false"` | Enables or disables backup behavior for a container |
-| `gordon.backup.type` | e.g. `"postgresql"` | Explicit database type override |
-| `gordon.backup.version` | e.g. `"17"` | Explicit database version override |
-| `gordon.backup.schedule` | e.g. `"hourly,daily"` | Schedule override hint |
-| `gordon.backup.sidecar` | `"true"` | Identifies backup sidecar containers |
+Backups are declarative rather than label-driven. App manifests declare database and volume targets in `[service.backup]`; Gordon does not define or write Docker labels to enable backups, select database types or schedules, or identify backup sidecars.
 
 ## Image Labels
 
@@ -78,9 +68,6 @@ docker ps -f "label=gordon.managed=true"
 
 # Containers for a specific app
 docker ps -f "label=gordon.app=blog"
-
-# Backup sidecars
-docker ps -f "label=gordon.backup.sidecar=true"
 ```
 
 ## Related

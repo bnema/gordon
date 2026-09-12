@@ -148,16 +148,8 @@ func (r *remoteControlPlane) GetProcessLogs(ctx context.Context, lines int) ([]s
 	return r.client.GetProcessLogs(ctx, lines)
 }
 
-func (r *remoteControlPlane) GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error) {
-	return r.client.GetContainerLogs(ctx, logDomain, lines)
-}
-
 func (r *remoteControlPlane) StreamProcessLogs(ctx context.Context, lines int) (<-chan string, error) {
 	return r.client.StreamProcessLogs(ctx, lines)
-}
-
-func (r *remoteControlPlane) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
-	return r.client.StreamContainerLogs(ctx, logDomain, lines)
 }
 
 func (r *remoteControlPlane) ListVolumes(ctx context.Context) ([]dto.Volume, error) {
