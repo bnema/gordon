@@ -70,9 +70,7 @@ func newImagesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "images",
 		Short: "List and prune images",
-		Long: `Inspect and clean up runtime and registry images.
-
-These commands currently require remote mode with a configured target.`,
+		Long:  `Inspect and clean up runtime and registry images through the selected daemon.`,
 	}
 
 	cmd.AddCommand(newImagesListCmd())
@@ -89,14 +87,10 @@ func newImagesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List runtime images and registry tags",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote, err := GetRemoteClient()
+			client, _, err := resolveDaemonClient()
 			if err != nil {
 				return err
 			}
-			if !isRemote {
-				return fmt.Errorf("images commands require a configured remote target")
-			}
-
 			return runImagesList(cmd.Context(), client, cmd.OutOrStdout(), jsonOut)
 		},
 	}
@@ -115,21 +109,21 @@ func newImagesPruneCmd() *cobra.Command {
 		Long: `Remove dangling runtime images and/or old registry tags.
 
 By default both runtime and registry cleanup run, keeping latest + 3 previous
-release tags per repository. Use --dangling or --registry to restrict scope.`,
+release tags per repository. Use --dangling or --registry to restrict scope.
+
+Only resources proven safe are deleted: every candidate gets an eligible,
+protected, or unknown verdict, and protected or unknown candidates are
+reported and left in place. A prune that deletes nothing succeeds.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			client, isRemote, err := GetRemoteClient()
+			client, _, err := resolveDaemonClient()
 			if err != nil {
 				return err
 			}
-			if !isRemote {
-				return fmt.Errorf("images commands require a configured remote target")
-			}
-
 			return runImagesPrune(cmd.Context(), client, opts, cmd.OutOrStdout())
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Show what would be pruned without applying changes")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Run the full inventory and planning, then report without deleting")
 	cmd.Flags().IntVar(&opts.KeepReleases, "keep-releases", domain.DefaultImagePruneKeepLast,
 		"Number of previous non-latest tags to keep per repository (latest is always kept)")
 	cmd.Flags().BoolVar(&opts.Dangling, "dangling", false, "Include dangling runtime images (default: both scopes)")
@@ -357,7 +351,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 		}
 	}
 
-	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry)
+	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry, false)
 
 	resp, err := pruneWithSpinner(ctx, client, req, pruneDangling, pruneRegistry)
 	if err != nil {
@@ -378,12 +372,14 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 	}
 
 	if pruneRegistry {
-		err = cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%s\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, bytesize.Format(resp.Registry.SpaceReclaimed))
+		if err := cliWritef(out, "Registry: tags_removed=%d blobs_removed=%d space_reclaimed=%s\n", resp.Registry.TagsRemoved, resp.Registry.BlobsRemoved, bytesize.Format(resp.Registry.SpaceReclaimed)); err != nil {
+			return err
+		}
+	} else if err := cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)")); err != nil {
 		return err
 	}
 
-	err = cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
-	return err
+	return cliRenderPruneSummary(out, resp.Plan)
 }
 
 func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesPruneOptions, pruneDangling, pruneRegistry bool, out io.Writer) error {
@@ -391,33 +387,34 @@ func runImagesPruneDryRun(ctx context.Context, client imagesClient, opts imagesP
 		return err
 	}
 
+	// A dry run executes the full inventory and planning path: only the
+	// deletion step is skipped, so the report is the executed plan.
+	req := buildPruneRequest(opts.KeepReleases, pruneDangling, pruneRegistry, true)
+	resp, err := client.PruneImages(ctx, req)
+	if err != nil {
+		return fmt.Errorf("failed to plan image prune: %w", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("failed to plan image prune: empty response")
+	}
+
 	if pruneDangling {
-		images, err := client.ListImages(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to list images: %w", err)
-		}
-
-		danglingCount := 0
-		for _, img := range images {
-			if img.Dangling {
-				danglingCount++
-			}
-		}
-
-		if err := cliWritef(out, "Runtime: would prune %d dangling runtime images\n", danglingCount); err != nil {
+		if err := cliWritef(out, "Runtime: would delete %d images\n", resp.Plan.CountByKind(domain.PruneResourceRuntimeImage)); err != nil {
 			return err
 		}
-	} else {
-		if err := cliWriteLine(out, cliRenderMuted("Runtime cleanup skipped (--registry)")); err != nil {
-			return err
-		}
+	} else if err := cliWriteLine(out, cliRenderMuted("Runtime cleanup skipped (--registry)")); err != nil {
+		return err
 	}
 
 	if pruneRegistry {
-		return cliWritef(out, "Registry: would keep latest + %d previous tags per repository\n", opts.KeepReleases)
+		if err := cliWritef(out, "Registry: latest + %d previous tags per repository\n", opts.KeepReleases); err != nil {
+			return err
+		}
+	} else if err := cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)")); err != nil {
+		return err
 	}
 
-	return cliWriteLine(out, cliRenderMuted("Registry cleanup skipped (--dangling)"))
+	return cliRenderPruneSummary(out, resp.Plan)
 }
 
 func loadPrunePreview(ctx context.Context, client imagesClient, keepReleases int, pruneDangling, pruneRegistry bool) (prunePreview, error) {
@@ -561,11 +558,12 @@ func selectKeptTags(tagInfos []previewRegistryTag, keepReleases int) map[string]
 	return kept
 }
 
-func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry bool) dto.ImagePruneRequest {
+func buildPruneRequest(keepReleases int, pruneDangling, pruneRegistry, dryRun bool) dto.ImagePruneRequest {
 	return dto.ImagePruneRequest{
 		KeepLast:      &keepReleases,
 		PruneDangling: &pruneDangling,
 		PruneRegistry: &pruneRegistry,
+		DryRun:        &dryRun,
 	}
 }
 

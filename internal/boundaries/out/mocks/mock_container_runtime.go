@@ -7,6 +7,7 @@ package mocks
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -309,16 +310,16 @@ func (_c *MockContainerRuntime_CreateNetwork_Call) RunAndReturn(run func(ctx con
 }
 
 // CreateVolume provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) CreateVolume(ctx context.Context, volumeName string) error {
-	ret := _mock.Called(ctx, volumeName)
+func (_mock *MockContainerRuntime) CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error {
+	ret := _mock.Called(ctx, volumeName, labels)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CreateVolume")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, volumeName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, map[string]string) error); ok {
+		r0 = returnFunc(ctx, volumeName, labels)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -333,11 +334,12 @@ type MockContainerRuntime_CreateVolume_Call struct {
 // CreateVolume is a helper method to define mock.On call
 //   - ctx context.Context
 //   - volumeName string
-func (_e *MockContainerRuntime_Expecter) CreateVolume(ctx any, volumeName any) *MockContainerRuntime_CreateVolume_Call {
-	return &MockContainerRuntime_CreateVolume_Call{Call: _e.mock.On("CreateVolume", ctx, volumeName)}
+//   - labels map[string]string
+func (_e *MockContainerRuntime_Expecter) CreateVolume(ctx any, volumeName any, labels any) *MockContainerRuntime_CreateVolume_Call {
+	return &MockContainerRuntime_CreateVolume_Call{Call: _e.mock.On("CreateVolume", ctx, volumeName, labels)}
 }
 
-func (_c *MockContainerRuntime_CreateVolume_Call) Run(run func(ctx context.Context, volumeName string)) *MockContainerRuntime_CreateVolume_Call {
+func (_c *MockContainerRuntime_CreateVolume_Call) Run(run func(ctx context.Context, volumeName string, labels map[string]string)) *MockContainerRuntime_CreateVolume_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -347,9 +349,14 @@ func (_c *MockContainerRuntime_CreateVolume_Call) Run(run func(ctx context.Conte
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 map[string]string
+		if args[2] != nil {
+			arg2 = args[2].(map[string]string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -360,7 +367,7 @@ func (_c *MockContainerRuntime_CreateVolume_Call) Return(err error) *MockContain
 	return _c
 }
 
-func (_c *MockContainerRuntime_CreateVolume_Call) RunAndReturn(run func(ctx context.Context, volumeName string) error) *MockContainerRuntime_CreateVolume_Call {
+func (_c *MockContainerRuntime_CreateVolume_Call) RunAndReturn(run func(ctx context.Context, volumeName string, labels map[string]string) error) *MockContainerRuntime_CreateVolume_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -498,6 +505,80 @@ func (_c *MockContainerRuntime_ExecInContainer_Call) Return(execResult *out.Exec
 }
 
 func (_c *MockContainerRuntime_ExecInContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, cmd []string) (*out.ExecResult, error)) *MockContainerRuntime_ExecInContainer_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetContainerBackendBinds provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) GetContainerBackendBinds(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error) {
+	ret := _mock.Called(ctx, containerID, ports)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetContainerBackendBinds")
+	}
+
+	var r0 []domain.ContainerBackendBind
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error)); ok {
+		return returnFunc(ctx, containerID, ports)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []domain.ContainerBackendPort) []domain.ContainerBackendBind); ok {
+		r0 = returnFunc(ctx, containerID, ports)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.ContainerBackendBind)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, []domain.ContainerBackendPort) error); ok {
+		r1 = returnFunc(ctx, containerID, ports)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_GetContainerBackendBinds_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerBackendBinds'
+type MockContainerRuntime_GetContainerBackendBinds_Call struct {
+	*mock.Call
+}
+
+// GetContainerBackendBinds is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - ports []domain.ContainerBackendPort
+func (_e *MockContainerRuntime_Expecter) GetContainerBackendBinds(ctx any, containerID any, ports any) *MockContainerRuntime_GetContainerBackendBinds_Call {
+	return &MockContainerRuntime_GetContainerBackendBinds_Call{Call: _e.mock.On("GetContainerBackendBinds", ctx, containerID, ports)}
+}
+
+func (_c *MockContainerRuntime_GetContainerBackendBinds_Call) Run(run func(ctx context.Context, containerID string, ports []domain.ContainerBackendPort)) *MockContainerRuntime_GetContainerBackendBinds_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 []domain.ContainerBackendPort
+		if args[2] != nil {
+			arg2 = args[2].([]domain.ContainerBackendPort)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerBackendBinds_Call) Return(containerBackendBinds []domain.ContainerBackendBind, err error) *MockContainerRuntime_GetContainerBackendBinds_Call {
+	_c.Call.Return(containerBackendBinds, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerBackendBinds_Call) RunAndReturn(run func(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error)) *MockContainerRuntime_GetContainerBackendBinds_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -716,6 +797,86 @@ func (_c *MockContainerRuntime_GetContainerLogs_Call) RunAndReturn(run func(ctx 
 	return _c
 }
 
+// GetContainerLogsSince provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) GetContainerLogsSince(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error) {
+	ret := _mock.Called(ctx, containerID, since, follow)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetContainerLogsSince")
+	}
+
+	var r0 io.ReadCloser
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Time, bool) (io.ReadCloser, error)); ok {
+		return returnFunc(ctx, containerID, since, follow)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Time, bool) io.ReadCloser); ok {
+		r0 = returnFunc(ctx, containerID, since, follow)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(io.ReadCloser)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, time.Time, bool) error); ok {
+		r1 = returnFunc(ctx, containerID, since, follow)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_GetContainerLogsSince_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerLogsSince'
+type MockContainerRuntime_GetContainerLogsSince_Call struct {
+	*mock.Call
+}
+
+// GetContainerLogsSince is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - since time.Time
+//   - follow bool
+func (_e *MockContainerRuntime_Expecter) GetContainerLogsSince(ctx any, containerID any, since any, follow any) *MockContainerRuntime_GetContainerLogsSince_Call {
+	return &MockContainerRuntime_GetContainerLogsSince_Call{Call: _e.mock.On("GetContainerLogsSince", ctx, containerID, since, follow)}
+}
+
+func (_c *MockContainerRuntime_GetContainerLogsSince_Call) Run(run func(ctx context.Context, containerID string, since time.Time, follow bool)) *MockContainerRuntime_GetContainerLogsSince_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 time.Time
+		if args[2] != nil {
+			arg2 = args[2].(time.Time)
+		}
+		var arg3 bool
+		if args[3] != nil {
+			arg3 = args[3].(bool)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerLogsSince_Call) Return(readCloser io.ReadCloser, err error) *MockContainerRuntime_GetContainerLogsSince_Call {
+	_c.Call.Return(readCloser, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_GetContainerLogsSince_Call) RunAndReturn(run func(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error)) *MockContainerRuntime_GetContainerLogsSince_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetContainerNetwork provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) GetContainerNetwork(ctx context.Context, containerID string) (string, error) {
 	ret := _mock.Called(ctx, containerID)
@@ -850,78 +1011,6 @@ func (_c *MockContainerRuntime_GetContainerNetworkInfo_Call) Return(s string, n 
 }
 
 func (_c *MockContainerRuntime_GetContainerNetworkInfo_Call) RunAndReturn(run func(ctx context.Context, containerID string) (string, int, error)) *MockContainerRuntime_GetContainerNetworkInfo_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetContainerPort provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error) {
-	ret := _mock.Called(ctx, containerID, internalPort)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetContainerPort")
-	}
-
-	var r0 int
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) (int, error)); ok {
-		return returnFunc(ctx, containerID, internalPort)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) int); ok {
-		r0 = returnFunc(ctx, containerID, internalPort)
-	} else {
-		r0 = ret.Get(0).(int)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int) error); ok {
-		r1 = returnFunc(ctx, containerID, internalPort)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockContainerRuntime_GetContainerPort_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerPort'
-type MockContainerRuntime_GetContainerPort_Call struct {
-	*mock.Call
-}
-
-// GetContainerPort is a helper method to define mock.On call
-//   - ctx context.Context
-//   - containerID string
-//   - internalPort int
-func (_e *MockContainerRuntime_Expecter) GetContainerPort(ctx any, containerID any, internalPort any) *MockContainerRuntime_GetContainerPort_Call {
-	return &MockContainerRuntime_GetContainerPort_Call{Call: _e.mock.On("GetContainerPort", ctx, containerID, internalPort)}
-}
-
-func (_c *MockContainerRuntime_GetContainerPort_Call) Run(run func(ctx context.Context, containerID string, internalPort int)) *MockContainerRuntime_GetContainerPort_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 int
-		if args[2] != nil {
-			arg2 = args[2].(int)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockContainerRuntime_GetContainerPort_Call) Return(n int, err error) *MockContainerRuntime_GetContainerPort_Call {
-	_c.Call.Return(n, err)
-	return _c
-}
-
-func (_c *MockContainerRuntime_GetContainerPort_Call) RunAndReturn(run func(ctx context.Context, containerID string, internalPort int) (int, error)) *MockContainerRuntime_GetContainerPort_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2205,16 +2294,16 @@ func (_c *MockContainerRuntime_RenameContainer_Call) RunAndReturn(run func(ctx c
 }
 
 // RestartContainer provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) RestartContainer(ctx context.Context, containerID string) error {
-	ret := _mock.Called(ctx, containerID)
+func (_mock *MockContainerRuntime) RestartContainer(ctx context.Context, containerID string, grace time.Duration) error {
+	ret := _mock.Called(ctx, containerID, grace)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestartContainer")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, containerID)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Duration) error); ok {
+		r0 = returnFunc(ctx, containerID, grace)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2229,11 +2318,12 @@ type MockContainerRuntime_RestartContainer_Call struct {
 // RestartContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx any, containerID any) *MockContainerRuntime_RestartContainer_Call {
-	return &MockContainerRuntime_RestartContainer_Call{Call: _e.mock.On("RestartContainer", ctx, containerID)}
+//   - grace time.Duration
+func (_e *MockContainerRuntime_Expecter) RestartContainer(ctx any, containerID any, grace any) *MockContainerRuntime_RestartContainer_Call {
+	return &MockContainerRuntime_RestartContainer_Call{Call: _e.mock.On("RestartContainer", ctx, containerID, grace)}
 }
 
-func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.Context, containerID string)) *MockContainerRuntime_RestartContainer_Call {
+func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.Context, containerID string, grace time.Duration)) *MockContainerRuntime_RestartContainer_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2243,9 +2333,14 @@ func (_c *MockContainerRuntime_RestartContainer_Call) Run(run func(ctx context.C
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 time.Duration
+		if args[2] != nil {
+			arg2 = args[2].(time.Duration)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -2256,7 +2351,7 @@ func (_c *MockContainerRuntime_RestartContainer_Call) Return(err error) *MockCon
 	return _c
 }
 
-func (_c *MockContainerRuntime_RestartContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string) error) *MockContainerRuntime_RestartContainer_Call {
+func (_c *MockContainerRuntime_RestartContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, grace time.Duration) error) *MockContainerRuntime_RestartContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2319,16 +2414,16 @@ func (_c *MockContainerRuntime_StartContainer_Call) RunAndReturn(run func(ctx co
 }
 
 // StopContainer provides a mock function for the type MockContainerRuntime
-func (_mock *MockContainerRuntime) StopContainer(ctx context.Context, containerID string) error {
-	ret := _mock.Called(ctx, containerID)
+func (_mock *MockContainerRuntime) StopContainer(ctx context.Context, containerID string, grace time.Duration) error {
+	ret := _mock.Called(ctx, containerID, grace)
 
 	if len(ret) == 0 {
 		panic("no return value specified for StopContainer")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, containerID)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Duration) error); ok {
+		r0 = returnFunc(ctx, containerID, grace)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2343,11 +2438,12 @@ type MockContainerRuntime_StopContainer_Call struct {
 // StopContainer is a helper method to define mock.On call
 //   - ctx context.Context
 //   - containerID string
-func (_e *MockContainerRuntime_Expecter) StopContainer(ctx any, containerID any) *MockContainerRuntime_StopContainer_Call {
-	return &MockContainerRuntime_StopContainer_Call{Call: _e.mock.On("StopContainer", ctx, containerID)}
+//   - grace time.Duration
+func (_e *MockContainerRuntime_Expecter) StopContainer(ctx any, containerID any, grace any) *MockContainerRuntime_StopContainer_Call {
+	return &MockContainerRuntime_StopContainer_Call{Call: _e.mock.On("StopContainer", ctx, containerID, grace)}
 }
 
-func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Context, containerID string)) *MockContainerRuntime_StopContainer_Call {
+func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Context, containerID string, grace time.Duration)) *MockContainerRuntime_StopContainer_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2357,9 +2453,14 @@ func (_c *MockContainerRuntime_StopContainer_Call) Run(run func(ctx context.Cont
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 time.Duration
+		if args[2] != nil {
+			arg2 = args[2].(time.Duration)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -2370,7 +2471,7 @@ func (_c *MockContainerRuntime_StopContainer_Call) Return(err error) *MockContai
 	return _c
 }
 
-func (_c *MockContainerRuntime_StopContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string) error) *MockContainerRuntime_StopContainer_Call {
+func (_c *MockContainerRuntime_StopContainer_Call) RunAndReturn(run func(ctx context.Context, containerID string, grace time.Duration) error) *MockContainerRuntime_StopContainer_Call {
 	_c.Call.Return(run)
 	return _c
 }

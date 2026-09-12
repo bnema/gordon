@@ -123,3 +123,51 @@ func createTestContainer(t *testing.T, config *domain.ContainerConfig) map[strin
 
 	return createBody
 }
+
+// TestRuntime_CreateContainerMountsDeclaredReadOnlyVolumes proves a mount
+// declared read-only reaches the real Docker create request as read-only.
+func TestRuntime_CreateContainerMountsDeclaredReadOnlyVolumes(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:           "nginx:latest",
+		Name:            "gordon-app",
+		Volumes:         map[string]string{"/data": "gordon-vol-data"},
+		ReadOnlyVolumes: map[string]string{"/config": "gordon-vol-config"},
+	})
+
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	binds, ok := hostConfig["Binds"].([]any)
+	require.True(t, ok)
+	assert.Contains(t, binds, "gordon-vol-data:/data")
+	assert.Contains(t, binds, "gordon-vol-config:/config:ro")
+}
+
+// TestRuntime_CreateContainerAppliesNetworkAndResourceLimits proves the
+// isolation contract reaches the real Docker create request: the container
+// joins the named private network and carries the configured memory, CPU,
+// and PID limits.
+func TestRuntime_CreateContainerAppliesNetworkAndResourceLimits(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:       "nginx:latest",
+		Name:        "gordon-app",
+		NetworkMode: "gordon-app-abc123",
+		Aliases:     []string{"web"},
+		Hostname:    "web",
+		MemoryLimit: 512 << 20,
+		NanoCPUs:    1_500_000_000,
+		PidsLimit:   256,
+	})
+
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "gordon-app-abc123", hostConfig["NetworkMode"])
+	assert.Equal(t, float64(512<<20), hostConfig["Memory"])
+	assert.Equal(t, float64(1_500_000_000), hostConfig["NanoCpus"])
+	assert.Equal(t, float64(256), hostConfig["PidsLimit"])
+
+	networking, ok := createBody["NetworkingConfig"].(map[string]any)
+	require.True(t, ok)
+	endpoints, ok := networking["EndpointsConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, endpoints, "gordon-app-abc123")
+}

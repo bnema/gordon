@@ -37,12 +37,8 @@ max_size = 100
 max_backups = 10
 max_age = 90
 
-[logging.container_logs]
-enabled = true                           # enabled by default
-dir = "~/.gordon/logs/containers"
-max_size = 100
-max_backups = 10
-max_age = 90
+# Workload logs are read from the container runtime with
+# `gordon apps logs APP --service SERVICE`.
 
 # Environment directory
 [env]
@@ -59,22 +55,8 @@ preserve = true
 enabled = true
 network_prefix = "prod"
 
-# Application routes with pinned versions
-[routes]
-"app.company.com" = "company-app:v2.1.0"
-"api.company.com" = "company-api:v1.5.2"
-"admin.company.com" = "admin-panel:v1.0.1"
-"docs.company.com" = "company-docs:latest"
-
-# Network groups for shared services
-[network_groups]
-"backend" = ["app.company.com", "api.company.com"]
-
-# Service attachments
-[attachments]
-"backend" = ["company-redis:latest"]
-"app.company.com" = ["company-postgres:latest"]
-"api.company.com" = ["company-postgres:latest"]
+# Applications, routes, services, and shared networks are declared in
+# separate app manifest files and applied with `gordon apps apply`.
 ```
 
 ## Setup Steps

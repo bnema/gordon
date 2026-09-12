@@ -149,6 +149,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		ExposedPorts: exposedPorts,
 		WorkingDir:   config.WorkingDir,
 		Cmd:          config.Cmd,
+		Entrypoint:   config.Entrypoint,
 		Labels:       config.Labels,
 		User:         config.User,
 	}
@@ -299,6 +300,9 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 
 	_, err := r.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to start container")
+		}
 		return log.WrapErr(err, "failed to start container")
 	}
 
@@ -330,8 +334,9 @@ func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) erro
 	return nil
 }
 
-// StopContainer stops a container.
-func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
+// StopContainer stops a container, giving it grace to exit before the
+// runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) StopContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -340,9 +345,11 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout})
+	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to stop container")
+		}
 		return log.WrapErr(err, "failed to stop container")
 	}
 
@@ -350,8 +357,9 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// RestartContainer restarts a container.
-func (r *Runtime) RestartContainer(ctx context.Context, containerID string) error {
+// RestartContainer restarts a container, giving it grace to exit before
+// the runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) RestartContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -360,14 +368,31 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: &timeout})
+	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to restart container")
+		}
 		return log.WrapErr(err, "failed to restart container")
 	}
 
 	log.Info().Msg("container restarted")
 	return nil
+}
+
+// stopTimeout converts a stop grace into the runtime API's whole-second
+// timeout. A non-positive grace returns nil, which keeps the runtime's
+// own default instead of an immediate kill. A fractional grace rounds up
+// so the container never receives less time than the spec asked for.
+func stopTimeout(grace time.Duration) *int {
+	if grace <= 0 {
+		return nil
+	}
+	seconds := int(math.Ceil(grace.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return &seconds
 }
 
 // RemoveContainer removes a container.
@@ -383,6 +408,10 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 
 	_, err := r.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: force})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			log.Debug().Msg("container not found, already removed")
+			return nil
+		}
 		return log.WrapErr(err, "failed to remove container")
 	}
 
@@ -480,6 +509,9 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 
 	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil, log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to inspect container")
+		}
 		return nil, log.WrapErr(err, "failed to inspect container")
 	}
 	resp := inspectResult.Container
@@ -502,6 +534,14 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
+	// StartedAt scopes log readiness to the current execution: markers
+	// from a previous execution of the same container ID must not
+	// satisfy a probe. An unparsable value stays zero and is rejected by
+	// the readiness probe rather than silently widening the scope.
+	startedAt, _ := time.Parse(time.RFC3339Nano, resp.State.StartedAt)
+	if startedAt.Year() <= 1 {
+		startedAt = time.Time{}
+	}
 	volumeMounts := make([]domain.ContainerVolumeMount, 0, len(resp.Mounts))
 	for _, m := range resp.Mounts {
 		volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
@@ -524,7 +564,44 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Labels:       resp.Config.Labels,
 		VolumeMounts: volumeMounts,
 		Created:      created,
+		StartedAt:    startedAt,
 	}, nil
+}
+
+// GetContainerLogsSince gets container logs emitted at or after since.
+// Readiness uses it with the observed execution start so markers from a
+// previous execution of the same container ID cannot match.
+func (r *Runtime) GetContainerLogsSince(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "GetContainerLogsSince",
+		zerowrap.FieldEntityID: containerID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	options := client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     follow,
+		Timestamps: true,
+		Tail:       "10000",
+	}
+	if !since.IsZero() {
+		// RFC3339Nano keeps the sub-second part of the execution start:
+		// a marker emitted in the same second as a previous execution
+		// must not satisfy the probe.
+		options.Since = since.UTC().Format(time.RFC3339Nano)
+	}
+	logs, err := r.client.ContainerLogs(ctx, containerID, options)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil, log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to get container logs")
+		}
+		return nil, log.WrapErr(err, "failed to get container logs")
+	}
+
+	return logs, nil
 }
 
 // GetContainerLogs gets container logs.
@@ -754,54 +831,6 @@ func (r *Runtime) ListImagesDetailed(ctx context.Context) ([]runtimepkg.ImageDet
 	return result, nil
 }
 
-// PruneImages prunes unused images and reports reclaimed space.
-func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepkg.PruneReport, error) {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "adapter",
-		zerowrap.FieldAdapter: "docker",
-		zerowrap.FieldAction:  "PruneImages",
-		"dangling_only":       danglingOnly,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	pruneFilters := make(client.Filters).Add("label", domain.LabelManaged+"=true")
-	if danglingOnly {
-		pruneFilters.Add("dangling", "true")
-	}
-
-	pruneResult, err := r.client.ImagePrune(ctx, client.ImagePruneOptions{Filters: pruneFilters})
-	if err != nil {
-		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to prune images")
-	}
-
-	deletedIDs := make([]string, 0, len(pruneResult.Report.ImagesDeleted))
-	for _, deleted := range pruneResult.Report.ImagesDeleted {
-		if deleted.Deleted != "" {
-			deletedIDs = append(deletedIDs, deleted.Deleted)
-		}
-		if deleted.Untagged != "" {
-			deletedIDs = append(deletedIDs, deleted.Untagged)
-		}
-	}
-
-	spaceReclaimed := pruneResult.Report.SpaceReclaimed
-	if spaceReclaimed > math.MaxInt64 {
-		log.Warn().
-			Uint64("space_reclaimed_bytes", spaceReclaimed).
-			Int64("space_reclaimed_capped_bytes", math.MaxInt64).
-			Msg("space reclaimed exceeds int64 max; capping value")
-		spaceReclaimed = uint64(math.MaxInt64)
-	}
-
-	//nolint:gosec // spaceReclaimed is capped to MaxInt64 above
-	spaceReclaimedInt := int64(spaceReclaimed)
-
-	return runtimepkg.PruneReport{
-		DeletedIDs:     deletedIDs,
-		SpaceReclaimed: spaceReclaimedInt,
-	}, nil
-}
-
 // Ping checks if Docker is responsive.
 func (r *Runtime) Ping(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -881,42 +910,60 @@ func hasConfiguredHealthcheck(cfg *container.Config) bool {
 	return !strings.EqualFold(strings.TrimSpace(cfg.Healthcheck.Test[0]), "NONE")
 }
 
-// GetContainerPort gets the host port for a container's internal port.
-func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error) {
+// GetContainerBackendBinds resolves protocol-specific container ports to
+// their host binds in a single container inspection.
+func (r *Runtime) GetContainerBackendBinds(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
-		zerowrap.FieldAction:   "GetContainerPort",
+		zerowrap.FieldAction:   "GetContainerBackendBinds",
 		zerowrap.FieldEntityID: containerID,
-		"internal_port":        internalPort,
+		"ports":                len(ports),
 	})
 	log := zerowrap.FromCtx(ctx)
 
 	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		return 0, log.WrapErr(err, "failed to inspect container")
+		return nil, log.WrapErr(err, "failed to inspect container")
 	}
 	resp := inspectResult.Container
 
 	if resp.NetworkSettings == nil || resp.NetworkSettings.Ports == nil {
-		return 0, fmt.Errorf("no port mappings found for container %s", containerID)
+		return nil, fmt.Errorf("no port mappings found for container %s", containerID)
 	}
 
-	containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", internalPort))
-	if err != nil {
-		return 0, fmt.Errorf("invalid container port %d: %w", internalPort, err)
-	}
-	bindings, exists := resp.NetworkSettings.Ports[containerPort]
-	if !exists || len(bindings) == 0 {
-		return 0, fmt.Errorf("port %d not mapped for container %s", internalPort, containerID)
+	binds := make([]domain.ContainerBackendBind, 0, len(ports))
+	for _, port := range ports {
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", port.ContainerPort, port.Protocol))
+		if err != nil {
+			return nil, fmt.Errorf("invalid container port %d: %w", port.ContainerPort, err)
+		}
+		bindings, exists := resp.NetworkSettings.Ports[containerPort]
+		if !exists || len(bindings) == 0 {
+			return nil, fmt.Errorf("port %d/%s not mapped for container %s", port.ContainerPort, port.Protocol, containerID)
+		}
+		// Exactly one loopback binding is required: a wildcard, multiple,
+		// or non-loopback mapping would expose the backend beyond the
+		// loopback contract the proxy and readiness rely on.
+		if len(bindings) != 1 {
+			return nil, fmt.Errorf("port %d/%s has %d host bindings for container %s; exactly one loopback binding is required", port.ContainerPort, port.Protocol, len(bindings), containerID)
+		}
+		binding := bindings[0]
+		if binding.HostIP != netip.MustParseAddr("127.0.0.1") {
+			return nil, fmt.Errorf("port %d/%s is published on host IP %q for container %s; loopback is required", port.ContainerPort, port.Protocol, binding.HostIP, containerID)
+		}
+		hostPort, err := strconv.Atoi(binding.HostPort)
+		if err != nil || hostPort < 1 || hostPort > 65535 {
+			return nil, fmt.Errorf("invalid host port %q for container %s", binding.HostPort, containerID)
+		}
+		binds = append(binds, domain.ContainerBackendBind{
+			ContainerPort: port.ContainerPort,
+			HostPort:      hostPort,
+			Protocol:      port.Protocol,
+		})
 	}
 
-	hostPort, err := strconv.Atoi(bindings[0].HostPort)
-	if err != nil {
-		return 0, fmt.Errorf("invalid host port for container %s: %w", containerID, err)
-	}
-
-	return hostPort, nil
+	return binds, nil
 }
 
 // GetImageExposedPorts gets the exposed ports from an image.
@@ -1177,7 +1224,7 @@ func (r *Runtime) VolumeExists(ctx context.Context, volumeName string) (bool, er
 }
 
 // CreateVolume creates a new Docker volume.
-func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
+func (r *Runtime) CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "docker",
@@ -1186,12 +1233,17 @@ func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// The managed marker and creation time are adapter-owned; every
+	// caller-supplied label is preserved so ownership provenance is
+	// stamped at creation, not reconstructed later.
+	merged := make(map[string]string, len(labels)+2)
+	maps.Copy(merged, labels)
+	merged[domain.LabelManaged] = "true"
+	merged[domain.LabelCreated] = time.Now().UTC().Format(time.RFC3339)
+
 	_, err := r.client.VolumeCreate(ctx, client.VolumeCreateOptions{
-		Name: volumeName,
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelCreated: time.Now().UTC().Format(time.RFC3339),
-		},
+		Name:   volumeName,
+		Labels: merged,
 	})
 	if err != nil {
 		return log.WrapErr(err, "failed to create volume")

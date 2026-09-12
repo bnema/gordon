@@ -127,7 +127,7 @@ func TestRenewalLoop_ReconcilesMissingCertificatesOnTick(t *testing.T) {
 		TLSPort:   8443,
 	}
 
-	routes := &fakeRoutes{routes: []domain.Route{{Domain: "app.example.com"}}}
+	routes := &fakeRoutes{hosts: []out.AppHost{{Host: "app.example.com"}}}
 	issuer, recorder := newMockPublicCertificateIssuer(t, nil, nil)
 	store, _ := newMockCertificateStore(t)
 

@@ -163,15 +163,13 @@ gordon remotes use <name>
 ### Description
 
 When a remote is active, it's used automatically for most remote-capable commands without needing to specify `--remote` and `--token`.
-`gordon routes list` and `gordon routes status` are the exception: they aggregate local + saved remotes unless you set `--remote` or `GORDON_REMOTE`.
 
-If no remote is active and you do not pass `--remote`, Gordon can also auto-infer a saved remote for commands with a concrete target (for example `gordon push myapp`, `gordon deploy app.example.com`, or `gordon images tags myapp`). It only auto-selects when exactly one saved remote matches. Ambiguous matches and probe failures require an explicit `--remote`.
+If no remote is active and you do not pass `--remote`, Gordon can also auto-infer a saved remote for `gordon push` and `gordon images tags <repository>`. It only auto-selects when exactly one saved remote matches. Ambiguous matches and probe failures require an explicit `--remote`.
 
 ```bash
 gordon remotes use prod
 gordon secrets list app.com     # Uses prod remote automatically
-gordon routes list              # Aggregates local + saved remotes
-gordon routes status            # Aggregates local + saved remotes
+gordon status                   # Uses prod remote automatically
 ```
 
 ### Example
@@ -246,7 +244,7 @@ token = "eyJ..."
 
 When multiple sources specify remote or token, the CLI uses this priority:
 
-For `routes list` and `routes status`, `--remote` and `GORDON_REMOTE` are the explicit single-target selectors. Without either one, those commands aggregate local + saved remotes even when an active remote exists.
+For aggregate views, `--remote` and `GORDON_REMOTE` are the explicit single-target selectors. Without either one, those commands aggregate local + saved remotes even when an active remote exists.
 Auto-inference is not used for those aggregate views.
 
 **Remote target selection:**
@@ -271,13 +269,8 @@ Auto-inference is not used for those aggregate views.
 This allows overriding specific values while keeping defaults:
 
 ```bash
-# Aggregate routes views
-gordon routes list
-gordon routes status
-
 # Force one target
-GORDON_REMOTE=prod gordon routes list
-GORDON_REMOTE=prod gordon routes status
+GORDON_REMOTE=prod gordon status
 ```
 
 ---
@@ -295,11 +288,11 @@ gordon remotes add dev https://gordon.dev.example.com --token-env DEV_TOKEN
 # Work with prod
 gordon remotes use prod
 gordon secrets list myapp.example.com
-gordon routes list --remote prod
+gordon status --remote prod
 
 # Switch to staging
 gordon remotes use staging
-GORDON_REMOTE=staging gordon routes status
+GORDON_REMOTE=staging gordon status
 ```
 
 ### CI/CD Pipeline
@@ -311,21 +304,17 @@ env:
   GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
 
 steps:
-  - name: Deploy to Gordon
+  - name: Push to Gordon
     run: |
-      gordon routes deploy myapp.example.com
+      gordon push myapp --build --remote ${{ secrets.GORDON_URL }}
 ```
 
 ### Compare Environments
 
 ```bash
-# Aggregate route inventory/status across local + saved remotes
-gordon routes list
-gordon routes status
-
 # Compare one target at a time
-gordon routes list --remote https://gordon.example.com --token $PROD_TOKEN
-GORDON_REMOTE=staging gordon routes status
+gordon status --remote https://gordon.example.com --token $PROD_TOKEN
+GORDON_REMOTE=staging gordon status
 
 # Or switch between active remotes for other commands
 gordon remotes use prod && gordon secrets list myapp.example.com
@@ -354,7 +343,7 @@ A common Tailscale setup is to point your domain's DNS at the machine's Tailscal
 
 If you have your own certificate for the domain (e.g. from a corporate CA), you can provide it via `tls_cert_file`/`tls_key_file` — see [Server Configuration](../config/server.md#custom-certificates). The static cert is served for SNI-matching domains; everything else falls through to the internal CA.
 
-`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: Gordon reverse proxy and container routes can still serve wildcard app domains like `*.example.com`.
+`insecure_tls` only affects CLI -> Gordon admin HTTPS verification. It does not change runtime routing: the reverse proxy can still serve wildcard app domains like `*.example.com`.
 
 ## Migration from [client] Config
 

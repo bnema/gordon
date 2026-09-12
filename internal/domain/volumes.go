@@ -21,4 +21,7 @@ type VolumeInfo struct {
 type VolumePruneReport struct {
 	VolumesRemoved int
 	SpaceReclaimed int64
+	// Plan carries every candidate's verdict, the inventory gaps, and
+	// the applied flag. Dry-run and execution share this shape.
+	Plan PruneReport
 }

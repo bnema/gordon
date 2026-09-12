@@ -88,6 +88,47 @@ func TestService_PutManifest_Success(t *testing.T) {
 	assert.True(t, strings.HasPrefix(digest, "sha256:"))
 }
 
+func TestService_PutManifest_RejectsUnownedBlob(t *testing.T) {
+	const digest = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+
+	blobStorage.EXPECT().BlobOwnedByRepository("attacker", digest).Return(false, nil)
+
+	manifest := &domain.Manifest{
+		Name:        "attacker",
+		Reference:   "latest",
+		ContentType: "application/vnd.oci.image.manifest.v1+json",
+		Data:        []byte(`{"schemaVersion":2,"layers":[{"digest":"` + digest + `"}]}`),
+	}
+
+	_, err := svc.PutManifest(testContext(), manifest)
+
+	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
+	manifestStorage.AssertNotCalled(t, "PutManifest", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestService_PutManifest_RejectsUnknownChildManifest(t *testing.T) {
+	const child = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+
+	manifestStorage.EXPECT().GetManifest("index", child).Return(nil, "", domain.ErrManifestNotFound)
+
+	manifest := &domain.Manifest{
+		Name:        "index",
+		Reference:   "latest",
+		ContentType: "application/vnd.oci.image.index.v1+json",
+		Data:        []byte(`{"schemaVersion":2,"manifests":[{"digest":"` + child + `"}]}`),
+	}
+
+	_, err := svc.PutManifest(testContext(), manifest)
+
+	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
+}
+
 func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
@@ -100,6 +141,7 @@ func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 	manifest := &domain.Manifest{Name: "myapp", Reference: reference, ContentType: "application/vnd.oci.image.manifest.v1+json", Data: data}
 
 	manifestStorage.EXPECT().PutManifest("myapp", reference, manifest.ContentType, data).Return(nil)
+	blobStorage.EXPECT().BlobOwnedByRepository("myapp", "sha256:config").Return(true, nil)
 
 	digest, err := svc.PutManifest(testContext(), manifest)
 
@@ -127,64 +169,56 @@ func TestService_PutManifest_RejectsDigestMismatch(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrDigestMismatch)
 }
 
-func TestService_GetBlobPath_RequiresRepositoryReference(t *testing.T) {
+// TestService_GetBlobPath_RequiresRepositoryOwnership proves a blob is
+// served only to a repository that completed an upload of it.
+func TestService_GetBlobPath_RequiresRepositoryOwnership(t *testing.T) {
 	const digest = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
 	svc := NewService(blobStorage, manifestStorage, nil)
 
-	manifestStorage.EXPECT().ListTags("allowed").Return([]string{"latest"}, nil)
-	manifestStorage.EXPECT().GetManifest("allowed", "latest").Return(
-		[]byte(`{"schemaVersion":2,"layers":[{"digest":"`+digest+`"}]}`),
-		"application/vnd.oci.image.manifest.v1+json", nil,
-	)
+	blobStorage.EXPECT().BlobOwnedByRepository("allowed", digest).Return(true, nil)
 	blobStorage.EXPECT().GetBlobPath(digest).Return("/registry/blob", nil)
 
 	path, err := svc.GetBlobPath(testContext(), "allowed", digest)
 	require.NoError(t, err)
 	assert.Equal(t, "/registry/blob", path)
 
-	manifestStorage.EXPECT().ListTags("denied").Return([]string{"latest"}, nil)
-	manifestStorage.EXPECT().GetManifest("denied", "latest").Return(
-		[]byte(`{"schemaVersion":2,"layers":[]}`),
-		"application/vnd.oci.image.manifest.v1+json", nil,
-	)
+	blobStorage.EXPECT().BlobOwnedByRepository("denied", digest).Return(false, nil)
 
 	_, err = svc.GetBlobPath(testContext(), "denied", digest)
 	assert.ErrorIs(t, err, domain.ErrBlobNotFound)
 }
 
-func TestService_GetBlobPath_FollowsSubjectManifest(t *testing.T) {
-	const target = "sha256:target"
+// TestService_GetBlobPath_IgnoresManifestReferences proves a manifest that
+// merely names a foreign digest does not confer access to it: ownership is
+// never inferred from repository-controlled manifest content.
+func TestService_GetBlobPath_IgnoresManifestReferences(t *testing.T) {
+	const target = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
 	svc := NewService(blobStorage, manifestStorage, nil)
 
-	manifestStorage.EXPECT().ListTags("artifacts").Return([]string{"latest"}, nil)
-	manifestStorage.EXPECT().GetManifest("artifacts", "latest").Return(
-		[]byte(`{"subject":{"digest":"sha256:subject"}}`), "application/vnd.oci.artifact.manifest.v1+json", nil,
-	)
-	manifestStorage.EXPECT().GetManifest("artifacts", "sha256:subject").Return(
-		[]byte(`{"config":{"digest":"`+target+`"}}`), "application/vnd.oci.image.manifest.v1+json", nil,
-	)
-	blobStorage.EXPECT().GetBlobPath(target).Return("/registry/target", nil)
+	blobStorage.EXPECT().BlobOwnedByRepository("attacker", target).Return(false, nil)
 
-	path, err := svc.GetBlobPath(testContext(), "artifacts", target)
-
-	require.NoError(t, err)
-	assert.Equal(t, "/registry/target", path)
-}
-
-func TestService_GetBlobPath_BoundsManifestTraversal(t *testing.T) {
-	blobStorage := mocks.NewMockBlobStorage(t)
-	manifestStorage := mocks.NewMockManifestStorage(t)
-	svc := NewService(blobStorage, manifestStorage, nil)
-	tags := make([]string, maxManifestTraversal+1)
-	manifestStorage.EXPECT().ListTags("busy").Return(tags, nil)
-
-	_, err := svc.GetBlobPath(testContext(), "busy", "sha256:target")
+	_, err := svc.GetBlobPath(testContext(), "attacker", target)
 
 	assert.ErrorIs(t, err, domain.ErrBlobNotFound)
+	blobStorage.AssertNotCalled(t, "GetBlobPath", target)
+	manifestStorage.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything)
+}
+
+func TestService_GetBlobPath_OwnershipLookupError(t *testing.T) {
+	const target = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+
+	blobStorage.EXPECT().BlobOwnedByRepository("busy", target).Return(false, errors.New("ownership lookup failed"))
+
+	_, err := svc.GetBlobPath(testContext(), "busy", target)
+
+	assert.Error(t, err)
 }
 
 func TestService_PutManifest_StorageError(t *testing.T) {
@@ -449,9 +483,9 @@ func TestService_FinishUpload_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
+	blobStorage.EXPECT().FinishBlobUpload("myapp", "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(nil)
 
-	err := svc.FinishUpload(ctx, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
+	err := svc.FinishUpload(ctx, "myapp", "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 
 	assert.NoError(t, err)
 }
@@ -464,9 +498,9 @@ func TestService_FinishUploadMarksBlobPending(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus, state)
 	const digest = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 
-	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", digest).Return(nil)
+	blobStorage.EXPECT().FinishBlobUpload("myapp", "1234567890-myapp", digest).Return(nil)
 
-	require.NoError(t, svc.FinishUpload(testContext(), "1234567890-myapp", digest))
+	require.NoError(t, svc.FinishUpload(testContext(), "myapp", "1234567890-myapp", digest))
 	assert.Contains(t, state.PendingDigests(time.Now().UTC()), digest)
 }
 
@@ -479,7 +513,7 @@ func TestService_FinishUploadBlocksRegistryPruning(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", mock.Anything).RunAndReturn(func(string, string) error {
+	blobStorage.EXPECT().FinishBlobUpload("myapp", "1234567890-myapp", mock.Anything).RunAndReturn(func(string, string, string) error {
 		close(started)
 		<-release
 		return nil
@@ -487,7 +521,7 @@ func TestService_FinishUploadBlocksRegistryPruning(t *testing.T) {
 
 	finished := make(chan error, 1)
 	go func() {
-		finished <- svc.FinishUpload(testContext(), "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
+		finished <- svc.FinishUpload(testContext(), "myapp", "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 	}()
 	<-started
 
@@ -526,9 +560,9 @@ func TestService_FinishUpload_Error(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().FinishBlobUpload("1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(errors.New("digest mismatch"))
+	blobStorage.EXPECT().FinishBlobUpload("myapp", "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4").Return(errors.New("digest mismatch"))
 
-	err := svc.FinishUpload(ctx, "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
+	err := svc.FinishUpload(ctx, "myapp", "1234567890-myapp", "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to finish blob upload")
@@ -542,9 +576,9 @@ func TestService_CancelUpload_Success(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().CancelBlobUpload("1234567890-myapp").Return(nil)
+	blobStorage.EXPECT().CancelBlobUpload("myapp", "1234567890-myapp").Return(nil)
 
-	err := svc.CancelUpload(ctx, "1234567890-myapp")
+	err := svc.CancelUpload(ctx, "myapp", "1234567890-myapp")
 
 	assert.NoError(t, err)
 }
@@ -557,9 +591,9 @@ func TestService_CancelUpload_Error(t *testing.T) {
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 	ctx := testContext()
 
-	blobStorage.EXPECT().CancelBlobUpload("1234567890-myapp").Return(errors.New("upload not found"))
+	blobStorage.EXPECT().CancelBlobUpload("myapp", "1234567890-myapp").Return(errors.New("upload not found"))
 
-	err := svc.CancelUpload(ctx, "1234567890-myapp")
+	err := svc.CancelUpload(ctx, "myapp", "1234567890-myapp")
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to cancel blob upload")
@@ -636,16 +670,15 @@ func TestService_ListRepositories_Error(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to list repositories")
 }
 
-func TestPutManifest_SkipsEventWhenDeployIntentSuppressed(t *testing.T) {
+func TestPutManifest_PublishesEventForTagReference(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
 	eventBus := mocks.NewMockEventPublisher(t)
 
 	svc := NewService(blobStorage, manifestStorage, eventBus)
 
-	svc.SuppressDeployEvent("my-app")
-
 	manifestStorage.EXPECT().PutManifest("my-app", "latest", "application/vnd.oci.image.manifest.v1+json", mock.Anything).Return(nil)
+	eventBus.EXPECT().Publish(domain.EventImagePushed, mock.Anything).Return(nil).Once()
 
 	manifest := &domain.Manifest{
 		Name:        "my-app",
@@ -656,20 +689,4 @@ func TestPutManifest_SkipsEventWhenDeployIntentSuppressed(t *testing.T) {
 
 	_, err := svc.PutManifest(context.Background(), manifest)
 	require.NoError(t, err)
-
-	eventBus.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
-}
-
-func TestSuppressDeployEvent_ClearsCorrectly(t *testing.T) {
-	blobStorage := mocks.NewMockBlobStorage(t)
-	manifestStorage := mocks.NewMockManifestStorage(t)
-	eventBus := mocks.NewMockEventPublisher(t)
-
-	svc := NewService(blobStorage, manifestStorage, eventBus)
-
-	svc.SuppressDeployEvent("my-app")
-	assert.True(t, svc.IsDeployEventSuppressed("my-app"))
-
-	svc.ClearDeployEventSuppression("my-app")
-	assert.False(t, svc.IsDeployEventSuppressed("my-app"))
 }

@@ -5,9 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
-	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -34,33 +31,67 @@ type Config struct {
 	MaxConcurrentConns int   // Maximum concurrent proxy connections (0 = no limit)
 }
 
+// TargetProvider resolves a canonical HTTP host to its app backend.
+// Implemented by the apptraffic host index (derived from ACTIVE state);
+// the proxy never interprets app state itself.
+type TargetProvider interface {
+	// LookupHost returns the projected backend for a canonical host.
+	LookupHost(host string) (domain.AppBackend, bool)
+}
+
 // Service implements the ProxyService interface.
+// App backends resolve through appTargets (ACTIVE-derived projection);
+// the pre-v2.50 container-service + image-label resolution is removed.
 type Service struct {
-	runtime          out.ContainerRuntime
-	containerSvc     in.ContainerService
-	configSvc        in.ConfigService
-	config           Config
-	targets          map[string]*domain.ProxyTarget
+	configSvc in.ConfigService
+	config    Config
+	// appTargets is the ACTIVE-derived host index, wired after the app
+	// store opens (WithAppTargets). Nil means no app serves this host.
+	// App resolutions bypass the target cache entirely (see
+	// resolveAppTarget); only external routes and explicit RegisterTarget
+	// entries live in targets.
+	appTargets TargetProvider
+	targets    map[string]cachedTarget
+	// gen is the LOCAL cache invalidation epoch for external/explicit
+	// targets only. It is unrelated to the apptraffic HostIndex version:
+	// app resolutions never consult it.
+	gen              uint64
 	mu               sync.RWMutex
 	inFlight         map[string]int
 	inFlightMu       sync.Mutex
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
-// NewService creates a new proxy service.
+// cachedTarget carries the local cache epoch its resolution was built from.
+// Applies to external/explicit targets only; app targets are never cached.
+type cachedTarget struct {
+	target *domain.ProxyTarget
+	gen    uint64
+}
+
+// WithAppTargets wires the ACTIVE-derived host index. The proxy is
+// built before the app store opens, so wiring is deferred like the
+// backup WithAppSources hook.
+func (s *Service) WithAppTargets(provider TargetProvider) *Service {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.appTargets = provider
+	s.gen++
+	s.targets = make(map[string]cachedTarget)
+	return s
+}
+
+// NewService creates a new proxy service. The app target provider is
+// wired later via WithAppTargets once the app store opens.
 func NewService(
-	runtime out.ContainerRuntime,
-	containerSvc in.ContainerService,
 	configSvc in.ConfigService,
 	config Config,
 ) *Service {
 	return &Service{
-		runtime:      runtime,
-		containerSvc: containerSvc,
-		configSvc:    configSvc,
-		config:       config,
-		targets:      make(map[string]*domain.ProxyTarget),
-		inFlight:     make(map[string]int),
+		configSvc: configSvc,
+		config:    config,
+		targets:   make(map[string]cachedTarget),
+		inFlight:  make(map[string]int),
 	}
 }
 
@@ -89,16 +120,17 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Check cache first
+	// Check cache first (generation-guarded: a resolution built before
+	// the latest invalidation is dropped, never served).
 	s.mu.RLock()
-	if target, exists := s.targets[domainName]; exists {
+	if cached, exists := s.targets[domainName]; exists {
 		s.mu.RUnlock()
 		log.Debug().
-			Str("host", target.Host).
-			Int("port", target.Port).
-			Str("container_id", target.ContainerID).
+			Str("host", cached.target.Host).
+			Int("port", cached.target.Port).
+			Str("container_id", cached.target.ContainerID).
 			Msg("using cached proxy target")
-		return target, nil
+		return cached.target, nil
 	}
 	s.mu.RUnlock()
 
@@ -108,75 +140,36 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 		return s.resolveExternalRoute(ctx, domainName, targetAddr, log)
 	}
 
-	// Get container for this domain
-	container, exists := s.containerSvc.Get(ctx, domainName)
-	if !exists {
-		log.Debug().Msg("container not found for domain")
+	// App backends resolve from the ACTIVE-derived host index.
+	return s.resolveAppTarget(domainName, log)
+}
+
+// resolveAppTarget maps a canonical host to its recorded loopback
+// backend. App targets are NEVER cached: every resolution reads the
+// ACTIVE-derived host index (an in-memory RWMutex lookup), so a freshly
+// rebuilt index is observed on the very next request with no invalidation
+// wiring. Unbound or unknown hosts fail closed (no container-IP
+// fallback, no image-label inference, no stale-target fallback).
+func (s *Service) resolveAppTarget(domainName string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
+	s.mu.RLock()
+	provider := s.appTargets
+	s.mu.RUnlock()
+	if provider == nil {
+		log.Debug().Msg("no app target provider wired")
 		return nil, domain.ErrNoTargetAvailable
 	}
-	log.Debug().Str("container_id", container.ID).Str("image", container.Image).Msg("found container for domain")
-
-	// Build target based on runtime mode
-
-	if s.isRunningInContainer() {
-		// Gordon is in a container - use container network
-		meta, err := s.resolveTargetMetadata(ctx, container.Image)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to resolve target metadata")
-		}
-		containerIP, _, err := s.runtime.GetContainerNetworkInfo(ctx, container.ID)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get container network info", map[string]any{zerowrap.FieldEntityID: container.ID})
-		}
-		target = &domain.ProxyTarget{
-			Host:        containerIP,
-			Port:        meta.Port,
-			ContainerID: container.ID,
-			Scheme:      "http",
-			Protocol:    meta.Protocol,
-			RouteHost:   domainName,
-		}
-	} else {
-		// Gordon is on the host - use host port mapping
-		routes := s.configSvc.GetRoutes(ctx)
-		var route *domain.Route
-		for _, r := range routes {
-			if r.Domain == domainName {
-				route = &r
-				break
-			}
-		}
-
-		if route == nil {
-			return nil, domain.ErrRouteNotFound
-		}
-
-		meta, err := s.resolveTargetMetadata(ctx, container.Image)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to resolve target metadata")
-		}
-
-		hostPort, err := s.runtime.GetContainerPort(ctx, container.ID, meta.Port)
-		if err != nil {
-			return nil, log.WrapErrWithFields(err, "failed to get host port mapping", map[string]any{"internal_port": meta.Port})
-		}
-
-		target = &domain.ProxyTarget{
-			Host:        "localhost",
-			Port:        hostPort,
-			ContainerID: container.ID,
-			Scheme:      "http",
-			Protocol:    meta.Protocol,
-			RouteHost:   domainName,
-		}
+	backend, ok := provider.LookupHost(domainName)
+	if !ok || !backend.Resolved() {
+		log.Debug().Msg("no resolved app backend for host")
+		return nil, domain.ErrNoTargetAvailable
 	}
-
-	// Cache the target
-	s.mu.Lock()
-	s.targets[domainName] = target
-	s.mu.Unlock()
-
-	return target, nil
+	return &domain.ProxyTarget{
+		Host:        backend.Host,
+		Port:        backend.Port,
+		ContainerID: backend.ContainerID,
+		Scheme:      "http",
+		RouteHost:   domainName,
+	}, nil
 }
 
 // resolveExternalRoute resolves an external route target address into a ProxyTarget,
@@ -225,7 +218,7 @@ func (s *Service) resolveExternalRoute(_ context.Context, domainName, targetAddr
 
 	// Cache external route target
 	s.mu.Lock()
-	s.targets[domainName] = t
+	s.targets[domainName] = cachedTarget{target: t, gen: s.gen}
 	s.mu.Unlock()
 
 	log.Debug().
@@ -245,7 +238,7 @@ func (s *Service) RegisterTarget(_ context.Context, domainName string, target *d
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.targets[canonicalDomain] = target
+	s.targets[canonicalDomain] = cachedTarget{target: target, gen: s.gen}
 	return nil
 }
 
@@ -265,6 +258,8 @@ func (s *Service) UnregisterTarget(_ context.Context, domainName string) error {
 
 // InvalidateTarget removes a cached proxy target, forcing re-lookup on next request.
 // This is used during zero-downtime deployments to switch traffic to a new container.
+// Every invalidation bumps the cache generation so concurrent stale
+// resolutions are dropped instead of cached.
 func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
 	canonicalDomain, ok := domain.CanonicalRouteDomain(domainName)
 	if !ok {
@@ -274,6 +269,7 @@ func (s *Service) InvalidateTarget(_ context.Context, domainName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.gen++
 	delete(s.targets, canonicalDomain)
 }
 
@@ -308,10 +304,11 @@ func (s *Service) WaitForNoInFlight(ctx context.Context, containerID string, tim
 	}
 }
 
-// RefreshTargets refreshes all proxy targets from container state.
+// RefreshTargets drops all cached proxy targets, forcing re-lookup.
 func (s *Service) RefreshTargets(ctx context.Context) error {
 	s.mu.Lock()
-	s.targets = make(map[string]*domain.ProxyTarget)
+	s.gen++
+	s.targets = make(map[string]cachedTarget)
 	s.mu.Unlock()
 
 	log := zerowrap.FromCtx(ctx)
@@ -341,8 +338,9 @@ func (s *Service) IsRegistryDomain(host string) bool {
 	return ok && canonicalHost == registryDomain
 }
 
-// IsKnownHost returns true if host is configured as registry, route, or external route.
-func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
+// IsKnownHost returns true for the registry domain, external routes,
+// and app-served hosts from the ACTIVE-derived index.
+func (s *Service) IsKnownHost(_ context.Context, host string) bool {
 	canonicalHost, ok := domain.CanonicalRouteDomain(host)
 	if !ok {
 		return false
@@ -350,10 +348,16 @@ func (s *Service) IsKnownHost(ctx context.Context, host string) bool {
 	if s.IsRegistryDomain(canonicalHost) {
 		return true
 	}
-	if _, err := s.configSvc.GetRoute(ctx, canonicalHost); err == nil {
+	if _, ok := s.configSvc.GetExternalRoutes()[canonicalHost]; ok {
 		return true
 	}
-	_, ok = s.configSvc.GetExternalRoutes()[canonicalHost]
+	s.mu.RLock()
+	provider := s.appTargets
+	s.mu.RUnlock()
+	if provider == nil {
+		return false
+	}
+	_, ok = provider.LookupHost(canonicalHost)
 	return ok
 }
 
@@ -419,35 +423,5 @@ func (s *Service) DrainRegistryInFlight(timeout time.Duration) bool {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	return false
-}
-
-func (s *Service) isRunningInContainer() bool {
-	// Check for /.dockerenv
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		return true
-	}
-
-	// Check cgroup for container indicators
-	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
-		content := string(data)
-		if strings.Contains(content, "docker") ||
-			strings.Contains(content, "containerd") ||
-			strings.Contains(content, "podman") {
-			return true
-		}
-	}
-
-	// NOTE: Hostname length check (12 or 64 chars) was removed because it produced
-	// false positives on hosts with short hostnames (e.g., "web-server-1" = 12 chars),
-	// which would cause the proxy to use container network IPs instead of host port mappings.
-
-	// Check environment variables
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" ||
-		os.Getenv("DOCKER_CONTAINER") != "" ||
-		os.Getenv("container") != "" {
-		return true
-	}
-
 	return false
 }

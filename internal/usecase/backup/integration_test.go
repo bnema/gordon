@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/out/appstate"
 	"github.com/bnema/gordon/internal/adapters/out/docker"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/domain"
@@ -38,7 +39,7 @@ func TestBackupService_Integration_Postgres17And18(t *testing.T) {
 
 func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Runtime, version string) {
 	image := fmt.Sprintf("postgres:%s", version)
-	domainName := fmt.Sprintf("backup-it-%s.example.com", version)
+	appName := fmt.Sprintf("backup-it-%s", version)
 	networkName := fmt.Sprintf("gordon-backup-it-%s-%d", version, time.Now().UnixNano())
 	containerName := fmt.Sprintf("gordon-backup-it-%s-%d", version, time.Now().UnixNano())
 
@@ -65,10 +66,10 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 			"POSTGRES_DB=appdb",
 		},
 		Labels: map[string]string{
-			domain.LabelManaged:    "true",
-			domain.LabelAttachment: "true",
-			domain.LabelAttachedTo: domainName,
-			domain.LabelImage:      image,
+			domain.LabelManaged: "true",
+			domain.LabelApp:     appName,
+			domain.LabelService: "postgres",
+			domain.LabelImage:   image,
 		},
 	}
 
@@ -78,7 +79,7 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		stopCtx, cancelStop := context.WithTimeout(context.Background(), 20*time.Second)
-		_ = runtime.StopContainer(stopCtx, container.ID)
+		_ = runtime.StopContainer(stopCtx, container.ID, domain.AppDefaultStopGrace)
 		cancelStop()
 
 		removeCtx, cancelRemove := context.WithTimeout(context.Background(), 20*time.Second)
@@ -95,32 +96,33 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	storage, err := filesystem.NewBackupStorage(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
 
-	containerSvc := &integrationContainerService{
-		routes: map[string]*domain.Container{
-			domainName: container,
-		},
-		attachments: map[string][]domain.Attachment{
-			domainName: {
-				{
-					Name:        "postgres",
-					Image:       image,
-					ContainerID: container.ID,
-					Status:      container.Status,
-					Network:     networkName,
-					Ports:       []int{5432},
+	state, err := appstate.NewStore(t.TempDir(), zerowrap.Default())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, state.Close()) })
+	require.NoError(t, state.SaveActive(ctx, domain.AppActive{
+		App:       appName,
+		Converged: true,
+		Services: map[string]domain.AppEffectiveService{
+			"postgres": {
+				Image:     image,
+				Container: container.ID,
+				Spec: domain.AppService{
+					Name:      "postgres",
+					Image:     image,
+					Databases: []domain.AppDatabase{{Name: "appdb", Type: domain.AppDBPostgres, Schedule: "daily"}},
+					Backup:    domain.AppBackup{Postgres: []string{"appdb"}},
 				},
 			},
 		},
-	}
+	}))
 
-	svc := backup.NewService(runtime, storage, containerSvc, domain.BackupConfig{Enabled: true}, zerowrap.Default())
-
-	detected, err := svc.DetectDatabases(ctx, domainName)
+	svc := backup.NewService(runtime, storage, domain.BackupConfig{Enabled: true}, zerowrap.Default()).WithAppState(state)
+	targets, err := svc.Targets(ctx, appName)
 	require.NoError(t, err)
-	require.Len(t, detected, 1)
-	assert.Equal(t, domain.DBTypePostgreSQL, detected[0].Type)
+	require.Len(t, targets, 1)
+	assert.Equal(t, "postgres", targets[0].Service)
 
-	result, err := svc.RunBackup(ctx, domainName, "postgres")
+	result, err := svc.RunBackup(ctx, appName, "postgres", "appdb")
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, domain.BackupStatusCompleted, result.Job.Status)
@@ -130,7 +132,7 @@ func runPostgresBackupFlow(t *testing.T, ctx context.Context, runtime *docker.Ru
 	assert.Greater(t, len(backupBytes), 32)
 	assert.True(t, bytes.HasPrefix(backupBytes, []byte("PGDMP")), "expected pg_dump custom format header")
 
-	jobs, err := svc.ListBackups(ctx, domainName)
+	jobs, err := svc.ListBackups(ctx, appName)
 	require.NoError(t, err)
 	assert.Len(t, jobs, 1)
 }
@@ -179,73 +181,5 @@ func seedPostgresData(ctx context.Context, runtime *docker.Runtime, containerID 
 	if res.ExitCode != 0 {
 		return fmt.Errorf("seed command failed: %s", strings.TrimSpace(string(res.Stderr)))
 	}
-	return nil
-}
-
-type integrationContainerService struct {
-	routes      map[string]*domain.Container
-	attachments map[string][]domain.Attachment
-}
-
-func (s *integrationContainerService) Deploy(context.Context, domain.Route) (*domain.Container, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Stop(context.Context, string) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Remove(context.Context, string, bool) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) Get(_ context.Context, domainName string) (*domain.Container, bool) {
-	c, ok := s.routes[domainName]
-	return c, ok
-}
-
-func (s *integrationContainerService) Restart(context.Context, string, bool) error {
-	return fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) List(context.Context) map[string]*domain.Container {
-	out := make(map[string]*domain.Container, len(s.routes))
-	for k, v := range s.routes {
-		out[k] = v
-	}
-	return out
-}
-
-func (s *integrationContainerService) ListRoutesWithDetails(context.Context) []domain.RouteInfo {
-	return nil
-}
-
-func (s *integrationContainerService) ListAttachments(_ context.Context, domainName string) []domain.Attachment {
-	attachments := s.attachments[domainName]
-	out := make([]domain.Attachment, len(attachments))
-	copy(out, attachments)
-	return out
-}
-
-func (s *integrationContainerService) ListNetworks(context.Context) ([]*domain.NetworkInfo, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (s *integrationContainerService) HealthCheck(context.Context) map[string]bool {
-	return map[string]bool{}
-}
-
-func (s *integrationContainerService) SyncContainers(context.Context) error {
-	return nil
-}
-
-func (s *integrationContainerService) UpdateAttachments(map[string][]string) {
-}
-
-func (s *integrationContainerService) AutoStart(context.Context, []domain.Route) error {
-	return nil
-}
-
-func (s *integrationContainerService) Shutdown(context.Context) error {
 	return nil
 }

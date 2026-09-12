@@ -79,10 +79,9 @@ gordon_domain = "gordon.mydomain.com"    # Registry + Admin API domain
 [entrypoints.edge]
 address = ":443"                         # Public smart TCP edge (choose your bind/mapping)
 protocol = "smart_tcp"
-
-[routes]
-"app.mydomain.com" = "myapp:latest"      # Domain → Image mapping
 ```
+
+Application workloads are NOT declared in `gordon.toml`. Each app lives in its own standalone TOML file (see step 8). The old `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed in v2.50 — Gordon refuses to start when any of them is present.
 
 ## 5. Set Up DNS (Including Wildcard)
 
@@ -96,8 +95,8 @@ In Cloudflare (or your DNS provider), create:
 | A/CNAME | `*` | `YOUR_SERVER_IP` or `gordon.mydomain.com` | Yes |
 
 Why wildcard (`*`)?
-- It automatically covers app routes like `app.mydomain.com`, `api.mydomain.com`, `demo.mydomain.com`, etc.
-- You can add new domains in `[routes]` without creating DNS records one by one.
+- It automatically covers app hosts like `app.mydomain.com`, `api.mydomain.com`, `demo.mydomain.com`, etc.
+- You can add new app HTTP hosts without creating DNS records one by one.
 
 If your DNS provider supports wildcard CNAME flattening (Cloudflare does), `* -> gordon.mydomain.com` is usually the cleanest option.
 
@@ -129,10 +128,10 @@ sudo loginctl enable-linger $USER
 
 ## 7. Generate a Deploy Token
 
-Create a token for remote CLI deploys (skip if auth is disabled):
+Create a token for remote CLI use (skip if auth is disabled):
 
 ```bash
-gordon auth token generate --subject deploy --scopes push,pull --expiry 0
+gordon auth token generate --subject deploy --scopes "push,pull,admin:apps:read,admin:apps:write" --expiry 90d
 ```
 
 `--expiry 0` creates a non-expiring token. Prefer a finite expiry and a rotation policy unless you explicitly need a long-lived deploy token.
@@ -148,53 +147,66 @@ On your local machine:
 gordon remotes add prod https://gordon.mydomain.com --token <your-token>
 gordon remotes use prod
 
-# Recommended first-time setup
-gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
-
-# Then build, push, and deploy
-gordon push myapp:latest --domain app.example.com --build --no-confirm
+# Build and push the image (OCI transfer only, never deploys)
+gordon push myapp --build --remote prod
 ```
 
-What this command does:
+Write the app file (`blog.toml`). The file is intended for Git: it must never contain secret values.
 
-- `gordon bootstrap` creates or updates the route, applies requested attachments,
-  and stores environment variables.
-- This is the recommended path for first deploys because it does not require the
-  route to exist ahead of time.
-- Run `gordon push` separately after bootstrap to build, upload, and deploy the image.
+```toml
+name = "blog"
 
-If the route already exists and you only need to push a new image version, use:
+[[service]]
+name = "web"
+image = "gordon.mydomain.com/myapp:latest"
+
+[[service.http]]
+host = "app.mydomain.com"
+port = 3000
+```
+
+Apply the manifest, then deploy:
 
 ```bash
-gordon push myapp --build --no-confirm
+gordon apps apply --file blog.toml --remote prod
+gordon apps deploy blog --remote prod
 ```
 
-`gordon push` still requires the route to already exist so it can resolve the
-deploy target.
+What these commands do:
+
+- `gordon push` builds, uploads, and stores the image. It never deploys.
+- `gordon apps apply` validates the manifest and persists it as desired state.
+- `gordon apps deploy` activates the accepted revision: pulls the image, starts the container, waits for readiness, switches traffic, retires the old container.
+
+If the app needs secrets, register their names in the manifest (`[service.secrets]` maps ENV name to secret name), then write values — values stay in pass, never in the file:
+
+```bash
+gordon apps secrets set blog --service web APP_ENV=production --remote prod
+```
 
 Your app is now live at `https://app.mydomain.com`!
 
 ## 9. Update Your App
 
-Push a new image to deploy with zero downtime:
+Push a new image, update the manifest tag if needed, apply, deploy:
 
 ```bash
-# Make changes, then build + push + deploy
-gordon push myapp --build --no-confirm
+# Make changes, then build + push
+gordon push myapp --build --remote prod
+
+# Deploy the new tag (re-resolves mutable tags)
+gordon apps deploy blog --remote prod
 ```
 
-Gordon automatically:
-1. Starts the new container
-2. Waits for it to be ready
-3. Routes traffic to the new container
-4. Stops the old container
+For HTTP services without volumes, Gordon keeps the old container serving until the replacement passes readiness, then switches traffic, drains, and retires the old container. TCP/UDP and volume-owning services replace with interruption.
 
 ## Next Steps
 
 - [Installation Guide](./installation.md) - Production setup with firewall and rootless containers
-- [Configuration Reference](./config/index.md) - All configuration options
+- [Configuration Reference](./config/index.md) - All installation configuration options
+- [Apps CLI](./cli/apps.md) - Apply, deploy, and lifecycle commands
 - [Authentication](./config/auth.md) - Secure your registry
-- [Environment Variables](./config/env.md) - Configure per-app settings
+- [App secrets](./cli/apps.md#gordon-apps-secrets) - Service-scoped secret values in pass
 
 ## Related
 

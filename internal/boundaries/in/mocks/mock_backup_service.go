@@ -39,96 +39,28 @@ func (_m *MockBackupService) EXPECT() *MockBackupService_Expecter {
 	return &MockBackupService_Expecter{mock: &_m.Mock}
 }
 
-// DetectDatabases provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) DetectDatabases(ctx context.Context, domainName string) ([]domain.DBInfo, error) {
-	ret := _mock.Called(ctx, domainName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DetectDatabases")
-	}
-
-	var r0 []domain.DBInfo
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.DBInfo, error)); ok {
-		return returnFunc(ctx, domainName)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.DBInfo); ok {
-		r0 = returnFunc(ctx, domainName)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.DBInfo)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, domainName)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockBackupService_DetectDatabases_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DetectDatabases'
-type MockBackupService_DetectDatabases_Call struct {
-	*mock.Call
-}
-
-// DetectDatabases is a helper method to define mock.On call
-//   - ctx context.Context
-//   - domainName string
-func (_e *MockBackupService_Expecter) DetectDatabases(ctx any, domainName any) *MockBackupService_DetectDatabases_Call {
-	return &MockBackupService_DetectDatabases_Call{Call: _e.mock.On("DetectDatabases", ctx, domainName)}
-}
-
-func (_c *MockBackupService_DetectDatabases_Call) Run(run func(ctx context.Context, domainName string)) *MockBackupService_DetectDatabases_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockBackupService_DetectDatabases_Call) Return(dBInfos []domain.DBInfo, err error) *MockBackupService_DetectDatabases_Call {
-	_c.Call.Return(dBInfos, err)
-	return _c
-}
-
-func (_c *MockBackupService_DetectDatabases_Call) RunAndReturn(run func(ctx context.Context, domainName string) ([]domain.DBInfo, error)) *MockBackupService_DetectDatabases_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ListBackups provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) ListBackups(ctx context.Context, domainName string) ([]domain.DatabaseBackupJob, error) {
-	ret := _mock.Called(ctx, domainName)
+func (_mock *MockBackupService) ListBackups(ctx context.Context, app string) ([]domain.BackupJob, error) {
+	ret := _mock.Called(ctx, app)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBackups")
 	}
 
-	var r0 []domain.DatabaseBackupJob
+	var r0 []domain.BackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.DatabaseBackupJob, error)); ok {
-		return returnFunc(ctx, domainName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.BackupJob, error)); ok {
+		return returnFunc(ctx, app)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.DatabaseBackupJob); ok {
-		r0 = returnFunc(ctx, domainName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.BackupJob); ok {
+		r0 = returnFunc(ctx, app)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.DatabaseBackupJob)
+			r0 = ret.Get(0).([]domain.BackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, domainName)
+		r1 = returnFunc(ctx, app)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -142,12 +74,12 @@ type MockBackupService_ListBackups_Call struct {
 
 // ListBackups is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainName string
-func (_e *MockBackupService_Expecter) ListBackups(ctx any, domainName any) *MockBackupService_ListBackups_Call {
-	return &MockBackupService_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, domainName)}
+//   - app string
+func (_e *MockBackupService_Expecter) ListBackups(ctx any, app any) *MockBackupService_ListBackups_Call {
+	return &MockBackupService_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, app)}
 }
 
-func (_c *MockBackupService_ListBackups_Call) Run(run func(ctx context.Context, domainName string)) *MockBackupService_ListBackups_Call {
+func (_c *MockBackupService_ListBackups_Call) Run(run func(ctx context.Context, app string)) *MockBackupService_ListBackups_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -165,19 +97,19 @@ func (_c *MockBackupService_ListBackups_Call) Run(run func(ctx context.Context, 
 	return _c
 }
 
-func (_c *MockBackupService_ListBackups_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_ListBackups_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockBackupService_ListBackups_Call) Return(backupJobs []domain.BackupJob, err error) *MockBackupService_ListBackups_Call {
+	_c.Call.Return(backupJobs, err)
 	return _c
 }
 
-func (_c *MockBackupService_ListBackups_Call) RunAndReturn(run func(ctx context.Context, domainName string) ([]domain.DatabaseBackupJob, error)) *MockBackupService_ListBackups_Call {
+func (_c *MockBackupService_ListBackups_Call) RunAndReturn(run func(ctx context.Context, app string) ([]domain.BackupJob, error)) *MockBackupService_ListBackups_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Restore provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) Restore(ctx context.Context, domainName string, backupID string) error {
-	ret := _mock.Called(ctx, domainName, backupID)
+func (_mock *MockBackupService) Restore(ctx context.Context, app string, backupID string) error {
+	ret := _mock.Called(ctx, app, backupID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Restore")
@@ -185,7 +117,7 @@ func (_mock *MockBackupService) Restore(ctx context.Context, domainName string, 
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, domainName, backupID)
+		r0 = returnFunc(ctx, app, backupID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -199,13 +131,13 @@ type MockBackupService_Restore_Call struct {
 
 // Restore is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainName string
+//   - app string
 //   - backupID string
-func (_e *MockBackupService_Expecter) Restore(ctx any, domainName any, backupID any) *MockBackupService_Restore_Call {
-	return &MockBackupService_Restore_Call{Call: _e.mock.On("Restore", ctx, domainName, backupID)}
+func (_e *MockBackupService_Expecter) Restore(ctx any, app any, backupID any) *MockBackupService_Restore_Call {
+	return &MockBackupService_Restore_Call{Call: _e.mock.On("Restore", ctx, app, backupID)}
 }
 
-func (_c *MockBackupService_Restore_Call) Run(run func(ctx context.Context, domainName string, backupID string)) *MockBackupService_Restore_Call {
+func (_c *MockBackupService_Restore_Call) Run(run func(ctx context.Context, app string, backupID string)) *MockBackupService_Restore_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -233,14 +165,14 @@ func (_c *MockBackupService_Restore_Call) Return(err error) *MockBackupService_R
 	return _c
 }
 
-func (_c *MockBackupService_Restore_Call) RunAndReturn(run func(ctx context.Context, domainName string, backupID string) error) *MockBackupService_Restore_Call {
+func (_c *MockBackupService_Restore_Call) RunAndReturn(run func(ctx context.Context, app string, backupID string) error) *MockBackupService_Restore_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RestorePITR provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) RestorePITR(ctx context.Context, domainName string, targetTime time.Time) error {
-	ret := _mock.Called(ctx, domainName, targetTime)
+func (_mock *MockBackupService) RestorePITR(ctx context.Context, app string, targetTime time.Time) error {
+	ret := _mock.Called(ctx, app, targetTime)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestorePITR")
@@ -248,7 +180,7 @@ func (_mock *MockBackupService) RestorePITR(ctx context.Context, domainName stri
 
 	var r0 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string, time.Time) error); ok {
-		r0 = returnFunc(ctx, domainName, targetTime)
+		r0 = returnFunc(ctx, app, targetTime)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -262,13 +194,13 @@ type MockBackupService_RestorePITR_Call struct {
 
 // RestorePITR is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainName string
+//   - app string
 //   - targetTime time.Time
-func (_e *MockBackupService_Expecter) RestorePITR(ctx any, domainName any, targetTime any) *MockBackupService_RestorePITR_Call {
-	return &MockBackupService_RestorePITR_Call{Call: _e.mock.On("RestorePITR", ctx, domainName, targetTime)}
+func (_e *MockBackupService_Expecter) RestorePITR(ctx any, app any, targetTime any) *MockBackupService_RestorePITR_Call {
+	return &MockBackupService_RestorePITR_Call{Call: _e.mock.On("RestorePITR", ctx, app, targetTime)}
 }
 
-func (_c *MockBackupService_RestorePITR_Call) Run(run func(ctx context.Context, domainName string, targetTime time.Time)) *MockBackupService_RestorePITR_Call {
+func (_c *MockBackupService_RestorePITR_Call) Run(run func(ctx context.Context, app string, targetTime time.Time)) *MockBackupService_RestorePITR_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -296,33 +228,33 @@ func (_c *MockBackupService_RestorePITR_Call) Return(err error) *MockBackupServi
 	return _c
 }
 
-func (_c *MockBackupService_RestorePITR_Call) RunAndReturn(run func(ctx context.Context, domainName string, targetTime time.Time) error) *MockBackupService_RestorePITR_Call {
+func (_c *MockBackupService_RestorePITR_Call) RunAndReturn(run func(ctx context.Context, app string, targetTime time.Time) error) *MockBackupService_RestorePITR_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RunBackup provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) RunBackup(ctx context.Context, domainName string, dbName string) (*domain.DatabaseBackupResult, error) {
-	ret := _mock.Called(ctx, domainName, dbName)
+func (_mock *MockBackupService) RunBackup(ctx context.Context, app string, service string, database string) (*domain.BackupResult, error) {
+	ret := _mock.Called(ctx, app, service, database)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunBackup")
 	}
 
-	var r0 *domain.DatabaseBackupResult
+	var r0 *domain.BackupResult
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*domain.DatabaseBackupResult, error)); ok {
-		return returnFunc(ctx, domainName, dbName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*domain.BackupResult, error)); ok {
+		return returnFunc(ctx, app, service, database)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *domain.DatabaseBackupResult); ok {
-		r0 = returnFunc(ctx, domainName, dbName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *domain.BackupResult); ok {
+		r0 = returnFunc(ctx, app, service, database)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.DatabaseBackupResult)
+			r0 = ret.Get(0).(*domain.BackupResult)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, domainName, dbName)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, database)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -336,13 +268,14 @@ type MockBackupService_RunBackup_Call struct {
 
 // RunBackup is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainName string
-//   - dbName string
-func (_e *MockBackupService_Expecter) RunBackup(ctx any, domainName any, dbName any) *MockBackupService_RunBackup_Call {
-	return &MockBackupService_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, domainName, dbName)}
+//   - app string
+//   - service string
+//   - database string
+func (_e *MockBackupService_Expecter) RunBackup(ctx any, app any, service any, database any) *MockBackupService_RunBackup_Call {
+	return &MockBackupService_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, app, service, database)}
 }
 
-func (_c *MockBackupService_RunBackup_Call) Run(run func(ctx context.Context, domainName string, dbName string)) *MockBackupService_RunBackup_Call {
+func (_c *MockBackupService_RunBackup_Call) Run(run func(ctx context.Context, app string, service string, database string)) *MockBackupService_RunBackup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -356,43 +289,48 @@ func (_c *MockBackupService_RunBackup_Call) Run(run func(ctx context.Context, do
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
 }
 
-func (_c *MockBackupService_RunBackup_Call) Return(v *domain.DatabaseBackupResult, err error) *MockBackupService_RunBackup_Call {
-	_c.Call.Return(v, err)
+func (_c *MockBackupService_RunBackup_Call) Return(backupResult *domain.BackupResult, err error) *MockBackupService_RunBackup_Call {
+	_c.Call.Return(backupResult, err)
 	return _c
 }
 
-func (_c *MockBackupService_RunBackup_Call) RunAndReturn(run func(ctx context.Context, domainName string, dbName string) (*domain.DatabaseBackupResult, error)) *MockBackupService_RunBackup_Call {
+func (_c *MockBackupService_RunBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, database string) (*domain.BackupResult, error)) *MockBackupService_RunBackup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // Status provides a mock function for the type MockBackupService
-func (_mock *MockBackupService) Status(ctx context.Context) ([]domain.DatabaseBackupJob, error) {
+func (_mock *MockBackupService) Status(ctx context.Context) ([]domain.BackupJob, error) {
 	ret := _mock.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Status")
 	}
 
-	var r0 []domain.DatabaseBackupJob
+	var r0 []domain.BackupJob
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.DatabaseBackupJob, error)); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.BackupJob, error)); ok {
 		return returnFunc(ctx)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.DatabaseBackupJob); ok {
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.BackupJob); ok {
 		r0 = returnFunc(ctx)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.DatabaseBackupJob)
+			r0 = ret.Get(0).([]domain.BackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
@@ -427,12 +365,12 @@ func (_c *MockBackupService_Status_Call) Run(run func(ctx context.Context)) *Moc
 	return _c
 }
 
-func (_c *MockBackupService_Status_Call) Return(vs []domain.DatabaseBackupJob, err error) *MockBackupService_Status_Call {
-	_c.Call.Return(vs, err)
+func (_c *MockBackupService_Status_Call) Return(backupJobs []domain.BackupJob, err error) *MockBackupService_Status_Call {
+	_c.Call.Return(backupJobs, err)
 	return _c
 }
 
-func (_c *MockBackupService_Status_Call) RunAndReturn(run func(ctx context.Context) ([]domain.DatabaseBackupJob, error)) *MockBackupService_Status_Call {
+func (_c *MockBackupService_Status_Call) RunAndReturn(run func(ctx context.Context) ([]domain.BackupJob, error)) *MockBackupService_Status_Call {
 	_c.Call.Return(run)
 	return _c
 }

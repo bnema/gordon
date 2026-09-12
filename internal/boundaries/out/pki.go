@@ -1,17 +1,18 @@
 package out
 
 import (
-	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"time"
-
-	"github.com/bnema/gordon/internal/domain"
 )
 
-// RouteChecker provides route lookup for domain validation.
-type RouteChecker interface {
-	GetRoutes(ctx context.Context) []domain.Route
+// AppRoutes provides ACTIVE-derived host lookup for domain validation.
+// Implemented by the apptraffic host index via AppHostSource plus the
+// installation external routes. Replaces the retired RouteChecker
+// (config-file routes are gone with the declarative-apps cutover).
+type AppRoutes interface {
+	AppHostSource
+	// GetExternalRoutes returns installation external routes.
 	GetExternalRoutes() map[string]string
 }
 

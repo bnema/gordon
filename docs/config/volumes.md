@@ -1,165 +1,57 @@
 # Volumes Configuration
 
-Configure automatic persistent storage for containers.
+Persistent app storage is declared in each app manifest. The installation-level `[volumes]` settings apply to non-app volume management and do not control declarative app storage.
 
-## Configuration
+## Declarative app volumes
 
-```toml
-[volumes]
-auto_create = true
-prefix = "gordon"
-preserve = true
-```
-
-## Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `auto_create` | bool | `true` | Automatically create volumes from Dockerfile VOLUME |
-| `prefix` | string | `"gordon"` | Prefix for volume names |
-| `preserve` | bool | `true` | Keep volumes when containers are removed |
-
-## How It Works
-
-Gordon automatically creates Docker volumes from Dockerfile `VOLUME` directives:
-
-```dockerfile
-FROM postgres:18
-VOLUME ["/var/lib/postgresql/data"]
-```
-
-When Gordon deploys this container:
-
-1. Reads `VOLUME` directives from image metadata
-2. Creates named volumes with `prefix-domain-path` naming
-3. Mounts volumes to the container
-4. Preserves data across container updates
-
-## Volume Naming
-
-Volumes are named: `{prefix}-{domain}-{path}`
-
-| Domain | Volume Path | Volume Name |
-|--------|-------------|-------------|
-| `app.mydomain.com` | `/data` | `gordon-app-mydomain-com-data` |
-| `db.mydomain.com` | `/var/lib/postgresql/data` | `gordon-db-mydomain-com-var-lib-postgresql-data` |
-
-## Persistence
-
-### Default: Preserve Volumes
+Services declare persistent mounts in the app manifest:
 
 ```toml
-[volumes]
-preserve = true
+[[service.volume]]
+name = "database-data"
+path = "/var/lib/postgresql/data"
 ```
 
-With `preserve = true`:
-- Volumes persist when containers are updated
-- Data survives container restarts
-- Volumes remain even if container is removed
+A volume name is unique within its service. Gordon creates an incarnation-owned runtime volume, records the app, app UUID, service, and logical volume ownership, and reuses it across replacement and restart. App manifests do not support bind mounts or sharing one volume between services.
 
-### Remove with Container
+Every Dockerfile `VOLUME` path must have a matching `[[service.volume]]` declaration. Deployment fails closed when an image declares an unmanaged volume.
 
-```toml
-[volumes]
-preserve = false
-```
+Runtime volume names are implementation details. Use `gordon volumes list` and ownership labels to inspect them; do not derive ownership from a name, rename volumes, or edit Gordon's ownership records.
 
-With `preserve = false`:
-- Volumes are removed when containers are removed
-- Useful for stateless containers
-- Frees up disk space automatically
+## Retention
 
-## Examples
+Ordinary app operations retain data:
 
-### Database Container
+- deploy and restart reuse the service's volumes;
+- removing a service retains its volumes;
+- `gordon apps remove` retains volumes under the removed app's internal UUID;
+- a new app that reuses the public name does not adopt retained volumes.
 
-```dockerfile
-# my-postgres.Dockerfile
-FROM postgres:18
-VOLUME ["/var/lib/postgresql/data"]
-ENV POSTGRES_DB=myapp
-ENV POSTGRES_USER=app
-```
+Gordon does not automatically delete retained app volumes. Back up persistent data before any manual deletion, and use database-native backup and restore procedures for databases.
 
-Gordon automatically:
-- Creates `gordon-db-mydomain-com-var-lib-postgresql-data` volume
-- Mounts it to `/var/lib/postgresql/data`
-- Preserves data across postgres container updates
+## Pruning
 
-### Application with Uploads
-
-```dockerfile
-FROM node:18
-WORKDIR /app
-VOLUME ["/app/uploads", "/app/data"]
-COPY . .
-CMD ["npm", "start"]
-```
-
-Creates two volumes:
-- `gordon-app-mydomain-com-app-uploads`
-- `gordon-app-mydomain-com-app-data`
-
-### Custom Prefix
-
-```toml
-[volumes]
-prefix = "prod"
-```
-
-Volume names become:
-- `prod-app-mydomain-com-data`
-- `prod-db-mydomain-com-var-lib-postgresql-data`
-
-## Managing Volumes
-
-### List Volumes
+Use Gordon's ownership-aware command:
 
 ```bash
-docker volume ls | grep gordon
+gordon volumes prune --dry-run
+gordon volumes prune
 ```
 
-### Inspect Volume
+A volume is eligible only when all of these requirements hold:
 
-```bash
-docker volume inspect gordon-app-mydomain-com-data
-```
+1. Gordon has a durable ownership record marking it `released`.
+2. Runtime labels agree with the record's app, app incarnation UUID, and service.
+3. No container mounts the volume.
 
-### Backup Volume
+Retained, attached, unknown, contradictory, and unrelated volumes survive. A `gordon.managed=true` label or a matching name is not sufficient deletion authority. With current lifecycle metadata, no operation marks app volumes `released`, so prune normally succeeds with no deletions.
 
-```bash
-docker run --rm \
-  -v gordon-db-mydomain-com-var-lib-postgresql-data:/data \
-  -v $(pwd):/backup \
-  alpine tar -czf /backup/db-backup.tar.gz -C /data .
-```
+> **Warning:** Do not use `docker volume prune`, `podman volume prune`, or equivalent runtime cleanup for Gordon data. Those commands bypass Gordon's ownership and retention checks and can delete an unmounted retained volume.
 
-### Restore Volume
-
-```bash
-docker run --rm \
-  -v gordon-db-mydomain-com-var-lib-postgresql-data:/data \
-  -v $(pwd):/backup \
-  alpine tar -xzf /backup/db-backup.tar.gz -C /data
-```
-
-## Volume Cleanup
-
-If you have orphaned volumes:
-
-```bash
-# List all gordon volumes
-docker volume ls -f name=gordon
-
-# Remove specific volume (warning: deletes data!)
-docker volume rm gordon-old-app-data
-
-# Prune unused volumes (be careful!)
-docker volume prune
-```
+See the [Volumes CLI reference](../cli/volumes.md) for flags and plan output.
 
 ## Related
 
-- [Attachments](./attachments.md)
+- [App Manifest](./apps.md)
+- [Volumes CLI](../cli/volumes.md)
 - [Configuration Overview](./index.md)

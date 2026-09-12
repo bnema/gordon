@@ -37,7 +37,7 @@ Examples:
   gordon networks list --remote https://gordon.mydomain.com --token $TOKEN`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}

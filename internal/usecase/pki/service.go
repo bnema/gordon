@@ -33,7 +33,7 @@ type cachedCert struct {
 // especially given the 10-year root CA lifetime.
 type Service struct {
 	ca             out.CertificateAuthority
-	routes         out.RouteChecker
+	routes         out.AppRoutes
 	allowedMu      sync.RWMutex
 	allowedDomains map[string]struct{}
 	log            zerowrap.Logger
@@ -47,7 +47,7 @@ type Service struct {
 // NewService creates a PKI service and starts background maintenance goroutines.
 // It performs an initial intermediate renewal check synchronously so the first
 // TLS handshakes never use a nearly-expired intermediate.
-func NewService(ctx context.Context, ca out.CertificateAuthority, routes out.RouteChecker, allowedDomains []string, log zerowrap.Logger) *Service {
+func NewService(ctx context.Context, ca out.CertificateAuthority, routes out.AppRoutes, allowedDomains []string, log zerowrap.Logger) *Service {
 	ctx, cancel := context.WithCancel(ctx)
 	allowed := canonicalDomainSet(allowedDomains)
 	svc := &Service{
@@ -195,8 +195,8 @@ func (s *Service) isDomainAllowed(ctx context.Context, domainName string) bool {
 	if additionallyAllowed {
 		return true
 	}
-	for _, r := range s.routes.GetRoutes(ctx) {
-		if r.Domain == domainName {
+	for _, h := range s.routes.AppHosts() {
+		if h.Host == domainName && h.TLSMode != domain.AppTLSNever {
 			return true
 		}
 	}
@@ -253,18 +253,18 @@ func (s *Service) renewIntermediateIfNeeded() {
 func (s *Service) sweepExpiredCerts(ctx context.Context) {
 	now := time.Now()
 
-	// Fetch routes once for all cache entries.
-	routes := s.routes.GetRoutes(ctx)
+	// Fetch app hosts once for all cache entries.
+	hosts := s.routes.AppHosts()
 	extRoutes := s.routes.GetExternalRoutes()
 
 	s.allowedMu.RLock()
-	allowed := make(map[string]struct{}, len(routes)+len(extRoutes)+len(s.allowedDomains))
+	allowed := make(map[string]struct{}, len(hosts)+len(extRoutes)+len(s.allowedDomains))
 	for domain := range s.allowedDomains {
 		allowed[domain] = struct{}{}
 	}
 	s.allowedMu.RUnlock()
-	for _, r := range routes {
-		allowed[r.Domain] = struct{}{}
+	for _, h := range hosts {
+		allowed[h.Host] = struct{}{}
 	}
 	for d := range extRoutes {
 		allowed[d] = struct{}{}

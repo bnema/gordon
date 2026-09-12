@@ -124,6 +124,24 @@ func TestPusher_UploadBlob(t *testing.T) {
 	}
 }
 
+func TestPusher_PlainHTTP(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+
+	server := httptest.NewServer(newFakePushRegistry(t, img, map[string]bool{}).handler())
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	p := registrypush.New(
+		registrypush.WithPlainHTTP(true),
+		registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) {
+			return img, nil
+		}),
+	)
+	require.NoError(t, p.Push(context.Background(), serverURL.Host+"/demo/app:v1"))
+}
+
 func TestPusher_Push(t *testing.T) {
 	testCases := []struct {
 		name                       string

@@ -34,6 +34,7 @@ func NewBlobStorage(rootDir string, log zerowrap.Logger) (*BlobStorage, error) {
 	dirs := []string{
 		filepath.Join(rootDir, "blobs"),
 		filepath.Join(rootDir, "uploads"),
+		filepath.Join(rootDir, "ownership"),
 	}
 
 	for _, dir := range dirs {
@@ -261,6 +262,14 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	}
 	file.Close()
 
+	// Bind the upload to the repository that started it. Every later
+	// operation on this UUID must present the same repository, so a known
+	// upload UUID is not a bearer token for another repository.
+	if err := os.WriteFile(uploadRepoPath(uploadPath), []byte(name), 0600); err != nil {
+		_ = os.Remove(uploadPath)
+		return "", fmt.Errorf("failed to record upload repository: %w", err)
+	}
+
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "filesystem").
@@ -271,11 +280,35 @@ func (s *BlobStorage) StartBlobUpload(name string) (string, error) {
 	return uploadID, nil
 }
 
+// verifyUploadRepository reports the repository that started an upload and
+// fails closed when it does not match the requesting repository.
+func (s *BlobStorage) verifyUploadRepository(uploadPath, name string) error {
+	raw, err := os.ReadFile(uploadRepoPath(uploadPath))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%w: %s", domain.ErrUploadNotFound, filepath.Base(uploadPath))
+		}
+		return fmt.Errorf("read upload repository: %w", err)
+	}
+	if string(raw) != name {
+		return fmt.Errorf("%w: %s", domain.ErrUploadNotFound, filepath.Base(uploadPath))
+	}
+	return nil
+}
+
+// uploadRepoPath returns the sidecar recording an upload's repository.
+func uploadRepoPath(uploadPath string) string {
+	return uploadPath + ".repo"
+}
+
 // AppendBlobChunk appends data to an in-progress upload.
 func (s *BlobStorage) AppendBlobChunk(name, uuid string, data io.Reader, contentLength, maxBlobSize int64) (int64, error) {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return 0, fmt.Errorf("invalid upload path: %w", err)
+	}
+	if err := s.verifyUploadRepository(uploadPath, name); err != nil {
+		return 0, err
 	}
 
 	mu := s.getUploadLock(uuid)
@@ -379,11 +412,17 @@ func (lw *lockedWriteCloser) Close() error {
 	return lw.closeErr
 }
 
-// FinishBlobUpload completes an upload and moves it to blob storage.
-func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
+// FinishBlobUpload completes an upload for the named repository, moves it
+// to blob storage, and records the repository/blob association. The
+// association is written only after the content-addressed blob exists and
+// only for the repository that started the upload.
+func (s *BlobStorage) FinishBlobUpload(name, uuid, digest string) error {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return fmt.Errorf("invalid upload path: %w", err)
+	}
+	if err := s.verifyUploadRepository(uploadPath, name); err != nil {
+		return err
 	}
 
 	mu := s.getUploadLock(uuid)
@@ -423,22 +462,32 @@ func (s *BlobStorage) FinishBlobUpload(uuid, digest string) error {
 		return fmt.Errorf("failed to move upload to blob location: %w", err)
 	}
 	finalized = true
+	_ = os.Remove(uploadRepoPath(uploadPath))
+
+	if err := s.recordBlobOwnership(name, digest); err != nil {
+		return err
+	}
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "filesystem").
 		Str("uuid", uuid).
+		Str("name", name).
 		Str("digest", digest).
 		Msg("blob upload finished")
 
 	return nil
 }
 
-// CancelBlobUpload cancels an in-progress upload.
-func (s *BlobStorage) CancelBlobUpload(uuid string) error {
+// CancelBlobUpload cancels an in-progress upload owned by the named
+// repository.
+func (s *BlobStorage) CancelBlobUpload(name, uuid string) error {
 	uploadPath, err := s.getUploadPath(uuid)
 	if err != nil {
 		return fmt.Errorf("invalid upload path: %w", err)
+	}
+	if err := s.verifyUploadRepository(uploadPath, name); err != nil {
+		return err
 	}
 
 	mu := s.getUploadLock(uuid)
@@ -454,18 +503,56 @@ func (s *BlobStorage) CancelBlobUpload(uuid string) error {
 	if err := os.Remove(uploadPath); err != nil {
 		if os.IsNotExist(err) {
 			s.cleanupUploadLock(uuid)
-			return fmt.Errorf("upload not found: %s", uuid)
+			return fmt.Errorf("%w: %s", domain.ErrUploadNotFound, uuid)
 		}
 		return fmt.Errorf("failed to cancel upload: %w", err)
 	}
+	_ = os.Remove(uploadRepoPath(uploadPath))
 	finalized = true
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
 		Str(zerowrap.FieldAdapter, "filesystem").
 		Str("uuid", uuid).
+		Str("name", name).
 		Msg("blob upload cancelled")
 
+	return nil
+}
+
+// BlobOwnedByRepository reports whether the repository completed an upload
+// of the digest. Ownership comes only from that authenticated completion;
+// a manifest that merely names a digest is not evidence of ownership.
+func (s *BlobStorage) BlobOwnedByRepository(name, digest string) (bool, error) {
+	if name == "" || digest == "" {
+		return false, nil
+	}
+	path, err := s.getOwnershipPath(name, digest)
+	if err != nil {
+		return false, fmt.Errorf("invalid ownership path: %w", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("stat blob ownership: %w", err)
+	}
+	return true, nil
+}
+
+// recordBlobOwnership persists the repository/blob association as a durable
+// marker file.
+func (s *BlobStorage) recordBlobOwnership(name, digest string) error {
+	path, err := s.getOwnershipPath(name, digest)
+	if err != nil {
+		return fmt.Errorf("invalid ownership path: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return fmt.Errorf("failed to create ownership directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(name), 0600); err != nil {
+		return fmt.Errorf("failed to record blob ownership: %w", err)
+	}
 	return nil
 }
 
@@ -487,6 +574,15 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 
 	for _, entry := range entries {
 		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".repo") {
+			uploadPath := filepath.Join(uploadsDir, strings.TrimSuffix(entry.Name(), ".repo"))
+			if _, err := os.Stat(uploadPath); os.IsNotExist(err) {
+				if err := os.Remove(filepath.Join(uploadsDir, entry.Name())); err != nil && !os.IsNotExist(err) {
+					s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove orphan upload sidecar")
+				}
+			}
 			continue
 		}
 
@@ -519,6 +615,7 @@ func (s *BlobStorage) CleanupStaleUploads(maxAge time.Duration) (int, int64, err
 				s.log.Warn().Err(err).Str("file", entry.Name()).Msg("failed to remove stale upload")
 				continue
 			}
+			_ = os.Remove(uploadRepoPath(path))
 
 			mu.Unlock()
 			s.cleanupUploadLock(entry.Name())
@@ -583,6 +680,25 @@ func (s *BlobStorage) getUploadPath(uuid string) (string, error) {
 		return "", fmt.Errorf("path validation failed: %w", err)
 	}
 
+	return path, nil
+}
+
+// getOwnershipPath returns the durable marker path for a repository/blob
+// association. The repository is hashed so its name never becomes a path
+// component.
+func (s *BlobStorage) getOwnershipPath(name, digest string) (string, error) {
+	if err := validation.ValidateRepositoryName(name); err != nil {
+		return "", fmt.Errorf("invalid repository name: %w", err)
+	}
+	if err := validation.ValidateDigest(digest); err != nil {
+		return "", fmt.Errorf("invalid digest: %w", err)
+	}
+	sum := sha256.Sum256([]byte(name))
+	parts := strings.SplitN(digest, ":", 2)
+	path := filepath.Join(s.rootDir, "ownership", hex.EncodeToString(sum[:]), parts[0], parts[1])
+	if err := validation.ValidatePathWithinRoot(s.rootDir, path); err != nil {
+		return "", fmt.Errorf("path validation failed: %w", err)
+	}
 	return path, nil
 }
 

@@ -11,10 +11,10 @@ package mocks
 
 import (
 	context "context"
-	runtime "github.com/bnema/gordon/pkg/runtime"
 	io "io"
 	reflect "reflect"
 
+	runtime "github.com/bnema/gordon/pkg/runtime"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -279,6 +279,21 @@ func (mr *MockRuntimeMockRecorder) ListImages(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListImages", reflect.TypeOf((*MockRuntime)(nil).ListImages), ctx)
 }
 
+// ListImagesDetailed mocks base method.
+func (m *MockRuntime) ListImagesDetailed(ctx context.Context) ([]runtime.ImageDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListImagesDetailed", ctx)
+	ret0, _ := ret[0].([]runtime.ImageDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListImagesDetailed indicates an expected call of ListImagesDetailed.
+func (mr *MockRuntimeMockRecorder) ListImagesDetailed(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListImagesDetailed", reflect.TypeOf((*MockRuntime)(nil).ListImagesDetailed), ctx)
+}
+
 // ListNetworks mocks base method.
 func (m *MockRuntime) ListNetworks(ctx context.Context) ([]*runtime.NetworkInfo, error) {
 	m.ctrl.T.Helper()
@@ -407,20 +422,6 @@ func (mr *MockRuntimeMockRecorder) RemoveVolume(ctx, volumeName, force any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RemoveVolume", reflect.TypeOf((*MockRuntime)(nil).RemoveVolume), ctx, volumeName, force)
 }
 
-// RestartContainer mocks base method.
-func (m *MockRuntime) RestartContainer(ctx context.Context, containerID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RestartContainer", ctx, containerID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// RestartContainer indicates an expected call of RestartContainer.
-func (mr *MockRuntimeMockRecorder) RestartContainer(ctx, containerID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RestartContainer", reflect.TypeOf((*MockRuntime)(nil).RestartContainer), ctx, containerID)
-}
-
 // StartContainer mocks base method.
 func (m *MockRuntime) StartContainer(ctx context.Context, containerID string) error {
 	m.ctrl.T.Helper()
@@ -433,20 +434,6 @@ func (m *MockRuntime) StartContainer(ctx context.Context, containerID string) er
 func (mr *MockRuntimeMockRecorder) StartContainer(ctx, containerID any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StartContainer", reflect.TypeOf((*MockRuntime)(nil).StartContainer), ctx, containerID)
-}
-
-// StopContainer mocks base method.
-func (m *MockRuntime) StopContainer(ctx context.Context, containerID string) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "StopContainer", ctx, containerID)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// StopContainer indicates an expected call of StopContainer.
-func (mr *MockRuntimeMockRecorder) StopContainer(ctx, containerID any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "StopContainer", reflect.TypeOf((*MockRuntime)(nil).StopContainer), ctx, containerID)
 }
 
 // Version mocks base method.
@@ -477,4 +464,18 @@ func (m *MockRuntime) VolumeExists(ctx context.Context, volumeName string) (bool
 func (mr *MockRuntimeMockRecorder) VolumeExists(ctx, volumeName any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "VolumeExists", reflect.TypeOf((*MockRuntime)(nil).VolumeExists), ctx, volumeName)
+}
+
+// WaitForContainer mocks base method.
+func (m *MockRuntime) WaitForContainer(ctx context.Context, containerID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "WaitForContainer", ctx, containerID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// WaitForContainer indicates an expected call of WaitForContainer.
+func (mr *MockRuntimeMockRecorder) WaitForContainer(ctx, containerID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "WaitForContainer", reflect.TypeOf((*MockRuntime)(nil).WaitForContainer), ctx, containerID)
 }

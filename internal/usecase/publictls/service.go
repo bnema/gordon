@@ -15,9 +15,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// RouteSource provides routes from which certificate targets are derived.
+// RouteSource provides ACTIVE-derived hosts from which certificate
+// targets are derived, plus installation external routes.
 type RouteSource interface {
-	GetRoutes(ctx context.Context) []domain.Route
+	out.AppHostSource
 	GetExternalRoutes() map[string]string
 }
 
@@ -104,9 +105,8 @@ func (s *Service) Load(ctx context.Context) error {
 
 	required := make(map[string]struct{})
 	if s.deps.Routes != nil {
-		routes := s.deps.Routes.GetRoutes(ctx)
 		external := s.deps.Routes.GetExternalRoutes()
-		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
+		required = canonicalHostSet(routeHosts(s.deps.Routes.AppHosts(), external, s.additionalHosts))
 	}
 
 	s.mu.Lock()
@@ -143,9 +143,8 @@ func (s *Service) SetAdditionalHosts(ctx context.Context, hosts []string) {
 	s.additionalHosts = append([]string(nil), hosts...)
 	required := canonicalHostSet(s.additionalHosts)
 	if s.deps.Routes != nil {
-		routes := s.deps.Routes.GetRoutes(ctx)
 		external := s.deps.Routes.GetExternalRoutes()
-		required = canonicalHostSet(routeHosts(routes, external, s.additionalHosts))
+		required = canonicalHostSet(routeHosts(s.deps.Routes.AppHosts(), external, s.additionalHosts))
 	}
 
 	s.mu.Lock()
@@ -199,9 +198,8 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// Get route hosts early to build required hosts set before target derivation.
 	// This ensures GetCertificate returns ErrTLSRouteNotCovered even if
 	// DeriveCertificateTargets fails (e.g. broken DNS-01 zone resolver).
-	routes := s.deps.Routes.GetRoutes(ctx)
 	external := s.deps.Routes.GetExternalRoutes()
-	hosts := routeHosts(routes, external, s.additionalHosts)
+	hosts := routeHosts(s.deps.Routes.AppHosts(), external, s.additionalHosts)
 
 	// Build required hosts set from route hosts (before target derivation).
 	required := canonicalHostSet(hosts)
@@ -215,7 +213,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 
 	// Derive desired targets.
 	targets, err := DeriveCertificateTargets(ctx, effective.Mode,
-		routes, external,
+		s.deps.Routes.AppHosts(), external,
 		s.additionalHosts,
 		s.deps.ZoneResolver,
 	)

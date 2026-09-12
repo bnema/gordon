@@ -29,7 +29,25 @@ Detailed installation guide for production environments.
 )
 ```
 
-Download and inspect the installer before executing it. The installer verifies the release archive checksum before installation and automatically detects your OS (Linux/macOS) and architecture (amd64/arm64), downloads the appropriate binary from GitHub releases, and installs it to `/usr/local/bin`.
+Download and inspect the installer before executing it. The installer verifies the release archive checksum, detects Linux/macOS and amd64/arm64, and installs Gordon to `~/.local/bin` without `sudo`. If that directory is absent from `PATH`, an interactive install can offer to add an idempotent marker block to Fish (`~/.config/fish/config.fish`), Bash (`~/.bashrc`), or Zsh (`~/.zshrc`). Restart the shell after accepting, or follow the printed command to update the current shell.
+
+For unattended installs, control PATH configuration explicitly:
+
+```bash
+# Update supported shell configuration without prompting
+curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=1 sh
+
+# Never modify shell configuration
+curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=0 sh
+
+# Use another user-local directory
+curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR="$HOME/bin" GORDON_UPDATE_PATH=1 sh
+
+# Explicit global installation (may request sudo)
+curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR=/usr/local/bin GORDON_UPDATE_PATH=0 sh
+```
+
+`GORDON_INSTALL_DIR` accepts arbitrary safe absolute destinations, including `"$HOME/bin"`, `"$HOME/.local/bin"`, and `/usr/local/bin`. PATH detection and shell configuration use that effective directory. Relative paths, PATH separators, and control characters are rejected. `GORDON_UPDATE_PATH` accepts only `0` or `1`. Do not run the default installer through `sudo`: it refuses to infer a user home and install silently under `/root`.
 
 ### Manual Installation
 
@@ -136,6 +154,16 @@ insecure = true
 EOF
 ```
 
+Podman assigns loopback backend ports from the host's ephemeral port range when Gordon publishes managed service ports. If an nftables output policy restricts loopback access, allow the Gordon daemon's primary UID—not its subordinate container UIDs—to connect to that range for the protocols used by managed services:
+
+```nftables
+# Confirm the range with: sysctl net.ipv4.ip_local_port_range
+meta skuid <gordon-uid> ip daddr 127.0.0.1 tcp dport 32768-60999 accept
+meta skuid <gordon-uid> ip daddr 127.0.0.1 udp dport 32768-60999 accept
+```
+
+Place these rules before any broader loopback rejection. Keep public entrypoint and administrative-port policy separate; these rules only let Gordon reach rootless Podman backends on the local host.
+
 ## Firewall Configuration
 
 Gordon needs ports accessible for the registry and the public edge entrypoint.
@@ -195,10 +223,9 @@ gordon_domain = "gordon.yourdomain.com"
 [entrypoints.edge]
 address = ":443"
 protocol = "smart_tcp"
-
-[routes]
-"app.yourdomain.com" = "myapp:latest"
 ```
+
+Application workloads live in standalone app files, not in `gordon.toml` (see [Getting Started](./getting-started.md#8-deploy-your-first-app)).
 
 See [Configuration Reference](./config/index.md) for all options.
 
@@ -310,17 +337,20 @@ Without this setting, Cloudflare traffic receives `403 Forbidden: Only certifica
 
 > **Note:** This is separate from `[api.rate_limit] trusted_proxies`, which controls IP extraction from `X-Forwarded-For`. Both should list your proxy IPs. See [Proxy Origin IP Allowlist](./config/server.md#proxy-origin-ip-allowlist) for details.
 
-## Installing a Specific Version or Pre-Release
+## Choosing an Install Channel
 
 ```bash
-# Install an exact version
-curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 bash
+# Install an exact release
+curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 sh
 
-# Install the latest pre-release instead of the latest stable release
-curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 bash
+# Install the latest pre-release
+curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 sh
+
+# Build the current next branch commit from source
+curl -fsSL https://gordon.bnema.dev/install | GORDON_CHANNEL=next sh
 ```
 
-By default, the installer resolves `latest` to the newest stable release and verifies the downloaded checksum before installing.
+Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
 
 ## Verify Installation
 

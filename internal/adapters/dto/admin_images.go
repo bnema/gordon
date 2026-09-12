@@ -17,11 +17,13 @@ type ImagesResponse struct {
 	Images []Image `json:"images"`
 }
 
-// ImagePruneRequest triggers image pruning.
+// ImagePruneRequest triggers image pruning. DryRun plans the full
+// operation and deletes nothing.
 type ImagePruneRequest struct {
 	KeepLast      *int  `json:"keep_last,omitempty"`
 	PruneDangling *bool `json:"prune_dangling,omitempty"`
 	PruneRegistry *bool `json:"prune_registry,omitempty"`
+	DryRun        *bool `json:"dry_run,omitempty"`
 }
 
 // RuntimePruneResult represents runtime prune results.
@@ -37,8 +39,10 @@ type RegistryPruneResult struct {
 	SpaceReclaimed int64 `json:"space_reclaimed"`
 }
 
-// ImagePruneResponse is returned by image prune endpoints.
+// ImagePruneResponse is returned by image prune endpoints. Plan is the
+// same shape for dry runs and executions.
 type ImagePruneResponse struct {
 	Runtime  RuntimePruneResult  `json:"runtime"`
 	Registry RegistryPruneResult `json:"registry"`
+	Plan     PruneSummary        `json:"plan"`
 }

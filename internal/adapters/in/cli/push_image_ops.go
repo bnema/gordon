@@ -35,6 +35,7 @@ type pushImageOps interface {
 type dockerImageOps struct {
 	cli          client.APIClient
 	insecureTLS  bool
+	plainHTTP    bool
 	progress     io.Writer
 	remoteClient *remote.Client // nil when local
 }
@@ -70,8 +71,11 @@ func newImageOpsForResolvedRemote(resolved *remote.ResolvedRemote) (pushImageOps
 	if err != nil {
 		return nil, err
 	}
-	if resolved != nil && resolved.Token != "" {
-		ops.remoteClient = remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
+	if resolved != nil {
+		ops.plainHTTP = strings.HasPrefix(strings.ToLower(resolved.URL), "http://")
+		if resolved.Token != "" {
+			ops.remoteClient = remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
+		}
 	}
 	return ops, nil
 }
@@ -87,6 +91,7 @@ func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
 	opts := []registrypush.Option{
 		registrypush.WithProgress(d.progress),
 		registrypush.WithInsecureTLS(d.insecureTLS),
+		registrypush.WithPlainHTTP(d.plainHTTP),
 	}
 
 	if d.remoteClient != nil {
@@ -107,6 +112,7 @@ func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
 			retryOpts := []registrypush.Option{
 				registrypush.WithProgress(d.progress),
 				registrypush.WithInsecureTLS(d.insecureTLS),
+				registrypush.WithPlainHTTP(d.plainHTTP),
 				registrypush.WithAuth(authHeader),
 			}
 			pusher = registrypush.New(retryOpts...)

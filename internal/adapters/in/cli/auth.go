@@ -60,11 +60,13 @@ func newAuthTokenCmd() *cobra.Command {
 // newTokenGenerateCmd creates the token generate command.
 func newTokenGenerateCmd() *cobra.Command {
 	var (
-		subject    string
-		scopes     string
-		expiry     string
-		configPath string
-		repo       string
+		subject       string
+		scopes        string
+		expiry        string
+		cliConfigPath string
+		repo          string
+		rawOut        bool
+		jsonOut       bool
 	)
 
 	cmd := &cobra.Command{
@@ -84,12 +86,13 @@ Registry scopes (for Docker push/pull):
 Admin scopes (for remote CLI access):
   Format: admin:<resource>:<actions>
 
-  Resources: routes, secrets, config, status, logs, volumes, * (all)
+  Resources: apps, secrets, config, status, logs, volumes, * (all)
   Actions:   read, write, * (all)
 
   Examples:
     admin:*:*              Full admin access (recommended for CLI)
-    admin:routes:read      Read-only routes access
+    admin:apps:read        Read-only apps access
+    admin:apps:write       App mutations (apply, deploy, lifecycle)
     admin:status:read      Read-only status access
     admin:logs:read        Read-only log access
     admin:volumes:read     Read-only volume access
@@ -102,8 +105,8 @@ Repository scoping:
 Combined examples:
   --scopes "push,pull"                          All repos, registry only (default)
   --scopes "push" --repo myapp                  Push to myapp only
-  --scopes "push,pull,admin:routes:read"        Minimum CI scope (all repos)
-  --scopes "push,admin:routes:read" --repo app  Minimum CI scope (specific repo)
+  --scopes "push,pull,admin:apps:read"         Minimum CI scope (all repos)
+  --scopes "push,admin:apps:read" --repo app   Minimum CI scope (specific repo)
 
 EXPIRY:
 
@@ -114,15 +117,18 @@ Supports human-friendly durations:
 Examples: 1y, 30d, 2w, 6M, 1y6M, 2w3d
 Use --expiry=0 for a token that never expires (useful for CI).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTokenGenerate(subject, scopes, expiry, configPath, repo)
+			return runTokenGenerate(subject, scopes, expiry, cliConfigPath, repo, cmd.OutOrStdout(), rawOut, jsonOut)
 		},
 	}
 
 	cmd.Flags().StringVar(&subject, "subject", "", "Subject/username for the token (required)")
 	cmd.Flags().StringVar(&scopes, "scopes", "push,pull", "Comma-separated list of scopes")
 	cmd.Flags().StringVar(&expiry, "expiry", "30d", "Token expiry duration (e.g., 1y, 30d, 2w, 24h, 0 for never)")
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVarP(&cliConfigPath, "config", "c", "", "Path to config file")
 	cmd.Flags().StringVar(&repo, "repo", "*", "Repository to scope the token to (default: * for all repositories)")
+	cmd.Flags().BoolVar(&rawOut, "raw", false, "Output only the raw token")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.MarkFlagsMutuallyExclusive("raw", "json")
 
 	_ = cmd.MarkFlagRequired("subject")
 
@@ -132,8 +138,8 @@ Use --expiry=0 for a token that never expires (useful for CI).`,
 // newTokenListCmd creates the token list command.
 func newTokenListCmd() *cobra.Command {
 	var (
-		configPath string
-		jsonOut    bool
+		cliConfigPath string
+		jsonOut       bool
 	)
 
 	cmd := &cobra.Command{
@@ -141,11 +147,11 @@ func newTokenListCmd() *cobra.Command {
 		Short: "List all authentication tokens",
 		Long:  `List all stored authentication tokens with their subjects and expiry information.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTokenList(configPath, cmd.OutOrStdout(), jsonOut)
+			return runTokenList(cliConfigPath, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVarP(&cliConfigPath, "config", "c", "", "Path to config file")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 
 	return cmd
@@ -154,8 +160,8 @@ func newTokenListCmd() *cobra.Command {
 // newTokenRevokeCmd creates the token revoke command.
 func newTokenRevokeCmd() *cobra.Command {
 	var (
-		configPath string
-		all        bool
+		cliConfigPath string
+		all           bool
 	)
 
 	cmd := &cobra.Command{
@@ -169,16 +175,16 @@ Examples:
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all {
-				return runTokenRevokeAll(configPath)
+				return runTokenRevokeAll(cliConfigPath)
 			}
 			if len(args) == 0 {
 				return fmt.Errorf("token ID required (or use --all to revoke all tokens)")
 			}
-			return runTokenRevoke(args[0], configPath)
+			return runTokenRevoke(args[0], cliConfigPath)
 		},
 	}
 
-	cmd.Flags().StringVarP(&configPath, "config", "c", "", "Path to config file")
+	cmd.Flags().StringVarP(&cliConfigPath, "config", "c", "", "Path to config file")
 	cmd.Flags().BoolVar(&all, "all", false, "Revoke all tokens")
 
 	return cmd
@@ -188,18 +194,21 @@ Examples:
 func newAuthInternalCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "internal",
-		Short: "Show internal registry credentials for manual recovery",
-		Long: `Display the auto-generated internal registry credentials.
+		Short: "Show server-local registry recovery credentials",
+		Long: `Display the server's auto-generated internal registry credentials.
 
-These credentials are used by Gordon for pulling images from the local registry
-(localhost:5000) during internal deploys. You can use them for manual recovery:
+This sensitive recovery command is available only when Gordon runs locally on
+the server. The daemon normally uses these ephemeral credentials automatically
+to pull from its registry; remote clients and ordinary pushes use scoped tokens.
 
-  docker login localhost:5000 -u gordon-internal -p <password>
+For local recovery only:
 
-Note: Credentials are regenerated each time Gordon starts, and are only
-available while Gordon is running.`,
+  gordon auth internal
+  docker login localhost:<registry-port> -u gordon-internal --password-stdin
+
+Credentials are regenerated whenever the Gordon daemon starts.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShowInternalAuth()
+			return runShowInternalAuth(cmd.OutOrStdout())
 		},
 	}
 }
@@ -402,21 +411,31 @@ func runAuthLogout(out io.Writer) error {
 }
 
 // runShowInternalAuth displays the internal registry credentials.
-func runShowInternalAuth() error {
+func runShowInternalAuth(out io.Writer) error {
+	if _, isRemote, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag); err != nil {
+		return err
+	} else if isRemote {
+		return fmt.Errorf("auth internal is server-local only; run it directly on the Gordon server")
+	}
+
 	creds, err := app.GetInternalCredentials()
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Internal Registry Credentials")
-	fmt.Println("==============================")
-	fmt.Printf("Username: %s\n", creds.Username)
-	fmt.Printf("Password: %s\n", creds.Password)
-	fmt.Println()
-	fmt.Println("Usage:")
-	fmt.Printf("  docker login localhost:5000 -u %s -p %s\n", creds.Username, creds.Password)
-
-	return nil
+	if err := cliWriteLine(out, "Internal Registry Credentials"); err != nil {
+		return err
+	}
+	if err := cliWriteLine(out, "=============================="); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Username: %s\n", creds.Username); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Password: %s\n", creds.Password); err != nil {
+		return err
+	}
+	return cliWriteLine(out, "\nThese credentials are sensitive and intended only for server-local recovery.")
 }
 
 // runTokenGenerate generates a new authentication token.
@@ -463,8 +482,8 @@ func parseAndConvertScopes(scopesStr, repo string) ([]string, error) {
 	return scopes, nil
 }
 
-func runTokenGenerate(subject, scopesStr, expiryStr, configPath, repo string) error {
-	cfg, err := loadAuthConfig(configPath)
+func runTokenGenerate(subject, scopesStr, expiryStr, cliConfigPath, repo string, out io.Writer, rawOut, jsonOut bool) error {
+	cfg, err := loadAuthConfig(cliConfigPath)
 	if err != nil {
 		return err
 	}
@@ -497,26 +516,34 @@ func runTokenGenerate(subject, scopesStr, expiryStr, configPath, repo string) er
 		return fmt.Errorf("failed to generate token: %w", err)
 	}
 
-	fmt.Println("Token generated successfully!")
-	fmt.Printf("Subject: %s\n", subject)
-	fmt.Printf("Scopes: %s\n", strings.Join(scopes, ", "))
-	if expiry == 0 {
-		fmt.Println("Expiry: never")
-	} else {
-		fmt.Printf("Expiry: %s\n", expiry)
+	if rawOut {
+		return cliWriteLine(out, token)
 	}
-	fmt.Println()
-	fmt.Println("Token (use as password with docker login):")
-	fmt.Println(token)
-	fmt.Println()
-	fmt.Printf("Usage: docker login -u %s -p <token> <registry>\n", subject)
+	if jsonOut {
+		return writeJSON(out, map[string]any{
+			"subject": subject,
+			"scopes":  scopes,
+			"expiry":  expiry.String(),
+			"token":   token,
+		})
+	}
 
-	return nil
+	if err := cliWriteLine(out, "Token generated successfully!"); err != nil {
+		return err
+	}
+	if err := cliWritef(out, "Subject: %s\nScopes: %s\n", subject, strings.Join(scopes, ", ")); err != nil {
+		return err
+	}
+	expiryLabel := expiry.String()
+	if expiry == 0 {
+		expiryLabel = "never"
+	}
+	return cliWritef(out, "Expiry: %s\n\nToken (use as password with docker login):\n%s\n\nUsage: docker login -u %s -p <token> <registry>\n", expiryLabel, token, subject)
 }
 
 // runTokenList lists all stored tokens.
-func runTokenList(configPath string, out io.Writer, jsonOut bool) error {
-	cfg, err := loadAuthConfig(configPath)
+func runTokenList(cliConfigPath string, out io.Writer, jsonOut bool) error {
+	cfg, err := loadAuthConfig(cliConfigPath)
 	if err != nil {
 		return err
 	}
@@ -579,8 +606,8 @@ func runTokenList(configPath string, out io.Writer, jsonOut bool) error {
 }
 
 // runTokenRevoke revokes a token by ID.
-func runTokenRevoke(tokenID, configPath string) error {
-	cfg, err := loadAuthConfig(configPath)
+func runTokenRevoke(tokenID, cliConfigPath string) error {
+	cfg, err := loadAuthConfig(cliConfigPath)
 	if err != nil {
 		return err
 	}
@@ -601,8 +628,8 @@ func runTokenRevoke(tokenID, configPath string) error {
 }
 
 // runTokenRevokeAll revokes all tokens.
-func runTokenRevokeAll(configPath string) error {
-	cfg, err := loadAuthConfig(configPath)
+func runTokenRevokeAll(cliConfigPath string) error {
+	cfg, err := loadAuthConfig(cliConfigPath)
 	if err != nil {
 		return err
 	}
@@ -635,14 +662,14 @@ type cliConfig struct {
 }
 
 // loadAuthConfig loads the configuration needed for auth CLI commands.
-func loadAuthConfig(configPath string) (*cliConfig, error) {
+func loadAuthConfig(cliConfigPath string) (*cliConfig, error) {
 	v := viper.New()
 
 	// Set defaults
 	v.SetDefault("server.data_dir", app.DefaultDataDir())
 	v.SetDefault("auth.secrets_backend", "unsafe")
 
-	app.ConfigureViper(v, configPath)
+	app.ConfigureViper(v, cliConfigPath)
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {

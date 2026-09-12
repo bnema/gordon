@@ -6,6 +6,7 @@ package out
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -16,8 +17,14 @@ type ContainerRuntime interface {
 	// Container lifecycle
 	CreateContainer(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error)
 	StartContainer(ctx context.Context, containerID string) error
-	StopContainer(ctx context.Context, containerID string) error
-	RestartContainer(ctx context.Context, containerID string) error
+	// StopContainer stops one exact container, giving it grace to exit
+	// before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	StopContainer(ctx context.Context, containerID string, grace time.Duration) error
+	// RestartContainer restarts one exact container, giving it grace to
+	// exit before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	RestartContainer(ctx context.Context, containerID string, grace time.Duration) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 	RenameContainer(ctx context.Context, containerID, newName string) error
 
@@ -25,6 +32,11 @@ type ContainerRuntime interface {
 	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
 	InspectContainer(ctx context.Context, containerID string) (*domain.Container, error)
 	GetContainerLogs(ctx context.Context, containerID string, follow bool) (io.ReadCloser, error)
+	// GetContainerLogsSince returns logs emitted at or after since, so
+	// readiness can scope a probe to the current execution of one
+	// exact container ID. A missing container reports the
+	// domain.ErrContainerNotFound sentinel.
+	GetContainerLogsSince(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error)
 
 	// Image operations
 	PullImage(ctx context.Context, image string) error
@@ -41,7 +53,9 @@ type ContainerRuntime interface {
 	// Health and status
 	IsContainerRunning(ctx context.Context, containerID string) (bool, error)
 	GetContainerHealthStatus(ctx context.Context, containerID string) (status string, hasHealthcheck bool, err error)
-	GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error)
+	// GetContainerBackendBinds resolves protocol-specific container ports to
+	// their host binds in one container inspection.
+	GetContainerBackendBinds(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error)
 
 	// Image and port inspection
 	GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error)
@@ -52,7 +66,10 @@ type ContainerRuntime interface {
 	// Volume management
 	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
 	VolumeExists(ctx context.Context, volumeName string) (bool, error)
-	CreateVolume(ctx context.Context, volumeName string) error
+	// CreateVolume creates one named volume with the given labels.
+	// Labels carry ownership provenance; a caller that omits them
+	// creates an unmanaged volume that prune never adopts.
+	CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error
 	RemoveVolume(ctx context.Context, volumeName string, force bool) error
 	ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
 

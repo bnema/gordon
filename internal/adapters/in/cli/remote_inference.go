@@ -5,20 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/gordon/pkg/validation"
 )
 
 type remoteInferenceProbe func(context.Context, *remote.Client) (bool, error)
 
-func inferPushRemote(ctx context.Context, imageArg, domainFlag, dockerfile string) (*remote.ResolvedRemote, error) {
-	if domainFlag != "" {
-		return inferRemoteForRouteDomain(ctx, domainFlag)
-	}
-
+func inferPushRemote(ctx context.Context, imageArg, _, dockerfile string) (*remote.ResolvedRemote, error) {
 	if imageArg == "" {
 		detected, err := detectImageName(dockerfile)
 		if err != nil {
@@ -26,105 +23,20 @@ func inferPushRemote(ctx context.Context, imageArg, domainFlag, dockerfile strin
 		}
 		imageArg = detected
 	}
-
-	if looksLikeLegacyDomain(imageArg) {
-		lookupImage := imageArg
-		domainLookupArg := imageArg
-		if parsedImage, ref := validation.ParseImageReference(imageArg); parsedImage != imageArg {
-			domainLookupArg = parsedImage
-			if !strings.HasPrefix(ref, "sha256:") {
-				lookupImage = parsedImage
-			}
-		}
-
-		resolved, err := inferRemoteForImage(ctx, lookupImage)
-		if err != nil || resolved != nil {
-			return resolved, err
-		}
-
-		return inferRemoteForRouteDomain(ctx, domainLookupArg)
-	}
-
 	classified := classifyPushArgument(imageArg)
-	return inferRemoteForImage(ctx, classified.lookupImage)
+	return inferRemoteForImage(ctx, classified.repository)
 }
 
 func inferRemoteForImage(ctx context.Context, imageName string) (*remote.ResolvedRemote, error) {
 	return inferSavedRemote(ctx, "image", imageName, func(ctx context.Context, client *remote.Client) (bool, error) {
-		routes, err := client.FindRoutesByImage(ctx, imageName)
-		if err != nil {
-			return false, err
-		}
-		return len(filterPreviewRoutes(routes)) > 0, nil
-	})
-}
-
-func inferRemoteForRouteDomain(ctx context.Context, routeDomain string) (*remote.ResolvedRemote, error) {
-	return inferSavedRemote(ctx, "route", routeDomain, func(ctx context.Context, client *remote.Client) (bool, error) {
-		_, err := client.GetRoute(ctx, routeDomain)
+		tags, err := client.ListTags(ctx, imageName)
 		if err != nil {
 			if isRemoteNotFoundError(err) {
 				return false, nil
 			}
 			return false, err
 		}
-		return true, nil
-	})
-}
-
-func inferRemoteForRouteCleanupDomain(ctx context.Context, routeDomain string) (*remote.ResolvedRemote, error) {
-	return inferSavedRemote(ctx, "route cleanup", routeDomain, func(ctx context.Context, client *remote.Client) (bool, error) {
-		_, err := client.GetRoute(ctx, routeDomain)
-		if err == nil {
-			return true, nil
-		}
-		if !isRemoteNotFoundError(err) {
-			return false, err
-		}
-
-		preview, err := client.GetRouteCleanupPreview(ctx, routeDomain)
-		if err != nil {
-			return false, err
-		}
-		return routeCleanupReportHasEvidence(preview), nil
-	})
-}
-
-func routeCleanupReportHasEvidence(report *domain.CleanupReport) bool {
-	if report == nil {
-		return false
-	}
-	return len(report.PreservedVolumes) > 0 || len(report.PreservedAttachments) > 0 || len(report.OrphanedEntities) > 0
-}
-
-func inferRemoteForAttachmentImage(ctx context.Context, imageName string) (*remote.ResolvedRemote, error) {
-	return inferSavedRemote(ctx, "attachment image", imageName, func(ctx context.Context, client *remote.Client) (bool, error) {
-		targets, err := client.FindAttachmentTargetsByImage(ctx, imageName)
-		if err != nil {
-			return false, err
-		}
-		return len(targets) > 0, nil
-	})
-}
-
-func inferRemoteForAttachmentTarget(ctx context.Context, target string) (*remote.ResolvedRemote, error) {
-	return inferSavedRemote(ctx, "attachment target", target, func(ctx context.Context, client *remote.Client) (bool, error) {
-		images, err := client.GetAttachmentsConfig(ctx, target)
-		if err == nil {
-			return len(images) > 0, nil
-		}
-		if !isRemoteNotFoundError(err) {
-			return false, err
-		}
-
-		_, err = client.GetRoute(ctx, target)
-		if err != nil {
-			if isRemoteNotFoundError(err) {
-				return false, nil
-			}
-			return false, err
-		}
-		return true, nil
+		return len(tags) > 0, nil
 	})
 }
 
@@ -153,7 +65,7 @@ func inferSavedRemote(ctx context.Context, targetKind, target string, probe remo
 
 	for _, name := range names {
 		entry := remotes[name]
-		matched, err := probe(ctx, newRoutesTargetClient(name, entry))
+		matched, err := probe(ctx, newInferenceTargetClient(name, entry))
 		if err != nil {
 			probeFailures = append(probeFailures, fmt.Sprintf("%s (%v)", name, err))
 			continue
@@ -183,7 +95,7 @@ func inferSavedRemote(ctx context.Context, targetKind, target string, probe remo
 }
 
 func loadInferenceCandidateRemotes() (map[string]remote.RemoteEntry, bool) {
-	if _, ok := resolveRoutesExplicitTarget(); ok {
+	if _, ok := resolveExplicitTargetName(); ok {
 		return nil, false
 	}
 
@@ -205,8 +117,8 @@ func resolvedRemoteFromEntry(name string, entry remote.RemoteEntry) *remote.Reso
 	return &remote.ResolvedRemote{
 		Name:        name,
 		URL:         entry.URL,
-		Token:       resolveRoutesTokenForTarget(name, entry),
-		InsecureTLS: resolveRoutesInsecureForTarget(name, entry),
+		Token:       resolveTokenForTarget(name, entry),
+		InsecureTLS: resolveInsecureForTarget(name, entry),
 	}
 }
 
@@ -217,12 +129,86 @@ func isRemoteNotFoundError(err error) bool {
 	return errors.Is(err, domain.ErrRouteNotFound)
 }
 
-func filterPreviewRoutes(routes []domain.Route) []domain.Route {
-	filtered := make([]domain.Route, 0, len(routes))
-	for _, route := range routes {
-		if !strings.Contains(route.Domain, domain.DefaultPreviewSeparator) {
-			filtered = append(filtered, route)
+func resolveExplicitRemote() (*remote.ResolvedRemote, bool, error) {
+	target, ok := resolveExplicitTargetName()
+	if !ok {
+		return nil, false, nil
+	}
+
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return &remote.ResolvedRemote{
+			URL:         target,
+			Token:       resolveTokenForTarget("", remote.RemoteEntry{}),
+			InsecureTLS: resolveInsecureForTarget("", remote.RemoteEntry{}),
+		}, true, nil
+	}
+
+	remotes, err := remote.LoadRemotes("")
+	if err != nil {
+		return nil, false, err
+	}
+
+	if remotes != nil {
+		if entry, found := remotes.Remotes[target]; found {
+			return &remote.ResolvedRemote{
+				Name:        target,
+				URL:         entry.URL,
+				Token:       resolveTokenForTarget(target, entry),
+				InsecureTLS: resolveInsecureForTarget(target, entry),
+			}, true, nil
 		}
 	}
-	return filtered
+
+	return nil, false, nil
+}
+
+func resolveExplicitTargetName() (string, bool) {
+	if target := strings.TrimSpace(remoteFlag); target != "" {
+		return target, true
+	}
+	if target := strings.TrimSpace(os.Getenv("GORDON_REMOTE")); target != "" {
+		return target, true
+	}
+	return "", false
+}
+
+func resolveTokenForTarget(name string, entry remote.RemoteEntry) string {
+	if token := strings.TrimSpace(tokenFlag); token != "" {
+		return token
+	}
+	if token := strings.TrimSpace(os.Getenv("GORDON_TOKEN")); token != "" {
+		return token
+	}
+	if name != "" {
+		return remote.ResolveTokenForRemote(name, entry)
+	}
+	return ""
+}
+
+func resolveInsecureForTarget(name string, entry remote.RemoteEntry) bool {
+	if insecureTLSFlag {
+		return true
+	}
+	if env := strings.TrimSpace(os.Getenv("GORDON_INSECURE")); env != "" {
+		if value, err := strconv.ParseBool(env); err == nil {
+			return value
+		}
+	}
+	if name != "" {
+		return entry.InsecureTLS
+	}
+	return false
+}
+
+func newInferenceTargetClient(name string, entry remote.RemoteEntry) *remote.Client {
+	return remote.NewClient(entry.URL, remoteClientOptions(resolveTokenForTarget(name, entry), resolveInsecureForTarget(name, entry))...)
+}
+
+// inferExplicitTarget resolves --remote/GORDON_REMOTE without probing saved remotes.
+func inferExplicitTarget(_ context.Context) (*remote.ResolvedRemote, error) {
+	resolved, ok, err := resolveExplicitRemote()
+	if err != nil || !ok {
+		return nil, err
+	}
+	return resolved, nil
 }

@@ -4,8 +4,8 @@ Automated deployment with GitLab CI/CD using Gordon's push command.
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Generated deployment token
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. A least-privilege token: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the pipeline applies or deploys apps
 3. GitLab CI/CD variables configured
 
 ## Quick Setup
@@ -17,7 +17,7 @@ On your Gordon server:
 ```bash
 gordon auth token generate \
   --subject gitlab-ci \
-  --scopes "push,pull,admin:routes:read,admin:config:write" \
+  --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 0
 ```
 
@@ -48,7 +48,7 @@ deploy:
     - gordon push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   only:
     - tags
 ```
@@ -76,7 +76,7 @@ deploy:
     - gordon push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_TAG
 ```
@@ -99,7 +99,7 @@ deploy:
     - gordon push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 ```
@@ -120,7 +120,7 @@ deploy:
     - gordon push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   when: manual
 ```
 
@@ -142,7 +142,7 @@ deploy:
         --token "$GORDON_TOKEN"
         --build-arg NODE_ENV=production
         --build-arg API_URL=https://api.example.com
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_TAG
 ```
@@ -166,7 +166,7 @@ deploy:
 ```
 
 This requires additional CI/CD variables: `GORDON_REGISTRY` and `GORDON_USERNAME`.
-Gordon auto-deploys when it receives the image.
+Pushing only stores the image; deploy explicitly with `gordon apps deploy` afterwards.
 
 ## Version Detection
 

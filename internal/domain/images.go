@@ -12,6 +12,8 @@ type ImagePruneOptions struct {
 	PruneDangling bool
 	// PruneRegistry enables registry tag retention and blob garbage collection.
 	PruneRegistry bool
+	// DryRun plans everything and deletes nothing.
+	DryRun bool
 }
 
 // DefaultImagePruneOptions returns options that prune both scopes with the default retention.
@@ -55,6 +57,9 @@ type RegistryPruneResult struct {
 type ImagePruneReport struct {
 	Runtime  RuntimePruneResult
 	Registry RegistryPruneResult
+	// Plan carries every candidate's verdict, the inventory gaps, and
+	// the applied flag. Dry-run and execution share this shape.
+	Plan PruneReport
 }
 
 // ImageInfo describes an image/tag visible from runtime and registry data.

@@ -26,3 +26,13 @@ func TestInitConfigAcceptsLegacyPortsWithEntrypoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, cfg.EntryPoints, "edge")
 }
+
+func TestInitConfigRejectsRetiredAppKeys(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[routes]\n[routes.blog]\nimage = \"reg/blog:latest\"\n"), 0o600))
+
+	_, _, err := initConfig(configPath)
+
+	require.ErrorContains(t, err, "config-retired")
+	require.ErrorContains(t, err, `"routes"`)
+}

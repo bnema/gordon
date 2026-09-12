@@ -41,13 +41,29 @@ func TestRunVolumesList_JSON(t *testing.T) {
 
 func TestRunVolumesPrune_JSONExecutesActualPrune(t *testing.T) {
 	clientMock := climocks.NewMockvolumesClient(t)
-	resp := &dto.VolumePruneResponse{
+	preview := &dto.VolumePruneResponse{Plan: dto.PruneSummary{
+		Eligible: 1,
+		Candidates: []dto.PruneCandidate{{
+			Kind: "volume", Ref: "orphan1", Verdict: "eligible",
+		}},
+	}}
+	result := &dto.VolumePruneResponse{
 		VolumesRemoved: 1,
 		SpaceReclaimed: 1024,
 		Volumes:        []dto.Volume{{Name: "orphan1", Size: 1024}},
+		Plan: dto.PruneSummary{
+			Applied:  true,
+			Eligible: 1,
+			Candidates: []dto.PruneCandidate{{
+				Kind: "volume", Ref: "orphan1", Verdict: "eligible",
+			}},
+			Deleted: []dto.PruneCandidate{{
+				Kind: "volume", Ref: "orphan1", Verdict: "eligible",
+			}},
+		},
 	}
-	previewCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true}).Return(resp, nil).Once()
-	pruneCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: false}).Return(resp, nil).Once()
+	previewCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true}).Return(preview, nil).Once()
+	pruneCall := clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: false}).Return(result, nil).Once()
 	mock.InOrder(previewCall, pruneCall)
 
 	var out bytes.Buffer
@@ -59,16 +75,17 @@ func TestRunVolumesPrune_JSONExecutesActualPrune(t *testing.T) {
 func TestRunVolumesPrune_DryRun(t *testing.T) {
 	clientMock := climocks.NewMockvolumesClient(t)
 	clientMock.EXPECT().PruneVolumes(context.Background(), dto.VolumePruneRequest{DryRun: true}).Return(&dto.VolumePruneResponse{
-		VolumesRemoved: 2,
-		SpaceReclaimed: 4096,
-		Volumes: []dto.Volume{
-			{Name: "orphan1", Size: 2048},
-			{Name: "orphan2", Size: 2048},
+		Plan: dto.PruneSummary{
+			Eligible: 2,
+			Candidates: []dto.PruneCandidate{
+				{Kind: "volume", Ref: "orphan1", Verdict: "eligible"},
+				{Kind: "volume", Ref: "orphan2", Verdict: "eligible"},
+			},
 		},
 	}, nil).Once()
 
 	var out bytes.Buffer
 	err := runVolumesPrune(context.Background(), clientMock, volumesPruneOptions{DryRun: true}, &out)
 	require.NoError(t, err)
-	assert.Contains(t, out.String(), "orphan1")
+	assert.Contains(t, out.String(), "Would delete: 2")
 }

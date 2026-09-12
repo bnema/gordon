@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -30,13 +29,12 @@ var registryTracer = otel.Tracer("gordon.registry")
 
 // Service implements the RegistryService interface.
 type Service struct {
-	blobStorage      out.BlobStorage
-	manifestStorage  out.ManifestStorage
-	eventBus         out.EventPublisher
-	metrics          *telemetry.Metrics
-	suppressedImages sync.Map // imageName -> *time.Timer
-	mutationMu       *sync.RWMutex
-	registryState    *registrystate.State
+	blobStorage     out.BlobStorage
+	manifestStorage out.ManifestStorage
+	eventBus        out.EventPublisher
+	metrics         *telemetry.Metrics
+	mutationMu      *sync.RWMutex
+	registryState   *registrystate.State
 }
 
 // SetMetrics sets the telemetry metrics for the registry service.
@@ -62,85 +60,6 @@ func NewService(
 		mutationMu:      &registryState.MutationMu,
 		registryState:   registryState,
 	}
-}
-
-// SuppressDeployEvent marks an image name to skip image.pushed events.
-// The suppression auto-expires after 2 minutes to prevent leaks.
-func (s *Service) SuppressDeployEvent(imageName string) {
-	imageName = ExtractImageName(strings.TrimSpace(imageName))
-	if imageName == "" {
-		return
-	}
-
-	var timer *time.Timer
-	timer = time.AfterFunc(2*time.Minute, func() {
-		// Only delete if this timer is still the current one, preventing an
-		// old timer's callback from removing a newer suppression entry.
-		if v, ok := s.suppressedImages.Load(imageName); ok && v == timer {
-			s.suppressedImages.Delete(imageName)
-		}
-	})
-	if existing, loaded := s.suppressedImages.LoadOrStore(imageName, timer); loaded {
-		existing.(*time.Timer).Stop()
-		s.suppressedImages.Store(imageName, timer)
-	}
-}
-
-// ClearDeployEventSuppression removes event suppression for an image.
-func (s *Service) ClearDeployEventSuppression(imageName string) {
-	imageName = ExtractImageName(strings.TrimSpace(imageName))
-	if imageName == "" {
-		return
-	}
-
-	if v, loaded := s.suppressedImages.LoadAndDelete(imageName); loaded {
-		v.(*time.Timer).Stop()
-	}
-}
-
-// ExtractImageName returns just the repository path of a container image
-// reference, stripping any registry host prefix, tag, and digest.
-// Examples:
-//
-//	"reg.example.com/team/my-app:latest" -> "team/my-app"
-//	"reg.example.com/my-app@sha256:abc"  -> "my-app"
-//	"my-app:v1.2"                        -> "my-app"
-func ExtractImageName(imageRef string) string {
-	name := imageRef
-	// Strip digest
-	if idx := strings.Index(name, "@"); idx != -1 {
-		name = name[:idx]
-	}
-	// Strip tag
-	// Find the last colon, but only strip it if it comes after any slash
-	// (to avoid treating a port number in the host as a tag).
-	if idx := strings.LastIndex(name, ":"); idx != -1 {
-		slashIdx := strings.LastIndex(name, "/")
-		if idx > slashIdx {
-			name = name[:idx]
-		}
-	}
-	// Strip registry host: if the first segment contains a dot or colon it is
-	// a registry hostname; remove it.
-	parts := strings.SplitN(name, "/", 2)
-	if len(parts) == 2 {
-		host := parts[0]
-		if strings.ContainsAny(host, ".:") || host == "localhost" {
-			name = parts[1]
-		}
-	}
-	return name
-}
-
-// IsDeployEventSuppressed checks if deploy events are suppressed for an image.
-func (s *Service) IsDeployEventSuppressed(imageName string) bool {
-	imageName = ExtractImageName(strings.TrimSpace(imageName))
-	if imageName == "" {
-		return false
-	}
-
-	_, exists := s.suppressedImages.Load(imageName)
-	return exists
 }
 
 // GetManifest retrieves a manifest by name and reference.
@@ -202,6 +121,10 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 		digest = manifest.Reference
 	}
 
+	if err := s.validateManifestBlobs(manifest.Name, manifest.Data); err != nil {
+		return "", log.WrapErr(err, "manifest references unowned content")
+	}
+
 	if err := s.manifestStorage.PutManifest(manifest.Name, manifest.Reference, manifest.ContentType, manifest.Data); err != nil {
 		return "", log.WrapErr(err, "failed to store manifest")
 	}
@@ -221,17 +144,13 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 	// A docker push sends manifests by both digest and tag; firing only on
 	// tag prevents duplicate deploy triggers for the same push.
 	if s.eventBus != nil && !validation.IsDigest(manifest.Reference) {
-		if s.IsDeployEventSuppressed(manifest.Name) {
-			log.Info().Str("image", manifest.Name).Msg("skipping image.pushed event: CLI deploy intent active")
-		} else {
-			if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
-				Name:        manifest.Name,
-				Reference:   manifest.Reference,
-				Manifest:    manifest.Data,
-				Annotations: manifest.Annotations,
-			}); err != nil {
-				log.Warn().Err(err).Msg("failed to publish image pushed event")
-			}
+		if err := s.eventBus.Publish(domain.EventImagePushed, domain.ImagePushedPayload{
+			Name:        manifest.Name,
+			Reference:   manifest.Reference,
+			Manifest:    manifest.Data,
+			Annotations: manifest.Annotations,
+		}); err != nil {
+			log.Warn().Err(err).Msg("failed to publish image pushed event")
 		}
 	}
 
@@ -277,8 +196,10 @@ func (s *Service) GetBlob(ctx context.Context, digest string) (io.ReadCloser, er
 	return reader, nil
 }
 
-// GetBlobPath returns the filesystem path to a blob only when a manifest in
-// the requested repository references it.
+// GetBlobPath returns the filesystem path to a blob only when the
+// repository completed an upload of that digest. Ownership is never
+// inferred from manifest references: a repository writer controls its own
+// manifests, so a manifest naming a foreign digest must not confer access.
 func (s *Service) GetBlobPath(ctx context.Context, name, digest string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -288,11 +209,11 @@ func (s *Service) GetBlobPath(ctx context.Context, name, digest string) (string,
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	referenced, err := s.repositoryReferencesDigest(name, digest)
+	owned, err := s.blobStorage.BlobOwnedByRepository(name, digest)
 	if err != nil {
 		return "", log.WrapErr(err, "failed to verify blob ownership")
 	}
-	if !referenced {
+	if !owned {
 		return "", domain.ErrBlobNotFound
 	}
 
@@ -318,70 +239,51 @@ type manifestReferences struct {
 
 const maxManifestTraversal = 10000
 
-func (s *Service) repositoryReferencesDigest(name, target string) (bool, error) {
-	tags, err := s.manifestStorage.ListTags(name)
-	if err != nil {
-		if errors.Is(err, domain.ErrManifestNotFound) {
-			return false, nil
-		}
-		return false, fmt.Errorf("list tags for repository %s: %w", name, err)
+// validateManifestBlobs requires every config/layer blob a manifest
+// references to be owned by the repository, and every child manifest to
+// already exist in it. A manifest can therefore never manufacture access to
+// content the repository did not receive through an authenticated push.
+func (s *Service) validateManifestBlobs(name string, data []byte) error {
+	var refs manifestReferences
+	if err := json.Unmarshal(data, &refs); err != nil {
+		return fmt.Errorf("%w: manifest is not a JSON descriptor document", domain.ErrManifestBlobUnknown)
 	}
 
-	if len(tags) > maxManifestTraversal {
-		return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
+	blobs := make([]manifestDescriptor, 0, 1+len(refs.Layers)+len(refs.Blobs))
+	if refs.Config.Digest != "" {
+		blobs = append(blobs, refs.Config)
 	}
-	queue := append([]string(nil), tags...)
-	seen := make(map[string]struct{}, len(queue))
-	for len(queue) > 0 {
-		reference := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[reference]; ok {
+	blobs = append(blobs, refs.Layers...)
+	blobs = append(blobs, refs.Blobs...)
+	for _, descriptor := range blobs {
+		if descriptor.Digest == "" {
 			continue
 		}
-		seen[reference] = struct{}{}
-		if len(seen) > maxManifestTraversal {
-			return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
-		}
-
-		data, _, err := s.manifestStorage.GetManifest(name, reference)
+		owned, err := s.blobStorage.BlobOwnedByRepository(name, descriptor.Digest)
 		if err != nil {
-			return false, fmt.Errorf("get manifest %s for repository %s: %w", reference, name, err)
+			return fmt.Errorf("verify blob ownership: %w", err)
 		}
-		var refs manifestReferences
-		if err := json.Unmarshal(data, &refs); err != nil {
-			return false, fmt.Errorf("decode manifest %s: %w", reference, err)
-		}
-
-		if manifestReferencesTarget(refs, target) {
-			return true, nil
-		}
-		nestedManifests := refs.Manifests
-		if refs.Subject != nil && refs.Subject.Digest != "" {
-			nestedManifests = append(append([]manifestDescriptor(nil), refs.Manifests...), *refs.Subject)
-		}
-		if len(seen)+len(queue)+len(nestedManifests) > maxManifestTraversal {
-			return false, fmt.Errorf("%w: repository %s exceeds manifest traversal limit", domain.ErrBlobNotFound, name)
-		}
-		queue = appendManifestDigests(queue, nestedManifests)
-	}
-	return false, nil
-}
-
-func manifestReferencesTarget(refs manifestReferences, target string) bool {
-	return refs.Config.Digest == target ||
-		descriptorListContains(refs.Layers, target) ||
-		descriptorListContains(refs.Manifests, target) ||
-		descriptorListContains(refs.Blobs, target) ||
-		(refs.Subject != nil && refs.Subject.Digest == target)
-}
-
-func appendManifestDigests(queue []string, descriptors []manifestDescriptor) []string {
-	for _, descriptor := range descriptors {
-		if descriptor.Digest != "" {
-			queue = append(queue, descriptor.Digest)
+		if !owned {
+			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
 		}
 	}
-	return queue
+
+	children := refs.Manifests
+	if refs.Subject != nil && refs.Subject.Digest != "" {
+		children = append(append([]manifestDescriptor(nil), children...), *refs.Subject)
+	}
+	if len(children) > maxManifestTraversal {
+		return fmt.Errorf("%w: manifest references too many children", domain.ErrManifestBlobUnknown)
+	}
+	for _, descriptor := range children {
+		if descriptor.Digest == "" {
+			continue
+		}
+		if _, _, err := s.manifestStorage.GetManifest(name, descriptor.Digest); err != nil {
+			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
+		}
+	}
+	return nil
 }
 
 func manifestReferencedDigests(data []byte) []string {
@@ -404,15 +306,6 @@ func manifestReferencedDigests(data []byte) []string {
 		digests = append(digests, refs.Subject.Digest)
 	}
 	return digests
-}
-
-func descriptorListContains(descriptors []manifestDescriptor, digest string) bool {
-	for _, descriptor := range descriptors {
-		if descriptor.Digest == digest {
-			return true
-		}
-	}
-	return false
 }
 
 func manifestDigestMatches(reference string, data []byte) (bool, error) {
@@ -493,8 +386,9 @@ func (s *Service) AppendBlobChunk(ctx context.Context, name, uuid string, data i
 	return length, nil
 }
 
-// FinishUpload completes a blob upload.
-func (s *Service) FinishUpload(ctx context.Context, uuid, digest string) error {
+// FinishUpload completes a blob upload for the named repository and records
+// the repository/blob association.
+func (s *Service) FinishUpload(ctx context.Context, name, uuid, digest string) error {
 	// Keep the transition from upload to blob storage atomic with respect to
 	// registry garbage collection. PruneRegistry holds the exclusive lock, so
 	// it cannot observe a finalized blob before it is marked pending.
@@ -504,12 +398,13 @@ func (s *Service) FinishUpload(ctx context.Context, uuid, digest string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "FinishUpload",
+		"name":                name,
 		"uuid":                uuid,
 		"digest":              digest,
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	if err := s.blobStorage.FinishBlobUpload(uuid, digest); err != nil {
+	if err := s.blobStorage.FinishBlobUpload(name, uuid, digest); err != nil {
 		return log.WrapErr(err, "failed to finish blob upload")
 	}
 	s.registryState.AddPending(digest, time.Now().UTC())
@@ -519,15 +414,16 @@ func (s *Service) FinishUpload(ctx context.Context, uuid, digest string) error {
 }
 
 // CancelUpload cancels an in-progress upload.
-func (s *Service) CancelUpload(ctx context.Context, uuid string) error {
+func (s *Service) CancelUpload(ctx context.Context, name, uuid string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "CancelUpload",
+		"name":                name,
 		"uuid":                uuid,
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	if err := s.blobStorage.CancelBlobUpload(uuid); err != nil {
+	if err := s.blobStorage.CancelBlobUpload(name, uuid); err != nil {
 		return log.WrapErr(err, "failed to cancel blob upload")
 	}
 

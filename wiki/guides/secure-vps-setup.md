@@ -175,7 +175,7 @@ gordon remotes use tailnet-reg
 # Then use commands normally (auth + admin API)
 gordon auth login
 gordon routes list
-gordon backup status
+gordon backups status
 ```
 
 `~/.config/gordon/remotes.toml` should contain an entry like:

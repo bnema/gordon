@@ -135,7 +135,7 @@ Standard Go durations also work: `24h`, `30m`, `1h30m`
 
 Registry scopes: `push`, `pull`, `push,pull`
 
-Admin scopes: `admin:*:*`, `admin:routes:read`, `admin:routes:write`, `admin:config:read`, `admin:config:write`, `admin:status:read`, `admin:logs:read`, `admin:volumes:read`, `admin:volumes:write`, `admin:secrets:read`, `admin:secrets:write`
+Admin scopes: `admin:*:*`, `admin:apps:read`, `admin:apps:write`, `admin:config:read`, `admin:config:write`, `admin:status:read`, `admin:logs:read`, `admin:volumes:read`, `admin:volumes:write`, `admin:secrets:read`, `admin:secrets:write`
 
 Combine scopes with commas:
 
@@ -271,8 +271,8 @@ Usage:
 | `pull` | Pull images from registry |
 | `push,pull` | Both push and pull (default) |
 | `admin:*:*` | Full admin access |
-| `admin:routes:read` | Read-only routes access |
-| `admin:routes:write` | Routes write access |
+| `admin:apps:read` | Read-only apps access (list, show, diff, status) |
+| `admin:apps:write` | App mutations (apply, deploy, lifecycle, secrets) |
 | `admin:config:read` | Read-only config access |
 | `admin:config:write` | Config write access |
 | `admin:status:read` | Read-only status/health |

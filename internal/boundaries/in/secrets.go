@@ -2,8 +2,6 @@ package in
 
 import (
 	"context"
-
-	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // SecretService defines the contract for managing domain-scoped secrets.
@@ -12,10 +10,6 @@ type SecretService interface {
 	// ListKeys returns the list of secret keys for a domain (not values).
 	// Returns an error if the domain is invalid.
 	ListKeys(ctx context.Context, domain string) ([]string, error)
-
-	// ListKeysWithAttachments returns the list of secret keys for a domain
-	// along with any attachment secrets for containers associated with the domain.
-	ListKeysWithAttachments(ctx context.Context, domain string) ([]string, []out.AttachmentSecrets, error)
 
 	// GetAll returns all secrets for a domain as a key-value map.
 	// Returns an error if the domain is invalid.
@@ -28,12 +22,4 @@ type SecretService interface {
 	// Delete removes a specific secret key from a domain.
 	// Returns an error if the domain is invalid.
 	Delete(ctx context.Context, domain, key string) error
-
-	// SetAttachment sets or updates multiple secrets for an attachment container.
-	// The container name is derived from the domain and service name.
-	SetAttachment(ctx context.Context, domain, service string, secrets map[string]string) error
-
-	// DeleteAttachment removes a specific secret key from an attachment container.
-	// The container name is derived from the domain and service name.
-	DeleteAttachment(ctx context.Context, domain, service, key string) error
 }

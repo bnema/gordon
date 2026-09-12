@@ -3,17 +3,29 @@ package domain
 // Label keys used by Gordon for container and image metadata.
 const (
 	// Container labels
-	LabelDomain     = "gordon.domain"
-	LabelImage      = "gordon.image"
-	LabelManaged    = "gordon.managed"
-	LabelRoute      = "gordon.route"
-	LabelAttachment = "gordon.attachment"
-	LabelAttachedTo = "gordon.attached-to"
-	LabelCreated    = "gordon.created"
+	LabelDomain  = "gordon.domain"
+	LabelImage   = "gordon.image"
+	LabelManaged = "gordon.managed"
+	LabelCreated = "gordon.created"
 	// LabelEnvHash stores a SHA-256 hash of the effective environment
 	// variables at deploy time, used to detect env drift without
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
+
+	// App ownership labels are stamped by the v2.50 deploy engine on every
+	// container and volume it creates (03-deployment.md §4A/B, frozen here
+	// so prune/backup guards can consume them before the engine activates).
+	// The engine wiring that stamps them lands at cutover; until then no
+	// live resource carries them and guards treat their absence on a
+	// managed resource as legacy/unknown provenance (never prune-eligible
+	// once app state exists).
+	LabelApp         = "gordon.app"
+	LabelAppService  = "gordon.app.service"
+	LabelAppRevision = "gordon.app.revision"
+	// LabelAppID carries the app's stable internal UUID, so provenance
+	// survives a public-name reuse without ever inferring ownership
+	// from the name alone.
+	LabelAppID = "gordon.app.id"
 
 	// Standalone service labels identify Gordon-managed L4 service containers.
 	LabelService                       = "gordon.service"

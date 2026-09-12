@@ -13,6 +13,7 @@ jobs:
       pull-requests: read
     outputs:
       go: ${{ steps.filter.outputs.go }}
+      installer: ${{ steps.filter.outputs.installer }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
@@ -26,6 +27,22 @@ jobs:
               - '.golangci.yml'
               - 'Makefile'
               - '.github/workflows/**'
+            installer:
+              - 'install.sh'
+              - 'tests/install_next_test.sh'
+              - '.github/workflows/ci.yml'
+
+  installer:
+    name: Installer
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check installer scripts
+        run: |
+          shellcheck -s sh install.sh tests/install_next_test.sh
+          sh tests/install_next_test.sh
 
   lint:
     name: Lint
@@ -38,14 +55,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.x"
-
-      - name: Cache Go modules
-        uses: actions/cache@v5
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
+          cache: true
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
@@ -63,22 +73,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.27.x"
-
-      - name: Cache Go modules
-        uses: actions/cache@v5
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-mod-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-mod-
-
-      - name: Cache Go build cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-build-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-build-
+          cache: true
 
       - name: Run tests
         run: go test -race -v ./...

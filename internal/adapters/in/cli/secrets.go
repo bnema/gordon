@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 
@@ -16,11 +15,12 @@ import (
 func newSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
-		Short: "Manage secrets",
-		Long: `Manage secrets (environment variables) for routes and attachments.
+		Short: "Manage installation secrets",
+		Long: `Manage installation secrets (per-host entries such as service auth).
 
-Secrets are stored per-domain and injected into containers as environment variables.
-Use --attachment to target attachment containers (databases, caches, etc.).
+Application secret VALUES are managed with gordon apps secrets and stay
+in pass under gordon/apps/<uuid>/<service>/<name>. The commands below
+manage the installation secret store only.
 
 When targeting a remote Gordon instance (via --remote flag or GORDON_REMOTE env var),
 these commands operate on the remote server.`,
@@ -43,7 +43,6 @@ func newSecretsListCmd() *cobra.Command {
 		Long: `List all secret keys configured for a domain.
 
 Note: Only secret keys are shown, not values (for security).
-Attachment secrets (for services like databases) are also displayed.
 
 Examples:
   gordon secrets list app.mydomain.com
@@ -64,28 +63,22 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	ctx := cmd.Context()
 	secretDomain := args[0]
 
-	handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+	handle, err := resolveControlPlaneForDomain(ctx, secretDomain)
 	if err != nil {
 		return err
 	}
 	defer handle.close()
 
-	keys, attachments, err := fetchSecretsWithAttachments(ctx, handle.plane, secretDomain)
+	keys, err := fetchSecrets(ctx, handle.plane, secretDomain)
 	if err != nil {
 		return err
 	}
 
-	totalSecrets := len(keys)
-	for _, att := range attachments {
-		totalSecrets += len(att.Keys)
-	}
-
-	if totalSecrets == 0 {
+	if len(keys) == 0 {
 		if jsonOut {
 			return writeJSON(cmd.OutOrStdout(), map[string]any{
-				"domain":      secretDomain,
-				"keys":        []string{},
-				"attachments": []any{},
+				"domain": secretDomain,
+				"keys":   []string{},
 			})
 		}
 		fmt.Println(styles.Theme.Muted.Render(fmt.Sprintf("No secrets configured for %s", secretDomain)))
@@ -93,13 +86,9 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	}
 
 	if jsonOut {
-		if attachments == nil {
-			attachments = []remote.AttachmentSecrets{}
-		}
 		return writeJSON(cmd.OutOrStdout(), map[string]any{
-			"domain":      secretDomain,
-			"keys":        keys,
-			"attachments": attachments,
+			"domain": secretDomain,
+			"keys":   keys,
 		})
 	}
 
@@ -110,7 +99,7 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	fmt.Println(styles.Theme.Title.Render(title))
 	fmt.Println()
 
-	rows := buildSecretsTableRows(keys, attachments)
+	rows := buildSecretsTableRows(keys)
 
 	table := components.NewTable(
 		components.WithColumns([]components.TableColumn{
@@ -124,120 +113,39 @@ func runSecretsListCmd(cmd *cobra.Command, args []string, jsonOut bool) error {
 	return nil
 }
 
-// fetchSecretsWithAttachments retrieves secrets from the selected control plane.
-func fetchSecretsWithAttachments(ctx context.Context, cp ControlPlane, secretDomain string) ([]string, []remote.AttachmentSecrets, error) {
-	result, err := cp.ListSecretsWithAttachments(ctx, secretDomain)
+// fetchSecrets retrieves secret keys from the selected control plane.
+func fetchSecrets(ctx context.Context, cp ControlPlane, secretDomain string) ([]string, error) {
+	result, err := cp.ListSecrets(ctx, secretDomain)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to list secrets: %w", err)
+		return nil, fmt.Errorf("failed to list secrets: %w", err)
 	}
-	return result.Keys, result.Attachments, nil
+	return result.Keys, nil
 }
 
-// buildSecretsTableRows builds table rows with tree structure for attachments.
-func buildSecretsTableRows(keys []string, attachments []remote.AttachmentSecrets) [][]string {
+// buildSecretsTableRows builds table rows for secret keys.
+func buildSecretsTableRows(keys []string) [][]string {
 	var rows [][]string
-
-	// Domain secrets first
 	for _, key := range keys {
 		rows = append(rows, []string{key, styles.Theme.Muted.Render("(hidden)")})
 	}
-
-	// Attachment secrets with tree structure
-	for i, att := range attachments {
-		isLastAttachment := i == len(attachments)-1
-		rows = append(rows, buildAttachmentRows(att, isLastAttachment)...)
-	}
-
 	return rows
-}
-
-// buildAttachmentRows builds table rows for a single attachment with tree structure.
-func buildAttachmentRows(att remote.AttachmentSecrets, isLastAttachment bool) [][]string {
-	var rows [][]string
-
-	// Attachment header with tree prefix
-	prefix := styles.IconTreeBranch + styles.IconTreeLine
-	if isLastAttachment {
-		prefix = styles.IconTreeLast + styles.IconTreeLine
-	}
-
-	serviceName := extractServiceName(att.Service)
-	attachmentHeader := fmt.Sprintf("%s %s", prefix, styles.Theme.Muted.Render(fmt.Sprintf("[%s]", serviceName)))
-	rows = append(rows, []string{attachmentHeader, ""})
-
-	// Keys for this attachment with nested tree structure
-	for j, key := range att.Keys {
-		isLastKey := j == len(att.Keys)-1
-		keyPrefix := getKeyPrefix(isLastAttachment, isLastKey)
-		rows = append(rows, []string{keyPrefix + " " + key, styles.Theme.Muted.Render("(hidden)")})
-	}
-
-	return rows
-}
-
-// extractServiceName extracts a short service name from a container name.
-// e.g., "gordon-git-bnema-dev-gitea-postgres" → "gitea-postgres"
-func extractServiceName(containerName string) string {
-	if !strings.HasPrefix(containerName, "gordon-") {
-		return containerName
-	}
-
-	parts := strings.SplitN(containerName, "-", 2)
-	if len(parts) <= 1 {
-		return containerName
-	}
-
-	serviceName := parts[1]
-	allParts := strings.Split(serviceName, "-")
-
-	// Handle service names based on the number of segments explicitly
-	if len(allParts) < 2 {
-		// No additional segments; use the service name as-is.
-		return serviceName
-	}
-	if len(allParts) == 2 {
-		// Exactly two segments; the service name is already in the desired form.
-		return strings.Join(allParts, "-")
-	}
-
-	// More than two segments: take the last two as the short service name (e.g., "gitea-postgres").
-	return strings.Join(allParts[len(allParts)-2:], "-")
-}
-
-// getKeyPrefix returns the tree prefix for a key based on its position.
-func getKeyPrefix(isLastAttachment, isLastKey bool) string {
-	if isLastAttachment {
-		// Parent is last, use space continuation
-		if isLastKey {
-			return "   " + styles.IconTreeLast + styles.IconTreeLine
-		}
-		return "   " + styles.IconTreeBranch + styles.IconTreeLine
-	}
-	// Parent has siblings, use vertical line continuation
-	if isLastKey {
-		return styles.IconTreeVert + "  " + styles.IconTreeLast + styles.IconTreeLine
-	}
-	return styles.IconTreeVert + "  " + styles.IconTreeBranch + styles.IconTreeLine
 }
 
 // newSecretsSetCmd creates the secrets set command.
 func newSecretsSetCmd() *cobra.Command {
-	var attachment, fromFile string
+	var fromFile string
 	var jsonOut bool
 
 	cmd := &cobra.Command{
 		Use:   "set <domain> --from-file <path>",
-		Short: "Set secrets for a domain or attachment",
-		Long: `Set one or more secrets for a domain or an attachment container.
+		Short: "Set installation secrets for a domain",
+		Long: `Set one or more installation secrets for a domain.
 
 Secrets are read from a mode 0600 file containing one KEY=value pair per line.
-
-Use --attachment to target an attachment service (e.g., postgres, redis) instead
-of the main domain container.
+For app secret values, use gordon apps secrets instead.
 
 Examples:
-  gordon secrets set app.mydomain.com --from-file ./app.env
-  gordon secrets set app.mydomain.com --attachment postgres --from-file ./postgres.env`,
+  gordon secrets set app.mydomain.com --from-file ./app.env`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -256,29 +164,20 @@ Examples:
 				secrets[parts[0]] = parts[1]
 			}
 
-			handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+			handle, err := resolveControlPlaneForDomain(ctx, secretDomain)
 			if err != nil {
 				return err
 			}
 			defer handle.close()
-			if attachment != "" {
-				if err := handle.plane.SetAttachmentSecrets(ctx, secretDomain, attachment, secrets); err != nil {
-					return fmt.Errorf("failed to set secrets: %w", err)
-				}
-			} else {
-				if err := handle.plane.SetSecrets(ctx, secretDomain, secrets); err != nil {
-					return fmt.Errorf("failed to set secrets: %w", err)
-				}
+			if err := handle.plane.SetSecrets(ctx, secretDomain, secrets); err != nil {
+				return fmt.Errorf("failed to set secrets: %w", err)
 			}
 
 			target := secretDomain
-			if attachment != "" {
-				target = fmt.Sprintf("%s [%s]", secretDomain, attachment)
-			}
 
 			if jsonOut {
 				return writeJSON(cmd.OutOrStdout(), map[string]any{
-					"domain": secretDomain, "attachment": attachment, "count": len(secrets), "updated": true,
+					"domain": secretDomain, "count": len(secrets), "updated": true,
 				})
 			}
 			if len(secrets) == 1 {
@@ -290,7 +189,6 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
 	cmd.Flags().StringVar(&fromFile, "from-file", "", "Read KEY=value lines from a mode 0600 file")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("from-file")
@@ -300,23 +198,18 @@ Examples:
 
 // newSecretsRemoveCmd creates the secrets remove command.
 func newSecretsRemoveCmd() *cobra.Command {
-	var (
-		force      bool
-		attachment string
-	)
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "remove <domain> <key>",
-		Short: "Remove a secret",
-		Long: `Remove a secret from a domain or an attachment container.
+		Short: "Remove an installation secret",
+		Long: `Remove an installation secret from a domain.
 
-Use --attachment to target an attachment service (e.g., postgres, redis) instead
-of the main domain container.
+For app secret values, use gordon apps secrets delete instead.
 
 Examples:
   gordon secrets remove app.mydomain.com OLD_API_KEY
-  gordon secrets remove app.mydomain.com OLD_API_KEY --force
-  gordon secrets remove app.mydomain.com --attachment postgres POSTGRES_PASSWORD`,
+  gordon secrets remove app.mydomain.com OLD_API_KEY --force`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -324,9 +217,6 @@ Examples:
 			key := args[1]
 
 			target := secretDomain
-			if attachment != "" {
-				target = fmt.Sprintf("%s [%s]", secretDomain, attachment)
-			}
 
 			// Confirm unless --force
 			if !force {
@@ -342,19 +232,13 @@ Examples:
 				}
 			}
 
-			handle, err := resolveControlPlaneForRouteDomain(ctx, secretDomain)
+			handle, err := resolveControlPlaneForDomain(ctx, secretDomain)
 			if err != nil {
 				return err
 			}
 			defer handle.close()
-			if attachment != "" {
-				if err := handle.plane.DeleteAttachmentSecret(ctx, secretDomain, attachment, key); err != nil {
-					return fmt.Errorf("failed to remove secret: %w", err)
-				}
-			} else {
-				if err := handle.plane.DeleteSecret(ctx, secretDomain, key); err != nil {
-					return fmt.Errorf("failed to remove secret: %w", err)
-				}
+			if err := handle.plane.DeleteSecret(ctx, secretDomain, key); err != nil {
+				return fmt.Errorf("failed to remove secret: %w", err)
 			}
 
 			fmt.Println(styles.RenderSuccess(fmt.Sprintf("Secret removed from %s: %s", target, key)))
@@ -363,7 +247,6 @@ Examples:
 	}
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Skip confirmation")
-	cmd.Flags().StringVarP(&attachment, "attachment", "a", "", "Target an attachment service (e.g., postgres, redis)")
 
 	return cmd
 }

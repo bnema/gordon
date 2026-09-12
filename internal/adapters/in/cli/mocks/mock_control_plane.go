@@ -40,107 +40,55 @@ func (_m *MockControlPlane) EXPECT() *MockControlPlane_Expecter {
 	return &MockControlPlane_Expecter{mock: &_m.Mock}
 }
 
-// AddAttachment provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) AddAttachment(ctx context.Context, domainOrGroup string, image string) error {
-	ret := _mock.Called(ctx, domainOrGroup, image)
+// ApplyApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
+	ret := _mock.Called(ctx, req)
 
 	if len(ret) == 0 {
-		panic("no return value specified for AddAttachment")
+		panic("no return value specified for ApplyApp")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, domainOrGroup, image)
-	} else {
-		r0 = ret.Error(0)
+	var r0 *dto.AppApplyResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.AppApplyRequest) (*dto.AppApplyResponse, error)); ok {
+		return returnFunc(ctx, req)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.AppApplyRequest) *dto.AppApplyResponse); ok {
+		r0 = returnFunc(ctx, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppApplyResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, dto.AppApplyRequest) error); ok {
+		r1 = returnFunc(ctx, req)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
-// MockControlPlane_AddAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddAttachment'
-type MockControlPlane_AddAttachment_Call struct {
+// MockControlPlane_ApplyApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ApplyApp'
+type MockControlPlane_ApplyApp_Call struct {
 	*mock.Call
 }
 
-// AddAttachment is a helper method to define mock.On call
+// ApplyApp is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainOrGroup string
-//   - image string
-func (_e *MockControlPlane_Expecter) AddAttachment(ctx any, domainOrGroup any, image any) *MockControlPlane_AddAttachment_Call {
-	return &MockControlPlane_AddAttachment_Call{Call: _e.mock.On("AddAttachment", ctx, domainOrGroup, image)}
+//   - req dto.AppApplyRequest
+func (_e *MockControlPlane_Expecter) ApplyApp(ctx any, req any) *MockControlPlane_ApplyApp_Call {
+	return &MockControlPlane_ApplyApp_Call{Call: _e.mock.On("ApplyApp", ctx, req)}
 }
 
-func (_c *MockControlPlane_AddAttachment_Call) Run(run func(ctx context.Context, domainOrGroup string, image string)) *MockControlPlane_AddAttachment_Call {
+func (_c *MockControlPlane_ApplyApp_Call) Run(run func(ctx context.Context, req dto.AppApplyRequest)) *MockControlPlane_ApplyApp_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 string
+		var arg1 dto.AppApplyRequest
 		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_AddAttachment_Call) Return(err error) *MockControlPlane_AddAttachment_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_AddAttachment_Call) RunAndReturn(run func(ctx context.Context, domainOrGroup string, image string) error) *MockControlPlane_AddAttachment_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// AddAutoRouteAllowedDomain provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	ret := _mock.Called(ctx, pattern)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddAutoRouteAllowedDomain")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, pattern)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_AddAutoRouteAllowedDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddAutoRouteAllowedDomain'
-type MockControlPlane_AddAutoRouteAllowedDomain_Call struct {
-	*mock.Call
-}
-
-// AddAutoRouteAllowedDomain is a helper method to define mock.On call
-//   - ctx context.Context
-//   - pattern string
-func (_e *MockControlPlane_Expecter) AddAutoRouteAllowedDomain(ctx any, pattern any) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
-	return &MockControlPlane_AddAutoRouteAllowedDomain_Call{Call: _e.mock.On("AddAutoRouteAllowedDomain", ctx, pattern)}
-}
-
-func (_c *MockControlPlane_AddAutoRouteAllowedDomain_Call) Run(run func(ctx context.Context, pattern string)) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
+			arg1 = args[1].(dto.AppApplyRequest)
 		}
 		run(
 			arg0,
@@ -150,69 +98,12 @@ func (_c *MockControlPlane_AddAutoRouteAllowedDomain_Call) Run(run func(ctx cont
 	return _c
 }
 
-func (_c *MockControlPlane_AddAutoRouteAllowedDomain_Call) Return(err error) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
-	_c.Call.Return(err)
+func (_c *MockControlPlane_ApplyApp_Call) Return(appApplyResponse *dto.AppApplyResponse, err error) *MockControlPlane_ApplyApp_Call {
+	_c.Call.Return(appApplyResponse, err)
 	return _c
 }
 
-func (_c *MockControlPlane_AddAutoRouteAllowedDomain_Call) RunAndReturn(run func(ctx context.Context, pattern string) error) *MockControlPlane_AddAutoRouteAllowedDomain_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// AddRoute provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) AddRoute(ctx context.Context, route domain.Route) error {
-	ret := _mock.Called(ctx, route)
-
-	if len(ret) == 0 {
-		panic("no return value specified for AddRoute")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.Route) error); ok {
-		r0 = returnFunc(ctx, route)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_AddRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddRoute'
-type MockControlPlane_AddRoute_Call struct {
-	*mock.Call
-}
-
-// AddRoute is a helper method to define mock.On call
-//   - ctx context.Context
-//   - route domain.Route
-func (_e *MockControlPlane_Expecter) AddRoute(ctx any, route any) *MockControlPlane_AddRoute_Call {
-	return &MockControlPlane_AddRoute_Call{Call: _e.mock.On("AddRoute", ctx, route)}
-}
-
-func (_c *MockControlPlane_AddRoute_Call) Run(run func(ctx context.Context, route domain.Route)) *MockControlPlane_AddRoute_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 domain.Route
-		if args[1] != nil {
-			arg1 = args[1].(domain.Route)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_AddRoute_Call) Return(err error) *MockControlPlane_AddRoute_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_AddRoute_Call) RunAndReturn(run func(ctx context.Context, route domain.Route) error) *MockControlPlane_AddRoute_Call {
+func (_c *MockControlPlane_ApplyApp_Call) RunAndReturn(run func(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error)) *MockControlPlane_ApplyApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -279,180 +170,37 @@ func (_c *MockControlPlane_BackupStatus_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
-// Bootstrap provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	ret := _mock.Called(ctx, req)
+// DeleteAppSecret provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error {
+	ret := _mock.Called(ctx, app, req)
 
 	if len(ret) == 0 {
-		panic("no return value specified for Bootstrap")
-	}
-
-	var r0 *dto.BootstrapResponse
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.BootstrapRequest) (*dto.BootstrapResponse, error)); ok {
-		return returnFunc(ctx, req)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, dto.BootstrapRequest) *dto.BootstrapResponse); ok {
-		r0 = returnFunc(ctx, req)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dto.BootstrapResponse)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, dto.BootstrapRequest) error); ok {
-		r1 = returnFunc(ctx, req)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_Bootstrap_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Bootstrap'
-type MockControlPlane_Bootstrap_Call struct {
-	*mock.Call
-}
-
-// Bootstrap is a helper method to define mock.On call
-//   - ctx context.Context
-//   - req dto.BootstrapRequest
-func (_e *MockControlPlane_Expecter) Bootstrap(ctx any, req any) *MockControlPlane_Bootstrap_Call {
-	return &MockControlPlane_Bootstrap_Call{Call: _e.mock.On("Bootstrap", ctx, req)}
-}
-
-func (_c *MockControlPlane_Bootstrap_Call) Run(run func(ctx context.Context, req dto.BootstrapRequest)) *MockControlPlane_Bootstrap_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 dto.BootstrapRequest
-		if args[1] != nil {
-			arg1 = args[1].(dto.BootstrapRequest)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_Bootstrap_Call) Return(bootstrapResponse *dto.BootstrapResponse, err error) *MockControlPlane_Bootstrap_Call {
-	_c.Call.Return(bootstrapResponse, err)
-	return _c
-}
-
-func (_c *MockControlPlane_Bootstrap_Call) RunAndReturn(run func(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error)) *MockControlPlane_Bootstrap_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CleanupOrphanedAttachments provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
-	ret := _mock.Called(ctx, owner, stop)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CleanupOrphanedAttachments")
-	}
-
-	var r0 *domain.CleanupReport
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) (*domain.CleanupReport, error)); ok {
-		return returnFunc(ctx, owner, stop)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) *domain.CleanupReport); ok {
-		r0 = returnFunc(ctx, owner, stop)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.CleanupReport)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, bool) error); ok {
-		r1 = returnFunc(ctx, owner, stop)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_CleanupOrphanedAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CleanupOrphanedAttachments'
-type MockControlPlane_CleanupOrphanedAttachments_Call struct {
-	*mock.Call
-}
-
-// CleanupOrphanedAttachments is a helper method to define mock.On call
-//   - ctx context.Context
-//   - owner string
-//   - stop bool
-func (_e *MockControlPlane_Expecter) CleanupOrphanedAttachments(ctx any, owner any, stop any) *MockControlPlane_CleanupOrphanedAttachments_Call {
-	return &MockControlPlane_CleanupOrphanedAttachments_Call{Call: _e.mock.On("CleanupOrphanedAttachments", ctx, owner, stop)}
-}
-
-func (_c *MockControlPlane_CleanupOrphanedAttachments_Call) Run(run func(ctx context.Context, owner string, stop bool)) *MockControlPlane_CleanupOrphanedAttachments_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 bool
-		if args[2] != nil {
-			arg2 = args[2].(bool)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_CleanupOrphanedAttachments_Call) Return(cleanupReport *domain.CleanupReport, err error) *MockControlPlane_CleanupOrphanedAttachments_Call {
-	_c.Call.Return(cleanupReport, err)
-	return _c
-}
-
-func (_c *MockControlPlane_CleanupOrphanedAttachments_Call) RunAndReturn(run func(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error)) *MockControlPlane_CleanupOrphanedAttachments_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// DeleteAttachmentSecret provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) DeleteAttachmentSecret(ctx context.Context, domain1 string, service string, key string) error {
-	ret := _mock.Called(ctx, domain1, service, key)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DeleteAttachmentSecret")
+		panic("no return value specified for DeleteAppSecret")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) error); ok {
-		r0 = returnFunc(ctx, domain1, service, key)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSecretDeleteRequest) error); ok {
+		r0 = returnFunc(ctx, app, req)
 	} else {
 		r0 = ret.Error(0)
 	}
 	return r0
 }
 
-// MockControlPlane_DeleteAttachmentSecret_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteAttachmentSecret'
-type MockControlPlane_DeleteAttachmentSecret_Call struct {
+// MockControlPlane_DeleteAppSecret_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeleteAppSecret'
+type MockControlPlane_DeleteAppSecret_Call struct {
 	*mock.Call
 }
 
-// DeleteAttachmentSecret is a helper method to define mock.On call
+// DeleteAppSecret is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domain1 string
-//   - service string
-//   - key string
-func (_e *MockControlPlane_Expecter) DeleteAttachmentSecret(ctx any, domain1 any, service any, key any) *MockControlPlane_DeleteAttachmentSecret_Call {
-	return &MockControlPlane_DeleteAttachmentSecret_Call{Call: _e.mock.On("DeleteAttachmentSecret", ctx, domain1, service, key)}
+//   - app string
+//   - req dto.AppSecretDeleteRequest
+func (_e *MockControlPlane_Expecter) DeleteAppSecret(ctx any, app any, req any) *MockControlPlane_DeleteAppSecret_Call {
+	return &MockControlPlane_DeleteAppSecret_Call{Call: _e.mock.On("DeleteAppSecret", ctx, app, req)}
 }
 
-func (_c *MockControlPlane_DeleteAttachmentSecret_Call) Run(run func(ctx context.Context, domain1 string, service string, key string)) *MockControlPlane_DeleteAttachmentSecret_Call {
+func (_c *MockControlPlane_DeleteAppSecret_Call) Run(run func(ctx context.Context, app string, req dto.AppSecretDeleteRequest)) *MockControlPlane_DeleteAppSecret_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -462,30 +210,25 @@ func (_c *MockControlPlane_DeleteAttachmentSecret_Call) Run(run func(ctx context
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 string
+		var arg2 dto.AppSecretDeleteRequest
 		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		var arg3 string
-		if args[3] != nil {
-			arg3 = args[3].(string)
+			arg2 = args[2].(dto.AppSecretDeleteRequest)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
-			arg3,
 		)
 	})
 	return _c
 }
 
-func (_c *MockControlPlane_DeleteAttachmentSecret_Call) Return(err error) *MockControlPlane_DeleteAttachmentSecret_Call {
+func (_c *MockControlPlane_DeleteAppSecret_Call) Return(err error) *MockControlPlane_DeleteAppSecret_Call {
 	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockControlPlane_DeleteAttachmentSecret_Call) RunAndReturn(run func(ctx context.Context, domain1 string, service string, key string) error) *MockControlPlane_DeleteAttachmentSecret_Call {
+func (_c *MockControlPlane_DeleteAppSecret_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error) *MockControlPlane_DeleteAppSecret_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -553,47 +296,127 @@ func (_c *MockControlPlane_DeleteSecret_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
-// Deploy provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) Deploy(ctx context.Context, deployDomain string) (*remote.DeployResult, error) {
-	ret := _mock.Called(ctx, deployDomain)
+// DeployApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, req)
 
 	if len(ret) == 0 {
-		panic("no return value specified for Deploy")
+		panic("no return value specified for DeployApp")
 	}
 
-	var r0 *remote.DeployResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*remote.DeployResult, error)); ok {
-		return returnFunc(ctx, deployDomain)
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, req)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *remote.DeployResult); ok {
-		r0 = returnFunc(ctx, deployDomain)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppDeployRequest) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, req)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*remote.DeployResult)
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, dto.AppDeployRequest) string); ok {
+		r1 = returnFunc(ctx, app, req)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, dto.AppDeployRequest) error); ok {
+		r2 = returnFunc(ctx, app, req)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_DeployApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeployApp'
+type MockControlPlane_DeployApp_Call struct {
+	*mock.Call
+}
+
+// DeployApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppDeployRequest
+func (_e *MockControlPlane_Expecter) DeployApp(ctx any, app any, req any) *MockControlPlane_DeployApp_Call {
+	return &MockControlPlane_DeployApp_Call{Call: _e.mock.On("DeployApp", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_DeployApp_Call) Run(run func(ctx context.Context, app string, req dto.AppDeployRequest)) *MockControlPlane_DeployApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppDeployRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppDeployRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_DeployApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_DeployApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_DeployApp_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)) *MockControlPlane_DeployApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DiffApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DiffApp")
+	}
+
+	var r0 *dto.AppDiffResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDiffResponse, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDiffResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDiffResponse)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, deployDomain)
+		r1 = returnFunc(ctx, app)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockControlPlane_Deploy_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Deploy'
-type MockControlPlane_Deploy_Call struct {
+// MockControlPlane_DiffApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DiffApp'
+type MockControlPlane_DiffApp_Call struct {
 	*mock.Call
 }
 
-// Deploy is a helper method to define mock.On call
+// DiffApp is a helper method to define mock.On call
 //   - ctx context.Context
-//   - deployDomain string
-func (_e *MockControlPlane_Expecter) Deploy(ctx any, deployDomain any) *MockControlPlane_Deploy_Call {
-	return &MockControlPlane_Deploy_Call{Call: _e.mock.On("Deploy", ctx, deployDomain)}
+//   - app string
+func (_e *MockControlPlane_Expecter) DiffApp(ctx any, app any) *MockControlPlane_DiffApp_Call {
+	return &MockControlPlane_DiffApp_Call{Call: _e.mock.On("DiffApp", ctx, app)}
 }
 
-func (_c *MockControlPlane_Deploy_Call) Run(run func(ctx context.Context, deployDomain string)) *MockControlPlane_Deploy_Call {
+func (_c *MockControlPlane_DiffApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_DiffApp_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -611,465 +434,12 @@ func (_c *MockControlPlane_Deploy_Call) Run(run func(ctx context.Context, deploy
 	return _c
 }
 
-func (_c *MockControlPlane_Deploy_Call) Return(deployResult *remote.DeployResult, err error) *MockControlPlane_Deploy_Call {
-	_c.Call.Return(deployResult, err)
+func (_c *MockControlPlane_DiffApp_Call) Return(appDiffResponse *dto.AppDiffResponse, err error) *MockControlPlane_DiffApp_Call {
+	_c.Call.Return(appDiffResponse, err)
 	return _c
 }
 
-func (_c *MockControlPlane_Deploy_Call) RunAndReturn(run func(ctx context.Context, deployDomain string) (*remote.DeployResult, error)) *MockControlPlane_Deploy_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// DeployIntent provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) DeployIntent(ctx context.Context, imageName string) error {
-	ret := _mock.Called(ctx, imageName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DeployIntent")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, imageName)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_DeployIntent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DeployIntent'
-type MockControlPlane_DeployIntent_Call struct {
-	*mock.Call
-}
-
-// DeployIntent is a helper method to define mock.On call
-//   - ctx context.Context
-//   - imageName string
-func (_e *MockControlPlane_Expecter) DeployIntent(ctx any, imageName any) *MockControlPlane_DeployIntent_Call {
-	return &MockControlPlane_DeployIntent_Call{Call: _e.mock.On("DeployIntent", ctx, imageName)}
-}
-
-func (_c *MockControlPlane_DeployIntent_Call) Run(run func(ctx context.Context, imageName string)) *MockControlPlane_DeployIntent_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_DeployIntent_Call) Return(err error) *MockControlPlane_DeployIntent_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_DeployIntent_Call) RunAndReturn(run func(ctx context.Context, imageName string) error) *MockControlPlane_DeployIntent_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// DetectDatabases provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
-	ret := _mock.Called(ctx, backupDomain)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DetectDatabases")
-	}
-
-	var r0 []dto.DatabaseInfo
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]dto.DatabaseInfo, error)); ok {
-		return returnFunc(ctx, backupDomain)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []dto.DatabaseInfo); ok {
-		r0 = returnFunc(ctx, backupDomain)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]dto.DatabaseInfo)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, backupDomain)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_DetectDatabases_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DetectDatabases'
-type MockControlPlane_DetectDatabases_Call struct {
-	*mock.Call
-}
-
-// DetectDatabases is a helper method to define mock.On call
-//   - ctx context.Context
-//   - backupDomain string
-func (_e *MockControlPlane_Expecter) DetectDatabases(ctx any, backupDomain any) *MockControlPlane_DetectDatabases_Call {
-	return &MockControlPlane_DetectDatabases_Call{Call: _e.mock.On("DetectDatabases", ctx, backupDomain)}
-}
-
-func (_c *MockControlPlane_DetectDatabases_Call) Run(run func(ctx context.Context, backupDomain string)) *MockControlPlane_DetectDatabases_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_DetectDatabases_Call) Return(databaseInfos []dto.DatabaseInfo, err error) *MockControlPlane_DetectDatabases_Call {
-	_c.Call.Return(databaseInfos, err)
-	return _c
-}
-
-func (_c *MockControlPlane_DetectDatabases_Call) RunAndReturn(run func(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error)) *MockControlPlane_DetectDatabases_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// FindAttachmentTargetsByImage provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
-	ret := _mock.Called(ctx, imageName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for FindAttachmentTargetsByImage")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
-		return returnFunc(ctx, imageName)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
-		r0 = returnFunc(ctx, imageName)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, imageName)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_FindAttachmentTargetsByImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindAttachmentTargetsByImage'
-type MockControlPlane_FindAttachmentTargetsByImage_Call struct {
-	*mock.Call
-}
-
-// FindAttachmentTargetsByImage is a helper method to define mock.On call
-//   - ctx context.Context
-//   - imageName string
-func (_e *MockControlPlane_Expecter) FindAttachmentTargetsByImage(ctx any, imageName any) *MockControlPlane_FindAttachmentTargetsByImage_Call {
-	return &MockControlPlane_FindAttachmentTargetsByImage_Call{Call: _e.mock.On("FindAttachmentTargetsByImage", ctx, imageName)}
-}
-
-func (_c *MockControlPlane_FindAttachmentTargetsByImage_Call) Run(run func(ctx context.Context, imageName string)) *MockControlPlane_FindAttachmentTargetsByImage_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_FindAttachmentTargetsByImage_Call) Return(strings []string, err error) *MockControlPlane_FindAttachmentTargetsByImage_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockControlPlane_FindAttachmentTargetsByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) ([]string, error)) *MockControlPlane_FindAttachmentTargetsByImage_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// FindRoutesByImage provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
-	ret := _mock.Called(ctx, imageName)
-
-	if len(ret) == 0 {
-		panic("no return value specified for FindRoutesByImage")
-	}
-
-	var r0 []domain.Route
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]domain.Route, error)); ok {
-		return returnFunc(ctx, imageName)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []domain.Route); ok {
-		r0 = returnFunc(ctx, imageName)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.Route)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, imageName)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_FindRoutesByImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindRoutesByImage'
-type MockControlPlane_FindRoutesByImage_Call struct {
-	*mock.Call
-}
-
-// FindRoutesByImage is a helper method to define mock.On call
-//   - ctx context.Context
-//   - imageName string
-func (_e *MockControlPlane_Expecter) FindRoutesByImage(ctx any, imageName any) *MockControlPlane_FindRoutesByImage_Call {
-	return &MockControlPlane_FindRoutesByImage_Call{Call: _e.mock.On("FindRoutesByImage", ctx, imageName)}
-}
-
-func (_c *MockControlPlane_FindRoutesByImage_Call) Run(run func(ctx context.Context, imageName string)) *MockControlPlane_FindRoutesByImage_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_FindRoutesByImage_Call) Return(routes []domain.Route, err error) *MockControlPlane_FindRoutesByImage_Call {
-	_c.Call.Return(routes, err)
-	return _c
-}
-
-func (_c *MockControlPlane_FindRoutesByImage_Call) RunAndReturn(run func(ctx context.Context, imageName string) ([]domain.Route, error)) *MockControlPlane_FindRoutesByImage_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetAllAttachmentsConfig provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {
-	ret := _mock.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetAllAttachmentsConfig")
-	}
-
-	var r0 map[string][]string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) (map[string][]string, error)); ok {
-		return returnFunc(ctx)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) map[string][]string); ok {
-		r0 = returnFunc(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string][]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = returnFunc(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetAllAttachmentsConfig_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAllAttachmentsConfig'
-type MockControlPlane_GetAllAttachmentsConfig_Call struct {
-	*mock.Call
-}
-
-// GetAllAttachmentsConfig is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetAllAttachmentsConfig(ctx any) *MockControlPlane_GetAllAttachmentsConfig_Call {
-	return &MockControlPlane_GetAllAttachmentsConfig_Call{Call: _e.mock.On("GetAllAttachmentsConfig", ctx)}
-}
-
-func (_c *MockControlPlane_GetAllAttachmentsConfig_Call) Run(run func(ctx context.Context)) *MockControlPlane_GetAllAttachmentsConfig_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetAllAttachmentsConfig_Call) Return(stringToStrings map[string][]string, err error) *MockControlPlane_GetAllAttachmentsConfig_Call {
-	_c.Call.Return(stringToStrings, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetAllAttachmentsConfig_Call) RunAndReturn(run func(ctx context.Context) (map[string][]string, error)) *MockControlPlane_GetAllAttachmentsConfig_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetAttachmentsConfig provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error) {
-	ret := _mock.Called(ctx, domainOrGroup)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetAttachmentsConfig")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
-		return returnFunc(ctx, domainOrGroup)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
-		r0 = returnFunc(ctx, domainOrGroup)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, domainOrGroup)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetAttachmentsConfig_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAttachmentsConfig'
-type MockControlPlane_GetAttachmentsConfig_Call struct {
-	*mock.Call
-}
-
-// GetAttachmentsConfig is a helper method to define mock.On call
-//   - ctx context.Context
-//   - domainOrGroup string
-func (_e *MockControlPlane_Expecter) GetAttachmentsConfig(ctx any, domainOrGroup any) *MockControlPlane_GetAttachmentsConfig_Call {
-	return &MockControlPlane_GetAttachmentsConfig_Call{Call: _e.mock.On("GetAttachmentsConfig", ctx, domainOrGroup)}
-}
-
-func (_c *MockControlPlane_GetAttachmentsConfig_Call) Run(run func(ctx context.Context, domainOrGroup string)) *MockControlPlane_GetAttachmentsConfig_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetAttachmentsConfig_Call) Return(strings []string, err error) *MockControlPlane_GetAttachmentsConfig_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetAttachmentsConfig_Call) RunAndReturn(run func(ctx context.Context, domainOrGroup string) ([]string, error)) *MockControlPlane_GetAttachmentsConfig_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetAutoRouteAllowedDomains provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
-	ret := _mock.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetAutoRouteAllowedDomains")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]string, error)); ok {
-		return returnFunc(ctx)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []string); ok {
-		r0 = returnFunc(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = returnFunc(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetAutoRouteAllowedDomains_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAutoRouteAllowedDomains'
-type MockControlPlane_GetAutoRouteAllowedDomains_Call struct {
-	*mock.Call
-}
-
-// GetAutoRouteAllowedDomains is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetAutoRouteAllowedDomains(ctx any) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
-	return &MockControlPlane_GetAutoRouteAllowedDomains_Call{Call: _e.mock.On("GetAutoRouteAllowedDomains", ctx)}
-}
-
-func (_c *MockControlPlane_GetAutoRouteAllowedDomains_Call) Run(run func(ctx context.Context)) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetAutoRouteAllowedDomains_Call) Return(strings []string, err error) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetAutoRouteAllowedDomains_Call) RunAndReturn(run func(ctx context.Context) ([]string, error)) *MockControlPlane_GetAutoRouteAllowedDomains_Call {
+func (_c *MockControlPlane_DiffApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDiffResponse, error)) *MockControlPlane_DiffApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1132,142 +502,6 @@ func (_c *MockControlPlane_GetConfig_Call) Return(config *remote.Config, err err
 }
 
 func (_c *MockControlPlane_GetConfig_Call) RunAndReturn(run func(ctx context.Context) (*remote.Config, error)) *MockControlPlane_GetConfig_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetContainerLogs provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetContainerLogs(ctx context.Context, logDomain string, lines int) ([]string, error) {
-	ret := _mock.Called(ctx, logDomain, lines)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetContainerLogs")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) ([]string, error)); ok {
-		return returnFunc(ctx, logDomain, lines)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) []string); ok {
-		r0 = returnFunc(ctx, logDomain, lines)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int) error); ok {
-		r1 = returnFunc(ctx, logDomain, lines)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetContainerLogs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetContainerLogs'
-type MockControlPlane_GetContainerLogs_Call struct {
-	*mock.Call
-}
-
-// GetContainerLogs is a helper method to define mock.On call
-//   - ctx context.Context
-//   - logDomain string
-//   - lines int
-func (_e *MockControlPlane_Expecter) GetContainerLogs(ctx any, logDomain any, lines any) *MockControlPlane_GetContainerLogs_Call {
-	return &MockControlPlane_GetContainerLogs_Call{Call: _e.mock.On("GetContainerLogs", ctx, logDomain, lines)}
-}
-
-func (_c *MockControlPlane_GetContainerLogs_Call) Run(run func(ctx context.Context, logDomain string, lines int)) *MockControlPlane_GetContainerLogs_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 int
-		if args[2] != nil {
-			arg2 = args[2].(int)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetContainerLogs_Call) Return(strings []string, err error) *MockControlPlane_GetContainerLogs_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetContainerLogs_Call) RunAndReturn(run func(ctx context.Context, logDomain string, lines int) ([]string, error)) *MockControlPlane_GetContainerLogs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetHealth provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetHealth(ctx context.Context) (map[string]*remote.RouteHealth, error) {
-	ret := _mock.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetHealth")
-	}
-
-	var r0 map[string]*remote.RouteHealth
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) (map[string]*remote.RouteHealth, error)); ok {
-		return returnFunc(ctx)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) map[string]*remote.RouteHealth); ok {
-		r0 = returnFunc(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(map[string]*remote.RouteHealth)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = returnFunc(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetHealth_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetHealth'
-type MockControlPlane_GetHealth_Call struct {
-	*mock.Call
-}
-
-// GetHealth is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockControlPlane_Expecter) GetHealth(ctx any) *MockControlPlane_GetHealth_Call {
-	return &MockControlPlane_GetHealth_Call{Call: _e.mock.On("GetHealth", ctx)}
-}
-
-func (_c *MockControlPlane_GetHealth_Call) Run(run func(ctx context.Context)) *MockControlPlane_GetHealth_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetHealth_Call) Return(stringToRouteHealth map[string]*remote.RouteHealth, err error) *MockControlPlane_GetHealth_Call {
-	_c.Call.Return(stringToRouteHealth, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetHealth_Call) RunAndReturn(run func(ctx context.Context) (map[string]*remote.RouteHealth, error)) *MockControlPlane_GetHealth_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1336,74 +570,6 @@ func (_c *MockControlPlane_GetProcessLogs_Call) Return(strings []string, err err
 }
 
 func (_c *MockControlPlane_GetProcessLogs_Call) RunAndReturn(run func(ctx context.Context, lines int) ([]string, error)) *MockControlPlane_GetProcessLogs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetRoute provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	ret := _mock.Called(ctx, routeDomain)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetRoute")
-	}
-
-	var r0 *domain.Route
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*domain.Route, error)); ok {
-		return returnFunc(ctx, routeDomain)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *domain.Route); ok {
-		r0 = returnFunc(ctx, routeDomain)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.Route)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, routeDomain)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_GetRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetRoute'
-type MockControlPlane_GetRoute_Call struct {
-	*mock.Call
-}
-
-// GetRoute is a helper method to define mock.On call
-//   - ctx context.Context
-//   - routeDomain string
-func (_e *MockControlPlane_Expecter) GetRoute(ctx any, routeDomain any) *MockControlPlane_GetRoute_Call {
-	return &MockControlPlane_GetRoute_Call{Call: _e.mock.On("GetRoute", ctx, routeDomain)}
-}
-
-func (_c *MockControlPlane_GetRoute_Call) Run(run func(ctx context.Context, routeDomain string)) *MockControlPlane_GetRoute_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_GetRoute_Call) Return(route *domain.Route, err error) *MockControlPlane_GetRoute_Call {
-	_c.Call.Return(route, err)
-	return _c
-}
-
-func (_c *MockControlPlane_GetRoute_Call) RunAndReturn(run func(ctx context.Context, routeDomain string) (*domain.Route, error)) *MockControlPlane_GetRoute_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1594,9 +760,71 @@ func (_c *MockControlPlane_GetTrafficStatus_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// ListApps provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListApps")
+	}
+
+	var r0 []dto.AppSummaryDTO
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]dto.AppSummaryDTO, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) []dto.AppSummaryDTO); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]dto.AppSummaryDTO)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_ListApps_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListApps'
+type MockControlPlane_ListApps_Call struct {
+	*mock.Call
+}
+
+// ListApps is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockControlPlane_Expecter) ListApps(ctx any) *MockControlPlane_ListApps_Call {
+	return &MockControlPlane_ListApps_Call{Call: _e.mock.On("ListApps", ctx)}
+}
+
+func (_c *MockControlPlane_ListApps_Call) Run(run func(ctx context.Context)) *MockControlPlane_ListApps_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_ListApps_Call) Return(appSummaryDTOs []dto.AppSummaryDTO, err error) *MockControlPlane_ListApps_Call {
+	_c.Call.Return(appSummaryDTOs, err)
+	return _c
+}
+
+func (_c *MockControlPlane_ListApps_Call) RunAndReturn(run func(ctx context.Context) ([]dto.AppSummaryDTO, error)) *MockControlPlane_ListApps_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListBackups provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
-	ret := _mock.Called(ctx, backupDomain)
+func (_mock *MockControlPlane) ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error) {
+	ret := _mock.Called(ctx, app)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListBackups")
@@ -1605,17 +833,17 @@ func (_mock *MockControlPlane) ListBackups(ctx context.Context, backupDomain str
 	var r0 []dto.BackupJob
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]dto.BackupJob, error)); ok {
-		return returnFunc(ctx, backupDomain)
+		return returnFunc(ctx, app)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []dto.BackupJob); ok {
-		r0 = returnFunc(ctx, backupDomain)
+		r0 = returnFunc(ctx, app)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]dto.BackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, backupDomain)
+		r1 = returnFunc(ctx, app)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1629,12 +857,12 @@ type MockControlPlane_ListBackups_Call struct {
 
 // ListBackups is a helper method to define mock.On call
 //   - ctx context.Context
-//   - backupDomain string
-func (_e *MockControlPlane_Expecter) ListBackups(ctx any, backupDomain any) *MockControlPlane_ListBackups_Call {
-	return &MockControlPlane_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, backupDomain)}
+//   - app string
+func (_e *MockControlPlane_Expecter) ListBackups(ctx any, app any) *MockControlPlane_ListBackups_Call {
+	return &MockControlPlane_ListBackups_Call{Call: _e.mock.On("ListBackups", ctx, app)}
 }
 
-func (_c *MockControlPlane_ListBackups_Call) Run(run func(ctx context.Context, backupDomain string)) *MockControlPlane_ListBackups_Call {
+func (_c *MockControlPlane_ListBackups_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_ListBackups_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1657,7 +885,7 @@ func (_c *MockControlPlane_ListBackups_Call) Return(backupJobs []dto.BackupJob, 
 	return _c
 }
 
-func (_c *MockControlPlane_ListBackups_Call) RunAndReturn(run func(ctx context.Context, backupDomain string) ([]dto.BackupJob, error)) *MockControlPlane_ListBackups_Call {
+func (_c *MockControlPlane_ListBackups_Call) RunAndReturn(run func(ctx context.Context, app string) ([]dto.BackupJob, error)) *MockControlPlane_ListBackups_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1724,136 +952,12 @@ func (_c *MockControlPlane_ListNetworks_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
-// ListOrphanedAttachments provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
-	ret := _mock.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListOrphanedAttachments")
-	}
-
-	var r0 []domain.CleanupAttachment
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]domain.CleanupAttachment, error)); ok {
-		return returnFunc(ctx)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []domain.CleanupAttachment); ok {
-		r0 = returnFunc(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]domain.CleanupAttachment)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = returnFunc(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_ListOrphanedAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListOrphanedAttachments'
-type MockControlPlane_ListOrphanedAttachments_Call struct {
-	*mock.Call
-}
-
-// ListOrphanedAttachments is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListOrphanedAttachments(ctx any) *MockControlPlane_ListOrphanedAttachments_Call {
-	return &MockControlPlane_ListOrphanedAttachments_Call{Call: _e.mock.On("ListOrphanedAttachments", ctx)}
-}
-
-func (_c *MockControlPlane_ListOrphanedAttachments_Call) Run(run func(ctx context.Context)) *MockControlPlane_ListOrphanedAttachments_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_ListOrphanedAttachments_Call) Return(cleanupAttachments []domain.CleanupAttachment, err error) *MockControlPlane_ListOrphanedAttachments_Call {
-	_c.Call.Return(cleanupAttachments, err)
-	return _c
-}
-
-func (_c *MockControlPlane_ListOrphanedAttachments_Call) RunAndReturn(run func(ctx context.Context) ([]domain.CleanupAttachment, error)) *MockControlPlane_ListOrphanedAttachments_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ListRoutesWithDetails provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) ListRoutesWithDetails(ctx context.Context) ([]remote.RouteInfo, error) {
-	ret := _mock.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListRoutesWithDetails")
-	}
-
-	var r0 []remote.RouteInfo
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context) ([]remote.RouteInfo, error)); ok {
-		return returnFunc(ctx)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context) []remote.RouteInfo); ok {
-		r0 = returnFunc(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]remote.RouteInfo)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = returnFunc(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_ListRoutesWithDetails_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRoutesWithDetails'
-type MockControlPlane_ListRoutesWithDetails_Call struct {
-	*mock.Call
-}
-
-// ListRoutesWithDetails is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockControlPlane_Expecter) ListRoutesWithDetails(ctx any) *MockControlPlane_ListRoutesWithDetails_Call {
-	return &MockControlPlane_ListRoutesWithDetails_Call{Call: _e.mock.On("ListRoutesWithDetails", ctx)}
-}
-
-func (_c *MockControlPlane_ListRoutesWithDetails_Call) Run(run func(ctx context.Context)) *MockControlPlane_ListRoutesWithDetails_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		run(
-			arg0,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_ListRoutesWithDetails_Call) Return(vs []remote.RouteInfo, err error) *MockControlPlane_ListRoutesWithDetails_Call {
-	_c.Call.Return(vs, err)
-	return _c
-}
-
-func (_c *MockControlPlane_ListRoutesWithDetails_Call) RunAndReturn(run func(ctx context.Context) ([]remote.RouteInfo, error)) *MockControlPlane_ListRoutesWithDetails_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ListSecretsWithAttachments provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
+// ListSecrets provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
 	ret := _mock.Called(ctx, secretDomain)
 
 	if len(ret) == 0 {
-		panic("no return value specified for ListSecretsWithAttachments")
+		panic("no return value specified for ListSecrets")
 	}
 
 	var r0 *remote.SecretsListResult
@@ -1876,19 +980,19 @@ func (_mock *MockControlPlane) ListSecretsWithAttachments(ctx context.Context, s
 	return r0, r1
 }
 
-// MockControlPlane_ListSecretsWithAttachments_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSecretsWithAttachments'
-type MockControlPlane_ListSecretsWithAttachments_Call struct {
+// MockControlPlane_ListSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSecrets'
+type MockControlPlane_ListSecrets_Call struct {
 	*mock.Call
 }
 
-// ListSecretsWithAttachments is a helper method to define mock.On call
+// ListSecrets is a helper method to define mock.On call
 //   - ctx context.Context
 //   - secretDomain string
-func (_e *MockControlPlane_Expecter) ListSecretsWithAttachments(ctx any, secretDomain any) *MockControlPlane_ListSecretsWithAttachments_Call {
-	return &MockControlPlane_ListSecretsWithAttachments_Call{Call: _e.mock.On("ListSecretsWithAttachments", ctx, secretDomain)}
+func (_e *MockControlPlane_Expecter) ListSecrets(ctx any, secretDomain any) *MockControlPlane_ListSecrets_Call {
+	return &MockControlPlane_ListSecrets_Call{Call: _e.mock.On("ListSecrets", ctx, secretDomain)}
 }
 
-func (_c *MockControlPlane_ListSecretsWithAttachments_Call) Run(run func(ctx context.Context, secretDomain string)) *MockControlPlane_ListSecretsWithAttachments_Call {
+func (_c *MockControlPlane_ListSecrets_Call) Run(run func(ctx context.Context, secretDomain string)) *MockControlPlane_ListSecrets_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1906,12 +1010,12 @@ func (_c *MockControlPlane_ListSecretsWithAttachments_Call) Run(run func(ctx con
 	return _c
 }
 
-func (_c *MockControlPlane_ListSecretsWithAttachments_Call) Return(secretsListResult *remote.SecretsListResult, err error) *MockControlPlane_ListSecretsWithAttachments_Call {
+func (_c *MockControlPlane_ListSecrets_Call) Return(secretsListResult *remote.SecretsListResult, err error) *MockControlPlane_ListSecrets_Call {
 	_c.Call.Return(secretsListResult, err)
 	return _c
 }
 
-func (_c *MockControlPlane_ListSecretsWithAttachments_Call) RunAndReturn(run func(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)) *MockControlPlane_ListSecretsWithAttachments_Call {
+func (_c *MockControlPlane_ListSecrets_Call) RunAndReturn(run func(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)) *MockControlPlane_ListSecrets_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1985,8 +1089,8 @@ func (_c *MockControlPlane_ListTags_Call) RunAndReturn(run func(ctx context.Cont
 }
 
 // ListVolumeBackups provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
-	ret := _mock.Called(ctx, backupDomain)
+func (_mock *MockControlPlane) ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error) {
+	ret := _mock.Called(ctx, app)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListVolumeBackups")
@@ -1995,17 +1099,17 @@ func (_mock *MockControlPlane) ListVolumeBackups(ctx context.Context, backupDoma
 	var r0 []dto.VolumeBackupJob
 	var r1 error
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]dto.VolumeBackupJob, error)); ok {
-		return returnFunc(ctx, backupDomain)
+		return returnFunc(ctx, app)
 	}
 	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []dto.VolumeBackupJob); ok {
-		r0 = returnFunc(ctx, backupDomain)
+		r0 = returnFunc(ctx, app)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]dto.VolumeBackupJob)
 		}
 	}
 	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, backupDomain)
+		r1 = returnFunc(ctx, app)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2019,12 +1123,12 @@ type MockControlPlane_ListVolumeBackups_Call struct {
 
 // ListVolumeBackups is a helper method to define mock.On call
 //   - ctx context.Context
-//   - backupDomain string
-func (_e *MockControlPlane_Expecter) ListVolumeBackups(ctx any, backupDomain any) *MockControlPlane_ListVolumeBackups_Call {
-	return &MockControlPlane_ListVolumeBackups_Call{Call: _e.mock.On("ListVolumeBackups", ctx, backupDomain)}
+//   - app string
+func (_e *MockControlPlane_Expecter) ListVolumeBackups(ctx any, app any) *MockControlPlane_ListVolumeBackups_Call {
+	return &MockControlPlane_ListVolumeBackups_Call{Call: _e.mock.On("ListVolumeBackups", ctx, app)}
 }
 
-func (_c *MockControlPlane_ListVolumeBackups_Call) Run(run func(ctx context.Context, backupDomain string)) *MockControlPlane_ListVolumeBackups_Call {
+func (_c *MockControlPlane_ListVolumeBackups_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_ListVolumeBackups_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2047,7 +1151,7 @@ func (_c *MockControlPlane_ListVolumeBackups_Call) Return(volumeBackupJobs []dto
 	return _c
 }
 
-func (_c *MockControlPlane_ListVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error)) *MockControlPlane_ListVolumeBackups_Call {
+func (_c *MockControlPlane_ListVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, app string) ([]dto.VolumeBackupJob, error)) *MockControlPlane_ListVolumeBackups_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2110,6 +1214,80 @@ func (_c *MockControlPlane_ListVolumes_Call) Return(volumes []dto.Volume, err er
 }
 
 func (_c *MockControlPlane_ListVolumes_Call) RunAndReturn(run func(ctx context.Context) ([]dto.Volume, error)) *MockControlPlane_ListVolumes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// OperationByKey provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) OperationByKey(ctx context.Context, app string, key string) (*dto.AppDeployResponse, error) {
+	ret := _mock.Called(ctx, app, key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OperationByKey")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.AppDeployResponse, error)); ok {
+		return returnFunc(ctx, app, key)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, key)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, key)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_OperationByKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OperationByKey'
+type MockControlPlane_OperationByKey_Call struct {
+	*mock.Call
+}
+
+// OperationByKey is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - key string
+func (_e *MockControlPlane_Expecter) OperationByKey(ctx any, app any, key any) *MockControlPlane_OperationByKey_Call {
+	return &MockControlPlane_OperationByKey_Call{Call: _e.mock.On("OperationByKey", ctx, app, key)}
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) Run(run func(ctx context.Context, app string, key string)) *MockControlPlane_OperationByKey_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) Return(appDeployResponse *dto.AppDeployResponse, err error) *MockControlPlane_OperationByKey_Call {
+	_c.Call.Return(appDeployResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_OperationByKey_Call) RunAndReturn(run func(ctx context.Context, app string, key string) (*dto.AppDeployResponse, error)) *MockControlPlane_OperationByKey_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2233,37 +1411,128 @@ func (_c *MockControlPlane_Reload_Call) RunAndReturn(run func(ctx context.Contex
 	return _c
 }
 
-// RemoveAttachment provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RemoveAttachment(ctx context.Context, domainOrGroup string, image string) error {
-	ret := _mock.Called(ctx, domainOrGroup, image)
+// RemoveApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
 
 	if len(ret) == 0 {
-		panic("no return value specified for RemoveAttachment")
+		panic("no return value specified for RemoveApp")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, domainOrGroup, image)
-	} else {
-		r0 = ret.Error(0)
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
 }
 
-// MockControlPlane_RemoveAttachment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveAttachment'
-type MockControlPlane_RemoveAttachment_Call struct {
+// MockControlPlane_RemoveApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveApp'
+type MockControlPlane_RemoveApp_Call struct {
 	*mock.Call
 }
 
-// RemoveAttachment is a helper method to define mock.On call
+// RemoveApp is a helper method to define mock.On call
 //   - ctx context.Context
-//   - domainOrGroup string
-//   - image string
-func (_e *MockControlPlane_Expecter) RemoveAttachment(ctx any, domainOrGroup any, image any) *MockControlPlane_RemoveAttachment_Call {
-	return &MockControlPlane_RemoveAttachment_Call{Call: _e.mock.On("RemoveAttachment", ctx, domainOrGroup, image)}
+//   - app string
+func (_e *MockControlPlane_Expecter) RemoveApp(ctx any, app any) *MockControlPlane_RemoveApp_Call {
+	return &MockControlPlane_RemoveApp_Call{Call: _e.mock.On("RemoveApp", ctx, app)}
 }
 
-func (_c *MockControlPlane_RemoveAttachment_Call) Run(run func(ctx context.Context, domainOrGroup string, image string)) *MockControlPlane_RemoveAttachment_Call {
+func (_c *MockControlPlane_RemoveApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_RemoveApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_RemoveApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RemoveApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RestartApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) RestartApp(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, service)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RestartApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, service)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, service)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) string); ok {
+		r1 = returnFunc(ctx, app, service)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, string) error); ok {
+		r2 = returnFunc(ctx, app, service)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_RestartApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RestartApp'
+type MockControlPlane_RestartApp_Call struct {
+	*mock.Call
+}
+
+// RestartApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+func (_e *MockControlPlane_Expecter) RestartApp(ctx any, app any, service any) *MockControlPlane_RestartApp_Call {
+	return &MockControlPlane_RestartApp_Call{Call: _e.mock.On("RestartApp", ctx, app, service)}
+}
+
+func (_c *MockControlPlane_RestartApp_Call) Run(run func(ctx context.Context, app string, service string)) *MockControlPlane_RestartApp_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2286,207 +1555,19 @@ func (_c *MockControlPlane_RemoveAttachment_Call) Run(run func(ctx context.Conte
 	return _c
 }
 
-func (_c *MockControlPlane_RemoveAttachment_Call) Return(err error) *MockControlPlane_RemoveAttachment_Call {
-	_c.Call.Return(err)
+func (_c *MockControlPlane_RestartApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_RestartApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
 	return _c
 }
 
-func (_c *MockControlPlane_RemoveAttachment_Call) RunAndReturn(run func(ctx context.Context, domainOrGroup string, image string) error) *MockControlPlane_RemoveAttachment_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RemoveAutoRouteAllowedDomain provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	ret := _mock.Called(ctx, pattern)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RemoveAutoRouteAllowedDomain")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, pattern)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_RemoveAutoRouteAllowedDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveAutoRouteAllowedDomain'
-type MockControlPlane_RemoveAutoRouteAllowedDomain_Call struct {
-	*mock.Call
-}
-
-// RemoveAutoRouteAllowedDomain is a helper method to define mock.On call
-//   - ctx context.Context
-//   - pattern string
-func (_e *MockControlPlane_Expecter) RemoveAutoRouteAllowedDomain(ctx any, pattern any) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
-	return &MockControlPlane_RemoveAutoRouteAllowedDomain_Call{Call: _e.mock.On("RemoveAutoRouteAllowedDomain", ctx, pattern)}
-}
-
-func (_c *MockControlPlane_RemoveAutoRouteAllowedDomain_Call) Run(run func(ctx context.Context, pattern string)) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_RemoveAutoRouteAllowedDomain_Call) Return(err error) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_RemoveAutoRouteAllowedDomain_Call) RunAndReturn(run func(ctx context.Context, pattern string) error) *MockControlPlane_RemoveAutoRouteAllowedDomain_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// RemoveRoute provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RemoveRoute(ctx context.Context, routeDomain string) error {
-	ret := _mock.Called(ctx, routeDomain)
-
-	if len(ret) == 0 {
-		panic("no return value specified for RemoveRoute")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
-		r0 = returnFunc(ctx, routeDomain)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_RemoveRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveRoute'
-type MockControlPlane_RemoveRoute_Call struct {
-	*mock.Call
-}
-
-// RemoveRoute is a helper method to define mock.On call
-//   - ctx context.Context
-//   - routeDomain string
-func (_e *MockControlPlane_Expecter) RemoveRoute(ctx any, routeDomain any) *MockControlPlane_RemoveRoute_Call {
-	return &MockControlPlane_RemoveRoute_Call{Call: _e.mock.On("RemoveRoute", ctx, routeDomain)}
-}
-
-func (_c *MockControlPlane_RemoveRoute_Call) Run(run func(ctx context.Context, routeDomain string)) *MockControlPlane_RemoveRoute_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_RemoveRoute_Call) Return(err error) *MockControlPlane_RemoveRoute_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_RemoveRoute_Call) RunAndReturn(run func(ctx context.Context, routeDomain string) error) *MockControlPlane_RemoveRoute_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Restart provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error) {
-	ret := _mock.Called(ctx, restartDomain, withAttachments)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Restart")
-	}
-
-	var r0 *remote.RestartResult
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) (*remote.RestartResult, error)); ok {
-		return returnFunc(ctx, restartDomain, withAttachments)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, bool) *remote.RestartResult); ok {
-		r0 = returnFunc(ctx, restartDomain, withAttachments)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*remote.RestartResult)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, bool) error); ok {
-		r1 = returnFunc(ctx, restartDomain, withAttachments)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockControlPlane_Restart_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Restart'
-type MockControlPlane_Restart_Call struct {
-	*mock.Call
-}
-
-// Restart is a helper method to define mock.On call
-//   - ctx context.Context
-//   - restartDomain string
-//   - withAttachments bool
-func (_e *MockControlPlane_Expecter) Restart(ctx any, restartDomain any, withAttachments any) *MockControlPlane_Restart_Call {
-	return &MockControlPlane_Restart_Call{Call: _e.mock.On("Restart", ctx, restartDomain, withAttachments)}
-}
-
-func (_c *MockControlPlane_Restart_Call) Run(run func(ctx context.Context, restartDomain string, withAttachments bool)) *MockControlPlane_Restart_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 bool
-		if args[2] != nil {
-			arg2 = args[2].(bool)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_Restart_Call) Return(restartResult *remote.RestartResult, err error) *MockControlPlane_Restart_Call {
-	_c.Call.Return(restartResult, err)
-	return _c
-}
-
-func (_c *MockControlPlane_Restart_Call) RunAndReturn(run func(ctx context.Context, restartDomain string, withAttachments bool) (*remote.RestartResult, error)) *MockControlPlane_Restart_Call {
+func (_c *MockControlPlane_RestartApp_Call) RunAndReturn(run func(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RestartApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RunBackup provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RunBackup(ctx context.Context, backupDomain string, dbName string) (*dto.BackupRunResponse, error) {
-	ret := _mock.Called(ctx, backupDomain, dbName)
+func (_mock *MockControlPlane) RunBackup(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error) {
+	ret := _mock.Called(ctx, app, service, database)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunBackup")
@@ -2494,18 +1575,18 @@ func (_mock *MockControlPlane) RunBackup(ctx context.Context, backupDomain strin
 
 	var r0 *dto.BackupRunResponse
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.BackupRunResponse, error)); ok {
-		return returnFunc(ctx, backupDomain, dbName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.BackupRunResponse, error)); ok {
+		return returnFunc(ctx, app, service, database)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.BackupRunResponse); ok {
-		r0 = returnFunc(ctx, backupDomain, dbName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.BackupRunResponse); ok {
+		r0 = returnFunc(ctx, app, service, database)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*dto.BackupRunResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, backupDomain, dbName)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, database)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2519,13 +1600,14 @@ type MockControlPlane_RunBackup_Call struct {
 
 // RunBackup is a helper method to define mock.On call
 //   - ctx context.Context
-//   - backupDomain string
-//   - dbName string
-func (_e *MockControlPlane_Expecter) RunBackup(ctx any, backupDomain any, dbName any) *MockControlPlane_RunBackup_Call {
-	return &MockControlPlane_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, backupDomain, dbName)}
+//   - app string
+//   - service string
+//   - database string
+func (_e *MockControlPlane_Expecter) RunBackup(ctx any, app any, service any, database any) *MockControlPlane_RunBackup_Call {
+	return &MockControlPlane_RunBackup_Call{Call: _e.mock.On("RunBackup", ctx, app, service, database)}
 }
 
-func (_c *MockControlPlane_RunBackup_Call) Run(run func(ctx context.Context, backupDomain string, dbName string)) *MockControlPlane_RunBackup_Call {
+func (_c *MockControlPlane_RunBackup_Call) Run(run func(ctx context.Context, app string, service string, database string)) *MockControlPlane_RunBackup_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2539,10 +1621,15 @@ func (_c *MockControlPlane_RunBackup_Call) Run(run func(ctx context.Context, bac
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 string
+		if args[3] != nil {
+			arg3 = args[3].(string)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -2553,14 +1640,14 @@ func (_c *MockControlPlane_RunBackup_Call) Return(backupRunResponse *dto.BackupR
 	return _c
 }
 
-func (_c *MockControlPlane_RunBackup_Call) RunAndReturn(run func(ctx context.Context, backupDomain string, dbName string) (*dto.BackupRunResponse, error)) *MockControlPlane_RunBackup_Call {
+func (_c *MockControlPlane_RunBackup_Call) RunAndReturn(run func(ctx context.Context, app string, service string, database string) (*dto.BackupRunResponse, error)) *MockControlPlane_RunBackup_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
 // RunVolumeBackups provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RunVolumeBackups(ctx context.Context, backupDomain string, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	ret := _mock.Called(ctx, backupDomain, volumeName)
+func (_mock *MockControlPlane) RunVolumeBackups(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error) {
+	ret := _mock.Called(ctx, app, service, volume)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RunVolumeBackups")
@@ -2568,18 +1655,18 @@ func (_mock *MockControlPlane) RunVolumeBackups(ctx context.Context, backupDomai
 
 	var r0 *dto.VolumeBackupRunResponse
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.VolumeBackupRunResponse, error)); ok {
-		return returnFunc(ctx, backupDomain, volumeName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*dto.VolumeBackupRunResponse, error)); ok {
+		return returnFunc(ctx, app, service, volume)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.VolumeBackupRunResponse); ok {
-		r0 = returnFunc(ctx, backupDomain, volumeName)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *dto.VolumeBackupRunResponse); ok {
+		r0 = returnFunc(ctx, app, service, volume)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*dto.VolumeBackupRunResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, backupDomain, volumeName)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service, volume)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -2593,77 +1680,14 @@ type MockControlPlane_RunVolumeBackups_Call struct {
 
 // RunVolumeBackups is a helper method to define mock.On call
 //   - ctx context.Context
-//   - backupDomain string
-//   - volumeName string
-func (_e *MockControlPlane_Expecter) RunVolumeBackups(ctx any, backupDomain any, volumeName any) *MockControlPlane_RunVolumeBackups_Call {
-	return &MockControlPlane_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, backupDomain, volumeName)}
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) Run(run func(ctx context.Context, backupDomain string, volumeName string)) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) Return(volumeBackupRunResponse *dto.VolumeBackupRunResponse, err error) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Return(volumeBackupRunResponse, err)
-	return _c
-}
-
-func (_c *MockControlPlane_RunVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, backupDomain string, volumeName string) (*dto.VolumeBackupRunResponse, error)) *MockControlPlane_RunVolumeBackups_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// SetAttachmentSecrets provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) SetAttachmentSecrets(ctx context.Context, domain1 string, service string, secrets map[string]string) error {
-	ret := _mock.Called(ctx, domain1, service, secrets)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SetAttachmentSecrets")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, map[string]string) error); ok {
-		r0 = returnFunc(ctx, domain1, service, secrets)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_SetAttachmentSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAttachmentSecrets'
-type MockControlPlane_SetAttachmentSecrets_Call struct {
-	*mock.Call
-}
-
-// SetAttachmentSecrets is a helper method to define mock.On call
-//   - ctx context.Context
-//   - domain1 string
+//   - app string
 //   - service string
-//   - secrets map[string]string
-func (_e *MockControlPlane_Expecter) SetAttachmentSecrets(ctx any, domain1 any, service any, secrets any) *MockControlPlane_SetAttachmentSecrets_Call {
-	return &MockControlPlane_SetAttachmentSecrets_Call{Call: _e.mock.On("SetAttachmentSecrets", ctx, domain1, service, secrets)}
+//   - volume string
+func (_e *MockControlPlane_Expecter) RunVolumeBackups(ctx any, app any, service any, volume any) *MockControlPlane_RunVolumeBackups_Call {
+	return &MockControlPlane_RunVolumeBackups_Call{Call: _e.mock.On("RunVolumeBackups", ctx, app, service, volume)}
 }
 
-func (_c *MockControlPlane_SetAttachmentSecrets_Call) Run(run func(ctx context.Context, domain1 string, service string, secrets map[string]string)) *MockControlPlane_SetAttachmentSecrets_Call {
+func (_c *MockControlPlane_RunVolumeBackups_Call) Run(run func(ctx context.Context, app string, service string, volume string)) *MockControlPlane_RunVolumeBackups_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2677,9 +1701,9 @@ func (_c *MockControlPlane_SetAttachmentSecrets_Call) Run(run func(ctx context.C
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
-		var arg3 map[string]string
+		var arg3 string
 		if args[3] != nil {
-			arg3 = args[3].(map[string]string)
+			arg3 = args[3].(string)
 		}
 		run(
 			arg0,
@@ -2691,12 +1715,75 @@ func (_c *MockControlPlane_SetAttachmentSecrets_Call) Run(run func(ctx context.C
 	return _c
 }
 
-func (_c *MockControlPlane_SetAttachmentSecrets_Call) Return(err error) *MockControlPlane_SetAttachmentSecrets_Call {
+func (_c *MockControlPlane_RunVolumeBackups_Call) Return(volumeBackupRunResponse *dto.VolumeBackupRunResponse, err error) *MockControlPlane_RunVolumeBackups_Call {
+	_c.Call.Return(volumeBackupRunResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_RunVolumeBackups_Call) RunAndReturn(run func(ctx context.Context, app string, service string, volume string) (*dto.VolumeBackupRunResponse, error)) *MockControlPlane_RunVolumeBackups_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetAppSecrets provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
+	ret := _mock.Called(ctx, app, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetAppSecrets")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSecretSetRequest) error); ok {
+		r0 = returnFunc(ctx, app, req)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockControlPlane_SetAppSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetAppSecrets'
+type MockControlPlane_SetAppSecrets_Call struct {
+	*mock.Call
+}
+
+// SetAppSecrets is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppSecretSetRequest
+func (_e *MockControlPlane_Expecter) SetAppSecrets(ctx any, app any, req any) *MockControlPlane_SetAppSecrets_Call {
+	return &MockControlPlane_SetAppSecrets_Call{Call: _e.mock.On("SetAppSecrets", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_SetAppSecrets_Call) Run(run func(ctx context.Context, app string, req dto.AppSecretSetRequest)) *MockControlPlane_SetAppSecrets_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppSecretSetRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppSecretSetRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_SetAppSecrets_Call) Return(err error) *MockControlPlane_SetAppSecrets_Call {
 	_c.Call.Return(err)
 	return _c
 }
 
-func (_c *MockControlPlane_SetAttachmentSecrets_Call) RunAndReturn(run func(ctx context.Context, domain1 string, service string, secrets map[string]string) error) *MockControlPlane_SetAttachmentSecrets_Call {
+func (_c *MockControlPlane_SetAppSecrets_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSecretSetRequest) error) *MockControlPlane_SetAppSecrets_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2764,48 +1851,47 @@ func (_c *MockControlPlane_SetSecrets_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
-// StreamContainerLogs provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) StreamContainerLogs(ctx context.Context, logDomain string, lines int) (<-chan string, error) {
-	ret := _mock.Called(ctx, logDomain, lines)
+// ShowApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error) {
+	ret := _mock.Called(ctx, app)
 
 	if len(ret) == 0 {
-		panic("no return value specified for StreamContainerLogs")
+		panic("no return value specified for ShowApp")
 	}
 
-	var r0 <-chan string
+	var r0 *dto.AppShowResponse
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) (<-chan string, error)); ok {
-		return returnFunc(ctx, logDomain, lines)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppShowResponse, error)); ok {
+		return returnFunc(ctx, app)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, int) <-chan string); ok {
-		r0 = returnFunc(ctx, logDomain, lines)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppShowResponse); ok {
+		r0 = returnFunc(ctx, app)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(<-chan string)
+			r0 = ret.Get(0).(*dto.AppShowResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, int) error); ok {
-		r1 = returnFunc(ctx, logDomain, lines)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, app)
 	} else {
 		r1 = ret.Error(1)
 	}
 	return r0, r1
 }
 
-// MockControlPlane_StreamContainerLogs_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StreamContainerLogs'
-type MockControlPlane_StreamContainerLogs_Call struct {
+// MockControlPlane_ShowApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ShowApp'
+type MockControlPlane_ShowApp_Call struct {
 	*mock.Call
 }
 
-// StreamContainerLogs is a helper method to define mock.On call
+// ShowApp is a helper method to define mock.On call
 //   - ctx context.Context
-//   - logDomain string
-//   - lines int
-func (_e *MockControlPlane_Expecter) StreamContainerLogs(ctx any, logDomain any, lines any) *MockControlPlane_StreamContainerLogs_Call {
-	return &MockControlPlane_StreamContainerLogs_Call{Call: _e.mock.On("StreamContainerLogs", ctx, logDomain, lines)}
+//   - app string
+func (_e *MockControlPlane_Expecter) ShowApp(ctx any, app any) *MockControlPlane_ShowApp_Call {
+	return &MockControlPlane_ShowApp_Call{Call: _e.mock.On("ShowApp", ctx, app)}
 }
 
-func (_c *MockControlPlane_StreamContainerLogs_Call) Run(run func(ctx context.Context, logDomain string, lines int)) *MockControlPlane_StreamContainerLogs_Call {
+func (_c *MockControlPlane_ShowApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_ShowApp_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -2815,25 +1901,168 @@ func (_c *MockControlPlane_StreamContainerLogs_Call) Run(run func(ctx context.Co
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
-		var arg2 int
-		if args[2] != nil {
-			arg2 = args[2].(int)
-		}
 		run(
 			arg0,
 			arg1,
-			arg2,
 		)
 	})
 	return _c
 }
 
-func (_c *MockControlPlane_StreamContainerLogs_Call) Return(stringCh <-chan string, err error) *MockControlPlane_StreamContainerLogs_Call {
-	_c.Call.Return(stringCh, err)
+func (_c *MockControlPlane_ShowApp_Call) Return(appShowResponse *dto.AppShowResponse, err error) *MockControlPlane_ShowApp_Call {
+	_c.Call.Return(appShowResponse, err)
 	return _c
 }
 
-func (_c *MockControlPlane_StreamContainerLogs_Call) RunAndReturn(run func(ctx context.Context, logDomain string, lines int) (<-chan string, error)) *MockControlPlane_StreamContainerLogs_Call {
+func (_c *MockControlPlane_ShowApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppShowResponse, error)) *MockControlPlane_ShowApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StartApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StartApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_StartApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StartApp'
+type MockControlPlane_StartApp_Call struct {
+	*mock.Call
+}
+
+// StartApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) StartApp(ctx any, app any) *MockControlPlane_StartApp_Call {
+	return &MockControlPlane_StartApp_Call{Call: _e.mock.On("StartApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_StartApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_StartApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StartApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_StartApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StartApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_StartApp_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// StopApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app)
+
+	if len(ret) == 0 {
+		panic("no return value specified for StopApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) string); ok {
+		r1 = returnFunc(ctx, app)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, app)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_StopApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StopApp'
+type MockControlPlane_StopApp_Call struct {
+	*mock.Call
+}
+
+// StopApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+func (_e *MockControlPlane_Expecter) StopApp(ctx any, app any) *MockControlPlane_StopApp_Call {
+	return &MockControlPlane_StopApp_Call{Call: _e.mock.On("StopApp", ctx, app)}
+}
+
+func (_c *MockControlPlane_StopApp_Call) Run(run func(ctx context.Context, app string)) *MockControlPlane_StopApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_StopApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_StopApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_StopApp_Call) RunAndReturn(run func(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_StopApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2902,63 +2131,6 @@ func (_c *MockControlPlane_StreamProcessLogs_Call) Return(stringCh <-chan string
 }
 
 func (_c *MockControlPlane_StreamProcessLogs_Call) RunAndReturn(run func(ctx context.Context, lines int) (<-chan string, error)) *MockControlPlane_StreamProcessLogs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// UpdateRoute provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) UpdateRoute(ctx context.Context, route domain.Route) error {
-	ret := _mock.Called(ctx, route)
-
-	if len(ret) == 0 {
-		panic("no return value specified for UpdateRoute")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.Route) error); ok {
-		r0 = returnFunc(ctx, route)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockControlPlane_UpdateRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateRoute'
-type MockControlPlane_UpdateRoute_Call struct {
-	*mock.Call
-}
-
-// UpdateRoute is a helper method to define mock.On call
-//   - ctx context.Context
-//   - route domain.Route
-func (_e *MockControlPlane_Expecter) UpdateRoute(ctx any, route any) *MockControlPlane_UpdateRoute_Call {
-	return &MockControlPlane_UpdateRoute_Call{Call: _e.mock.On("UpdateRoute", ctx, route)}
-}
-
-func (_c *MockControlPlane_UpdateRoute_Call) Run(run func(ctx context.Context, route domain.Route)) *MockControlPlane_UpdateRoute_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 domain.Route
-		if args[1] != nil {
-			arg1 = args[1].(domain.Route)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_UpdateRoute_Call) Return(err error) *MockControlPlane_UpdateRoute_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockControlPlane_UpdateRoute_Call) RunAndReturn(run func(ctx context.Context, route domain.Route) error) *MockControlPlane_UpdateRoute_Call {
 	_c.Call.Return(run)
 	return _c
 }

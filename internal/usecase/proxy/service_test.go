@@ -7,10 +7,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -18,44 +16,61 @@ func testContext() context.Context {
 	return zerowrap.WithCtx(context.Background(), zerowrap.Default())
 }
 
-func TestService_GetTarget_FromCache(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
+// stubProvider is a fixed TargetProvider for proxy tests.
+type stubProvider struct {
+	backends map[string]domain.AppBackend
+}
 
-	config := Config{
-		RegistryDomain: "registry.example.com",
-		RegistryPort:   5000,
+func (s *stubProvider) LookupHost(host string) (domain.AppBackend, bool) {
+	backend, ok := s.backends[host]
+	return backend, ok
+}
+
+func testService(t *testing.T, configSvc *inmocks.MockConfigService, provider TargetProvider) *Service {
+	if configSvc == nil {
+		configSvc = inmocks.NewMockConfigService(t)
 	}
-	svc := NewService(runtime, containerSvc, configSvc, config)
+	svc := NewService(configSvc, Config{})
+	if provider != nil {
+		svc.WithAppTargets(provider)
+	}
+	return svc
+}
+
+func appBackend(host string, port int) domain.AppBackend {
+	return domain.AppBackend{
+		Host:          "127.0.0.1",
+		Port:          port,
+		ContainerPort: 8080,
+		ContainerID:   "c-app",
+	}
+}
+
+func TestService_GetTarget_FromCache(t *testing.T) {
+	svc := testService(t, nil, nil)
 	ctx := testContext()
 
 	// Pre-populate cache
-	cachedTarget := &domain.ProxyTarget{
-		Host:        "192.168.1.100",
-		Port:        8080,
+	cached := &domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        18080,
 		ContainerID: "container-123",
 		Scheme:      "http",
 	}
-	svc.targets["app.example.com"] = cachedTarget
+	svc.targets["app.example.com"] = cachedTarget{target: cached}
 
-	// No mock calls expected - should return from cache
-
+	// No provider needed - should return from cache
 	result, err := svc.GetTarget(ctx, "app.example.com")
 
 	assert.NoError(t, err)
-	assert.Equal(t, cachedTarget, result)
+	assert.Equal(t, cached, result)
 }
 
 func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
+	svc := testService(t, configSvc, &stubProvider{backends: map[string]domain.AppBackend{}})
+	ctx := testContext()
 
 	result, err := svc.GetTarget(ctx, "App.Example.com")
 	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
@@ -63,37 +78,92 @@ func TestService_GetTarget_CanonicalizesHostForLookup(t *testing.T) {
 }
 
 func TestService_GetTarget_RejectsInvalidHostAuthority(t *testing.T) {
-	svc := NewService(outmocks.NewMockContainerRuntime(t), inmocks.NewMockContainerService(t), inmocks.NewMockConfigService(t), Config{})
+	svc := testService(t, nil, nil)
 	result, err := svc.GetTarget(testContext(), "app.example.com:8080")
 	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
 	assert.Nil(t, result)
 }
 
-func TestService_GetTarget_ContainerNotFound(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
+func TestService_GetTarget_AppBackend(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
-
-	config := Config{}
-	svc := NewService(runtime, containerSvc, configSvc, config)
-	ctx := testContext()
-
-	// Mock external routes (empty - no match)
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
+	svc := testService(t, configSvc, &stubProvider{backends: map[string]domain.AppBackend{
+		"app.example.com": appBackend("127.0.0.1", 18080),
+	}})
+	ctx := testContext()
 
 	result, err := svc.GetTarget(ctx, "app.example.com")
 
+	assert.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", result.Host)
+	assert.Equal(t, 18080, result.Port)
+	assert.Equal(t, "c-app", result.ContainerID)
+	assert.Equal(t, "http", result.Scheme)
+	assert.Equal(t, "app.example.com", result.RouteHost)
+}
+
+func TestService_GetTarget_AppBackendUnresolved(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	// Zero backend: recorded but unbound (fail closed).
+	svc := testService(t, configSvc, &stubProvider{backends: map[string]domain.AppBackend{
+		"app.example.com": {ContainerPort: 8080},
+	}})
+	ctx := testContext()
+
+	result, err := svc.GetTarget(ctx, "app.example.com")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.Nil(t, result)
+}
+
+func TestService_GetTarget_NoProvider(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	svc := testService(t, configSvc, nil)
+	ctx := testContext()
+
+	result, err := svc.GetTarget(ctx, "app.example.com")
+	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.Nil(t, result)
+}
+
+func TestService_GetTarget_NoStaleAppBackendAfterReplacement(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	provider := &stubProvider{backends: map[string]domain.AppBackend{
+		"app.example.com": appBackend("127.0.0.1", 32768),
+	}}
+	svc := testService(t, configSvc, provider)
+	ctx := testContext()
+
+	// First resolution observes the v1 bind.
+	result, err := svc.GetTarget(ctx, "app.example.com")
+	assert.NoError(t, err)
+	assert.Equal(t, 32768, result.Port)
+
+	// Deploy replacement: the index now records the v2 bind. No
+	// invalidation call happens; the next lookup must observe v2.
+	provider.backends["app.example.com"] = appBackend("127.0.0.1", 32769)
+	result, err = svc.GetTarget(ctx, "app.example.com")
+	assert.NoError(t, err)
+	assert.Equal(t, 32769, result.Port)
+
+	// App resolutions never populate the target cache.
+	svc.mu.RLock()
+	_, exists := svc.targets["app.example.com"]
+	svc.mu.RUnlock()
+	assert.False(t, exists)
+
+	// Withdrawal fails closed: no stale-target fallback.
+	delete(provider.backends, "app.example.com")
+	result, err = svc.GetTarget(ctx, "app.example.com")
 	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
 	assert.Nil(t, result)
 }
 
 func TestService_GetTarget_ExternalRoute(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, configSvc, nil)
 	ctx := testContext()
 
 	// Mock external routes - use public IP to pass SSRF check
@@ -111,11 +181,8 @@ func TestService_GetTarget_ExternalRoute(t *testing.T) {
 }
 
 func TestService_GetTarget_ExternalRoute_Cached(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, configSvc, nil)
 	ctx := testContext()
 
 	// First call - should resolve external route (use public IP)
@@ -134,11 +201,8 @@ func TestService_GetTarget_ExternalRoute_Cached(t *testing.T) {
 }
 
 func TestService_GetTarget_ExternalRoute_SSRFBlocked(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, configSvc, nil)
 	ctx := testContext()
 
 	tests := []struct {
@@ -156,7 +220,7 @@ func TestService_GetTarget_ExternalRoute_SSRFBlocked(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Clear cache
-			svc.targets = make(map[string]*domain.ProxyTarget)
+			svc.targets = make(map[string]cachedTarget)
 
 			configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
 				"ssrf.example.com": tt.target,
@@ -172,11 +236,8 @@ func TestService_GetTarget_ExternalRoute_SSRFBlocked(t *testing.T) {
 }
 
 func TestService_GetTarget_ExternalRoute_InvalidTarget(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
 	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, configSvc, nil)
 	ctx := testContext()
 
 	// Mock external routes with invalid format (missing port)
@@ -202,11 +263,8 @@ func TestService_GetTarget_ExternalRoute_InvalidPort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runtime := outmocks.NewMockContainerRuntime(t)
-			containerSvc := inmocks.NewMockContainerService(t)
 			configSvc := inmocks.NewMockConfigService(t)
-
-			svc := NewService(runtime, containerSvc, configSvc, Config{})
+			svc := testService(t, configSvc, nil)
 			ctx := testContext()
 
 			configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{
@@ -222,16 +280,12 @@ func TestService_GetTarget_ExternalRoute_InvalidPort(t *testing.T) {
 }
 
 func TestService_RegisterTarget(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, nil, nil)
 	ctx := testContext()
 
 	target := &domain.ProxyTarget{
-		Host:        "192.168.1.100",
-		Port:        8080,
+		Host:        "127.0.0.1",
+		Port:        18080,
 		ContainerID: "container-123",
 		Scheme:      "http",
 	}
@@ -245,22 +299,18 @@ func TestService_RegisterTarget(t *testing.T) {
 	cached := svc.targets["app.example.com"]
 	svc.mu.RUnlock()
 
-	assert.Equal(t, target, cached)
+	assert.Equal(t, target, cached.target)
 }
 
 func TestService_UnregisterTarget(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, nil, nil)
 	ctx := testContext()
 
 	// Pre-populate
-	svc.targets["app.example.com"] = &domain.ProxyTarget{
-		Host: "192.168.1.100",
-		Port: 8080,
-	}
+	svc.targets["app.example.com"] = cachedTarget{target: &domain.ProxyTarget{
+		Host: "127.0.0.1",
+		Port: 18080,
+	}}
 
 	err := svc.UnregisterTarget(ctx, "App.Example.com")
 
@@ -275,16 +325,12 @@ func TestService_UnregisterTarget(t *testing.T) {
 }
 
 func TestService_RefreshTargets(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, nil, nil)
 	ctx := testContext()
 
 	// Pre-populate with some targets
-	svc.targets["app1.example.com"] = &domain.ProxyTarget{Host: "192.168.1.100"}
-	svc.targets["app2.example.com"] = &domain.ProxyTarget{Host: "192.168.1.101"}
+	svc.targets["app1.example.com"] = cachedTarget{target: &domain.ProxyTarget{Host: "127.0.0.1"}}
+	svc.targets["app2.example.com"] = cachedTarget{target: &domain.ProxyTarget{Host: "127.0.0.1"}}
 
 	err := svc.RefreshTargets(ctx)
 
@@ -299,11 +345,8 @@ func TestService_RefreshTargets(t *testing.T) {
 }
 
 func TestService_UpdateConfig(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{
+	svc := testService(t, nil, nil)
+	svc.UpdateConfig(Config{
 		RegistryDomain: "old.registry.com",
 		RegistryPort:   5000,
 	})
@@ -319,33 +362,16 @@ func TestService_UpdateConfig(t *testing.T) {
 	assert.Equal(t, 5001, svc.config.RegistryPort)
 }
 
-func TestService_isRunningInContainer(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-
-	// This test just verifies the method doesn't panic
-	// The actual result depends on the environment
-	result := svc.isRunningInContainer()
-	assert.IsType(t, true, result) // Just verify it returns a bool
-}
-
 func TestService_InvalidateTarget(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, nil, nil)
 	ctx := testContext()
 
 	// Pre-populate cache with target
-	svc.targets["app.example.com"] = &domain.ProxyTarget{
-		Host:        "192.168.1.100",
-		Port:        8080,
+	svc.targets["app.example.com"] = cachedTarget{target: &domain.ProxyTarget{
+		Host:        "127.0.0.1",
+		Port:        18080,
 		ContainerID: "old-container",
-	}
+	}}
 
 	// Invalidate the target using mixed-case input.
 	svc.InvalidateTarget(ctx, "App.Example.com")
@@ -358,77 +384,16 @@ func TestService_InvalidateTarget(t *testing.T) {
 	assert.False(t, exists, "target should be removed from cache after invalidation")
 }
 
-func TestContainerDeployedHandler_CanHandle(t *testing.T) {
-	handler := NewContainerDeployedHandler(testContext(), nil)
-
-	assert.True(t, handler.CanHandle(domain.EventContainerDeployed))
-	assert.False(t, handler.CanHandle(domain.EventImagePushed))
-	assert.False(t, handler.CanHandle(domain.EventConfigReload))
-}
-
-func TestContainerDeployedHandler_Handle_InvalidatesCache(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
+func TestService_IsKnownHost_AppBackend(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	svc := testService(t, configSvc, &stubProvider{backends: map[string]domain.AppBackend{
+		"app.example.com": appBackend("127.0.0.1", 18080),
+	}})
 	ctx := testContext()
 
-	// Pre-populate cache
-	svc.targets["app.example.com"] = &domain.ProxyTarget{
-		Host:        "192.168.1.100",
-		Port:        8080,
-		ContainerID: "old-container",
-	}
-
-	// Create handler with service as invalidator
-	handler := NewContainerDeployedHandler(ctx, svc)
-
-	// Simulate container deployed event
-	event := domain.Event{
-		ID:    "event-123",
-		Type:  domain.EventContainerDeployed,
-		Route: "app.example.com",
-		Data: &domain.ContainerEventPayload{
-			ContainerID: "new-container",
-			Domain:      "app.example.com",
-		},
-	}
-
-	err := handler.Handle(context.Background(), event)
-
-	assert.NoError(t, err)
-
-	// Verify target was invalidated
-	svc.mu.RLock()
-	_, exists := svc.targets["app.example.com"]
-	svc.mu.RUnlock()
-
-	assert.False(t, exists, "cache should be invalidated after container deployed event")
-}
-
-func TestContainerDeployedHandler_Handle_NoDomain(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	handler := NewContainerDeployedHandler(ctx, svc)
-
-	// Event with no domain
-	event := domain.Event{
-		ID:   "event-123",
-		Type: domain.EventContainerDeployed,
-		Data: &domain.ContainerEventPayload{
-			ContainerID: "new-container",
-		},
-	}
-
-	// Should not error, just skip
-	err := handler.Handle(context.Background(), event)
-	assert.NoError(t, err)
+	assert.True(t, svc.IsKnownHost(ctx, "app.example.com"))
+	assert.False(t, svc.IsKnownHost(ctx, "unknown.example.com"))
 }
 
 func TestRegistryInFlightTracking(t *testing.T) {
@@ -492,11 +457,8 @@ func TestDrainRegistryInFlightTimeout(t *testing.T) {
 }
 
 func TestService_ProxyConfig_ReflectsUpdates(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{
+	svc := testService(t, nil, nil)
+	svc.UpdateConfig(Config{
 		RegistryDomain:     "old.registry.com",
 		RegistryPort:       5000,
 		MaxBodySize:        1024,
@@ -528,11 +490,8 @@ func TestService_ProxyConfig_ReflectsUpdates(t *testing.T) {
 }
 
 func TestService_IsRegistryDomain(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{
+	svc := testService(t, nil, nil)
+	svc.UpdateConfig(Config{
 		RegistryDomain: "registry.example.com",
 	})
 
@@ -542,11 +501,8 @@ func TestService_IsRegistryDomain(t *testing.T) {
 }
 
 func TestService_IsRegistryDomain_EmptyConfig(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
+	svc := testService(t, nil, nil)
+	svc.UpdateConfig(Config{})
 
 	assert.False(t, svc.IsRegistryDomain("registry.example.com"))
 	assert.False(t, svc.IsRegistryDomain(""))
@@ -605,210 +561,4 @@ func TestService_TrackRegistryRequest(t *testing.T) {
 
 	svc.ReleaseRegistryRequest()
 	assert.Equal(t, int64(0), svc.RegistryInFlight())
-}
-
-func TestService_GetTarget_HostMode_UsesProxyPortLabel(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	// No external routes
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	// Container exists for this domain
-	container := &domain.Container{
-		ID:    "c-gitea",
-		Image: "gitea/gitea:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "git.example.com").Return(container, true)
-
-	// Route exists
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "git.example.com", Image: "gitea/gitea:latest"},
-	})
-
-	// Image has gordon.proxy.port=3000 label
-	runtime.EXPECT().GetImageLabels(mock.Anything, "gitea/gitea:latest").Return(map[string]string{
-		domain.LabelProxyPort: "3000",
-	}, nil)
-
-	// Host port mapping for internal port 3000
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-gitea", 3000).Return(32000, nil)
-
-	result, err := svc.GetTarget(ctx, "git.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "localhost", result.Host)
-	assert.Equal(t, 32000, result.Port)
-	assert.Equal(t, "c-gitea", result.ContainerID)
-	assert.Equal(t, "git.example.com", result.RouteHost)
-}
-
-func TestService_GetTarget_HostMode_UsesDeprecatedPortLabel(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	container := &domain.Container{
-		ID:    "c-app",
-		Image: "myapp:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "app.example.com", Image: "myapp:latest"},
-	})
-
-	// Image has deprecated gordon.port label — should still work
-	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(map[string]string{
-		domain.LabelPort: "8080",
-	}, nil)
-
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-app", 8080).Return(33000, nil)
-
-	result, err := svc.GetTarget(ctx, "app.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, 33000, result.Port)
-}
-
-func TestService_GetTarget_HostMode_ProxyPortWinsOverPort(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	container := &domain.Container{
-		ID:    "c-dual",
-		Image: "dualapp:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "dual.example.com").Return(container, true)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "dual.example.com", Image: "dualapp:latest"},
-	})
-
-	// Both labels set — gordon.proxy.port=9000 should win over gordon.port=3000
-	runtime.EXPECT().GetImageLabels(mock.Anything, "dualapp:latest").Return(map[string]string{
-		domain.LabelProxyPort: "9000",
-		domain.LabelPort:      "3000",
-	}, nil)
-
-	// Should use 9000 (gordon.proxy.port), NOT 3000 (gordon.port)
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-dual", 9000).Return(34000, nil)
-
-	result, err := svc.GetTarget(ctx, "dual.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, 34000, result.Port)
-}
-
-func TestService_GetTarget_HostMode_FallsBackToExposedPort(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	container := &domain.Container{
-		ID:    "c-plain",
-		Image: "plain:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "plain.example.com").Return(container, true)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "plain.example.com", Image: "plain:latest"},
-	})
-
-	// No port labels — should fall back to first exposed port
-	runtime.EXPECT().GetImageLabels(mock.Anything, "plain:latest").Return(map[string]string{}, nil)
-	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "plain:latest").Return([]int{8080}, nil)
-
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-plain", 8080).Return(35000, nil)
-
-	result, err := svc.GetTarget(ctx, "plain.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, 35000, result.Port)
-}
-
-func TestService_GetTarget_HostMode_H2CProtocolPropagated(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	container := &domain.Container{
-		ID:    "c-grpc",
-		Image: "grpc-app:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "grpc.example.com").Return(container, true)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "grpc.example.com", Image: "grpc-app:latest"},
-	})
-
-	runtime.EXPECT().GetImageLabels(mock.Anything, "grpc-app:latest").Return(map[string]string{
-		domain.LabelProxyPort:     "50051",
-		domain.LabelProxyProtocol: "h2c",
-	}, nil)
-
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-grpc", 50051).Return(50051, nil)
-
-	result, err := svc.GetTarget(ctx, "grpc.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "h2c", result.Protocol)
-	assert.Equal(t, 50051, result.Port)
-}
-
-func TestService_GetTarget_HostMode_DefaultProtocol(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	configSvc := inmocks.NewMockConfigService(t)
-
-	svc := NewService(runtime, containerSvc, configSvc, Config{})
-	ctx := testContext()
-
-	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-
-	container := &domain.Container{
-		ID:    "c-web",
-		Image: "web:latest",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "web.example.com").Return(container, true)
-
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{
-		{Domain: "web.example.com", Image: "web:latest"},
-	})
-
-	runtime.EXPECT().GetImageLabels(mock.Anything, "web:latest").Return(map[string]string{
-		domain.LabelProxyPort: "8080",
-	}, nil)
-
-	runtime.EXPECT().GetContainerPort(mock.Anything, "c-web", 8080).Return(8080, nil)
-
-	result, err := svc.GetTarget(ctx, "web.example.com")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "", result.Protocol)
 }

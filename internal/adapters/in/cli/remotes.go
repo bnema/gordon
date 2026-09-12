@@ -296,7 +296,7 @@ without needing to specify --remote.
 
 Examples:
   gordon remotes use prod
-  gordon routes list  # Uses prod remote automatically`,
+  gordon status  # Uses prod remote automatically`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]

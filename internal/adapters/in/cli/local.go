@@ -49,7 +49,7 @@ func (l *LocalServices) HasInternalTLS() bool {
 
 // GetLocalServices creates local services for CLI operations.
 // It loads the config and initializes services without starting the server.
-func GetLocalServices(configPath string) (*LocalServices, error) {
+func GetLocalServices(cliConfigPath string) (*LocalServices, error) {
 	// Set up viper with defaults
 	v := viper.New()
 	v.SetDefault("server.port", 8088)
@@ -57,7 +57,7 @@ func GetLocalServices(configPath string) (*LocalServices, error) {
 	v.SetDefault("server.data_dir", app.DefaultDataDir())
 
 	// Configure viper with config file paths
-	app.ConfigureViper(v, configPath)
+	app.ConfigureViper(v, cliConfigPath)
 
 	// Read config file
 	if err := v.ReadInConfig(); err != nil {

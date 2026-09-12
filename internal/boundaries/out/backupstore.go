@@ -10,11 +10,11 @@ import (
 
 // DatabaseBackupStorage defines persistence for database backup artifacts and metadata.
 type DatabaseBackupStorage interface {
-	Store(ctx context.Context, domainName, dbName string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error)
+	Store(ctx context.Context, app, service, database string, schedule domain.BackupSchedule, timestamp time.Time, data io.Reader) (string, error)
 	Get(ctx context.Context, path string) (io.ReadCloser, error)
-	List(ctx context.Context, domainName string, schedule *domain.BackupSchedule) ([]domain.DatabaseBackupJob, error)
+	List(ctx context.Context, app string, schedule *domain.BackupSchedule) ([]domain.DatabaseBackupJob, error)
 	Delete(ctx context.Context, path string) error
-	ApplyRetention(ctx context.Context, domainName string, policy domain.DatabaseBackupRetentionPolicy) (int, error)
+	ApplyRetention(ctx context.Context, app string, policy domain.DatabaseBackupRetentionPolicy) (int, error)
 }
 
 // BackupStorage is kept as a compatibility alias for the existing database backup feature.

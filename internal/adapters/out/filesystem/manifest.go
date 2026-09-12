@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -108,6 +109,23 @@ func (s *ManifestStorage) PutManifest(name, reference, contentType string, data 
 			Str("name", name).
 			Str("reference", reference).
 			Msg("failed to update tags list")
+	}
+
+	// Mirror tag-addressed manifests under their content digest so
+	// digest-addressed pulls (the pinned deploy path) resolve.
+	if !validation.IsDigest(reference) {
+		digest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+		if digest != reference {
+			if err := s.putManifestByDigest(name, digest, contentType, data); err != nil {
+				s.log.Warn().
+					Str(zerowrap.FieldLayer, "adapter").
+					Str(zerowrap.FieldAdapter, "filesystem").
+					Err(err).
+					Str("name", name).
+					Str("digest", digest).
+					Msg("failed to mirror manifest by digest")
+			}
+		}
 	}
 
 	s.log.Info().
@@ -306,6 +324,22 @@ func (s *ManifestStorage) putManifestContentType(name, reference, contentType st
 		return err
 	}
 	return os.WriteFile(contentTypePath, []byte(contentType), 0600)
+}
+
+// putManifestByDigest mirrors one manifest under its content digest so
+// digest-addressed pulls resolve.
+func (s *ManifestStorage) putManifestByDigest(name, digest, contentType string, data []byte) error {
+	manifestPath, err := s.getManifestPath(name, digest)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0750); err != nil {
+		return fmt.Errorf("failed to create manifest directory: %w", err)
+	}
+	if err := os.WriteFile(manifestPath, data, 0600); err != nil {
+		return fmt.Errorf("failed to write digest manifest: %w", err)
+	}
+	return s.putManifestContentType(name, digest, contentType)
 }
 
 func (s *ManifestStorage) deleteManifestContentType(name, reference string) error {

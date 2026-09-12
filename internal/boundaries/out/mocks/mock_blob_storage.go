@@ -173,17 +173,83 @@ func (_c *MockBlobStorage_BlobExists_Call) RunAndReturn(run func(digest string) 
 	return _c
 }
 
+// BlobOwnedByRepository provides a mock function for the type MockBlobStorage
+func (_mock *MockBlobStorage) BlobOwnedByRepository(name string, digest string) (bool, error) {
+	ret := _mock.Called(name, digest)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BlobOwnedByRepository")
+	}
+
+	var r0 bool
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string, string) (bool, error)); ok {
+		return returnFunc(name, digest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string, string) bool); ok {
+		r0 = returnFunc(name, digest)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string, string) error); ok {
+		r1 = returnFunc(name, digest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBlobStorage_BlobOwnedByRepository_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BlobOwnedByRepository'
+type MockBlobStorage_BlobOwnedByRepository_Call struct {
+	*mock.Call
+}
+
+// BlobOwnedByRepository is a helper method to define mock.On call
+//   - name string
+//   - digest string
+func (_e *MockBlobStorage_Expecter) BlobOwnedByRepository(name any, digest any) *MockBlobStorage_BlobOwnedByRepository_Call {
+	return &MockBlobStorage_BlobOwnedByRepository_Call{Call: _e.mock.On("BlobOwnedByRepository", name, digest)}
+}
+
+func (_c *MockBlobStorage_BlobOwnedByRepository_Call) Run(run func(name string, digest string)) *MockBlobStorage_BlobOwnedByRepository_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockBlobStorage_BlobOwnedByRepository_Call) Return(b bool, err error) *MockBlobStorage_BlobOwnedByRepository_Call {
+	_c.Call.Return(b, err)
+	return _c
+}
+
+func (_c *MockBlobStorage_BlobOwnedByRepository_Call) RunAndReturn(run func(name string, digest string) (bool, error)) *MockBlobStorage_BlobOwnedByRepository_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // CancelBlobUpload provides a mock function for the type MockBlobStorage
-func (_mock *MockBlobStorage) CancelBlobUpload(uuid string) error {
-	ret := _mock.Called(uuid)
+func (_mock *MockBlobStorage) CancelBlobUpload(name string, uuid string) error {
+	ret := _mock.Called(name, uuid)
 
 	if len(ret) == 0 {
 		panic("no return value specified for CancelBlobUpload")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string) error); ok {
-		r0 = returnFunc(uuid)
+	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
+		r0 = returnFunc(name, uuid)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -196,19 +262,25 @@ type MockBlobStorage_CancelBlobUpload_Call struct {
 }
 
 // CancelBlobUpload is a helper method to define mock.On call
+//   - name string
 //   - uuid string
-func (_e *MockBlobStorage_Expecter) CancelBlobUpload(uuid any) *MockBlobStorage_CancelBlobUpload_Call {
-	return &MockBlobStorage_CancelBlobUpload_Call{Call: _e.mock.On("CancelBlobUpload", uuid)}
+func (_e *MockBlobStorage_Expecter) CancelBlobUpload(name any, uuid any) *MockBlobStorage_CancelBlobUpload_Call {
+	return &MockBlobStorage_CancelBlobUpload_Call{Call: _e.mock.On("CancelBlobUpload", name, uuid)}
 }
 
-func (_c *MockBlobStorage_CancelBlobUpload_Call) Run(run func(uuid string)) *MockBlobStorage_CancelBlobUpload_Call {
+func (_c *MockBlobStorage_CancelBlobUpload_Call) Run(run func(name string, uuid string)) *MockBlobStorage_CancelBlobUpload_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
 			arg0 = args[0].(string)
 		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
 		run(
 			arg0,
+			arg1,
 		)
 	})
 	return _c
@@ -219,7 +291,7 @@ func (_c *MockBlobStorage_CancelBlobUpload_Call) Return(err error) *MockBlobStor
 	return _c
 }
 
-func (_c *MockBlobStorage_CancelBlobUpload_Call) RunAndReturn(run func(uuid string) error) *MockBlobStorage_CancelBlobUpload_Call {
+func (_c *MockBlobStorage_CancelBlobUpload_Call) RunAndReturn(run func(name string, uuid string) error) *MockBlobStorage_CancelBlobUpload_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -351,16 +423,16 @@ func (_c *MockBlobStorage_DeleteBlob_Call) RunAndReturn(run func(digest string) 
 }
 
 // FinishBlobUpload provides a mock function for the type MockBlobStorage
-func (_mock *MockBlobStorage) FinishBlobUpload(uuid string, digest string) error {
-	ret := _mock.Called(uuid, digest)
+func (_mock *MockBlobStorage) FinishBlobUpload(name string, uuid string, digest string) error {
+	ret := _mock.Called(name, uuid, digest)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FinishBlobUpload")
 	}
 
 	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(string, string) error); ok {
-		r0 = returnFunc(uuid, digest)
+	if returnFunc, ok := ret.Get(0).(func(string, string, string) error); ok {
+		r0 = returnFunc(name, uuid, digest)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -373,13 +445,14 @@ type MockBlobStorage_FinishBlobUpload_Call struct {
 }
 
 // FinishBlobUpload is a helper method to define mock.On call
+//   - name string
 //   - uuid string
 //   - digest string
-func (_e *MockBlobStorage_Expecter) FinishBlobUpload(uuid any, digest any) *MockBlobStorage_FinishBlobUpload_Call {
-	return &MockBlobStorage_FinishBlobUpload_Call{Call: _e.mock.On("FinishBlobUpload", uuid, digest)}
+func (_e *MockBlobStorage_Expecter) FinishBlobUpload(name any, uuid any, digest any) *MockBlobStorage_FinishBlobUpload_Call {
+	return &MockBlobStorage_FinishBlobUpload_Call{Call: _e.mock.On("FinishBlobUpload", name, uuid, digest)}
 }
 
-func (_c *MockBlobStorage_FinishBlobUpload_Call) Run(run func(uuid string, digest string)) *MockBlobStorage_FinishBlobUpload_Call {
+func (_c *MockBlobStorage_FinishBlobUpload_Call) Run(run func(name string, uuid string, digest string)) *MockBlobStorage_FinishBlobUpload_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 string
 		if args[0] != nil {
@@ -389,9 +462,14 @@ func (_c *MockBlobStorage_FinishBlobUpload_Call) Run(run func(uuid string, diges
 		if args[1] != nil {
 			arg1 = args[1].(string)
 		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -402,7 +480,7 @@ func (_c *MockBlobStorage_FinishBlobUpload_Call) Return(err error) *MockBlobStor
 	return _c
 }
 
-func (_c *MockBlobStorage_FinishBlobUpload_Call) RunAndReturn(run func(uuid string, digest string) error) *MockBlobStorage_FinishBlobUpload_Call {
+func (_c *MockBlobStorage_FinishBlobUpload_Call) RunAndReturn(run func(name string, uuid string, digest string) error) *MockBlobStorage_FinishBlobUpload_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -465,6 +543,66 @@ func (_c *MockBlobStorage_GetBlob_Call) Return(readCloser io.ReadCloser, err err
 }
 
 func (_c *MockBlobStorage_GetBlob_Call) RunAndReturn(run func(digest string) (io.ReadCloser, error)) *MockBlobStorage_GetBlob_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// GetBlobModTime provides a mock function for the type MockBlobStorage
+func (_mock *MockBlobStorage) GetBlobModTime(digest string) (time.Time, error) {
+	ret := _mock.Called(digest)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetBlobModTime")
+	}
+
+	var r0 time.Time
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(string) (time.Time, error)); ok {
+		return returnFunc(digest)
+	}
+	if returnFunc, ok := ret.Get(0).(func(string) time.Time); ok {
+		r0 = returnFunc(digest)
+	} else {
+		r0 = ret.Get(0).(time.Time)
+	}
+	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
+		r1 = returnFunc(digest)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockBlobStorage_GetBlobModTime_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetBlobModTime'
+type MockBlobStorage_GetBlobModTime_Call struct {
+	*mock.Call
+}
+
+// GetBlobModTime is a helper method to define mock.On call
+//   - digest string
+func (_e *MockBlobStorage_Expecter) GetBlobModTime(digest any) *MockBlobStorage_GetBlobModTime_Call {
+	return &MockBlobStorage_GetBlobModTime_Call{Call: _e.mock.On("GetBlobModTime", digest)}
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) Run(run func(digest string)) *MockBlobStorage_GetBlobModTime_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) Return(time1 time.Time, err error) *MockBlobStorage_GetBlobModTime_Call {
+	_c.Call.Return(time1, err)
+	return _c
+}
+
+func (_c *MockBlobStorage_GetBlobModTime_Call) RunAndReturn(run func(digest string) (time.Time, error)) *MockBlobStorage_GetBlobModTime_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -642,63 +780,6 @@ func (_c *MockBlobStorage_ListBlobs_Call) Return(strings []string, err error) *M
 }
 
 func (_c *MockBlobStorage_ListBlobs_Call) RunAndReturn(run func() ([]string, error)) *MockBlobStorage_ListBlobs_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// GetBlobModTime provides a mock function for the type MockBlobStorage.
-func (_mock *MockBlobStorage) GetBlobModTime(digest string) (time.Time, error) {
-	ret := _mock.Called(digest)
-
-	if len(ret) == 0 {
-		panic("no return value specified for GetBlobModTime")
-	}
-
-	var r0 time.Time
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(string) (time.Time, error)); ok {
-		return returnFunc(digest)
-	}
-	if returnFunc, ok := ret.Get(0).(func(string) time.Time); ok {
-		r0 = returnFunc(digest)
-	} else if ret.Get(0) != nil {
-		r0 = ret.Get(0).(time.Time)
-	}
-	if returnFunc, ok := ret.Get(1).(func(string) error); ok {
-		r1 = returnFunc(digest)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockBlobStorage_GetBlobModTime_Call is a typed expectation for GetBlobModTime.
-type MockBlobStorage_GetBlobModTime_Call struct {
-	*mock.Call
-}
-
-// GetBlobModTime is a helper method to define mock.On call.
-func (_e *MockBlobStorage_Expecter) GetBlobModTime(digest any) *MockBlobStorage_GetBlobModTime_Call {
-	return &MockBlobStorage_GetBlobModTime_Call{Call: _e.mock.On("GetBlobModTime", digest)}
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) Run(run func(digest string)) *MockBlobStorage_GetBlobModTime_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 string
-		if args[0] != nil {
-			arg0 = args[0].(string)
-		}
-		run(arg0)
-	})
-	return _c
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) Return(modTime time.Time, err error) *MockBlobStorage_GetBlobModTime_Call {
-	_c.Call.Return(modTime, err)
-	return _c
-}
-
-func (_c *MockBlobStorage_GetBlobModTime_Call) RunAndReturn(run func(digest string) (time.Time, error)) *MockBlobStorage_GetBlobModTime_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -23,8 +23,8 @@ gordon serve [options]
 Starts the Gordon server, which includes:
 
 - **Container Registry** - Receives image pushes on the registry port
-- **HTTP Proxy** - Routes traffic to containers on the proxy port
-- **Event Bus** - Coordinates deployments and updates
+- **Reverse Proxy** - Routes app hosts to recorded loopback backends
+- **Event Bus** - Coordinates runtime notifications
 - **Config Watcher** - Monitors configuration file for changes
 
 ### Configuration File Detection
@@ -68,8 +68,8 @@ Gordon responds to these signals:
 |--------|--------|
 | `SIGTERM` | Graceful shutdown |
 | `SIGINT` | Graceful shutdown (Ctrl+C) |
-| `SIGUSR1` | Reload configuration |
-| `SIGUSR2` | Manual deploy request (used by local `gordon deploy`) |
+| `SIGUSR1` | Reload installation configuration |
+| `SIGUSR2` | Reserved; no app deployment action |
 
 ### Running with systemd
 
@@ -106,21 +106,16 @@ sudo loginctl enable-linger $USER
 7. Register event handlers
 8. Start config file watcher
 9. Start HTTP servers
-10. Run best-effort startup recovery (sync existing containers, then recover configured routes)
+10. Run best-effort startup recovery (reconcile apps intended to run from active state)
 
 ### Startup Recovery
 
 After Gordon starts, including after a host reboot, it runs a best-effort recovery pass once the listeners are bound. Errors are logged, but Gordon keeps starting.
 
-1. **Sync existing containers** - Gordon reconciles runtime state with configured routes.
-2. **Recover configured routes** - Gordon runs `AutoStart` for any configured route that has no running container.
-3. **Start the background monitor** - Ongoing crash recovery resumes after the startup pass.
+1. **Reconcile app boot state** - Gordon ensures apps intended to run are running from active state (stopped-intent apps stay stopped, pending desired revisions are never activated).
+4. **Start the background monitor** - Ongoing crash recovery resumes after the startup pass.
 
-This recovery runs even when `[auto_route].enabled = false`. `auto_route` only controls whether new image pushes create routes automatically; it does not disable restart recovery for routes already in the config.
-
-Recovery stays inside Gordon's own control flow instead of relying on Docker or Podman restart policies. That keeps the behavior consistent across both runtimes.
-
-Startup recovery is intentionally narrower than a manual deploy. It only starts routes that are missing a running container, skips readiness checks during boot, and does not perform drain/replacement logic for routes that are already running.
+Reload and startup recovery never activate pending desired app state, re-resolve images, or flip intent. They touch installation settings and runtime reconciliation only.
 
 ### Shutdown Sequence
 
@@ -135,7 +130,7 @@ Startup recovery is intentionally narrower than a manual deploy. It only starts 
 
 ## gordon reload
 
-Reload configuration and sync containers to match.
+Reload installation configuration.
 
 ### Synopsis
 
@@ -147,10 +142,10 @@ gordon reload
 
 Sends `SIGUSR1` to the running Gordon process, triggering:
 
-- Configuration file reload
-- Route synchronization
-- Deployment of containers for routes missing containers
-- Attachment deployment
+- Installation settings reload (live keys apply, restart-required keys are reported)
+- Traffic/proxy state refresh from ACTIVE app projection
+
+Reload never activates pending desired app state, re-resolves images, or flips intent. Obsolete application keys (`routes`, `attachments`, `services`, `auto`, previews, …) are rejected with a `config-retired` diagnostic before any mutation.
 
 ### Example
 
@@ -162,79 +157,17 @@ gordon reload
 
 ---
 
-## gordon deploy
-
-Manually deploy or redeploy a specific route.
-
-### Synopsis
-
-```bash
-gordon deploy <domain> [options]
-```
-
-### Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `<domain>` | The domain name of the route to deploy (required) |
-
-### Options
-
-| Option | Description |
-|--------|-------------|
-| `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
-| `--token` | Authentication token for remote |
-
-Remote targeting uses client config or an active remote by default.
-Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
-
-### Description
-
-**Local mode:** On the Gordon host, Gordon uses the explicit deploy path for the selected route. When the CLI cannot execute that path directly, it falls back to queueing the request with `SIGUSR2` for the running server. This is different from startup recovery: startup recovery uses `AutoStart`, while a manual deploy performs an explicit redeploy for the selected route.
-
-**Remote mode:** Calls the remote Gordon Admin API to trigger deployment. The remote Gordon instance still performs the actual deploy internally; the CLI only submits the request.
-
-Both local and remote manual deploys use Gordon's explicit deploy path:
-
-- Fresh image content is pulled for the route
-- The specified route is redeployed
-- Configured readiness checks and drain behavior apply when needed
-
-### Examples
-
-```bash
-# Local deployment
-gordon deploy myapp.example.com
-gordon deploy api.example.com
-
-# Remote deployment (override)
-gordon deploy myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
-```
-
-### Use Cases
-
-- Recover from a failed deployment
-- Force redeploy without pushing a new image
-- Manual deployment when automatic deploy didn't trigger
-- Trigger deployments on remote Gordon instances from CI/CD
-
----
-
 ## gordon logs
 
-Display Gordon process logs or container logs.
+Display Gordon daemon process logs. Application workload output is read with
+`gordon apps logs APP --service SVC`, which resolves the app's active container
+through the daemon.
 
 ### Synopsis
 
 ```bash
-gordon logs [domain] [options]
+gordon logs [options]
 ```
-
-### Arguments
-
-| Argument | Description |
-|----------|-------------|
-| `[domain]` | Optional. Container domain to view logs for. Without this, shows Gordon process logs. |
 
 ### Options
 
@@ -246,10 +179,8 @@ gordon logs [domain] [options]
 | `--remote, -r` | | | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
 | `--token` | | | Authentication token for remote |
 
-Remote targeting uses client config or an active remote by default.
-When you provide a concrete domain and no remote is selected, Gordon can also
-auto-infer a saved remote when exactly one match is found.
-Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
+Remote targeting uses client config or an active remote by default. Use
+`--remote` and `--token` to override. See [CLI Overview](./index.md).
 
 Remote log access requires an admin token with `admin:logs:read` (or `admin:*:*`). `admin:status:read` is not sufficient for logs.
 
@@ -262,14 +193,12 @@ gordon logs -f           # Follow logs
 gordon logs -n 100       # Last 100 lines
 gordon logs -f -n 200    # Follow, starting from last 200 lines
 
-# Container logs
-gordon logs myapp.example.com           # Last 50 lines from container
-gordon logs myapp.example.com -f        # Follow container logs
-gordon logs myapp.example.com -n 100    # Last 100 lines from container
+# App service logs
+gordon apps logs blog --service web
+gordon apps logs blog --service web --follow --remote prod
 
-# Remote mode (override)
+# Remote process logs (override)
 gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-gordon logs myapp.example.com --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 ### Log Locations
@@ -284,9 +213,9 @@ tail -f ~/.gordon/logs/gordon.log
 # With systemd
 journalctl --user -u gordon -f
 
-# Container logs via docker (local alternative)
-docker logs --tail 50 myapp.example.com
-docker logs -f myapp.example.com
+# App service logs through Gordon
+gordon apps logs blog --service web --tail 50
+gordon apps logs blog --service web --follow
 ```
 
 ---

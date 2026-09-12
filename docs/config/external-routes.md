@@ -79,5 +79,5 @@ vim ~/.config/gordon/gordon.toml
 
 ## Related
 
-- [Routes Configuration](./routes.md)
+- [App Manifest](./apps.md)
 - [Configuration Overview](./index.md)

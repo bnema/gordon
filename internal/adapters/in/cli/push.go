@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,11 +13,9 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/adapters/in/cli/ui/components"
 	"github.com/bnema/gordon/internal/adapters/in/cli/ui/styles"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/validation"
@@ -38,6 +35,7 @@ type buildConfig struct {
 type imagePush struct {
 	Registry   string
 	ImageName  string
+	SourceRef  string
 	Version    string
 	VersionRef string
 	LatestRef  string
@@ -45,47 +43,32 @@ type imagePush struct {
 
 // pushRequest holds all inputs for the push command.
 type pushRequest struct {
-	ImageArg  string
-	Domain    string
-	Tag       string
-	Build     buildConfig
-	NoDeploy  bool
-	NoConfirm bool
+	ImageArg string
+	Tag      string
+	Build    buildConfig
 }
 
 func newPushCmd() *cobra.Command {
 	var (
-		noDeploy   bool
-		noConfirm  bool
 		build      bool
 		platform   string
 		tag        string
 		dockerfile string
 		buildArgs  []string
-		domainFlag string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "push [image]",
-		Short: "Tag, push, and optionally deploy an image",
+		Short: "Tag and push an image to the Gordon registry",
 		Long: `Tags a local image for the Gordon registry and pushes it.
-Uses git tags for versioning. Optionally triggers deployment after push.
-
-Image-first syntax is primary:
-  - Positional args resolve routes by image name first
-  - Tagged positional refs still resolve routes by image name
-  - The pushed version comes from --tag, CI tag refs, or git describe
-  - Dotted positional refs fall back to legacy domain lookup if no image route exists
-  - --domain is a deploy target override for legacy workflows
-  - No-arg mode still auto-detects from Dockerfile labels or current directory name
-
-With --build, builds the image first using docker buildx.
+Uses git tags for versioning. Push transfers OCI content only: it never
+deploys. Deploy separately with ` + "`gordon apps deploy`" + ` after applying
+the manifest that references the pushed tag.
 
 Examples:
   gordon push myapp --build --remote ...
-  gordon push myapp:v1.2.3 --tag v1.2.3 --no-deploy --remote ...
+  gordon push myapp:v1.2.3 --tag v1.2.3 --remote ...
   gordon push registry.example.com/myapp:v1.2.3 --build --remote ...
-  gordon push --domain myapp.example.com --build --remote ...
   gordon push --build --build-arg CGO_ENABLED=0 --remote ...`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -94,24 +77,18 @@ Examples:
 				imageArg = args[0]
 			}
 			return runPush(cmd.Context(), cmd.OutOrStdout(), pushRequest{
-				ImageArg:  imageArg,
-				Domain:    domainFlag,
-				Tag:       tag,
-				Build:     buildConfig{Enabled: build, Platform: platform, Dockerfile: dockerfile, BuildArgs: buildArgs},
-				NoDeploy:  noDeploy,
-				NoConfirm: noConfirm,
+				ImageArg: imageArg,
+				Tag:      tag,
+				Build:    buildConfig{Enabled: build, Platform: platform, Dockerfile: dockerfile, BuildArgs: buildArgs},
 			})
 		},
 	}
 
-	cmd.Flags().BoolVar(&noDeploy, "no-deploy", false, "Push only, don't trigger deploy")
-	cmd.Flags().BoolVar(&noConfirm, "no-confirm", false, "Skip deploy confirmation prompt")
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
 	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
 	cmd.Flags().StringVar(&tag, "tag", "", "Override pushed version tag (default: CI tag ref or git describe)")
 	cmd.Flags().StringArrayVar(&buildArgs, "build-arg", nil, "Additional build args (used with --build)")
-	cmd.Flags().StringVar(&domainFlag, "domain", "", "Explicit domain override (legacy mode)")
 
 	return cmd
 }
@@ -141,7 +118,8 @@ const (
 
 type classifiedPushArg struct {
 	kind         pushArgKind
-	lookupImage  string
+	sourceRef    string
+	repository   string
 	legacyDomain string
 }
 
@@ -150,11 +128,11 @@ func classifyPushArgument(arg string) classifiedPushArg {
 		return classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: arg}
 	}
 
-	classified := classifiedPushArg{kind: pushArgKindImage, lookupImage: arg}
-	if parsedImage, ref := validation.ParseImageReference(arg); parsedImage != arg && !strings.HasPrefix(ref, "sha256:") {
-		classified.lookupImage = parsedImage
+	_, repository, _ := parseImageRef(arg)
+	if repository == "" {
+		repository, _ = validation.ParseImageReference(arg)
 	}
-	return classified
+	return classifiedPushArg{kind: pushArgKindImage, sourceRef: arg, repository: repository}
 }
 
 func looksLikeLegacyDomain(arg string) bool {
@@ -168,51 +146,29 @@ func looksLikeLegacyDomain(arg string) bool {
 	return strings.Contains(host, ".")
 }
 
-// resolveRoute determines the registry, image name, and domain from the input mode.
-func resolveRoute(ctx context.Context, cp ControlPlane, imageArg, domainFlag, dockerfile string) (registry, imageName, pushDomain string, err error) {
-	if domainFlag != "" {
-		return resolveFromDomain(ctx, cp, domainFlag)
-	}
-
+// resolveImageTarget determines the registry and image name from the input.
+// Push transfers OCI content only and never triggers deploys or route
+// lookups. The deploy target comes from the app manifest applied
+// separately via `gordon apps apply`.
+func resolveImageTarget(out io.Writer, imageArg, dockerfile string) (registry, imageName, sourceRef string, err error) {
 	if imageArg == "" {
 		imageArg, err = detectImageName(dockerfile)
 		if err != nil {
 			return "", "", "", err
 		}
-		fmt.Printf("Detected image: %s\n", styles.Theme.Bold.Render(imageArg))
-	}
-
-	if looksLikeLegacyDomain(imageArg) {
-		lookupImage := imageArg
-		domainLookupArg := imageArg
-		if parsedImage, ref := validation.ParseImageReference(imageArg); parsedImage != imageArg {
-			domainLookupArg = parsedImage
-			if !strings.HasPrefix(ref, "sha256:") {
-				lookupImage = parsedImage
-			}
-		}
-
-		registry, imageName, pushDomain, err = resolveFromImage(ctx, cp, lookupImage, dockerfile)
-		if err == nil {
-			return registry, imageName, pushDomain, nil
-		}
-		if !isImageBootstrapError(err) {
+		if err := cliWritef(out, "Detected image: %s\n", styles.Theme.Bold.Render(imageArg)); err != nil {
 			return "", "", "", err
 		}
-
-		registry, imageName, pushDomain, err = resolveFromDomain(ctx, cp, domainLookupArg)
-		if err == nil {
-			return registry, imageName, pushDomain, nil
-		}
-		if errors.Is(err, domain.ErrRouteNotFound) {
-			return "", "", "", noRouteForImageError(domainLookupArg)
-		}
-		return "", "", "", err
 	}
-
+	if looksLikeLegacyDomain(imageArg) {
+		return "", "", "", fmt.Errorf("domain-style push targets are retired: push an image name, then `gordon apps apply` (got %q)", imageArg)
+	}
 	classified := classifyPushArgument(imageArg)
-
-	return resolveFromImage(ctx, cp, classified.lookupImage, dockerfile)
+	registry, imageName, _ = parseImageRef(classified.sourceRef)
+	if registry == "" || imageName == "" {
+		return "", "", "", fmt.Errorf("cannot parse registry/image from %q", imageArg)
+	}
+	return registry, imageName, classified.sourceRef, nil
 }
 
 // resolveVersion determines and validates the version tag.
@@ -233,7 +189,7 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 	}
 	defer handle.close()
 
-	registry, imageName, pushDomain, err := resolveRoute(ctx, handle.plane, req.ImageArg, req.Domain, dockerfile)
+	registry, imageName, sourceRef, err := resolveImageTarget(out, req.ImageArg, dockerfile)
 	if err != nil {
 		return err
 	}
@@ -246,7 +202,7 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 		return err
 	}
 
-	img := imagePush{Registry: registry, ImageName: imageName, Version: version}
+	img := imagePush{Registry: registry, ImageName: imageName, SourceRef: sourceRef, Version: version}
 	img.VersionRef, img.LatestRef = resolveImageRefs(registry, imageName, version)
 
 	imageOps, err := newPushImageOps(inferredRemote)
@@ -262,21 +218,13 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 			return err
 		}
 	}
-	if err := cliWritef(out, "Domain: %s\n", styles.Theme.Bold.Render(pushDomain)); err != nil {
-		return err
-	}
-
-	skipExplicitDeploy := shouldSkipDeploy(ctx, handle.plane, imageName, req.NoDeploy)
 	build := buildConfig{Enabled: req.Build.Enabled, Platform: req.Build.Platform, Dockerfile: dockerfile, BuildArgs: req.Build.BuildArgs}
-	if err := pushResolvedImage(ctx, imageOps, build, img); err != nil {
+	if err := pushResolvedImage(ctx, out, imageOps, build, img); err != nil {
 		return err
 	}
 
 	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
 		return err
-	}
-	if !skipExplicitDeploy {
-		return deployAfterPush(ctx, handle.plane, pushDomain, req.NoConfirm)
 	}
 	return nil
 }
@@ -286,7 +234,7 @@ func resolvePushTarget(ctx context.Context, out io.Writer, req pushRequest) (doc
 	if err != nil {
 		return "", nil, nil, err
 	}
-	inferredRemote, err = inferPushRemote(ctx, req.ImageArg, req.Domain, dockerfile)
+	inferredRemote, err = inferPushRemote(ctx, req.ImageArg, "", dockerfile)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -297,7 +245,7 @@ func resolvePushTarget(ctx context.Context, out io.Writer, req pushRequest) (doc
 		}
 		return dockerfile, inferredRemote, handle, nil
 	}
-	handle, err = resolveControlPlane(configPath)
+	handle, err = resolveControlPlane(cliConfigPath)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -320,179 +268,15 @@ func newPushImageOps(inferredRemote *remote.ResolvedRemote) (pushImageOps, error
 	return newImageOpsFn()
 }
 
-func pushResolvedImage(ctx context.Context, imageOps pushImageOps, build buildConfig, img imagePush) error {
+func pushResolvedImage(ctx context.Context, out io.Writer, imageOps pushImageOps, build buildConfig, img imagePush) error {
 	if build.Enabled {
-		return buildAndPush(ctx, imageOps, build, img)
+		return buildAndPush(ctx, out, imageOps, build, img)
 	}
-	return tagAndPush(ctx, imageOps, img)
+	return tagAndPush(ctx, out, imageOps, img)
 }
 
-// shouldSkipDeploy signals deploy intent and returns whether the explicit deploy
-// should be skipped (either because --no-deploy was set, or the token lacks scope).
-func shouldSkipDeploy(ctx context.Context, plane ControlPlane, imageName string, noDeploy bool) bool {
-	// Always call DeployIntent to suppress server-side auto-deploy, even with --no-deploy.
-	// Without this, the server's event listener would still auto-deploy the pushed image.
-	if err := plane.DeployIntent(ctx, imageName); err != nil {
-		if isInsufficientScope(err) {
-			fmt.Fprintln(os.Stderr, "info: deploy intent skipped (insufficient scope), server will auto-deploy on image receive")
-			return true
-		}
-		// Non-fatal: worst case we get a redundant deploy via event
-		fmt.Fprintf(os.Stderr, "warning: failed to register deploy intent: %v\n", err)
-	}
-	return noDeploy
-}
-
-// isInsufficientScope returns true if the error is an HTTP 403 Forbidden response,
-// meaning the token lacks the required admin scope.
-func isInsufficientScope(err error) bool {
-	var httpErr *remote.HTTPError
-	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusForbidden
-}
-
-// resolveFromDomain resolves image info from a domain name (legacy mode).
-func resolveFromDomain(ctx context.Context, cp ControlPlane, pushDomain string) (registry, imageName, resolvedDomain string, err error) {
-	route, err := cp.GetRoute(ctx, pushDomain)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to get route for domain %q: %w", pushDomain, err)
-	}
-
-	registry, imageName, _ = parseImageRef(route.Image)
-	if registry == "" || imageName == "" {
-		return "", "", "", fmt.Errorf("cannot parse registry/image from route image: %s", route.Image)
-	}
-
-	return registry, imageName, pushDomain, nil
-}
-
-// resolveFromImage resolves domain(s) from an image name using the backend.
-func resolveFromImage(ctx context.Context, cp ControlPlane, imageArg, dockerfile string) (registry, imageName, resolvedDomain string, err error) {
-	// First, query the backend to find routes for this image
-	routes, err := cp.FindRoutesByImage(ctx, imageArg)
-	if err != nil {
-		return "", "", "", fmt.Errorf("failed to find routes for image %q: %w", imageArg, err)
-	}
-
-	routes = filterPreviewRoutes(routes)
-
-	if len(routes) == 0 {
-		return "", "", "", noRouteForImageError(imageArg)
-	}
-
-	// Pick the target domain
-	var targetRoute domain.Route
-	if len(routes) == 1 {
-		targetRoute = routes[0]
-	} else {
-		// Multiple domains: check Dockerfile labels first, then prompt
-		targetRoute, err = selectDomain(routes, dockerfile)
-		if err != nil {
-			return "", "", "", err
-		}
-	}
-
-	registry, imageName, _ = parseImageRef(targetRoute.Image)
-	if registry == "" || imageName == "" {
-		return "", "", "", fmt.Errorf("cannot parse registry/image from route image: %s", targetRoute.Image)
-	}
-
-	return registry, imageName, targetRoute.Domain, nil
-}
-
-func isImageBootstrapError(err error) bool {
-	return errors.Is(err, domain.ErrNoRouteForImage)
-}
-
-func noRouteForImageError(imageArg string) error {
-	// bootstrap command is registered in bootstrap.go (see issue #98)
-	return noRouteForImageBootstrapError{imageArg: imageArg}
-}
-
-type noRouteForImageBootstrapError struct {
-	imageArg string
-}
-
-func (e noRouteForImageBootstrapError) Error() string {
-	return fmt.Sprintf(
-		"no route configured for image %q\n\nFor a first deploy, use 'gordon bootstrap <domain> %s'\nOr configure the route directly with 'gordon routes add <domain> %s'\nIf this is an attachment image, use 'gordon attachments push %s'",
-		e.imageArg,
-		e.imageArg,
-		e.imageArg,
-		e.imageArg,
-	)
-}
-
-func (e noRouteForImageBootstrapError) Unwrap() error {
-	return domain.ErrNoRouteForImage
-}
-
-// selectDomain picks the target domain from multiple routes.
-// Checks Dockerfile labels first, then falls back to interactive selection.
-func selectDomain(routes []domain.Route, dockerfile string) (domain.Route, error) {
-	// Try to resolve from Dockerfile labels
-	labels := parseDockerfileLabels(dockerfile)
-	labelDomain := labels[domain.LabelDomain]
-	labelDomains := labels[domain.LabelDomains]
-
-	// Collect domains from labels
-	var labelDomainList []string
-	if labelDomain != "" {
-		labelDomainList = append(labelDomainList, labelDomain)
-	}
-	if labelDomains != "" {
-		for d := range strings.SplitSeq(labelDomains, ",") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				labelDomainList = append(labelDomainList, d)
-			}
-		}
-	}
-
-	// Try to find a matching route from labels
-	if len(labelDomainList) > 0 {
-		routeMap := make(map[string]domain.Route, len(routes))
-		for _, r := range routes {
-			routeMap[r.Domain] = r
-		}
-		for _, ld := range labelDomainList {
-			if r, ok := routeMap[ld]; ok {
-				return r, nil
-			}
-		}
-	}
-
-	// Fall back to interactive selection
-	items := make([]string, 0, len(routes))
-	for _, r := range routes {
-		items = append(items, fmt.Sprintf("%s  %s", r.Domain, styles.Theme.Muted.Render(r.Image)))
-	}
-
-	selected, err := components.RunSelector(
-		"Multiple domains found for this image. Select target:",
-		items,
-		"",
-	)
-	if err != nil {
-		return domain.Route{}, fmt.Errorf("selection error: %w", err)
-	}
-	if selected == "" {
-		return domain.Route{}, fmt.Errorf("no domain selected")
-	}
-
-	// Extract domain from the selected display string
-	for i, item := range items {
-		if item == selected {
-			return routes[i], nil
-		}
-	}
-
-	return domain.Route{}, fmt.Errorf("selected domain not found")
-}
-
-// detectImageName auto-detects the image name from context.
-// Resolution order:
-// 1. Dockerfile label gordon.domain (if Dockerfile exists)
-// 2. Current directory name
+// detectImageName resolves the image name from Dockerfile labels or the
+// current directory name.
 func detectImageName(dockerfile string) (string, error) {
 	// Try Dockerfile labels
 	labels := parseDockerfileLabels(dockerfile)
@@ -513,7 +297,7 @@ func detectImageName(dockerfile string) (string, error) {
 
 	dirName := filepath.Base(cwd)
 	if dirName == "." || dirName == "/" {
-		return "", fmt.Errorf("cannot detect image name from current directory; provide an image name or use --domain")
+		return "", fmt.Errorf("cannot detect image name from current directory; provide an image name")
 	}
 
 	return dirName, nil
@@ -655,7 +439,7 @@ func parseTagRef(ref string) string {
 	return tag
 }
 
-func buildAndPush(ctx context.Context, ops pushImageOps, build buildConfig, img imagePush) error {
+func buildAndPush(ctx context.Context, out io.Writer, ops pushImageOps, build buildConfig, img imagePush) error {
 	if _, err := os.Stat(build.Dockerfile); os.IsNotExist(err) {
 		return fmt.Errorf("dockerfile not found: %s", build.Dockerfile)
 	}
@@ -663,12 +447,16 @@ func buildAndPush(ctx context.Context, ops pushImageOps, build buildConfig, img 
 	// Build and load into local daemon (NOT --push).
 	// The native registry push client handles chunked uploads to stay
 	// within Cloudflare's 100MB per-request limit.
-	fmt.Println("\nBuilding image...")
+	if err := cliWriteLine(out, "\nBuilding image..."); err != nil {
+		return err
+	}
 	if err := ops.Build(ctx, buildImageArgs(ctx, img.Version, build.Platform, build.Dockerfile, build.BuildArgs, img.VersionRef, img.LatestRef)); err != nil {
 		return err
 	}
 
-	fmt.Println("Pushing...")
+	if err := cliWriteLine(out, "Pushing..."); err != nil {
+		return err
+	}
 	if err := ops.Push(ctx, img.LatestRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
 	}
@@ -731,10 +519,15 @@ func buildImageArgs(ctx context.Context, version, platform, dockerfile string, b
 	return args
 }
 
-func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
-	localImage := fmt.Sprintf("%s/%s", img.Registry, img.ImageName)
+func tagAndPush(ctx context.Context, out io.Writer, ops pushImageOps, img imagePush) error {
+	localImage := img.SourceRef
+	if localImage == "" {
+		return errors.New("push source image reference cannot be empty")
+	}
 
-	fmt.Println("\nChecking local image...")
+	if err := cliWriteLine(out, "\nChecking local image..."); err != nil {
+		return err
+	}
 	exists, err := ops.Exists(ctx, localImage)
 	if err != nil {
 		return fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
@@ -743,7 +536,9 @@ func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
 		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
 	}
 
-	fmt.Println("Tagging...")
+	if err := cliWriteLine(out, "Tagging..."); err != nil {
+		return err
+	}
 	if err := ops.Tag(ctx, localImage, img.VersionRef); err != nil {
 		return fmt.Errorf("failed to tag %s: %w", img.VersionRef, err)
 	}
@@ -753,7 +548,9 @@ func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
 		}
 	}
 
-	fmt.Println("Pushing...")
+	if err := cliWriteLine(out, "Pushing..."); err != nil {
+		return err
+	}
 	if err := ops.Push(ctx, img.VersionRef); err != nil {
 		return fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
 	}
@@ -763,118 +560,6 @@ func tagAndPush(ctx context.Context, ops pushImageOps, img imagePush) error {
 		}
 	}
 	return nil
-}
-
-func deployAfterPush(ctx context.Context, cp ControlPlane, pushDomain string, noConfirm bool) error {
-	if !noConfirm {
-		confirmed, err := components.RunConfirm("Deploy now?", components.WithDefaultYes())
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			return nil
-		}
-	}
-
-	var (
-		result *remote.DeployResult
-		err    error
-	)
-	if remoteCP, ok := cp.(*remoteControlPlane); ok {
-		result, err = deployWithSpinner(ctx, remoteCP.client, pushDomain)
-	} else {
-		result, err = cp.Deploy(ctx, pushDomain)
-	}
-	if err != nil {
-		return formatDeployFailure(err)
-	}
-	containerID := shortContainerID(result.ContainerID)
-	fmt.Println(styles.RenderSuccess(fmt.Sprintf("Deployed %s (container: %s)", pushDomain, containerID)))
-	return nil
-}
-
-func deployWithSpinner(ctx context.Context, client *remote.Client, pushDomain string) (*remote.DeployResult, error) {
-	if !isInteractiveTerminal() {
-		fmt.Printf("Deploying %s...\n", pushDomain)
-		return client.Deploy(ctx, pushDomain)
-	}
-
-	done := make(chan deployOutcome, 1)
-	go func() {
-		result, err := client.Deploy(ctx, pushDomain)
-		done <- deployOutcome{result: result, err: err}
-	}()
-
-	model := newDeploySpinnerModel(pushDomain, done)
-	final, err := tea.NewProgram(model, tea.WithContext(ctx)).Run()
-	fmt.Print("\r\033[K")
-	if err != nil {
-		return nil, err
-	}
-
-	deployModel, ok := final.(deploySpinnerModel)
-	if !ok {
-		return nil, fmt.Errorf("spinner exited with unexpected model type %T", final)
-	}
-	if !deployModel.finished {
-		return nil, fmt.Errorf("deploy spinner exited before deploy result was received")
-	}
-
-	return deployModel.outcome.result, deployModel.outcome.err
-}
-
-type deployOutcome struct {
-	result *remote.DeployResult
-	err    error
-}
-
-type deployDoneMsg deployOutcome
-
-type deploySpinnerModel struct {
-	spinner  components.SpinnerModel
-	done     <-chan deployOutcome
-	outcome  deployOutcome
-	finished bool
-}
-
-func newDeploySpinnerModel(pushDomain string, done <-chan deployOutcome) deploySpinnerModel {
-	return deploySpinnerModel{
-		spinner: components.NewSpinner(
-			components.WithMessage(fmt.Sprintf("Deploying %s...", pushDomain)),
-			components.WithSpinnerType(components.SpinnerMiniDot),
-		),
-		done: done,
-	}
-}
-
-func (m deploySpinnerModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Init(), waitForDeployDone(m.done))
-}
-
-func (m deploySpinnerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case deployDoneMsg:
-		m.outcome = deployOutcome(msg)
-		m.finished = true
-		return m, tea.Quit
-	default:
-		updated, cmd := m.spinner.Update(msg)
-		spinnerModel, ok := updated.(components.SpinnerModel)
-		if ok {
-			m.spinner = spinnerModel
-		}
-		return m, cmd
-	}
-}
-
-func (m deploySpinnerModel) View() string {
-	return m.spinner.View()
-}
-
-func waitForDeployDone(done <-chan deployOutcome) tea.Cmd {
-	return func() tea.Msg {
-		return deployDoneMsg(<-done)
-	}
 }
 
 func isInteractiveTerminal() bool {
@@ -898,6 +583,9 @@ func parseImageRef(image string) (registry, name, tag string) {
 	}
 	registry = parts[0]
 	nameTag := parts[1]
+	if idx := strings.LastIndex(nameTag, "@"); idx != -1 {
+		return registry, nameTag[:idx], nameTag[idx+1:]
+	}
 	if idx := strings.LastIndex(nameTag, ":"); idx != -1 {
 		name = nameTag[:idx]
 		tag = nameTag[idx+1:]

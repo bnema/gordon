@@ -13,7 +13,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/app"
 )
 
 var (
@@ -50,16 +49,16 @@ func NewRootCmd() *cobra.Command {
 			tokenFlag = token
 			return nil
 		},
-		Short: "Gordon - A lightweight container deployment platform",
-		Long: `Gordon is a self-contained container deployment platform that combines
-a Docker registry with automatic container deployment capabilities.
+		Short: "Gordon - A self-hosted container deployment platform",
+		Long: `Gordon is a self-hosted container deployment platform: a private
+container registry, an app runtime, and a reverse proxy.
 
-It listens for image pushes and automatically deploys containers based on
-configuration rules, making it ideal for single-server deployments.
+Applications are declared in standalone TOML files and managed with
+gordon apps; push transfers OCI content only and never deploys.
 
 Commands are organized by where they run:
-  Server-only:  Run on the machine hosting Gordon (serve, auth, reload)
-  Management:   Work locally or remotely via --remote flag (routes, secrets, etc.)
+  Server-only:  Run on the machine hosting Gordon (serve, auth, ca)
+  Management:   Work locally or remotely via --remote flag (apps, secrets, etc.)
   Client-only:  CLI utilities that don't require a running Gordon server`,
 	}
 
@@ -88,34 +87,13 @@ Commands are organized by where they run:
 	caCmd.GroupID = groupServer
 	rootCmd.AddCommand(caCmd)
 
-	// Management commands (work locally or via --remote)
-	routesCmd := newRoutesCmd()
-	routesCmd.GroupID = groupManage
-	rootCmd.AddCommand(routesCmd)
-
-	attachmentsCmd := newAttachmentsCmd()
-	attachmentsCmd.GroupID = groupManage
-	rootCmd.AddCommand(attachmentsCmd)
-
 	secretsCmd := newSecretsCmd()
 	secretsCmd.GroupID = groupManage
 	rootCmd.AddCommand(secretsCmd)
 
-	deployCmd := newDeployCmd()
-	deployCmd.GroupID = groupManage
-	rootCmd.AddCommand(deployCmd)
-
-	restartCmd := newRestartCmd()
-	restartCmd.GroupID = groupManage
-	rootCmd.AddCommand(restartCmd)
-
 	pushCmd := newPushCmd()
 	pushCmd.GroupID = groupManage
 	rootCmd.AddCommand(pushCmd)
-
-	pinCmd := newPinCmd()
-	pinCmd.GroupID = groupManage
-	rootCmd.AddCommand(pinCmd)
 
 	reloadCmd := newReloadCmd()
 	reloadCmd.GroupID = groupManage
@@ -137,10 +115,6 @@ Commands are organized by where they run:
 	imagesCmd.GroupID = groupManage
 	rootCmd.AddCommand(imagesCmd)
 
-	bootstrapCmd := newBootstrapCmd()
-	bootstrapCmd.GroupID = groupManage
-	rootCmd.AddCommand(bootstrapCmd)
-
 	configCmd := newConfigCmd()
 	configCmd.GroupID = groupManage
 	rootCmd.AddCommand(configCmd)
@@ -153,14 +127,6 @@ Commands are organized by where they run:
 	volumesCmd.GroupID = groupManage
 	rootCmd.AddCommand(volumesCmd)
 
-	autorouteCmd := newAutorouteCmd()
-	autorouteCmd.GroupID = groupManage
-	rootCmd.AddCommand(autorouteCmd)
-
-	previewCmd := newPreviewCmd()
-	previewCmd.GroupID = groupManage
-	rootCmd.AddCommand(previewCmd)
-
 	tlsCmd := newTLSCmd()
 	tlsCmd.GroupID = groupManage
 	rootCmd.AddCommand(tlsCmd)
@@ -168,6 +134,10 @@ Commands are organized by where they run:
 	trafficCmd := newTrafficCmd()
 	trafficCmd.GroupID = groupManage
 	rootCmd.AddCommand(trafficCmd)
+
+	appsCmd := newAppsCmd()
+	appsCmd.GroupID = groupManage
+	rootCmd.AddCommand(appsCmd)
 
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
@@ -222,21 +192,23 @@ func IsRemoteMode() bool {
 func newReloadCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "reload",
-		Short: "Start containers for configured routes",
-		Long: `Starts containers for routes defined in config.toml that don't have
-a running container. Running containers are never restarted to ensure 100% uptime.
+		Short: "Reload installation configuration (never activates app state)",
+		Long: `Reloads installation-only settings (entrypoints, TLS, limits,
+external routes) after editing gordon.toml.
 
-Use this command after editing config.toml to add new routes, or after pushing
-images to the registry when the route was not yet configured.`,
+Reload never activates pending app desired state, never re-resolves
+image tags, and never starts app workloads. Apps are managed with
+gordon apps (apply, deploy, lifecycle).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client, isRemote, err := GetRemoteClient()
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}
-			if isRemote {
-				return runReloadRemote(cmd.Context(), client)
+			defer handle.close()
+			if err := handle.plane.Reload(cmd.Context()); err != nil {
+				return fmt.Errorf("failed to reload: %w", err)
 			}
-			return runReload()
+			return cliWriteLine(cmd.OutOrStdout(), cliRenderSuccess("Configuration reloaded successfully"))
 		},
 	}
 }
@@ -262,34 +234,9 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// runReload sends SIGUSR1 to the running Gordon process.
-func runReload() error {
-	return app.SendReloadSignal()
-}
-
-// runReloadRemote triggers a reload on a remote Gordon instance.
-func runReloadRemote(ctx context.Context, client *remote.Client) error {
-	if err := client.Reload(ctx); err != nil {
-		if shouldFallbackToLocal(err) {
-			localErr := runReload()
-			if localErr == nil {
-				if writeErr := cliWriteLine(os.Stdout, cliRenderWarning(fmt.Sprintf("Remote reload failed (%v), used local signal fallback", err))); writeErr != nil {
-					return writeErr
-				}
-				if writeErr := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); writeErr != nil {
-					return writeErr
-				}
-				return nil
-			}
-			return fmt.Errorf("remote reload failed: %w; local fallback failed: %v", err, localErr)
-		}
-		return fmt.Errorf("failed to reload: %w", err)
-	}
-	if err := cliWriteLine(os.Stdout, cliRenderSuccess("Configuration reloaded successfully")); err != nil {
-		return err
-	}
-	return nil
-}
+// cliConfigPath for local operations. If empty, config is auto-discovered
+// from standard locations (/etc/gordon/gordon.toml, ~/.config/gordon/gordon.toml, ./gordon.toml).
+var cliConfigPath string
 
 // newLogsCmd creates the logs command.
 func newLogsCmd() *cobra.Command {
@@ -298,29 +245,23 @@ func newLogsCmd() *cobra.Command {
 	var logsConfigPath string
 
 	cmd := &cobra.Command{
-		Use:   "logs [domain]",
-		Short: "Show logs (Gordon process or container)",
-		Long: `Shows logs from the Gordon process or a specific container.
+		Use:   "logs",
+		Short: "Show Gordon process logs",
+		Long: `Shows logs from the Gordon daemon process.
 
-Without a domain argument, shows Gordon process logs.
-With a domain argument, shows container logs for that domain.
+Application workload output is read with gordon apps logs APP --service SVC,
+which resolves the app's active container through the daemon.
 
 Examples:
-  gordon logs                    # Gordon process logs
-  gordon logs -f                 # Follow process logs
-  gordon logs myapp.local        # Container logs for myapp.local
-  gordon logs myapp.local -f     # Follow container logs
+  gordon logs        # Gordon process logs
+  gordon logs -f     # Follow process logs
+  gordon logs -n 100 # Last 100 lines
 
 Remote mode:
-  gordon logs --remote https://gordon.mydomain.com --token $TOKEN
-  gordon logs myapp.local --remote https://gordon.mydomain.com --token $TOKEN`,
-		Args: cobra.MaximumNArgs(1),
+  gordon logs --remote https://gordon.mydomain.com --token $TOKEN`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			logDomain := ""
-			if len(args) > 0 {
-				logDomain = args[0]
-			}
-			return runLogs(cmd.Context(), logsConfigPath, logDomain, follow, lines, cmd.OutOrStdout())
+			return runLogs(cmd.Context(), logsConfigPath, follow, lines, cmd.OutOrStdout())
 		},
 	}
 
@@ -332,101 +273,23 @@ Remote mode:
 }
 
 // runLogs handles the logs command logic.
-func runLogs(ctx context.Context, logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
-	if logDomain != "" {
-		handle, err := resolveControlPlaneForRouteDomain(ctx, logDomain)
-		if err != nil {
-			return err
-		}
-		defer handle.close()
-		return runContainerLogs(ctx, handle.plane, logDomain, follow, lines, out)
-	}
-
-	client, isRemote, err := GetRemoteClient()
+func runLogs(ctx context.Context, logsConfigPath string, follow bool, lines int, out io.Writer) error {
+	handle, err := resolveControlPlane(logsConfigPath)
 	if err != nil {
 		return err
 	}
-	if isRemote {
-		return runLogsRemote(ctx, client, logDomain, follow, lines, out)
-	}
-	return runLogsLocal(logsConfigPath, logDomain, follow, lines, out)
+	defer handle.close()
+	return runProcessLogs(ctx, handle.plane, follow, lines, out)
 }
 
-// runLogsRemote fetches logs from a remote Gordon instance.
-func runLogsRemote(ctx context.Context, client *remote.Client, logDomain string, follow bool, lines int, out io.Writer) error {
+func runProcessLogs(ctx context.Context, cp ControlPlane, follow bool, lines int, out io.Writer) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	if follow {
-		return streamLogsRemote(ctx, client, logDomain, lines, out)
-	}
-
-	if logDomain == "" {
-		// Process logs
-		logLines, err := client.GetProcessLogs(ctx, lines)
+		ch, err := cp.StreamProcessLogs(ctx, lines)
 		if err != nil {
-			return fmt.Errorf("failed to get process logs: %w", err)
-		}
-		for _, line := range logLines {
-			if err := cliWriteLine(out, line); err != nil {
-				return err
-			}
-		}
-	} else {
-		// Container logs
-		logLines, err := client.GetContainerLogs(ctx, logDomain, lines)
-		if err != nil {
-			return fmt.Errorf("failed to get container logs: %w", err)
-		}
-		for _, line := range logLines {
-			if err := cliWriteLine(out, line); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-// streamLogsRemote streams logs from a remote Gordon instance.
-func streamLogsRemote(ctx context.Context, client *remote.Client, logDomain string, lines int, out io.Writer) error {
-	var ch <-chan string
-	var err error
-
-	if logDomain == "" {
-		ch, err = client.StreamProcessLogs(ctx, lines)
-	} else {
-		ch, err = client.StreamContainerLogs(ctx, logDomain, lines)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to stream logs: %w", err)
-	}
-
-	for line := range ch {
-		if err := cliWriteLine(out, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// runLogsLocal shows logs from a local Gordon instance.
-func runLogsLocal(logsConfigPath, logDomain string, follow bool, lines int, out io.Writer) error {
-	if logDomain == "" {
-		// Process logs - use existing app.ShowLogs
-		return app.ShowLogs(logsConfigPath, follow, lines)
-	}
-
-	return showContainerLogsLocal(out, logsConfigPath, logDomain, follow, lines)
-}
-
-func runContainerLogs(ctx context.Context, cp ControlPlane, logDomain string, follow bool, lines int, out io.Writer) error {
-	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-
-	if follow {
-		ch, err := cp.StreamContainerLogs(ctx, logDomain, lines)
-		if err != nil {
-			return fmt.Errorf("failed to stream container logs: %w", err)
+			return fmt.Errorf("failed to stream process logs: %w", err)
 		}
 		for line := range ch {
 			if err := cliWriteLine(out, line); err != nil {
@@ -436,39 +299,14 @@ func runContainerLogs(ctx context.Context, cp ControlPlane, logDomain string, fo
 		return nil
 	}
 
-	logLines, err := cp.GetContainerLogs(ctx, logDomain, lines)
+	logLines, err := cp.GetProcessLogs(ctx, lines)
 	if err != nil {
-		return fmt.Errorf("failed to get container logs: %w", err)
+		return fmt.Errorf("failed to get process logs: %w", err)
 	}
 	for _, line := range logLines {
 		if err := cliWriteLine(out, line); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-// showContainerLogsLocal is retained for UI adoption coverage and fallback messaging.
-func showContainerLogsLocal(out io.Writer, _ string, logDomain string, follow bool, lines int) error {
-	if err := cliWriteLine(out, cliRenderTitle(fmt.Sprintf("Container logs for %s", logDomain))); err != nil {
-		return err
-	}
-	if err := cliWriteLine(out, cliRenderInfo("To view container logs locally, use:")); err != nil {
-		return err
-	}
-	if err := cliWritef(out, "  docker logs --tail %d %s\n", lines, logDomain); err != nil {
-		return err
-	}
-	if follow {
-		if err := cliWritef(out, "  docker logs -f --tail %d %s\n", lines, logDomain); err != nil {
-			return err
-		}
-	}
-	if err := cliWriteLine(out, ""); err != nil {
-		return err
-	}
-	if err := cliWriteLine(out, cliRenderMuted("Or use remote mode to access logs via the admin API.")); err != nil {
-		return err
 	}
 	return nil
 }

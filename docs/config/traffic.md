@@ -4,7 +4,7 @@ Gordon models network listeners as a traffic graph: entrypoints receive packets 
 
 ## Smart TCP Edge Entrypoint
 
-Public application traffic is normally exposed with a `smart_tcp` entrypoint. The conventional route-capable entrypoint name is `edge`, but Gordon does not require that name or assign a built-in public port. When exactly one route-capable `smart_tcp` or `tls_mux` entrypoint exists, normal Gordon routes use it even if it has a custom name. Choose the address that matches your deployment, firewall, and container mapping:
+Public application traffic is normally exposed with a `smart_tcp` entrypoint. The conventional route-capable entrypoint name is `edge`, but Gordon does not require that name or assign a built-in public port. When exactly one route-capable `smart_tcp` or `tls_mux` entrypoint exists, app HTTP hosts use it even if it has a custom name. Choose the address that matches your deployment, firewall, and container mapping:
 
 ```toml
 [entrypoints.edge]
@@ -15,7 +15,7 @@ trusted_cidrs = []
 
 Do not treat `entrypoints.edge.address` as an HTTP port or an HTTPS port. It is one TCP socket that sniffs each new connection and dispatches the original byte stream.
 
-Supported entrypoint protocols are `smart_tcp`, `tls_mux`, `tcp`, and `udp`. `smart_tcp` is the primary public edge model; `tls_mux` can also serve normal Gordon routes through TLS fallback, `tcp` and `udp` are for explicit L4 services, and UDP remains separate from the TCP entrypoint.
+Supported entrypoint protocols are `smart_tcp`, `tls_mux`, `tcp`, and `udp`. `smart_tcp` is the primary public edge model; `tls_mux` can also serve app HTTP hosts through TLS fallback, `tcp` and `udp` are for explicit L4 services, and UDP remains separate from the TCP entrypoint.
 
 ## Smart TCP Dispatch Order
 
@@ -73,7 +73,7 @@ protocol = "tcp"
 
 Service references use:
 
-- `route:<domain>` for configured HTTP routes
+- `route:<domain>` for app HTTP hosts from ACTIVE state (merged with installation external routes)
 - `external_route:<domain>` for configured external HTTP routes
 - `network_service:<service>:<port-name>` for manually managed TCP, UDP, and TLS passthrough backends
 - `service:<service>:<port-name>` for Gordon-managed standalone service backends
@@ -96,7 +96,7 @@ sni = "raw.example.com"
 service = "network_service:raw:tls"
 ```
 
-Exact SNI matches win over wildcard matches. Ambiguous wildcard overlaps and HTTP-host/TLS-passthrough conflicts on the same smart TCP entrypoint are rejected at validation time. HTTPS application routes that do not match a passthrough SNI use Gordon's normal HTTPS fallback and certificate selection.
+Exact SNI matches win over wildcard matches. Ambiguous wildcard overlaps and HTTP-host/TLS-passthrough conflicts on the same smart TCP entrypoint are rejected at validation time. App HTTPS hosts that do not match a passthrough SNI use Gordon's normal HTTPS fallback and certificate selection.
 
 ## Raw TCP Fallback
 
@@ -176,6 +176,6 @@ UDP sessions are keyed by client address and expire after `idle_timeout`. If `ma
 ## Related
 
 - [Server Settings](./server.md)
-- [Routes](./routes.md)
+- [App Manifest](./apps.md)
 - [Standalone Services](./services.md)
 - [CLI traffic status](../cli/traffic.md)

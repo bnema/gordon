@@ -16,36 +16,66 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
+
+// appStateProvider resolves app services from the durable ACTIVE record.
+type appStateProvider interface {
+	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
+}
 
 // Service implements the LogService interface.
 type Service struct {
 	logFilePath        string
 	fileLoggingEnabled bool
-	containerSvc       in.ContainerService
 	runtime            out.ContainerRuntime
 	log                zerowrap.Logger
+	// appState resolves log references to containers recorded in ACTIVE.
+	appState appStateProvider
 }
 
 var execCommandContext = exec.CommandContext
 
-// NewService creates a new log service.
+// NewService creates a new log service. App state is wired after the store opens.
 func NewService(
 	logFilePath string,
 	fileLoggingEnabled bool,
-	containerSvc in.ContainerService,
 	runtime out.ContainerRuntime,
 	log zerowrap.Logger,
 ) *Service {
 	return &Service{
 		logFilePath:        logFilePath,
 		fileLoggingEnabled: fileLoggingEnabled,
-		containerSvc:       containerSvc,
 		runtime:            runtime,
 		log:                log,
 	}
+}
+
+// WithAppState wires the durable ACTIVE app-state reader used for log resolution.
+func (s *Service) WithAppState(provider appStateProvider) *Service {
+	s.appState = provider
+	return s
+}
+
+// containerForService resolves an app/service reference exclusively through ACTIVE.
+func (s *Service) containerForService(ctx context.Context, ref string) (string, error) {
+	app, service, ok := strings.Cut(ref, "/")
+	if !ok || app == "" || service == "" || strings.Contains(service, "/") || s.appState == nil {
+		return "", fmt.Errorf("invalid app/service log reference: %s", ref)
+	}
+	active, found, err := s.appState.LoadActive(ctx, app)
+	if err != nil {
+		return "", fmt.Errorf("failed to load active app %s: %w", app, err)
+	}
+	if !found {
+		return "", fmt.Errorf("active app/service not found: %s", ref)
+	}
+	target, found := active.Services[service]
+	if !found || target.Container == "" {
+		return "", fmt.Errorf("active app/service not found: %s", ref)
+	}
+	return target.Container, nil
 }
 
 // GetProcessLogs returns the last N lines of Gordon process logs.
@@ -357,14 +387,14 @@ func (s *Service) GetContainerLogs(ctx context.Context, domain string, lines int
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	// Resolve the app/service to its ACTIVE container.
+	containerID, err := s.containerForService(ctx, domain)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get logs from container runtime (non-follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, false)
+	reader, err := s.runtime.GetContainerLogs(ctx, containerID, false)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}
@@ -398,14 +428,14 @@ func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initia
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	// Get container by domain
-	container, ok := s.containerSvc.Get(ctx, domain)
-	if !ok || container == nil {
-		return nil, fmt.Errorf("container not found for domain: %s", domain)
+	// Resolve the app/service to its ACTIVE container.
+	containerID, err := s.containerForService(ctx, domain)
+	if err != nil {
+		return nil, err
 	}
 
 	// Get logs from container runtime (follow mode)
-	reader, err := s.runtime.GetContainerLogs(ctx, container.ID, true)
+	reader, err := s.runtime.GetContainerLogs(ctx, containerID, true)
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to get container logs")
 	}

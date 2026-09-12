@@ -478,210 +478,16 @@ func (c *Client) requestWithRetry(ctx context.Context, method, path string, body
 	return nil, fmt.Errorf("request failed after retries")
 }
 
-// Routes API
-
-// Type aliases for API types using shared DTO package.
-type RouteInfo = dto.RouteInfo
-type Attachment = dto.Attachment
-
-// ListRoutes returns all configured routes.
-func (c *Client) ListRoutes(ctx context.Context) ([]domain.Route, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Routes []domain.Route `json:"routes"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Routes, nil
-}
-
-// ListRoutesWithDetails returns routes with network and attachment info.
-func (c *Client) ListRoutesWithDetails(ctx context.Context) ([]RouteInfo, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes?detailed=true", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Routes []RouteInfo `json:"routes"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Routes, nil
-}
-
-// ListNetworks returns Gordon-managed networks.
-func (c *Client) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/networks", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Networks []*domain.NetworkInfo `json:"networks"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Networks, nil
-}
-
-// ListAttachments returns attachments for a domain.
-func (c *Client) ListAttachments(ctx context.Context, routeDomain string) ([]Attachment, error) {
-	if routeDomain == "" {
-		return nil, fmt.Errorf("domain is required")
-	}
-	path := "/routes/" + url.PathEscape(routeDomain) + "/attachments"
-	resp, err := c.request(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Attachments []Attachment `json:"attachments"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Attachments, nil
-}
-
-// GetRoute returns a specific route by domain.
-func (c *Client) GetRoute(ctx context.Context, routeDomain string) (*domain.Route, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes/"+url.PathEscape(routeDomain), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var route domain.Route
-	if err := parseResponse(resp, &route); err != nil {
-		var httpErr *HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
-			return nil, domain.ErrRouteNotFound
-		}
-		return nil, err
-	}
-
-	return &route, nil
-}
-
-// GetRouteCleanupPreview returns retained cleanup state for a route that may no longer be configured.
-func (c *Client) GetRouteCleanupPreview(ctx context.Context, routeDomain string) (*domain.CleanupReport, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes/"+url.PathEscape(routeDomain)+"/cleanup", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var report domain.CleanupReport
-	if err := parseResponse(resp, &report); err != nil {
-		return nil, err
-	}
-
-	return &report, nil
-}
-
-// FindRoutesByImage returns all routes associated with the given image name.
-func (c *Client) FindRoutesByImage(ctx context.Context, imageName string) ([]domain.Route, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/routes/by-image/"+url.PathEscape(imageName), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Image  string         `json:"image"`
-		Routes []domain.Route `json:"routes"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Routes, nil
-}
-
-// AddRoute adds a new route.
-func (c *Client) AddRoute(ctx context.Context, route domain.Route) error {
-	resp, err := c.request(ctx, http.MethodPost, "/routes", route)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// UpdateRoute updates an existing route.
-func (c *Client) UpdateRoute(ctx context.Context, route domain.Route) error {
-	resp, err := c.request(ctx, http.MethodPut, "/routes/"+url.PathEscape(route.Domain), route)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// RemoveRoute removes a route by domain.
-func (c *Client) RemoveRoute(ctx context.Context, routeDomain string) error {
-	_, err := c.RemoveRouteWithCleanup(ctx, routeDomain)
-	return err
-}
-
-// RemoveRouteWithCleanup removes a route and returns the server cleanup report.
-func (c *Client) RemoveRouteWithCleanup(ctx context.Context, routeDomain string) (*dto.RouteDeleteResponse, error) {
-	resp, err := c.request(ctx, http.MethodDelete, "/routes/"+url.PathEscape(routeDomain), nil)
-	if err != nil {
-		return nil, fmt.Errorf("delete route %s failed: %w", routeDomain, err)
-	}
-	var result dto.RouteDeleteResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse delete route %s response: %w", routeDomain, err)
-	}
-	return &result, nil
-}
-
-func (c *Client) Bootstrap(ctx context.Context, req dto.BootstrapRequest) (*dto.BootstrapResponse, error) {
-	resp, err := c.request(ctx, http.MethodPost, "/bootstrap", req)
-	if err != nil {
-		return nil, err
-	}
-	var result dto.BootstrapResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
 // Secrets API
 
-// AttachmentSecrets represents secrets for an attachment container.
-type AttachmentSecrets struct {
-	Service string   `json:"service"`
-	Keys    []string `json:"keys"`
-}
-
-// SecretsListResult contains domain secrets and any attachment secrets.
+// SecretsListResult contains domain secret keys.
 type SecretsListResult struct {
-	Domain      string              `json:"domain"`
-	Keys        []string            `json:"keys"`
-	Attachments []AttachmentSecrets `json:"attachments,omitempty"`
+	Domain string   `json:"domain"`
+	Keys   []string `json:"keys"`
 }
 
-// ListSecrets returns the list of secret keys for a domain.
-func (c *Client) ListSecrets(ctx context.Context, secretDomain string) ([]string, error) {
-	result, err := c.ListSecretsWithAttachments(ctx, secretDomain)
-	if err != nil {
-		return nil, err
-	}
-	return result.Keys, nil
-}
-
-// ListSecretsWithAttachments returns domain secrets and attachment secrets.
+// ListSecretsWithAttachments returns domain secret keys. Attachment
+// containers are retired: the daemon answers without attachment keys.
 func (c *Client) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*SecretsListResult, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+url.PathEscape(secretDomain), nil)
 	if err != nil {
@@ -714,40 +520,18 @@ func (c *Client) DeleteSecret(ctx context.Context, secretDomain, key string) err
 	return parseResponse(resp, nil)
 }
 
-// SetAttachmentSecrets sets secrets for an attachment container.
-func (c *Client) SetAttachmentSecrets(ctx context.Context, domain, service string, secrets map[string]string) error {
-	path := "/secrets/" + url.PathEscape(domain) + "/attachments/" + url.PathEscape(service)
-	resp, err := c.request(ctx, http.MethodPost, path, secrets)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// DeleteAttachmentSecret removes a secret from an attachment container.
-func (c *Client) DeleteAttachmentSecret(ctx context.Context, domain, service, key string) error {
-	path := "/secrets/" + url.PathEscape(domain) + "/attachments/" + url.PathEscape(service) + "/" + url.PathEscape(key)
-	resp, err := c.request(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
 // Status API
 
 // Status represents the Gordon server status.
 type Status struct {
-	Routes           int               `json:"routes"`
+	Apps             int               `json:"apps"`
 	RegistryDomain   string            `json:"registry_domain"`
 	RegistryPort     int               `json:"registry_port"`
 	ServerPort       int               `json:"server_port"`
-	AutoRoute        bool              `json:"auto_route"`
 	NetworkIsolation bool              `json:"network_isolation"`
 	ContainerStatus  map[string]string `json:"container_status"`
 }
 
-// GetTLSStatus returns the public TLS/ACME status.
 func (c *Client) GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/tls/status", nil)
 	if err != nil {
@@ -840,10 +624,10 @@ func (c *Client) PruneImages(ctx context.Context, req dto.ImagePruneRequest) (*d
 }
 
 // ListBackups returns backups globally or for a domain.
-func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.BackupJob, error) {
+func (c *Client) ListBackups(ctx context.Context, app string) ([]dto.BackupJob, error) {
 	path := "/backups"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+	if app != "" {
+		path += "/" + url.PathEscape(app)
 	}
 
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
@@ -859,7 +643,8 @@ func (c *Client) ListBackups(ctx context.Context, backupDomain string) ([]dto.Ba
 	return result.Backups, nil
 }
 
-// BackupStatus returns aggregate backup status.
+// BackupStatus returns stored backups plus declared targets that have no
+// completed backup yet.
 func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	resp, err := c.request(ctx, http.MethodGet, "/backups/status", nil)
 	if err != nil {
@@ -874,13 +659,15 @@ func (c *Client) BackupStatus(ctx context.Context) ([]dto.BackupJob, error) {
 	return result.Backups, nil
 }
 
-// RunBackup triggers a backup for a domain.
-func (c *Client) RunBackup(ctx context.Context, backupDomain, dbName string) (*dto.BackupRunResponse, error) {
-	if backupDomain == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
+// RunBackup runs one declared database backup of one app. service and
+// database are explicit selectors.
+func (c *Client) RunBackup(ctx context.Context, app, service, database string) (*dto.BackupRunResponse, error) {
+	if app == "" {
+		return nil, fmt.Errorf("app cannot be empty")
 	}
 
-	resp, err := c.request(ctx, http.MethodPost, "/backups/"+url.PathEscape(backupDomain), dto.BackupRunRequest{DB: dbName})
+	resp, err := c.request(ctx, http.MethodPost, "/backups/"+url.PathEscape(app),
+		dto.BackupRunRequest{Service: service, Database: database})
 	if err != nil {
 		return nil, err
 	}
@@ -893,30 +680,11 @@ func (c *Client) RunBackup(ctx context.Context, backupDomain, dbName string) (*d
 	return &result, nil
 }
 
-// DetectDatabases detects supported databases for a domain.
-func (c *Client) DetectDatabases(ctx context.Context, backupDomain string) ([]dto.DatabaseInfo, error) {
-	if backupDomain == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
-	}
-
-	resp, err := c.request(ctx, http.MethodGet, "/backups/"+url.PathEscape(backupDomain)+"/detect", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dto.BackupDetectResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Databases, nil
-}
-
-// ListVolumeBackups returns volume backups globally or for a domain.
-func (c *Client) ListVolumeBackups(ctx context.Context, backupDomain string) ([]dto.VolumeBackupJob, error) {
+// ListVolumeBackups returns volume backups globally or for one app.
+func (c *Client) ListVolumeBackups(ctx context.Context, app string) ([]dto.VolumeBackupJob, error) {
 	path := "/backups/volumes"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+	if app != "" {
+		path += "/" + url.PathEscape(app)
 	}
 
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
@@ -945,14 +713,15 @@ func (c *Client) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob,
 	return result.Backups, nil
 }
 
-// RunVolumeBackups triggers volume backups.
-func (c *Client) RunVolumeBackups(ctx context.Context, backupDomain, volumeName string) (*dto.VolumeBackupRunResponse, error) {
-	path := "/backups/volumes"
-	if backupDomain != "" {
-		path += "/" + url.PathEscape(backupDomain)
+// RunVolumeBackups runs one declared volume backup of one app. service
+// and volume are explicit selectors.
+func (c *Client) RunVolumeBackups(ctx context.Context, app, service, volume string) (*dto.VolumeBackupRunResponse, error) {
+	if app == "" {
+		return nil, fmt.Errorf("app cannot be empty")
 	}
+	path := "/backups/volumes/" + url.PathEscape(app)
 
-	resp, err := c.request(ctx, http.MethodPost, path, dto.VolumeBackupRunRequest{Volume: volumeName})
+	resp, err := c.request(ctx, http.MethodPost, path, dto.VolumeBackupRunRequest{Service: service, Volume: volume})
 	if err != nil {
 		return nil, err
 	}
@@ -1006,9 +775,6 @@ type Config struct {
 		RegistryDomain string `json:"registry_domain"`
 		DataDir        string `json:"data_dir,omitempty"`
 	} `json:"server"`
-	AutoRoute struct {
-		Enabled bool `json:"enabled"`
-	} `json:"auto_route"`
 	NetworkIsolation struct {
 		Enabled bool   `json:"enabled"`
 		Prefix  string `json:"prefix"`
@@ -1018,7 +784,6 @@ type Config struct {
 		Prefix     string `json:"prefix"`
 		Preserve   bool   `json:"preserve"`
 	} `json:"volumes"`
-	Routes         []domain.Route  `json:"routes"`
 	ExternalRoutes []ExternalRoute `json:"external_routes"`
 }
 
@@ -1026,6 +791,23 @@ type Config struct {
 type ExternalRoute struct {
 	Domain string `json:"domain"`
 	Target string `json:"target,omitempty"`
+}
+
+// GetConfig returns the Gordon configuration.
+func (c *Client) ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error) {
+	resp, err := c.request(ctx, http.MethodGet, "/networks", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Networks []*domain.NetworkInfo `json:"networks"`
+	}
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, err
+	}
+
+	return result.Networks, nil
 }
 
 // GetConfig returns the Gordon configuration.
@@ -1049,77 +831,6 @@ func (c *Client) Ping(ctx context.Context) error {
 	return err
 }
 
-// Deploy API
-
-// DeployResult contains the result of a deployment.
-type DeployResult struct {
-	Status      string `json:"status"`
-	ContainerID string `json:"container_id"`
-	Domain      string `json:"domain"`
-}
-
-// Deploy triggers a deployment for the specified domain.
-func (c *Client) Deploy(ctx context.Context, deployDomain string) (*DeployResult, error) {
-	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy/"+url.PathEscape(deployDomain), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result DeployResult
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// DeployIntent tells the server that a CLI-managed push is about to happen,
-// suppressing event-based deploys for this image.
-func (c *Client) DeployIntent(ctx context.Context, imageName string) error {
-	imageName = strings.TrimSpace(imageName)
-	if imageName == "" {
-		return fmt.Errorf("image name cannot be empty")
-	}
-	resp, err := c.requestWithRetry(ctx, http.MethodPost, "/deploy-intent/"+url.PathEscape(imageName), nil)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// Restart API
-
-// RestartResult contains the result of a restart.
-type RestartResult struct {
-	Status string `json:"status"`
-	Domain string `json:"domain"`
-}
-
-// Restart triggers a container restart for the specified domain.
-func (c *Client) Restart(ctx context.Context, restartDomain string, withAttachments bool) (*RestartResult, error) {
-	if restartDomain == "" {
-		return nil, fmt.Errorf("domain cannot be empty")
-	}
-	path := "/restart/" + url.PathEscape(restartDomain)
-	if withAttachments {
-		path += "?attachments=true"
-	}
-	resp, err := c.requestWithRetry(ctx, http.MethodPost, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result RestartResult
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// Tags API
-
-// ListTags returns available tags for a repository.
 func (c *Client) ListTags(ctx context.Context, repository string) ([]string, error) {
 	if repository == "" {
 		return nil, fmt.Errorf("repository cannot be empty")
@@ -1194,169 +905,6 @@ func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, line
 // Attachments Config API
 
 // ListOrphanedAttachments returns running attachment containers no longer configured.
-func (c *Client) ListOrphanedAttachments(ctx context.Context) ([]domain.CleanupAttachment, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/attachments/orphans", nil)
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Attachments []domain.CleanupAttachment `json:"attachments"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-	return result.Attachments, nil
-}
-
-// CleanupOrphanedAttachments optionally stops/removes orphaned attachment containers.
-func (c *Client) CleanupOrphanedAttachments(ctx context.Context, owner string, stop bool) (*domain.CleanupReport, error) {
-	path := "/attachments/prune"
-	params := url.Values{}
-	if stop {
-		params.Set("stop", "true")
-	}
-	if owner != "" {
-		params.Set("owner", owner)
-	}
-	if encoded := params.Encode(); encoded != "" {
-		path += "?" + encoded
-	}
-	resp, err := c.request(ctx, http.MethodPost, path, nil)
-	if err != nil {
-		return nil, fmt.Errorf("cleanup orphaned attachments failed: %w", err)
-	}
-	var result domain.CleanupReport
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, fmt.Errorf("parse orphaned attachment cleanup response: %w", err)
-	}
-	return &result, nil
-}
-
-// GetAllAttachmentsConfig returns all configured attachments.
-func (c *Client) GetAllAttachmentsConfig(ctx context.Context) (map[string][]string, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/attachments", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Attachments map[string][]string `json:"attachments"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Attachments, nil
-}
-
-// GetAttachmentsConfig returns attachments for a specific domain/group from config.
-func (c *Client) GetAttachmentsConfig(ctx context.Context, domainOrGroup string) ([]string, error) {
-	if domainOrGroup == "" {
-		return nil, fmt.Errorf("domain or group is required")
-	}
-	path := "/attachments/" + url.PathEscape(domainOrGroup)
-	resp, err := c.request(ctx, http.MethodGet, path, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result struct {
-		Target string   `json:"target"`
-		Images []string `json:"images"`
-	}
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Images, nil
-}
-
-// FindAttachmentTargetsByImage returns all attachment targets associated with the given image name.
-func (c *Client) FindAttachmentTargetsByImage(ctx context.Context, imageName string) ([]string, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/attachments/by-image/"+url.PathEscape(imageName), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dto.AttachmentTargetsByImageResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Targets, nil
-}
-
-// AddAttachment adds an attachment to a domain/group.
-func (c *Client) AddAttachment(ctx context.Context, domainOrGroup, image string) error {
-	if domainOrGroup == "" {
-		return fmt.Errorf("domain or group is required")
-	}
-	if image == "" {
-		return fmt.Errorf("image is required")
-	}
-	path := "/attachments/" + url.PathEscape(domainOrGroup)
-	resp, err := c.request(ctx, http.MethodPost, path, struct {
-		Image string `json:"image"`
-	}{Image: image})
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// RemoveAttachment removes an attachment from a domain/group.
-func (c *Client) RemoveAttachment(ctx context.Context, domainOrGroup, image string) error {
-	if domainOrGroup == "" {
-		return fmt.Errorf("domain or group is required")
-	}
-	if image == "" {
-		return fmt.Errorf("image is required")
-	}
-	path := "/attachments/" + url.PathEscape(domainOrGroup) + "/" + url.PathEscape(image)
-	resp, err := c.request(ctx, http.MethodDelete, path, nil)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-func (c *Client) GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/autoroute/allowed-domains", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result dto.AutoRouteAllowedDomainsResponse
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return result.Domains, nil
-}
-
-func (c *Client) AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	if strings.TrimSpace(pattern) == "" {
-		return fmt.Errorf("pattern must not be empty")
-	}
-	resp, err := c.request(ctx, http.MethodPost, "/autoroute/allowed-domains", dto.AutoRouteAllowedDomainRequest{Pattern: pattern})
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-func (c *Client) RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error {
-	if strings.TrimSpace(pattern) == "" {
-		return fmt.Errorf("pattern must not be empty")
-	}
-	resp, err := c.request(ctx, http.MethodDelete, "/autoroute/allowed-domains/"+url.PathEscape(pattern), nil)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// openSSEStream opens an SSE connection to the given admin path and returns the response.
 func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response, error) {
 	streamURL := c.baseURL + "/admin" + path
 
@@ -1377,7 +925,8 @@ func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response
 	// Use the same transport as the main client (honoring TLS config and
 	// custom transports) but without a timeout so streaming doesn't get cut off.
 	streamClient := &http.Client{
-		Transport: c.httpClient.Transport,
+		Transport:     c.httpClient.Transport,
+		CheckRedirect: c.httpClient.CheckRedirect,
 	}
 	resp, err := streamClient.Do(req)
 	if err != nil {

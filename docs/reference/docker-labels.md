@@ -4,122 +4,57 @@ Labels used by Gordon for container and image metadata.
 
 ## Container Labels
 
-Gordon adds these labels to managed containers:
+Gordon stamps these ownership labels on every container it creates:
 
 | Label | Value | Description |
 |-------|-------|-------------|
 | `gordon.managed` | `"true"` | Identifies Gordon-managed containers |
-| `gordon.domain` | Domain name | Domain this container serves |
-| `gordon.image` | Image:tag | Original image from configuration |
-| `gordon.route` | Domain name | Route this container handles |
+| `gordon.app` | App name | App this container serves |
+| `gordon.app.service` | Service name | Service this container runs |
+| `gordon.app.revision` | Revision | Active revision that created it |
 | `gordon.created` | Timestamp | When Gordon created the container |
 
-### Propagated Image Labels
+Queries by logical identity use labels, never name parsing. Resources without these labels (old or foreign containers) are preserved, never adopted or deleted.
 
-When an image defines these labels, Gordon copies them onto the container for runtime use (readiness probing, proxy routing):
+### Legacy Labels
 
-| Label | Example | Description |
-|-------|---------|-------------|
-| `gordon.proxy.port` | `"3000"` | Port the proxy routes HTTP traffic to |
-| `gordon.health` | `"/healthz"` | Health check endpoint for readiness probing |
-
-These labels only appear on containers whose source image defined them.
-
-### Attachment Labels
-
-Additional labels for attachment containers:
+Containers created before v2.50 may carry these labels. They are read-only provenance hints for prune guards — Gordon never infers app state from them:
 
 | Label | Value | Description |
 |-------|-------|-------------|
-| `gordon.attachment` | `"true"` | Container is an attachment service |
-| `gordon.attached-to` | Domain/group | Route or network group this serves |
+| `gordon.domain` | Domain name | Pre-v2.50 domain this container served |
+| `gordon.image` | Image:tag | Original image from configuration |
+| `gordon.route` | Domain name | Pre-v2.50 route this container handled |
 
-### Backup Labels
+### Backup Metadata
 
-Labels used by the backup subsystem:
-
-| Label | Value | Description |
-|-------|-------|-------------|
-| `gordon.backup` | `"true"` / `"false"` | Enables or disables backup behavior for a container |
-| `gordon.backup.type` | e.g. `"postgresql"` | Explicit database type override |
-| `gordon.backup.version` | e.g. `"17"` | Explicit database version override |
-| `gordon.backup.schedule` | e.g. `"hourly,daily"` | Schedule override hint |
-| `gordon.backup.sidecar` | `"true"` | Identifies backup sidecar containers |
+Backups are declarative rather than label-driven. App manifests declare database and volume targets in `[service.backup]`; Gordon does not define or write Docker labels to enable backups, select database types or schedules, or identify backup sidecars.
 
 ## Image Labels
 
-Labels you can set in your Dockerfile:
-
-| Label | Example | Description |
-|-------|---------|-------------|
-| `gordon.domains` | `"app.example.com,www.app.example.com"` | Comma-separated domains for auto-route |
-| `gordon.proxy.port` | `"3000"` | Port to proxy HTTP traffic to |
-| `gordon.health` | `"/healthz"` | HTTP health check endpoint path for readiness probing |
-| `gordon.env-file` | `"/app/.env.example"` | Path to env template file inside the image |
-
-### Health Check Label
-
-When `gordon.health` is set, Gordon performs HTTP GET requests to the specified
-path during deployment and waits for a 2xx or 3xx response before routing traffic
-to the new container:
-
-```dockerfile
-FROM node:20-alpine
-LABEL gordon.health="/api/health"
-EXPOSE 3000
-CMD ["node", "server.js"]
-```
-
-Gordon probes `http://<container-ip>:3000/api/health` until it gets a successful
-response or the `deploy.http_probe_timeout` is reached.
-
-### Proxy Port Label
-
-When an image exposes multiple ports, Gordon needs to know which one serves HTTP:
-
-```dockerfile
-# Gitea exposes SSH (22) and HTTP (3000)
-FROM gitea/gitea:latest
-LABEL gordon.proxy.port=3000
-EXPOSE 22
-EXPOSE 3000
-```
-
-Without this label, Gordon uses the first exposed port.
-
-**When to use:**
-- Image exposes multiple ports
-- First exposed port isn't the HTTP service
-- You want explicit control over routing
+No image-label inference exists in v2.50: Gordon never creates routes, deploys, or resolves image names from Dockerfile labels. Push with a domain-like name or a `gordon.domain` label is treated as an ordinary image name. Readiness and proxy ports come from the app manifest (`[service.readiness]`, `[[service.http]]`), not from image labels.
 
 ## Container Naming
 
-Gordon names containers:
-
-| Pattern | Example |
-|---------|---------|
-| `gordon-{domain}` | `gordon-app-mydomain-com` |
-| `gordon-{domain}-new` | `gordon-app-mydomain-com-new` (during updates) |
-| `gordon-{domain}-{service}` | `gordon-app-mydomain-com-postgres` (attachments) |
+Gordon names containers `gordon-<app>--<service>--<instance>` where `<instance>` is the creating operation ID. Retiring containers keep their instance names until removal.
 
 ## Inspecting Labels
 
 View labels on a container:
 
 ```bash
-docker inspect gordon-app-mydomain-com --format '{{json .Config.Labels}}' | jq
+docker inspect <container> --format '{{json .Config.Labels}}' | jq
 ```
 
 Example output:
 
 ```json
 {
-  "gordon.created": "2024-01-15T10:30:00Z",
-  "gordon.domain": "app.mydomain.com",
-  "gordon.image": "myapp:latest",
   "gordon.managed": "true",
-  "gordon.proxy.port": "3000",
-  "gordon.route": "app.mydomain.com"
+  "gordon.app": "blog",
+  "gordon.app.service": "web",
+  "gordon.app.revision": "rev-3",
+  "gordon.created": "2024-01-15T10:30:00Z"
 }
 ```
 
@@ -131,75 +66,12 @@ Find Gordon-managed containers:
 # All Gordon containers
 docker ps -f "label=gordon.managed=true"
 
-# Containers for specific domain
-docker ps -f "label=gordon.domain=app.mydomain.com"
-
-# Attachment containers
-docker ps -f "label=gordon.attachment=true"
-
-# Attachments for specific route
-docker ps -f "label=gordon.attached-to=app.mydomain.com"
-
-# Backup sidecars
-docker ps -f "label=gordon.backup.sidecar=true"
+# Containers for a specific app
+docker ps -f "label=gordon.app=blog"
 ```
-
-## Examples
-
-### Standard Application Container
-
-```bash
-docker inspect gordon-app-mydomain-com --format '{{json .Config.Labels}}'
-```
-
-```json
-{
-  "gordon.managed": "true",
-  "gordon.domain": "app.mydomain.com",
-  "gordon.image": "myapp:v2.1.0",
-  "gordon.route": "app.mydomain.com",
-  "gordon.created": "2024-01-15T10:30:00Z"
-}
-```
-
-### Attachment Container
-
-```bash
-docker inspect gordon-app-mydomain-com-postgres --format '{{json .Config.Labels}}'
-```
-
-```json
-{
-  "gordon.managed": "true",
-  "gordon.attachment": "true",
-  "gordon.attached-to": "app.mydomain.com",
-  "gordon.created": "2024-01-15T10:29:00Z"
-}
-```
-
-### Multi-Port Dockerfile
-
-```dockerfile
-FROM node:18
-LABEL gordon.proxy.port=3000
-
-WORKDIR /app
-COPY . .
-
-# HTTP server on 3000
-EXPOSE 3000
-# Metrics on 9090
-EXPOSE 9090
-# WebSocket on 8080
-EXPOSE 8080
-
-CMD ["npm", "start"]
-```
-
-Gordon routes HTTP to port 3000.
 
 ## Related
 
 - [Configuration Overview](../config/index.md)
-- [Attachments](../config/attachments.md)
+- [App Manifest](../config/apps.md)
 - [Concepts](../concepts.md)

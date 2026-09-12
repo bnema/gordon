@@ -1,62 +1,28 @@
 # Rollback
 
-Roll back to previous versions when deployments fail.
+Roll forward to a previous version when a deploy misbehaves. There is no historical rollback command in v2.50: rolling back means applying a manifest that references the previous tag (or re-pushing it) and deploying again.
 
-## Recommended: Use `gordon pin`
+## Roll Forward to a Previous Tag
 
-`gordon pin` is the built-in rollback and roll-forward workflow for route images:
-
-```bash
-gordon pin app.example.com
-gordon pin app.example.com --tag v2.30.1
-gordon pin list app.example.com
-```
-
-Use it when the target image already exists in the Gordon registry and you want Gordon to update the route and redeploy it for you.
-
-## Rollback Strategies
-
-### 1. Config-Based Rollback
-
-Update the route to point to the previous version:
-
-```toml
-# Current (broken)
-[routes]
-"app.mydomain.com" = "myapp:v2.1.0"
-
-# Rollback to previous
-[routes]
-"app.mydomain.com" = "myapp:v2.0.0"
-```
-
-Then reload:
+The image tags are still in the registry. Point the app file at the last good tag, apply, deploy:
 
 ```bash
-gordon reload
+# 1. Edit blog.toml: image = "gordon.mydomain.com/myapp:v2.0.0"
+gordon apps apply --file blog.toml --remote prod
+gordon apps deploy blog --remote prod
 ```
 
-### 2. Push Previous Version
+For HTTP services without volumes, the previous (broken) container keeps serving until the replacement passes readiness, so the recovery itself is zero-downtime.
 
-Re-push the previous image with the `latest` tag:
+## Re-push the Previous Image as latest
 
-```bash
-docker pull registry.mydomain.com/myapp:v2.0.0
-docker tag registry.mydomain.com/myapp:v2.0.0 registry.mydomain.com/myapp:latest
-docker push registry.mydomain.com/myapp:latest
-```
-
-### 3. Manifest-Based Rollback
-
-Use OCI manifest annotations for version control:
+When the app file tracks `latest`, re-tag and re-push, then deploy (deploy re-resolves mutable tags):
 
 ```bash
-# Rollback to v2.0.0
-export VERSION=v2.0.0
-podman manifest create myapp:latest --amend
-podman manifest add myapp:latest registry.mydomain.com/myapp:$VERSION
-podman manifest annotate myapp:latest --annotation version=$VERSION registry.mydomain.com/myapp:$VERSION
-podman manifest push myapp:latest registry.mydomain.com/myapp:latest
+docker pull gordon.mydomain.com/myapp:v2.0.0
+docker tag gordon.mydomain.com/myapp:v2.0.0 gordon.mydomain.com/myapp:latest
+docker push gordon.mydomain.com/myapp:latest
+gordon apps deploy blog --remote prod
 ```
 
 ## Version Management
@@ -67,169 +33,56 @@ Always push versioned tags alongside `latest`:
 
 ```bash
 VERSION=$(git describe --tags)
-docker tag myapp registry.mydomain.com/myapp:$VERSION
-docker tag myapp registry.mydomain.com/myapp:latest
-docker push registry.mydomain.com/myapp:$VERSION
-docker push registry.mydomain.com/myapp:latest
+docker tag myapp gordon.mydomain.com/myapp:$VERSION
+docker tag myapp gordon.mydomain.com/myapp:latest
+docker push gordon.mydomain.com/myapp:$VERSION
+docker push gordon.mydomain.com/myapp:latest
 ```
 
 ### Semantic Versioning
 
-Use semantic versions for clear rollback targets:
+Use semantic versions for clear recovery targets:
 
 ```
 v2.1.0  ← Current (broken)
-v2.0.0  ← Rollback target
+v2.0.0  ← Recovery target
 v1.9.0  ← Older stable
 ```
 
 ### Git SHA Tags
 
-Tag with commit SHA for precise rollbacks:
+Tag with commit SHA for precise recovery:
 
 ```bash
 # Deploy
 SHA=$(git rev-parse --short HEAD)
-docker push registry.mydomain.com/myapp:$SHA
-
-# Rollback to specific commit
-docker pull registry.mydomain.com/myapp:abc1234
-docker tag registry.mydomain.com/myapp:abc1234 registry.mydomain.com/myapp:latest
-docker push registry.mydomain.com/myapp:latest
+docker push gordon.mydomain.com/myapp:$SHA
 ```
 
-## Rollback Workflow
+## Verifying Recovery
 
-### Quick Rollback
+After re-deploying the previous version:
 
 ```bash
-# 1. Identify last working version
-docker image ls registry.mydomain.com/myapp
-
-# 2. Tag as latest
-docker tag registry.mydomain.com/myapp:v2.0.0 registry.mydomain.com/myapp:latest
-
-# 3. Push
-docker push registry.mydomain.com/myapp:latest
-```
-
-### Config Rollback
-
-```bash
-# 1. Edit config
-vim ~/.config/gordon/gordon.toml
-
-# 2. Change version
-# "app.mydomain.com" = "myapp:v2.0.0"
-
-# 3. Reload
-gordon reload
-```
-
-## Automated Rollback
-
-### GitHub Actions
-
-Add rollback capability to your workflow:
-
-```yaml
-name: Rollback
-
-on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to rollback to (e.g., v2.0.0)'
-        required: true
-
-jobs:
-  rollback:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Login to Registry
-        env:
-          GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
-          GORDON_USERNAME: ${{ secrets.GORDON_USERNAME }}
-          GORDON_REGISTRY: ${{ secrets.GORDON_REGISTRY }}
-        run: printf '%s' "$GORDON_TOKEN" | docker login -u "$GORDON_USERNAME" --password-stdin "$GORDON_REGISTRY"
-
-      - name: Rollback
-        env:
-          GORDON_REGISTRY: ${{ secrets.GORDON_REGISTRY }}
-          VERSION: ${{ inputs.version }}
-        run: |
-          [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
-          REPOSITORY="$GORDON_REGISTRY/myapp"
-          SOURCE_IMAGE="$REPOSITORY:$VERSION"
-          LATEST_IMAGE="$REPOSITORY:latest"
-          SOURCE_DIGEST="$(docker buildx imagetools inspect "$SOURCE_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
-          IMMUTABLE_IMAGE="$REPOSITORY@$SOURCE_DIGEST"
-          docker buildx imagetools create --tag "$LATEST_IMAGE" "$IMMUTABLE_IMAGE"
-          LATEST_DIGEST="$(docker buildx imagetools inspect "$LATEST_IMAGE" --format '{{json .Manifest}}' | jq -er '.digest')"
-          [[ "$LATEST_DIGEST" == "$SOURCE_DIGEST" ]] || {
-            echo "rollback verification failed: latest resolved to $LATEST_DIGEST, expected $SOURCE_DIGEST" >&2
-            exit 1
-          }
-
-      - name: Summary
-        env:
-          VERSION: ${{ inputs.version }}
-        run: |
-          echo "## Rollback Complete" >> "$GITHUB_STEP_SUMMARY"
-          printf 'Rolled back to version: %s\n' "$VERSION" >> "$GITHUB_STEP_SUMMARY"
-```
-
-### Rollback Script
-
-Create a local rollback script:
-
-```bash
-#!/bin/bash
-# rollback.sh
-
-REGISTRY="registry.mydomain.com"
-IMAGE="myapp"
-VERSION=$1
-
-if [ -z "$VERSION" ]; then
-  echo "Usage: ./rollback.sh <version>"
-  echo "Available versions:"
-  docker image ls "$REGISTRY/$IMAGE" --format "{{.Tag}}"
-  exit 1
-fi
-
-echo "Rolling back to $IMAGE:$VERSION..."
-docker pull "$REGISTRY/$IMAGE:$VERSION"
-docker tag "$REGISTRY/$IMAGE:$VERSION" "$REGISTRY/$IMAGE:latest"
-docker push "$REGISTRY/$IMAGE:latest"
-echo "Rollback complete!"
-```
-
-## Verifying Rollback
-
-After rollback:
-
-```bash
-# Check container is running correct version
-docker inspect gordon-app-mydomain-com | grep Image
+# Check the app's effective vs observed state
+gordon apps status blog --remote prod
 
 # Check application responds
 curl -I https://app.mydomain.com
 
 # Check logs
-gordon logs -f
+gordon apps logs blog --remote prod
 ```
 
 ## Best Practices
 
 1. **Always tag versions** - Don't rely solely on `latest`
-2. **Keep N previous versions** - Maintain rollback options
+2. **Keep N previous versions** - Maintain recovery options
 3. **Test before deploy** - Reduce need for rollbacks
 4. **Document known-good versions** - Track stable releases
-5. **Automate rollback** - Reduce time to recovery
 
 ## Related
 
 - [Deployment Overview](./index.md)
 - [GitHub Actions](./github-actions.md)
-- [Routes Configuration](../config/routes.md)
+- [Apps CLI](../cli/apps.md)

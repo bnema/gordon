@@ -13,13 +13,13 @@ import (
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/apptraffic"
 	config "github.com/bnema/gordon/internal/usecase/config"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/gordon/internal/usecase/publictls"
@@ -228,6 +228,25 @@ func TestCertificateSelector_StaticCertWins(t *testing.T) {
 		"static cert should be returned, not public TLS")
 }
 
+// stubAppRoutes is an ACTIVE-derived host source for TLS selector tests.
+type stubAppRoutes struct {
+	hosts []out.AppHost
+}
+
+func (s *stubAppRoutes) AppHosts() []out.AppHost { return s.hosts }
+
+func (s *stubAppRoutes) L4Entries() []apptraffic.RouteEntry { return nil }
+
+func (s *stubAppRoutes) GetExternalRoutes() map[string]string { return nil }
+
+func newRoutesMock(_ *testing.T, domains ...string) *stubAppRoutes {
+	hosts := make([]out.AppHost, 0, len(domains))
+	for _, d := range domains {
+		hosts = append(hosts, out.AppHost{Host: d})
+	}
+	return &stubAppRoutes{hosts: hosts}
+}
+
 func TestCertificateSelector_PublicTLSErrorFallsThroughWithoutLocalPKI(t *testing.T) {
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().GetCertificateForHost("acme-required.example.com").Return(nil, domain.ErrTLSRouteNotCovered)
@@ -244,9 +263,7 @@ func TestCertificateSelector_PublicTLSErrorFallsThroughToLocalPKI(t *testing.T) 
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().GetCertificateForHost("acme-required.example.com").Return(nil, domain.ErrTLSRouteNotCovered)
 
-	routes := outmocks.NewMockRouteChecker(t)
-	routes.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "acme-required.example.com"}}).Maybe()
-	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	routes := newRoutesMock(t, "acme-required.example.com")
 	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
 	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, nil, zerowrap.Default())

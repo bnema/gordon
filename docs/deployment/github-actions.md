@@ -4,8 +4,8 @@ Two approaches for deploying with GitHub Actions: the `gordon push` CLI (recomme
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Deployment token generated with the required scopes
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
 ## Recommended: gordon push
@@ -19,7 +19,7 @@ On your Gordon server:
 ```bash
 gordon auth token generate \
   --subject github-actions \
-  --scopes "push,pull,admin:routes:read,admin:config:write" \
+  --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 0
 ```
 
@@ -72,8 +72,7 @@ jobs:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
           gordon push --build \
-            --remote ${{ secrets.GORDON_REMOTE }} \
-            --no-confirm
+            --remote ${{ secrets.GORDON_REMOTE }}
 ```
 
 #### Continuous Deploy on Main
@@ -105,8 +104,7 @@ jobs:
         run: |
           gordon push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
-            --tag latest \
-            --no-confirm
+            --tag latest
 ```
 
 #### Manual Dispatch
@@ -141,7 +139,7 @@ jobs:
           GORDON_REMOTE: ${{ secrets.GORDON_REMOTE }}
           DEPLOY_TAG: ${{ inputs.tag }}
         run: |
-          args=(push --build --remote "$GORDON_REMOTE" --no-confirm)
+          args=(push --build --remote "$GORDON_REMOTE")
           if [[ -n "$DEPLOY_TAG" ]]; then
             [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
             args+=(--tag "$DEPLOY_TAG")
@@ -176,8 +174,7 @@ jobs:
           gordon push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/api/Dockerfile \
-            myapp-api \
-            --no-confirm
+            myapp-api
 
       - name: Deploy Web
         env:
@@ -186,8 +183,7 @@ jobs:
           gordon push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/web/Dockerfile \
-            myapp-web \
-            --no-confirm
+            myapp-web
 ```
 
 #### With Build Args
@@ -204,7 +200,7 @@ Pass build arguments to the Docker build:
       --build-arg NODE_ENV=production \
       --build-arg API_URL=https://api.example.com \
       --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-      --no-confirm
+
 ```
 
 ### setup-gordon Action Reference
@@ -220,7 +216,7 @@ Pass build arguments to the Docker build:
 
 ## Alternative: Docker-based Workflow
 
-For environments where installing the Gordon binary is not desired, use Docker directly to build and push to the Gordon registry. Gordon auto-deploys when it receives the image — no explicit deploy step is needed.
+For environments where installing the Gordon binary is not desired, use Docker directly to build and push to the Gordon registry. Pushing only stores the image — deploy explicitly with `gordon apps deploy` afterwards.
 
 ### Setup
 

@@ -70,6 +70,9 @@ drain_delay = "2s"
 security_profile = "compat"
 
 [network_isolation]
+# Installation network policy for Gordon-managed networks (prefix filter
+# for `gordon networks list`). Per-app isolation is removed: apps declare
+# `[[network.shared]]` membership in their app file instead.
 enabled = true
 network_prefix = "gordon"
 # Set true to create Docker internal networks without direct external egress.
@@ -81,19 +84,16 @@ prefix = "gordon"
 preserve = true
 
 [images]
-# Explicit external registries must be listed here. Gordon's own registry is
-# always allowed; localhost/private/link-local registries are always rejected.
+# Docker Hub, ghcr.io, quay.io, and Gordon's registry are always allowed.
+# Add other registries as exact hostname+port entries; this does not configure credentials.
 allowed_registries = []
-# Require @sha256:<digest> for allowlisted external registries.
+# Require @sha256:<64 hex chars> for images from every registry, including Gordon.
 require_digest = false
 
 [images.prune]
 enabled = false
 schedule = "daily"
 keep_last = 3
-
-[auto_route]
-enabled = false
 
 [logging]
 level = "info"
@@ -102,13 +102,6 @@ format = "console"
 [logging.file]
 enabled = false
 # path = "~/.gordon/logs/gordon.log"
-# max_size = 100
-# max_backups = 3
-# max_age = 28
-
-[logging.container_logs]
-enabled = true
-# dir = "~/.gordon/logs/containers"
 # max_size = 100
 # max_backups = 3
 # max_age = 28
@@ -173,9 +166,27 @@ keep = 14
 
 [external_routes]
 # "status.example.com" = "127.0.0.1:9000"
+#
+# NOTE: the pre-v2.50 application keys below were removed by the
+# declarative-apps cutover. Gordon fails boot/reload closed when any of
+# them is present (see validateRetiredAppConfig in internal/app/run.go).
+# Declare application workloads in standalone <app>.toml files instead:
+# one file per app, applied with `gordon apps apply --file <app>.toml`
+# and activated with `gordon apps deploy <app>`.
+#
+# REMOVED: [routes]            -> [[service.http]] in an app file
+# REMOVED: [attachments]       -> [[service]] + volumes in an app file
+# REMOVED: [network_groups]    -> [[network.shared]] in an app file
+# REMOVED: [[services]]-as-app -> one [[service]] per app file
+# REMOVED: [service_routes]    -> [[service.http]] in an app file
+# REMOVED: [auto]/[auto_route] -> explicit interfaces in an app file
+# REMOVED: [previews]          -> staging is an ordinary app file
 
 # Gordon-managed standalone L4 services. Use service:<name>:<port> from
-# traffic routers to expose published loopback ports.
+# traffic routers to expose published loopback ports. Standalone services
+# are installation-level: they live in gordon.toml, not in app files.
+# (App services are declared with [[service]] in <app>.toml files and
+# managed with `gordon apps`; see docs/cli/apps.md.)
 # [[services]]
 # name = "rust"
 # image = "registry.example.com:5000/rust:latest"
@@ -213,9 +224,6 @@ keep = 14
 # name = "rust-rcon"
 # entrypoint = "rcon"
 # service = "service:rust:rcon"
-
-[network_groups]
-# "backend" = ["app.example.com", "api.example.com"]
-
-[attachments]
-# "app.example.com" = ["postgres:18"]
+#
+# REMOVED application sections (see note under [external_routes] above):
+# [routes], [network_groups], [attachments] were deleted with the cutover.

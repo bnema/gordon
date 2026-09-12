@@ -111,4 +111,3 @@ The `token_source` field indicates where the ACME token was sourced from
 
 - [CLI Overview](./index.md)
 - [Status Command](./status.md)
-- [Routes Command](./routes.md)

@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/domain"
 )
 
 func withFastRetry(t *testing.T) {
@@ -30,50 +29,6 @@ func withFastRetry(t *testing.T) {
 		retryMaxAttempts = prevAttempts
 		retryBaseDelay = prevDelay
 	})
-}
-
-func TestClientRestartDoesNotRetryGatewayResponseAfterSideEffect(t *testing.T) {
-	withFastRetry(t)
-
-	var mutations int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/restart/test.example.com", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
-		atomic.AddInt32(&mutations, 1)
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte(`{"error":"upstream response unavailable"}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	result, err := client.Restart(context.Background(), "test.example.com", false)
-
-	require.Nil(t, result)
-	var outcomeErr *OutcomeUnknownError
-	require.ErrorAs(t, err, &outcomeErr)
-	assert.Contains(t, err.Error(), "inspect current state before retrying")
-	assert.EqualValues(t, 1, atomic.LoadInt32(&mutations))
-}
-
-func TestClientRestartDoesNotRetryAmbiguousTransportFailure(t *testing.T) {
-	withFastRetry(t)
-
-	var mutations int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&mutations, 1)
-		conn, _, err := w.(http.Hijacker).Hijack()
-		require.NoError(t, err)
-		require.NoError(t, conn.Close())
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	result, err := client.Restart(context.Background(), "test.example.com", true)
-
-	require.Nil(t, result)
-	var outcomeErr *OutcomeUnknownError
-	require.ErrorAs(t, err, &outcomeErr)
-	assert.EqualValues(t, 1, atomic.LoadInt32(&mutations))
 }
 
 func TestClientReloadDoesNotRetryGatewayResponse(t *testing.T) {
@@ -95,73 +50,6 @@ func TestClientReloadDoesNotRetryGatewayResponse(t *testing.T) {
 	var outcomeErr *OutcomeUnknownError
 	require.ErrorAs(t, err, &outcomeErr)
 	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
-}
-
-func TestClientDeployDoesNotRetryGatewayResponse(t *testing.T) {
-	withFastRetry(t)
-
-	var attempts int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/deploy/test.example.com", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
-		atomic.AddInt32(&attempts, 1)
-		w.WriteHeader(http.StatusBadGateway)
-		_, _ = w.Write([]byte(`{"error":"upstream unavailable"}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	result, err := client.Deploy(context.Background(), "test.example.com")
-
-	require.Nil(t, result)
-	var outcomeErr *OutcomeUnknownError
-	require.ErrorAs(t, err, &outcomeErr)
-	assert.ErrorContains(t, err, "502 Bad Gateway: upstream unavailable")
-	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
-}
-
-func TestClientDeployConfirmedRejectionIsNotOutcomeUnknown(t *testing.T) {
-	var attempts int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		atomic.AddInt32(&attempts, 1)
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		_, _ = w.Write([]byte(`{"error":"invalid deployment"}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	result, err := client.Deploy(context.Background(), "test.example.com")
-
-	require.Nil(t, result)
-	var outcomeErr *OutcomeUnknownError
-	assert.NotErrorAs(t, err, &outcomeErr)
-	var httpErr *HTTPError
-	require.ErrorAs(t, err, &httpErr)
-	assert.Equal(t, http.StatusUnprocessableEntity, httpErr.StatusCode)
-	assert.EqualValues(t, 1, atomic.LoadInt32(&attempts))
-}
-
-func TestClientDeployAuthenticationRejectionIsNotOutcomeUnknown(t *testing.T) {
-	var deployAttempts int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/auth/token" {
-			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":"invalid credentials"}`))
-			return
-		}
-		atomic.AddInt32(&deployAttempts, 1)
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, WithToken("invalid-token"))
-	result, err := client.Deploy(context.Background(), "test.example.com")
-
-	require.Nil(t, result)
-	var outcomeErr *OutcomeUnknownError
-	assert.NotErrorAs(t, err, &outcomeErr)
-	assert.ErrorContains(t, err, "ephemeral token exchange: 403 Forbidden")
-	assert.Zero(t, atomic.LoadInt32(&deployAttempts))
 }
 
 func TestClientGetStatusDoesNotRetryAuthenticationRejection(t *testing.T) {
@@ -197,7 +85,7 @@ func TestClientGetStatusRetriesTransientGatewayResponse(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"routes":2,"container_status":{}}`))
+		_, _ = w.Write([]byte(`{"apps":2,"container_status":{}}`))
 	}))
 	defer srv.Close()
 
@@ -206,7 +94,7 @@ func TestClientGetStatusRetriesTransientGatewayResponse(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, status)
-	assert.Equal(t, 2, status.Routes)
+	assert.Equal(t, 2, status.Apps)
 	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
 }
 
@@ -222,7 +110,7 @@ func TestClientGetStatusRetriesTransientTransportFailure(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"routes":2,"container_status":{}}`))
+		_, _ = w.Write([]byte(`{"apps":2,"container_status":{}}`))
 	}))
 	defer srv.Close()
 
@@ -231,7 +119,7 @@ func TestClientGetStatusRetriesTransientTransportFailure(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, status)
-	assert.Equal(t, 2, status.Routes)
+	assert.Equal(t, 2, status.Apps)
 	assert.EqualValues(t, 3, atomic.LoadInt32(&attempts))
 }
 
@@ -259,7 +147,7 @@ func TestClientWithInsecureTLS_AllowsSelfSignedCertificate(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/status", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"routes":0,"registry_domain":"","registry_port":0,"server_port":0,"auto_route":false,"network_isolation":false,"container_status":{}}`))
+		_, _ = w.Write([]byte(`{"apps":0,"registry_domain":"","registry_port":0,"server_port":0,"auto_route":false,"network_isolation":false,"container_status":{}}`))
 	}))
 	defer srv.Close()
 
@@ -353,53 +241,6 @@ func TestClientPruneImages(t *testing.T) {
 	require.NotNil(t, resp)
 	assert.Equal(t, 2, resp.Runtime.DeletedCount)
 	assert.Equal(t, 3, resp.Registry.TagsRemoved)
-}
-
-func TestClientFindAttachmentTargetsByImage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/attachments/by-image/postgres:16", r.URL.Path)
-		require.Equal(t, "", r.URL.RawQuery)
-		require.Equal(t, http.MethodGet, r.Method)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"image":"postgres:16","targets":["app.example.com","workers"]}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "postgres:16")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"app.example.com", "workers"}, targets)
-}
-
-func TestClientGetRoute_Maps404ToDomainErrRouteNotFound(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/routes/missing.example.test", r.URL.Path)
-		require.Equal(t, http.MethodGet, r.Method)
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"route not found"}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	route, err := client.GetRoute(context.Background(), "missing.example.test")
-	require.Nil(t, route)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, domain.ErrRouteNotFound)
-}
-
-func TestClientFindAttachmentTargetsByImage_WithSlashContainingImage(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/attachments/by-image/registry/org/image:tag", r.URL.Path)
-		require.Equal(t, http.MethodGet, r.Method)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"image":"registry/org/image:tag","targets":["workers"]}`))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL)
-	targets, err := client.FindAttachmentTargetsByImage(context.Background(), "registry/org/image:tag")
-	require.NoError(t, err)
-	assert.Equal(t, []string{"workers"}, targets)
 }
 
 func TestParseResponse_CapsErrorBodySize(t *testing.T) {
@@ -589,20 +430,20 @@ func TestParseErrorResponse_NonJSON(t *testing.T) {
 
 func TestRunVolumeBackups_PartialContentReturnsResultAndError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/backups/volumes/app.example.com", r.URL.Path)
+		require.Equal(t, "/admin/backups/volumes/shop", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusPartialContent)
 		require.NoError(t, json.NewEncoder(w).Encode(dto.VolumeBackupRunResponse{
 			Status:  "partial",
-			Backups: []dto.VolumeBackupJob{{ID: "v1", Domain: "app.example.com", VolumeName: "gordon-app-data", Status: "completed"}},
+			Backups: []dto.VolumeBackupJob{{ID: "v1", App: "shop", Service: "api", VolumeName: "data", Status: "completed"}},
 			Error:   "one volume failed",
 		}))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	result, err := client.RunVolumeBackups(context.Background(), "app.example.com", "")
+	result, err := client.RunVolumeBackups(context.Background(), "shop", "api", "data")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "one volume failed")

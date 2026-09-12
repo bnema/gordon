@@ -12,9 +12,6 @@ func TestAllListCommands_AcceptJSONFlag(t *testing.T) {
 		name    string
 		builder func() *cobra.Command
 	}{
-		{"routes list", newRoutesListCmd},
-		{"routes status", newRoutesStatusCmd},
-		{"attachments list", newAttachmentsListCmd},
 		{"secrets list", newSecretsListCmd},
 		{"images list", newImagesListCmd},
 		{"backup list", newBackupListCmd},
@@ -23,9 +20,7 @@ func TestAllListCommands_AcceptJSONFlag(t *testing.T) {
 		{"backup volumes status", newVolumeBackupStatusCmd},
 		{"auth token list", newTokenListCmd},
 		{"remotes list", newRemotesListCmd},
-		{"pin list", newPinListCmd},
 		{"config show", newConfigShowCmd},
-		{"routes show", newRoutesShowCmd},
 		{"networks list", newNetworksListCmd},
 		{"images tags", newImagesTagsCmd},
 		{"tls status", newTLSStatusCmd},

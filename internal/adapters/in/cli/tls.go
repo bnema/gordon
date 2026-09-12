@@ -33,7 +33,7 @@ func newTLSStatusCmd() *cobra.Command {
 		Use:   "status",
 		Short: "Show public TLS certificate status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			handle, err := tlsResolveControlPlane(configPath)
+			handle, err := tlsResolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}

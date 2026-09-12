@@ -39,6 +39,7 @@ type Pusher struct {
 	timeout     time.Duration
 	transport   http.RoundTripper
 	insecureTLS bool
+	plainHTTP   bool
 	imageSource func(ctx context.Context, ref string) (v1.Image, func(), error)
 	cleanupFn   func()
 	progress    io.Writer
@@ -67,6 +68,13 @@ func WithTimeout(d time.Duration) Option {
 // This is ignored when a custom transport is provided via WithTransport.
 func WithInsecureTLS(insecure bool) Option {
 	return func(p *Pusher) { p.insecureTLS = insecure }
+}
+
+// WithPlainHTTP forces the registry base URL to use http:// instead of
+// https://. This is independent from WithInsecureTLS, which only disables
+// TLS certificate verification while still using https://.
+func WithPlainHTTP(plain bool) Option {
+	return func(p *Pusher) { p.plainHTTP = plain }
 }
 
 // WithImageSource overrides the default daemon-based image reader.
@@ -162,7 +170,7 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		defer userCleanup()
 	}
 
-	baseURL := registryBaseURL(parsedRef.Context().RegistryStr())
+	baseURL := p.registryBaseURL(parsedRef.Context().RegistryStr())
 	repo := parsedRef.Context().RepositoryStr()
 
 	if err := p.uploadImageLayers(ctx, img, baseURL, repo, authHeader); err != nil {
@@ -383,7 +391,10 @@ func resolveAuthHeader(ref name.Reference) (string, error) {
 	return "", nil
 }
 
-func registryBaseURL(host string) string {
+func (p *Pusher) registryBaseURL(host string) string {
+	if p.plainHTTP {
+		return "http://" + host
+	}
 	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || host == "localhost" || host == "127.0.0.1" {
 		return "http://" + host
 	}

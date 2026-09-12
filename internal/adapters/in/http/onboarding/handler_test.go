@@ -111,24 +111,24 @@ func TestHandler_OnboardingPage(t *testing.T) {
 
 func TestHandler_OnboardingPage_DefaultHTTPSURLOmitsInternalTLSPort(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+	body := getOnboardingBody(t, srv, "app.example.com")
 
-	assert.Contains(t, body, "https://o2.bnema.dev/")
+	assert.Contains(t, body, "https://app.example.com/")
 	assert.NotContains(t, body, ":8443")
 }
 
 func TestHandler_OnboardingPage_ExplicitHTTPPortMapsToTLSPort(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	body := getOnboardingBody(t, srv, "o2.bnema.dev:8088")
+	body := getOnboardingBody(t, srv, "app.example.com:8088")
 
-	assert.Contains(t, body, "https://o2.bnema.dev:8443/")
+	assert.Contains(t, body, "https://app.example.com:8443/")
 }
 
 func TestHandler_OnboardingPage_ExplicitNonHTTPPortIsPreserved(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	body := getOnboardingBody(t, srv, "o2.bnema.dev:9999")
+	body := getOnboardingBody(t, srv, "app.example.com:9999")
 
-	assert.Contains(t, body, "https://o2.bnema.dev:9999/")
+	assert.Contains(t, body, "https://app.example.com:9999/")
 }
 
 func TestHandler_OnboardingPage_IPHostHidesGoToSiteLink(t *testing.T) {
@@ -140,7 +140,7 @@ func TestHandler_OnboardingPage_IPHostHidesGoToSiteLink(t *testing.T) {
 
 func TestHandler_OnboardingPage_IncludesFingerprintAndClientImportCopy(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+	body := getOnboardingBody(t, srv, "app.example.com")
 
 	// Fingerprint must be visible
 	assert.Contains(t, body, testFingerprint)
@@ -156,9 +156,9 @@ func TestHandler_OnboardingPage_IncludesFingerprintAndClientImportCopy(t *testin
 func TestHandler_OnboardingPage_GoToSiteLinkIsPlainLink(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
-	body := getOnboardingBody(t, srv, "o2.bnema.dev")
+	body := getOnboardingBody(t, srv, "app.example.com")
 
-	assert.Contains(t, body, `<a href="https://o2.bnema.dev/">Go to site &#x2192;</a>`)
+	assert.Contains(t, body, `<a href="https://app.example.com/">Go to site &#x2192;</a>`)
 	assert.NotContains(t, body, "onclick=")
 	assert.NotContains(t, body, "document.cookie")
 }
