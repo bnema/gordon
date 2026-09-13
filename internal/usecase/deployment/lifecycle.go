@@ -185,7 +185,7 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		// The step is journaled before the runtime work, so a candidate
 		// created by a redeploy is durably recorded as soon as it exists.
 		op.Steps = append(op.Steps, domain.AppOperationStep{
-			ID: "service." + name + ".start", State: domain.AppStepPending, Before: eff.Container,
+			ID: "service." + name + ".start", State: domain.AppStepPending, Before: eff.Container, Service: name,
 		})
 		s.ensureServiceRunning(ctx, app, opID, name, eff, &op, len(op.Steps)-1, result)
 	}
@@ -256,7 +256,7 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		// The step is journaled before the runtime work, so a candidate
 		// created by a rebuild of a missing generation is durably recorded.
 		op.Steps = append(op.Steps, domain.AppOperationStep{
-			ID: "service." + name + ".restart", State: domain.AppStepPending, Before: eff.Container,
+			ID: "service." + name + ".restart", State: domain.AppStepPending, Before: eff.Container, Service: name,
 		})
 		svcResult := s.restartOneService(ctx, app, op.Op, name, eff, &op, len(op.Steps)-1)
 		result.Services[name] = svcResult
@@ -689,19 +689,19 @@ func failedServiceResult(before string, err error) ServiceResult {
 // re-inspects its loopback binds, and verifies readiness before the service
 // may be published again. Any failure leaves the service withdrawn with its
 // recorded binds cleared, so a not-ready backend is never projected.
-func (s *Service) verifyRunningService(ctx context.Context, app, name string, eff domain.AppEffectiveService, step *domain.AppOperationStep, result *LifecycleResult) bool {
+func (s *Service) verifyRunningService(ctx context.Context, app, name string, eff domain.AppEffectiveService, step *domain.AppOperationStep, result *LifecycleResult) {
 	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
-		return true
+		return
 	}
 	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
-		return true
+		return
 	}
 	if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
-		return true
+		return
 	}
 	// The service is running and its re-inspected loopback binds are
 	// persisted, so the step may succeed: the graph apply for this app
@@ -709,7 +709,6 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
 	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
-	return true
 }
 
 // refreshBackendBinds re-inspects the loopback publishes of a restarted

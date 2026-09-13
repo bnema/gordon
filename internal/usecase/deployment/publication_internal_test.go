@@ -52,7 +52,7 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 
 	step := domain.AppOperationStep{ID: "service.web.start"}
 	result := &LifecycleResult{Services: map[string]ServiceResult{}}
-	require.True(t, svc.verifyRunningService(ctx, "blog", "web", eff, &step, result))
+	svc.verifyRunningService(ctx, "blog", "web", eff, &step, result)
 
 	assert.Equal(t, domain.AppStepFailed, step.State)
 	assert.Equal(t, "failed", result.Services["web"].Result)
@@ -87,7 +87,7 @@ func TestVerifyRunningService_ReadyPublishesBinds(t *testing.T) {
 
 	step := domain.AppOperationStep{ID: "service.web.start"}
 	result := &LifecycleResult{Services: map[string]ServiceResult{}}
-	require.True(t, svc.verifyRunningService(ctx, "blog", "web", eff, &step, result))
+	svc.verifyRunningService(ctx, "blog", "web", eff, &step, result)
 
 	assert.Equal(t, domain.AppStepSucceeded, step.State)
 	assert.Equal(t, map[int]int{8080: 32771}, result.Services["web"].BackendBinds)

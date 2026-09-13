@@ -2,6 +2,7 @@ package deployment_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -480,10 +481,11 @@ func TestBootRecovery_InterruptionAfterTheLastStepIsASuccess(t *testing.T) {
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-published", mock.Anything)
 }
 
-// TestPreflight_RefusesWhileAnOperationIsUnfinished proves the claim guard:
-// preflight never masks an unfinished operation of the same app, because that
-// would leave its leftover generation untracked forever.
-func TestPreflight_RefusesWhileAnOperationIsUnfinished(t *testing.T) {
+// TestPreflight_ReconcilesUnfinishedPredecessor proves a preflight converges
+// an interrupted predecessor before it resolves instead of refusing it, and
+// that it ignores the caller's request key: the journal it opens can neither
+// mask an unfinished operation nor pre-claim a later mutation.
+func TestPreflight_ReconcilesUnfinishedPredecessor(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	images := outmocks.NewMockImageResolver(t)
@@ -493,15 +495,182 @@ func TestPreflight_RefusesWhileAnOperationIsUnfinished(t *testing.T) {
 	seedRevision(t, ctx, store, "intent-0", "", testRevision("blog", spec))
 	require.NoError(t, store.SaveOperation(ctx, domain.AppOperation{
 		Op: "op-unfinished", Kind: "deploy", App: "blog", StartedAt: time.Now().UTC(),
-		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepSucceeded}},
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
 	}))
 
+	images.EXPECT().ResolveDigest(mock.Anything, spec.Image).
+		Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, spec.Image).Return(nil, nil).Once()
+
 	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: outmocks.NewMockContainerRuntime(t), Images: images, Secrets: secrets,
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default())
-	_, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog", Op: "op-other"})
-	require.ErrorIs(t, err, domain.ErrAppStateConflict)
-	assert.Contains(t, err.Error(), "unfinished operation")
+	pinned, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog", Op: "op-other"})
+	require.NoError(t, err)
+	require.Len(t, pinned, 1)
+
+	reconciled, err := store.LoadOperation(ctx, "blog", "op-unfinished")
+	require.NoError(t, err)
+	require.True(t, reconciled.Terminal(), "preflight reconciles the interrupted predecessor")
+	assert.Equal(t, domain.AppOutcomeFailed, reconciled.Outcome)
+}
+
+// TestPreflightThenDeployWithSameKey proves the repaired contract: a preflight
+// never claims the caller's key, so a Deploy that follows with the same key
+// executes instead of replaying the preflight journal as a conflict.
+func TestPreflightThenDeployWithSameKey(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	seedReplaceableApp(t, ctx, store)
+
+	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").
+		Return(restartTestDigest, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
+
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default())
+	pinned, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog", Op: "op-same"})
+	require.NoError(t, err)
+	require.Len(t, pinned, 1)
+
+	// The same key must reach execution, not replay the effect-free preflight
+	// journal as a conflict. The second resolution is made to fail so the
+	// deploy stops before any runtime effect.
+	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return("", assert.AnError).Once()
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-same"})
+	require.ErrorIs(t, err, domain.ErrAppImageUnresolvable)
+	require.NotNil(t, result)
+	assert.Equal(t, "op-same", result.Op)
+	assert.False(t, errors.Is(err, domain.ErrAppStateConflict))
+}
+
+// TestBootRecovery_FailsClosedWhenCandidateCannotBeRemoved proves
+// reconciliation never proceeds while an orphan candidate may still run: the
+// removal failure aborts the mutation, the interrupted journal is not
+// finalized, and no newer operation is created to mask the leftover.
+func TestBootRecovery_FailsClosedWhenCandidateCannotBeRemoved(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedReplaceableApp(t, ctx, store)
+	require.NoError(t, store.SaveOperation(ctx, domain.AppOperation{
+		Op: "op-crash", Kind: "deploy", App: "blog", StartedAt: time.Now().UTC(),
+		Steps: []domain.AppOperationStep{
+			{ID: "service.web.replace", State: domain.AppStepPending, Service: "web", Before: "c-old", After: "c-orphan"},
+		},
+	}))
+
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-orphan", true).Return(assert.AnError)
+
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default())
+
+	err := svc.ReconcileBoot(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be removed")
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
+
+	// The leftover stays journaled and non-terminal, so it is still the latest
+	// operation.
+	leftover, err := store.LoadOperation(ctx, "blog", "op-crash")
+	require.NoError(t, err)
+	assert.False(t, leftover.Terminal(), "a leftover that could not be removed is never finalized")
+
+	// A later mutation fails closed on the same leftover and opens no journal
+	// that could mask it.
+	_, err = svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-next"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be removed")
+	_, err = store.LoadOperation(ctx, "blog", "op-next")
+	require.ErrorIs(t, err, domain.ErrAppOperationNotFound)
+}
+
+// TestBootRecovery_ClearsReplacementInhibitionAndRebuildsFromActive proves
+// the crash window is fully recoverable for a volume-owning service: an
+// interruption after the superseded container was retired leaves the
+// replacement-pending inhibition behind, boot recovery removes the
+// never-published candidate, clears that stale inhibition, and rebuilds the
+// generation ACTIVE records from its pinned revision.
+func TestBootRecovery_ClearsReplacementInhibitionAndRebuildsFromActive(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+
+	spec := webService()
+	spec.Secrets = map[string]string{}
+	spec.Volumes = []domain.AppVolume{{Name: "data", Path: "/data"}}
+	spec.Readiness = domain.AppReadiness{Type: domain.AppReadinessHTTP, Path: "/healthz", Timeout: time.Second}
+	rev := testRevision("blog", spec)
+	rev.Revision = "rev-0"
+	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
+	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+		"web": {
+			Container: "c-old", EffectiveRevision: "rev-0", Image: spec.Image,
+			Digest: restartTestDigest, Spec: spec, BackendBinds: map[int]int{8080: 18080},
+		},
+	}}))
+	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
+	seedRevision(t, ctx, store, "intent-0", "", rev)
+	// A replacement interrupted after it retired c-old and created its
+	// candidate: ACTIVE still names c-old, the candidate is journaled but
+	// unpublished, and c-old carries the replacement-pending inhibition.
+	require.NoError(t, store.SaveOperation(ctx, domain.AppOperation{
+		Op: "op-crash", Kind: "deploy", App: "blog", StartedAt: time.Now().UTC(),
+		Steps: []domain.AppOperationStep{
+			{ID: "preflight", State: domain.AppStepSucceeded},
+			{ID: "service.web.replace", State: domain.AppStepPending, Service: "web", Before: "c-old", After: "c-orphan"},
+		},
+	}))
+	require.NoError(t, store.SaveRecoveryInhibition(ctx, domain.AppRecoveryInhibition{
+		App: "blog", Service: "web", ContainerID: "c-old",
+		Reason: domain.AppInhibitReplacementPending, Operation: "op-crash",
+	}))
+
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-orphan", true).Return(nil).Once()
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-old").Return(false, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "c-old").Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
+	expectNetworkProvision(runtime, "app-blog", 1)
+	runtime.EXPECT().CreateVolume(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuilt", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+	require.NoError(t, svc.ReconcileBoot(ctx))
+
+	inhibitions, err := store.LoadRecoveryInhibitions(ctx, "blog")
+	require.NoError(t, err)
+	assert.Empty(t, inhibitions, "the stale replacement inhibition must not survive recovery")
+
+	active, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "c-rebuilt", active.Services["web"].Container)
+	assert.Equal(t, "rev-0", active.Services["web"].EffectiveRevision)
+
+	finalized, err := store.LoadOperation(ctx, "blog", "op-crash")
+	require.NoError(t, err)
+	require.True(t, finalized.Terminal())
+	assert.Equal(t, domain.AppOutcomeFailed, finalized.Outcome)
 }
 
 // TestRestart_RebuildsMissingActiveContainer proves restart is not a dead end

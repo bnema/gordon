@@ -326,10 +326,15 @@ func newOpID() string {
 // Preflight resolves a captured revision without any workload mutation:
 // image digests, secret presence, image-volume mapping, reservation
 // recheck, and resource preconditions. It records the pinned digest
-// table into the journal BEFORE any effect. It does not reconcile an
-// interrupted operation: it refuses the claim instead, so it can never mask
-// an unfinished operation of the same app (Deploy, Start, Restart, Stop, and
-// Remove reconcile first).
+// table into the journal BEFORE any effect.
+//
+// Preflight never claims the caller's request key, and it reconciles an
+// interrupted operation before resolving. DeployInput.Op is ignored here:
+// the key identifies a mutation, and a preflight that claimed it would
+// poison a later Deploy of the same key (its journal would look like an
+// interrupted deploy). The preflight journal is opened under a generated
+// id, so it can neither mask an unfinished operation nor pre-claim a
+// mutation; the next mutation reconciles it away.
 func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, error) {
 	release, err := s.acquireAppContext(ctx, input.App)
 	if err != nil {
@@ -339,6 +344,10 @@ func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedSer
 	if err := s.deps.State.Recover(ctx); err != nil {
 		return nil, nil, fmt.Errorf("deployment: recover before preflight: %w", err)
 	}
+	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
+		return nil, nil, err
+	}
+	input.Op = ""
 	pinned, op, _, err := s.preflightLocked(ctx, input)
 	return pinned, op, err
 }

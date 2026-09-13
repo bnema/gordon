@@ -596,8 +596,8 @@ func TestDeploy_MultiServiceStopsAtFirstFailure(t *testing.T) {
 // TestDeploy_VolumeReplacementPreventsOverlappingWriters proves a stateful
 // replacement durably inhibits the superseded generation before it is
 // retired, stops and removes it before the candidate starts, and keeps the
-// inhibition when the candidate never becomes ready. Exclusion holds because
-// the previous process is gone before the replacement can write.
+// inhibition while the candidate's removal cannot be confirmed. Exclusion
+// holds because the previous process is gone before the replacement can write.
 func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -675,11 +675,13 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(nil, assert.AnError).Once()
-	// The failed replacement removes its candidate once, and the following
-	// boot reconciliation retries it: a terminal failed operation keeps
-	// retrying a candidate it recorded, because the journal cannot know the
-	// earlier removal succeeded without re-checking the runtime.
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(nil).Times(2)
+	// The failed replacement removes its candidate once. Boot reconciliation
+	// retries it because a terminal failed operation cannot know the earlier
+	// removal succeeded without re-checking the runtime; that retry fails, so
+	// recovery fails closed and never revives the superseded writer whose
+	// volume the orphan may still touch.
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(assert.AnError).Once()
 
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
@@ -728,7 +730,16 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 	}, zerowrap.Default())
 	bootErr := rebooted.ReconcileBoot(ctx)
 	require.Error(t, bootErr)
-	assert.Contains(t, bootErr.Error(), "recovery inhibited")
+	assert.Contains(t, bootErr.Error(), "could not be removed")
 	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, "c-old")
 	runtime.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-old", mock.Anything)
+
+	// The orphan that could not be removed keeps the inhibition: the
+	// superseded writer is never revived on top of data the candidate may
+	// already have touched.
+	keptInhibitions, keptErr := store.LoadRecoveryInhibitions(ctx, "blog")
+	require.NoError(t, keptErr)
+	require.Len(t, keptInhibitions, 1)
+	assert.Equal(t, "c-old", keptInhibitions[0].ContainerID)
+	assert.Equal(t, domain.AppInhibitReplacementPending, keptInhibitions[0].Reason)
 }
