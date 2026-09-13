@@ -68,6 +68,7 @@ gordon apps stop blog
 gordon apps start blog
 gordon apps remove blog
 gordon apps operations show blog --key <operation-key>
+gordon apps operations watch blog --key <operation-key>
 gordon apps secrets list blog
 gordon config validate --file /path/to/gordon.toml
 

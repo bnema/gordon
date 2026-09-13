@@ -63,6 +63,7 @@ func TestAppDeployResponseKeys(t *testing.T) {
 		Op:       "op-abc",
 		App:      "blog",
 		Revision: "rev-new",
+		Status:   AppStatusRunning,
 		Outcome:  "success",
 		Services: map[string]AppServiceResultDTO{
 			"web": {Result: "deployed", EffectiveRevision: "rev-new"},
@@ -75,7 +76,7 @@ func TestAppDeployResponseKeys(t *testing.T) {
 		Retained:  &AppRetainedDTO{Volumes: []string{"blog-db"}, Secrets: []string{"db/password"}},
 	}
 	keys := dtoJSONKeys(t, resp)
-	for _, key := range []string{"op", "app", "revision", "outcome", "services", "steps", "cleanup_warnings", "effective", "retained"} {
+	for _, key := range []string{"op", "app", "revision", "status", "outcome", "services", "steps", "cleanup_warnings", "effective", "retained"} {
 		assert.Contains(t, keys, key)
 	}
 	svc := keys["services"].(map[string]any)["web"].(map[string]any)

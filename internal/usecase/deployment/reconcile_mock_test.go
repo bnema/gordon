@@ -86,7 +86,7 @@ func recoveringService(
 	state *outmocks.MockAppState,
 	runtime *outmocks.MockContainerRuntime,
 	traffic *recordingTraffic,
-	httpGet func(context.Context, string) (int, error),
+	httpGet func(context.Context, string, string) (int, error),
 ) *deployment.Service {
 	t.Helper()
 	return deployment.NewService(deployment.Deps{
@@ -195,7 +195,7 @@ func TestReconcileRunning_StartsExitedExactIDThenVerifiesAndPublishes(t *testing
 	})).Return(nil).Once()
 
 	var probedURL string
-	svc := recoveringService(t, state, runtime, traffic, func(_ context.Context, url string) (int, error) {
+	svc := recoveringService(t, state, runtime, traffic, func(_ context.Context, url, _ string) (int, error) {
 		probedURL = url
 		return 200, nil
 	})
@@ -599,7 +599,7 @@ func TestReconcileRunning_NoHealthcheckNeverRestartsOnReadiness(t *testing.T) {
 	// An execution unseen by this daemon is verified immediately because it
 	// may have restarted while Gordon was absent. Readiness failure keeps it
 	// withdrawn, but never restarts an otherwise running workload.
-	svc := recoveringService(t, state, runtime, traffic, func(context.Context, string) (int, error) {
+	svc := recoveringService(t, state, runtime, traffic, func(context.Context, string, string) (int, error) {
 		return 500, nil
 	})
 	require.Error(t, svc.ReconcileRunning(ctx), "the unseen execution fails readiness and stays withdrawn")
@@ -796,7 +796,7 @@ func TestReconcileRunning_FailedReadinessPersistsNoBinds(t *testing.T) {
 		Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
 
-	svc := recoveringService(t, state, runtime, traffic, func(context.Context, string) (int, error) {
+	svc := recoveringService(t, state, runtime, traffic, func(context.Context, string, string) (int, error) {
 		return 500, nil
 	})
 	require.Error(t, svc.ReconcileRunning(ctx))

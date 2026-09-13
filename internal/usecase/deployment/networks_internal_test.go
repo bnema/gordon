@@ -54,7 +54,7 @@ func TestCreateAndStart_UsesIncarnationPrivateNetworkAndLimits(t *testing.T) {
 		ResourceLimits{MemoryBytes: 1 << 30, NanoCPUs: 2_000_000_000, PidsLimit: 256},
 	)
 	created, binds, udp, err := svc.createAndStart(ctx, "blog", "rev-1",
-		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1")
+		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	assert.Empty(t, binds)
@@ -80,7 +80,7 @@ func TestCreateAndStart_ReusesOwnedNetwork(t *testing.T) {
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
 	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1",
-		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1")
+		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.NoError(t, err)
 }
 
@@ -100,7 +100,7 @@ func TestCreateAndStart_RefusesForeignNetwork(t *testing.T) {
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
 	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1",
-		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1")
+		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 }
 
@@ -130,7 +130,7 @@ func TestCreateAndStart_JoinsDeclaredSharedNetworks(t *testing.T) {
 		name:           "web",
 		spec:           domain.AppService{Name: "web"},
 		sharedNetworks: []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}}},
-	}, "op-1")
+	}, "op-1", nil)
 	require.NoError(t, err)
 }
 
@@ -163,7 +163,7 @@ func TestCreateAndStart_RoutesDeclaredReadOnlyVolumeToReadOnlyMount(t *testing.T
 			Name:    "web",
 			Volumes: []domain.AppVolume{{Name: "config", Path: "/config", ReadOnly: true}},
 		},
-	}, "op-1")
+	}, "op-1", nil)
 	require.NoError(t, err)
 }
 

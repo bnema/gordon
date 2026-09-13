@@ -1,6 +1,6 @@
 # Rollback
 
-Roll forward to a previous version when a deploy misbehaves. There is no historical rollback command in v2.50: rolling back means applying a manifest that references the previous tag (or re-pushing it) and deploying again.
+Roll forward to a previous version when a deploy misbehaves. There is no historical rollback command in v2.50: rolling back means applying and deploying a previous manifest or image reference. Redeploying a mutable tag (for example `latest`) does not guarantee the previous image bytes; keep immutable versioned tags.
 
 ## Roll Forward to a Previous Tag
 
@@ -12,7 +12,7 @@ gordon apps apply --file blog.toml --remote prod
 gordon apps deploy blog --remote prod
 ```
 
-For HTTP services without volumes, the previous (broken) container keeps serving until the replacement passes readiness, so the recovery itself is zero-downtime.
+A rollback deploy replaces services one at a time like any other deploy: a short service interruption is possible, and Gordon never runs two generations of the same service at the same time. If the replacement fails after the old container was removed, Gordon does not recreate it and does not promise automatic data rollback.
 
 ## Re-push the Previous Image as latest
 

@@ -50,6 +50,11 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil)
 
 	expectNetworkProvision(runtime, "app-blog", 1)
+	// The superseded generation is confirmed gone before the replacement is
+	// created: a deploy never overlaps two generations of one service.
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
@@ -68,7 +73,7 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -83,9 +88,10 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	step, ok := opStep(last, "service.web.replace")
 	require.True(t, ok)
 	assert.Equal(t, domain.AppStepFailed, step.State, "the service step must not claim success before traffic applied")
-	// The replaced container is retained: ACTIVE is published but the graph
-	// never accepted the new routing.
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
+	// The superseded container is gone: a rejected graph is reported as a
+	// failure of the new generation, never as a return to the old one.
+	runtime.AssertCalled(t, "RemoveContainer", mock.Anything, "c-old", false)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-new", mock.Anything)
 }
 
 // TestStop_TrafficFailureRecordsTerminalFailure proves a rejected graph

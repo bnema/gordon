@@ -161,6 +161,5 @@ Use `strict` for images designed to write only to mounted volumes and run withou
 - [Auth](./auth.md)
 - [Images](./images.md)
 - [Network Isolation](./network-isolation.md)
-- [Deploy](./deploy.md)
 - [Volumes](./volumes.md)
 - [Reference](./reference.md)

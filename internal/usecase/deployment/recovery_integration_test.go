@@ -96,11 +96,11 @@ func seedDesired(t *testing.T, ctx context.Context, store *appstate.Store, rev d
 	require.NoError(t, store.MaterializeApply(ctx, rev.App, intentID))
 }
 
-// TestInterruptedVolumeFailureLeavesOldGenerationInhibited proves the
+// TestVolumeReplacementFailureLeavesOldGenerationInhibited proves the
 // marker is written BEFORE a volume-owning replacement can write and is
 // not cleared when that replacement fails: the old generation must never
 // be restarted on top of possibly-newer data.
-func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
+func TestVolumeReplacementFailureLeavesOldGenerationInhibited(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	runtime := outmocks.NewMockContainerRuntime(t)
@@ -144,7 +144,7 @@ func TestInterruptedVolumeFailureLeavesOldGenerationInhibited(t *testing.T) {
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 500, nil },
+		func(context.Context, string, string) (int, error) { return 500, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 

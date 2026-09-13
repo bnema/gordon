@@ -105,6 +105,30 @@ func TestClientLifecycle_MutationsCarryKeys(t *testing.T) {
 	assert.NotEqual(t, keys[0], keys[1], "each mutation gets a fresh key")
 }
 
+// TestClientDeployApp_AcceptedRunningJournal proves the remote client accepts
+// the 202 running response: it decodes the journal and returns the key so the
+// caller can poll operations/by-key.
+func TestClientDeployApp_AcceptedRunningJournal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/apps/blog/deploy", r.URL.Path)
+		require.Equal(t, http.MethodPost, r.Method)
+		require.NotEmpty(t, r.Header.Get("Idempotency-Key"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{
+			Op: "op-run", App: "blog", Revision: "rev-b", Status: dto.AppStatusRunning,
+		})
+	}))
+	defer srv.Close()
+
+	resp, key, err := NewClient(srv.URL).DeployApp(context.Background(), "blog", dto.AppDeployRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	assert.Equal(t, "op-run", resp.Op)
+	assert.Equal(t, dto.AppStatusRunning, resp.Status)
+	assert.NotEmpty(t, key)
+}
+
 func TestClientDeployApp_ConflictDecodesJournal(t *testing.T) {
 	journal := dto.AppDeployResponse{
 		Op: "op-9", App: "blog", Revision: "rev-b", Outcome: "failed",

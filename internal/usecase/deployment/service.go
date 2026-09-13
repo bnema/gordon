@@ -103,6 +103,14 @@ type Service struct {
 	// the lock.
 	bindMu       sync.RWMutex
 	bindPolicies map[string]domain.AppBindPolicy
+	// liveMu guards liveOps. liveOps holds the operations this process
+	// owns between the StartDeploy claim and the end of ExecuteDeploy. It
+	// is in-memory only: a fresh Service (boot) starts empty and may
+	// reconcile every persisted non-terminal operation, while a
+	// foreground mutation must never finalize an operation a live
+	// goroutine still owns.
+	liveMu  sync.Mutex
+	liveOps map[string]struct{}
 }
 
 // NewService creates the deployment engine. All deps are required;
@@ -117,6 +125,43 @@ func NewService(deps Deps, log zerowrap.Logger) *Service {
 		coord:   newAppCoordinator(),
 		backoff: newRecoveryBackoff(time.Now),
 	}
+}
+
+// markOperationLive records that this process owns one operation from the
+// StartDeploy claim until ExecuteDeploy finishes. A live operation is the
+// single owner's in-flight work: a foreground reconciliation must not
+// finalize it, or the claim would be settled before the owner can execute it.
+func (s *Service) markOperationLive(app, op string) {
+	if app == "" || op == "" {
+		return
+	}
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	if s.liveOps == nil {
+		s.liveOps = make(map[string]struct{})
+	}
+	s.liveOps[liveOperationKey(app, op)] = struct{}{}
+}
+
+// clearOperationLive drops the live marker. It is called once ExecuteDeploy
+// has recorded its outcome or left the claim recoverable, so a later
+// reconciliation can converge the operation instead of leaving it in flight.
+func (s *Service) clearOperationLive(app, op string) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	delete(s.liveOps, liveOperationKey(app, op))
+}
+
+// operationLive reports whether this process still owns the operation.
+func (s *Service) operationLive(app, op string) bool {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	_, ok := s.liveOps[liveOperationKey(app, op)]
+	return ok
+}
+
+func liveOperationKey(app, op string) string {
+	return app + "\x00" + op
 }
 
 // WithGCBarrier wires the process-wide GC barrier. Every workload
@@ -258,7 +303,6 @@ type DeployResult struct {
 	Outcome         string
 	Services        map[string]ServiceResult
 	CleanupWarnings []CleanupWarning
-	Interrupted     []string
 	// Removed names services retired because the new revision no longer
 	// declares them.
 	Removed []string
@@ -279,12 +323,6 @@ type ServiceResult struct {
 	// publishes for the active record. Nil when the service declares
 	// no UDP interface.
 	UDPBackendBinds map[int]int
-	// Retire is the exact container ID to stop+remove AFTER the new
-	// effective state is published. Empty when nothing retires.
-	Retire string
-	// RetireGrace is the effective stop grace of the container named by
-	// Retire: the generation being stopped, never its replacement.
-	RetireGrace time.Duration
 	// CleanupWarnings are bounded leftovers of this service's terminal
 	// path: a candidate that could not be removed, or a backend claim
 	// that could not be released.
@@ -330,38 +368,21 @@ func newOpID() string {
 	return "op-" + string(buf[:])
 }
 
-// Preflight resolves a captured revision without any workload mutation:
-// image digests, secret presence, image-volume mapping, reservation
-// recheck, and resource preconditions. It records the pinned digest
-// table into the journal BEFORE any effect.
-func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, error) {
-	release, err := s.acquireAppContext(ctx, input.App)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer release()
-	pinned, op, _, err := s.preflightLocked(ctx, input)
-	return pinned, op, err
-}
-
-func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, bool, error) {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "Preflight",
-		"app":                 input.App,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	if err := s.deps.State.Recover(ctx); err != nil {
-		return nil, nil, false, fmt.Errorf("deployment: recover before preflight: %w", err)
-	}
+// claimDeploymentLocked is the first phase of a deploy: it resolves the
+// requested revision, enforces the targeted-deploy convergence rules, and
+// claims the request key, persisting the non-terminal journal. It performs
+// no image pull and no workload mutation, so a crash after it leaves a
+// durable claim that reconciliation can converge. owned is true only for the
+// single claimer of the key; a replay returns the stored journal instead.
+// The caller holds the app lock and has already recovered the store.
+func (s *Service) claimDeploymentLocked(ctx context.Context, input DeployInput) (domain.AppDesiredRevision, domain.AppOperation, bool, error) {
 	rev, err := s.resolveRevision(ctx, input)
 	if err != nil {
-		return nil, nil, false, err
+		return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
 	}
 	if input.Service != "" {
 		if err := s.checkConverged(ctx, input.App, input.Service, rev); err != nil {
-			return nil, nil, false, err
+			return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
 		}
 	}
 
@@ -374,26 +395,42 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 	}
 	op, owned, err := s.claimOperation(ctx, input.Op, op, []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}})
 	if err != nil {
-		return nil, nil, false, err
+		return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
 	}
-	if !owned {
-		// The key already answered this request: its journal is the
-		// result, and no effect may run again.
-		return nil, &op, true, replayError(op)
-	}
+	return rev, op, owned, nil
+}
 
-	pinned, err := s.preflightServices(ctx, input.App, rev, input.Service)
+// pinPreflightLocked is the second preflight phase: it runs the image
+// pull/pin and resource gates of an already claimed operation and records the
+// pinned table (or the terminal preflight failure) in the journal. The
+// caller holds the app lock and owns the claimed, non-terminal operation.
+func (s *Service) pinPreflightLocked(ctx context.Context, app, onlyService string, rev domain.AppDesiredRevision, op *domain.AppOperation) ([]pinnedService, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	pinned, err := s.preflightServices(ctx, app, rev, onlyService)
 	if err != nil {
 		op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepFailed, Error: err.Error()}
 		op.Outcome = domain.AppOutcomeFailed
-		if saveErr := s.deps.State.SaveOperation(ctx, op); saveErr != nil {
+		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 			log.Warn().Err(saveErr).Msg("deployment: failed to record preflight failure")
 		}
-		return nil, &op, false, err
+		return nil, err
 	}
 	op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepSucceeded}
+	// A resumed claim can carry the service-step plan of an earlier attempt,
+	// including candidates it recorded. Converge those candidates before
+	// replacing the plan: an unreconciled leftover may still be running, and
+	// the replacement this execution creates must never overlap it.
+	if err := s.convergeResumedCandidates(ctx, app, op, log); err != nil {
+		return nil, err
+	}
+	// Replace the persisted plan instead of appending: the preflight step plus
+	// one step per pinned service, so runServiceStep's index contract matches a
+	// normalized layout and no earlier step is overwritten or left pending.
+	plan := make([]domain.AppOperationStep, 1, len(pinned)+1)
+	plan[0] = op.Steps[0]
 	for _, p := range pinned {
-		op.Steps = append(op.Steps, domain.AppOperationStep{
+		plan = append(plan, domain.AppOperationStep{
 			ID:      "service." + p.name + ".replace",
 			State:   domain.AppStepPending,
 			Service: p.name,
@@ -401,11 +438,37 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 			Image:   p.runtimeImage,
 		})
 	}
-	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
-		return nil, nil, false, fmt.Errorf("deployment: persist pinned table: %w", err)
+	op.Steps = plan
+	if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
+		return nil, fmt.Errorf("deployment: persist pinned table: %w", err)
 	}
 	log.Info().Str("op", op.Op).Str("revision", rev.Revision).Int("services", len(pinned)).Msg("deployment: preflight passed")
-	return pinned, &op, false, nil
+	return pinned, nil
+}
+
+// convergeResumedCandidates converges any candidate an earlier attempt of a
+// resumed claim recorded, so replacing its service-step plan cannot drop a
+// leftover that may still be running. A fresh claim has only its preflight
+// step and does no work here.
+func (s *Service) convergeResumedCandidates(ctx context.Context, app string, op *domain.AppOperation, log zerowrap.Logger) error {
+	needsActive := false
+	for _, step := range op.Steps {
+		if reconcileNeedsContainer(step, false) {
+			needsActive = true
+			break
+		}
+	}
+	if !needsActive {
+		return nil
+	}
+	active, _, err := s.deps.State.LoadActive(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load active for resumed claim: %w", err)
+	}
+	if _, err := s.convergeInterruptedSteps(ctx, app, op, active, false, log); err != nil {
+		return err
+	}
+	return nil
 }
 
 // claimOperation is the single claim point before any mutation effect.
@@ -418,6 +481,17 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 // journal under a generated id.
 func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppOperation, steps []domain.AppOperationStep) (domain.AppOperation, bool, error) {
 	op.Steps = steps
+	// A journal is never opened while a different operation of this app is
+	// still unfinished: that predecessor must be reconciled first, or this
+	// claim would mask it and its leftover generation could stay untracked.
+	latest, found, err := s.deps.State.LoadLatestOperation(ctx, op.App)
+	if err != nil {
+		return domain.AppOperation{}, false, fmt.Errorf("deployment: load latest operation: %w", err)
+	}
+	if found && !latest.Terminal() && latest.Op != key {
+		return domain.AppOperation{}, false, fmt.Errorf(
+			"deployment: app %q has unfinished operation %s: %w", op.App, latest.Op, domain.ErrAppStateConflict)
+	}
 	if key == "" {
 		op.Op = newOpID()
 		if err := s.deps.State.SaveOperation(ctx, op); err != nil {

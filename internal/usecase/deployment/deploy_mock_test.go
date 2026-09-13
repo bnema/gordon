@@ -20,10 +20,49 @@ import (
 
 func mockDeps(t *testing.T) (*outmocks.MockAppState, *outmocks.MockContainerRuntime, *outmocks.MockImageResolver, *outmocks.MockSecretProvider) {
 	t.Helper()
-	return outmocks.NewMockAppState(t),
+	state := outmocks.NewMockAppState(t)
+	// Every app mutation reconciles an interrupted predecessor first. These
+	// tests exercise the mutation itself, so they see no interrupted
+	// operation; tests that seed one use their own expectation or a real
+	// store.
+	state.EXPECT().LoadLatestOperation(mock.Anything, mock.Anything).
+		Return(domain.AppOperation{}, false, nil).Maybe()
+	// ExecuteDeploy always reloads the claimed operation from the store by
+	// app/op identity. Mock-backed execution sees the freshly claimed
+	// non-terminal journal shape (a single pending preflight step) unless a
+	// test overrides it with expectStoredOperation.
+	state.EXPECT().LoadOperation(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, app, opID string) (domain.AppOperation, error) {
+			return domain.AppOperation{
+				Kind: "deploy", App: app, Op: opID,
+				Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+			}, nil
+		}).Maybe()
+	return state,
 		outmocks.NewMockContainerRuntime(t),
 		outmocks.NewMockImageResolver(t),
 		outmocks.NewMockSecretProvider(t)
+}
+
+// expectStoredOperation makes one store record authoritative for the next
+// ExecuteDeploy reload. The operation identity is echoed from the request so
+// an unkeyed claim matches too. It replaces the catch-all default installed
+// by mockDeps, letting a test prove that a terminal or mismatched store
+// record overrides a stale in-process journal.
+func expectStoredOperation(state *outmocks.MockAppState, op domain.AppOperation) {
+	kept := state.ExpectedCalls[:0]
+	for _, call := range state.ExpectedCalls {
+		if call.Method != "LoadOperation" {
+			kept = append(kept, call)
+		}
+	}
+	state.ExpectedCalls = kept
+	state.EXPECT().LoadOperation(mock.Anything, op.App, mock.Anything).
+		RunAndReturn(func(_ context.Context, app, opID string) (domain.AppOperation, error) {
+			op.App = app
+			op.Op = opID
+			return op, nil
+		})
 }
 
 func mockRevision() domain.AppDesiredRevision {
@@ -74,6 +113,11 @@ func TestDeploy_PreflightFailureReturnsJournaledOperation(t *testing.T) {
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil).Twice()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil).Once()
 	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("", assert.AnError).Once()
+	// The store record carries the revision the claim was started for.
+	expectStoredOperation(state, domain.AppOperation{
+		Kind: "deploy", App: "blog", InputRevision: rev.Revision,
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+	})
 
 	svc := deployment.NewService(deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets}, zerowrap.Default())
 	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
@@ -143,7 +187,7 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 		},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -189,7 +233,7 @@ func TestDeploy_Mockery_HTTPSuccessRecordsLoopbackBinds(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(_ context.Context, url string) (int, error) { probedURL = url; return 200, nil },
+		func(_ context.Context, url, _ string) (int, error) { probedURL = url; return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -202,11 +246,12 @@ func TestDeploy_Mockery_HTTPSuccessRecordsLoopbackBinds(t *testing.T) {
 	runtime.AssertNotCalled(t, "GetContainerNetworkInfo", mock.Anything, mock.Anything)
 }
 
-// TestDeploy_Mockery_HTTPRetiresOldAfterPublish proves retire-after-publish
-// ordering: the replaced container is stopped+removed only after the new
-// effective state is published (proxy already switched), and a retire
-// failure records a cleanup warning without flipping the outcome.
-func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
+// TestDeploy_Mockery_HTTPReplacesOldGenerationBeforePublish proves the
+// sequential ordering: the superseded container is stopped and removed
+// before the replacement is created, and ACTIVE names the replacement only
+// after it exists. A public HTTP service without volumes is replaced exactly
+// like every other service.
+func TestDeploy_Mockery_HTTPReplacesOldGenerationBeforePublish(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	rev := mockRevision()
@@ -221,7 +266,20 @@ func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
 	}, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	var replacedAt, createdAt, publishedAt int
+	var step int
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
+		step++
+		replacedAt = step
+		return nil
+	}).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, *domain.ContainerConfig) (*domain.Container, error) {
+		step++
+		createdAt = step
+		return &domain.Container{ID: "c-new", Name: "web"}, nil
+	}).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.MatchedBy(func(claims []domain.AppListenerReservation) bool {
@@ -233,20 +291,11 @@ func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
 			"web": {EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old"},
 		},
 	}, true, nil)
-	var publishedAt, retiredAt int
-	var step int
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, domain.AppActive) error {
 		step++
 		publishedAt = step
 		return nil
 	}).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
-		step++
-		retiredAt = step
-		return nil
-	}).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
-	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
 	// The superseded generation stops being recovery-inhibited only
 	// once the replacement is published.
@@ -256,7 +305,7 @@ func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -264,12 +313,16 @@ func TestDeploy_Mockery_HTTPRetiresOldAfterPublish(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "deployed", result.Services["web"].Result)
-	assert.Equal(t, "c-old", result.Services["web"].Retire)
-	assert.Greater(t, retiredAt, publishedAt, "retire runs after publication")
+	assert.Less(t, replacedAt, createdAt, "the superseded generation is gone before the replacement is created")
+	assert.Greater(t, publishedAt, createdAt, "ACTIVE is published after the replacement exists")
 	assert.Empty(t, result.CleanupWarnings)
 }
 
-func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
+// TestDeploy_Mockery_HTTPReadinessFailureLeavesNoOldGeneration proves a
+// failed replacement never falls back to the generation it already retired:
+// the superseded container stays gone, the unready candidate is removed, and
+// nothing is published in its place.
+func TestDeploy_Mockery_HTTPReadinessFailureLeavesNoOldGeneration(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	rev := mockRevision()
@@ -284,7 +337,11 @@ func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
 	}, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	// Replacement created + started; readiness fails fast.
+	// The superseded generation is retired before the replacement is created,
+	// then the replacement fails readiness fast.
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -301,7 +358,7 @@ func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 500, nil },
+		func(context.Context, string, string) (int, error) { return 500, nil },
 		func(context.Context, string) error { return errors.New("refused") },
 	))
 
@@ -312,12 +369,13 @@ func TestDeploy_Mockery_HTTPFailureKeepsOld(t *testing.T) {
 	assert.NotContains(t, result.Services["web"].Error, "logs:", "raw logs must never be embedded in the public error")
 	require.Len(t, result.Services["web"].Diagnostics, 1, "failure diagnostics are kept separately")
 	assert.Equal(t, "boom", result.Services["web"].Diagnostics[0])
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
-	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-old", false)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-new", mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
-func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
+func TestDeploy_Mockery_VolumeReplacementMarksUnsafe(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 
@@ -361,8 +419,15 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 	}, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	var order []string
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
+		order = append(order, "stop-old")
+		return nil
+	}).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).RunAndReturn(func(context.Context, string, bool) error {
+		order = append(order, "remove-old")
+		return nil
+	}).Once()
 	// The superseded writer's confirmed disappearance releases its claims.
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
 	expectNetworkProvision(runtime, "app-uuid-blog", 1)
@@ -371,7 +436,10 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(inhibition domain.AppRecoveryInhibition) bool {
 		return inhibition.App == "blog" && inhibition.Service == "web" &&
 			inhibition.ContainerID == "c-old" && inhibition.Reason == domain.AppInhibitReplacementPending
-	})).Return(nil).Once()
+	})).RunAndReturn(func(context.Context, domain.AppRecoveryInhibition) error {
+		order = append(order, "inhibit")
+		return nil
+	}).Once()
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
 	runtime.EXPECT().CreateVolume(mock.Anything, "gordon-blog--web--vol--d", mock.MatchedBy(func(labels map[string]string) bool {
 		return labels[domain.LabelApp] == "blog" &&
@@ -386,7 +454,10 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 		require.GreaterOrEqual(t, ownershipSaves, 1,
 			"ownership must be reserved before the runtime volume exists")
 	}).Return(nil).Once()
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, *domain.ContainerConfig) (*domain.Container, error) {
+		order = append(order, "create-new")
+		return &domain.Container{ID: "c-new", Name: "web"}, nil
+	}).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 9000, HostPort: 19000, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.MatchedBy(func(claims []domain.AppListenerReservation) bool {
@@ -411,7 +482,8 @@ func TestDeploy_Mockery_InterruptedVolumeMarksUnsafe(t *testing.T) {
 	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, []string{"web"}, result.Interrupted)
+	assert.Equal(t, []string{"inhibit", "stop-old", "remove-old", "create-new"}, order,
+		"the durable inhibition is written before the superseded writer can be stopped, and the writer is gone before the replacement can write")
 	assert.True(t, result.Services["web"].RestartUnsafe)
 	assert.True(t, restartUnsafeSaved, "the terminal ownership write must record the restart-unsafe service")
 	assert.GreaterOrEqual(t, ownershipSaves, 2, "the volume reservation and the terminal ownership write must both be durable")
@@ -639,7 +711,7 @@ func TestStart_RunningContainerRefreshesShiftedBinds(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 	result, err := svc.Start(ctx, "blog", "")

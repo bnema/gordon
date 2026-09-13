@@ -103,6 +103,11 @@ type AppSecretMetadataDTO struct {
 	Presence string `json:"presence"`
 }
 
+// AppStatusRunning is the wire status of an operation whose effects are
+// still executing in the background. A terminal operation reports its
+// persisted outcome as the status instead.
+const AppStatusRunning = "running"
+
 // AppDeployResponse reports deploy outcome with terminal results.
 // Effective and Retained are filled from current app state when the app
 // still exists; they are omitted when it does not.
@@ -110,6 +115,7 @@ type AppDeployResponse struct {
 	Op              string                         `json:"op"`
 	App             string                         `json:"app"`
 	Revision        string                         `json:"revision"`
+	Status          string                         `json:"status"`
 	Outcome         string                         `json:"outcome"`
 	Services        map[string]AppServiceResultDTO `json:"services"`
 	Steps           []AppStepDTO                   `json:"steps"`

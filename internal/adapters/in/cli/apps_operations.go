@@ -10,7 +10,7 @@ import (
 
 func newAppsOperationsCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "operations", Short: "Inspect app operation journals"}
-	cmd.AddCommand(newAppsOperationsShowCmd())
+	cmd.AddCommand(newAppsOperationsShowCmd(), newAppsOperationsWatchCmd())
 	return cmd
 }
 

@@ -41,7 +41,7 @@ func writeManifest(t *testing.T, content string) string {
 
 func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
 	plane := appPlane(t)
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, "x.toml", true, true, false)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "x.toml", true, true, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--dry-run")
 	assert.Contains(t, err.Error(), "--deploy")
@@ -49,7 +49,7 @@ func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
 
 func TestRunAppsApply_RequiresFile(t *testing.T) {
 	plane := appPlane(t)
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, "", false, false, false)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "", false, false, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--file")
 }
@@ -63,7 +63,7 @@ func TestRunAppsApply_JSONParity(t *testing.T) {
 	plane := appPlane(t)
 	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(want, nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
 		writeManifest(t, "[app]\nname = \"blog\"\n"), false, false, true))
 	var got dto.AppApplyResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
@@ -77,7 +77,7 @@ func TestRunAppsApply_ChainsAcceptedRevision(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
 		writeManifest(t, "x"), false, true, false))
 	assert.Contains(t, out.String(), "rev-b")
 }
@@ -89,7 +89,7 @@ func TestRunAppsApply_ChainedJSONIsOneDocument(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
 		writeManifest(t, "x"), false, true, true))
 	var got struct {
 		Apply  dto.AppApplyResponse  `json:"apply"`
@@ -204,7 +204,7 @@ func TestRunAppDeploy_OutcomeUnknownMentionsKey(t *testing.T) {
 	plane := appPlane(t)
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		nil, "key-abc", &remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/deploy", Err: errors.New("boom")}).Once()
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, false)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, &bytes.Buffer{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outcome-unknown")
 	assert.Contains(t, err.Error(), "key-abc")
@@ -223,7 +223,7 @@ func TestRunAppDeploy_ConflictRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, false)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, false)
 	require.Error(t, err, "conflict must retain failure semantics")
 	text := out.String()
 	assert.Contains(t, text, "web:")
@@ -246,7 +246,7 @@ func TestRunAppDeploy_ConflictJSONRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, true)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, true)
 	require.Error(t, err)
 	var got dto.AppDeployResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))

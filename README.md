@@ -157,7 +157,7 @@ gordon apps deploy blog --remote prod
 - Private Docker/Podman registry on your VPS
 - Declarative apps: one TOML file per app, explicit apply then deploy
 - Domain-to-container routing through a smart TCP edge reverse proxy
-- HTTP zero-downtime updates (old container serves until replacement passes readiness)
+- Sequential service replacement (withdraw traffic, replace one generation, verify readiness, republish)
 - Remote CLI management (daemon is the sole writer)
 - Declarative per-service volumes, retained across lifecycle operations
 - Per-service secrets in pass, app-wide public env in the manifest

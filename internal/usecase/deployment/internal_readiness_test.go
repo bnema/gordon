@@ -327,7 +327,7 @@ func TestWaitServiceReady_InternalUsesNetworkPath(t *testing.T) {
 				assert.Equal(t, domain.AppPrivateNetworkName("gordon", "inc-1"), request.Network)
 				return domain.ContainerNetworkProbeResult{Ready: true, Status: 200}, nil
 			},
-			httpGet: func(context.Context, string) (int, error) {
+			httpGet: func(context.Context, string, string) (int, error) {
 				loopbackCalls++
 				return 200, nil
 			},
@@ -346,7 +346,7 @@ func TestWaitServiceReady_PublicKeepsLoopback(t *testing.T) {
 	loopbackCalls := 0
 	service := NewService(Deps{}, zerowrap.Default()).
 		WithProbeDeps(ProbeDeps{
-			httpGet: func(context.Context, string) (int, error) {
+			httpGet: func(context.Context, string, string) (int, error) {
 				loopbackCalls++
 				return 200, nil
 			},

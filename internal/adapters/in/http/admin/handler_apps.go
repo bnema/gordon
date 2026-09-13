@@ -309,8 +309,15 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 		return
 	}
 	status := http.StatusOK
-	if err != nil {
+	switch {
+	case err != nil:
 		status = http.StatusConflict
+	case op != nil && !op.Terminal():
+		// Newly owned: the claim is durable and its effects run on the
+		// daemon context, so answer 202 with the running operation and let
+		// the client observe completion through operations/by-key. A
+		// terminal replay instead answers 200 with the stored outcome.
+		status = http.StatusAccepted
 	}
 	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
@@ -498,6 +505,13 @@ func (h *Handler) sendAppError(w http.ResponseWriter, status int, code, message,
 }
 
 func isMappedPreflightError(err error, op *domain.AppOperation) bool {
+	// A non-terminal journal is a running replay, never a preflight
+	// failure: its stored operation is the response regardless of which
+	// steps have started, so the mapped error envelope must not replace
+	// it. Only an absent or terminal journal can map a preflight error.
+	if op != nil && !op.Terminal() {
+		return false
+	}
 	for _, step := range op.Steps {
 		if strings.HasPrefix(step.ID, "service.") {
 			return false
@@ -561,6 +575,12 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 	resp.Op = op.Op
 	resp.Revision = op.InputRevision
 	resp.Outcome = op.Outcome
+	// A non-terminal operation is still running; a terminal one reports
+	// its persisted outcome as the stable status.
+	resp.Status = dto.AppStatusRunning
+	if op.Terminal() {
+		resp.Status = op.Outcome
+	}
 	resp.Services = map[string]dto.AppServiceResultDTO{}
 	for _, step := range op.Steps {
 		service, ok := strings.CutPrefix(step.ID, "service.")

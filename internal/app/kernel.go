@@ -29,7 +29,12 @@ type Kernel struct {
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
 	appSvc          in.AppService
-	cleanup         func()
+	// appAdmin is the daemon-owned app lifecycle (when the full wiring is
+	// available). Close cancels and joins its in-flight background deploy
+	// executions before any other kernel resource is torn down.
+	appAdmin appAdministration
+	log      zerowrap.Logger
+	cleanup  func()
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -79,7 +84,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			cleanup()
 		}
 
-		return &Kernel{
+		kernel := &Kernel{
 			authEnabled:     cfg.Auth.Enabled,
 			configSvc:       svc.configSvc,
 			secretSvc:       svc.secretSvc,
@@ -92,8 +97,15 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			volumeSvc:       svc.volumeSvc,
 			publicTLSSvc:    svc.publicTLSSvc,
 			appSvc:          svc.appSvc,
+			log:             log,
 			cleanup:         wrappedCleanup,
-		}, nil
+		}
+		// A nil *AppServiceImpl must not be stored in the interface: the
+		// interface would be non-nil and Close would call it.
+		if svc.appSvcImpl != nil {
+			kernel.appAdmin = svc.appSvcImpl
+		}
+		return kernel, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
 	}
@@ -116,6 +128,7 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		authEnabled: cfg.Auth.Enabled,
 		configSvc:   configSvc,
 		secretSvc:   secretSvc,
+		log:         log,
 		cleanup:     cleanup,
 	}, nil
 }
@@ -124,11 +137,26 @@ func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
 	return zerowrap.New(zerowrap.Config{Level: "disabled", Output: io.Discard}), func() {}, nil
 }
 
+// Close tears the kernel down. It first cancels and joins daemon-owned app
+// administration on a bounded context, so a background deploy execution is
+// never torn down mid-flight alongside the state and runtime it uses. When
+// that quiescence times out the remaining cleanup is skipped and the error is
+// returned: an unfinished execution may still be writing to state.
 func (k *Kernel) Close() error {
-	if k == nil || k.cleanup == nil {
+	if k == nil {
 		return nil
 	}
-	k.cleanup()
+	if k.appAdmin != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := quiesceAppAdministration(ctx, k.appAdmin, k.log)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	if k.cleanup != nil {
+		k.cleanup()
+	}
 	return nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
@@ -50,6 +51,32 @@ func appsRequest(t *testing.T, handler *Handler, method, target string, body any
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	return rec
+}
+
+// appsServerDo sends a request through a test server backed by the apps
+// handler and returns the real HTTP status code and body. The scopes are
+// injected by newScopedTestServer because the server, not the client, owns
+// the request context.
+func appsServerDo(t *testing.T, srv *httptest.Server, method, target string, body any) (int, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequest(method, srv.URL+target, reader)
+	require.NoError(t, err)
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", "test-operation-key")
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, raw
 }
 
 const validAppManifest = `
@@ -157,6 +184,198 @@ func TestHandler_AppDeploy_MapsCleanupWarnings(t *testing.T) {
 	assert.Equal(t, "web", resp.CleanupWarnings[0].Service)
 	assert.Equal(t, "ctr-old", resp.CleanupWarnings[0].Leftover)
 	assert.Equal(t, "remove: still present", resp.CleanupWarnings[0].Detail)
+}
+
+// TestHandler_AppDeploy_RunningReturns202 proves a newly owned deploy whose
+// effects are still executing answers 202 Accepted with the durable
+// operation identity and a stable running status, so the client can recover
+// completion through GET operations/by-key. The claim and its journal are
+// already persisted when the handler answers.
+func TestHandler_AppDeploy_RunningReturns202(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	running := &domain.AppOperation{
+		Op: "op-run", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Steps: []domain.AppOperationStep{
+			{ID: "preflight", State: domain.AppStepSucceeded},
+			{ID: "service.web.replace", State: domain.AppStepPending},
+		},
+	}
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, nil).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusAccepted, status)
+
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, "op-run", resp.Op)
+	assert.Equal(t, "running", resp.Status)
+	assert.Empty(t, resp.Outcome, "a running operation has no terminal outcome")
+	require.Contains(t, resp.Services, "web")
+	assert.Equal(t, "pending", resp.Services["web"].Result)
+}
+
+// TestHandler_AppDeploy_TerminalReplayReturnsOK proves a duplicate idempotency
+// key whose stored operation already reached a successful terminal outcome
+// replays with 200 and the stored status instead of 202.
+func TestHandler_AppDeploy_TerminalReplayReturnsOK(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	terminal := &domain.AppOperation{
+		Op: "op-done", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Outcome: domain.AppOutcomeSuccess,
+		Steps:   []domain.AppOperationStep{{ID: "service.web.replace", State: domain.AppStepSucceeded}},
+	}
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(terminal, nil).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusOK, status)
+
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, "op-done", resp.Op)
+	assert.Equal(t, "success", resp.Status)
+	assert.Equal(t, "success", resp.Outcome)
+}
+
+// TestHandler_AppDeploy_TerminalFailureReplayIsVisible proves a replay of a
+// failed operation keeps its conflict mapping while still surfacing the
+// stored failure and per-service result, never a 202.
+func TestHandler_AppDeploy_TerminalFailureReplayIsVisible(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	failed := &domain.AppOperation{
+		Op: "op-fail", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Outcome: domain.AppOutcomeFailed,
+		Steps: []domain.AppOperationStep{{
+			ID: "service.web.replace", State: domain.AppStepFailed, Error: "boom",
+		}},
+	}
+	replayErr := fmt.Errorf("deployment: operation op-fail previously ended with outcome failed: %w", domain.ErrAppStateConflict)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(failed, replayErr).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusConflict, status)
+
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, "op-fail", resp.Op)
+	assert.Equal(t, "failed", resp.Status)
+	assert.Equal(t, "failed", resp.Outcome)
+	require.Contains(t, resp.Services, "web")
+	assert.Equal(t, "failed", resp.Services["web"].Result)
+	assert.Equal(t, "boom", resp.Services["web"].Error)
+}
+
+// assertRunningReplayJournal pins the replay contract shared by a running
+// replay before and after any service step has started: 409, the operation
+// journal DTO with a running status and no terminal outcome, and never the
+// mapped preflight error envelope. The top-level key set is asserted so both
+// cases are proven to share one wire shape.
+func assertRunningReplayJournal(t *testing.T, status int, body []byte, opID, lastStep string) {
+	t.Helper()
+	require.Equal(t, http.StatusConflict, status)
+
+	var shape map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body, &shape))
+	_, hasError := shape["error"]
+	assert.False(t, hasError, "a running replay must not degrade to the preflight error envelope")
+	keys := make([]string, 0, len(shape))
+	for key := range shape {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	assert.Equal(t,
+		[]string{"app", "effective", "op", "outcome", "retained", "revision", "services", "status", "steps"},
+		keys, "a running replay always returns the operation journal shape")
+
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, opID, resp.Op)
+	assert.Equal(t, "running", resp.Status)
+	assert.Empty(t, resp.Outcome, "a running operation has no terminal outcome")
+	found := false
+	for _, step := range resp.Steps {
+		if step.ID == lastStep {
+			found = true
+			assert.Equal(t, domain.AppStepPending, step.State)
+		}
+	}
+	assert.True(t, found, "the journal must expose step %q", lastStep)
+}
+
+// TestHandler_AppDeploy_RunningReplayBeforeServiceSteps proves a same-key
+// replay of an operation still in flight answers 409 with the stored journal
+// even before any service step has started. A non-terminal claim is a running
+// journal, not a preflight failure, so the mapped error envelope never
+// replaces it.
+func TestHandler_AppDeploy_RunningReplayBeforeServiceSteps(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	running := &domain.AppOperation{
+		Op: "op-run-pre", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+	}
+	replayErr := fmt.Errorf("deployment: operation op-run-pre has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+
+	assertRunningReplayJournal(t, status, body, "op-run-pre", "preflight")
+}
+
+// TestHandler_AppDeploy_RunningReplayAfterServiceSteps is the after-steps
+// twin: the same running replay, now with a pending service step, must answer
+// the identical 409 journal shape. Only the journal contents may differ from
+// the before-steps case, never the envelope.
+func TestHandler_AppDeploy_RunningReplayAfterServiceSteps(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	running := &domain.AppOperation{
+		Op: "op-run-post", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Steps: []domain.AppOperationStep{
+			{ID: "preflight", State: domain.AppStepSucceeded},
+			{ID: "service.web.replace", State: domain.AppStepPending},
+		},
+	}
+	replayErr := fmt.Errorf("deployment: operation op-run-post has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+
+	assertRunningReplayJournal(t, status, body, "op-run-post", "service.web.replace")
+}
+
+// TestHandler_AppDeploy_RejectsMissingIdempotencyKey keeps the request
+// validation contract: a deploy without a valid key never reaches the
+// service.
+func TestHandler_AppDeploy_RejectsMissingIdempotencyKey(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/admin/apps/blog/deploy", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestHandler_AppList_RequiresScope(t *testing.T) {

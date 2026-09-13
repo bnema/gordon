@@ -95,10 +95,16 @@ func renderAppOpConflict(out io.Writer, op, app, key string, err error, jsonOut 
 	} else if rerr := renderAppDeployResponse(out, &conflict.Response); rerr != nil {
 		return rerr, true
 	}
+	return appOpConflictMessage(op, app, key, conflict), true
+}
+
+// appOpConflictMessage is the by-key recovery guidance shared by the human
+// and JSON renderings of a journaled 409 conflict.
+func appOpConflictMessage(op, app, key string, conflict *remote.AppOpConflictError) error {
 	return fmt.Errorf(
 		"%s of %s did not succeed (outcome %s, op %s); journal rendered above; run the by-key lookup "+
 			"gordon apps operations show %s --key %s before retrying with the same key: %w",
-		op, app, conflict.Response.Outcome, conflict.Response.Op, app, key, err), true
+		op, app, conflict.Response.Outcome, conflict.Response.Op, app, key, conflict)
 }
 
 // newAppsCmd creates the `apps` parent command.
@@ -156,7 +162,7 @@ deploy may fail after the apply succeeded.`,
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppsApply(cmd.Context(), plane, os.Stdin, cmd.OutOrStdout(), file, dryRun, chainDeploy, jsonOut)
+			return runAppsApply(cmd.Context(), plane, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), file, dryRun, chainDeploy, jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&file, "file", "", "Path to the app manifest file (required)")
@@ -166,7 +172,7 @@ deploy may fail after the apply succeeded.`,
 	return cmd
 }
 
-func runAppsApply(ctx context.Context, plane ControlPlane, _ io.Reader, out io.Writer, file string, dryRun, chainDeploy, jsonOut bool) error {
+func runAppsApply(ctx context.Context, plane ControlPlane, _ io.Reader, out, errOut io.Writer, file string, dryRun, chainDeploy, jsonOut bool) error {
 	if dryRun && chainDeploy {
 		return fmt.Errorf("cannot combine --dry-run with --deploy: dry-run persists nothing to deploy")
 	}
@@ -190,27 +196,84 @@ func runAppsApply(ctx context.Context, plane ControlPlane, _ io.Reader, out io.W
 		}
 		return renderAppApply(out, resp, dryRun)
 	}
-	if !jsonOut {
-		if err := renderAppApply(out, resp, dryRun); err != nil {
-			return err
-		}
-	}
-	deployResp, key, deployErr := plane.DeployApp(ctx, resp.App, dto.AppDeployRequest{Revision: resp.ResultingRevision})
-	if deployErr != nil {
-		if conflictErr, ok := renderAppOpConflict(out, "deploy", resp.App, key, deployErr, jsonOut); ok {
-			return fmt.Errorf("apply of %s succeeded (%s); %w",
-				resp.App, resp.ResultingRevision, conflictErr)
-		}
-		return fmt.Errorf("apply of %s succeeded (%s); %w",
-			resp.App, resp.ResultingRevision, appMutationError("deploy", resp.App, key, deployErr))
-	}
 	if jsonOut {
-		return writeJSON(out, struct {
-			Apply  *dto.AppApplyResponse  `json:"apply"`
-			Deploy *dto.AppDeployResponse `json:"deploy"`
-		}{Apply: resp, Deploy: deployResp})
+		return runAppsApplyDeployJSON(ctx, plane, resp, out, errOut)
+	}
+	if err := renderAppApply(out, resp, dryRun); err != nil {
+		return err
+	}
+	return runAppsApplyDeploy(ctx, plane, resp, out, errOut)
+}
+
+// appApplyDeployDocument is the single machine-readable apply+deploy result.
+// The apply is always included so a failed chained deploy never hides that
+// the persist itself succeeded.
+type appApplyDeployDocument struct {
+	Apply  *dto.AppApplyResponse  `json:"apply"`
+	Deploy *dto.AppDeployResponse `json:"deploy"`
+}
+
+// runAppsApplyDeploy follows a chained deploy in human mode. The apply outcome
+// is already rendered, then an accepted (202 running) deploy reuses the shared
+// by-key watch: progress only on change, terminal journal, and Ctrl-C guidance
+// that the daemon-side operation keeps running. A terminal partial/failed
+// outcome exits nonzero without hiding the successful apply.
+func runAppsApplyDeploy(ctx context.Context, plane ControlPlane, apply *dto.AppApplyResponse, out, errOut io.Writer) error {
+	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision})
+	if err != nil {
+		if conflictErr, ok := renderAppOpConflict(out, "deploy", apply.App, key, err, false); ok {
+			return applySucceededError(apply, conflictErr)
+		}
+		return applySucceededError(apply, appMutationError("deploy", apply.App, key, err))
+	}
+	if deployResp.Status == dto.AppStatusRunning {
+		if werr := watchOperation(ctx, plane, apply.App, key, deployResp, out, errOut, false); werr != nil {
+			return applySucceededError(apply, werr)
+		}
+		return nil
 	}
 	return renderAppDeployResponse(out, deployResp)
+}
+
+// runAppsApplyDeployJSON follows a chained deploy and writes exactly one final
+// {apply,deploy} document once the operation is terminal. The mutation is
+// issued once and observed through the existing by-key endpoint; no initial
+// running document is emitted, and progress, transient warnings, and Ctrl-C
+// resume guidance go to errOut so stdout stays machine-readable.
+func runAppsApplyDeployJSON(ctx context.Context, plane ControlPlane, apply *dto.AppApplyResponse, out, errOut io.Writer) error {
+	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision})
+	if err != nil {
+		var conflict *remote.AppOpConflictError
+		if errors.As(err, &conflict) {
+			if werr := writeJSON(out, appApplyDeployDocument{Apply: apply, Deploy: &conflict.Response}); werr != nil {
+				return werr
+			}
+			return applySucceededError(apply, appOpConflictMessage("deploy", apply.App, key, conflict))
+		}
+		return applySucceededError(apply, appMutationError("deploy", apply.App, key, err))
+	}
+	terminal := deployResp
+	if deployResp.Status == dto.AppStatusRunning {
+		op, werr := awaitOperation(ctx, plane, apply.App, key, deployResp, errOut)
+		if werr != nil {
+			return applySucceededError(apply, werr)
+		}
+		terminal = op
+	}
+	if werr := writeJSON(out, appApplyDeployDocument{Apply: apply, Deploy: terminal}); werr != nil {
+		return werr
+	}
+	if terminal.Outcome == domain.AppOutcomeSuccess {
+		return nil
+	}
+	return applySucceededError(apply, &OperationFailedError{App: apply.App, Op: terminal.Op, Outcome: terminal.Outcome})
+}
+
+// applySucceededError preserves the apply outcome in every chained-deploy
+// failure path: the desired state was already persisted, so the caller must
+// not be told the apply failed.
+func applySucceededError(apply *dto.AppApplyResponse, cause error) error {
+	return fmt.Errorf("apply of %s succeeded (%s); %w", apply.App, apply.ResultingRevision, cause)
 }
 
 func renderAppApply(out io.Writer, resp *dto.AppApplyResponse, dryRun bool) error {
@@ -719,7 +782,7 @@ func newAppDeployCmd() *cobra.Command {
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), jsonOut)
+			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&revision, "revision", "", "Revision to activate (default: desired head)")
@@ -728,13 +791,19 @@ func newAppDeployCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out io.Writer, jsonOut bool) error {
+// runAppDeploy issues one deploy mutation and, when the daemon answers 202
+// with a running journal, polls the existing by-key endpoint to terminal
+// rather than reissuing the mutation or hiding the outcome.
+func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out, errOut io.Writer, jsonOut bool) error {
 	resp, key, err := plane.DeployApp(ctx, app, dto.AppDeployRequest{Revision: revision, Service: service})
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "deploy", app, key, err, jsonOut); ok {
 			return conflictErr
 		}
 		return appMutationError("deploy", app, key, err)
+	}
+	if resp.Status == dto.AppStatusRunning {
+		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)
 	}
 	if jsonOut {
 		return writeJSON(out, resp)

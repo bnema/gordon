@@ -21,49 +21,225 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. HTTP-only services whose interfaces are all public,
-// with no volumes and no binds, keep the old container serving until the
-// replacement passes readiness, then switch with a bounded drain and
-// retire the old container by exact ID. TCP/UDP, any internal HTTP
-// interface, and bind- or volume-owning services use replacement with
-// interruption. Volumes are never deleted: no RemoveVolume call, no
+// sorted name order. Every service is replaced sequentially — withdraw
+// traffic, retire the superseded container, start the replacement and wait
+// for its readiness probe — so a deployment may briefly interrupt the
+// service, and two Gordon-managed generations of one service never run at
+// the same time. Volumes are never deleted: no RemoveVolume call, no
 // volume-deletion flags on container removal.
+//
+// It is the synchronous composition of the two engine phases: StartDeploy
+// claims the key and journals the operation, then ExecuteDeploy runs the
+// effects for the owner only.
 func (s *Service) Deploy(ctx context.Context, input DeployInput) (*DeployResult, error) {
-	release, err := s.acquireAppContext(ctx, input.App)
+	started, err := s.StartDeploy(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if !started.Owned {
+		// The key already answered this request: its stored journal is the
+		// result and no workload is touched again.
+		return journaledOrNil(input, &started.Claim.Journal, started.ReplayError())
+	}
+	return s.ExecuteDeploy(ctx, started.Claim)
+}
+
+// DeployClaim is the durable identity of one started deploy operation. It is
+// the hand-off between the two phases: StartDeploy returns it and
+// ExecuteDeploy consumes it. App and Op are the durable identity, so a
+// caller that reconstructs the claim from them alone (for example after a
+// restart, with no in-process state) leaves Journal and Resolved empty and
+// ExecuteDeploy loads and resolves both from the store.
+type DeployClaim struct {
+	App      string
+	Op       string
+	Service  string
+	Revision string
+	// Resolved is the revision StartDeploy resolved for this claim. Empty
+	// when the claim was reconstructed from identity alone.
+	Resolved domain.AppDesiredRevision
+	// Journal is the claimed operation held in process. Its Op is empty when
+	// the claim was reconstructed from identity alone.
+	Journal domain.AppOperation
+}
+
+// StartDeployResult reports whether this caller owns the claimed operation.
+// Owned is true only for the single caller that claimed Op. Every idempotent
+// replay (the same key already answered) reports Owned false, and the stored
+// journal in Claim.Journal is the result. Only an owner may pass the claim to
+// ExecuteDeploy.
+type StartDeployResult struct {
+	Claim DeployClaim
+	Owned bool
+}
+
+// ReplayError is the explicit disposition of a claim this caller does not
+// own: nil for a terminal success, and a conflict for an in-flight,
+// interrupted, or failed operation, so a replay is never mistaken for a
+// second execution. It is nil for an owned operation.
+func (r StartDeployResult) ReplayError() error {
+	if r.Owned {
+		return nil
+	}
+	return replayError(r.Claim.Journal)
+}
+
+// StartDeploy performs the first phase of a deploy. Under the app lock it
+// converges any interrupted predecessor, resolves the request to a revision
+// and runs the targeted-deploy convergence checks, atomically claims the
+// request key, and persists the non-terminal journal. It performs no image
+// pull, pinning, or workload mutation, so a crash right after it leaves a
+// durable claim that reconciliation can converge.
+//
+// The returned claim distinguishes the newly owned operation (Owned true)
+// from an idempotent replay (Owned false): the same key is never handed to
+// two owners, and a replay never executes effects again.
+func (s *Service) StartDeploy(ctx context.Context, input DeployInput) (*StartDeployResult, error) {
+	// Planning and claiming acquire no runtime resource, so StartDeploy takes
+	// only the per-app coordinator. ExecuteDeploy takes the GC shared lease
+	// across resource acquisition and publication, where it is required.
+	release, err := s.coord.acquire(ctx, input.App)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	return s.deployLocked(ctx, input)
+	return s.startDeployLocked(ctx, input)
 }
 
-func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployResult, error) {
+func (s *Service) startDeployLocked(ctx context.Context, input DeployInput) (*StartDeployResult, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "Deploy",
+		zerowrap.FieldUseCase: "StartDeploy",
 		"app":                 input.App,
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	pinned, op, replayed, err := s.preflightLocked(ctx, input)
-	if replayed || err != nil {
-		// The key already answered this request: its stored journal is
-		// the result and no workload is touched again. A failed preflight
-		// returns the journal together with its error.
-		return journaledOrNil(input, op, err)
+	if err := s.deps.State.Recover(ctx); err != nil {
+		return nil, fmt.Errorf("deployment: recover before deploy: %w", err)
+	}
+	// A mutation of this app never starts on top of an interrupted one: its
+	// never-published candidates must be gone before this mutation creates a
+	// generation of the same service. ACTIVE is materialized first, so the
+	// published generation cannot be mistaken for a leftover.
+	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
+		return nil, err
+	}
+	rev, op, owned, err := s.claimDeploymentLocked(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if owned {
+		// The claimed operation is now live in this process. It is
+		// registered before the caller releases the coordinator, so a
+		// foreground mutation that takes the lock in the gap before
+		// ExecuteDeploy cannot reconcile the claim away.
+		s.markOperationLive(input.App, op.Op)
+	} else {
+		log.Info().Str("op", op.Op).Msg("deployment: replayed an already claimed operation")
+	}
+	return &StartDeployResult{
+		Claim: DeployClaim{
+			App: input.App, Op: op.Op, Service: input.Service, Revision: input.Revision,
+			Resolved: rev, Journal: op,
+		},
+		Owned: owned,
+	}, nil
+}
+
+// ExecuteDeploy performs the second phase of a deploy: it reacquires the app
+// lock, loads and verifies the claimed journal by app/op identity, runs the
+// image pull/pin and the sequential replacement, and records the terminal
+// outcome. A claim that is already terminal, or that does not match its
+// identity, is never executed: it replays its stored outcome instead. An
+// operation that stops mid-execution (shutdown or cancellation) leaves its
+// non-terminal journal behind for reconciliation, so it can never run twice.
+//
+// The operation stays live until this returns: the store record, not the
+// in-process claim, is what executes, and the live marker is cleared only
+// after the outcome was recorded or a recoverable non-terminal claim was
+// left behind, while the app lock is still held.
+func (s *Service) ExecuteDeploy(ctx context.Context, claim DeployClaim) (*DeployResult, error) {
+	release, err := s.acquireAppContext(ctx, claim.App)
+	if err != nil {
+		// The claim is left as persisted: recoverable, but no longer owned
+		// here, so a later reconciliation can converge it.
+		s.clearOperationLive(claim.App, claim.Op)
+		return nil, err
+	}
+	defer release()
+	// Registered after release, so it runs first: the marker is dropped
+	// before the app lock is released, and never while a live goroutine may
+	// still persist state.
+	defer s.clearOperationLive(claim.App, claim.Op)
+	return s.executeLocked(ctx, claim)
+}
+
+// AbandonDeploy settles a claim this process owns but will never execute, such
+// as when daemon shutdown races the hand-off between StartDeploy and
+// ExecuteDeploy. It drops the in-process live marker and converges the still
+// non-terminal journal as an interrupted operation, so no durable claim stays
+// marked live forever and a later reconciliation reads a terminal outcome
+// instead of a permanently in-flight key. It takes the app lock but performs
+// no workload effect.
+func (s *Service) AbandonDeploy(ctx context.Context, claim DeployClaim) error {
+	if claim.App == "" || claim.Op == "" {
+		return fmt.Errorf("deployment: abandon requires an app and operation identity: %w", domain.ErrAppStateConflict)
+	}
+	// The marker is dropped before any fallible step: even if convergence
+	// fails, the claim is no longer owned here, so a later reconciliation
+	// (foreground or boot) can converge it instead of skipping it as live.
+	s.clearOperationLive(claim.App, claim.Op)
+	release, err := s.coord.acquire(ctx, claim.App)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return s.reconcileInterruptedDeploy(ctx, claim.App)
+}
+
+// executeLocked runs the claimed, non-terminal operation. The caller holds
+// the app lock. Every failure that happens before a terminal outcome is
+// recorded (load active, revision, service step, traffic) leaves the journal
+// with its step state, never a silent success.
+func (s *Service) executeLocked(ctx context.Context, claim DeployClaim) (*DeployResult, error) {
+	input := DeployInput{App: claim.App, Revision: claim.Revision, Service: claim.Service}
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ExecuteDeploy",
+		"app":                 claim.App,
+		"op":                  claim.Op,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	op, err := s.loadClaim(ctx, claim)
+	if err != nil {
+		return nil, err
+	}
+	if op.Terminal() {
+		// The claim was finalized between the phases: never execute a settled
+		// key, replay its stored outcome instead.
+		return journaledDeployResult(input, &op), replayError(op)
+	}
+	// The claimed revision is authoritative for the whole execution: it was
+	// resolved when the key was claimed and is what the journal records, so a
+	// desired-state change between the two phases must never redirect this
+	// operation to a different revision than the one it pinned.
+	rev, err := s.claimRevision(ctx, claim, op)
+	if err != nil {
+		s.failOperation(ctx, &op, err, "error")
+		return journaledDeployResult(input, &op), err
+	}
+	pinned, err := s.pinPreflightLocked(ctx, input.App, input.Service, rev, &op)
+	if err != nil {
+		return journaledDeployResult(input, &op), err
 	}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].name < pinned[j].name })
 
 	active, _, err := s.deps.State.LoadActive(ctx, input.App)
 	if err != nil {
 		loadErr := fmt.Errorf("deployment: load active: %w", err)
-		s.failOperation(ctx, op, loadErr, "error")
-		return journaledDeployResult(input, op), loadErr
-	}
-	rev, err := s.resolveRevision(ctx, input)
-	if err != nil {
-		s.failOperation(ctx, op, err, "error")
-		return journaledDeployResult(input, op), err
+		s.failOperation(ctx, &op, loadErr, "error")
+		return journaledDeployResult(input, &op), loadErr
 	}
 
 	result := &DeployResult{
@@ -75,29 +251,61 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	// A targeted deploy is intentionally a partial plan: services omitted
 	// from pinned remain active. Full deploys reconcile actual removals.
 	if input.Service == "" {
-		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
+		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, &op, result, log); err != nil {
 			return result, err
 		}
 	}
 	for i, p := range pinned {
-		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
+		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, &op, active, result, log); err != nil {
 			return result, err
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
 	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	result.CleanupWarnings = collectCleanupWarnings(result.Services)
-	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+	if saveErr := s.deps.State.SaveOperation(ctx, op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
 	}
 	return result, nil
 }
 
-// runServiceStep executes one pinned service in the journal: replace,
-// publish ACTIVE, then cutover traffic and retire the replaced container.
-// The step is recorded as succeeded only after the runtime effect, the
-// ACTIVE publication, and the traffic apply all succeeded, so a journaled
-// success is never ahead of what is routed.
+// loadClaim verifies the claimed journal by app/op identity. The store is
+// authoritative: the operation is always reloaded by app/op ID, so a stale
+// in-process journal can never be executed (for example when another actor
+// finalized the key between the claim and execution). A journal that does
+// not match the identity, or is not a deploy, is refused.
+func (s *Service) loadClaim(ctx context.Context, claim DeployClaim) (domain.AppOperation, error) {
+	if claim.App == "" || claim.Op == "" {
+		return domain.AppOperation{}, fmt.Errorf("deployment: execute requires an app and operation identity: %w", domain.ErrAppStateConflict)
+	}
+	op, err := s.deps.State.LoadOperation(ctx, claim.App, claim.Op)
+	if err != nil {
+		return domain.AppOperation{}, fmt.Errorf("deployment: load claimed operation %q: %w", claim.Op, err)
+	}
+	if op.App != claim.App || op.Op != claim.Op {
+		return domain.AppOperation{}, fmt.Errorf("deployment: claim does not identify app %q operation %q: %w", claim.App, claim.Op, domain.ErrAppStateConflict)
+	}
+	if op.Kind != "deploy" {
+		return domain.AppOperation{}, fmt.Errorf("deployment: operation %q is %q, not a deploy: %w", claim.Op, op.Kind, domain.ErrAppStateConflict)
+	}
+	return op, nil
+}
+
+// claimRevision returns the revision StartDeploy captured. A claim
+// reconstructed from identity alone resolves the revision its journal
+// recorded, so a resumed execution pins the revision it was started for.
+func (s *Service) claimRevision(ctx context.Context, claim DeployClaim, op domain.AppOperation) (domain.AppDesiredRevision, error) {
+	if claim.Resolved.Revision != "" {
+		return claim.Resolved, nil
+	}
+	return s.resolveRevision(ctx, DeployInput{App: claim.App, Revision: op.InputRevision, Service: claim.Service})
+}
+
+// runServiceStep executes one pinned service in the journal: replace it,
+// publish its ACTIVE entry, then publish traffic for the new container. The
+// step is recorded as succeeded only after the runtime effect, the ACTIVE
+// publication, and the traffic apply all succeeded, so a journaled success
+// is never ahead of what is routed.
 func (s *Service) runServiceStep(
 	ctx context.Context,
 	app, revision string,
@@ -112,22 +320,29 @@ func (s *Service) runServiceStep(
 	if eff, ok := active.Services[p.name]; ok {
 		before = eff.Container
 	}
-	svcResult, interrupted := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name))
-	result.Services[p.name] = svcResult
-	if interrupted {
-		result.Interrupted = append(result.Interrupted, p.name)
-	}
 	stepID := "service." + p.name + ".replace"
-	step := domain.AppOperationStep{
+	// The step is journaled before the replacement runs and carries the
+	// candidate's container ID as soon as it exists, so an interrupted deploy
+	// leaves a trace boot recovery can clean up instead of an untracked
+	// generation.
+	step := &op.Steps[index+1]
+	*step = domain.AppOperationStep{
 		ID: stepID, Service: p.name,
 		Digest: p.digest, Image: p.runtimeImage,
-		Before: before, After: svcResult.After,
+		Before: before, State: domain.AppStepPending,
+	}
+	svcResult := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name), s.journalCandidate(op, index+1))
+	result.Services[p.name] = svcResult
+	// A recorded candidate is authoritative while the step is unresolved: a
+	// replacement that failed after creating its container must stay traceable
+	// for reconciliation.
+	if svcResult.After != "" {
+		step.After = svcResult.After
 	}
 	fail := func(err error) error {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
 		step.Diagnostics = svcResult.Diagnostics
-		op.Steps[index+1] = step
 		op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 		op.Outcome = ComputeOutcome(result.Services)
 		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
@@ -140,17 +355,18 @@ func (s *Service) runServiceStep(
 		return fail(fmt.Errorf("deployment: service %q failed at %s: %s: %w",
 			p.name, stepID, svcResult.Error, domain.ErrAppStateConflict))
 	}
-	// Publish per-service effective state first: the proxy switches to the
-	// new binds at publication. Retire the replaced container only AFTER
-	// publication (no outage on crash between the two); a retire failure
-	// is a cleanup warning, not an outcome flip.
+	// Publish the per-service effective state: the new binds become the
+	// service's recorded backend before the proxy is repointed at them.
 	if err := s.publishService(ctx, app, revision, p, svcResult, op.Op); err != nil {
 		svcResult.Result = "failed"
 		svcResult.Error = err.Error()
 		result.Services[p.name] = svcResult
 		return fail(err)
 	}
-	if err := s.cutoverService(ctx, app, p, &svcResult, result); err != nil {
+	// Rebuild and publish the traffic graph. ACTIVE already names the new
+	// container, but the operation is a failure until routing accepted it,
+	// so a rejected graph must never be journaled as success.
+	if err := s.refreshTraffic(ctx, app); err != nil {
 		svcResult.Result = "failed"
 		svcResult.Error = err.Error()
 		result.Services[p.name] = svcResult
@@ -158,7 +374,7 @@ func (s *Service) runServiceStep(
 	}
 	result.Services[p.name] = svcResult
 	step.State = domain.AppStepSucceeded
-	op.Steps[index+1] = step
+	step.Error = ""
 	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
 	}
@@ -310,81 +526,332 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 	return step, nil, nil
 }
 
-// cutoverService applies traffic after publication, then retires the
-// replaced container. A traffic failure is returned to the caller, which
-// records the failed step: ACTIVE is published but the new service is not
-// routable, so the operation must not report success. The old container
-// is retained when traffic activation fails.
-func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult) error {
-	if trafficErr := s.refreshTraffic(ctx, app); trafficErr != nil {
-		return trafficErr
+// candidateJournal durably records a freshly created replacement container
+// before it can be started or join a network. An interrupted deployment then
+// leaves a trace boot recovery removes, instead of an untracked running
+// generation that could overlap the one recovery rebuilds.
+//
+// The window between the runtime creating a container and this write is the
+// irreducible one: a container ID cannot be recorded before it exists.
+// sync/atomic is not needed here: the journal write is synchronous.
+type candidateJournal func(ctx context.Context, containerID string) error
+
+// journalCandidate records one created candidate in the operation journal.
+// The step is addressed by index and read at write time, so a later append to
+// the operation's steps can never leave the recorder writing to a stale
+// element. A nil operation (an internal path with no journal) records nothing.
+func (s *Service) journalCandidate(op *domain.AppOperation, index int) candidateJournal {
+	if op == nil || index < 0 || index >= len(op.Steps) {
+		return nil
 	}
-	if svcResult.Retire != "" {
-		drainWithDeadline(ctx, p.spec.StopGrace)
-		// The replaced generation keeps its inhibition: only a published
-		// replacement may clear it.
-		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: p.name, Grace: svcResult.RetireGrace,
-		}, svcResult.Retire)
-		svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, retired.Warnings...)
+	return func(ctx context.Context, containerID string) error {
+		op.Steps[index].After = containerID
+		if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
+			return fmt.Errorf("deployment: record candidate %s: %w", containerID, err)
+		}
+		return nil
 	}
+}
+
+// reconcileInterruptedDeploy converges the journal of a deployment that a
+// crash, shutdown, or failed cleanup interrupted. A candidate that was
+// created but never published is removed and its loopback claims released, so
+// recovery can rebuild the published generation without ever running two
+// generations of one service. The interrupted operation is then finalized as
+// failed: a repeat of its key replays an explicit failure instead of a
+// permanent in-flight claim.
+//
+// It also retries the candidates of a failed operation whose cleanup did not
+// complete, so a leftover stays visible and is eventually removed. The
+// published generation recorded in ACTIVE is never touched.
+//
+// It runs at boot and before every mutation of the app, always under the app
+// lock, so a non-terminal journal is definitively interrupted, and a mutation
+// that cannot reconcile a predecessor does not proceed. It reads the
+// operation journal first and only then ACTIVE, so the common case of a
+// successful operation costs one state read.
+//
+// Reconciliation fails closed on a candidate that cannot be removed: an
+// orphan that may still run aborts the caller instead of being journaled as a
+// recoverable leftover. Because the journal is never finalized while such a
+// leftover exists, it stays the latest operation and a newer operation can
+// never be created on top of it and mask it.
+func (s *Service) reconcileInterruptedDeploy(ctx context.Context, app string) error {
+	op, ok, err := s.deps.State.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load interrupted operation for %q: %w", app, err)
+	}
+	if !ok {
+		return nil
+	}
+	if !op.Terminal() && s.operationLive(app, op.Op) {
+		// The operation is owned by a live goroutine in this process that
+		// may still be persisting its outcome. Reconcile it only after that
+		// owner has exited; until then the store record is authoritative and
+		// must not be finalized here.
+		return nil
+	}
+	terminal := op.Terminal()
+	needsActive := false
+	for _, step := range op.Steps {
+		if reconcileNeedsContainer(step, terminal) {
+			needsActive = true
+			break
+		}
+	}
+	var active domain.AppActive
+	if needsActive {
+		active, _, err = s.deps.State.LoadActive(ctx, app)
+		if err != nil {
+			return fmt.Errorf("deployment: load active for interrupted operation: %w", err)
+		}
+	}
+	log := zerowrap.FromCtx(ctx)
+	// write is true when the journal itself changes: an interrupted operation
+	// is always finalized, a terminal one only when a leftover must be
+	// reported.
+	changed, err := s.convergeInterruptedSteps(ctx, app, &op, active, terminal, log)
+	if err != nil {
+		return err
+	}
+	write := !terminal || changed
+	if !write {
+		return nil
+	}
+	if !terminal {
+		// The effects ran and only the outcome write was interrupted: that is
+		// a success, not a failure.
+		op.Outcome = interruptedOutcome(op)
+	}
+	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
+		return fmt.Errorf("deployment: finalize interrupted operation for %q: %w", app, err)
+	}
+	log.Warn().Str("app", app).Str("op", op.Op).Msg("deployment: reconciled an unfinished operation")
 	return nil
 }
 
-// deployService replaces one service. beforeGrace is the effective stop
-// grace of the container being replaced. It returns the terminal result
-// and whether the service saw interruption.
-func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
-	if httpEligible(p.spec) {
-		return s.deployHTTP(ctx, app, revision, p, opID, before, beforeGrace)
-	}
-	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
-}
-
-// httpEligible reports HTTP services whose generations may overlap while
-// the candidate proves readiness. Every declared HTTP interface must be
-// effective-public: the proxy repoints each public host to the candidate
-// only after readiness, so overlap buys availability. Any internal HTTP
-// interface is instead resolved over the app private network by service
-// alias, and the candidate joins that network with the same alias as soon
-// as it starts — before readiness — so an internal consumer could reach an
-// unready generation with no cutover gate to stop it. Such a service takes
-// interrupted replacement like L4 services. Volumes, binds, and L4 ports
-// remain interrupted because two generations must not share their state or
-// publications.
-func httpEligible(spec domain.AppService) bool {
-	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
+// reconcileNeedsContainer reports whether one step still needs container
+// work: a step that recorded a candidate. A terminal operation only retries
+// the step that recorded a failed candidate; a pending step exists only in an
+// interrupted operation.
+func reconcileNeedsContainer(step domain.AppOperationStep, terminal bool) bool {
+	if step.After == "" {
 		return false
 	}
-	for _, h := range spec.HTTP {
-		if !h.IsPublic() {
+	if terminal {
+		return step.State == domain.AppStepFailed
+	}
+	return true
+}
+
+// convergeInterruptedSteps retries the recorded candidate of every step that
+// needs container work and accumulates the bounded leftovers in the journal.
+// It reports whether the journal changed and fails closed on the first
+// candidate that cannot be removed, before any later step or mutation runs.
+func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *domain.AppOperation, active domain.AppActive, terminal bool, log zerowrap.Logger) (bool, error) {
+	changed := false
+	for i := range op.Steps {
+		step := &op.Steps[i]
+		if !reconcileNeedsContainer(*step, terminal) {
+			continue
+		}
+		warnings, convErr := s.convergeCandidate(ctx, app, active, step, terminal, log)
+		if step.After == "" {
+			// Converging the candidate clears its recorded After, so the
+			// journal changed even when nothing was left over to report: the
+			// converged step must be persisted, or every later pass reconciles
+			// it again.
+			changed = true
+		}
+		if len(warnings) > 0 {
+			// A candidate that will not go away is operator-visible instead of
+			// staying untracked.
+			op.Warnings = append(op.Warnings, journalWarnings(warnings)...)
+			changed = true
+		}
+		if convErr != nil {
+			// Fail closed: the orphan may still be running, so no later
+			// mutation may proceed. The journal keeps the leftover (and the
+			// failed step) for the next pass; a terminal operation stays the
+			// latest record because no newer claim is opened.
+			if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+				log.Warn().Err(saveErr).Msg("deployment: failed to record reconciliation failure")
+			}
+			return changed, fmt.Errorf("deployment: reconcile incomplete operation for %q: %w", app, convErr)
+		}
+	}
+	return changed, nil
+}
+
+// convergeCandidate converges the container one step recorded. The published
+// generation is kept; a never-published candidate is removed so recovery can
+// rebuild the generation recorded in ACTIVE without two generations running
+// at once. An interrupted operation's step is marked failed.
+//
+// A candidate that cannot be removed is returned as an error, not a
+// recoverable warning: the orphan may still run, so every later mutation must
+// fail closed instead of proceeding. The returned warnings are the leftovers
+// of that removal.
+//
+// Success clears the step's recorded After and keeps the removed (or kept)
+// container id in Detail, so the audit trail survives while the converged step
+// is no longer retried on every later pass. Only the failure paths leave After
+// in place, keeping a failed convergence eligible for retry.
+//
+// Once the candidate is converged, the inhibition the replacement wrote for
+// the superseded container is cleared. A step carrying both Before and After
+// records that the superseded container was confirmed gone before the
+// candidate was created (deployService retires it first), so the marker
+// protects nothing and would otherwise refuse the boot/start/restart rebuild
+// from ACTIVE.
+func (s *Service) convergeCandidate(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) ([]CleanupWarning, error) {
+	candidate := step.After
+	if publishedContainer(active, candidate) {
+		// The published generation: keep it. A step that already succeeded is
+		// left as recorded; a routing apply that never ran is republished by
+		// the periodic recovery pass.
+		if !terminal && step.State != domain.AppStepSucceeded {
+			step.State = domain.AppStepFailed
+			step.Error = "interrupted before traffic publication; the published container is kept and routing is republished"
+		}
+		step.Detail = "converged: published container " + candidate + " kept"
+	} else {
+		retired := s.retireContainer(ctx, app, retireOptions{Service: step.Service, Force: true}, candidate)
+		if !retired.Gone {
+			if !terminal {
+				step.State = domain.AppStepFailed
+				step.Error = "interrupted before publication; the unpublished candidate could not be removed: " + cleanupDetail(retired)
+				log.Warn().Str("app", app).Str("container", candidate).Msg("deployment: unpublished candidate could not be removed")
+			}
+			return retired.Warnings, fmt.Errorf("deployment: candidate %s of service %q could not be removed: %s", candidate, step.Service, cleanupDetail(retired))
+		}
+		if !terminal {
+			step.State = domain.AppStepFailed
+			step.Error = "interrupted before publication; the unpublished candidate was removed"
+		}
+		step.Detail = "converged: removed unpublished candidate " + candidate
+	}
+	// The candidate is gone (or published): the replacement-pending
+	// inhibition of the superseded container is stale. Dropping it lets
+	// boot/start/restart rebuild that generation from ACTIVE; the single
+	// writer is preserved because the superseded container was proven gone
+	// before the candidate existed.
+	if step.Service != "" && step.Before != "" && step.Before != candidate {
+		if err := s.clearRecoveryInhibition(ctx, app, step.Service, step.Before); err != nil {
+			log.Warn().Err(err).Str("app", app).Str("container", step.Before).Msg("deployment: clear stale replacement inhibition")
+			return []CleanupWarning{{Service: step.Service, Leftover: step.Before, Detail: "clear recovery inhibition: " + err.Error()}}, nil
+		}
+	}
+	// Only reconciliation removes a recorded candidate: clearing After here is
+	// what marks the step converged.
+	step.After = ""
+	return nil, nil
+}
+
+// interruptedOutcome classifies an interrupted operation: a failure, unless
+// every step had already succeeded.
+func interruptedOutcome(op domain.AppOperation) string {
+	if operationSucceeded(op) {
+		return domain.AppOutcomeSuccess
+	}
+	return domain.AppOutcomeFailed
+}
+
+// operationSucceeded reports whether every step of an interrupted operation
+// reached success: its effects ran and only the final outcome write was
+// interrupted.
+func operationSucceeded(op domain.AppOperation) bool {
+	if len(op.Steps) == 0 {
+		return false
+	}
+	for _, step := range op.Steps {
+		if step.State != domain.AppStepSucceeded {
 			return false
 		}
 	}
 	return true
 }
 
-// singleWriterRequired reports services that must never have two generations
-// running concurrently. Persistent volumes and any bind (especially a
-// writable one) may be written by both, so they are treated identically.
-func singleWriterRequired(spec domain.AppService) bool {
-	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
+// publishedContainer reports whether any service of the ACTIVE record names
+// the container. A container that is the published generation is never a
+// leftover, whichever service recorded it.
+func publishedContainer(active domain.AppActive, containerID string) bool {
+	if containerID == "" {
+		return false
+	}
+	for _, service := range active.Services {
+		if service.Container == containerID {
+			return true
+		}
+	}
+	return false
 }
 
-// deployHTTP keeps the old container serving until the replacement passes
-// readiness AND the new effective state is published: the proxy switches
-// to the new loopback binds at publication, the old container drains,
-// and only then is the old container retired by exact ID. Retire never
-// precedes publication (no outage window on crash between the two).
-func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
-	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
-	if err != nil {
-		return s.failResult(revision, before, "", err), false
+// deployService replaces one service sequentially and returns its terminal
+// result. before is the ACTIVE container being superseded (empty on a first
+// deployment); beforeGrace is its effective stop grace.
+//
+// The order is fixed: withdraw from traffic and confirm it, durably inhibit
+// a single-writer generation, retire the superseded container and confirm
+// it is gone, then create and start the replacement and wait for its
+// readiness probe. Nothing is created before the previous generation is
+// confirmed gone, so two generations never overlap; a withdrawal or
+// retirement that cannot be confirmed aborts without creating a candidate.
+func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration, journal candidateJournal) ServiceResult {
+	// Revalidate the current authorization and source before withdrawing or
+	// retiring the serving generation. A reload between preflight and this
+	// service step must fail without mutating the existing workload.
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err)
 	}
-	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(p.spec), binds); err != nil {
-		// Old version keeps serving. Capture redacted diagnostics while
-		// the failed replacement still exists, then remove only that
-		// candidate.
+	// Withdraw the service from traffic first and confirm it: a withdrawal
+	// that cannot be applied must block every container mutation, so no
+	// unverified generation stays routable. A first deployment has no
+	// published generation to withdraw.
+	if before != "" {
+		if err := s.withdrawForRecovery(ctx, app, p.name); err != nil {
+			return s.failResult(revision, before, "", err)
+		}
+	}
+	// A volume- or bind-owning replacement may write while the old
+	// generation still exists and could be revived by native restart policy.
+	// Inhibit that generation durably BEFORE the write can happen, so boot or
+	// periodic recovery can never restart the old writer on top of the new
+	// one. Cleared once the safe generation is published (publishService) or
+	// the operator removes the app.
+	if before != "" && singleWriterRequired(p.spec) {
+		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
+			return s.failResult(revision, before, "", err)
+		}
+	}
+	if before != "" {
+		// The superseded generation must be confirmed gone before a new
+		// generation starts: a failed retirement aborts the replacement
+		// instead of allowing overlapping generations, and the generation
+		// keeps its inhibition and its claims.
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: p.name, Grace: beforeGrace,
+		}, before)
+		if !retired.Gone {
+			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired)))
+		}
+	}
+	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID, journal)
+	if err != nil {
+		result := s.failResult(revision, before, "", err)
+		if created != nil {
+			// The candidate exists: keep its ID in the terminal result so the
+			// journal and the operator can still trace it.
+			result.After = created.ID
+		}
+		return result
+	}
+	if err := s.waitServiceReady(ctx, app, created.ID, deploymentReadiness(p.spec), binds); err != nil {
+		// Capture redacted diagnostics while the failed replacement still
+		// exists, then remove only that candidate. The superseded container
+		// is already gone and is never recreated. Cleanup is best effort: a
+		// canceled context can leave the candidate behind, which is then
+		// reported as a leftover warning instead of a false success.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
 		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
 		return ServiceResult{
@@ -392,21 +859,28 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 			EffectiveRevision: revision,
 			Before:            before,
 			After:             created.ID,
+			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
 			CleanupWarnings:   cleanup,
-		}, false
+		}
 	}
 	return ServiceResult{
 		Result:            "deployed",
 		EffectiveRevision: revision,
 		Before:            before,
 		After:             created.ID,
+		RestartUnsafe:     singleWriterRequired(p.spec),
 		BackendBinds:      binds,
 		UDPBackendBinds:   udpBinds,
-		Retire:            retireContainerID(before, created.ID),
-		RetireGrace:       beforeGrace,
-	}, false
+	}
+}
+
+// singleWriterRequired reports services that must never have two generations
+// running concurrently. Persistent volumes and any bind (especially a
+// writable one) may be written by both, so they are treated identically.
+func singleWriterRequired(spec domain.AppService) bool {
+	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
 }
 
 // refreshTraffic rebuilds the proxy host index and applies the full
@@ -428,79 +902,6 @@ func (s *Service) refreshTraffic(ctx context.Context, app string) error {
 		return fmt.Errorf("deployment: rebuild traffic for %q: %w", app, err)
 	}
 	return nil
-}
-
-// retireContainerID returns the exact container ID to retire after the
-func retireContainerID(before, after string) string {
-	if before == "" || before == after {
-		return ""
-	}
-	return before
-}
-
-// deployInterrupted stops the old instance after preflight, then creates
-// the replacement. Volume-owning failures never restart the old image:
-// the replacement may already have written data.
-func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
-	// Revalidate the current authorization and source before inhibiting or
-	// retiring the serving generation. A reload between preflight and this
-	// service step must fail without mutating the existing workload.
-	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
-		return s.failResult(revision, before, "", err), true
-	}
-	// A volume-owning replacement may write while the old generation
-	// still exists and could be revived by native restart policy.
-	// Inhibit that generation durably BEFORE the write can happen, so
-	// boot or periodic recovery can never restart the old writer on
-	// top of the new one. Cleared once the safe generation is
-	// published (publishService) or the operator removes the app.
-	inhibited := before != "" && singleWriterRequired(p.spec)
-	if inhibited {
-		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
-			return s.failResult(revision, before, "", err), true
-		}
-	}
-	if before != "" {
-		// The superseded writer must be confirmed gone before a new
-		// writer can touch the same data: a failed retirement aborts the
-		// replacement instead of allowing overlapping writers, and the
-		// generation keeps its inhibition and its claims.
-		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: p.name, Grace: beforeGrace,
-		}, before)
-		if !retired.Gone {
-			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired))), true
-		}
-	}
-	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
-	if err != nil {
-		return s.failResult(revision, before, "", err), true
-	}
-	if err := s.waitServiceReady(ctx, app, created.ID, p.spec, binds); err != nil {
-		// Capture redacted diagnostics while the candidate still exists,
-		// then remove only that candidate.
-		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
-		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
-		return ServiceResult{
-			Result:            "failed",
-			EffectiveRevision: revision,
-			Before:            before,
-			After:             created.ID,
-			RestartUnsafe:     singleWriterRequired(p.spec),
-			Error:             err.Error(),
-			Diagnostics:       tail,
-			CleanupWarnings:   cleanup,
-		}, true
-	}
-	return ServiceResult{
-		Result:            "deployed",
-		EffectiveRevision: revision,
-		Before:            before,
-		After:             created.ID,
-		RestartUnsafe:     singleWriterRequired(p.spec),
-		BackendBinds:      binds,
-		UDPBackendBinds:   udpBinds,
-	}, true
 }
 
 // reserveVolumeOwnership durably records one app-owned volume as
@@ -568,7 +969,7 @@ func volumeProvenanceLabels(app, appID, service, revision string) map[string]str
 // never container IPs. The runtime keeps native restarts; Gordon
 // reconciles intent at boot and in the monitor (accepted decision:
 // native runtime restarts plus daemon reconciliation).
-func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string) (*domain.Container, map[int]int, map[int]int, error) {
+func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (*domain.Container, map[int]int, map[int]int, error) {
 	// Re-resolve binds from the current policy immediately before any
 	// runtime mutation: a bind revoked since preflight must fail here,
 	// before volume ownership or container creation.
@@ -580,13 +981,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	image := p.runtimeImage
-	if image == "" {
-		image = p.spec.Image
-		if p.digest != "" {
-			image = stripImageTag(p.spec.Image) + "@" + p.digest
-		}
-	}
+	image := runtimeImageRef(p)
 	// The incarnation network is verified or created before any
 	// container exists, so a workload is only ever started on a
 	// Gordon-owned network that no other app shares.
@@ -646,20 +1041,56 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// The candidate ID is durably journaled before the container is started
+	// or joins a shared network, so an interrupted deployment can be cleaned
+	// up instead of leaving an untracked running generation.
+	if err := s.recordCandidate(ctx, app, p.spec.Name, created.ID, journal); err != nil {
+		return nil, nil, nil, err
+	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, err
+		return created, nil, nil, err
 	}
 	if err := s.deps.Runtime.StartContainer(ctx, created.ID); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, fmt.Errorf("deployment: start container: %w", err)
+		return created, nil, nil, fmt.Errorf("deployment: start container: %w", err)
 	}
 	binds, udpBinds, err := s.readBackendBinds(ctx, app, p.spec.Name, created.ID, backendPorts(p.spec))
 	if err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, err
+		return created, nil, nil, err
 	}
 	return created, binds, udpBinds, nil
+}
+
+// runtimeImageRef resolves the exact runtime image reference of one pinned
+// service: the image preflight resolved, else the manifest reference pinned to
+// its digest.
+func runtimeImageRef(p pinnedService) string {
+	if p.runtimeImage != "" {
+		return p.runtimeImage
+	}
+	if p.digest == "" {
+		return p.spec.Image
+	}
+	return stripImageTag(p.spec.Image) + "@" + p.digest
+}
+
+// recordCandidate durably journals a freshly created candidate before it is
+// started. A candidate whose ID cannot be recorded must not keep running:
+// recovery could never find it, so it is removed and the failure surfaced.
+func (s *Service) recordCandidate(ctx context.Context, app, service, containerID string, journal candidateJournal) error {
+	if journal == nil {
+		return nil
+	}
+	if err := journal(ctx, containerID); err != nil {
+		retired := s.retireContainer(ctx, app, retireOptions{Service: service, Force: true}, containerID)
+		if !retired.Gone {
+			return fmt.Errorf("%w (candidate cleanup: %s)", err, cleanupDetail(retired))
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {
@@ -927,7 +1358,8 @@ func sortedEnv(envMap map[string]string) []string {
 	return env
 }
 
-// publishService writes the per-service effective record after cutover.
+// publishService writes the per-service effective record once the
+// replacement passed readiness.
 func (s *Service) publishService(ctx context.Context, app, revision string, p pinnedService, result ServiceResult, opID string) error {
 	if app == "" {
 		return fmt.Errorf("deployment: publish active: empty app: %w", domain.ErrAppStateConflict)
@@ -982,7 +1414,7 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 	return nil
 }
 
-// recordOwnership stamps volume/secret/network ownership after cutover.
+// recordOwnership stamps volume/secret/network ownership after publication.
 func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedService) error {
 	ownership, err := s.deps.State.LoadOwnership(ctx, app)
 	if err != nil {
@@ -1145,26 +1577,39 @@ func tailLines(r io.Reader, n int) ([]string, error) {
 	return lines, nil
 }
 
-// httpReadiness forces the HTTP path for eligible cutover checks.
-func httpReadiness(spec domain.AppService) domain.AppService {
-	if spec.Readiness.Type == "" || spec.Readiness.Type == domain.AppReadinessNone {
-		spec.Readiness.Type = domain.AppReadinessHTTP
+// deploymentReadiness resolves the readiness check a deploy or restart
+// runs. Readiness never depends on how a service is replaced: a declared
+// http, tcp, or log check is used as declared, and an undeclared check
+// ("none" or unset) keeps the implicit HTTP probe on a service Gordon can
+// probe over the published loopback bind — at least one effective-public
+// HTTP interface, no L4 interface, no volume, and no bind. An undeclared
+// probe on a stateful or L4 workload stays unchecked instead: an HTTP GET on
+// the published port proves nothing there, so Gordon never guesses one.
+func deploymentReadiness(spec domain.AppService) domain.AppService {
+	if !implicitHTTPProbe(spec) {
+		return spec
 	}
+	spec.Readiness.Type = domain.AppReadinessHTTP
 	return spec
 }
 
-// drainWithDeadline pauses briefly so in-flight HTTP requests finish.
-func drainWithDeadline(ctx context.Context, grace time.Duration) {
-	if grace <= 0 {
-		grace = domain.AppDefaultStopGrace
+// implicitHTTPProbe reports whether a service that declares no readiness
+// check receives the implicit HTTP probe when a deploy or restart starts it.
+// Recovery verification of an already running generation keeps the declared
+// readiness unchanged: it re-checks a generation it did not replace.
+func implicitHTTPProbe(spec domain.AppService) bool {
+	if spec.Readiness.Type != "" && spec.Readiness.Type != domain.AppReadinessNone {
+		return false
 	}
-	if grace > time.Second {
-		grace = time.Second
+	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
+		return false
 	}
-	select {
-	case <-time.After(grace):
-	case <-ctx.Done():
+	for _, h := range spec.HTTP {
+		if !h.IsPublic() {
+			return false
+		}
 	}
+	return true
 }
 
 // appLabels stamps engine ownership on every created container.

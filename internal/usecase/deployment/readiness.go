@@ -20,7 +20,7 @@ type ProbeDeps struct {
 	networkInfo    func(ctx context.Context, containerID string) (string, int, error)
 	containerStart func(ctx context.Context, containerID string) (time.Time, error)
 	logStream      func(ctx context.Context, containerID string, since time.Time) (io.ReadCloser, error)
-	httpGet        func(ctx context.Context, url string) (int, error)
+	httpGet        func(ctx context.Context, url, hostAuthority string) (int, error)
 	tcpDial        func(ctx context.Context, addr string) error
 	// networkProbe runs one bounded session against an internal port that
 	// has no host publication. Nil disables the internal path: it must
@@ -67,7 +67,7 @@ func NewProbeDeps(runtime ProbeRuntime) ProbeDeps {
 // NewTestProbeDeps builds ProbeDeps with injectable HTTP/TCP probers.
 // Tests control L4 outcomes without dialing; logStream still reads the
 // runtime mock.
-func NewTestProbeDeps(runtime ProbeRuntime, httpGet func(ctx context.Context, url string) (int, error), tcpDial func(ctx context.Context, addr string) error) ProbeDeps {
+func NewTestProbeDeps(runtime ProbeRuntime, httpGet func(ctx context.Context, url, hostAuthority string) (int, error), tcpDial func(ctx context.Context, addr string) error) ProbeDeps {
 	deps := NewProbeDeps(runtime)
 	deps.httpGet = httpGet
 	deps.tcpDial = tcpDial
@@ -287,6 +287,7 @@ func waitServiceReadyWithDeps(ctx context.Context, deps ProbeDeps, containerID s
 // waitHTTPReadyWithDeps polls GET path until 2xx/3xx or timeout.
 func waitHTTPReadyWithDeps(ctx context.Context, deps ProbeDeps, spec domain.AppService, binds map[int]int) error {
 	timeout := readinessTimeout(spec)
+	containerPort := readinessContainerPort(spec)
 	port, err := dialPort(spec, binds)
 	if err != nil {
 		return err
@@ -302,6 +303,11 @@ func waitHTTPReadyWithDeps(ctx context.Context, deps ProbeDeps, spec domain.AppS
 		Path:     pathPart,
 		RawQuery: rawQuery,
 	}).String()
+	// The probe dials the random loopback publication but must address the
+	// workload at its declared container port: a workload that validates the
+	// Host port (e.g. qBittorrent) rejects a published-port authority with
+	// 401 "Invalid Host header, port mismatch".
+	hostAuthority := net.JoinHostPort("127.0.0.1", itoa(containerPort))
 	deadline := time.Now().Add(timeout)
 	var lastAttempt string
 	for {
@@ -309,7 +315,7 @@ func waitHTTPReadyWithDeps(ctx context.Context, deps ProbeDeps, spec domain.AppS
 			return err
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, min(2*time.Second, time.Until(deadline)))
-		status, err := deps.httpGet(attemptCtx, probeURL)
+		status, err := deps.httpGet(attemptCtx, probeURL, hostAuthority)
 		cancel()
 		if err == nil && status >= 200 && status < 400 {
 			return nil

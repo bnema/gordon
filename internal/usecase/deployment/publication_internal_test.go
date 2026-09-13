@@ -46,13 +46,13 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default()).
 		WithProbeDeps(NewTestProbeDeps(runtime,
-			func(context.Context, string) (int, error) { return 500, nil },
+			func(context.Context, string, string) (int, error) { return 500, nil },
 			func(context.Context, string) error { return nil },
 		))
 
 	step := domain.AppOperationStep{ID: "service.web.start"}
 	result := &LifecycleResult{Services: map[string]ServiceResult{}}
-	require.True(t, svc.verifyRunningService(ctx, "blog", "web", eff, &step, result))
+	svc.verifyRunningService(ctx, "blog", "web", eff, &step, result)
 
 	assert.Equal(t, domain.AppStepFailed, step.State)
 	assert.Equal(t, "failed", result.Services["web"].Result)
@@ -81,13 +81,13 @@ func TestVerifyRunningService_ReadyPublishesBinds(t *testing.T) {
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default()).
 		WithProbeDeps(NewTestProbeDeps(runtime,
-			func(context.Context, string) (int, error) { return 200, nil },
+			func(context.Context, string, string) (int, error) { return 200, nil },
 			func(context.Context, string) error { return nil },
 		))
 
 	step := domain.AppOperationStep{ID: "service.web.start"}
 	result := &LifecycleResult{Services: map[string]ServiceResult{}}
-	require.True(t, svc.verifyRunningService(ctx, "blog", "web", eff, &step, result))
+	svc.verifyRunningService(ctx, "blog", "web", eff, &step, result)
 
 	assert.Equal(t, domain.AppStepSucceeded, step.State)
 	assert.Equal(t, map[int]int{8080: 32771}, result.Services["web"].BackendBinds)
