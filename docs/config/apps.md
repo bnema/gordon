@@ -60,6 +60,8 @@ name = "app-logs"                # policy name, never a host path
 path = "/var/log/app"            # absolute container destination
 readonly = true
 
+devices = ["transcode-gpu"]       # 0..n logical names from [app_devices.<name>]
+
 [[service.database]]             # explicit database declarations
 name = "main"
 type = "postgres"
@@ -79,6 +81,7 @@ services = ["web"]
 - App name: DNS label (lowercase alphanumerics and hyphens, max 63), must not contain `--`, reserved: `gordon`, `registry`, `admin`, `localhost`. Case-insensitive uniqueness.
 - Service name: `[a-z0-9_.-]`, max 63, unique within the app.
 - Bind name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
+- Device name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
 - Removing an app ends its incarnation: the name is freed, volumes and secrets are archived as retained under the old internal UUID, desired/active/intent state is cleared, and the next apply allocates a new UUID. A new app reusing the name never adopts the old secrets or volumes.
 
 ## Services
@@ -115,6 +118,7 @@ Image registry names and digest syntax are validated during manifest apply, reso
 - Manifests never carry host paths. A `[[service.bind]]` references an `[app_mounts.<name>]` policy the operator declares in `gordon.toml`; a bind whose name has no matching policy is rejected at apply time. See [Volumes](./volumes.md) and [Security Hardening](./security-hardening.md).
 - Named volumes are Gordon-owned app data: created, labeled, retained, backed up, and pruned by Gordon. Administrative binds are operator-owned host locations: Gordon mounts them and never creates, deletes, owns, backs up, or prunes them.
 - `[[service.bind]]` requires an absolute, normalized container `path` and an optional `readonly`. The policy's `read_only` and the bind's `readonly` force read-only together: either side wins and a manifest can never weaken its policy. Reserved destinations (`/`, `/proc`, `/sys`, `/dev`, `/boot` and their children) and paths colliding with a declared volume or another bind are rejected at apply time.
+- `devices` lists logical device names granted by `[app_devices.<name>]` policy the operator declares in `gordon.toml`; a device whose name has no matching policy, or whose policy does not allow the app+service pair, is rejected at apply time. Gordon resolves each name to explicit CDI IDs at activation time and encodes them as one native CDI `DeviceRequest`. Revisions persist the logical names, never the host resolution. A device add/remove shows as `service/<name>/devices` in diffs; reorder-only input is a no-op. Changing a mapping never recreates a running container: the next deploy serves the new resolution. Revoking a grant fails subsequent deploys closed while the running service is untouched. Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured; older or unrecognized engines return a structured `runtime-unsupported` error and never run without devices. Gordon installs no drivers, manages no quotas, and injects no `NVIDIA_*` environment: images carry their own runtime expectations.
 - A service with any bind runs as a single writer, like a volume-backed service: replacements never serve two generations at once.
 - A volume declared `readonly = true` is mounted read-only in the container; the service cannot modify protected data.
 - `[[service.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).

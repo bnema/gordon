@@ -33,6 +33,10 @@ type Service struct {
 	// atomically; applies read the current map without holding the lock.
 	bindMu       sync.RWMutex
 	bindPolicies map[string]domain.AppBindPolicy
+	// deviceMu guards devicePolicies. Reload replaces the whole map
+	// atomically; applies read the current map without holding the lock.
+	deviceMu       sync.RWMutex
+	devicePolicies map[string]domain.AppDevicePolicy
 }
 
 // NewService creates the apps use case over an AppState store.
@@ -79,6 +83,37 @@ func (s *Service) snapshotBindPolicies() map[string]domain.AppBindPolicy {
 	s.bindMu.RLock()
 	defer s.bindMu.RUnlock()
 	return s.bindPolicies
+}
+
+// WithDevicePolicies supplies the initial administrative device policies.
+func (s *Service) WithDevicePolicies(policies map[string]domain.AppDevicePolicy) *Service {
+	s.SetDevicePolicies(policies)
+	return s
+}
+
+// SetDevicePolicies atomically replaces the administrative device policies
+// used to authorize manifest devices. The map and its slices are copied so
+// later caller mutation cannot race an in-flight apply.
+func (s *Service) SetDevicePolicies(policies map[string]domain.AppDevicePolicy) {
+	copied := make(map[string]domain.AppDevicePolicy, len(policies))
+	for name, policy := range policies {
+		policy.CDI = append([]string(nil), policy.CDI...)
+		policy.AllowedApps = append([]string(nil), policy.AllowedApps...)
+		policy.AllowedServices = append([]string(nil), policy.AllowedServices...)
+		copied[name] = policy
+	}
+	s.deviceMu.Lock()
+	s.devicePolicies = copied
+	s.deviceMu.Unlock()
+}
+
+// snapshotDevicePolicies returns the current policy map. SetDevicePolicies
+// never mutates a published map, so the snapshot stays safe after the
+// lock drops.
+func (s *Service) snapshotDevicePolicies() map[string]domain.AppDevicePolicy {
+	s.deviceMu.RLock()
+	defer s.deviceMu.RUnlock()
+	return s.devicePolicies
 }
 
 // noopLease is a GC lease for an unwired barrier.
@@ -174,6 +209,9 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 	if err := s.validateBindPolicies(spec); err != nil {
 		return nil, nil, err
 	}
+	if err := s.validateDevicePolicies(spec); err != nil {
+		return nil, nil, err
+	}
 	if err := s.validateEntrypointCompatibility(spec); err != nil {
 		return nil, nil, err
 	}
@@ -222,6 +260,26 @@ func (s *Service) validateBindPolicies(spec domain.AppSpec) error {
 			}
 			if _, err := policy.ResolveAppBind(spec.Name, svc.Name, bind); err != nil {
 				return fmt.Errorf("%w: app %q service %q mount %q: refused by administrative mount policy", domain.ErrBindPolicy, spec.Name, svc.Name, bind.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// validateDevicePolicies resolves every declared device against the
+// administrative device policies before any desired state is persisted.
+// Errors name only the device, app, and service with an actionable hint:
+// host inventory never appears in apply errors.
+func (s *Service) validateDevicePolicies(spec domain.AppSpec) error {
+	policies := s.snapshotDevicePolicies()
+	for _, svc := range spec.Services {
+		for _, device := range svc.Devices {
+			policy, ok := policies[device]
+			if !ok {
+				return fmt.Errorf("%w: app %q service %q device %q: no administrative device policy configured (declare [app_devices.%s] with allowed_apps/allowed_services)", domain.ErrDevicePolicy, spec.Name, svc.Name, device, device)
+			}
+			if _, err := policy.ResolveAppDevice(spec.Name, svc.Name, device); err != nil {
+				return fmt.Errorf("%w: app %q service %q device %q: refused by administrative device policy (check allowed_apps/allowed_services)", domain.ErrDevicePolicy, spec.Name, svc.Name, device)
 			}
 		}
 	}

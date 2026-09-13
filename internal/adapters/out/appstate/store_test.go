@@ -521,3 +521,37 @@ func TestStore_RecoveryInhibitionsAreDurableAndGenerationScoped(t *testing.T) {
 	require.Error(t, reopened.SaveRecoveryInhibition(cancelled, domain.AppRecoveryInhibition{App: "blog"}))
 	require.Error(t, reopened.ClearRecoveryInhibition(cancelled, "blog", "worker", "c-worker"))
 }
+
+func TestStore_DesiredDevicesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	intent := testIntent("blog", "rev-1")
+	intent.Spec.Services[0].Devices = []string{"test_gpu"}
+	require.NoError(t, store.StageApply(ctx, intent))
+	require.NoError(t, store.CommitApply(ctx, "blog", "apply-test-rev-1"))
+	require.NoError(t, store.MaterializeApply(ctx, "blog", "apply-test-rev-1"))
+
+	desired, ok, err := store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, desired.Spec.Services, 1)
+	assert.Equal(t, []string{"test_gpu"}, desired.Spec.Services[0].Devices, "logical names persist in revisions")
+}
+
+func TestStore_DesiredWithoutDevicesLoads(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	// Old records predate the devices field: the missing JSON key must
+	// decode to a nil slice, never an error or a phantom device.
+	require.NoError(t, store.StageApply(ctx, testIntent("blog", "rev-1")))
+	require.NoError(t, store.CommitApply(ctx, "blog", "apply-test-rev-1"))
+	require.NoError(t, store.MaterializeApply(ctx, "blog", "apply-test-rev-1"))
+
+	desired, ok, err := store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, desired.Spec.Services, 1)
+	assert.Empty(t, desired.Spec.Services[0].Devices)
+}

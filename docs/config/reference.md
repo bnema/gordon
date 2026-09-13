@@ -153,6 +153,20 @@ preserve = true                              # Keep volumes when containers are 
 # allowed_services = ["web"]                 # Required; exact, non-empty
 # root = "/srv/gordon"                       # Optional; default: parent of source
 
+# =============================================================================
+# ADMINISTRATIVE APP DEVICES (CDI)
+# =============================================================================
+# A named device grant is the only way an app manifest may request host
+# devices. Manifests declare devices = ["<name>"]; raw /dev paths are
+# always rejected, and the policy's allowlists are exact and non-empty.
+# Aggregate "=all" CDI selectors are rejected: name every device
+# explicitly. Device-bearing creates require Podman 5.4+ or Docker 28.3+
+# with native CDI configured.
+# [app_devices.transcode-gpu]
+# cdi = ["example.com/gpu=GPU-device-uuid"]  # Required; explicit, non-empty
+# allowed_apps = ["video"]                   # Required; exact, non-empty
+# allowed_services = ["transcoder"]          # Required; exact, non-empty
+
 # REMOVED in v2.50: [routes], [attachments], [network_groups],
 # [[services]]-as-apps, [service_routes], [auto_route], [previews].
 # Declare apps in standalone files (see ./apps.md).
@@ -287,6 +301,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `app_mounts.<name>.allowed_services` | none | Required exact, non-empty service allowlist for this mount |
 | `app_mounts.<name>.read_only` | `false` | Force every bind resolved under this policy read-only; a manifest bind can never weaken it |
 | `app_mounts.<name>.root` | parent of `source` | Optional administrative boundary the resolved source must stay under |
+| `app_devices.<name>.cdi` | none | Required explicit, non-empty CDI device IDs granted under this logical name (no `=all` aggregate form) |
+| `app_devices.<name>.allowed_apps` | none | Required exact, non-empty app allowlist for this grant (no wildcard or empty-means-all form) |
+| `app_devices.<name>.allowed_services` | none | Required exact, non-empty service allowlist for this grant |
 | `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |

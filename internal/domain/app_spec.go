@@ -6,6 +6,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -104,6 +105,10 @@ type AppService struct {
 	Secrets   map[string]string
 	Volumes   []AppVolume
 	Binds     []AppBind
+	// Devices lists logical device names granted by administrative
+	// [app_devices] policy. Names resolve to CDI device IDs at activation
+	// time; the logical names (not host resolution) persist in revisions.
+	Devices   []string
 	Databases []AppDatabase
 	Backup    AppBackup
 }
@@ -525,6 +530,9 @@ func (s *AppService) validate() error {
 	if err := s.validateBinds(); err != nil {
 		return err
 	}
+	if err := s.validateDevices(); err != nil {
+		return err
+	}
 	if err := s.validateDatabases(volumes); err != nil {
 		return err
 	}
@@ -641,6 +649,23 @@ func (s *AppService) validateBinds() error {
 		if _, ok := volumePaths[bind.Path]; ok {
 			return fmt.Errorf("%w: service %q bind destination %q collides with a declared volume", ErrInvalidAppSpec, s.Name, bind.Path)
 		}
+	}
+	return nil
+}
+
+// validateDevices checks logical device names and duplicates. Authorization
+// against administrative policy happens at apply/deploy time, not here:
+// the manifest shape stays valid while policy may refuse to serve it.
+func (s *AppService) validateDevices() error {
+	seen := map[string]struct{}{}
+	for _, name := range s.Devices {
+		if err := ValidateDeviceName(name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("%w: service %q duplicate device %q", ErrInvalidAppSpec, s.Name, name)
+		}
+		seen[name] = struct{}{}
 	}
 	return nil
 }
@@ -1039,6 +1064,9 @@ func diffService(name string, desired, effective AppService) []string {
 	if !equalBinds(desired.Binds, effective.Binds) {
 		changed = append(changed, "service/"+name+"/binds")
 	}
+	if !equalDevices(desired.Devices, effective.Devices) {
+		changed = append(changed, "service/"+name+"/devices")
+	}
 	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
 		changed = append(changed, "service/"+name+"/databases")
 	}
@@ -1133,4 +1161,15 @@ func equalBinds(a, b []AppBind) bool {
 		}
 	}
 	return true
+}
+
+// equalDevices compares device slices as sets: reorder-only input is a
+// no-op, while add/remove reshuffles the sorted comparison.
+func equalDevices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortedA := slices.Sorted(slices.Values(a))
+	sortedB := slices.Sorted(slices.Values(b))
+	return slices.Equal(sortedA, sortedB)
 }

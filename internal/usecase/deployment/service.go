@@ -103,6 +103,11 @@ type Service struct {
 	// the lock.
 	bindMu       sync.RWMutex
 	bindPolicies map[string]domain.AppBindPolicy
+	// deviceMu guards devicePolicies. A config reload replaces the whole
+	// map atomically; deploy paths read the current map without holding
+	// the lock.
+	deviceMu       sync.RWMutex
+	devicePolicies map[string]domain.AppDevicePolicy
 	// liveMu guards liveOps. liveOps holds the operations this process
 	// owns between the StartDeploy claim and the end of ExecuteDeploy. It
 	// is in-memory only: a fresh Service (boot) starts empty and may
@@ -199,6 +204,51 @@ func (s *Service) snapshotBindPolicies() map[string]domain.AppBindPolicy {
 	s.bindMu.RLock()
 	defer s.bindMu.RUnlock()
 	return s.bindPolicies
+}
+
+// WithDevicePolicies supplies the initial administrative device policies.
+func (s *Service) WithDevicePolicies(policies map[string]domain.AppDevicePolicy) *Service {
+	s.SetDevicePolicies(policies)
+	return s
+}
+
+// SetDevicePolicies atomically replaces the administrative device policies
+// used to authorize service devices. The map and its slices are copied so
+// later caller mutation cannot race an in-flight deploy.
+func (s *Service) SetDevicePolicies(policies map[string]domain.AppDevicePolicy) {
+	copied := make(map[string]domain.AppDevicePolicy, len(policies))
+	for name, policy := range policies {
+		policy.CDI = append([]string(nil), policy.CDI...)
+		policy.AllowedApps = append([]string(nil), policy.AllowedApps...)
+		policy.AllowedServices = append([]string(nil), policy.AllowedServices...)
+		copied[name] = policy
+	}
+	s.deviceMu.Lock()
+	s.devicePolicies = copied
+	s.deviceMu.Unlock()
+}
+
+// snapshotDevicePolicies returns the current policy map. SetDevicePolicies
+// never mutates a published map, so the snapshot stays safe after the
+// lock drops.
+func (s *Service) snapshotDevicePolicies() map[string]domain.AppDevicePolicy {
+	s.deviceMu.RLock()
+	defer s.deviceMu.RUnlock()
+	return s.devicePolicies
+}
+
+// resolveServiceDevices resolves every declared logical device against the
+// current administrative policies into runtime CDI IDs. Errors name only
+// the app, service, and device: host inventory never appears.
+func (s *Service) resolveServiceDevices(app string, svc domain.AppService) ([]string, error) {
+	if len(svc.Devices) == 0 {
+		return nil, nil
+	}
+	ids, err := domain.ResolveAppDevices(app, svc.Name, svc.Devices, s.snapshotDevicePolicies())
+	if err != nil {
+		return nil, fmt.Errorf("deployment: %w", err)
+	}
+	return ids, nil
 }
 
 // resolveServiceBinds resolves every declared bind against the current
@@ -659,6 +709,9 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		// are discarded because createAndStart re-resolves against the
 		// current policy immediately before the runtime mutation.
 		if _, err := s.resolveServiceBinds(app, svc); err != nil {
+			return nil, err
+		}
+		if _, err := s.resolveServiceDevices(app, svc); err != nil {
 			return nil, err
 		}
 		pinned = append(pinned, pinnedService{

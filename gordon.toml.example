@@ -122,6 +122,26 @@ syslog_identifier = "gordon-access"
 # allowed_services = ["web"]         # Required; exact, non-empty
 # root = "/srv/gordon"               # Optional; defaults to the source's parent
 
+# =============================================================================
+# ADMINISTRATIVE APP DEVICES (CDI)
+# =============================================================================
+# A named device grant is the only way an app manifest may request host
+# devices. The manifest declares devices = ["<name>"]; raw /dev paths,
+# privileged containers, and runtime-specific GPU flags are never used.
+# Gordon resolves each name to explicit CDI IDs at activation time and
+# encodes them as one native CDI DeviceRequest. allowed_apps and
+# allowed_services are exact and non-empty: only that app+service pair
+# receives the grant. Aggregate "=all" selectors are rejected: name every
+# device explicitly. Changing a mapping never recreates a running
+# container; the next deploy serves the new resolution. Revoking a grant
+# fails subsequent deploys closed while the running service is untouched.
+# Supported engines: Podman 5.4+ or Docker 28.3+ with native CDI
+# configured (CDI specs, toolkit, device permissions on the host).
+# [app_devices.transcode-gpu]
+# cdi = ["example.com/gpu=GPU-device-uuid"]  # Required; explicit, non-empty
+# allowed_apps = ["video"]                   # Required; exact, non-empty
+# allowed_services = ["transcoder"]          # Required; exact, non-empty
+
 [telemetry]
 enabled = false
 # endpoint = "http://localhost:4318"
