@@ -505,6 +505,13 @@ func (h *Handler) sendAppError(w http.ResponseWriter, status int, code, message,
 }
 
 func isMappedPreflightError(err error, op *domain.AppOperation) bool {
+	// A non-terminal journal is a running replay, never a preflight
+	// failure: its stored operation is the response regardless of which
+	// steps have started, so the mapped error envelope must not replace
+	// it. Only an absent or terminal journal can map a preflight error.
+	if op != nil && !op.Terminal() {
+		return false
+	}
 	for _, step := range op.Steps {
 		if strings.HasPrefix(step.ID, "service.") {
 			return false

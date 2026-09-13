@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 	"time"
 
@@ -247,6 +248,91 @@ func TestHandler_AppDeploy_TerminalFailureReplayIsVisible(t *testing.T) {
 	require.Contains(t, resp.Services, "web")
 	assert.Equal(t, "failed", resp.Services["web"].Result)
 	assert.Equal(t, "boom", resp.Services["web"].Error)
+}
+
+// assertRunningReplayJournal pins the replay contract shared by a running
+// replay before and after any service step has started: 409, the operation
+// journal DTO with a running status and no terminal outcome, and never the
+// mapped preflight error envelope. The top-level key set is asserted so both
+// cases are proven to share one wire shape.
+func assertRunningReplayJournal(t *testing.T, rec *httptest.ResponseRecorder, opID, lastStep string) {
+	t.Helper()
+	require.Equal(t, http.StatusConflict, rec.Code)
+
+	var shape map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &shape))
+	_, hasError := shape["error"]
+	assert.False(t, hasError, "a running replay must not degrade to the preflight error envelope")
+	keys := make([]string, 0, len(shape))
+	for key := range shape {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	assert.Equal(t,
+		[]string{"app", "effective", "op", "outcome", "retained", "revision", "services", "status", "steps"},
+		keys, "a running replay always returns the operation journal shape")
+
+	var resp dto.AppDeployResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	assert.Equal(t, opID, resp.Op)
+	assert.Equal(t, "running", resp.Status)
+	assert.Empty(t, resp.Outcome, "a running operation has no terminal outcome")
+	found := false
+	for _, step := range resp.Steps {
+		if step.ID == lastStep {
+			found = true
+			assert.Equal(t, domain.AppStepPending, step.State)
+		}
+	}
+	assert.True(t, found, "the journal must expose step %q", lastStep)
+}
+
+// TestHandler_AppDeploy_RunningReplayBeforeServiceSteps proves a same-key
+// replay of an operation still in flight answers 409 with the stored journal
+// even before any service step has started. A non-terminal claim is a running
+// journal, not a preflight failure, so the mapped error envelope never
+// replaces it.
+func TestHandler_AppDeploy_RunningReplayBeforeServiceSteps(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	running := &domain.AppOperation{
+		Op: "op-run-pre", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+	}
+	replayErr := fmt.Errorf("deployment: operation op-run-pre has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
+		dto.AppDeployRequest{}, "admin:apps:write")
+
+	assertRunningReplayJournal(t, rec, "op-run-pre", "preflight")
+}
+
+// TestHandler_AppDeploy_RunningReplayAfterServiceSteps is the after-steps
+// twin: the same running replay, now with a pending service step, must answer
+// the identical 409 journal shape. Only the journal contents may differ from
+// the before-steps case, never the envelope.
+func TestHandler_AppDeploy_RunningReplayAfterServiceSteps(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	running := &domain.AppOperation{
+		Op: "op-run-post", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Steps: []domain.AppOperationStep{
+			{ID: "preflight", State: domain.AppStepSucceeded},
+			{ID: "service.web.replace", State: domain.AppStepPending},
+		},
+	}
+	replayErr := fmt.Errorf("deployment: operation op-run-post has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
+		dto.AppDeployRequest{}, "admin:apps:write")
+
+	assertRunningReplayJournal(t, rec, "op-run-post", "service.web.replace")
 }
 
 // TestHandler_AppDeploy_RejectsMissingIdempotencyKey keeps the request
