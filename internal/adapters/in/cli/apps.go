@@ -719,7 +719,7 @@ func newAppDeployCmd() *cobra.Command {
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), jsonOut)
+			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&revision, "revision", "", "Revision to activate (default: desired head)")
@@ -728,13 +728,19 @@ func newAppDeployCmd() *cobra.Command {
 	return cmd
 }
 
-func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out io.Writer, jsonOut bool) error {
+// runAppDeploy issues one deploy mutation and, when the daemon answers 202
+// with a running journal, polls the existing by-key endpoint to terminal
+// rather than reissuing the mutation or hiding the outcome.
+func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out, errOut io.Writer, jsonOut bool) error {
 	resp, key, err := plane.DeployApp(ctx, app, dto.AppDeployRequest{Revision: revision, Service: service})
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "deploy", app, key, err, jsonOut); ok {
 			return conflictErr
 		}
 		return appMutationError("deploy", app, key, err)
+	}
+	if resp.Status == dto.AppStatusRunning {
+		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)
 	}
 	if jsonOut {
 		return writeJSON(out, resp)

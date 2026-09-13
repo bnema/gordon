@@ -102,6 +102,33 @@ reused for a different request is refused.
 
 ---
 
+## gordon apps operations watch
+
+```bash
+gordon apps operations watch APP --key KEY [--json]
+```
+
+Polls the operation journal by request key until the operation reaches a
+terminal state, then renders the terminal journal. It never reissues the
+mutation, so it is the safe way to resume after an interrupted deploy or to
+follow an operation started elsewhere. Progress is printed only when the
+operation or step state changes; unchanged polls are not repeated.
+
+Exit status is nonzero for terminal `partial`/`failed` outcomes and for an
+interrupted watch. Ctrl-C stops only local polling: the daemon-side
+operation is not cancelled and keeps running, and the command prints the
+command to resume. With `--json`, stdout carries exactly one final document
+and progress goes to stderr.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--key` | Request key (required) |
+| `--json` | Output as JSON |
+
+---
+
 ## gordon apps diff
 
 ```bash
@@ -205,6 +232,14 @@ Activates a revision (default: desired head). Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
 later services stay unchanged.
 
+When the daemon accepts the deploy and runs the two phases in the
+background (HTTP 202), the command polls the operation journal by key until
+it is terminal and prints concise progress only when the operation or step
+state changes. It never reissues the mutation. In `--json` mode stdout
+carries one final document and progress goes to stderr. Ctrl-C stops only
+local polling (the daemon-side operation keeps running) and prints the
+`gordon apps operations watch` command to resume.
+
 ---
 
 ## gordon apps restart
@@ -288,8 +323,11 @@ gordon apps apply --file blog.toml --remote prod
 # Write secret values for registered names
 gordon apps secrets set blog --service web DATABASE_URL=... --remote prod
 
-# Deploy the accepted revision
+# Deploy the accepted revision (polls 202 operations to terminal)
 gordon apps deploy blog --remote prod
+
+# Resume watching an interrupted or externally started operation
+gordon apps operations watch blog --key <operation-key> --remote prod
 
 # Inspect
 gordon apps show blog --remote prod
@@ -300,3 +338,4 @@ gordon apps status blog --remote prod
 
 - [CLI Overview](./index.md)
 - [Push Command](./push.md)
+- [Deployment](../deployment/index.md)

@@ -204,7 +204,7 @@ func TestRunAppDeploy_OutcomeUnknownMentionsKey(t *testing.T) {
 	plane := appPlane(t)
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		nil, "key-abc", &remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/deploy", Err: errors.New("boom")}).Once()
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, false)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, &bytes.Buffer{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outcome-unknown")
 	assert.Contains(t, err.Error(), "key-abc")
@@ -223,7 +223,7 @@ func TestRunAppDeploy_ConflictRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, false)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, false)
 	require.Error(t, err, "conflict must retain failure semantics")
 	text := out.String()
 	assert.Contains(t, text, "web:")
@@ -246,7 +246,7 @@ func TestRunAppDeploy_ConflictJSONRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, true)
+	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, true)
 	require.Error(t, err)
 	var got dto.AppDeployResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
