@@ -69,24 +69,24 @@ func TestDevicePolicyAllowlistRejected(t *testing.T) {
 
 func TestResolveAppDeviceDenyByDefault(t *testing.T) {
 	p := validDevicePolicy()
-	_, err := p.ResolveAppDevice("other", "worker", "test_gpu")
+	_, err := p.ResolveAppDevice("other", "worker")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrDevicePolicy))
 
-	_, err = p.ResolveAppDevice("demo", "helper", "test_gpu")
+	_, err = p.ResolveAppDevice("demo", "helper")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrDevicePolicy))
 }
 
 func TestResolveAppDeviceExactGrant(t *testing.T) {
 	p := validDevicePolicy()
-	ids, err := p.ResolveAppDevice("demo", "worker", "test_gpu")
+	ids, err := p.ResolveAppDevice("demo", "worker")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"example.com/gpu=GPU-test-uuid"}, ids)
 	// The returned slice must be a copy: mutating it must not affect
 	// later resolutions.
 	ids[0] = "mutated"
-	again, err := p.ResolveAppDevice("demo", "worker", "test_gpu")
+	again, err := p.ResolveAppDevice("demo", "worker")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"example.com/gpu=GPU-test-uuid"}, again)
 }
@@ -117,6 +117,7 @@ func TestResolveAppDevicesDuplicateIDRejected(t *testing.T) {
 	_, err := ResolveAppDevices("demo", "worker", []string{"a", "b"}, policies)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrDevicePolicy))
+	assert.NotContains(t, err.Error(), shared, "duplicate-grant errors must not echo resolved CDI IDs")
 }
 
 func TestResolveAppDevicesEmptyIsNil(t *testing.T) {

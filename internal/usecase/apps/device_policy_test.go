@@ -110,3 +110,20 @@ func TestApply_DeviceDryRunRefusedWithoutMutation(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 	store.AssertNotCalled(t, "StageApply", context.Background(), spec.Name, uint64(0))
 }
+
+func TestApply_RejectsDuplicateCDIIDsAcrossDevices(t *testing.T) {
+	shared := "example.com/gpu=GPU-shared"
+	store := outmocks.NewMockAppState(t)
+	spec := testSpec("blog")
+	spec.Services[0].Devices = []string{"gpu-a", "gpu-b"}
+	svc := apps.NewService(store, zerowrap.Default()).
+		WithDevicePolicies(map[string]domain.AppDevicePolicy{
+			"gpu-a": {Name: "gpu-a", CDI: []string{shared}, AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}},
+			"gpu-b": {Name: "gpu-b", CDI: []string{shared}, AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}},
+		})
+
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+
+	require.ErrorIs(t, err, domain.ErrDevicePolicy)
+	assert.NotContains(t, err.Error(), shared, "apply errors must never leak CDI IDs")
+}

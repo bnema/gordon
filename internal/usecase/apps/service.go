@@ -268,7 +268,9 @@ func (s *Service) validateBindPolicies(spec domain.AppSpec) error {
 
 // validateDevicePolicies resolves every declared device against the
 // administrative device policies before any desired state is persisted.
-// Errors name only the device, app, and service with an actionable hint:
+// It runs the same union resolution as activation: duplicate CDI IDs
+// across logical resources fail here, not later at preflight. Errors
+// name only the device, app, and service with an actionable hint:
 // host inventory never appears in apply errors.
 func (s *Service) validateDevicePolicies(spec domain.AppSpec) error {
 	policies := s.snapshotDevicePolicies()
@@ -278,9 +280,15 @@ func (s *Service) validateDevicePolicies(spec domain.AppSpec) error {
 			if !ok {
 				return fmt.Errorf("%w: app %q service %q device %q: no administrative device policy configured (declare [app_devices.%s] with allowed_apps/allowed_services)", domain.ErrDevicePolicy, spec.Name, svc.Name, device, device)
 			}
-			if _, err := policy.ResolveAppDevice(spec.Name, svc.Name, device); err != nil {
+			if _, err := policy.ResolveAppDevice(spec.Name, svc.Name); err != nil {
 				return fmt.Errorf("%w: app %q service %q device %q: refused by administrative device policy (check allowed_apps/allowed_services)", domain.ErrDevicePolicy, spec.Name, svc.Name, device)
 			}
+		}
+		// The union check catches duplicate CDI IDs granted under two
+		// logical names; single-device errors above already named the
+		// device, so this wraps only the cross-device conflict.
+		if _, err := domain.ResolveAppDevices(spec.Name, svc.Name, svc.Devices, policies); err != nil {
+			return fmt.Errorf("apps: %w", err)
 		}
 	}
 	return nil

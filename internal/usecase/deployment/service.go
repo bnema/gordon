@@ -667,7 +667,7 @@ func selectPreflightServices(rev domain.AppDesiredRevision, onlyService string) 
 	return nil, fmt.Errorf("deployment: service %q not in revision %s: %w", onlyService, rev.Revision, domain.ErrAppStateConflict)
 }
 
-// preflightServices runs the five preflight gates in order. No mutation.
+// preflightServices runs the preflight gates in order. No mutation.
 func (s *Service) preflightServices(ctx context.Context, app string, rev domain.AppDesiredRevision, onlyService string) ([]pinnedService, error) {
 	services, err := selectPreflightServices(rev, onlyService)
 	if err != nil {
@@ -711,7 +711,7 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		if _, err := s.resolveServiceBinds(app, svc); err != nil {
 			return nil, err
 		}
-		if _, err := s.resolveServiceDevices(app, svc); err != nil {
+		if err := s.preflightServiceDevices(ctx, app, svc, pinned); err != nil {
 			return nil, err
 		}
 		pinned = append(pinned, pinnedService{
@@ -727,6 +727,40 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		return nil, err
 	}
 	return pinned, nil
+}
+
+// preflightServiceDevices runs the device authorization and engine
+// capability gates for one service. Split from preflightServices to keep
+// its complexity within budget.
+func (s *Service) preflightServiceDevices(ctx context.Context, app string, svc domain.AppService, pinned []pinnedService) error {
+	if _, err := s.resolveServiceDevices(app, svc); err != nil {
+		return err
+	}
+	// Engine capability is a knowable-before-mutation failure: a
+	// device-bearing revision on an unsupported engine must fail here,
+	// before withdrawal retires the serving generation. The check runs
+	// once per revision, on the first device-bearing service;
+	// CreateContainer keeps the same gate as defense.
+	if len(svc.Devices) > 0 && !devicesEngineChecked(pinned) {
+		if s.deps.Runtime == nil {
+			return fmt.Errorf("deployment: runtime unavailable: %w", domain.ErrRuntimeUnsupported)
+		}
+		if err := s.deps.Runtime.SupportsCDIDevices(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// devicesEngineChecked reports whether an earlier pinned service already
+// triggered the engine capability probe for this revision.
+func devicesEngineChecked(pinned []pinnedService) bool {
+	for _, p := range pinned {
+		if len(p.spec.Devices) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSecrets reads every required secret path once. Values stay in

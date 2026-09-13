@@ -105,12 +105,12 @@ func validateDeviceCDIID(id string) error {
 	return nil
 }
 
-// ResolveAppDevice resolves one logical device request under this policy
+// ResolveAppDevice resolves the logical device grant under this policy
 // for the given app and service. It validates the policy shape, enforces
 // the exact app/service allowlists, and returns the explicit CDI IDs.
 // The result is runtime-ready: callers encode the IDs as one native CDI
 // DeviceRequest.
-func (p AppDevicePolicy) ResolveAppDevice(app, service, device string) ([]string, error) {
+func (p AppDevicePolicy) ResolveAppDevice(app, service string) ([]string, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
@@ -139,13 +139,13 @@ func ResolveAppDevices(app, service string, names []string, policies map[string]
 		if !ok {
 			return nil, fmt.Errorf("%w: app %q service %q device %q: no administrative device policy configured", ErrDevicePolicy, app, service, name)
 		}
-		ids, err := policy.ResolveAppDevice(app, service, name)
+		ids, err := policy.ResolveAppDevice(app, service)
 		if err != nil {
 			return nil, fmt.Errorf("%w: app %q service %q device %q: refused by administrative device policy", ErrDevicePolicy, app, service, name)
 		}
 		for _, id := range ids {
 			if _, dup := seen[id]; dup {
-				return nil, fmt.Errorf("%w: app %q service %q device %q: cdi device %q already granted by another device", ErrDevicePolicy, app, service, name, id)
+				return nil, fmt.Errorf("%w: app %q service %q device %q: cdi device already granted by another device", ErrDevicePolicy, app, service, name)
 			}
 			seen[id] = struct{}{}
 			resolved = append(resolved, id)

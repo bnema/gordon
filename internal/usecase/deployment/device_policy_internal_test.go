@@ -213,3 +213,67 @@ func TestEnsureServiceRunning_RevokedDeviceFailsWithoutRuntimeMutation(t *testin
 	runtime.AssertNotCalled(t, "StartContainer")
 	runtime.AssertExpectations(t)
 }
+
+// TestPreflightServices_ProbesEngineOncePerRevision proves preflight calls
+// SupportsCDIDevices exactly once for a multi-service device-bearing
+// revision, and that pinned services carry their logical device requests.
+func TestPreflightServices_ProbesEngineOncePerRevision(t *testing.T) {
+	ctx := context.Background()
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+
+	rev := domain.AppDesiredRevision{
+		Revision: "rev-1",
+		App:      "blog",
+		Spec: domain.AppSpec{
+			Name: "blog",
+			Env:  map[string]string{},
+			Services: []domain.AppService{
+				{Name: "web", Image: "img:1", Devices: []string{"test_gpu"}},
+				{Name: "worker", Image: "img:1", Devices: []string{"test_gpu"}},
+			},
+		},
+	}
+	state.EXPECT().LoadOwnership(mock.Anything, "blog").
+		Return(domain.AppOwnership{App: "blog", ID: "app-1"}, nil).Once()
+	images.EXPECT().ResolveDigest(mock.Anything, "img:1").Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Twice()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "img:1").Return(nil, nil).Twice()
+	runtime.EXPECT().SupportsCDIDevices(mock.Anything).Return(nil).Once()
+	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
+
+	svc := NewService(Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets}, zerowrap.Default()).
+		WithDevicePolicies(map[string]domain.AppDevicePolicy{
+			"test_gpu": {
+				Name:            "test_gpu",
+				CDI:             []string{"example.com/gpu=GPU-test-uuid"},
+				AllowedApps:     []string{"blog"},
+				AllowedServices: []string{"web", "worker"},
+			},
+		})
+	pinned, err := svc.preflightServices(ctx, "blog", rev, "")
+	require.NoError(t, err)
+	require.Len(t, pinned, 2)
+	runtime.AssertExpectations(t)
+}
+
+// TestCreateContainer_RuntimeUnsupportedSurvivesRedaction proves the
+// engine-unsupported sentinel from a device-bearing create survives the
+// host-inventory redaction so callers map it to the structured
+// runtime-unsupported envelope.
+func TestCreateContainer_RuntimeUnsupportedSurvivesRedaction(t *testing.T) {
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).
+		Return(nil, domain.ErrRuntimeUnsupported).Once()
+	svc := NewService(Deps{Runtime: runtime}, zerowrap.Default())
+
+	_, err := svc.createContainer(context.Background(), "web", &domain.ContainerConfig{
+		CDIDevices: []string{"example.com/gpu=GPU-test-uuid"},
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, domain.ErrRuntimeUnsupported)
+	assert.NotContains(t, err.Error(), "GPU-test-uuid", "the sanitized error must not echo CDI IDs")
+	runtime.AssertExpectations(t)
+}

@@ -3,6 +3,7 @@ package deployment
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -1120,6 +1121,11 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 		// Same redaction rule for device-bearing creates: runtime errors
 		// may embed resolved CDI IDs, which are host inventory. Policy
 		// was already enforced by resolveServiceDevices before this call.
+		// The engine-unsupported sentinel survives redaction so callers
+		// can map it to the structured runtime-unsupported envelope.
+		if errors.Is(err, domain.ErrRuntimeUnsupported) {
+			return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: %w", service, domain.ErrRuntimeUnsupported)
+		}
 		return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: runtime error redacted", service)
 	}
 	return nil, fmt.Errorf("deployment: create container: %w", err)

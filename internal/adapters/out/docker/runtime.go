@@ -361,6 +361,14 @@ func (r *Runtime) requireCDISupport(ctx context.Context) error {
 	return nil
 }
 
+// SupportsCDIDevices implements out.ContainerRuntime. Deployment calls it
+// in preflight for device-bearing revisions so an unsupported engine
+// fails before any workload mutation; CreateContainer keeps the same gate
+// as defense in depth.
+func (r *Runtime) SupportsCDIDevices(ctx context.Context) error {
+	return r.requireCDISupport(ctx)
+}
+
 // checkCDISupport verifies one daemon version response against the CDI
 // support matrix. Family detection prefers the daemon's own components
 // (Podman Engine vs Engine) and falls back to the socket-path hint only

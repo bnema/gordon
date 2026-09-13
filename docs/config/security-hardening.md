@@ -63,6 +63,26 @@ The manifest references only the policy name: `[[service.bind]] name = "app-logs
 - `gordon serve` reload republishes validated policies atomically. An edit that fails validation is rejected and the previous policies stay live.
 - Gordon never creates, deletes, chowns, backs up, or prunes the host path; ownership, permissions, and backup remain the operator's responsibility.
 
+## Administrative app devices (CDI)
+
+App manifests cannot name host devices. A device grant exists only when the operator declares a named policy in `gordon.toml`:
+
+```toml
+[app_devices.transcode-gpu]
+cdi = ["example.com/gpu=GPU-device-uuid"]
+allowed_apps = ["video"]          # exact, non-empty
+allowed_services = ["transcoder"]  # exact, non-empty
+```
+
+The manifest references only the logical name: `devices = ["transcode-gpu"]`.
+
+- `cdi` holds explicit CDI device IDs. Raw `/dev` paths, unqualified names, and aggregate `=all` selectors are rejected.
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists, so least privilege is enforced by construction. There is no wildcard, prefix, or empty-means-all form.
+- Gordon resolves logical names to CDI IDs at activation time and encodes them as one native CDI `DeviceRequest`. Revisions persist the logical names, never the host resolution.
+- The grant is re-resolved immediately before every preflight, container create, restart, and recovery. Revoking a grant blocks future deploys while the running service is untouched; changing a mapping never recreates a running container.
+- Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured. Older or unrecognized engines fail with a structured `runtime-unsupported` error and never run without devices.
+- Gordon installs no drivers, manages no quotas, and injects no device environment: images carry their own runtime expectations.
+
 ## Pass import plaintext handling
 
 With the `pass` backend, Gordon imports eligible plaintext `.env` files at startup. It removes a source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon fails closed and leaves the plaintext source in place for operator review.
