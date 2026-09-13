@@ -745,8 +745,11 @@ func (s *Service) preflightServiceDevices(ctx context.Context, app string, svc d
 		if s.deps.Runtime == nil {
 			return fmt.Errorf("deployment: runtime unavailable: %w", domain.ErrRuntimeUnsupported)
 		}
+		// Sanitize the adapter cause: version-probe failures may embed
+		// the daemon endpoint, which must not reach journals or API
+		// responses. The sentinel survives for the structured envelope.
 		if err := s.deps.Runtime.SupportsCDIDevices(ctx); err != nil {
-			return err
+			return fmt.Errorf("deployment: engine device capability check for service %q: %w", svc.Name, domain.ErrRuntimeUnsupported)
 		}
 	}
 	return nil

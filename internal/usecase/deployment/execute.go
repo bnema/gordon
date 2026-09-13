@@ -1109,6 +1109,14 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 	if err == nil {
 		return created, nil
 	}
+	// The engine-unsupported sentinel survives redaction so callers can
+	// map it to the structured runtime-unsupported envelope. It carries
+	// no host inventory (engine family/version only), and the device
+	// gate runs only for device-bearing creates, so this branch also
+	// covers services that declare both binds and devices.
+	if errors.Is(err, domain.ErrRuntimeUnsupported) {
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: %w", service, domain.ErrRuntimeUnsupported)
+	}
 	if len(config.Binds) > 0 {
 		// A CreateContainer failure is a runtime error, not a bind policy
 		// violation: policy was already enforced by resolveServiceBinds
@@ -1121,11 +1129,6 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 		// Same redaction rule for device-bearing creates: runtime errors
 		// may embed resolved CDI IDs, which are host inventory. Policy
 		// was already enforced by resolveServiceDevices before this call.
-		// The engine-unsupported sentinel survives redaction so callers
-		// can map it to the structured runtime-unsupported envelope.
-		if errors.Is(err, domain.ErrRuntimeUnsupported) {
-			return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: %w", service, domain.ErrRuntimeUnsupported)
-		}
 		return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: runtime error redacted", service)
 	}
 	return nil, fmt.Errorf("deployment: create container: %w", err)
