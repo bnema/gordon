@@ -187,7 +187,12 @@ func TestCheckImageVolumes_IncludesBindDestinations(t *testing.T) {
 	})
 }
 
-func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
+// TestSingleWriterRequiredAndImplicitHTTPReadiness proves the two
+// independent service rules: singleWriterRequired marks the stateful
+// services whose superseded generation must stay recovery-inhibited, and
+// implicitHTTPProbe decides which undeclared readiness checks keep the
+// implicit HTTP probe.
+func TestSingleWriterRequiredAndImplicitHTTPReadiness(t *testing.T) {
 	httpSpec := func() domain.AppService {
 		return domain.AppService{
 			Name: "web",
@@ -195,52 +200,78 @@ func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
 		}
 	}
 
-	t.Run("http-only without binds is parallel eligible", func(t *testing.T) {
-		assert.True(t, httpEligible(httpSpec()))
+	t.Run("stateless public HTTP service keeps the implicit HTTP probe", func(t *testing.T) {
+		assert.True(t, implicitHTTPProbe(httpSpec()))
+		assert.Equal(t, domain.AppReadinessHTTP, deploymentReadiness(httpSpec()).Readiness.Type)
 		assert.False(t, singleWriterRequired(httpSpec()))
 	})
 
-	t.Run("internal-only http is not overlap eligible", func(t *testing.T) {
-		spec := domain.AppService{
+	t.Run("undeclared probe is not guessed for internal, mixed, or L4 services", func(t *testing.T) {
+		internal := domain.AppService{
 			Name: "api",
 			HTTP: []domain.AppHTTPInterface{{Port: 8080, Visibility: domain.AppVisibilityInternal}},
 		}
-		assert.False(t, httpEligible(spec),
-			"an internal-only service has no public generation to cut over and must use interrupted replacement")
-		assert.False(t, singleWriterRequired(spec))
+		assert.False(t, implicitHTTPProbe(internal),
+			"an internal-only interface is not reachable through a loopback publish, so no HTTP probe is guessed")
+		assert.Empty(t, deploymentReadiness(internal).Readiness.Type)
+		assert.False(t, singleWriterRequired(internal))
+
+		mixed := httpSpec()
+		mixed.HTTP = append(mixed.HTTP, domain.AppHTTPInterface{Port: 9090, Visibility: domain.AppVisibilityInternal})
+		assert.False(t, implicitHTTPProbe(mixed))
+		assert.Empty(t, deploymentReadiness(mixed).Readiness.Type)
+		assert.False(t, singleWriterRequired(mixed))
+
+		l4Only := domain.AppService{
+			Name: "db",
+			TCP:  []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 5432, Publish: "5432"}},
+		}
+		assert.False(t, implicitHTTPProbe(l4Only), "an HTTP GET proves nothing about an L4 workload")
+		assert.Empty(t, deploymentReadiness(l4Only).Readiness.Type)
 	})
 
-	t.Run("mixed public and internal http must interrupt", func(t *testing.T) {
-		spec := domain.AppService{
-			Name: "api",
-			HTTP: []domain.AppHTTPInterface{
-				{Host: "app.example.com", Port: 8080, TLS: domain.AppTLSAuto},
-				{Port: 9090, Visibility: domain.AppVisibilityInternal},
-			},
+	t.Run("declared probes are never replaced by the implicit HTTP probe", func(t *testing.T) {
+		for _, declared := range []string{domain.AppReadinessHTTP, domain.AppReadinessTCP, domain.AppReadinessLog} {
+			spec := httpSpec()
+			spec.Readiness = domain.AppReadiness{Type: declared}
+			assert.False(t, implicitHTTPProbe(spec), "%s is an explicit declaration", declared)
+			assert.Equal(t, declared, deploymentReadiness(spec).Readiness.Type)
 		}
-		assert.False(t, httpEligible(spec),
-			"the candidate is resolvable by service alias over the private network before readiness, so any internal interface must use interrupted replacement")
-		assert.False(t, singleWriterRequired(spec))
+	})
+
+	t.Run("an explicit none on a probeable service keeps the implicit HTTP probe", func(t *testing.T) {
+		spec := httpSpec()
+		spec.Readiness = domain.AppReadiness{Type: domain.AppReadinessNone}
+		assert.Equal(t, domain.AppReadinessHTTP, deploymentReadiness(spec).Readiness.Type)
+	})
+
+	t.Run("an explicit none on an L4 service stays unchecked", func(t *testing.T) {
+		spec := domain.AppService{
+			Name:      "db",
+			TCP:       []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 5432, Publish: "5432"}},
+			Readiness: domain.AppReadiness{Type: domain.AppReadinessNone},
+		}
+		assert.Equal(t, domain.AppReadinessNone, deploymentReadiness(spec).Readiness.Type)
 	})
 
 	t.Run("writable bind is single-writer", func(t *testing.T) {
 		spec := httpSpec()
 		spec.Binds = []domain.AppBind{{Name: "config", Path: "/etc/app.conf"}}
-		assert.False(t, httpEligible(spec), "a bind must disable parallel HTTP replacement")
+		assert.False(t, implicitHTTPProbe(spec), "a stateful service must declare its own readiness")
 		assert.True(t, singleWriterRequired(spec))
 	})
 
 	t.Run("read-only bind is also single-writer", func(t *testing.T) {
 		spec := httpSpec()
 		spec.Binds = []domain.AppBind{{Name: "config", Path: "/etc/app.conf", ReadOnly: true}}
-		assert.False(t, httpEligible(spec))
+		assert.False(t, implicitHTTPProbe(spec))
 		assert.True(t, singleWriterRequired(spec))
 	})
 
 	t.Run("volume is single-writer", func(t *testing.T) {
 		spec := httpSpec()
 		spec.Volumes = []domain.AppVolume{{Name: "data", Path: "/data"}}
-		assert.False(t, httpEligible(spec))
+		assert.False(t, implicitHTTPProbe(spec))
 		assert.True(t, singleWriterRequired(spec))
 	})
 }

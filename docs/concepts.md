@@ -69,18 +69,19 @@ DATABASE_URL = "database-url"
 
 ## Updates
 
-For HTTP services without volumes, Gordon keeps the old container serving until the replacement passes readiness, then switches traffic, drains with a bounded deadline, and retires that service's old container. Deployment stops at the first service failure: already successful services are preserved, later services stay unchanged.
+Gordon deploys an app's services one at a time in sorted order. A deploy may cause a short service interruption; there is no zero-downtime promise for app services. Gordon never runs two Gordon-managed generations of the same service at the same time.
+
+Every replaced service follows the same flow: preflight completes before anything is disrupted (image resolution and pull, secrets, volumes, networks, bind policy, reservations); the service is withdrawn from traffic; the old container is stopped and removed; the new container is created and started; the declared readiness probe runs; the new `ACTIVE` state is published; and traffic is rebuilt and published for the new container.
 
 ```
-Time ─────────────────────────────────────────────>
-
-Old Container:  [═══════════════════]
-                                    ↓ retire
-New Container:           [═════════════════════════>
-                         ↑ start    ↑ traffic routed
+Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► route traffic
 ```
 
-TCP, UDP, mixed, and volume-owning services replace with interruption — no zero-downtime promise. An open UDP socket is not application readiness. Gordon never restarts an old volume-owning image automatically after a replacement may have written data.
+If preflight fails, the running service is left untouched. If replacement fails after the old container was removed, the failure is explicit: Gordon does not recreate the old container and does not promise automatic data rollback, and a stateful service's recovery inhibition stays in place.
+
+Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back. This flow covers every service, including TCP, UDP, mixed, and volume-owning services. An open UDP socket is not application readiness, and Gordon never restarts an old volume-owning image automatically after a replacement may have written data.
+
+`gordon apps restart` is separate from deploy and stays in place: it withdraws traffic, restarts the same pinned container, verifies readiness, and republishes traffic. No second container is created.
 
 ## Deletion and Cleanup Lifecycle
 

@@ -258,7 +258,6 @@ type DeployResult struct {
 	Outcome         string
 	Services        map[string]ServiceResult
 	CleanupWarnings []CleanupWarning
-	Interrupted     []string
 	// Removed names services retired because the new revision no longer
 	// declares them.
 	Removed []string
@@ -279,12 +278,6 @@ type ServiceResult struct {
 	// publishes for the active record. Nil when the service declares
 	// no UDP interface.
 	UDPBackendBinds map[int]int
-	// Retire is the exact container ID to stop+remove AFTER the new
-	// effective state is published. Empty when nothing retires.
-	Retire string
-	// RetireGrace is the effective stop grace of the container named by
-	// Retire: the generation being stopped, never its replacement.
-	RetireGrace time.Duration
 	// CleanupWarnings are bounded leftovers of this service's terminal
 	// path: a candidate that could not be removed, or a backend claim
 	// that could not be released.

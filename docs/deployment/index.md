@@ -141,16 +141,13 @@ docker push gordon.example.com/myapp:$VERSION
 
 ## Updates
 
-For HTTP services without volumes, Gordon keeps the old container serving until the replacement passes readiness, then switches traffic, drains, and retires the old container. Deployment stops at the first service failure: already successful services are preserved, later services stay unchanged.
+Gordon deploys an app's services one at a time in sorted order. A deploy may cause a short service interruption; there is no zero-downtime promise for app services, and Gordon never runs two Gordon-managed generations of the same service at the same time.
 
 ```
-Timeline ─────────────────────────────────────────>
-
-Old Container:  [═══════════════════]
-                                    ↓ retire
-New Container:           [═════════════════════════>
-                         ↑ start    ↑ traffic routed
+Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► route traffic
 ```
+
+Preflight (image resolution and pull, secrets, volumes, networks, bind policy, reservations) completes before anything is disrupted, so a preflight failure leaves the running service untouched. If replacement fails after the old container was removed, the failure is explicit: Gordon does not recreate the old container and does not promise automatic data rollback. Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back.
 
 ## Related
 

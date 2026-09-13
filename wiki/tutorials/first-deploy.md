@@ -155,7 +155,7 @@ docker tag my-first-app registry.mydomain.com/my-first-app:latest
 docker push registry.mydomain.com/my-first-app:latest
 ```
 
-Gordon automatically deploys the update with zero downtime.
+Gordon replaces the running container: it withdraws traffic, stops and removes the old container, starts the new one, waits for it to pass its readiness probe, and routes traffic to it. Expect a short interruption at that point.
 
 ## Next Steps
 

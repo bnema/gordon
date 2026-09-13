@@ -176,7 +176,7 @@ What these commands do:
 
 - `gordon push` builds, uploads, and stores the image. It never deploys.
 - `gordon apps apply` validates the manifest and persists it as desired state.
-- `gordon apps deploy` activates the accepted revision: pulls the image, starts the container, waits for readiness, switches traffic, retires the old container.
+- `gordon apps deploy` activates the accepted revision: runs preflight, withdraws the service from traffic, stops and removes the old container, starts the new container, waits for readiness, publishes the new `ACTIVE` state, and routes traffic to it.
 
 If the app needs secrets, register their names in the manifest (`[service.secrets]` maps ENV name to secret name), then write values — values stay in pass, never in the file:
 
@@ -198,7 +198,7 @@ gordon push myapp --build --remote prod
 gordon apps deploy blog --remote prod
 ```
 
-For HTTP services without volumes, Gordon keeps the old container serving until the replacement passes readiness, then switches traffic, drains, and retires the old container. TCP/UDP and volume-owning services replace with interruption.
+Gordon deploys services one at a time in sorted order. A deploy may cause a short service interruption, and Gordon never runs two Gordon-managed generations of the same service at the same time. If preflight fails, the running service is left untouched. This applies to every service, including TCP, UDP, and volume-owning services.
 
 ## Next Steps
 

@@ -21,12 +21,11 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. HTTP-only services whose interfaces are all public,
-// with no volumes and no binds, keep the old container serving until the
-// replacement passes readiness, then switch with a bounded drain and
-// retire the old container by exact ID. TCP/UDP, any internal HTTP
-// interface, and bind- or volume-owning services use replacement with
-// interruption. Volumes are never deleted: no RemoveVolume call, no
+// sorted name order. Every service is replaced sequentially — withdraw
+// traffic, retire the superseded container, start the replacement and wait
+// for its readiness probe — so a deployment may briefly interrupt the
+// service, and two Gordon-managed generations of one service never run at
+// the same time. Volumes are never deleted: no RemoveVolume call, no
 // volume-deletion flags on container removal.
 func (s *Service) Deploy(ctx context.Context, input DeployInput) (*DeployResult, error) {
 	release, err := s.acquireAppContext(ctx, input.App)
@@ -93,11 +92,11 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	return result, nil
 }
 
-// runServiceStep executes one pinned service in the journal: replace,
-// publish ACTIVE, then cutover traffic and retire the replaced container.
-// The step is recorded as succeeded only after the runtime effect, the
-// ACTIVE publication, and the traffic apply all succeeded, so a journaled
-// success is never ahead of what is routed.
+// runServiceStep executes one pinned service in the journal: replace it,
+// publish its ACTIVE entry, then publish traffic for the new container. The
+// step is recorded as succeeded only after the runtime effect, the ACTIVE
+// publication, and the traffic apply all succeeded, so a journaled success
+// is never ahead of what is routed.
 func (s *Service) runServiceStep(
 	ctx context.Context,
 	app, revision string,
@@ -112,11 +111,8 @@ func (s *Service) runServiceStep(
 	if eff, ok := active.Services[p.name]; ok {
 		before = eff.Container
 	}
-	svcResult, interrupted := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name))
+	svcResult := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name))
 	result.Services[p.name] = svcResult
-	if interrupted {
-		result.Interrupted = append(result.Interrupted, p.name)
-	}
 	stepID := "service." + p.name + ".replace"
 	step := domain.AppOperationStep{
 		ID: stepID, Service: p.name,
@@ -140,17 +136,18 @@ func (s *Service) runServiceStep(
 		return fail(fmt.Errorf("deployment: service %q failed at %s: %s: %w",
 			p.name, stepID, svcResult.Error, domain.ErrAppStateConflict))
 	}
-	// Publish per-service effective state first: the proxy switches to the
-	// new binds at publication. Retire the replaced container only AFTER
-	// publication (no outage on crash between the two); a retire failure
-	// is a cleanup warning, not an outcome flip.
+	// Publish the per-service effective state: the new binds become the
+	// service's recorded backend before the proxy is repointed at them.
 	if err := s.publishService(ctx, app, revision, p, svcResult, op.Op); err != nil {
 		svcResult.Result = "failed"
 		svcResult.Error = err.Error()
 		result.Services[p.name] = svcResult
 		return fail(err)
 	}
-	if err := s.cutoverService(ctx, app, p, &svcResult, result); err != nil {
+	// Rebuild and publish the traffic graph. ACTIVE already names the new
+	// container, but the operation is a failure until routing accepted it,
+	// so a rejected graph must never be journaled as success.
+	if err := s.refreshTraffic(ctx, app); err != nil {
 		svcResult.Result = "failed"
 		svcResult.Error = err.Error()
 		result.Services[p.name] = svcResult
@@ -310,81 +307,65 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 	return step, nil, nil
 }
 
-// cutoverService applies traffic after publication, then retires the
-// replaced container. A traffic failure is returned to the caller, which
-// records the failed step: ACTIVE is published but the new service is not
-// routable, so the operation must not report success. The old container
-// is retained when traffic activation fails.
-func (s *Service) cutoverService(ctx context.Context, app string, p pinnedService, svcResult *ServiceResult, result *DeployResult) error {
-	if trafficErr := s.refreshTraffic(ctx, app); trafficErr != nil {
-		return trafficErr
+// deployService replaces one service sequentially and returns its terminal
+// result. before is the ACTIVE container being superseded (empty on a first
+// deployment); beforeGrace is its effective stop grace.
+//
+// The order is fixed: withdraw from traffic and confirm it, durably inhibit
+// a single-writer generation, retire the superseded container and confirm
+// it is gone, then create and start the replacement and wait for its
+// readiness probe. Nothing is created before the previous generation is
+// confirmed gone, so two generations never overlap; a withdrawal or
+// retirement that cannot be confirmed aborts without creating a candidate.
+func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) ServiceResult {
+	// Revalidate the current authorization and source before withdrawing or
+	// retiring the serving generation. A reload between preflight and this
+	// service step must fail without mutating the existing workload.
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err)
 	}
-	if svcResult.Retire != "" {
-		drainWithDeadline(ctx, p.spec.StopGrace)
-		// The replaced generation keeps its inhibition: only a published
-		// replacement may clear it.
-		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: p.name, Grace: svcResult.RetireGrace,
-		}, svcResult.Retire)
-		svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, retired.Warnings...)
-	}
-	return nil
-}
-
-// deployService replaces one service. beforeGrace is the effective stop
-// grace of the container being replaced. It returns the terminal result
-// and whether the service saw interruption.
-func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
-	if httpEligible(p.spec) {
-		return s.deployHTTP(ctx, app, revision, p, opID, before, beforeGrace)
-	}
-	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
-}
-
-// httpEligible reports HTTP services whose generations may overlap while
-// the candidate proves readiness. Every declared HTTP interface must be
-// effective-public: the proxy repoints each public host to the candidate
-// only after readiness, so overlap buys availability. Any internal HTTP
-// interface is instead resolved over the app private network by service
-// alias, and the candidate joins that network with the same alias as soon
-// as it starts — before readiness — so an internal consumer could reach an
-// unready generation with no cutover gate to stop it. Such a service takes
-// interrupted replacement like L4 services. Volumes, binds, and L4 ports
-// remain interrupted because two generations must not share their state or
-// publications.
-func httpEligible(spec domain.AppService) bool {
-	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
-		return false
-	}
-	for _, h := range spec.HTTP {
-		if !h.IsPublic() {
-			return false
+	// Withdraw the service from traffic first and confirm it: a withdrawal
+	// that cannot be applied must block every container mutation, so no
+	// unverified generation stays routable. A first deployment has no
+	// published generation to withdraw.
+	if before != "" {
+		if err := s.withdrawForRecovery(ctx, app, p.name); err != nil {
+			return s.failResult(revision, before, "", err)
 		}
 	}
-	return true
-}
-
-// singleWriterRequired reports services that must never have two generations
-// running concurrently. Persistent volumes and any bind (especially a
-// writable one) may be written by both, so they are treated identically.
-func singleWriterRequired(spec domain.AppService) bool {
-	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
-}
-
-// deployHTTP keeps the old container serving until the replacement passes
-// readiness AND the new effective state is published: the proxy switches
-// to the new loopback binds at publication, the old container drains,
-// and only then is the old container retired by exact ID. Retire never
-// precedes publication (no outage window on crash between the two).
-func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
+	// A volume- or bind-owning replacement may write while the old
+	// generation still exists and could be revived by native restart policy.
+	// Inhibit that generation durably BEFORE the write can happen, so boot or
+	// periodic recovery can never restart the old writer on top of the new
+	// one. Cleared once the safe generation is published (publishService) or
+	// the operator removes the app.
+	if before != "" && singleWriterRequired(p.spec) {
+		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
+			return s.failResult(revision, before, "", err)
+		}
+	}
+	if before != "" {
+		// The superseded generation must be confirmed gone before a new
+		// generation starts: a failed retirement aborts the replacement
+		// instead of allowing overlapping generations, and the generation
+		// keeps its inhibition and its claims.
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: p.name, Grace: beforeGrace,
+		}, before)
+		if !retired.Gone {
+			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired)))
+		}
+	}
 	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
 	if err != nil {
-		return s.failResult(revision, before, "", err), false
+		return s.failResult(revision, before, "", err)
 	}
-	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(p.spec), binds); err != nil {
-		// Old version keeps serving. Capture redacted diagnostics while
-		// the failed replacement still exists, then remove only that
-		// candidate.
+	if err := s.waitServiceReady(ctx, app, created.ID, deploymentReadiness(p.spec), binds); err != nil {
+		// Capture redacted diagnostics while the failed replacement still
+		// exists, then remove only that candidate. The superseded container
+		// is already gone and is never recreated. Cleanup is best effort: a
+		// canceled context can leave the candidate behind, which is then
+		// reported as a leftover warning instead of a false success.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
 		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
 		return ServiceResult{
@@ -392,21 +373,28 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 			EffectiveRevision: revision,
 			Before:            before,
 			After:             created.ID,
+			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
 			CleanupWarnings:   cleanup,
-		}, false
+		}
 	}
 	return ServiceResult{
 		Result:            "deployed",
 		EffectiveRevision: revision,
 		Before:            before,
 		After:             created.ID,
+		RestartUnsafe:     singleWriterRequired(p.spec),
 		BackendBinds:      binds,
 		UDPBackendBinds:   udpBinds,
-		Retire:            retireContainerID(before, created.ID),
-		RetireGrace:       beforeGrace,
-	}, false
+	}
+}
+
+// singleWriterRequired reports services that must never have two generations
+// running concurrently. Persistent volumes and any bind (especially a
+// writable one) may be written by both, so they are treated identically.
+func singleWriterRequired(spec domain.AppService) bool {
+	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
 }
 
 // refreshTraffic rebuilds the proxy host index and applies the full
@@ -428,79 +416,6 @@ func (s *Service) refreshTraffic(ctx context.Context, app string) error {
 		return fmt.Errorf("deployment: rebuild traffic for %q: %w", app, err)
 	}
 	return nil
-}
-
-// retireContainerID returns the exact container ID to retire after the
-func retireContainerID(before, after string) string {
-	if before == "" || before == after {
-		return ""
-	}
-	return before
-}
-
-// deployInterrupted stops the old instance after preflight, then creates
-// the replacement. Volume-owning failures never restart the old image:
-// the replacement may already have written data.
-func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
-	// Revalidate the current authorization and source before inhibiting or
-	// retiring the serving generation. A reload between preflight and this
-	// service step must fail without mutating the existing workload.
-	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
-		return s.failResult(revision, before, "", err), true
-	}
-	// A volume-owning replacement may write while the old generation
-	// still exists and could be revived by native restart policy.
-	// Inhibit that generation durably BEFORE the write can happen, so
-	// boot or periodic recovery can never restart the old writer on
-	// top of the new one. Cleared once the safe generation is
-	// published (publishService) or the operator removes the app.
-	inhibited := before != "" && singleWriterRequired(p.spec)
-	if inhibited {
-		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
-			return s.failResult(revision, before, "", err), true
-		}
-	}
-	if before != "" {
-		// The superseded writer must be confirmed gone before a new
-		// writer can touch the same data: a failed retirement aborts the
-		// replacement instead of allowing overlapping writers, and the
-		// generation keeps its inhibition and its claims.
-		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: p.name, Grace: beforeGrace,
-		}, before)
-		if !retired.Gone {
-			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired))), true
-		}
-	}
-	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
-	if err != nil {
-		return s.failResult(revision, before, "", err), true
-	}
-	if err := s.waitServiceReady(ctx, app, created.ID, p.spec, binds); err != nil {
-		// Capture redacted diagnostics while the candidate still exists,
-		// then remove only that candidate.
-		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
-		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
-		return ServiceResult{
-			Result:            "failed",
-			EffectiveRevision: revision,
-			Before:            before,
-			After:             created.ID,
-			RestartUnsafe:     singleWriterRequired(p.spec),
-			Error:             err.Error(),
-			Diagnostics:       tail,
-			CleanupWarnings:   cleanup,
-		}, true
-	}
-	return ServiceResult{
-		Result:            "deployed",
-		EffectiveRevision: revision,
-		Before:            before,
-		After:             created.ID,
-		RestartUnsafe:     singleWriterRequired(p.spec),
-		BackendBinds:      binds,
-		UDPBackendBinds:   udpBinds,
-	}, true
 }
 
 // reserveVolumeOwnership durably records one app-owned volume as
@@ -927,7 +842,8 @@ func sortedEnv(envMap map[string]string) []string {
 	return env
 }
 
-// publishService writes the per-service effective record after cutover.
+// publishService writes the per-service effective record once the
+// replacement passed readiness.
 func (s *Service) publishService(ctx context.Context, app, revision string, p pinnedService, result ServiceResult, opID string) error {
 	if app == "" {
 		return fmt.Errorf("deployment: publish active: empty app: %w", domain.ErrAppStateConflict)
@@ -982,7 +898,7 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 	return nil
 }
 
-// recordOwnership stamps volume/secret/network ownership after cutover.
+// recordOwnership stamps volume/secret/network ownership after publication.
 func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedService) error {
 	ownership, err := s.deps.State.LoadOwnership(ctx, app)
 	if err != nil {
@@ -1145,26 +1061,39 @@ func tailLines(r io.Reader, n int) ([]string, error) {
 	return lines, nil
 }
 
-// httpReadiness forces the HTTP path for eligible cutover checks.
-func httpReadiness(spec domain.AppService) domain.AppService {
-	if spec.Readiness.Type == "" || spec.Readiness.Type == domain.AppReadinessNone {
-		spec.Readiness.Type = domain.AppReadinessHTTP
+// deploymentReadiness resolves the readiness check a deploy or restart
+// runs. Readiness never depends on how a service is replaced: a declared
+// http, tcp, or log check is used as declared, and an undeclared check
+// ("none" or unset) keeps the implicit HTTP probe on a service Gordon can
+// probe over the published loopback bind — at least one effective-public
+// HTTP interface, no L4 interface, no volume, and no bind. An undeclared
+// probe on a stateful or L4 workload stays unchecked instead: an HTTP GET on
+// the published port proves nothing there, so Gordon never guesses one.
+func deploymentReadiness(spec domain.AppService) domain.AppService {
+	if !implicitHTTPProbe(spec) {
+		return spec
 	}
+	spec.Readiness.Type = domain.AppReadinessHTTP
 	return spec
 }
 
-// drainWithDeadline pauses briefly so in-flight HTTP requests finish.
-func drainWithDeadline(ctx context.Context, grace time.Duration) {
-	if grace <= 0 {
-		grace = domain.AppDefaultStopGrace
+// implicitHTTPProbe reports whether a service that declares no readiness
+// check receives the implicit HTTP probe when a deploy or restart starts it.
+// Recovery verification of an already running generation keeps the declared
+// readiness unchanged: it re-checks a generation it did not replace.
+func implicitHTTPProbe(spec domain.AppService) bool {
+	if spec.Readiness.Type != "" && spec.Readiness.Type != domain.AppReadinessNone {
+		return false
 	}
-	if grace > time.Second {
-		grace = time.Second
+	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
+		return false
 	}
-	select {
-	case <-time.After(grace):
-	case <-ctx.Done():
+	for _, h := range spec.HTTP {
+		if !h.IsPublic() {
+			return false
+		}
 	}
+	return true
 }
 
 // appLabels stamps engine ownership on every created container.

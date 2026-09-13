@@ -133,14 +133,14 @@ func TestRemove_FailedRetirementKeepsClaimsAndActiveState(t *testing.T) {
 	state.AssertNotCalled(t, "RetireApp", mock.Anything, mock.Anything)
 }
 
-// TestDeploy_RetirementFailureIsSurfacedAsAWarning proves a leftover of a
-// successful deploy is journaled as a bounded warning instead of being
-// dropped, and that the deploy itself still reports success.
-func TestDeploy_RetirementFailureIsSurfacedAsAWarning(t *testing.T) {
+// TestDeploy_RetirementFailureBlocksReplacement proves the superseded
+// generation must be confirmed gone before a replacement starts: a failed
+// retirement aborts the service without creating a candidate, and the
+// failure is journaled instead of being downgraded to a warning.
+func TestDeploy_RetirementFailureBlocksReplacement(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	rev := mockRevision()
-	rev.Spec.Services[0].StopGrace = time.Millisecond
 
 	oldActive := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
 		"web": {EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old", Spec: graceSpec(time.Second)},
@@ -155,18 +155,9 @@ func TestDeploy_RetirementFailureIsSurfacedAsAWarning(t *testing.T) {
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(oldActive, true, nil)
-	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
-	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil)
-	expectNetworkProvision(runtime, "app-blog", 1)
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
-	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
-	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
-		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
-	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
-	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
-	// The replaced container is retired with its own effective grace, and
-	// its removal fails: the deploy is still successful, the leftover is
-	// a warning.
+	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	// The superseded container is retired with its own effective grace, and
+	// its removal fails: the replacement must not start.
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", time.Second).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
 
@@ -185,12 +176,22 @@ func TestDeploy_RetirementFailureIsSurfacedAsAWarning(t *testing.T) {
 	))
 
 	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
-	require.NoError(t, err)
+	require.Error(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t, "deployed", result.Services["web"].Result)
-	require.Len(t, result.CleanupWarnings, 1)
-	assert.Equal(t, "c-old", result.CleanupWarnings[0].Leftover)
-	assert.NotContains(t, result.CleanupWarnings[0].Detail, "unexpected", "warnings carry stable, log-free detail")
+	assert.Equal(t, "failed", result.Services["web"].Result)
+	assert.Contains(t, result.Services["web"].Error, "retire superseded container",
+		"the unconfirmed retirement is the reported failure")
+
+	// No workload is created, started, or published while the superseded
+	// generation is not confirmed gone, and no claim or inhibition of that
+	// generation is released.
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StartContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "ListNetworks", mock.Anything)
+	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	require.NotEmpty(t, saved)
 	last := saved[len(saved)-1]
@@ -198,8 +199,6 @@ func TestDeploy_RetirementFailureIsSurfacedAsAWarning(t *testing.T) {
 	assert.Equal(t, "preflight", last.Steps[0].ID)
 	assert.Equal(t, domain.AppStepSucceeded, last.Steps[0].State)
 	assert.Equal(t, "service.web.replace", last.Steps[1].ID)
-	assert.Equal(t, domain.AppStepSucceeded, last.Steps[1].State)
-	require.Len(t, last.Warnings, 1)
-	assert.Equal(t, "web", last.Warnings[0].Service)
-	assert.Equal(t, "c-old", last.Warnings[0].Leftover)
+	assert.Equal(t, domain.AppStepFailed, last.Steps[1].State)
+	assert.Equal(t, domain.AppOutcomeFailed, last.Outcome)
 }
