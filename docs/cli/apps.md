@@ -55,6 +55,27 @@ With `--deploy`, chains exactly the accepted revision into a deploy after
 persistence succeeds; the two outcomes are reported separately because a
 deploy may fail after the apply succeeded.
 
+When the daemon accepts the deploy asynchronously (HTTP 202), the command
+reuses the same by-key watch as `gordon apps deploy`: it polls the
+operation journal until terminal, prints progress only when the operation
+or step state changes, and never reissues the deploy. A terminal
+`partial`/`failed` deploy exits nonzero while still reporting the
+successful apply. Ctrl-C stops only local polling: the daemon-side
+operation keeps running and the command prints how to resume it.
+
+With `--json`, stdout carries exactly one final combined document after the
+deploy reaches a terminal state:
+
+```json
+{
+  "apply": { "app": "blog", "resulting_revision": "rev-b", "pending": true },
+  "deploy": { "op": "op-1", "app": "blog", "status": "success", "outcome": "success" }
+}
+```
+
+No initial running document is emitted, and progress, transient warnings,
+and Ctrl-C resume guidance go to stderr.
+
 `--dry-run` and `--deploy` cannot be combined.
 
 ---

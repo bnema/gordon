@@ -24,7 +24,7 @@ func TestRunAppsApply_DryRunOmitsEmptyRevisionAndRendersDiff(t *testing.T) {
 		Intent: "apply-7",
 	}, nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
 		writeManifest(t, "[app]\nname = \"blog\"\n"), true, false, false))
 	text := out.String()
 	assert.Contains(t, text, "Validated (dry-run) blog")
@@ -38,7 +38,7 @@ func TestRunAppsApply_NoopOmitsEmptyRevision(t *testing.T) {
 	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).
 		Return(&dto.AppApplyResponse{App: "blog", Noop: true}, nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out,
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
 		writeManifest(t, "x"), true, false, false))
 	assert.Contains(t, out.String(), "No changes for blog")
 	assert.NotContains(t, out.String(), "()")
