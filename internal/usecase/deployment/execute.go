@@ -72,12 +72,12 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		Revision: rev.Revision,
 		Services: map[string]ServiceResult{},
 	}
-	// Reconcile services the new desired state no longer declares BEFORE
-	// publishing anything: a service the operator removed must stop being
-	// reachable, and its exact container must be stopped and removed
-	// while its data is retained.
-	if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
-		return result, err
+	// A targeted deploy is intentionally a partial plan: services omitted
+	// from pinned remain active. Full deploys reconcile actual removals.
+	if input.Service == "" {
+		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
+			return result, err
+		}
 	}
 	for i, p := range pinned {
 		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
