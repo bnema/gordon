@@ -27,19 +27,89 @@ const failLogTailTimeout = 10 * time.Second
 // service, and two Gordon-managed generations of one service never run at
 // the same time. Volumes are never deleted: no RemoveVolume call, no
 // volume-deletion flags on container removal.
+//
+// It is the synchronous composition of the two engine phases: StartDeploy
+// claims the key and journals the operation, then ExecuteDeploy runs the
+// effects for the owner only.
 func (s *Service) Deploy(ctx context.Context, input DeployInput) (*DeployResult, error) {
-	release, err := s.acquireAppContext(ctx, input.App)
+	started, err := s.StartDeploy(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if !started.Owned {
+		// The key already answered this request: its stored journal is the
+		// result and no workload is touched again.
+		return journaledOrNil(input, &started.Claim.Journal, started.ReplayError())
+	}
+	return s.ExecuteDeploy(ctx, started.Claim)
+}
+
+// DeployClaim is the durable identity of one started deploy operation. It is
+// the hand-off between the two phases: StartDeploy returns it and
+// ExecuteDeploy consumes it. App and Op are the durable identity, so a
+// caller that reconstructs the claim from them alone (for example after a
+// restart, with no in-process state) leaves Journal and Resolved empty and
+// ExecuteDeploy loads and resolves both from the store.
+type DeployClaim struct {
+	App      string
+	Op       string
+	Service  string
+	Revision string
+	// Resolved is the revision StartDeploy resolved for this claim. Empty
+	// when the claim was reconstructed from identity alone.
+	Resolved domain.AppDesiredRevision
+	// Journal is the claimed operation held in process. Its Op is empty when
+	// the claim was reconstructed from identity alone.
+	Journal domain.AppOperation
+}
+
+// StartDeployResult reports whether this caller owns the claimed operation.
+// Owned is true only for the single caller that claimed Op. Every idempotent
+// replay (the same key already answered) reports Owned false, and the stored
+// journal in Claim.Journal is the result. Only an owner may pass the claim to
+// ExecuteDeploy.
+type StartDeployResult struct {
+	Claim DeployClaim
+	Owned bool
+}
+
+// ReplayError is the explicit disposition of a claim this caller does not
+// own: nil for a terminal success, and a conflict for an in-flight,
+// interrupted, or failed operation, so a replay is never mistaken for a
+// second execution. It is nil for an owned operation.
+func (r StartDeployResult) ReplayError() error {
+	if r.Owned {
+		return nil
+	}
+	return replayError(r.Claim.Journal)
+}
+
+// StartDeploy performs the first phase of a deploy. Under the app lock it
+// converges any interrupted predecessor, resolves the request to a revision
+// and runs the targeted-deploy convergence checks, atomically claims the
+// request key, and persists the non-terminal journal. It performs no image
+// pull, pinning, or workload mutation, so a crash right after it leaves a
+// durable claim that reconciliation can converge.
+//
+// The returned claim distinguishes the newly owned operation (Owned true)
+// from an idempotent replay (Owned false): the same key is never handed to
+// two owners, and a replay never executes effects again.
+func (s *Service) StartDeploy(ctx context.Context, input DeployInput) (*StartDeployResult, error) {
+	// Planning and claiming acquire no runtime resource, so StartDeploy takes
+	// only the per-app coordinator. ExecuteDeploy takes the GC shared lease
+	// across resource acquisition and publication, where it is required.
+	release, err := s.coord.acquire(ctx, input.App)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
-	return s.deployLocked(ctx, input)
+	return s.startDeployLocked(ctx, input)
 }
 
-func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployResult, error) {
+func (s *Service) startDeployLocked(ctx context.Context, input DeployInput) (*StartDeployResult, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "Deploy",
+		zerowrap.FieldUseCase: "StartDeploy",
 		"app":                 input.App,
 	})
 	log := zerowrap.FromCtx(ctx)
@@ -54,26 +124,82 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
 		return nil, err
 	}
+	rev, op, owned, err := s.claimDeploymentLocked(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	if !owned {
+		log.Info().Str("op", op.Op).Msg("deployment: replayed an already claimed operation")
+	}
+	return &StartDeployResult{
+		Claim: DeployClaim{
+			App: input.App, Op: op.Op, Service: input.Service, Revision: input.Revision,
+			Resolved: rev, Journal: op,
+		},
+		Owned: owned,
+	}, nil
+}
 
-	pinned, op, replayed, err := s.preflightLocked(ctx, input)
-	if replayed || err != nil {
-		// The key already answered this request: its stored journal is
-		// the result and no workload is touched again. A failed preflight
-		// returns the journal together with its error.
-		return journaledOrNil(input, op, err)
+// ExecuteDeploy performs the second phase of a deploy: it reacquires the app
+// lock, loads and verifies the claimed journal by app/op identity, runs the
+// image pull/pin and the sequential replacement, and records the terminal
+// outcome. A claim that is already terminal, or that does not match its
+// identity, is never executed: it replays its stored outcome instead. An
+// operation that stops mid-execution (shutdown or cancellation) leaves its
+// non-terminal journal behind for reconciliation, so it can never run twice.
+func (s *Service) ExecuteDeploy(ctx context.Context, claim DeployClaim) (*DeployResult, error) {
+	release, err := s.acquireAppContext(ctx, claim.App)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return s.executeLocked(ctx, claim)
+}
+
+// executeLocked runs the claimed, non-terminal operation. The caller holds
+// the app lock. Every failure that happens before a terminal outcome is
+// recorded (load active, revision, service step, traffic) leaves the journal
+// with its step state, never a silent success.
+func (s *Service) executeLocked(ctx context.Context, claim DeployClaim) (*DeployResult, error) {
+	input := DeployInput{App: claim.App, Revision: claim.Revision, Service: claim.Service}
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "ExecuteDeploy",
+		"app":                 claim.App,
+		"op":                  claim.Op,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	op, err := s.loadClaim(ctx, claim)
+	if err != nil {
+		return nil, err
+	}
+	if op.Terminal() {
+		// The claim was finalized between the phases: never execute a settled
+		// key, replay its stored outcome instead.
+		return journaledDeployResult(input, &op), replayError(op)
+	}
+	rev, err := s.claimRevision(ctx, claim, op)
+	if err != nil {
+		s.failOperation(ctx, &op, err, "error")
+		return journaledDeployResult(input, &op), err
+	}
+	pinned, err := s.pinPreflightLocked(ctx, input.App, input.Service, rev, &op)
+	if err != nil {
+		return journaledDeployResult(input, &op), err
 	}
 	sort.Slice(pinned, func(i, j int) bool { return pinned[i].name < pinned[j].name })
 
 	active, _, err := s.deps.State.LoadActive(ctx, input.App)
 	if err != nil {
 		loadErr := fmt.Errorf("deployment: load active: %w", err)
-		s.failOperation(ctx, op, loadErr, "error")
-		return journaledDeployResult(input, op), loadErr
+		s.failOperation(ctx, &op, loadErr, "error")
+		return journaledDeployResult(input, &op), loadErr
 	}
-	rev, err := s.resolveRevision(ctx, input)
+	rev, err = s.resolveRevision(ctx, input)
 	if err != nil {
-		s.failOperation(ctx, op, err, "error")
-		return journaledDeployResult(input, op), err
+		s.failOperation(ctx, &op, err, "error")
+		return journaledDeployResult(input, &op), err
 	}
 
 	result := &DeployResult{
@@ -85,22 +211,57 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	// A targeted deploy is intentionally a partial plan: services omitted
 	// from pinned remain active. Full deploys reconcile actual removals.
 	if input.Service == "" {
-		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
+		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, &op, result, log); err != nil {
 			return result, err
 		}
 	}
 	for i, p := range pinned {
-		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
+		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, &op, active, result, log); err != nil {
 			return result, err
 		}
 	}
 	op.Outcome = ComputeOutcome(result.Services)
 	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	result.CleanupWarnings = collectCleanupWarnings(result.Services)
-	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
+	if saveErr := s.deps.State.SaveOperation(ctx, op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to record deploy outcome")
 	}
 	return result, nil
+}
+
+// loadClaim verifies the claimed journal by app/op identity. The in-process
+// journal is used when the claim carries it; a claim reconstructed from
+// identity alone (after a restart) is loaded from the store. A journal that
+// does not match the identity, or is not a deploy, is refused.
+func (s *Service) loadClaim(ctx context.Context, claim DeployClaim) (domain.AppOperation, error) {
+	op := claim.Journal
+	if op.Op == "" {
+		if claim.App == "" || claim.Op == "" {
+			return domain.AppOperation{}, fmt.Errorf("deployment: execute requires an app and operation identity: %w", domain.ErrAppStateConflict)
+		}
+		loaded, err := s.deps.State.LoadOperation(ctx, claim.App, claim.Op)
+		if err != nil {
+			return domain.AppOperation{}, fmt.Errorf("deployment: load claimed operation %q: %w", claim.Op, err)
+		}
+		op = loaded
+	}
+	if op.App != claim.App || op.Op != claim.Op {
+		return domain.AppOperation{}, fmt.Errorf("deployment: claim does not identify app %q operation %q: %w", claim.App, claim.Op, domain.ErrAppStateConflict)
+	}
+	if op.Kind != "deploy" {
+		return domain.AppOperation{}, fmt.Errorf("deployment: operation %q is %q, not a deploy: %w", claim.Op, op.Kind, domain.ErrAppStateConflict)
+	}
+	return op, nil
+}
+
+// claimRevision returns the revision StartDeploy captured. A claim
+// reconstructed from identity alone resolves the revision its journal
+// recorded, so a resumed execution pins the revision it was started for.
+func (s *Service) claimRevision(ctx context.Context, claim DeployClaim, op domain.AppOperation) (domain.AppDesiredRevision, error) {
+	if claim.Resolved.Revision != "" {
+		return claim.Resolved, nil
+	}
+	return s.resolveRevision(ctx, DeployInput{App: claim.App, Revision: op.InputRevision, Service: claim.Service})
 }
 
 // runServiceStep executes one pinned service in the journal: replace it,

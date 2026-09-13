@@ -360,15 +360,38 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 		zerowrap.FieldUseCase: "Preflight",
 		"app":                 input.App,
 	})
-	log := zerowrap.FromCtx(ctx)
 
-	rev, err := s.resolveRevision(ctx, input)
+	rev, op, owned, err := s.claimDeploymentLocked(ctx, input)
 	if err != nil {
 		return nil, nil, false, err
 	}
+	if !owned {
+		// The key already answered this request: its journal is the
+		// result, and no effect may run again.
+		return nil, &op, true, replayError(op)
+	}
+	pinned, err := s.pinPreflightLocked(ctx, input.App, input.Service, rev, &op)
+	if err != nil {
+		return nil, &op, false, err
+	}
+	return pinned, &op, false, nil
+}
+
+// claimDeploymentLocked is the first phase of a deploy: it resolves the
+// requested revision, enforces the targeted-deploy convergence rules, and
+// claims the request key, persisting the non-terminal journal. It performs
+// no image pull and no workload mutation, so a crash after it leaves a
+// durable claim that reconciliation can converge. owned is true only for the
+// single claimer of the key; a replay returns the stored journal instead.
+// The caller holds the app lock and has already recovered the store.
+func (s *Service) claimDeploymentLocked(ctx context.Context, input DeployInput) (domain.AppDesiredRevision, domain.AppOperation, bool, error) {
+	rev, err := s.resolveRevision(ctx, input)
+	if err != nil {
+		return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
+	}
 	if input.Service != "" {
 		if err := s.checkConverged(ctx, input.App, input.Service, rev); err != nil {
-			return nil, nil, false, err
+			return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
 		}
 	}
 
@@ -381,22 +404,26 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 	}
 	op, owned, err := s.claimOperation(ctx, input.Op, op, []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}})
 	if err != nil {
-		return nil, nil, false, err
+		return domain.AppDesiredRevision{}, domain.AppOperation{}, false, err
 	}
-	if !owned {
-		// The key already answered this request: its journal is the
-		// result, and no effect may run again.
-		return nil, &op, true, replayError(op)
-	}
+	return rev, op, owned, nil
+}
 
-	pinned, err := s.preflightServices(ctx, input.App, rev, input.Service)
+// pinPreflightLocked is the second preflight phase: it runs the image
+// pull/pin and resource gates of an already claimed operation and records the
+// pinned table (or the terminal preflight failure) in the journal. The
+// caller holds the app lock and owns the claimed, non-terminal operation.
+func (s *Service) pinPreflightLocked(ctx context.Context, app, onlyService string, rev domain.AppDesiredRevision, op *domain.AppOperation) ([]pinnedService, error) {
+	log := zerowrap.FromCtx(ctx)
+
+	pinned, err := s.preflightServices(ctx, app, rev, onlyService)
 	if err != nil {
 		op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepFailed, Error: err.Error()}
 		op.Outcome = domain.AppOutcomeFailed
-		if saveErr := s.deps.State.SaveOperation(ctx, op); saveErr != nil {
+		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 			log.Warn().Err(saveErr).Msg("deployment: failed to record preflight failure")
 		}
-		return nil, &op, false, err
+		return nil, err
 	}
 	op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepSucceeded}
 	for _, p := range pinned {
@@ -408,11 +435,11 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 			Image:   p.runtimeImage,
 		})
 	}
-	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
-		return nil, nil, false, fmt.Errorf("deployment: persist pinned table: %w", err)
+	if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
+		return nil, fmt.Errorf("deployment: persist pinned table: %w", err)
 	}
 	log.Info().Str("op", op.Op).Str("revision", rev.Revision).Int("services", len(pinned)).Msg("deployment: preflight passed")
-	return pinned, &op, false, nil
+	return pinned, nil
 }
 
 // claimOperation is the single claim point before any mutation effect.
