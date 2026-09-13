@@ -3,6 +3,7 @@ package deployment_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -214,10 +215,11 @@ func TestExecuteDeploy_RecordsTerminalFailure(t *testing.T) {
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 }
 
-// TestExecuteDeploy_TerminalClaimIsNeverReExecuted proves a claim finalized
-// between the two phases (or supplied stale) replays its stored outcome and
-// never runs a second time.
-func TestExecuteDeploy_TerminalClaimIsNeverReExecuted(t *testing.T) {
+// TestExecuteDeploy_TerminalStoreRecordBeatsStaleClaim proves the store is
+// authoritative: a claim whose durable record was terminalized by another
+// actor between the phases replays that outcome and never executes, even
+// though the in-process claim still carries a non-terminal journal.
+func TestExecuteDeploy_TerminalStoreRecordBeatsStaleClaim(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	rev := mockRevision()
@@ -232,11 +234,17 @@ func TestExecuteDeploy_TerminalClaimIsNeverReExecuted(t *testing.T) {
 	started, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "k1"})
 	require.NoError(t, err)
 	require.True(t, started.Owned)
+	require.False(t, started.Claim.Journal.Terminal(), "the in-process claim is still non-terminal")
 
-	claim := started.Claim
-	claim.Journal.Outcome = domain.AppOutcomeSuccess // settled by another actor
+	// Another actor settled the key in the store: the stale in-memory copy
+	// must not drive execution.
+	expectStoredOperation(state, domain.AppOperation{
+		Op: "k1", Kind: "deploy", App: "blog", InputRevision: "rev-1",
+		Outcome: domain.AppOutcomeSuccess,
+		Steps:   []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepSucceeded}},
+	})
 
-	result, err := svc.ExecuteDeploy(ctx, claim)
+	result, err := svc.ExecuteDeploy(ctx, started.Claim)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -320,4 +328,90 @@ func TestDeploy_IsStartDeployThenExecuteDeploy(t *testing.T) {
 	require.NotEmpty(t, *saved)
 	require.False(t, (*saved)[0].Terminal(), "Deploy journals the claim before execution")
 	require.True(t, (*saved)[len(*saved)-1].Terminal(), "Deploy records the terminal outcome")
+}
+
+// TestStartDeploy_LiveClaimSurvivesForegroundReconciliation pins the
+// StartDeploy/ExecuteDeploy hand-off window: while an owner is between the
+// claim and the coordinator (blocked before its GC lease), a same-key and a
+// different-key foreground mutation must not reconcile, terminalize, or
+// re-claim the live operation. The single owner then executes exactly the
+// revision it claimed.
+func TestStartDeploy_LiveClaimSurvivesForegroundReconciliation(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	_, desired := seedReplaceableApp(t, ctx, store)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+
+	// One full headless replacement, the only effects the live owner may run.
+	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return(restartTestDigest, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
+	expectNetworkProvision(runtime, "app-blog", 1)
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+
+	// Block ExecuteDeploy on its GC lease, before it takes the coordinator.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	barrier := outmocks.NewMockGCBarrier(t)
+	lease := outmocks.NewMockGCLease(t)
+	barrier.EXPECT().AcquireShared(mock.Anything).Run(func(context.Context) {
+		close(entered)
+		<-release
+	}).Return(lease, nil).Once()
+	lease.EXPECT().Release().Return().Once()
+
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default()).WithGCBarrier(barrier).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+
+	started, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-live", Revision: desired.Revision})
+	require.NoError(t, err)
+	require.True(t, started.Owned, "the first claim owns the operation")
+
+	done := make(chan error, 1)
+	go func() {
+		_, execErr := svc.ExecuteDeploy(ctx, started.Claim)
+		done <- execErr
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for ExecuteDeploy to block before the coordinator")
+	}
+
+	// Same key while the owner is live: replay, never a second owner.
+	same, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-live", Revision: desired.Revision})
+	require.NoError(t, err)
+	require.False(t, same.Owned, "a same-key replay never owns the operation twice")
+	require.ErrorIs(t, same.ReplayError(), domain.ErrAppStateConflict, "the live claim was not terminalized")
+
+	// Different key while the owner is live: the unfinished-operation guard
+	// refuses, so no second claim is written.
+	_, err = svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-other", Revision: "rev-0"})
+	require.ErrorIs(t, err, domain.ErrAppStateConflict)
+
+	live, err := store.LoadOperation(ctx, "blog", "op-live")
+	require.NoError(t, err)
+	require.False(t, live.Terminal(), "a live operation is never terminalized by a foreground mutation")
+	_, err = store.LoadOperation(ctx, "blog", "op-other")
+	require.ErrorIs(t, err, domain.ErrAppOperationNotFound, "no second claim was written")
+
+	close(release)
+	require.NoError(t, <-done)
+
+	final, err := store.LoadOperation(ctx, "blog", "op-live")
+	require.NoError(t, err)
+	require.True(t, final.Terminal())
+	assert.Equal(t, domain.AppOutcomeSuccess, final.Outcome)
+	assert.Equal(t, desired.Revision, final.InputRevision, "the owner executed the revision it claimed, not the stale one")
+	runtime.AssertNumberOfCalls(t, "CreateContainer", 1)
 }

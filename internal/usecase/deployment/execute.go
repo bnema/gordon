@@ -128,7 +128,13 @@ func (s *Service) startDeployLocked(ctx context.Context, input DeployInput) (*St
 	if err != nil {
 		return nil, err
 	}
-	if !owned {
+	if owned {
+		// The claimed operation is now live in this process. It is
+		// registered before the caller releases the coordinator, so a
+		// foreground mutation that takes the lock in the gap before
+		// ExecuteDeploy cannot reconcile the claim away.
+		s.markOperationLive(input.App, op.Op)
+	} else {
 		log.Info().Str("op", op.Op).Msg("deployment: replayed an already claimed operation")
 	}
 	return &StartDeployResult{
@@ -147,12 +153,24 @@ func (s *Service) startDeployLocked(ctx context.Context, input DeployInput) (*St
 // identity, is never executed: it replays its stored outcome instead. An
 // operation that stops mid-execution (shutdown or cancellation) leaves its
 // non-terminal journal behind for reconciliation, so it can never run twice.
+//
+// The operation stays live until this returns: the store record, not the
+// in-process claim, is what executes, and the live marker is cleared only
+// after the outcome was recorded or a recoverable non-terminal claim was
+// left behind, while the app lock is still held.
 func (s *Service) ExecuteDeploy(ctx context.Context, claim DeployClaim) (*DeployResult, error) {
 	release, err := s.acquireAppContext(ctx, claim.App)
 	if err != nil {
+		// The claim is left as persisted: recoverable, but no longer owned
+		// here, so a later reconciliation can converge it.
+		s.clearOperationLive(claim.App, claim.Op)
 		return nil, err
 	}
 	defer release()
+	// Registered after release, so it runs first: the marker is dropped
+	// before the app lock is released, and never while a live goroutine may
+	// still persist state.
+	defer s.clearOperationLive(claim.App, claim.Op)
 	return s.executeLocked(ctx, claim)
 }
 
@@ -229,21 +247,18 @@ func (s *Service) executeLocked(ctx context.Context, claim DeployClaim) (*Deploy
 	return result, nil
 }
 
-// loadClaim verifies the claimed journal by app/op identity. The in-process
-// journal is used when the claim carries it; a claim reconstructed from
-// identity alone (after a restart) is loaded from the store. A journal that
-// does not match the identity, or is not a deploy, is refused.
+// loadClaim verifies the claimed journal by app/op identity. The store is
+// authoritative: the operation is always reloaded by app/op ID, so a stale
+// in-process journal can never be executed (for example when another actor
+// finalized the key between the claim and execution). A journal that does
+// not match the identity, or is not a deploy, is refused.
 func (s *Service) loadClaim(ctx context.Context, claim DeployClaim) (domain.AppOperation, error) {
-	op := claim.Journal
-	if op.Op == "" {
-		if claim.App == "" || claim.Op == "" {
-			return domain.AppOperation{}, fmt.Errorf("deployment: execute requires an app and operation identity: %w", domain.ErrAppStateConflict)
-		}
-		loaded, err := s.deps.State.LoadOperation(ctx, claim.App, claim.Op)
-		if err != nil {
-			return domain.AppOperation{}, fmt.Errorf("deployment: load claimed operation %q: %w", claim.Op, err)
-		}
-		op = loaded
+	if claim.App == "" || claim.Op == "" {
+		return domain.AppOperation{}, fmt.Errorf("deployment: execute requires an app and operation identity: %w", domain.ErrAppStateConflict)
+	}
+	op, err := s.deps.State.LoadOperation(ctx, claim.App, claim.Op)
+	if err != nil {
+		return domain.AppOperation{}, fmt.Errorf("deployment: load claimed operation %q: %w", claim.Op, err)
 	}
 	if op.App != claim.App || op.Op != claim.Op {
 		return domain.AppOperation{}, fmt.Errorf("deployment: claim does not identify app %q operation %q: %w", claim.App, claim.Op, domain.ErrAppStateConflict)
@@ -545,6 +560,13 @@ func (s *Service) reconcileInterruptedDeploy(ctx context.Context, app string) er
 		return fmt.Errorf("deployment: load interrupted operation for %q: %w", app, err)
 	}
 	if !ok {
+		return nil
+	}
+	if !op.Terminal() && s.operationLive(app, op.Op) {
+		// The operation is owned by a live goroutine in this process that
+		// may still be persisting its outcome. Reconcile it only after that
+		// owner has exited; until then the store record is authoritative and
+		// must not be finalized here.
 		return nil
 	}
 	terminal := op.Terminal()

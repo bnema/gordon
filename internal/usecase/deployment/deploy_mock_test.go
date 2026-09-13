@@ -27,10 +27,42 @@ func mockDeps(t *testing.T) (*outmocks.MockAppState, *outmocks.MockContainerRunt
 	// store.
 	state.EXPECT().LoadLatestOperation(mock.Anything, mock.Anything).
 		Return(domain.AppOperation{}, false, nil).Maybe()
+	// ExecuteDeploy always reloads the claimed operation from the store by
+	// app/op identity. Mock-backed execution sees the freshly claimed
+	// non-terminal journal shape (a single pending preflight step) unless a
+	// test overrides it with expectStoredOperation.
+	state.EXPECT().LoadOperation(mock.Anything, mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, app, opID string) (domain.AppOperation, error) {
+			return domain.AppOperation{
+				Kind: "deploy", App: app, Op: opID,
+				Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+			}, nil
+		}).Maybe()
 	return state,
 		outmocks.NewMockContainerRuntime(t),
 		outmocks.NewMockImageResolver(t),
 		outmocks.NewMockSecretProvider(t)
+}
+
+// expectStoredOperation makes one store record authoritative for the next
+// ExecuteDeploy reload. The operation identity is echoed from the request so
+// an unkeyed claim matches too. It replaces the catch-all default installed
+// by mockDeps, letting a test prove that a terminal or mismatched store
+// record overrides a stale in-process journal.
+func expectStoredOperation(state *outmocks.MockAppState, op domain.AppOperation) {
+	kept := state.ExpectedCalls[:0]
+	for _, call := range state.ExpectedCalls {
+		if call.Method != "LoadOperation" {
+			kept = append(kept, call)
+		}
+	}
+	state.ExpectedCalls = kept
+	state.EXPECT().LoadOperation(mock.Anything, op.App, mock.Anything).
+		RunAndReturn(func(_ context.Context, app, opID string) (domain.AppOperation, error) {
+			op.App = app
+			op.Op = opID
+			return op, nil
+		})
 }
 
 func mockRevision() domain.AppDesiredRevision {
@@ -81,6 +113,11 @@ func TestDeploy_PreflightFailureReturnsJournaledOperation(t *testing.T) {
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil).Twice()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil).Once()
 	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return("", assert.AnError).Once()
+	// The store record carries the revision the claim was started for.
+	expectStoredOperation(state, domain.AppOperation{
+		Kind: "deploy", App: "blog", InputRevision: rev.Revision,
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
+	})
 
 	svc := deployment.NewService(deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets}, zerowrap.Default())
 	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})

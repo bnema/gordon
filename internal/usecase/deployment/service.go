@@ -103,6 +103,14 @@ type Service struct {
 	// the lock.
 	bindMu       sync.RWMutex
 	bindPolicies map[string]domain.AppBindPolicy
+	// liveMu guards liveOps. liveOps holds the operations this process
+	// owns between the StartDeploy claim and the end of ExecuteDeploy. It
+	// is in-memory only: a fresh Service (boot) starts empty and may
+	// reconcile every persisted non-terminal operation, while a
+	// foreground mutation must never finalize an operation a live
+	// goroutine still owns.
+	liveMu  sync.Mutex
+	liveOps map[string]struct{}
 }
 
 // NewService creates the deployment engine. All deps are required;
@@ -117,6 +125,43 @@ func NewService(deps Deps, log zerowrap.Logger) *Service {
 		coord:   newAppCoordinator(),
 		backoff: newRecoveryBackoff(time.Now),
 	}
+}
+
+// markOperationLive records that this process owns one operation from the
+// StartDeploy claim until ExecuteDeploy finishes. A live operation is the
+// single owner's in-flight work: a foreground reconciliation must not
+// finalize it, or the claim would be settled before the owner can execute it.
+func (s *Service) markOperationLive(app, op string) {
+	if app == "" || op == "" {
+		return
+	}
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	if s.liveOps == nil {
+		s.liveOps = make(map[string]struct{})
+	}
+	s.liveOps[liveOperationKey(app, op)] = struct{}{}
+}
+
+// clearOperationLive drops the live marker. It is called once ExecuteDeploy
+// has recorded its outcome or left the claim recoverable, so a later
+// reconciliation can converge the operation instead of leaving it in flight.
+func (s *Service) clearOperationLive(app, op string) {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	delete(s.liveOps, liveOperationKey(app, op))
+}
+
+// operationLive reports whether this process still owns the operation.
+func (s *Service) operationLive(app, op string) bool {
+	s.liveMu.Lock()
+	defer s.liveMu.Unlock()
+	_, ok := s.liveOps[liveOperationKey(app, op)]
+	return ok
+}
+
+func liveOperationKey(app, op string) string {
+	return app + "\x00" + op
 }
 
 // WithGCBarrier wires the process-wide GC barrier. Every workload
