@@ -368,60 +368,6 @@ func newOpID() string {
 	return "op-" + string(buf[:])
 }
 
-// Preflight resolves a captured revision without any workload mutation:
-// image digests, secret presence, image-volume mapping, reservation
-// recheck, and resource preconditions. It records the pinned digest
-// table into the journal BEFORE any effect.
-//
-// Preflight never claims the caller's request key, and it reconciles an
-// interrupted operation before resolving. DeployInput.Op is ignored here:
-// the key identifies a mutation, and a preflight that claimed it would
-// poison a later Deploy of the same key (its journal would look like an
-// interrupted deploy). The preflight journal is opened under a generated
-// id, so it can neither mask an unfinished operation nor pre-claim a
-// mutation; the next mutation reconciles it away.
-func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, error) {
-	release, err := s.acquireAppContext(ctx, input.App)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer release()
-	if err := s.deps.State.Recover(ctx); err != nil {
-		return nil, nil, fmt.Errorf("deployment: recover before preflight: %w", err)
-	}
-	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
-		return nil, nil, err
-	}
-	input.Op = ""
-	pinned, op, _, err := s.preflightLocked(ctx, input)
-	return pinned, op, err
-}
-
-// preflightLocked resolves and pins one revision and records the pinned table.
-// The caller holds the app lock and has already recovered the store.
-func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, bool, error) {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "Preflight",
-		"app":                 input.App,
-	})
-
-	rev, op, owned, err := s.claimDeploymentLocked(ctx, input)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	if !owned {
-		// The key already answered this request: its journal is the
-		// result, and no effect may run again.
-		return nil, &op, true, replayError(op)
-	}
-	pinned, err := s.pinPreflightLocked(ctx, input.App, input.Service, rev, &op)
-	if err != nil {
-		return nil, &op, false, err
-	}
-	return pinned, &op, false, nil
-}
-
 // claimDeploymentLocked is the first phase of a deploy: it resolves the
 // requested revision, enforces the targeted-deploy convergence rules, and
 // claims the request key, persisting the non-terminal journal. It performs

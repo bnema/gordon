@@ -2,7 +2,6 @@ package deployment_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -479,74 +478,6 @@ func TestBootRecovery_InterruptionAfterTheLastStepIsASuccess(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, domain.AppStepSucceeded, step.State, "a step that already succeeded is left as recorded")
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-published", mock.Anything)
-}
-
-// TestPreflight_ReconcilesUnfinishedPredecessor proves a preflight converges
-// an interrupted predecessor before it resolves instead of refusing it, and
-// that it ignores the caller's request key: the journal it opens can neither
-// mask an unfinished operation nor pre-claim a later mutation.
-func TestPreflight_ReconcilesUnfinishedPredecessor(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	images := outmocks.NewMockImageResolver(t)
-	secrets := outmocks.NewMockSecretProvider(t)
-	spec := webService()
-	spec.Secrets = map[string]string{}
-	seedRevision(t, ctx, store, "intent-0", "", testRevision("blog", spec))
-	require.NoError(t, store.SaveOperation(ctx, domain.AppOperation{
-		Op: "op-unfinished", Kind: "deploy", App: "blog", StartedAt: time.Now().UTC(),
-		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
-	}))
-
-	images.EXPECT().ResolveDigest(mock.Anything, spec.Image).
-		Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil).Once()
-	runtime := outmocks.NewMockContainerRuntime(t)
-	runtime.EXPECT().InspectImageVolumes(mock.Anything, spec.Image).Return(nil, nil).Once()
-
-	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: runtime, Images: images, Secrets: secrets,
-	}, zerowrap.Default())
-	pinned, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog", Op: "op-other"})
-	require.NoError(t, err)
-	require.Len(t, pinned, 1)
-
-	reconciled, err := store.LoadOperation(ctx, "blog", "op-unfinished")
-	require.NoError(t, err)
-	require.True(t, reconciled.Terminal(), "preflight reconciles the interrupted predecessor")
-	assert.Equal(t, domain.AppOutcomeFailed, reconciled.Outcome)
-}
-
-// TestPreflightThenDeployWithSameKey proves the repaired contract: a preflight
-// never claims the caller's key, so a Deploy that follows with the same key
-// executes instead of replaying the preflight journal as a conflict.
-func TestPreflightThenDeployWithSameKey(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	images := outmocks.NewMockImageResolver(t)
-	secrets := outmocks.NewMockSecretProvider(t)
-	runtime := outmocks.NewMockContainerRuntime(t)
-	seedReplaceableApp(t, ctx, store)
-
-	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").
-		Return(restartTestDigest, nil).Once()
-	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
-
-	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: runtime, Images: images, Secrets: secrets,
-	}, zerowrap.Default())
-	pinned, _, err := svc.Preflight(ctx, deployment.DeployInput{App: "blog", Op: "op-same"})
-	require.NoError(t, err)
-	require.Len(t, pinned, 1)
-
-	// The same key must reach execution, not replay the effect-free preflight
-	// journal as a conflict. The second resolution is made to fail so the
-	// deploy stops before any runtime effect.
-	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return("", assert.AnError).Once()
-	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-same"})
-	require.ErrorIs(t, err, domain.ErrAppImageUnresolvable)
-	require.NotNil(t, result)
-	assert.Equal(t, "op-same", result.Op)
-	assert.False(t, errors.Is(err, domain.ErrAppStateConflict))
 }
 
 // TestBootRecovery_FailsClosedWhenCandidateCannotBeRemoved proves
