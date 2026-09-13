@@ -40,16 +40,37 @@ secrets_backend = "unsafe"
 	require.NotNil(t, kernel.Secrets())
 }
 
-// TestKernelClose_QuiescesAppAdministrationBeforeDependencies proves the
-// kernel Close ordering: daemon-owned app administration is cancelled and
-// joined on a bounded context before any remaining kernel resource is torn
-// down, so a background deploy can never outlive the state/runtime it uses.
-// A quiescence error is reported, never fatal.
-func TestKernelClose_QuiescesAppAdministrationBeforeDependencies(t *testing.T) {
+// TestKernelClose_QuiescenceTimeoutSkipsCleanup proves the fail-closed kernel
+// Close ordering: daemon-owned app administration is cancelled and joined on
+// a bounded context before any remaining kernel resource is torn down, and
+// when that quiescence times out the dependency teardown is skipped and the
+// error is returned, so an unfinished deploy is never dropped onto a closed
+// state or runtime.
+func TestKernelClose_QuiescenceTimeoutSkipsCleanup(t *testing.T) {
 	t.Parallel()
 
 	order := []string{}
 	admin := &orderRecordingAdmin{order: &order, err: errors.New("in-flight deploy did not unwind")}
+	cleanedUp := false
+	kernel := &Kernel{
+		appAdmin: admin,
+		log:      zerowrap.Default(),
+		cleanup:  func() { cleanedUp = true; order = append(order, "cleanup") },
+	}
+
+	require.Error(t, kernel.Close())
+	require.Equal(t, []string{"app-shutdown"}, order, "teardown must stop when quiescence times out")
+	assert.False(t, cleanedUp)
+	assert.True(t, admin.deadline, "app administration shutdown must run on a bounded context")
+}
+
+// TestKernelClose_CleansUpAfterQuiescence keeps the normal path: once app
+// administration joined cleanly, the kernel still tears its resources down.
+func TestKernelClose_CleansUpAfterQuiescence(t *testing.T) {
+	t.Parallel()
+
+	order := []string{}
+	admin := &orderRecordingAdmin{order: &order}
 	kernel := &Kernel{
 		appAdmin: admin,
 		log:      zerowrap.Default(),
@@ -58,7 +79,6 @@ func TestKernelClose_QuiescesAppAdministrationBeforeDependencies(t *testing.T) {
 
 	require.NoError(t, kernel.Close())
 	require.Equal(t, []string{"app-shutdown", "cleanup"}, order)
-	assert.True(t, admin.deadline, "app administration shutdown must run on a bounded context")
 }
 
 // TestKernelClose_WithoutAppAdministrationStillCleansUp keeps the minimal

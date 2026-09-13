@@ -127,12 +127,12 @@ func (a *orderRecordingAdmin) Shutdown(ctx context.Context) error {
 	return a.err
 }
 
-// TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState proves
-// the registered shutdown order: app administration is cancelled and joined
-// on the bounded shutdown context before the app state store closes, so an
-// in-flight execution can never write to a closed store. A shutdown error is
-// reported, never fatal.
-func TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState(t *testing.T) {
+// TestGracefulShutdown_FailsClosedWhenAppAdministrationDoesNotQuiesce proves
+// the fail-closed shutdown ordering: when app administration cannot unwind on
+// the bounded shutdown context, the remaining state and runtime teardown is
+// skipped and the error is returned for the process to exit non-zero, so an
+// in-flight execution can never write to a closed store.
+func TestGracefulShutdown_FailsClosedWhenAppAdministrationDoesNotQuiesce(t *testing.T) {
 	// Keep internal-credential cleanup inside the test temp dir.
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 
@@ -140,10 +140,32 @@ func TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState(t *testing
 	admin := &orderRecordingAdmin{order: &order, err: errors.New("in-flight execution did not unwind")}
 
 	store := outmocks.NewMockAppState(t)
+
+	containerSvc := container.NewService(nil, nil, nil, nil, container.Config{})
+	err := gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default())
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "quiescence")
+	require.Equal(t, []string{"app-shutdown"}, order, "state teardown must not run under an unfinished execution")
+	store.AssertNotCalled(t, "Close")
+	assert.True(t, admin.deadline, "app administration shutdown must run on the bounded shutdown context")
+}
+
+// TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState keeps the
+// normal ordering: app administration is cancelled and joined on the bounded
+// shutdown context before the app state store closes.
+func TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState(t *testing.T) {
+	// Keep internal-credential cleanup inside the test temp dir.
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+
+	order := []string{}
+	admin := &orderRecordingAdmin{order: &order}
+
+	store := outmocks.NewMockAppState(t)
 	store.EXPECT().Close().Run(func() { order = append(order, "state-close") }).Return(nil)
 
 	containerSvc := container.NewService(nil, nil, nil, nil, container.Config{})
-	gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default())
+	require.NoError(t, gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default()))
 
 	require.Equal(t, []string{"app-shutdown", "state-close"}, order)
 	assert.True(t, admin.deadline, "app administration shutdown must run on the bounded shutdown context")

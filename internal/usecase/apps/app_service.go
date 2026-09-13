@@ -124,27 +124,32 @@ func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 // the live marker is released and the journal converged as interrupted, so it
 // can neither execute nor stay marked live forever.
 func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) error {
+	opFields := map[string]any{
+		zerowrap.FieldLayer:   "usecase",
+		zerowrap.FieldUseCase: "Deploy",
+		"app":                 claim.App,
+		"op":                  claim.Op,
+	}
 	s.lifecycleMu.Lock()
 	if s.stopped {
-		settleCtx := context.WithoutCancel(s.daemonCtx)
+		settleCtx := zerowrap.CtxWithFields(context.WithoutCancel(s.daemonCtx), opFields)
 		s.lifecycleMu.Unlock()
-		s.log.Warn().Str("app", claim.App).Str("op", claim.Op).
-			Msg("apps: deploy claimed during shutdown; settling the claim without executing")
+		settleLog := zerowrap.FromCtx(settleCtx)
+		settleLog.Warn().Msg("apps: deploy claimed during shutdown; settling the claim without executing")
 		if err := s.deploy.AbandonDeploy(settleCtx, claim); err != nil {
-			s.log.Warn().Err(err).Str("app", claim.App).Str("op", claim.Op).
-				Msg("apps: failed to settle a deploy claimed during shutdown")
+			settleLog.Warn().Err(err).Msg("apps: failed to settle a deploy claimed during shutdown")
 		}
 		return fmt.Errorf("apps: deploy claimed during shutdown: %w", domain.ErrAppStateConflict)
 	}
-	ctx := s.daemonCtx
+	ctx := zerowrap.CtxWithFields(s.daemonCtx, opFields)
 	s.executions.Add(1)
 	s.lifecycleMu.Unlock()
 
 	go func() {
 		defer s.executions.Done()
+		execLog := zerowrap.FromCtx(ctx)
 		if _, err := s.deploy.ExecuteDeploy(ctx, claim); err != nil {
-			s.log.Warn().Err(err).Str("app", claim.App).Str("op", claim.Op).
-				Msg("apps: background deploy execution failed")
+			execLog.Warn().Err(err).Msg("apps: background deploy execution failed")
 		}
 	}()
 	return nil

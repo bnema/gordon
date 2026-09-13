@@ -53,6 +53,32 @@ func appsRequest(t *testing.T, handler *Handler, method, target string, body any
 	return rec
 }
 
+// appsServerDo sends a request through a test server backed by the apps
+// handler and returns the real HTTP status code and body. The scopes are
+// injected by newScopedTestServer because the server, not the client, owns
+// the request context.
+func appsServerDo(t *testing.T, srv *httptest.Server, method, target string, body any) (int, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequest(method, srv.URL+target, reader)
+	require.NoError(t, err)
+	if method != http.MethodGet {
+		req.Header.Set("Idempotency-Key", "test-operation-key")
+	}
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	assert.Equal(t, "application/json", resp.Header.Get("Content-Type"))
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp.StatusCode, raw
+}
+
 const validAppManifest = `
 name = "blog"
 [[service]]
@@ -179,12 +205,12 @@ func TestHandler_AppDeploy_RunningReturns202(t *testing.T) {
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
-	require.Equal(t, http.StatusAccepted, rec.Code)
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusAccepted, status)
 
 	var resp dto.AppDeployResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, "op-run", resp.Op)
 	assert.Equal(t, "running", resp.Status)
 	assert.Empty(t, resp.Outcome, "a running operation has no terminal outcome")
@@ -207,12 +233,12 @@ func TestHandler_AppDeploy_TerminalReplayReturnsOK(t *testing.T) {
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(terminal, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
-	require.Equal(t, http.StatusOK, rec.Code)
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusOK, status)
 
 	var resp dto.AppDeployResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, "op-done", resp.Op)
 	assert.Equal(t, "success", resp.Status)
 	assert.Equal(t, "success", resp.Outcome)
@@ -236,12 +262,12 @@ func TestHandler_AppDeploy_TerminalFailureReplayIsVisible(t *testing.T) {
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(failed, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
-	require.Equal(t, http.StatusConflict, rec.Code)
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusConflict, status)
 
 	var resp dto.AppDeployResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, "op-fail", resp.Op)
 	assert.Equal(t, "failed", resp.Status)
 	assert.Equal(t, "failed", resp.Outcome)
@@ -255,12 +281,12 @@ func TestHandler_AppDeploy_TerminalFailureReplayIsVisible(t *testing.T) {
 // journal DTO with a running status and no terminal outcome, and never the
 // mapped preflight error envelope. The top-level key set is asserted so both
 // cases are proven to share one wire shape.
-func assertRunningReplayJournal(t *testing.T, rec *httptest.ResponseRecorder, opID, lastStep string) {
+func assertRunningReplayJournal(t *testing.T, status int, body []byte, opID, lastStep string) {
 	t.Helper()
-	require.Equal(t, http.StatusConflict, rec.Code)
+	require.Equal(t, http.StatusConflict, status)
 
 	var shape map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &shape))
+	require.NoError(t, json.Unmarshal(body, &shape))
 	_, hasError := shape["error"]
 	assert.False(t, hasError, "a running replay must not degrade to the preflight error envelope")
 	keys := make([]string, 0, len(shape))
@@ -273,7 +299,7 @@ func assertRunningReplayJournal(t *testing.T, rec *httptest.ResponseRecorder, op
 		keys, "a running replay always returns the operation journal shape")
 
 	var resp dto.AppDeployResponse
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, opID, resp.Op)
 	assert.Equal(t, "running", resp.Status)
 	assert.Empty(t, resp.Outcome, "a running operation has no terminal outcome")
@@ -304,10 +330,10 @@ func TestHandler_AppDeploy_RunningReplayBeforeServiceSteps(t *testing.T) {
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
 
-	assertRunningReplayJournal(t, rec, "op-run-pre", "preflight")
+	assertRunningReplayJournal(t, status, body, "op-run-pre", "preflight")
 }
 
 // TestHandler_AppDeploy_RunningReplayAfterServiceSteps is the after-steps
@@ -329,10 +355,10 @@ func TestHandler_AppDeploy_RunningReplayAfterServiceSteps(t *testing.T) {
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
 
-	assertRunningReplayJournal(t, rec, "op-run-post", "service.web.replace")
+	assertRunningReplayJournal(t, status, body, "op-run-post", "service.web.replace")
 }
 
 // TestHandler_AppDeploy_RejectsMissingIdempotencyKey keeps the request
@@ -342,12 +368,14 @@ func TestHandler_AppDeploy_RejectsMissingIdempotencyKey(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	req := httptest.NewRequest(http.MethodPost, "/admin/apps/blog/deploy", nil)
-	req = req.WithContext(ctxWithScopes("admin:apps:write"))
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/admin/apps/blog/deploy", nil)
+	require.NoError(t, err)
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
 
-	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestHandler_AppList_RequiresScope(t *testing.T) {

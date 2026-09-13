@@ -440,6 +440,15 @@ func TestBootRecovery_RetriesLeftoverOfATerminalFailedOperation(t *testing.T) {
 	require.NoError(t, svc.ReconcileBoot(ctx))
 
 	runtime.AssertCalled(t, "RemoveContainer", mock.Anything, "c-orphan", true)
+
+	// The removal is recorded: the step no longer retries the candidate on a
+	// later pass, and the removed container id stays visible for audit.
+	convergedOp, err := store.LoadOperation(ctx, "blog", "op-failed")
+	require.NoError(t, err)
+	step, found := opStep(convergedOp, "service.web.replace")
+	require.True(t, found)
+	assert.Empty(t, step.After, "a converged candidate must not be retried on the next pass")
+	assert.Contains(t, step.Detail, "c-orphan", "the removed candidate stays in the audit trail")
 }
 
 // TestBootRecovery_InterruptionAfterTheLastStepIsASuccess proves an operation

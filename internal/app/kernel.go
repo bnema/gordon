@@ -139,15 +139,20 @@ func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
 
 // Close tears the kernel down. It first cancels and joins daemon-owned app
 // administration on a bounded context, so a background deploy execution is
-// never torn down mid-flight alongside the state and runtime it uses.
+// never torn down mid-flight alongside the state and runtime it uses. When
+// that quiescence times out the remaining cleanup is skipped and the error is
+// returned: an unfinished execution may still be writing to state.
 func (k *Kernel) Close() error {
 	if k == nil {
 		return nil
 	}
 	if k.appAdmin != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		quiesceAppAdministration(ctx, k.appAdmin, k.log)
+		err := quiesceAppAdministration(ctx, k.appAdmin, k.log)
 		cancel()
+		if err != nil {
+			return err
+		}
 	}
 	if k.cleanup != nil {
 		k.cleanup()

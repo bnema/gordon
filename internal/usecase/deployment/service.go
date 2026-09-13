@@ -417,8 +417,20 @@ func (s *Service) pinPreflightLocked(ctx context.Context, app, onlyService strin
 		return nil, err
 	}
 	op.Steps[0] = domain.AppOperationStep{ID: "preflight", State: domain.AppStepSucceeded}
+	// A resumed claim can carry the service-step plan of an earlier attempt,
+	// including candidates it recorded. Converge those candidates before
+	// replacing the plan: an unreconciled leftover may still be running, and
+	// the replacement this execution creates must never overlap it.
+	if err := s.convergeResumedCandidates(ctx, app, op, log); err != nil {
+		return nil, err
+	}
+	// Replace the persisted plan instead of appending: the preflight step plus
+	// one step per pinned service, so runServiceStep's index contract matches a
+	// normalized layout and no earlier step is overwritten or left pending.
+	plan := make([]domain.AppOperationStep, 1, len(pinned)+1)
+	plan[0] = op.Steps[0]
 	for _, p := range pinned {
-		op.Steps = append(op.Steps, domain.AppOperationStep{
+		plan = append(plan, domain.AppOperationStep{
 			ID:      "service." + p.name + ".replace",
 			State:   domain.AppStepPending,
 			Service: p.name,
@@ -426,11 +438,37 @@ func (s *Service) pinPreflightLocked(ctx context.Context, app, onlyService strin
 			Image:   p.runtimeImage,
 		})
 	}
+	op.Steps = plan
 	if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
 		return nil, fmt.Errorf("deployment: persist pinned table: %w", err)
 	}
 	log.Info().Str("op", op.Op).Str("revision", rev.Revision).Int("services", len(pinned)).Msg("deployment: preflight passed")
 	return pinned, nil
+}
+
+// convergeResumedCandidates converges any candidate an earlier attempt of a
+// resumed claim recorded, so replacing its service-step plan cannot drop a
+// leftover that may still be running. A fresh claim has only its preflight
+// step and does no work here.
+func (s *Service) convergeResumedCandidates(ctx context.Context, app string, op *domain.AppOperation, log zerowrap.Logger) error {
+	needsActive := false
+	for _, step := range op.Steps {
+		if reconcileNeedsContainer(step, false) {
+			needsActive = true
+			break
+		}
+	}
+	if !needsActive {
+		return nil
+	}
+	active, _, err := s.deps.State.LoadActive(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load active for resumed claim: %w", err)
+	}
+	if _, err := s.convergeInterruptedSteps(ctx, app, op, active, false, log); err != nil {
+		return err
+	}
+	return nil
 }
 
 // claimOperation is the single claim point before any mutation effect.

@@ -3107,8 +3107,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	// so no new mutation can begin during shutdown.
 	localAdmin.Close()
 	registrySrvs := []*http.Server{registrySrv, internalRegistrySrv}
-	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appSvcImpl, svc.appState, log)
-	return nil
+	return gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appSvcImpl, svc.appState, log)
 }
 
 // reconcileAppsAtBoot reconciles declarative apps intended to run,
@@ -3431,21 +3430,27 @@ type appAdministration interface {
 }
 
 // quiesceAppAdministration cancels and joins daemon-owned app work on the
-// bounded shutdown context. A shutdown error (the bound expiring while work
-// unwinds) is reported, never fatal: new executions are refused once
-// Shutdown runs.
-func quiesceAppAdministration(ctx context.Context, appAdmin appAdministration, log zerowrap.Logger) {
+// bounded shutdown context. A non-nil error means the bound expired while an
+// execution was still unwinding: the caller must stop tearing down the state
+// and runtime that execution still uses.
+func quiesceAppAdministration(ctx context.Context, appAdmin appAdministration, log zerowrap.Logger) error {
 	if appAdmin == nil {
-		return
+		return nil
 	}
 	if err := appAdmin.Shutdown(ctx); err != nil {
-		log.Warn().Err(err).Msg("app administration shutdown error")
+		log.Error().Err(err).Msg("app administration did not quiesce before the shutdown deadline")
+		return err
 	}
+	return nil
 }
 
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
-// the container service and cleans up runtime files.
-func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, appAdmin appAdministration, appState out.AppState, log zerowrap.Logger) {
+// the container service and cleans up runtime files. It returns an error when
+// app administration could not quiesce: in that case the remaining teardown
+// is skipped and the error is propagated to the process entry point, which
+// exits non-zero instead of closing state or runtime under an in-flight
+// ExecuteDeploy.
+func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, appAdmin appAdministration, appState out.AppState, log zerowrap.Logger) error {
 	log.Info().Msg("shutting down Gordon...")
 
 	// Phase 0: stop periodic app recovery first and wait for any in-flight
@@ -3460,17 +3465,15 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 	// deploys are refused and in-flight executions are cancelled on the
 	// daemon context and joined here — before traffic, runtime, or the app
 	// state store is torn down, so no execution can write to closed state.
-	quiesceAppAdministration(shutdownCtx, appAdmin, log)
+	// A timeout is fail-closed: the unfinished execution still owns the
+	// state and runtime it uses, so teardown stops here and the error makes
+	// the process exit non-zero rather than close resources underneath it.
+	if err := quiesceAppAdministration(shutdownCtx, appAdmin, log); err != nil {
+		return fmt.Errorf("app administration quiescence: %w", err)
+	}
 
 	// Phase 1: Stop ingress frontends (TLS, then proxy) — no new traffic accepted
-	for _, srv := range []*http.Server{tlsSrv, proxySrv} {
-		if srv == nil {
-			continue
-		}
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
-		}
-	}
+	shutdownHTTPServers(shutdownCtx, log, tlsSrv, proxySrv)
 
 	if trafficManager != nil {
 		if err := trafficManager.Shutdown(shutdownCtx); err != nil {
@@ -3499,14 +3502,7 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 	}
 
 	// Phase 3: Stop the registry backends.
-	for _, registrySrv := range registrySrvs {
-		if registrySrv == nil {
-			continue
-		}
-		if err := registrySrv.Shutdown(shutdownCtx); err != nil {
-			log.Warn().Err(err).Str("addr", registrySrv.Addr).Msg("server shutdown error")
-		}
-	}
+	shutdownHTTPServers(shutdownCtx, log, registrySrvs...)
 
 	if err := containerSvc.Shutdown(shutdownCtx); err != nil {
 		log.Warn().Err(err).Msg("error during container shutdown")
@@ -3515,6 +3511,20 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 
 	cleanupInternalCredentials()
 	log.Info().Msg("Gordon stopped")
+	return nil
+}
+
+// shutdownHTTPServers gracefully stops each non-nil server on the shutdown
+// context, logging per-server failures so one listener cannot mask another.
+func shutdownHTTPServers(ctx context.Context, log zerowrap.Logger, servers ...*http.Server) {
+	for _, srv := range servers {
+		if srv == nil {
+			continue
+		}
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server shutdown error")
+		}
+	}
 }
 
 func closeAppState(state out.AppState, log zerowrap.Logger) {
