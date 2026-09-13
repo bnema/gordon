@@ -234,6 +234,66 @@ func TestPreflight_TargetedRefusesDivergence(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 }
 
+func TestPreflight_TargetedDiffPolicy(t *testing.T) {
+	baseService := webService()
+	worker := webService()
+	worker.Name = "worker"
+	worker.HTTP[0].Host = "worker.example.com"
+	base := domain.AppActive{
+		App: "blog", ConvergedRevision: "rev-1", Converged: true,
+		Networks: []domain.AppSharedNetwork{{Network: "shared", Services: []string{"web"}}},
+		Services: map[string]domain.AppEffectiveService{
+			"web":    {Spec: baseService},
+			"worker": {Spec: worker},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*domain.AppSpec)
+		service string
+		wantErr bool
+	}{
+		{name: "requested service image", service: "web", mutate: func(spec *domain.AppSpec) { spec.Services[0].Image = "img:2" }},
+		{name: "other service", service: "web", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Services[1].Image = "img:2" }},
+		{name: "environment", service: "web", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Env = map[string]string{"MODE": "prod"} }},
+		{name: "network", service: "web", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Networks[0].Aliases = []string{"peer"} }},
+		{name: "service added", service: "web", wantErr: true, mutate: func(spec *domain.AppSpec) {
+			spec.Services = append(spec.Services, domain.AppService{Name: "job", Image: "img:1", Readiness: domain.AppReadiness{Type: "none", Timeout: 30 * time.Second}})
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := domain.AppSpec{Name: "blog", Networks: append([]domain.AppSharedNetwork(nil), base.Networks...), Services: []domain.AppService{baseService, worker}}
+			spec.Networks[0].Aliases = append([]string(nil), base.Networks[0].Aliases...)
+			tc.mutate(&spec)
+			state := outmocks.NewMockAppState(t)
+			runtime := outmocks.NewMockContainerRuntime(t)
+			images := outmocks.NewMockImageResolver(t)
+			secrets := outmocks.NewMockSecretProvider(t)
+			rev := domain.AppDesiredRevision{App: "blog", Revision: "rev-2", Spec: spec}
+			state.EXPECT().Recover(mock.Anything).Return(nil).Once()
+			state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-2").Return(rev, nil).Once()
+			state.EXPECT().LoadActive(mock.Anything, "blog").Return(base, true, nil).Once()
+			if !tc.wantErr {
+				images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).Return("sha256:"+strings.Repeat("a", 64), nil).Once()
+				secrets.EXPECT().GetSecret(mock.Anything, mock.Anything).Return("x", nil).Once()
+				runtime.EXPECT().InspectImageVolumes(mock.Anything, mock.Anything).Return(nil, nil).Once()
+				state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
+				state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
+				state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil).Times(2)
+			}
+			svc := preflightService(t, state, runtime, images, secrets)
+			_, _, err := svc.Preflight(context.Background(), deployment.DeployInput{App: "blog", Revision: "rev-2", Service: tc.service})
+			if tc.wantErr {
+				require.ErrorIs(t, err, domain.ErrAppStateConflict)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestPreflight_TargetedConvergedPasses(t *testing.T) {
 	ctx := context.Background()
 	state := outmocks.NewMockAppState(t)

@@ -94,6 +94,27 @@ func TestImageSourcePolicy_RejectsMalformedReferences(t *testing.T) {
 	}
 }
 
+func TestImageSourcePolicy_IsInstallationImageDockerHubAlias(t *testing.T) {
+	cases := []struct {
+		name         string
+		installation string
+		ref          string
+		want         bool
+	}{
+		{"implicit docker.io ref matches docker.io installation", "docker.io", "library/nginx:1", true},
+		{"registry-1 ref matches docker.io installation", "docker.io", "registry-1.docker.io/library/nginx:1", true},
+		{"docker.io ref matches registry-1 installation", "registry-1.docker.io", "docker.io/library/nginx:1", true},
+		{"installation registry is not docker.io", "gordon.example.com", "docker.io/library/nginx:1", false},
+		{"foreign ref does not match docker.io installation", "docker.io", "ghcr.io/example/app:1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := domain.ImageSourcePolicy{InstallationRegistry: tc.installation}
+			assert.Equal(t, tc.want, policy.IsInstallationImage(tc.ref))
+		})
+	}
+}
+
 func TestIsLocalOrPrivateHost(t *testing.T) {
 	local := []string{"localhost", "sub.localhost", "127.0.0.1", "127.0.0.1:5000", "[::1]:5000", "10.0.0.1", "192.168.0.1", "172.31.0.1", "fc00::1", "0.0.0.0", "169.254.169.254"}
 	for _, host := range local {

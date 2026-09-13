@@ -360,7 +360,7 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 		return nil, nil, false, err
 	}
 	if input.Service != "" {
-		if err := s.checkConverged(ctx, input.App, rev); err != nil {
+		if err := s.checkConverged(ctx, input.App, input.Service, rev); err != nil {
 			return nil, nil, false, err
 		}
 	}
@@ -488,8 +488,10 @@ func (s *Service) requireKnownApp(ctx context.Context, app string) error {
 	return nil
 }
 
-// checkConverged refuses service-targeted deploy on desired/effective divergence.
-func (s *Service) checkConverged(ctx context.Context, app string, rev domain.AppDesiredRevision) error {
+// checkConverged permits a targeted deploy when every desired/effective
+// difference belongs to that service. App-wide and other-service changes
+// must be deployed together so ACTIVE never combines incompatible specs.
+func (s *Service) checkConverged(ctx context.Context, app, service string, rev domain.AppDesiredRevision) error {
 	active, ok, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
 		return err
@@ -497,13 +499,34 @@ func (s *Service) checkConverged(ctx context.Context, app string, rev domain.App
 	if !ok {
 		return fmt.Errorf("deployment: app %q was never deployed, targeted deploy refused: %w", app, domain.ErrAppStateConflict)
 	}
-	if !active.Converged || active.ConvergedRevision != rev.Revision {
-		return fmt.Errorf(
-			"%w: service-targeted deploy refused, desired %s diverges from effective state",
-			domain.ErrAppStateConflict, rev.Revision,
-		)
+	if active.Converged && active.ConvergedRevision == rev.Revision {
+		return nil
 	}
-	return nil
+	diff := domain.DiffAppSpec(rev.Spec, effectiveAppSpec(active))
+	prefix := "service/" + service + "/"
+	if len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) > 0 {
+		for _, path := range diff.Changed {
+			if !strings.HasPrefix(path, prefix) {
+				return targetedDivergenceError(rev.Revision, path)
+			}
+		}
+		return nil
+	}
+	return targetedDivergenceError(rev.Revision, "application structure")
+}
+
+func effectiveAppSpec(active domain.AppActive) domain.AppSpec {
+	spec := domain.AppSpec{Name: active.App, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
+	for name, service := range active.Services {
+		effective := service.Spec
+		effective.Name = name
+		spec.Services = append(spec.Services, effective)
+	}
+	return spec
+}
+
+func targetedDivergenceError(revision, path string) error {
+	return fmt.Errorf("%w: service-targeted deploy refused, desired %s also changes %s", domain.ErrAppStateConflict, revision, path)
 }
 
 // selectPreflightServices copies and optionally narrows a revision's services.

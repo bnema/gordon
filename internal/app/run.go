@@ -1878,6 +1878,13 @@ type reloadCoordinator struct {
 	trailingGeneration uint64
 	stopped            bool
 
+	// lifecycleCtx owns the context used by debounced trailing reloads. Its
+	// base is detached from any caller's cancellation so a short-lived request
+	// context cannot abort a coalesced apply, while lifecycleCancel lets Stop
+	// tear the coordinator's own lifecycle down explicitly.
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
+
 	configSvc            configReloader
 	v                    *viper.Viper
 	proxySvc             proxyConfigUpdater
@@ -1966,9 +1973,12 @@ func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context, lo
 	if c.trailingTimer != nil {
 		c.trailingTimer.Stop()
 	}
+	if c.lifecycleCancel == nil {
+		c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.WithoutCancel(ctx))
+	}
 	c.trailingGeneration++
 	generation := c.trailingGeneration
-	trailingCtx := context.WithoutCancel(ctx)
+	trailingCtx := c.lifecycleCtx
 	c.trailingTimer = time.AfterFunc(c.debounce, func() {
 		c.runTrailingReload(trailingCtx, generation, loadConfig)
 	})
@@ -1996,6 +2006,9 @@ func (c *reloadCoordinator) Stop() {
 	if c.trailingTimer != nil {
 		c.trailingTimer.Stop()
 		c.trailingTimer = nil
+	}
+	if c.lifecycleCancel != nil {
+		c.lifecycleCancel()
 	}
 }
 
@@ -3014,23 +3027,30 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		return err
 	}
 
+	// cleanupAfterLocalAdmin releases the local admin socket and traffic
+	// manager in addition to the servers that already bound, so no startup
+	// failure after this point leaks a listening socket or a live manager.
+	cleanupAfterLocalAdmin := func(servers ...*http.Server) {
+		cleanupStartupResources(localAdmin, svc.trafficManager, log, servers...)
+	}
+
 	svc.tlsHTTPEntryPoints = tlsMuxHTTPServerNames(cfg)
 	svc.smartHTTPEntryPoints = smartTCPHTTPServerNames(cfg)
 
 	// Wait for both registry listeners and the HTTP proxy before applying traffic.
-	if err := waitForServerReady(internalRegistryReady, errChan); err != nil {
-		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+	if err := waitForServerReady(ctx, internalRegistryReady, errChan); err != nil {
+		cleanupAfterLocalAdmin(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if err := waitForCoreProxyReady(ctx, registryReady, proxyReady, errChan); err != nil {
-		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		cleanupAfterLocalAdmin(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	// Apply only the installation graph fail-fast before slower app
 	// readiness checks. Persisted ACTIVE binds are intentionally excluded
 	// until boot reconciliation re-inspects them.
 	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, nil); err != nil {
-		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		cleanupAfterLocalAdmin(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 
@@ -3052,8 +3072,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
-		shutdownTrafficManagerForStartupCleanup(svc.trafficManager, log)
-		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		cleanupAfterLocalAdmin(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
 	if schedulerCleanup != nil {
@@ -3098,11 +3117,37 @@ func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime,
 	}
 }
 
-func waitForCoreProxyReady(_ context.Context, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
-	if err := waitForServerReady(registryReady, errChan); err != nil {
+func waitForCoreProxyReady(ctx context.Context, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
+	if err := waitForServerReady(ctx, registryReady, errChan); err != nil {
 		return err
 	}
-	return waitForServerReady(proxyReady, errChan)
+	return waitForServerReady(ctx, proxyReady, errChan)
+}
+
+// shutdownStartedServers gracefully shuts down listeners that bound before a
+// partial startup failure so an error return does not leak them.
+func shutdownStartedServers(servers []*http.Server, log zerowrap.Logger) {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	for _, srv := range servers {
+		if srv != nil {
+			if err := srv.Shutdown(shutdownCtx); err != nil {
+				log.Error().Err(err).Msg("failed to shut down server during startup cleanup")
+			}
+		}
+	}
+}
+
+// cleanupStartupResources releases every resource a partial startup may have
+// acquired once the local admin socket is serving: the admin socket first (no
+// further mutations can begin), then the bound servers, then the traffic
+// manager that startProxyServers may already have populated.
+func cleanupStartupResources(localAdmin *localAdminServer, trafficManager *trafficadapter.Manager, log zerowrap.Logger, servers ...*http.Server) {
+	if localAdmin != nil {
+		localAdmin.Close()
+	}
+	shutdownStartedServers(servers, log)
+	shutdownTrafficManagerForStartupCleanup(trafficManager, log)
 }
 
 func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, log zerowrap.Logger) {
@@ -3116,7 +3161,7 @@ func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, lo
 	}
 }
 
-func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
+func waitForServerReady(ctx context.Context, ready <-chan struct{}, errChan <-chan error) error {
 	if ready == nil {
 		return nil
 	}
@@ -3125,6 +3170,8 @@ func waitForServerReady(ready <-chan struct{}, errChan <-chan error) error {
 		return nil
 	case err := <-errChan:
 		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

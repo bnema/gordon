@@ -369,6 +369,9 @@ func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, e
 	// window. A traffic failure retains the old container for the next
 	// convergence pass.
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		if inhibitErr := s.inhibitRecovery(ctx, app, name, eff.Container, domain.AppInhibitRetirementPending, opID); inhibitErr != nil {
+			return fail(errors.Join(err, inhibitErr).Error())
+		}
 		return fail(err.Error())
 	}
 	drainWithDeadline(ctx, eff.Spec.StopGrace)

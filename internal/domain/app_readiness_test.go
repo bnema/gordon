@@ -27,6 +27,10 @@ func TestValidateReadinessPath(t *testing.T) {
 		"/healthz\x00",
 		"/healthz\x7f",
 		"/he\talthz",
+		" /healthz",
+		"/healthz ",
+		"\t/healthz",
+		"/healthz\n",
 	}
 	for _, path := range invalid {
 		assert.Error(t, domain.ValidateReadinessPath(path), "path %q should be rejected", path)

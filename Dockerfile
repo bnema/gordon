@@ -5,10 +5,11 @@ ARG BUILDPLATFORM
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
-# Whether the source checkout had uncommitted changes. The Makefile passes
-# the value reported by `git describe --dirty`; the default is accurate for
-# contexts without .git metadata (see .dockerignore).
-ARG DIRTY=false
+# Whether the source checkout had uncommitted changes. The Makefile and the
+# release tooling pass an explicit true/false value. Because .git is excluded
+# from the build context (see .dockerignore), an ad-hoc build that passes no
+# build-arg reports "unknown" rather than falsely claiming a clean checkout.
+ARG DIRTY=unknown
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine3.22 AS builder
 

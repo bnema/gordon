@@ -71,6 +71,10 @@ var (
 	// ErrNetworkProbeCleanup marks a helper that could not be force-removed.
 	// Callers must fail immediately rather than create another helper.
 	ErrNetworkProbeCleanup = errors.New("network probe helper cleanup failed")
+	// ErrBindPolicy wraps administrative bind policy violations. It is
+	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
+	// installation policy refuses to serve it.
+	ErrBindPolicy = errors.New("bind policy violation")
 
 	// App state errors
 	ErrAppStateIO           = errors.New("app state storage failure")

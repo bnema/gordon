@@ -60,7 +60,6 @@ func TestLiveRuntime_SharedMembershipAndDetachment(t *testing.T) {
 	}, 60*time.Second, 2*time.Second, "an enrolled service must reach the peer through the shared network")
 
 	result, err := runtime.ExecInContainer(ctx, outsider.ID, probe)
-	if err == nil {
-		assert.NotZero(t, result.ExitCode, "an unrelated service must not reach a peer it is not enrolled with")
-	}
+	require.NoError(t, err, "the exec itself must run; a transport error is not proof of isolation")
+	assert.NotZero(t, result.ExitCode, "an unrelated service must not reach a peer it is not enrolled with")
 }

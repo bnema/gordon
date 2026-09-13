@@ -32,7 +32,7 @@ func (p ImageSourcePolicy) IsInstallationImage(ref string) bool {
 		return false
 	}
 	installation, err := canonicalRegistryHost(p.InstallationRegistry)
-	return err == nil && host == installation
+	return err == nil && dockerRegistryAlias(host) == dockerRegistryAlias(installation)
 }
 
 // ImageSourcePolicy is the installation policy for every image reference

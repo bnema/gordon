@@ -1,17 +1,11 @@
 package domain
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
-
-// ErrBindPolicy wraps administrative bind policy violations. It is
-// distinct from ErrInvalidAppSpec: the manifest may be valid while the
-// installation policy refuses to serve it.
-var ErrBindPolicy = errors.New("bind policy violation")
 
 // AppBindPolicy is one named administrative bind policy. The installation
 // declares policies; app manifests reference them by name. Source is the

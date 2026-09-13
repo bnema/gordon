@@ -210,7 +210,7 @@ func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
 		assert.False(t, singleWriterRequired(spec))
 	})
 
-	t.Run("mixed public and internal http stays overlap eligible", func(t *testing.T) {
+	t.Run("mixed public and internal http must interrupt", func(t *testing.T) {
 		spec := domain.AppService{
 			Name: "api",
 			HTTP: []domain.AppHTTPInterface{
@@ -218,8 +218,8 @@ func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
 				{Port: 9090, Visibility: domain.AppVisibilityInternal},
 			},
 		}
-		assert.True(t, httpEligible(spec),
-			"one public HTTP interface keeps candidate-first replacement")
+		assert.False(t, httpEligible(spec),
+			"the candidate is resolvable by service alias over the private network before readiness, so any internal interface must use interrupted replacement")
 		assert.False(t, singleWriterRequired(spec))
 	})
 

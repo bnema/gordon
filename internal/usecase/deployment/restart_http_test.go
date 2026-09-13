@@ -288,6 +288,9 @@ func TestRestart_HTTPTrafficFailureReportsFailedAndKeepsPublishedCandidate(t *te
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil).Once()
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(inhibition domain.AppRecoveryInhibition) bool {
+		return inhibition.Service == "web" && inhibition.ContainerID == "c-old" && inhibition.Reason == domain.AppInhibitRetirementPending
+	})).Return(nil).Once()
 	var ops []domain.AppOperation
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, op domain.AppOperation) error {
 		ops = append(ops, op)

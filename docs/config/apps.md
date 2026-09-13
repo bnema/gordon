@@ -130,13 +130,13 @@ host = "blog.mydomain.com"
 port = 3000
 tls = "auto"                     # auto | always | never
 
-[[service.http]]                 # internal: reachable only from the app network
+[[service.http]]                 # internal: not published (app private network only)
 visibility = "internal"
 port = 8080
 ```
 
 - `public`: `host` is required and must be a valid public hostname, and `tls` is `auto` (default when absent), `always`, or `never`. A public interface gets a proxy route, a global host reservation, a certificate target when TLS applies, and a `127.0.0.1` loopback backend publication.
-- `internal`: reachable only from the app's own private network. `port` is required, `host` must be absent, and `tls` must be absent — any declared TLS value is rejected. An internal interface creates no proxy route, no host reservation, no certificate target, and no host port publication, but is still a declared TCP-capable container port for readiness metadata.
+- `internal`: creates no proxy route, no host reservation, no certificate target, and no host port publication, so it is never reachable through the host or proxy plane. `port` is required, `host` must be absent, and `tls` must be absent — any declared TLS value is rejected. It is still a declared TCP-capable container port for readiness metadata. Reachability follows network membership, not visibility: any container attached to a network this service joins can reach the port — sibling services on the app's own private network, and peers on any `[[network.shared]]` network the service is enrolled in.
 
 There is no `.internal` pseudo-domain: internal interfaces carry no hostname at all.
 

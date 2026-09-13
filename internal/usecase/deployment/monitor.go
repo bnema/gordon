@@ -358,11 +358,7 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 	if err != nil {
 		return fmt.Errorf("deployment: reconcile %q: load recovery inhibitions: %w", app, err)
 	}
-	inhibited := map[recoveryKey]struct{}{}
-	for _, inhibition := range inhibitions {
-		inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
-	}
-	var failures []error
+	inhibited, failures := s.processRecoveryInhibitions(ctx, app, inhibitions)
 	for _, name := range sortedServiceNames(active) {
 		eff := active.Services[name]
 		if intent.Stopped {
@@ -387,6 +383,22 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 	}
 	s.pruneRecoveryHistory(app, active)
 	return errors.Join(failures...)
+}
+
+func (s *Service) processRecoveryInhibitions(ctx context.Context, app string, inhibitions []domain.AppRecoveryInhibition) (map[recoveryKey]struct{}, []error) {
+	inhibited := map[recoveryKey]struct{}{}
+	var failures []error
+	for _, inhibition := range inhibitions {
+		if inhibition.Reason != domain.AppInhibitRetirementPending {
+			inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
+			continue
+		}
+		retired := s.retireContainer(ctx, app, retireOptions{Service: inhibition.Service}, inhibition.ContainerID)
+		if !retired.Gone {
+			failures = append(failures, fmt.Errorf("deployment: retirement pending for %s/%s", app, inhibition.ContainerID))
+		}
+	}
+	return inhibited, failures
 }
 
 // convergeStoppedService enforces durable stopped intent: it never

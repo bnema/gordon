@@ -731,11 +731,15 @@ func (r AppReadiness) validateL4(svc *AppService) error {
 // leading slash, no scheme or authority, and no control characters. The
 // path is appended to an immutable loopback URL, so rejecting everything
 // that could be read as a different authority keeps the probe on the
-// declared backend.
+// declared backend. Surrounding whitespace is rejected rather than
+// trimmed: the stored path is used verbatim, and a silently trimmed probe
+// would target a different path than the manifest declares.
 func ValidateReadinessPath(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("http readiness requires path")
+	}
+	if path != strings.TrimSpace(path) {
+		return fmt.Errorf("http readiness path must not have leading or trailing whitespace")
 	}
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return fmt.Errorf("http readiness path must be an origin-form path beginning with one slash")

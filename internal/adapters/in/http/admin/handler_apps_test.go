@@ -377,3 +377,17 @@ func TestHandler_AppApply_DryRunOmitsRevision(t *testing.T) {
 	assert.Empty(t, resp.ResultingRevision)
 	assert.NotContains(t, rec.Body.String(), "resulting_revision")
 }
+
+func TestHandler_AppSecretsList_MissingAppIs404(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	appSvc.EXPECT().ListSecrets(mock.Anything, "ghost", "").Return(
+		nil,
+		fmt.Errorf("apps: app %q does not exist: %w", "ghost", domain.ErrAppNotFound),
+	).Once()
+
+	rec := appsRequest(t, handler, http.MethodGet, "/admin/apps/ghost/secrets", nil, "admin:apps:read")
+	require.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "app-not-found")
+}
