@@ -214,11 +214,13 @@ func (e *AppOpConflictError) Error() string {
 	return fmt.Sprintf("%s: %s %s outcome %s", e.Status, e.Response.Op, e.Response.App, e.Response.Outcome)
 }
 
-// parseDeployResponse decodes a deploy/lifecycle mutation response. A 409
-// carries the journaled AppDeployResponse body (per-service results,
-// steps, effective/observed state) instead of an error envelope; it is
-// decoded and surfaced as AppOpConflictError so the CLI can render the
-// journal while retaining failure semantics.
+// parseDeployResponse decodes a deploy/lifecycle mutation response. A 202
+// Accepted is a success shape: it carries the same running AppDeployResponse
+// journal as a 200 and is polled via OperationByKey, so it decodes through
+// the generic 2xx path. A 409 carries the journaled AppDeployResponse body
+// (per-service results, steps, effective/observed state) instead of an error
+// envelope; it is decoded and surfaced as AppOpConflictError so the CLI can
+// render the journal while retaining failure semantics.
 func parseDeployResponse(resp *http.Response, action, app string) (*dto.AppDeployResponse, error) {
 	if resp.StatusCode == http.StatusConflict {
 		return decodeDeployConflict(resp, action, app)
