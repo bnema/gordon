@@ -160,7 +160,7 @@ func TestExecuteDeploy_RecordsTerminalOutcome(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -316,7 +316,7 @@ func TestDeploy_IsStartDeployThenExecuteDeploy(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -369,7 +369,7 @@ func TestStartDeploy_LiveClaimSurvivesForegroundReconciliation(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithGCBarrier(barrier).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 

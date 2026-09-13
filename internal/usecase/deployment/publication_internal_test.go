@@ -46,7 +46,7 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default()).
 		WithProbeDeps(NewTestProbeDeps(runtime,
-			func(context.Context, string) (int, error) { return 500, nil },
+			func(context.Context, string, string) (int, error) { return 500, nil },
 			func(context.Context, string) error { return nil },
 		))
 
@@ -81,7 +81,7 @@ func TestVerifyRunningService_ReadyPublishesBinds(t *testing.T) {
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default()).
 		WithProbeDeps(NewTestProbeDeps(runtime,
-			func(context.Context, string) (int, error) { return 200, nil },
+			func(context.Context, string, string) (int, error) { return 200, nil },
 			func(context.Context, string) error { return nil },
 		))
 

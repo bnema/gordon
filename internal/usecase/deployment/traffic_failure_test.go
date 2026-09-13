@@ -73,7 +73,7 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 

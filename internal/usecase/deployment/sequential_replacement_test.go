@@ -169,7 +169,7 @@ func TestDeploy_SequentialReplacementNeverOverlapsGenerations(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(_ context.Context, url string) (int, error) {
+		func(_ context.Context, url, _ string) (int, error) {
 			probedURL = url
 			recordEvent(&order, "ready")
 			return 200, nil
@@ -282,7 +282,7 @@ func TestDeploy_FirstDeploymentRetiresNothing(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) {
+		func(context.Context, string, string) (int, error) {
 			recordEvent(&order, "ready")
 			return 200, nil
 		},
@@ -338,7 +338,7 @@ func TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate(t *testing.T)
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 		Traffic: &orderedTraffic{events: &order},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 503, nil },
+		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 
@@ -389,7 +389,7 @@ func TestDeploy_CandidateCleanupFailureStaysVisible(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 503, nil },
+		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 
@@ -445,7 +445,7 @@ func TestDeploy_CancellationDuringReadinessIsNotReportedAsSuccess(t *testing.T) 
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(probeCtx context.Context, _ string) (int, error) {
+		func(probeCtx context.Context, _, _ string) (int, error) {
 			select {
 			case <-probeStarted:
 			default:
@@ -562,7 +562,7 @@ func TestDeploy_MultiServiceStopsAtFirstFailure(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(_ context.Context, url string) (int, error) {
+		func(_ context.Context, url, _ string) (int, error) {
 			if strings.Contains(url, "18081") {
 				return 503, nil
 			}
@@ -687,7 +687,7 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 503, nil },
+		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 

@@ -187,7 +187,7 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 		},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -233,7 +233,7 @@ func TestDeploy_Mockery_HTTPSuccessRecordsLoopbackBinds(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(_ context.Context, url string) (int, error) { probedURL = url; return 200, nil },
+		func(_ context.Context, url, _ string) (int, error) { probedURL = url; return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -305,7 +305,7 @@ func TestDeploy_Mockery_HTTPReplacesOldGenerationBeforePublish(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -358,7 +358,7 @@ func TestDeploy_Mockery_HTTPReadinessFailureLeavesNoOldGeneration(t *testing.T) 
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 500, nil },
+		func(context.Context, string, string) (int, error) { return 500, nil },
 		func(context.Context, string) error { return errors.New("refused") },
 	))
 
@@ -711,7 +711,7 @@ func TestStart_RunningContainerRefreshesShiftedBinds(t *testing.T) {
 		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 	result, err := svc.Start(ctx, "blog", "")

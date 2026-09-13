@@ -87,7 +87,7 @@ func TestDeploy_CandidateIsJournaledBeforeItStarts(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -140,7 +140,7 @@ func crashDuringReplacement(t *testing.T, store *appstate.Store, opKey string) {
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(probeCtx context.Context, _ string) (int, error) {
+		func(probeCtx context.Context, _, _ string) (int, error) {
 			select {
 			case <-probeStarted:
 			default:
@@ -218,7 +218,7 @@ func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *te
 	rebooted := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime2, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime2,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 	// Boot recovery runs on a fresh process context: the crashed deploy's
@@ -287,7 +287,7 @@ func TestDeploy_ReconcilesInterruptedPredecessorBeforeCreatingAReplacement(t *te
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 
@@ -392,7 +392,7 @@ func TestRestart_FailedRebuildClearsTheInhibitionOfTheMissingContainer(t *testin
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 503, nil },
+		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 
@@ -583,7 +583,7 @@ func TestBootRecovery_ClearsReplacementInhibitionAndRebuildsFromActive(t *testin
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 	require.NoError(t, svc.ReconcileBoot(ctx))
@@ -627,7 +627,7 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 200, nil },
+		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
 

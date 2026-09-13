@@ -22,11 +22,17 @@ var probeHTTPClient = &http.Client{
 	Timeout: 5 * time.Second,
 }
 
-// httpGetOnce performs one HTTP GET without following redirects.
-func httpGetOnce(ctx context.Context, url string) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// httpGetOnce performs one HTTP GET without following redirects. It dials
+// probeURL's authority (the loopback published bind) while sending
+// hostAuthority as the Host header, so a workload that validates the Host
+// port of its declared container port accepts the probe.
+func httpGetOnce(ctx context.Context, probeURL, hostAuthority string) (int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		return 0, err
+	}
+	if hostAuthority != "" {
+		req.Host = hostAuthority
 	}
 	resp, err := probeHTTPClient.Do(req)
 	if err != nil {

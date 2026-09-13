@@ -96,7 +96,7 @@ func TestRestart_InPlaceWithdrawsRestartsVerifiesAndRepublishes(t *testing.T) {
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 		Traffic: &restartTrafficRecorder{events: &order},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(_ context.Context, url string) (int, error) {
+		func(_ context.Context, url, _ string) (int, error) {
 			probedURL = url
 			recordEvent(&order, "ready")
 			return 200, nil
@@ -146,7 +146,7 @@ func TestRestart_ReadinessFailureLeavesTheRestartedContainerWithdrawn(t *testing
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 		Traffic: &restartTrafficRecorder{events: &order},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string) (int, error) { return 503, nil },
+		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 
