@@ -453,10 +453,7 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if _, err := buildAppMountPolicies(cfg); err != nil {
 		return nil, Config{}, err
 	}
-	if err := validateAppDeviceKeys(v.GetStringMap("app_devices")); err != nil {
-		return nil, Config{}, err
-	}
-	if _, err := buildAppDevicePolicies(cfg); err != nil {
+	if err := validateDeviceConfig(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
 
@@ -2085,13 +2082,7 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateRetiredAppConfig(c.v); err != nil {
 		return err
 	}
-	if _, err := buildAppMountPolicies(reloadCfg); err != nil {
-		return err
-	}
-	if err := validateAppDeviceKeys(c.v.GetStringMap("app_devices")); err != nil {
-		return err
-	}
-	if _, err := buildAppDevicePolicies(reloadCfg); err != nil {
+	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
 		return err
 	}
 

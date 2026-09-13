@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/spf13/viper"
+
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -78,4 +80,28 @@ func redactedDevicePolicyReason(err error) string {
 		reason = reason[idx+2:]
 	}
 	return reason
+}
+
+// validateDeviceConfig validates the [app_devices] subtree: unknown keys
+// fail closed, then the decoded policies validate. Split from
+// applyLoadedConfig to keep its complexity within budget.
+func validateDeviceConfig(v *viper.Viper, cfg Config) error {
+	if err := validateAppDeviceKeys(v.GetStringMap("app_devices")); err != nil {
+		return err
+	}
+	if _, err := buildAppDevicePolicies(cfg); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAppPolicies validates both administrative app policy subtrees
+// (bind mounts and device grants) before publication. Failed validation
+// keeps the previous policies live. Split from applyLoadedConfig to keep
+// its complexity within budget.
+func validateAppPolicies(v *viper.Viper, cfg Config) error {
+	if _, err := buildAppMountPolicies(cfg); err != nil {
+		return err
+	}
+	return validateDeviceConfig(v, cfg)
 }

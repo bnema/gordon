@@ -1064,9 +1064,7 @@ func diffService(name string, desired, effective AppService) []string {
 	if !equalBinds(desired.Binds, effective.Binds) {
 		changed = append(changed, "service/"+name+"/binds")
 	}
-	if !equalDevices(desired.Devices, effective.Devices) {
-		changed = append(changed, "service/"+name+"/devices")
-	}
+	changed = appendDeviceChanges(changed, name, desired.Devices, effective.Devices)
 	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
 		changed = append(changed, "service/"+name+"/databases")
 	}
@@ -1172,4 +1170,14 @@ func equalDevices(a, b []string) bool {
 	sortedA := slices.Sorted(slices.Values(a))
 	sortedB := slices.Sorted(slices.Values(b))
 	return slices.Equal(sortedA, sortedB)
+}
+
+// appendDeviceChanges appends the service devices diff entry when the
+// device sets differ. Split from diffService to keep its complexity
+// within budget.
+func appendDeviceChanges(changed []string, name string, desired, effective []string) []string {
+	if !equalDevices(desired, effective) {
+		changed = append(changed, "service/"+name+"/devices")
+	}
+	return changed
 }

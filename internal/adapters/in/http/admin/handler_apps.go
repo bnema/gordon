@@ -520,7 +520,13 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
 		errors.Is(err, domain.ErrBindPolicy) ||
 		errors.Is(err, domain.ErrDevicePolicy) ||
-		errors.Is(err, domain.ErrAppNotFound) ||
+		isPreflightErrorRest(err)
+}
+
+// isPreflightErrorRest covers the remaining preflight-mappable sentinels.
+// Split from isMappedPreflightError to keep its complexity within budget.
+func isPreflightErrorRest(err error) bool {
+	return errors.Is(err, domain.ErrAppNotFound) ||
 		errors.Is(err, domain.ErrAppReservationConflict) ||
 		errors.Is(err, domain.ErrAppImageUnresolvable) ||
 		errors.Is(err, domain.ErrAppSecretMissing) ||
