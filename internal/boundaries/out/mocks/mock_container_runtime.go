@@ -1858,6 +1858,72 @@ func (_c *MockContainerRuntime_Ping_Call) RunAndReturn(run func(ctx context.Cont
 	return _c
 }
 
+// ProbeContainerNetwork provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) ProbeContainerNetwork(ctx context.Context, request domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error) {
+	ret := _mock.Called(ctx, request)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ProbeContainerNetwork")
+	}
+
+	var r0 domain.ContainerNetworkProbeResult
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error)); ok {
+		return returnFunc(ctx, request)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.ContainerNetworkProbeRequest) domain.ContainerNetworkProbeResult); ok {
+		r0 = returnFunc(ctx, request)
+	} else {
+		r0 = ret.Get(0).(domain.ContainerNetworkProbeResult)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, domain.ContainerNetworkProbeRequest) error); ok {
+		r1 = returnFunc(ctx, request)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockContainerRuntime_ProbeContainerNetwork_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ProbeContainerNetwork'
+type MockContainerRuntime_ProbeContainerNetwork_Call struct {
+	*mock.Call
+}
+
+// ProbeContainerNetwork is a helper method to define mock.On call
+//   - ctx context.Context
+//   - request domain.ContainerNetworkProbeRequest
+func (_e *MockContainerRuntime_Expecter) ProbeContainerNetwork(ctx any, request any) *MockContainerRuntime_ProbeContainerNetwork_Call {
+	return &MockContainerRuntime_ProbeContainerNetwork_Call{Call: _e.mock.On("ProbeContainerNetwork", ctx, request)}
+}
+
+func (_c *MockContainerRuntime_ProbeContainerNetwork_Call) Run(run func(ctx context.Context, request domain.ContainerNetworkProbeRequest)) *MockContainerRuntime_ProbeContainerNetwork_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.ContainerNetworkProbeRequest
+		if args[1] != nil {
+			arg1 = args[1].(domain.ContainerNetworkProbeRequest)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_ProbeContainerNetwork_Call) Return(containerNetworkProbeResult domain.ContainerNetworkProbeResult, err error) *MockContainerRuntime_ProbeContainerNetwork_Call {
+	_c.Call.Return(containerNetworkProbeResult, err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_ProbeContainerNetwork_Call) RunAndReturn(run func(ctx context.Context, request domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error)) *MockContainerRuntime_ProbeContainerNetwork_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // PullImage provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) PullImage(ctx context.Context, image string) error {
 	ret := _mock.Called(ctx, image)

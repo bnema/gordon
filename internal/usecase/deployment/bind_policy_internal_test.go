@@ -176,6 +176,15 @@ func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
 		assert.False(t, singleWriterRequired(httpSpec()))
 	})
 
+	t.Run("internal http-only preserves candidate-first replacement", func(t *testing.T) {
+		spec := domain.AppService{
+			Name: "api",
+			HTTP: []domain.AppHTTPInterface{{Port: 8080, Visibility: domain.AppVisibilityInternal}},
+		}
+		assert.True(t, httpEligible(spec))
+		assert.False(t, singleWriterRequired(spec))
+	})
+
 	t.Run("writable bind is single-writer", func(t *testing.T) {
 		spec := httpSpec()
 		spec.Binds = []domain.AppBind{{Name: "config", Path: "/etc/app.conf"}}

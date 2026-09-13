@@ -49,9 +49,11 @@ func liveCreate(t *testing.T, runtime *Runtime, ctx context.Context, config *dom
 	created, err := runtime.CreateContainer(ctx, config)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		cleanup, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		_ = runtime.StopContainer(cleanup, created.ID, domain.AppDefaultStopGrace)
+		// Force-remove in one step. A separate StopContainer would wait the
+		// full stop grace (30s) and then consume the cleanup budget, leaving
+		// the container behind and exhausting the daemon's address pool.
 		_ = runtime.RemoveContainer(cleanup, created.ID, true)
 	})
 	require.NoError(t, runtime.StartContainer(ctx, created.ID))

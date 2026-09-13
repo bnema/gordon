@@ -64,6 +64,13 @@ var (
 
 	// App manifest errors
 	ErrInvalidAppSpec = errors.New("invalid app manifest")
+	// ErrInvalidNetworkProbe wraps malformed bounded container-network
+	// readiness requests. It is distinct from ErrInvalidAppSpec: the
+	// manifest may be valid while one probe request is not.
+	ErrInvalidNetworkProbe = errors.New("invalid network probe request")
+	// ErrNetworkProbeCleanup marks a helper that could not be force-removed.
+	// Callers must fail immediately rather than create another helper.
+	ErrNetworkProbeCleanup = errors.New("network probe helper cleanup failed")
 
 	// App state errors
 	ErrAppStateIO           = errors.New("app state storage failure")

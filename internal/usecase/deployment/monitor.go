@@ -598,7 +598,7 @@ func (s *Service) publishRecoveredService(ctx context.Context, app, name string,
 		return errors.Join(s.withdrawForRecovery(ctx, app, name), err)
 	}
 	if started || restarted || fresh {
-		if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+		if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 			s.backoff.recordFailure(key)
 			return errors.Join(s.withdrawForRecovery(ctx, app, name), err)
 		}

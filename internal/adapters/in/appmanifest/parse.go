@@ -56,7 +56,11 @@ type rawReadiness struct {
 type rawHTTP struct {
 	Host string `toml:"host"`
 	Port int    `toml:"port"`
-	TLS  string `toml:"tls"`
+	// TLS uses presence tracking because internal interfaces reject every
+	// explicit value, including an empty string.
+	TLS *string `toml:"tls"`
+	// Visibility is empty when unset; the parser normalizes it to public.
+	Visibility string `toml:"visibility"`
 }
 
 // rawTCP mirrors [[service.tcp]].
@@ -175,6 +179,25 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 	return spec, nil
 }
 
+func toDomainHTTP(service string, h rawHTTP) (domain.AppHTTPInterface, error) {
+	visibility := h.Visibility
+	if visibility == "" {
+		visibility = domain.AppVisibilityPublic
+	}
+	if visibility == domain.AppVisibilityInternal && h.TLS != nil {
+		return domain.AppHTTPInterface{}, fmt.Errorf("%w: service %q internal http port %d must not declare tls", domain.ErrInvalidAppSpec, service, h.Port)
+	}
+	tls := ""
+	if h.TLS != nil {
+		tls = *h.TLS
+	} else if visibility == domain.AppVisibilityPublic {
+		tls = domain.AppTLSAuto
+	}
+	return domain.AppHTTPInterface{
+		Host: domain.CanonicalHTTPHost(h.Host), Port: h.Port, TLS: tls, Visibility: visibility,
+	}, nil
+}
+
 // toDomainService maps one raw service with defaults.
 func toDomainService(raw rawService) (domain.AppService, error) {
 	svc := domain.AppService{
@@ -202,15 +225,11 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 	}
 	svc.Readiness = readiness
 	for _, h := range raw.HTTP {
-		tls := h.TLS
-		if tls == "" {
-			tls = domain.AppTLSAuto
+		iface, err := toDomainHTTP(raw.Name, h)
+		if err != nil {
+			return domain.AppService{}, err
 		}
-		svc.HTTP = append(svc.HTTP, domain.AppHTTPInterface{
-			Host: domain.CanonicalHTTPHost(h.Host),
-			Port: h.Port,
-			TLS:  tls,
-		})
+		svc.HTTP = append(svc.HTTP, iface)
 	}
 	for _, t := range raw.TCP {
 		svc.TCP = append(svc.TCP, domain.AppTCPInterface{

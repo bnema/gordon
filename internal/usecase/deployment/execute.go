@@ -340,9 +340,12 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
 }
 
-// httpEligible reports HTTP-only services without volumes or binds. A bind
-// (especially a writable one) is treated like a persistent volume: two
-// generations must never serve concurrently.
+// httpEligible reports HTTP services whose generations may overlap while
+// the candidate proves readiness. Public services then cut proxy traffic
+// over; internal-only services need no proxy update but retain the same
+// candidate-first availability guarantee. Volumes, binds, and L4 ports
+// remain interrupted because two generations must not share their state
+// or publications.
 func httpEligible(spec domain.AppService) bool {
 	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
 		return false
@@ -367,7 +370,7 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 	if err != nil {
 		return s.failResult(revision, before, "", err), false
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), created.ID, httpReadiness(p.spec), binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(p.spec), binds); err != nil {
 		// Old version keeps serving. Capture redacted diagnostics while
 		// the failed replacement still exists, then remove only that
 		// candidate.
@@ -462,7 +465,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 	if err != nil {
 		return s.failResult(revision, before, "", err), true
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), created.ID, p.spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, created.ID, p.spec, binds); err != nil {
 		// Capture redacted diagnostics while the candidate still exists,
 		// then remove only that candidate.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
@@ -661,10 +664,12 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 	return nil, fmt.Errorf("deployment: create container: %w", err)
 }
 
-// backendPublishes collects every interface container port for loopback
-// publication: HTTP + TCP interfaces on tcp plus UDP interfaces on udp,
-// plus an explicit TCP readiness port. Each publishes on 127.0.0.1
-// ephemeral (never public). Deduplicated by (protocol, container port).
+// backendPorts collects every interface container port for loopback
+// publication: public HTTP + TCP interfaces on tcp plus UDP interfaces on
+// udp, plus an explicit TCP readiness port. Internal HTTP ports are
+// excluded: they are reached only over the private network and must keep
+// no host binding. Each publish is on 127.0.0.1 ephemeral (never public).
+// Deduplicated by (protocol, container port).
 func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 	seen := map[domain.ContainerBackendPort]struct{}{}
 	var ports []domain.ContainerBackendPort
@@ -679,6 +684,9 @@ func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 		}
 	}
 	for _, h := range spec.HTTP {
+		if !h.IsPublic() {
+			continue
+		}
 		add(h.Port, domain.NetworkProtocolTCP)
 	}
 	for _, t := range spec.TCP {
@@ -689,8 +697,12 @@ func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 	}
 	// Readiness probes are TCP-only (validation rejects UDP-only
 	// services with tcp/http readiness); the readiness port matches a
-	// declared TCP container port.
-	add(spec.Readiness.Port, domain.NetworkProtocolTCP)
+	// declared TCP container port. An internal-only port is never
+	// published, so readiness metadata cannot create a host binding for
+	// it.
+	if spec.Readiness.Port > 0 && !spec.InternallyOnlyPort(spec.Readiness.Port) {
+		add(spec.Readiness.Port, domain.NetworkProtocolTCP)
+	}
 	sort.Slice(ports, func(i, j int) bool {
 		if ports[i].Protocol != ports[j].Protocol {
 			return ports[i].Protocol < ports[j].Protocol

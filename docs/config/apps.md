@@ -43,6 +43,10 @@ host = "blog.mydomain.com"
 port = 3000
 tls = "auto"                     # auto | always | never
 
+[[service.http]]                 # optional private interface
+visibility = "internal"          # public (default) | internal
+port = 8080                      # required; no host or tls
+
 [service.secrets]                # ENV name -> secret name (values in pass)
 DATABASE_URL = "database-url"
 
@@ -116,11 +120,35 @@ Image registry names and digest syntax are validated during manifest apply, reso
 - `[[service.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).
 - `[service.backup]` lists the declared databases (`postgres`) and volumes (`volume`) that are backup targets. A declared database or volume that is not referenced here is never backed up. Schedules follow the declaration through deploys; stored backups are never deleted when declarations change.
 
+## HTTP Interfaces
+
+`[[service.http]]` declares 0..n HTTP interfaces per service. `visibility` is optional and defaults to `public` when the key is absent or empty.
+
+```toml
+[[service.http]]                 # public: proxied by host
+host = "blog.mydomain.com"
+port = 3000
+tls = "auto"                     # auto | always | never
+
+[[service.http]]                 # internal: reachable only from the app network
+visibility = "internal"
+port = 8080
+```
+
+- `public`: `host` is required and must be a valid public hostname, and `tls` is `auto` (default when absent), `always`, or `never`. A public interface gets a proxy route, a global host reservation, a certificate target when TLS applies, and a `127.0.0.1` loopback backend publication.
+- `internal`: reachable only from the app's own private network. `port` is required, `host` must be absent, and `tls` must be absent — any declared TLS value is rejected. An internal interface creates no proxy route, no host reservation, no certificate target, and no host port publication, but is still a declared TCP-capable container port for readiness metadata.
+
+There is no `.internal` pseudo-domain: internal interfaces carry no hostname at all.
+
+A container port declared by both an internal HTTP interface and an externally backed interface (public HTTP or TCP) is rejected at apply time, because publication is socket-level. Duplicate internal HTTP ports within a service are rejected the same way.
+
 ## Readiness
 
-`type = "http"` requires an origin-form `path` beginning with a single `/`. Absolute URLs, authority forms such as `@host:port`, scheme-relative paths, and control characters are rejected at apply time. The probe always dials the declared loopback backend, never follows redirects, ignores environment proxy settings, and is bounded per request and for the whole operation.
+`type = "http"` requires an origin-form `path` beginning with a single `/`. Absolute URLs, authority forms such as `@host:port`, scheme-relative paths, and control characters are rejected at apply time. The probe always dials the declared loopback backend, never follows redirects, ignores environment proxy settings, and is bounded per request and for the whole operation. A public or otherwise published interface keeps this loopback probe. An internal HTTP port is instead probed over the app private network by one bounded, short-lived helper, using HTTP or TCP according to the interface's `[service.readiness]` type; the internal port is never temporarily published to the host to probe it.
 
 ## TLS
+
+TLS applies to public interfaces only; an internal interface never declares `tls`.
 
 - `auto` keeps the host eligible for HTTP and HTTPS; plaintext is redirected when an HTTPS endpoint exists and redirects are enabled.
 - `always` is enforced: a plaintext request to an `always` host is redirected whenever an HTTPS endpoint exists, and refused with `421 Misdirected Request` when none does. The backend is never reached over plaintext.
@@ -129,6 +157,8 @@ Image registry names and digest syntax are validated during manifest apply, reso
 ## Networks
 
 Each app gets a private network automatically. `[[network.shared]]` adds services to named shared networks, created/reused only within verified Gordon ownership. Deploy adds AND removes memberships without disconnecting unrelated services.
+
+Services of the same app communicate over that private network and resolve each other by service alias. Different apps are isolated by default; cross-app traffic requires both services to declare the same `[[network.shared]]` membership. See [Network Isolation](./network-isolation.md).
 
 ## Strictness
 

@@ -325,7 +325,7 @@ func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, e
 	if err != nil {
 		return fail(err.Error())
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), created.ID, httpReadiness(eff.Spec), binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(eff.Spec), binds); err != nil {
 		// The old generation is still ACTIVE and serving: capture redacted
 		// diagnostics while the failed candidate exists, then remove only
 		// that candidate.
@@ -436,7 +436,7 @@ func (s *Service) restartOneService(ctx context.Context, app, name string, eff d
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
@@ -783,7 +783,7 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}

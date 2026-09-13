@@ -125,6 +125,18 @@ internal = true
 
 Every app container joins an incarnation-owned private network derived from the app's internal UUID; shared memberships come only from explicit `[[network.shared]]` declarations, and memory/CPU/PID limits apply on every create and recovery path.
 
+## Readiness helper containers
+
+Probing an internal HTTP port uses one bounded helper container per readiness attempt, removed immediately after. Gordon force-removes the helper under an independent cleanup context, including on failure and timeout. There is no operator configuration for the helper; its image and limits are fixed.
+
+- The helper image is digest-pinned and multi-arch: `alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc`. The image must be pre-provisioned and available offline on the target host, because the probe never pulls.
+- The helper attaches only to the target app's private network. It never joins a shared network or a host network.
+- It never publishes a host port and has no mounts, volumes, secrets, environment, or runtime socket.
+- It runs non-root (uid/gid `65534`) with a read-only root filesystem, all capabilities dropped, `no-new-privileges`, and bounded CPU, memory, and PIDs.
+- It targets the exact inspected container IP on that network, never a service alias, and revalidates the container's execution start before trusting the result; a restarted generation is discarded.
+- A target that listens only on its own loopback fails readiness.
+- Helpers left behind by an abrupt daemon or host stop are reclaimed by the next probe once they are older than ten minutes; a live session is never touched.
+
 ## Registry exposure
 
 - With `auth.enabled = true`, registry requests are authenticated and repository-scoped; the public proxy forwards registry domains to the internal registry.

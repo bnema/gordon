@@ -88,6 +88,12 @@ func projectService(app, name string, eff domain.AppEffectiveService, entrypoint
 	spec.Name = name
 	var entries []RouteEntry
 	for _, h := range spec.HTTP {
+		// Internal HTTP is reachable only from the app private network: it
+		// is never routed, so it must not project a traffic entry or a
+		// certificate host. Fail closed by skipping it entirely.
+		if !h.IsPublic() {
+			continue
+		}
 		entries = append(entries, RouteEntry{
 			Kind:       "http",
 			RouterName: "app-" + app + "--" + spec.Name + "--http-" + sanitizeHost(h.Host),

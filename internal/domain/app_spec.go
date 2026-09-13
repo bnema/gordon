@@ -45,6 +45,13 @@ const (
 	AppTLSNever  = "never"
 )
 
+// App visibility modes for HTTP interfaces. public keeps the historical
+// host/TLS plane; internal is reachable only from the app private network.
+const (
+	AppVisibilityPublic   = "public"
+	AppVisibilityInternal = "internal"
+)
+
 // App database engines. Only postgres in v2.50.
 const (
 	AppDBPostgres = "postgres"
@@ -110,11 +117,81 @@ type AppReadiness struct {
 	Timeout  time.Duration
 }
 
-// AppHTTPInterface is one HTTP service interface.
+// AppHTTPInterface is one HTTP service interface. Visibility is explicit
+// interface state: public HTTP keeps the historical host/TLS behavior,
+// internal HTTP declares neither host nor tls and is reachable only from
+// the app private network.
 type AppHTTPInterface struct {
 	Host string
 	Port int
 	TLS  string
+	// Visibility is public or internal. The zero value normalizes to
+	// public when read or projected, so manifests and stored state
+	// written before visibility existed keep their meaning.
+	Visibility string
+}
+
+// EffectiveVisibility normalizes absent visibility to public.
+func (h AppHTTPInterface) EffectiveVisibility() string {
+	if h.Visibility == "" {
+		return AppVisibilityPublic
+	}
+	return h.Visibility
+}
+
+// IsPublic reports whether the interface is served on the public plane.
+func (h AppHTTPInterface) IsPublic() bool {
+	return h.EffectiveVisibility() == AppVisibilityPublic
+}
+
+// IsInternal reports whether the interface is reachable only from the
+// app private network.
+func (h AppHTTPInterface) IsInternal() bool {
+	return h.EffectiveVisibility() == AppVisibilityInternal
+}
+
+// IsPublicHTTP reports whether a service declares at least one
+// effective-public HTTP interface.
+func (s AppService) IsPublicHTTP() bool {
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			return true
+		}
+	}
+	return false
+}
+
+// HTTPInterfaceForPort returns the first HTTP interface declaring port.
+func (s AppService) HTTPInterfaceForPort(port int) (AppHTTPInterface, bool) {
+	for _, h := range s.HTTP {
+		if h.Port == port {
+			return h, true
+		}
+	}
+	return AppHTTPInterface{}, false
+}
+
+// InternallyOnlyPort reports whether port is declared by internal HTTP
+// interfaces and by no externally backed HTTP/TCP interface. Such a port
+// is reached over the private network only and must never gain a host
+// publication, including through readiness metadata.
+func (s AppService) InternallyOnlyPort(port int) bool {
+	internal := false
+	for _, h := range s.HTTP {
+		if h.Port != port {
+			continue
+		}
+		if !h.IsInternal() {
+			return false
+		}
+		internal = true
+	}
+	for _, t := range s.TCP {
+		if t.Port == port {
+			return false
+		}
+	}
+	return internal
 }
 
 // AppTCPInterface is one TCP service interface.
@@ -464,7 +541,7 @@ func (s *AppService) validate() error {
 	return nil
 }
 
-// validateInterfaces checks HTTP/TCP/UDP entries.
+// validateInterfaces checks HTTP/TCP/UDP entries and their port ownership.
 func (s *AppService) validateInterfaces() error {
 	for i := range s.HTTP {
 		if err := s.HTTP[i].validate(s.Name); err != nil {
@@ -480,6 +557,37 @@ func (s *AppService) validateInterfaces() error {
 		if err := s.UDP[i].validate(s.Name); err != nil {
 			return err
 		}
+	}
+	return s.validateInterfacePorts()
+}
+
+// validateInterfacePorts rejects one container port claimed by both an
+// internal HTTP interface and an externally backed HTTP/TCP interface:
+// publication is socket-level, so publishing the port would expose the
+// internal listener beyond the private network. Internal ports must also
+// be declared at most once, since they carry no host to tell them apart.
+func (s *AppService) validateInterfacePorts() error {
+	external := map[int]string{}
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			external[h.Port] = "http"
+		}
+	}
+	for _, t := range s.TCP {
+		external[t.Port] = "tcp"
+	}
+	seenInternal := map[int]struct{}{}
+	for _, h := range s.HTTP {
+		if !h.IsInternal() {
+			continue
+		}
+		if kind, ok := external[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is also declared by an externally backed %s interface", ErrInvalidAppSpec, s.Name, h.Port, kind)
+		}
+		if _, ok := seenInternal[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is declared more than once", ErrInvalidAppSpec, s.Name, h.Port)
+		}
+		seenInternal[h.Port] = struct{}{}
 	}
 	return nil
 }
@@ -678,21 +786,38 @@ func hasTCPContainerPort(svc *AppService, port int) bool {
 	return false
 }
 
-// validate checks one HTTP interface.
+// validate checks one HTTP interface against its visibility. Public
+// interfaces keep the historical host/TLS rules; internal interfaces are
+// private-network only and must not claim a host or a TLS mode.
 func (h AppHTTPInterface) validate(service string) error {
-	if h.Host == "" {
-		return fmt.Errorf("%w: service %q http host is required", ErrInvalidAppSpec, service)
-	}
-	if _, ok := CanonicalRouteDomain(h.Host); !ok {
-		return fmt.Errorf("%w: service %q http host %q is not a valid public hostname", ErrInvalidAppSpec, service, h.Host)
-	}
-	if h.Port < 1 || h.Port > 65535 {
-		return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
-	}
-	switch h.TLS {
-	case AppTLSAuto, AppTLSAlways, AppTLSNever:
+	switch h.EffectiveVisibility() {
+	case AppVisibilityPublic:
+		if h.Host == "" {
+			return fmt.Errorf("%w: service %q http host is required", ErrInvalidAppSpec, service)
+		}
+		if _, ok := CanonicalRouteDomain(h.Host); !ok {
+			return fmt.Errorf("%w: service %q http host %q is not a valid public hostname", ErrInvalidAppSpec, service, h.Host)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
+		switch h.TLS {
+		case AppTLSAuto, AppTLSAlways, AppTLSNever:
+		default:
+			return fmt.Errorf("%w: service %q http tls must be auto|always|never", ErrInvalidAppSpec, service)
+		}
+	case AppVisibilityInternal:
+		if h.Host != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare host", ErrInvalidAppSpec, service)
+		}
+		if h.TLS != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare tls", ErrInvalidAppSpec, service)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
 	default:
-		return fmt.Errorf("%w: service %q http tls must be auto|always|never", ErrInvalidAppSpec, service)
+		return fmt.Errorf("%w: service %q http visibility must be public|internal", ErrInvalidAppSpec, service)
 	}
 	return nil
 }
@@ -866,7 +991,7 @@ func secretPathChanges(desired, effective AppService) map[string]struct{} {
 // interfacesChanged compares interface slices.
 func interfacesChanged(desired, effective AppService) bool {
 	for i := range desired.HTTP {
-		if desired.HTTP[i] != effective.HTTP[i] {
+		if !httpInterfacesEqual(desired.HTTP[i], effective.HTTP[i]) {
 			return true
 		}
 	}
@@ -881,6 +1006,18 @@ func interfacesChanged(desired, effective AppService) bool {
 		}
 	}
 	return false
+}
+
+// httpInterfacesEqual compares two HTTP interfaces with visibility
+// normalized. State written before the field existed reads as the zero
+// value and must equal an explicit public, while a real public/internal
+// flip is still a change.
+func httpInterfacesEqual(a, b AppHTTPInterface) bool {
+	if a.EffectiveVisibility() != b.EffectiveVisibility() {
+		return false
+	}
+	a.Visibility, b.Visibility = "", ""
+	return a == b
 }
 
 // equalStringMaps compares string maps.

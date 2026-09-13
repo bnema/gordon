@@ -342,6 +342,19 @@ keep_last = 3                                # Keep N newest tags per repository
 
 Note: for all `backups.retention.*` keys, `0` means keep no backups for that retention tier.
 
+## App Manifest HTTP Interfaces
+
+`[[service.http]]` declares HTTP interfaces in a standalone app manifest (see [App Manifest](./apps.md)).
+
+| Key | Values | Default | Description |
+|-----|--------|---------|-------------|
+| `service.http[].visibility` | `"public"`, `"internal"` | `"public"` | `public` is proxied by host and may terminate TLS; `internal` is reachable only from the app's private network |
+| `service.http[].host` | hostname | none | Required for public interfaces; must be absent for `visibility = "internal"` |
+| `service.http[].port` | integer | none | Required container port for every interface |
+| `service.http[].tls` | `"auto"`, `"always"`, `"never"` | `"auto"` | Public interfaces only; `visibility = "internal"` rejects any declared value |
+
+`visibility = "internal"` creates no proxy route, host reservation, certificate target, or host port publication. A container port declared by both an internal HTTP interface and an externally backed interface (public HTTP or TCP) is rejected, as are duplicate internal HTTP ports.
+
 ## Environment Variables
 
 All configuration options can be set via environment variables using the pattern:

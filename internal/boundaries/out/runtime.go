@@ -95,6 +95,17 @@ type ContainerRuntime interface {
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	ConnectContainerToNetwork(ctx context.Context, containerName, networkName string) error
 	DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error
+
+	// Bounded network readiness
+	//
+	// ProbeContainerNetwork runs one bounded readiness session against one
+	// declared internal container port, which has no host publication. The
+	// adapter owns the helper lifecycle: it resolves the target endpoint on
+	// the exact network in the request, runs one hardened helper attached
+	// only to that network, and always removes the helper under an
+	// independent bounded cleanup context. It never publishes a host port
+	// and never targets a service alias.
+	ProbeContainerNetwork(ctx context.Context, request domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error)
 }
 
 // ContainerLister is the subset of ContainerRuntime needed by the orphan GC.
