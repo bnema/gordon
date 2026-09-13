@@ -3,6 +3,7 @@ package docker
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -110,22 +111,23 @@ func (r *Runtime) ProbeContainerNetwork(ctx context.Context, request domain.Cont
 	}
 	// A bound expiry is a readiness failure, not an infrastructure
 	// failure. Return it before any post-session step, and never classify
-	// it through a context that just expired.
+	// it through a context that just expired. Caller cancellation stays an
+	// error so the deployment stops immediately.
 	if timedOut {
-		return domain.ContainerNetworkProbeResult{Diagnostic: "probe did not complete within its bound"}, nil
+		return probeWaitTimeoutResult(ctx)
 	}
 
 	exitCode, stdout, err := r.probeHelperOutcome(sessionCtx, helperID)
-	if err != nil {
-		return domain.ContainerNetworkProbeResult{}, err
+	if result, handled := classifyProbeStepError(sessionCtx, ctx, err); handled {
+		return result, err
 	}
 	// Revalidate identity before trusting the outcome: a target that
 	// restarted during the session must not report readiness for a
 	// generation that no longer exists. The caller may retry this as a
 	// candidate that is simply not ready yet.
 	finalIP, err := r.inspectProbeTarget(sessionCtx, request)
-	if err != nil {
-		return domain.ContainerNetworkProbeResult{}, err
+	if result, handled := classifyProbeStepError(sessionCtx, ctx, err); handled {
+		return result, err
 	}
 	if finalIP != targetIP {
 		return domain.ContainerNetworkProbeResult{}, fmt.Errorf("deployment: probe target endpoint changed during readiness: %w", domain.ErrAppStateConflict)
@@ -143,6 +145,37 @@ func (r *Runtime) ProbeContainerNetwork(ctx context.Context, request domain.Cont
 		result.Diagnostic = probeDiagnostic(request, result.Status)
 	}
 	return result, nil
+}
+
+func probeWaitTimeoutResult(parentCtx context.Context) (domain.ContainerNetworkProbeResult, error) {
+	if err := parentCtx.Err(); err != nil {
+		return domain.ContainerNetworkProbeResult{}, err
+	}
+	return probeTimeoutFailure(), nil
+}
+
+func classifyProbeStepError(sessionCtx, parentCtx context.Context, err error) (domain.ContainerNetworkProbeResult, bool) {
+	if err == nil {
+		return domain.ContainerNetworkProbeResult{}, false
+	}
+	if probeBoundExpired(sessionCtx, parentCtx) {
+		return probeTimeoutFailure(), true
+	}
+	return domain.ContainerNetworkProbeResult{}, true
+}
+
+// probeTimeoutFailure is the bounded readiness failure of a session whose
+// own bound expired. It is not an infrastructure error: the target may
+// simply be slow, so the caller may retry it as an unhealthy attempt.
+func probeTimeoutFailure() domain.ContainerNetworkProbeResult {
+	return domain.ContainerNetworkProbeResult{Diagnostic: "probe did not complete within its bound"}
+}
+
+// probeBoundExpired reports whether a post-wait probe step failed because
+// the session's own bound expired. A caller cancellation is never a bound
+// expiry: it must stay an error so the deployment stops immediately.
+func probeBoundExpired(sessionCtx, parentCtx context.Context) bool {
+	return parentCtx.Err() == nil && errors.Is(sessionCtx.Err(), context.DeadlineExceeded)
 }
 
 func probeCleanupResult(log zerowrap.Logger, cleanup func() error, result domain.ContainerNetworkProbeResult, retErr error) (domain.ContainerNetworkProbeResult, error) {

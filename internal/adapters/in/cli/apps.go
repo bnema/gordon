@@ -489,26 +489,32 @@ func newAppsSecretsListCmd() *cobra.Command {
 			return err
 		}
 		defer handle.close()
-		entries, err := handle.plane.ListAppSecrets(cmd.Context(), args[0], service)
-		if err != nil {
-			return err
-		}
-		if jsonOut {
-			return writeJSON(cmd.OutOrStdout(), entries)
-		}
-		for _, entry := range entries {
-			if err := cliWriteLine(cmd.OutOrStdout(), cliRenderMeta(entry.Service+"/"+entry.Key+":", entry.Name+" "+entry.Source+" "+entry.Presence)); err != nil {
-				return err
-			}
-		}
-		if len(entries) == 0 {
-			return cliWriteLine(cmd.OutOrStdout(), cliRenderMuted("No registered secrets"))
-		}
-		return nil
+		return runAppsSecretsList(cmd.Context(), handle.plane, cmd.OutOrStdout(), args[0], service, jsonOut)
 	}}
 	cmd.Flags().StringVar(&service, "service", "", "Filter by service")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
+}
+
+// runAppsSecretsList renders metadata-only registrations for one app,
+// optionally filtered to one service. Secret values never appear.
+func runAppsSecretsList(ctx context.Context, plane ControlPlane, out io.Writer, app, service string, jsonOut bool) error {
+	entries, err := plane.ListAppSecrets(ctx, app, service)
+	if err != nil {
+		return fmt.Errorf("list app secrets for %s: %w", app, err)
+	}
+	if jsonOut {
+		return writeJSON(out, entries)
+	}
+	for _, entry := range entries {
+		if err := cliWriteLine(out, cliRenderMeta(entry.Service+"/"+entry.Key+":", entry.Name+" "+entry.Source+" "+entry.Presence)); err != nil {
+			return err
+		}
+	}
+	if len(entries) == 0 {
+		return cliWriteLine(out, cliRenderMuted("No registered secrets"))
+	}
+	return nil
 }
 
 // newAppsSecretsSetCmd creates `apps secrets set`.

@@ -171,3 +171,31 @@ func TestClientDeployApp_ConflictWithoutJournalFallsBackToHTTPError(t *testing.T
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusConflict, httpErr.StatusCode)
 }
+
+func TestClientListAppSecrets_ServiceFilterAndErrorContext(t *testing.T) {
+	var gotService string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/apps/blog/secrets", r.URL.Path)
+		gotService = r.URL.Query().Get("service")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]dto.AppSecretMetadataDTO{
+			{Service: "web", Key: "DATABASE_URL", Name: "database-url", Source: "desired", Presence: "unknown"},
+		})
+	}))
+	defer srv.Close()
+
+	entries, err := NewClient(srv.URL).ListAppSecrets(context.Background(), "blog", "web")
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "web", gotService)
+
+	errSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"internal"}`))
+	}))
+	defer errSrv.Close()
+
+	_, err = NewClient(errSrv.URL).ListAppSecrets(context.Background(), "blog", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list app secrets blog")
+}

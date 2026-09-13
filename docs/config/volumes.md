@@ -84,17 +84,17 @@ Gordon does not automatically delete retained app volumes. Back up persistent da
 Gordon does not copy data between volumes. Stop every container that can write to the source, verify a backup, create an empty target volume, and perform the copy through the runtime so rootless UID/GID mappings are preserved. For Podman, a disposable helper container is the preferred generic method:
 
 ```bash
-podman run --rm \
-  --volume <source-volume>:/source:ro \
-  --volume <target-volume>:/target \
-  docker.io/library/alpine:latest \
+podman run --rm --pull=never --network=none \
+  --volume "<source-volume>:/source:ro" \
+  --volume "<target-volume>:/target" \
+  docker.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc \
   sh -c 'cp -a /source/. /target/'
 ```
 
-Use an approved locally available helper image when hosts cannot pull Alpine. If direct access to storage paths is unavoidable with rootless Podman, enter its user namespace:
+Replace the literal `<...>` placeholders before running; they are quoted above so a shell cannot mistake them for redirection. The approved helper image is digest-pinned, must already be available locally, and runs without network access. If direct access to storage paths is unavoidable with rootless Podman, enter its user namespace:
 
 ```bash
-podman unshare cp -a <source-path>/. <target-path>/
+podman unshare cp -a "<source-path>"/. "<target-path>"/
 ```
 
 Do not use a plain root `cp` as the default procedure: host ownership IDs may not match the container's user namespace. Applications that rely on ACLs, extended attributes, sparse files, or database consistency need an application-specific export/restore or copy tool. Validate ownership and application behavior against the target, and retain the source volume until the migration is accepted.

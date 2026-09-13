@@ -202,11 +202,20 @@ func runInternalProbeAttempt(ctx context.Context, deps ProbeDeps, request domain
 }
 
 // rereadInternalProbeStart refreshes the execution boundary after a stale
-// or vanished candidate, keeping the previous value when the runtime
-// reports none so the next attempt still fails closed.
+// or vanished candidate. A candidate that briefly vanished (not found)
+// keeps its previous boundary so the caller keeps polling until the
+// deadline; any other runtime failure is infrastructure and aborts. It
+// keeps the previous value when the runtime reports none so the next
+// attempt still fails closed.
 func rereadInternalProbeStart(ctx context.Context, deps ProbeDeps, containerID string, current time.Time) (time.Time, error) {
 	next, err := deps.containerStart(ctx, containerID)
 	if err != nil {
+		// ErrContainerNotFound is the same "not ready yet" condition the
+		// probe reported: preserve the boundary and keep polling instead of
+		// aborting the wait as an infrastructure error.
+		if errors.Is(err, domain.ErrContainerNotFound) {
+			return current, nil
+		}
 		return current, fmt.Errorf("deployment: internal readiness execution start for %s: %w", containerID, err)
 	}
 	if next.IsZero() {

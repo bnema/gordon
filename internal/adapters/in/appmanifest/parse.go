@@ -19,10 +19,15 @@ import (
 
 // rawManifest mirrors the frozen TOML schema for strict decoding.
 type rawManifest struct {
-	Name     string             `toml:"name"`
-	Env      map[string]string  `toml:"env"`
-	Services []rawService       `toml:"service"`
-	Networks []rawSharedNetwork `toml:"network.shared"`
+	Name     string            `toml:"name"`
+	Env      map[string]string `toml:"env"`
+	Services []rawService      `toml:"service"`
+	Network  rawNetwork        `toml:"network"`
+}
+
+// rawNetwork mirrors [network] and its [[network.shared]] children.
+type rawNetwork struct {
+	Shared []rawSharedNetwork `toml:"shared"`
 }
 
 // rawService mirrors one [[service]] table.
@@ -157,7 +162,7 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		Name:     raw.Name,
 		Env:      map[string]string{},
 		Services: make([]domain.AppService, 0, len(raw.Services)),
-		Networks: make([]domain.AppSharedNetwork, 0, len(raw.Networks)),
+		Networks: make([]domain.AppSharedNetwork, 0, len(raw.Network.Shared)),
 	}
 	for key, value := range raw.Env {
 		spec.Env[key] = value
@@ -169,7 +174,7 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		}
 		spec.Services = append(spec.Services, svc)
 	}
-	for _, net := range raw.Networks {
+	for _, net := range raw.Network.Shared {
 		spec.Networks = append(spec.Networks, domain.AppSharedNetwork{
 			Network:  net.Network,
 			Services: append([]string(nil), net.Services...),

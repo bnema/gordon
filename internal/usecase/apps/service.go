@@ -340,7 +340,7 @@ func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source 
 
 // activeSpec rebuilds an AppSpec view from effective definitions for diffing.
 func activeSpec(active domain.AppActive) domain.AppSpec {
-	spec := domain.AppSpec{Name: active.App, Env: map[string]string{}}
+	spec := domain.AppSpec{Name: active.App, Env: map[string]string{}, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
 	for name, svc := range active.Services {
 		svcSpec := svc.Spec
 		svcSpec.Name = name

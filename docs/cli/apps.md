@@ -116,8 +116,9 @@ Shows the normalized desired-vs-active diff (`added`, `removed`, `changed`).
 
 Values are accepted via `KEY=VALUE` arguments (discouraged: shell history) or
 stdin. Names must already exist in desired or active state. Only key names are
-ever echoed back — never values. `--service` is required: secrets are
-service-scoped.
+ever echoed back — never values. Secrets are service-scoped: `--service` is
+required for `set` and `delete`, and optional for `list` where it filters to
+one service.
 
 ### gordon apps secrets list
 

@@ -177,6 +177,33 @@ func TestApply_DryRunWritesNothing(t *testing.T) {
 	store.AssertNotCalled(t, "StageApply", mock.Anything, mock.Anything)
 }
 
+func TestApply_ImageOnlyDiffPreservesActiveNetworks(t *testing.T) {
+	ctx := context.Background()
+	store := outmocks.NewMockAppState(t)
+	svc := apps.NewService(store, zerowrap.Default())
+	spec := testSpec("blog")
+	spec.Networks = []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}, Aliases: []string{"db"}}}
+	activeService := spec.Services[0]
+	activeService.Image = "img:1"
+	spec.Services[0].Image = "img:2"
+
+	store.EXPECT().Recover(mock.Anything).Return(nil).Once()
+	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
+	previousDesired := spec
+	previousDesired.Services = append([]domain.AppService(nil), spec.Services...)
+	previousDesired.Services[0].Image = "img:1"
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{Revision: "rev-1", App: "blog", Spec: previousDesired}, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
+		App: "blog", Networks: spec.Networks,
+		Services: map[string]domain.AppEffectiveService{"web": {Spec: activeService}},
+	}, true, nil).Once()
+
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.NoError(t, err)
+	require.NotNil(t, dry)
+	assert.Equal(t, []string{"service/web/image"}, dry.Diff.Changed)
+}
+
 func TestApply_RejectsCrossAppConflict(t *testing.T) {
 	ctx := context.Background()
 	store := outmocks.NewMockAppState(t)

@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -130,6 +131,32 @@ func TestProbeCleanupResult_PriorErrorNeverHidesCleanupFailure(t *testing.T) {
 	assert.False(t, result.Ready)
 	require.ErrorIs(t, err, domain.ErrNetworkProbeCleanup)
 	require.ErrorIs(t, err, priorErr)
+}
+
+func TestProbeBoundExpired_OnlySessionDeadline(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	session, sessionCancel := context.WithDeadline(parent, time.Now().Add(-time.Second))
+	defer sessionCancel()
+	<-session.Done()
+
+	assert.True(t, probeBoundExpired(session, parent),
+		"the session's own bound expiring is a readiness timeout")
+
+	// Caller cancellation must never be reclassified as a readiness
+	// timeout: it has to stay an error so the deployment stops.
+	cancel()
+	<-session.Done()
+	assert.False(t, probeBoundExpired(session, parent),
+		"caller cancellation must stay an error")
+
+	assert.False(t, probeBoundExpired(context.Background(), context.Background()),
+		"a live session has not expired")
+}
+
+func TestProbeTimeoutFailure_IsUnhealthyNotError(t *testing.T) {
+	result := probeTimeoutFailure()
+	assert.False(t, result.Ready, "a bound expiry must not report readiness")
+	assert.NotEmpty(t, result.Diagnostic, "a bound expiry must carry a bounded diagnostic")
 }
 
 func TestProbeDiagnostic(t *testing.T) {

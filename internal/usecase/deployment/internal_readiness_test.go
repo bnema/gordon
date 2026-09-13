@@ -259,6 +259,35 @@ func TestWaitInternalReady_StaleGenerationUntilDeadlineTimesOut(t *testing.T) {
 	assert.NotContains(t, err.Error(), "infrastructure error")
 }
 
+// TestWaitInternalReady_VanishedCandidateKeepsPolling proves a candidate
+// that is gone on the boundary re-read is still "not ready yet": the wait
+// keeps its previous execution boundary and polls to the readiness
+// deadline instead of aborting as an infrastructure error.
+func TestWaitInternalReady_VanishedCandidateKeepsPolling(t *testing.T) {
+	spec := internalSpec()
+	spec.Readiness.Timeout = 600 * time.Millisecond
+	startReads := 0
+	attempts := 0
+	deps := ProbeDeps{
+		containerStart: func(context.Context, string) (time.Time, error) {
+			startReads++
+			if startReads == 1 {
+				return time.Unix(1700000000, 0).UTC(), nil
+			}
+			return time.Time{}, fmt.Errorf("gone: %w", domain.ErrContainerNotFound)
+		},
+		networkProbe: func(context.Context, domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error) {
+			attempts++
+			return domain.ContainerNetworkProbeResult{}, fmt.Errorf("gone: %w", domain.ErrContainerNotFound)
+		},
+	}
+	err := waitInternalReadyWithDeps(context.Background(), deps, "c-api", spec, "net", 8080)
+	require.ErrorContains(t, err, "timeout")
+	assert.NotContains(t, err.Error(), "infrastructure error")
+	assert.GreaterOrEqual(t, attempts, 2, "a vanished candidate must be retried, not abort the wait")
+	assert.GreaterOrEqual(t, startReads, 2, "a vanished candidate must be re-read, not abort the wait")
+}
+
 // TestReadinessContainerPort_PrefersSinglePublicHTTP proves a public+
 // internal service with no explicit readiness port probes the public HTTP
 // backend instead of failing on an unresolved port.

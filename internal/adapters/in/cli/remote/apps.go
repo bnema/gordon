@@ -268,11 +268,11 @@ func (c *Client) ListAppSecrets(ctx context.Context, app, service string) ([]dto
 	}
 	resp, err := c.request(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list app secrets %s: %w", app, err)
 	}
 	var result []dto.AppSecretMetadataDTO
 	if err := parseResponse(resp, &result); err != nil {
-		return nil, fmt.Errorf("list app secrets: %w", err)
+		return nil, fmt.Errorf("list app secrets %s: %w", app, err)
 	}
 	return result, nil
 }

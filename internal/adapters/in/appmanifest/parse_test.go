@@ -47,6 +47,27 @@ func TestParse_ValidWeb(t *testing.T) {
 	assert.Equal(t, "http", svc.Readiness.Type)
 }
 
+func TestParse_SharedNetwork(t *testing.T) {
+	doc := `
+name = "media"
+[[service]]
+name = "web"
+image = "registry.example.com/media/web:1"
+[[network.shared]]
+network = "backend"
+services = ["web"]
+aliases = ["media-web"]
+`
+
+	spec, warnings, err := appmanifest.Parse([]byte(doc), "media.toml")
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	require.Len(t, spec.Networks, 1)
+	assert.Equal(t, domain.AppSharedNetwork{
+		Network: "backend", Services: []string{"web"}, Aliases: []string{"media-web"},
+	}, spec.Networks[0])
+}
+
 func TestParse_FileNameMismatchIsWarning(t *testing.T) {
 	_, warnings, err := appmanifest.Parse([]byte(validWeb), "other.toml")
 	require.NoError(t, err)

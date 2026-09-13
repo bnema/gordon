@@ -460,6 +460,43 @@ func TestWaitForCoreProxyReady_WaitsWithoutPublishingEmptyTraffic(t *testing.T) 
 	assert.Empty(t, manager.Status().EntryPoints)
 }
 
+func TestWaitForCoreProxyReady_ObservesContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Neither readiness channel ever closes: the canceled startup context must
+	// unblock the wait rather than hang on a listener that will never bind.
+	err := waitForCoreProxyReady(ctx, make(chan struct{}), make(chan struct{}), make(chan error))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestReloadCoordinator_StopCancelsOwnedTrailingReloadLifecycle(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "lifecycle.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	// Keep the trailing timer pending so Stop is the only thing that can tear
+	// the coordinator-owned lifecycle down.
+	coord.debounce = time.Hour
+
+	require.NoError(t, coord.Trigger(ctx)) // immediate apply records lastRun
+	require.NoError(t, coord.Trigger(ctx)) // coalesced into the trailing timer
+
+	coord.mu.Lock()
+	lifecycleCtx := coord.lifecycleCtx
+	coord.mu.Unlock()
+	require.NotNil(t, lifecycleCtx, "trailing reload must own a lifecycle context")
+	require.NoError(t, lifecycleCtx.Err())
+
+	coord.Stop()
+	require.ErrorIs(t, lifecycleCtx.Err(), context.Canceled)
+	require.Equal(t, 1, proxySvc.Calls(), "stopped coordinator must not apply the trailing reload")
+}
+
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()

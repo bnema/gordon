@@ -351,12 +351,21 @@ func (s *AppServiceImpl) OperationByKey(ctx context.Context, app, key string) (*
 	return &op, nil
 }
 
-// ListSecrets implements in.AppService without reading secret values.
+// ListSecrets implements in.AppService without reading secret values. A
+// name with no live identity is not found; ownership-only apps remain live
+// and report their registrations (possibly none).
 func (s *AppServiceImpl) ListSecrets(ctx context.Context, app, service string) ([]in.AppSecretMetadata, error) {
+	live, err := s.store.AppExists(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("list app secrets: check app %q: %w", app, err)
+	}
+	if !live {
+		return nil, fmt.Errorf("apps: app %q does not exist: %w", app, domain.ErrAppNotFound)
+	}
 	entries := []in.AppSecretMetadata{}
 	desired, ok, err := s.store.LoadDesired(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list app secrets: load desired for %q: %w", app, err)
 	}
 	if ok {
 		for _, svc := range desired.Spec.Services {
@@ -365,7 +374,7 @@ func (s *AppServiceImpl) ListSecrets(ctx context.Context, app, service string) (
 	}
 	active, ok, err := s.store.LoadActive(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list app secrets: load active for %q: %w", app, err)
 	}
 	if ok {
 		for svcName, svc := range active.Services {

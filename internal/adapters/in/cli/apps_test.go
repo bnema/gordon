@@ -529,3 +529,21 @@ func TestRunAppLogs_TextJSONFollow(t *testing.T) {
 	require.NoError(t, runAppLogs(context.Background(), plane, reader, "blog", "web", true, 50, &out, false))
 	assert.Equal(t, "s1\n", out.String())
 }
+
+func TestRunAppsSecretsList_RendersMetadataAndWrapsErrors(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().ListAppSecrets(mock.Anything, "blog", "web").Return([]dto.AppSecretMetadataDTO{
+		{Service: "web", Key: "DATABASE_URL", Name: "database-url", Source: "desired", Presence: "unknown"},
+	}, nil).Once()
+	var out bytes.Buffer
+	require.NoError(t, runAppsSecretsList(context.Background(), plane, &out, "blog", "web", false))
+	assert.Contains(t, out.String(), "web/DATABASE_URL")
+	assert.Contains(t, out.String(), "desired")
+
+	errPlane := appPlane(t)
+	errPlane.EXPECT().ListAppSecrets(mock.Anything, "blog", "").Return(nil, errors.New("boom")).Once()
+	err := runAppsSecretsList(context.Background(), errPlane, &bytes.Buffer{}, "blog", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list app secrets for blog")
+	assert.Contains(t, err.Error(), "boom")
+}

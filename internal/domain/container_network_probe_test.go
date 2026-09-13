@@ -38,6 +38,7 @@ func TestContainerNetworkProbeRequest_Validate(t *testing.T) {
 		{"unknown protocol", func(r *domain.ContainerNetworkProbeRequest) { r.Protocol = "grpc" }},
 		{"http without path", func(r *domain.ContainerNetworkProbeRequest) { r.Path = "" }},
 		{"http path not origin form", func(r *domain.ContainerNetworkProbeRequest) { r.Path = "healthz" }},
+		{"http path with surrounding whitespace", func(r *domain.ContainerNetworkProbeRequest) { r.Path = " /healthz " }},
 		{"tcp with path", func(r *domain.ContainerNetworkProbeRequest) {
 			r.Protocol = domain.ProbeProtocolTCP
 		}},

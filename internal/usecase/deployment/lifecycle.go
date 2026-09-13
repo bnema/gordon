@@ -317,6 +317,7 @@ func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, e
 	pinned := pinnedService{
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage,
 		appEnv:         maps.Clone(rev.Spec.Env),
+		appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
 	}
 	created, binds, udpBinds, err := s.createAndStart(ctx, app, eff.EffectiveRevision, pinned, opID)
@@ -368,6 +369,9 @@ func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, e
 	// window. A traffic failure retains the old container for the next
 	// convergence pass.
 	if err := s.refreshTraffic(ctx, app); err != nil {
+		if inhibitErr := s.inhibitRecovery(ctx, app, name, eff.Container, domain.AppInhibitRetirementPending, opID); inhibitErr != nil {
+			return fail(errors.Join(err, inhibitErr).Error())
+		}
 		return fail(err.Error())
 	}
 	drainWithDeadline(ctx, eff.Spec.StopGrace)
@@ -721,6 +725,7 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 	}
 	pinned := pinnedService{
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage, appEnv: maps.Clone(rev.Spec.Env),
+		appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
 	}
 	svcResult, _ := s.deployService(ctx, app, rev.Revision, pinned, opID, eff.Container, serviceStopGrace(eff))

@@ -131,7 +131,7 @@ func TestDiffAppSpec_DeterministicAndRedacted(t *testing.T) {
 	assert.Contains(t, diff.Changed, "service/web/stop_grace")
 	assert.Contains(t, diff.Changed, "service/web/databases")
 	assert.Contains(t, diff.Changed, "service/web/backup")
-	assert.Contains(t, diff.Changed, "networks")
+	assert.Contains(t, diff.Changed, "network/shared/added")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url-v2")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url")
 	assert.Contains(t, diff.Changed, "env")
@@ -151,6 +151,27 @@ func TestDiffAppSpec_DeterministicAndRedacted(t *testing.T) {
 	// Removed service.
 	removed := domain.DiffAppSpec(domain.AppSpec{Name: "x"}, before)
 	assert.Equal(t, []string{"service/web"}, removed.Removed)
+}
+
+func TestDiffAppSpec_NetworkDetailsAndOrderNormalization(t *testing.T) {
+	base := validSpec()
+	base.Networks = []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}, Aliases: []string{"db", "primary"}}}
+
+	reordered := validSpec()
+	reordered.Networks = []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}, Aliases: []string{"primary", "db"}}}
+	assert.Empty(t, domain.DiffAppSpec(reordered, base).Changed)
+
+	servicesChanged := validSpec()
+	servicesChanged.Services = append(servicesChanged.Services, domain.AppService{Name: "worker", Image: "img:1", Readiness: domain.AppReadiness{Type: "none", Timeout: 30 * time.Second}})
+	servicesChanged.Networks = []domain.AppSharedNetwork{{Network: "database", Services: []string{"web", "worker"}, Aliases: []string{"db", "primary"}}}
+	assert.Contains(t, domain.DiffAppSpec(servicesChanged, base).Changed, "network/database/services")
+
+	aliasesChanged := base
+	aliasesChanged.Networks = []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}, Aliases: []string{"db"}}}
+	assert.Equal(t, []string{"network/database/aliases"}, domain.DiffAppSpec(aliasesChanged, base).Changed)
+
+	removed := validSpec()
+	assert.Equal(t, []string{"network/database/removed"}, domain.DiffAppSpec(removed, base).Changed)
 }
 
 func TestDiffAppSpec_ErrorsWrapped(t *testing.T) {

@@ -10,10 +10,10 @@ ENGINE := podman
 VERSION := $(shell git describe --tags --always --dirty)
 COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u '+%Y-%m-%d_%I:%M:%S%p')
-# Dirty semantics come from the same `git describe --dirty` probe used for
-# VERSION, so the reported dirty flag can never disagree with the version
-# string (a dirty checkout makes git describe append -dirty).
-DIRTY := $(if $(findstring -dirty,$(VERSION)),true,false)
+# Probe the working tree directly (tracked edits and untracked files) instead
+# of parsing VERSION, so an overridden VERSION cannot mask a dirty checkout.
+# `git describe --dirty`, which VERSION uses, only reflects tracked edits.
+DIRTY := $(if $(shell git status --porcelain --untracked-files=normal 2>/dev/null),true,false)
 
 # Build flags
 LDFLAGS := -s -w \
