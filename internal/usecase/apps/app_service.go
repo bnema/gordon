@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/bnema/zerowrap"
 
@@ -24,11 +25,23 @@ type AppServiceImpl struct {
 	// core is the single configured apps service. It is built once and
 	// reconfigured in place, never reconstructed per request.
 	core *Service
+
+	// lifecycleMu guards the daemon lifecycle. daemonCtx is the
+	// daemon-owned parent for background executions: it is never a request
+	// context, so request cancellation cannot abort an in-flight deploy.
+	// stopped gates new executions once Shutdown runs, and executions
+	// tracks the in-flight ones so Shutdown can wait for them.
+	lifecycleMu sync.Mutex
+	daemonCtx   context.Context
+	daemonStop  context.CancelFunc
+	stopped     bool
+	executions  sync.WaitGroup
 }
 
 // deployEngine is the subset of the deployment engine the app service needs.
 type deployEngine interface {
-	Deploy(ctx context.Context, input deployment.DeployInput) (*deployment.DeployResult, error)
+	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
 	Start(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
 	Restart(ctx context.Context, app, service, opID string) (*deployment.LifecycleResult, error)
@@ -37,13 +50,86 @@ type deployEngine interface {
 
 // NewAppServiceImpl wires the driving-port implementation.
 func NewAppServiceImpl(store out.AppState, deploy deployEngine, secrets out.SecretWriter, log zerowrap.Logger) *AppServiceImpl {
+	daemonCtx, daemonStop := context.WithCancel(context.Background())
 	return &AppServiceImpl{
-		store:   store,
-		deploy:  deploy,
-		secrets: secrets,
-		log:     log,
-		core:    NewService(store, log),
+		store:      store,
+		deploy:     deploy,
+		secrets:    secrets,
+		log:        log,
+		core:       NewService(store, log),
+		daemonCtx:  daemonCtx,
+		daemonStop: daemonStop,
 	}
+}
+
+// WithDaemonContext sets the parent context that owns background deploy
+// executions. It must be called during wiring, before the first Deploy. The
+// derived context is cancelled by Shutdown; request contexts are never used
+// as its parent.
+func (s *AppServiceImpl) WithDaemonContext(parent context.Context) *AppServiceImpl {
+	if parent == nil {
+		parent = context.Background()
+	}
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.stopped {
+		return s
+	}
+	ctx, cancel := context.WithCancel(parent)
+	if s.daemonStop != nil {
+		s.daemonStop()
+	}
+	s.daemonCtx, s.daemonStop = ctx, cancel
+	return s
+}
+
+// Shutdown stops scheduling background deploy executions, cancels the daemon
+// context so in-flight executions abort with a recoverable non-terminal
+// journal, and waits for them to unwind or for ctx to expire.
+func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
+	s.lifecycleMu.Lock()
+	if !s.stopped {
+		s.stopped = true
+		s.daemonStop()
+	}
+	s.lifecycleMu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		s.executions.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// scheduleExecution runs the claimed operation's effects on the daemon
+// context. Only the owner of a freshly claimed key reaches it, so a duplicate
+// key can never spawn a second execution. The journal claimed by StartDeploy
+// is already durable when the goroutine starts.
+func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) {
+	s.lifecycleMu.Lock()
+	if s.stopped {
+		s.lifecycleMu.Unlock()
+		s.log.Warn().Str("app", claim.App).Str("op", claim.Op).
+			Msg("apps: deploy claimed during shutdown; non-terminal journal left for reconciliation")
+		return
+	}
+	ctx := s.daemonCtx
+	s.executions.Add(1)
+	s.lifecycleMu.Unlock()
+
+	go func() {
+		defer s.executions.Done()
+		if _, err := s.deploy.ExecuteDeploy(ctx, claim); err != nil {
+			s.log.Warn().Err(err).Str("app", claim.App).Str("op", claim.Op).
+				Msg("apps: background deploy execution failed")
+		}
+	}()
 }
 
 // WithEntrypoints supplies the installation entrypoint listeners used to
@@ -275,15 +361,24 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 	return domain.DiffAppSpec(desired.Spec, activeSpec(active)), nil
 }
 
-// Deploy implements in.AppService. A repeated idempotency key replays its
-// stored journal: the engine claims the key atomically before any effect,
-// so a duplicate request never deploys twice.
+// Deploy implements in.AppService. StartDeploy claims and persists the
+// operation under the app lock, then the effects run in the background on
+// the daemon context, so Deploy returns the still-running journal promptly
+// and request cancellation cannot abort an in-flight replacement. A repeated
+// idempotency key is never owned twice: its stored journal replays instead
+// of spawning a second execution, and only the owner schedules any work.
 func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
-	result, err := s.deploy.Deploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
-	if result == nil {
+	started, err := s.deploy.StartDeploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
+	if err != nil {
 		return nil, err
 	}
-	return s.operationResult(ctx, app, result.Op, err)
+	if !started.Owned {
+		// The key already answered this request: its stored journal is the
+		// result and no workload is touched again.
+		return s.operationResult(ctx, app, started.Claim.Op, started.ReplayError())
+	}
+	s.scheduleExecution(started.Claim)
+	return s.operationResult(ctx, app, started.Claim.Op, nil)
 }
 
 // Stop implements in.AppService.
