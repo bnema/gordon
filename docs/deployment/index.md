@@ -149,6 +149,8 @@ Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─�
 
 Preflight (image resolution and pull, secrets, volumes, networks, bind policy, reservations) completes before anything is disrupted, so a preflight failure leaves the running service untouched. If replacement fails after the old container was removed, the failure is explicit: Gordon does not recreate the old container and does not promise automatic data rollback. Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back.
 
+If a deploy is interrupted between creating the replacement container and publishing it, that candidate is recorded durably and Gordon removes it before creating or rebuilding any generation of that app — at boot and before every mutation — so two generations of one service never run together. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. A failed final traffic publication is republished by the next recovery pass, within 15 seconds by default.
+
 ## Related
 
 - [GitHub Actions](./github-actions.md)

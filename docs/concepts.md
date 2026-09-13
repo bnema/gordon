@@ -81,7 +81,9 @@ If preflight fails, the running service is left untouched. If replacement fails 
 
 Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back. This flow covers every service, including TCP, UDP, mixed, and volume-owning services. An open UDP socket is not application readiness, and Gordon never restarts an old volume-owning image automatically after a replacement may have written data.
 
-`gordon apps restart` is separate from deploy and stays in place: it withdraws traffic, restarts the same pinned container, verifies readiness, and republishes traffic. No second container is created.
+A deploy interrupted after the replacement container was created but before it was published leaves the failure explicit: the candidate is recorded in the deployment journal, and Gordon removes it before it creates or rebuilds any generation of that app — at boot and before every mutation — so two generations of one service never run together. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. The next recovery pass republishes routing within its 15-second cadence if the final traffic publication was the step that failed.
+
+`gordon apps restart` is separate from deploy and stays in place: it withdraws traffic, restarts the same pinned container, verifies readiness, and republishes traffic. No second container is created. When the recorded container is gone, restart rebuilds the service from its pinned `ACTIVE` digest and publishes it.
 
 ## Deletion and Cleanup Lifecycle
 

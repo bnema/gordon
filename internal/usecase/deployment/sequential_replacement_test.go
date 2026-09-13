@@ -675,7 +675,11 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(nil, assert.AnError).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(nil).Once()
+	// The failed replacement removes its candidate once, and the following
+	// boot reconciliation retries it: a terminal failed operation keeps
+	// retrying a candidate it recorded, because the journal cannot know the
+	// earlier removal succeeded without re-checking the runtime.
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(nil).Times(2)
 
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
@@ -708,6 +712,16 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 	require.NoError(t, loadErr)
 	require.True(t, ok)
 	assert.Equal(t, "c-old", active.Services["web"].Container)
+
+	// The failed replacement keeps its candidate in the journal: a leftover
+	// must stay traceable so reconciliation can converge it.
+	failedOp, hasOp, loadErr := store.LoadLatestOperation(ctx, "blog")
+	require.NoError(t, loadErr)
+	require.True(t, hasOp)
+	failedStep, found := opStep(failedOp, "service.web.replace")
+	require.True(t, found)
+	assert.Equal(t, domain.AppStepFailed, failedStep.State)
+	assert.Equal(t, "c-new", failedStep.After, "the created candidate stays recorded")
 
 	rebooted := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,

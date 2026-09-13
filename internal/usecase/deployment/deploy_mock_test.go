@@ -20,7 +20,14 @@ import (
 
 func mockDeps(t *testing.T) (*outmocks.MockAppState, *outmocks.MockContainerRuntime, *outmocks.MockImageResolver, *outmocks.MockSecretProvider) {
 	t.Helper()
-	return outmocks.NewMockAppState(t),
+	state := outmocks.NewMockAppState(t)
+	// Every app mutation reconciles an interrupted predecessor first. These
+	// tests exercise the mutation itself, so they see no interrupted
+	// operation; tests that seed one use their own expectation or a real
+	// store.
+	state.EXPECT().LoadLatestOperation(mock.Anything, mock.Anything).
+		Return(domain.AppOperation{}, false, nil).Maybe()
+	return state,
 		outmocks.NewMockContainerRuntime(t),
 		outmocks.NewMockImageResolver(t),
 		outmocks.NewMockSecretProvider(t)

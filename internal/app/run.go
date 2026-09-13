@@ -4096,7 +4096,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.auto_create", true)
 	v.SetDefault("volumes.prefix", "gordon")
 	v.SetDefault("volumes.preserve", true)
-	v.SetDefault("deploy.pull_policy", "if-tag-changed")
 	v.SetDefault("backups.databases.enabled", false)
 	v.SetDefault("backups.databases.schedule", string(domain.ScheduleDaily))
 	v.SetDefault("backups.databases.storage_dir", "")
@@ -4136,15 +4135,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.registry_allowed_ips", []string{})
 	v.SetDefault("server.proxy_allowed_ips", []string{})
 	v.SetDefault("server.registry_listen_address", "")
-	v.SetDefault("deploy.readiness_delay", "5s")
-	v.SetDefault("deploy.readiness_mode", "auto")
-	v.SetDefault("deploy.health_timeout", "90s")
-	v.SetDefault("deploy.stabilization_delay", "2s")
-	v.SetDefault("deploy.tcp_probe_timeout", "30s")
-	v.SetDefault("deploy.http_probe_timeout", "60s")
-	v.SetDefault("deploy.attachment_readiness_timeout", "30s")
-	v.SetDefault("deploy.drain_mode", "auto")
-	v.SetDefault("deploy.drain_timeout", "30s")
 
 	ConfigureViper(v, configPath)
 

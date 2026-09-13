@@ -129,7 +129,7 @@ func TestCreateAndStart_RefusesRevokedBindBeforeRuntimeMutation(t *testing.T) {
 		},
 	}
 
-	_, _, _, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1")
+	_, _, _, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
 
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
 	assert.Contains(t, err.Error(), "config")
@@ -290,10 +290,13 @@ func TestRestartOneService_RevokedBindFailsWithoutRuntimeMutation(t *testing.T) 
 		},
 	}
 
-	step, result := svc.restartOneService(context.Background(), "blog", "web", eff)
+	op := &domain.AppOperation{Op: "op-1", Steps: []domain.AppOperationStep{{
+		ID: "service.web.restart", State: domain.AppStepPending, Before: eff.Container,
+	}}}
+	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", eff, op, 0)
 
-	assert.Equal(t, domain.AppStepFailed, step.State)
-	assert.Contains(t, step.Error, "config")
+	assert.Equal(t, domain.AppStepFailed, op.Steps[0].State)
+	assert.Contains(t, op.Steps[0].Error, "config")
 	assert.Equal(t, "failed", result.Result)
 	runtime.AssertNotCalled(t, "RestartContainer")
 	runtime.AssertExpectations(t)
@@ -312,14 +315,15 @@ func TestEnsureServiceRunning_RevokedBindFailsWithoutRuntimeMutation(t *testing.
 			Binds: []domain.AppBind{{Name: "config", Path: "/etc/app.conf"}},
 		},
 	}
-	step := &domain.AppOperationStep{}
+	op := &domain.AppOperation{Op: "op-1", Steps: []domain.AppOperationStep{{
+		ID: "service.web.start", State: domain.AppStepPending, Before: eff.Container,
+	}}}
 	result := &LifecycleResult{Services: map[string]ServiceResult{}}
 
-	cont := svc.ensureServiceRunning(context.Background(), "blog", "op-1", "web", eff, step, result)
+	svc.ensureServiceRunning(context.Background(), "blog", "op-1", "web", eff, op, 0, result)
 
-	assert.True(t, cont)
-	assert.Equal(t, domain.AppStepFailed, step.State)
-	assert.Contains(t, step.Error, "config")
+	assert.Equal(t, domain.AppStepFailed, op.Steps[0].State)
+	assert.Contains(t, op.Steps[0].Error, "config")
 	runtime.AssertNotCalled(t, "StartContainer")
 	runtime.AssertExpectations(t)
 }

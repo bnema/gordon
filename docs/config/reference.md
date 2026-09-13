@@ -117,18 +117,6 @@ trace_sample_rate = 1.0                      # Fraction of traces to sample (0.0
 dir = ""                                     # Env files directory (default: {data_dir}/env)
 
 # =============================================================================
-# DEPLOYMENT
-# =============================================================================
-[deploy]
-pull_policy = "if-tag-changed"               # "always", "if-tag-changed", "never"
-readiness_mode = "auto"                      # "auto", "docker-health", "delay"
-health_timeout = "90s"                       # Max wait for health-based readiness
-readiness_delay = "5s"                       # Wait after running before considered ready
-drain_mode = "auto"                          # "auto", "inflight", "delay"
-drain_timeout = "30s"                        # Max wait for in-flight request drain
-drain_delay = "2s"                           # Wait after cache invalidation before old stop
-
-# =============================================================================
 # CONTAINERS
 # =============================================================================
 [containers]
@@ -287,13 +275,6 @@ keep_last = 3                                # Keep N newest tags per repository
 | `telemetry.metrics` | `true` | Export metrics |
 | `telemetry.logs` | `true` | Bridge zerolog to OTLP logs |
 | `telemetry.trace_sample_rate` | `1.0` | Fraction of traces to sample (0.0–1.0) |
-| `deploy.pull_policy` | `"if-tag-changed"` | Pull on tag change |
-| `deploy.readiness_mode` | `"auto"` | Readiness strategy (`auto`, `docker-health`, `delay`) |
-| `deploy.health_timeout` | `"90s"` | Max wait for health-based readiness before deploy fails |
-| `deploy.readiness_delay` | `"5s"` | Delay before container is considered ready |
-| `deploy.drain_mode` | `"auto"` | Drain strategy (`auto`, `inflight`, `delay`) |
-| `deploy.drain_timeout` | `"30s"` | Max wait for in-flight request drain before old stop |
-| `deploy.drain_delay` | `"2s"` | Delay before stopping previous container after cache invalidation |
 | `containers.security_profile` | `"compat"` | Runtime hardening profile: `compat` preserves existing behavior, `strict` enables read-only rootfs and narrower capabilities |
 | `network_isolation.enabled` | `true` | Network isolation enabled |
 | `network_isolation.network_prefix` | `"gordon"` | Network prefix |

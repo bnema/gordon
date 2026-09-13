@@ -48,6 +48,10 @@ func preflightService(
 	secrets *outmocks.MockSecretProvider,
 ) *deployment.Service {
 	t.Helper()
+	// Every mutation and preflight claims a journal only when no other
+	// operation of the app is unfinished. These tests start clean.
+	state.EXPECT().LoadLatestOperation(mock.Anything, mock.Anything).
+		Return(domain.AppOperation{}, false, nil).Maybe()
 	return deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
@@ -412,6 +416,7 @@ func TestReconcileBoot_ContinuesAfterAppFailure(t *testing.T) {
 	// bad app: Start fails bind verification, binds withdrawn.
 	state.EXPECT().LoadIntent(mock.Anything, "bad").Return(domain.AppStopIntent{App: "bad"}, nil).Once()
 	state.EXPECT().LoadActive(mock.Anything, "bad").Return(badActive, true, nil)
+	state.EXPECT().LoadLatestOperation(mock.Anything, "bad").Return(domain.AppOperation{}, false, nil).Maybe()
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "bad").Return(nil, nil).Once()
@@ -423,6 +428,7 @@ func TestReconcileBoot_ContinuesAfterAppFailure(t *testing.T) {
 	state.EXPECT().LoadIntent(mock.Anything, "good").Return(domain.AppStopIntent{App: "good"}, nil).Once()
 	// Start load + bind-refresh reload.
 	state.EXPECT().LoadActive(mock.Anything, "good").Return(goodActive, true, nil)
+	state.EXPECT().LoadLatestOperation(mock.Anything, "good").Return(domain.AppOperation{}, false, nil).Maybe()
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "good").Return(nil, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "ctr-good").Return(true, nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "ctr-good", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32777, Protocol: domain.NetworkProtocolTCP}}, nil).Once()

@@ -55,15 +55,6 @@ per_ip_rps = 50
 burst = 100
 trusted_proxies = []
 
-[deploy]
-pull_policy = "if-tag-changed"
-readiness_mode = "auto"
-health_timeout = "90s"
-readiness_delay = "5s"
-drain_mode = "auto"
-drain_timeout = "30s"
-drain_delay = "2s"
-
 [containers]
 # "compat" preserves broad image compatibility. "strict" enables a read-only
 # root filesystem and narrower Linux capabilities.

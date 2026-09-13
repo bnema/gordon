@@ -44,6 +44,17 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	if err := s.deps.State.Recover(ctx); err != nil {
+		return nil, fmt.Errorf("deployment: recover before deploy: %w", err)
+	}
+	// A mutation of this app never starts on top of an interrupted one: its
+	// never-published candidates must be gone before this mutation creates a
+	// generation of the same service. ACTIVE is materialized first, so the
+	// published generation cannot be mistaken for a leftover.
+	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
+		return nil, err
+	}
+
 	pinned, op, replayed, err := s.preflightLocked(ctx, input)
 	if replayed || err != nil {
 		// The key already answered this request: its stored journal is
@@ -111,19 +122,29 @@ func (s *Service) runServiceStep(
 	if eff, ok := active.Services[p.name]; ok {
 		before = eff.Container
 	}
-	svcResult := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name))
-	result.Services[p.name] = svcResult
 	stepID := "service." + p.name + ".replace"
-	step := domain.AppOperationStep{
+	// The step is journaled before the replacement runs and carries the
+	// candidate's container ID as soon as it exists, so an interrupted deploy
+	// leaves a trace boot recovery can clean up instead of an untracked
+	// generation.
+	step := &op.Steps[index+1]
+	*step = domain.AppOperationStep{
 		ID: stepID, Service: p.name,
 		Digest: p.digest, Image: p.runtimeImage,
-		Before: before, After: svcResult.After,
+		Before: before, State: domain.AppStepPending,
+	}
+	svcResult := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name), s.journalCandidate(op, index+1))
+	result.Services[p.name] = svcResult
+	// A recorded candidate is authoritative while the step is unresolved: a
+	// replacement that failed after creating its container must stay traceable
+	// for reconciliation.
+	if svcResult.After != "" {
+		step.After = svcResult.After
 	}
 	fail := func(err error) error {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
 		step.Diagnostics = svcResult.Diagnostics
-		op.Steps[index+1] = step
 		op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 		op.Outcome = ComputeOutcome(result.Services)
 		if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
@@ -155,7 +176,7 @@ func (s *Service) runServiceStep(
 	}
 	result.Services[p.name] = svcResult
 	step.State = domain.AppStepSucceeded
-	op.Steps[index+1] = step
+	step.Error = ""
 	if saveErr := s.deps.State.SaveOperation(ctx, *op); saveErr != nil {
 		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
 	}
@@ -307,6 +328,190 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 	return step, nil, nil
 }
 
+// candidateJournal durably records a freshly created replacement container
+// before it can be started or join a network. An interrupted deployment then
+// leaves a trace boot recovery removes, instead of an untracked running
+// generation that could overlap the one recovery rebuilds.
+//
+// The window between the runtime creating a container and this write is the
+// irreducible one: a container ID cannot be recorded before it exists.
+// sync/atomic is not needed here: the journal write is synchronous.
+type candidateJournal func(ctx context.Context, containerID string) error
+
+// journalCandidate records one created candidate in the operation journal.
+// The step is addressed by index and read at write time, so a later append to
+// the operation's steps can never leave the recorder writing to a stale
+// element. A nil operation (an internal path with no journal) records nothing.
+func (s *Service) journalCandidate(op *domain.AppOperation, index int) candidateJournal {
+	if op == nil || index < 0 || index >= len(op.Steps) {
+		return nil
+	}
+	return func(ctx context.Context, containerID string) error {
+		op.Steps[index].After = containerID
+		if err := s.deps.State.SaveOperation(ctx, *op); err != nil {
+			return fmt.Errorf("deployment: record candidate %s: %w", containerID, err)
+		}
+		return nil
+	}
+}
+
+// reconcileInterruptedDeploy converges the journal of a deployment that a
+// crash, shutdown, or failed cleanup interrupted. A candidate that was
+// created but never published is removed and its loopback claims released, so
+// recovery can rebuild the published generation without ever running two
+// generations of one service. The interrupted operation is then finalized as
+// failed: a repeat of its key replays an explicit failure instead of a
+// permanent in-flight claim.
+//
+// It also retries the candidates of a failed operation whose cleanup did not
+// complete, so a leftover stays visible and is eventually removed. The
+// published generation recorded in ACTIVE is never touched.
+//
+// It runs at boot and before every mutation of the app, always under the app
+// lock, so a non-terminal journal is definitively interrupted, and a mutation
+// that cannot reconcile a predecessor does not proceed. It reads the
+// operation journal first and only then ACTIVE, so the common case of a
+// successful operation costs one state read.
+func (s *Service) reconcileInterruptedDeploy(ctx context.Context, app string) error {
+	op, ok, err := s.deps.State.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load interrupted operation for %q: %w", app, err)
+	}
+	if !ok {
+		return nil
+	}
+	terminal := op.Terminal()
+	// A terminal operation only needs container work where a step recorded a
+	// candidate that failed; a pending step exists only in an interrupted
+	// operation.
+	reconcileStep := func(step domain.AppOperationStep) bool {
+		if step.After == "" {
+			return false
+		}
+		if terminal {
+			return step.State == domain.AppStepFailed
+		}
+		return true
+	}
+	needsActive := false
+	for _, step := range op.Steps {
+		if reconcileStep(step) {
+			needsActive = true
+			break
+		}
+	}
+	var active domain.AppActive
+	if needsActive {
+		active, _, err = s.deps.State.LoadActive(ctx, app)
+		if err != nil {
+			return fmt.Errorf("deployment: load active for interrupted operation: %w", err)
+		}
+	}
+	log := zerowrap.FromCtx(ctx)
+	// write is true when the journal itself changes: an interrupted operation
+	// is always finalized, a terminal one only when a leftover must be
+	// reported.
+	write := !terminal
+	for i := range op.Steps {
+		step := &op.Steps[i]
+		if !reconcileStep(*step) {
+			continue
+		}
+		warnings := s.convergeCandidate(ctx, app, active, step, terminal, log)
+		if len(warnings) > 0 {
+			// A candidate that will not go away is reported: the leftover must
+			// be operator-visible instead of staying untracked.
+			op.Warnings = append(op.Warnings, journalWarnings(warnings)...)
+			write = true
+		}
+	}
+	if !write {
+		return nil
+	}
+	if !terminal {
+		// The effects ran and only the outcome write was interrupted: that is
+		// a success, not a failure.
+		op.Outcome = interruptedOutcome(op)
+	}
+	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
+		return fmt.Errorf("deployment: finalize interrupted operation for %q: %w", app, err)
+	}
+	log.Warn().Str("app", app).Str("op", op.Op).Msg("deployment: reconciled an unfinished operation")
+	return nil
+}
+
+// convergeCandidate converges the container one step recorded. The published
+// generation is kept; a never-published candidate is removed so recovery can
+// rebuild the generation recorded in ACTIVE without two generations running
+// at once. An interrupted operation's step is marked failed. The returned
+// warnings are the leftovers of a removal that did not complete.
+func (s *Service) convergeCandidate(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) []CleanupWarning {
+	if publishedContainer(active, step.After) {
+		// The published generation: keep it. A step that already succeeded is
+		// left as recorded; a routing apply that never ran is republished by
+		// the periodic recovery pass.
+		if !terminal && step.State != domain.AppStepSucceeded {
+			step.State = domain.AppStepFailed
+			step.Error = "interrupted before traffic publication; the published container is kept and routing is republished"
+		}
+		return nil
+	}
+	retired := s.retireContainer(ctx, app, retireOptions{Service: step.Service, Force: true}, step.After)
+	if terminal {
+		if retired.Gone {
+			return nil
+		}
+		return retired.Warnings
+	}
+	step.State = domain.AppStepFailed
+	if retired.Gone {
+		step.Error = "interrupted before publication; the unpublished candidate was removed"
+		return nil
+	}
+	step.Error = "interrupted before publication; the unpublished candidate could not be removed: " + cleanupDetail(retired)
+	log.Warn().Str("app", app).Str("container", step.After).Msg("deployment: unpublished candidate could not be removed")
+	return retired.Warnings
+}
+
+// interruptedOutcome classifies an interrupted operation: a failure, unless
+// every step had already succeeded.
+func interruptedOutcome(op domain.AppOperation) string {
+	if operationSucceeded(op) {
+		return domain.AppOutcomeSuccess
+	}
+	return domain.AppOutcomeFailed
+}
+
+// operationSucceeded reports whether every step of an interrupted operation
+// reached success: its effects ran and only the final outcome write was
+// interrupted.
+func operationSucceeded(op domain.AppOperation) bool {
+	if len(op.Steps) == 0 {
+		return false
+	}
+	for _, step := range op.Steps {
+		if step.State != domain.AppStepSucceeded {
+			return false
+		}
+	}
+	return true
+}
+
+// publishedContainer reports whether any service of the ACTIVE record names
+// the container. A container that is the published generation is never a
+// leftover, whichever service recorded it.
+func publishedContainer(active domain.AppActive, containerID string) bool {
+	if containerID == "" {
+		return false
+	}
+	for _, service := range active.Services {
+		if service.Container == containerID {
+			return true
+		}
+	}
+	return false
+}
+
 // deployService replaces one service sequentially and returns its terminal
 // result. before is the ACTIVE container being superseded (empty on a first
 // deployment); beforeGrace is its effective stop grace.
@@ -317,7 +522,7 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 // readiness probe. Nothing is created before the previous generation is
 // confirmed gone, so two generations never overlap; a withdrawal or
 // retirement that cannot be confirmed aborts without creating a candidate.
-func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) ServiceResult {
+func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration, journal candidateJournal) ServiceResult {
 	// Revalidate the current authorization and source before withdrawing or
 	// retiring the serving generation. A reload between preflight and this
 	// service step must fail without mutating the existing workload.
@@ -356,9 +561,15 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired)))
 		}
 	}
-	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID)
+	created, binds, udpBinds, err := s.createAndStart(ctx, app, revision, p, opID, journal)
 	if err != nil {
-		return s.failResult(revision, before, "", err)
+		result := s.failResult(revision, before, "", err)
+		if created != nil {
+			// The candidate exists: keep its ID in the terminal result so the
+			// journal and the operator can still trace it.
+			result.After = created.ID
+		}
+		return result
 	}
 	if err := s.waitServiceReady(ctx, app, created.ID, deploymentReadiness(p.spec), binds); err != nil {
 		// Capture redacted diagnostics while the failed replacement still
@@ -483,7 +694,7 @@ func volumeProvenanceLabels(app, appID, service, revision string) map[string]str
 // never container IPs. The runtime keeps native restarts; Gordon
 // reconciles intent at boot and in the monitor (accepted decision:
 // native runtime restarts plus daemon reconciliation).
-func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string) (*domain.Container, map[int]int, map[int]int, error) {
+func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (*domain.Container, map[int]int, map[int]int, error) {
 	// Re-resolve binds from the current policy immediately before any
 	// runtime mutation: a bind revoked since preflight must fail here,
 	// before volume ownership or container creation.
@@ -495,13 +706,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	image := p.runtimeImage
-	if image == "" {
-		image = p.spec.Image
-		if p.digest != "" {
-			image = stripImageTag(p.spec.Image) + "@" + p.digest
-		}
-	}
+	image := runtimeImageRef(p)
 	// The incarnation network is verified or created before any
 	// container exists, so a workload is only ever started on a
 	// Gordon-owned network that no other app shares.
@@ -561,20 +766,56 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// The candidate ID is durably journaled before the container is started
+	// or joins a shared network, so an interrupted deployment can be cleaned
+	// up instead of leaving an untracked running generation.
+	if err := s.recordCandidate(ctx, app, p.spec.Name, created.ID, journal); err != nil {
+		return nil, nil, nil, err
+	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, err
+		return created, nil, nil, err
 	}
 	if err := s.deps.Runtime.StartContainer(ctx, created.ID); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, fmt.Errorf("deployment: start container: %w", err)
+		return created, nil, nil, fmt.Errorf("deployment: start container: %w", err)
 	}
 	binds, udpBinds, err := s.readBackendBinds(ctx, app, p.spec.Name, created.ID, backendPorts(p.spec))
 	if err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return nil, nil, nil, err
+		return created, nil, nil, err
 	}
 	return created, binds, udpBinds, nil
+}
+
+// runtimeImageRef resolves the exact runtime image reference of one pinned
+// service: the image preflight resolved, else the manifest reference pinned to
+// its digest.
+func runtimeImageRef(p pinnedService) string {
+	if p.runtimeImage != "" {
+		return p.runtimeImage
+	}
+	if p.digest == "" {
+		return p.spec.Image
+	}
+	return stripImageTag(p.spec.Image) + "@" + p.digest
+}
+
+// recordCandidate durably journals a freshly created candidate before it is
+// started. A candidate whose ID cannot be recorded must not keep running:
+// recovery could never find it, so it is removed and the failure surfaced.
+func (s *Service) recordCandidate(ctx context.Context, app, service, containerID string, journal candidateJournal) error {
+	if journal == nil {
+		return nil
+	}
+	if err := journal(ctx, containerID); err != nil {
+		retired := s.retireContainer(ctx, app, retireOptions{Service: service, Force: true}, containerID)
+		if !retired.Gone {
+			return fmt.Errorf("%w (candidate cleanup: %s)", err, cleanupDetail(retired))
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {

@@ -60,16 +60,6 @@ per_ip_rps = 50                          # Max requests/second per IP
 burst = 100                              # Burst size
 trusted_proxies = []                     # IPs/CIDRs trusted for X-Forwarded-For
 
-# Deploy behavior
-[deploy]
-pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
-readiness_mode = "auto"                  # auto, docker-health, delay
-health_timeout = "90s"                   # Max wait for health-based readiness
-readiness_delay = "5s"                   # Wait after running before ready
-drain_mode = "auto"                      # auto, inflight, delay
-drain_timeout = "30s"                    # Max wait for in-flight drain
-drain_delay = "2s"                       # Wait after proxy invalidation before stopping the old container
-
 # Container runtime profile
 [containers]
 security_profile = "compat"              # compat or strict
@@ -151,7 +141,6 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `[server]` | Core server settings | [Server](./server.md) |
 | `[auth]` | Authentication and secrets backend | [Auth](./auth.md) |
 | `[api.rate_limit]` | Rate limiting configuration | [Rate Limiting](./rate-limiting.md) |
-| `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[telemetry]` | OpenTelemetry observability export | [Telemetry](./telemetry.md) |
 | `[env]` | Installation secret store location | [Environment](./env.md) |
@@ -180,13 +169,6 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `api.rate_limit.per_ip_rps` | `50` |
 | `api.rate_limit.burst` | `100` |
 | `api.rate_limit.trusted_proxies` | `[]` |
-| `deploy.pull_policy` | `"if-tag-changed"` |
-| `deploy.readiness_mode` | `"auto"` |
-| `deploy.health_timeout` | `"90s"` |
-| `deploy.readiness_delay` | `"5s"` |
-| `deploy.drain_mode` | `"auto"` |
-| `deploy.drain_timeout` | `"30s"` |
-| `deploy.drain_delay` | `"2s"` |
 | `containers.security_profile` | `"compat"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
@@ -244,11 +226,6 @@ gordon reload
 | `server.max_blob_chunk_size` |
 | `server.max_blob_size` |
 | `auth.*` |
-| `deploy.readiness_mode` |
-| `deploy.readiness_delay` |
-| `deploy.health_timeout` |
-| `deploy.drain_mode` |
-| `deploy.drain_timeout` |
 
 ## Environment Variable Override
 

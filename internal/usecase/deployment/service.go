@@ -326,17 +326,25 @@ func newOpID() string {
 // Preflight resolves a captured revision without any workload mutation:
 // image digests, secret presence, image-volume mapping, reservation
 // recheck, and resource preconditions. It records the pinned digest
-// table into the journal BEFORE any effect.
+// table into the journal BEFORE any effect. It does not reconcile an
+// interrupted operation: it refuses the claim instead, so it can never mask
+// an unfinished operation of the same app (Deploy, Start, Restart, Stop, and
+// Remove reconcile first).
 func (s *Service) Preflight(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, error) {
 	release, err := s.acquireAppContext(ctx, input.App)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer release()
+	if err := s.deps.State.Recover(ctx); err != nil {
+		return nil, nil, fmt.Errorf("deployment: recover before preflight: %w", err)
+	}
 	pinned, op, _, err := s.preflightLocked(ctx, input)
 	return pinned, op, err
 }
 
+// preflightLocked resolves and pins one revision and records the pinned table.
+// The caller holds the app lock and has already recovered the store.
 func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pinnedService, *domain.AppOperation, bool, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -345,9 +353,6 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	if err := s.deps.State.Recover(ctx); err != nil {
-		return nil, nil, false, fmt.Errorf("deployment: recover before preflight: %w", err)
-	}
 	rev, err := s.resolveRevision(ctx, input)
 	if err != nil {
 		return nil, nil, false, err
@@ -411,6 +416,17 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 // journal under a generated id.
 func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppOperation, steps []domain.AppOperationStep) (domain.AppOperation, bool, error) {
 	op.Steps = steps
+	// A journal is never opened while a different operation of this app is
+	// still unfinished: that predecessor must be reconciled first, or this
+	// claim would mask it and its leftover generation could stay untracked.
+	latest, found, err := s.deps.State.LoadLatestOperation(ctx, op.App)
+	if err != nil {
+		return domain.AppOperation{}, false, fmt.Errorf("deployment: load latest operation: %w", err)
+	}
+	if found && !latest.Terminal() && latest.Op != key {
+		return domain.AppOperation{}, false, fmt.Errorf(
+			"deployment: app %q has unfinished operation %s: %w", op.App, latest.Op, domain.ErrAppStateConflict)
+	}
 	if key == "" {
 		op.Op = newOpID()
 		if err := s.deps.State.SaveOperation(ctx, op); err != nil {
