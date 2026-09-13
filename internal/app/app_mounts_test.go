@@ -7,6 +7,8 @@ import (
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/domain"
 )
 
 func TestBuildAppMountPolicies_ValidConfigUnmarshal(t *testing.T) {
@@ -38,14 +40,15 @@ root = "/srv/gordon"
 
 func TestBuildAppMountPolicies_Invalid(t *testing.T) {
 	cases := []struct {
-		name  string
-		mount AppMountPolicy
+		name   string
+		mount  AppMountPolicy
+		reason string
 	}{
-		{"empty source", AppMountPolicy{AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}}},
-		{"relative source", AppMountPolicy{Source: "binds", AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}}},
-		{"empty allowed apps", AppMountPolicy{Source: "/srv/binds", AllowedServices: []string{"web"}}},
-		{"empty allowed services", AppMountPolicy{Source: "/srv/binds", AllowedApps: []string{"blog"}}},
-		{"unclean root", AppMountPolicy{Source: "/srv/binds", AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}, Root: "/srv/../etc"}},
+		{"empty source", AppMountPolicy{AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}}, "source must not be empty"},
+		{"relative source", AppMountPolicy{Source: "binds", AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}}, "source must be absolute"},
+		{"empty allowed apps", AppMountPolicy{Source: "/srv/binds", AllowedServices: []string{"web"}}, "allowed apps must not be empty"},
+		{"empty allowed services", AppMountPolicy{Source: "/srv/binds", AllowedApps: []string{"blog"}}, "allowed services must not be empty"},
+		{"unclean root", AppMountPolicy{Source: "/srv/binds", AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}, Root: "/srv/../etc"}, "root must be a normalized clean path"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -53,11 +56,31 @@ func TestBuildAppMountPolicies_Invalid(t *testing.T) {
 			_, err := buildAppMountPolicies(cfg)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "app_mounts.config")
+			assert.Contains(t, err.Error(), tc.reason, "the field-level reason must survive redaction")
+			assert.ErrorIs(t, err, domain.ErrBindPolicy)
 			if tc.mount.Source != "" {
 				assert.NotContains(t, err.Error(), tc.mount.Source, "config errors must not echo the source path")
 			}
+			if tc.mount.Root != "" {
+				assert.NotContains(t, err.Error(), tc.mount.Root, "config errors must not echo the root path")
+			}
 		})
 	}
+}
+
+func TestRedactedBindPolicyReason_RedactsConfiguredValues(t *testing.T) {
+	_, err := buildAppMountPolicies(Config{AppMounts: map[string]AppMountPolicy{
+		"config": {
+			Source:          "/srv/binds/blog/config",
+			AllowedApps:     []string{"Blog"},
+			AllowedServices: []string{"web"},
+		},
+	}})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "app name must be a DNS label")
+	assert.NotContains(t, err.Error(), "/srv/binds/blog/config", "configured paths must never be echoed")
+	assert.NotContains(t, err.Error(), "Blog", "configured names must never be echoed")
 }
 
 func TestBuildAppMountPolicies_DefaultRootIsSourceParent(t *testing.T) {

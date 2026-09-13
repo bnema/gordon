@@ -21,12 +21,13 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. HTTP services without volumes keep the old container
-// serving until the replacement passes readiness, then switch with a
-// bounded drain and retire the old container by exact ID. TCP/UDP, mixed,
-// and volume-owning services use replacement with interruption. Volumes
-// are never deleted: no RemoveVolume call, no volume-deletion flags on
-// container removal.
+// sorted name order. Services with at least one public HTTP interface,
+// no volumes, and no binds keep the old container serving until the
+// replacement passes readiness, then switch with a bounded drain and
+// retire the old container by exact ID. TCP/UDP, mixed, bind- or
+// volume-owning, and internal-only services use replacement with
+// interruption. Volumes are never deleted: no RemoveVolume call, no
+// volume-deletion flags on container removal.
 func (s *Service) Deploy(ctx context.Context, input DeployInput) (*DeployResult, error) {
 	release, err := s.acquireAppContext(ctx, input.App)
 	if err != nil {
@@ -341,16 +342,20 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 }
 
 // httpEligible reports HTTP services whose generations may overlap while
-// the candidate proves readiness. Public services then cut proxy traffic
-// over; internal-only services need no proxy update but retain the same
-// candidate-first availability guarantee. Volumes, binds, and L4 ports
-// remain interrupted because two generations must not share their state
-// or publications.
+// the candidate proves readiness. Only a service with at least one
+// effective-public HTTP interface is eligible: the proxy repoints that
+// public host to the candidate after readiness, so overlap buys
+// availability. An internal-only HTTP service has no public host to
+// cut over; running two generations at once would only expose the
+// candidate on the private network's DNS while the old generation still
+// serves, so it takes interrupted replacement like L4 services.
+// Volumes, binds, and L4 ports remain interrupted because two
+// generations must not share their state or publications.
 func httpEligible(spec domain.AppService) bool {
 	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
 		return false
 	}
-	return true
+	return spec.IsPublicHTTP()
 }
 
 // singleWriterRequired reports services that must never have two generations
@@ -657,9 +662,12 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 		return created, nil
 	}
 	if len(config.Binds) > 0 {
-		// Runtime errors may contain the resolved host path. Keep it out of
-		// operation journals and ordinary API/CLI responses.
-		return nil, fmt.Errorf("deployment: create container for service %q with administrative mounts: %w", service, domain.ErrBindPolicy)
+		// A CreateContainer failure is a runtime error, not a bind policy
+		// violation: policy was already enforced by resolveServiceBinds
+		// before this call. Runtime errors may embed the resolved host
+		// path, so redact the whole cause instead of mislabelling it and
+		// keep it out of operation journals and API/CLI responses.
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative mounts: runtime error redacted", service)
 	}
 	return nil, fmt.Errorf("deployment: create container: %w", err)
 }

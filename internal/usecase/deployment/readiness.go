@@ -229,6 +229,11 @@ func classifyInternalProbe(result domain.ContainerNetworkProbeResult, probeErr e
 			return false, false, result.Diagnostic, nil
 		}
 		return false, false, "not ready", nil
+	case errors.Is(probeErr, domain.ErrNetworkProbeCleanup):
+		// A helper that could not be removed is a broken helper, not a
+		// stale candidate: an error wrapping both this and a stale or
+		// vanished sentinel must abort the wait, never be retried.
+		return false, false, "", fmt.Errorf("deployment: internal readiness probe helper cleanup failed: %w", probeErr)
 	case errors.Is(probeErr, domain.ErrAppStateConflict), errors.Is(probeErr, domain.ErrContainerNotFound):
 		return false, true, "target execution changed; retrying", nil
 	default:

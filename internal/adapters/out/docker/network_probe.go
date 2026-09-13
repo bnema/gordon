@@ -393,16 +393,6 @@ func parseProbeStatus(stdout string) int {
 	return status
 }
 
-// truncateProbeOutput bounds helper stdout so it can never grow unbounded.
-func truncateProbeOutput(stdout string) string {
-	const limit = 64
-	stdout = strings.TrimSpace(stdout)
-	if len(stdout) > limit {
-		return stdout[:limit]
-	}
-	return stdout
-}
-
 // probeDiagnostic describes an unhealthy attempt without leaking addresses
 // or command output.
 func probeDiagnostic(request domain.ContainerNetworkProbeRequest, status int) string {

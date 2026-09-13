@@ -509,6 +509,36 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	}, proxySvc.Config())
 }
 
+func TestSetupConfigHotReload_CoalescesRepeatedWatcherCallbacks(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "watch.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := &watchRecorder{}
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+	defer coord.Stop()
+
+	require.NoError(t, setupConfigHotReload(ctx, configSvc, coord))
+	require.NotNil(t, configSvc.onChange)
+
+	// fsnotify delivers a burst of events for a single edit; each callback
+	// must not apply the config on its own.
+	configSvc.onChange()
+	configSvc.onChange()
+	configSvc.onChange()
+
+	require.Eventually(t, func() bool { return proxySvc.Calls() == 2 }, time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return proxySvc.Calls() > 2 }, 50*time.Millisecond, 5*time.Millisecond)
+	// ApplyLoadedConfig applies what the watcher already loaded: the trailing
+	// apply must not read the config again.
+	require.Zero(t, reloadSvc.Calls())
+	require.Equal(t, "watch.example.com", proxySvc.Config().RegistryDomain)
+}
+
 func TestReloadCoordinator_TrailingReloadAppliesFinalState(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()

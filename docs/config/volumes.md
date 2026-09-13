@@ -63,7 +63,7 @@ readonly = true
 
 Collection is one-way: the collector reads operator-owned logs and cannot write back through the bind.
 
-Every Dockerfile `VOLUME` path must have a matching `[[service.volume]]` declaration. Deployment fails closed when an image declares an unmanaged volume.
+Every Dockerfile `VOLUME` path must be mapped explicitly. A matching `[[service.volume]]` declaration maps it to a Gordon-owned volume; a `[[service.bind]]` whose container `path` equals the `VOLUME` path also satisfies the mapping, because the bind mounts over that image-declared volume. Any `VOLUME` path with neither mapping fails closed at deploy with an unmanaged-volume error. A bind destination may not collide with a declared volume path.
 
 Runtime volume names are implementation details. Use `gordon volumes list` and ownership labels to inspect them; do not derive ownership from a name, rename volumes, or edit Gordon's ownership records.
 

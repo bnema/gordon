@@ -1928,20 +1928,38 @@ func (c *reloadCoordinator) SetAppMountPoliciesApplier(apply func(context.Contex
 	c.applyAppMountPolicy = apply
 }
 
+// Trigger requests a config reload that first re-reads config from disk.
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	return c.reloadDebouncedLocked(ctx, true)
+}
+
+// ApplyLoadedConfig requests a reload of the config the watcher already
+// loaded from disk. It shares the debounce/coalescing policy with Trigger so
+// a burst of fsnotify callbacks applies the final state exactly once.
+func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reloadDebouncedLocked(ctx, false)
+}
+
+// reloadDebouncedLocked is the single owner of the debounce/coalescing policy
+// shared by every reload entrypoint. Requests inside the debounce window are
+// merged into one trailing reload carrying the latest loadConfig intent.
+func (c *reloadCoordinator) reloadDebouncedLocked(ctx context.Context, loadConfig bool) error {
 	now := time.Now()
 	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
-		c.scheduleTrailingReloadLocked(ctx)
+		c.scheduleTrailingReloadLocked(ctx, loadConfig)
 		return nil
 	}
 
-	return c.reloadLocked(ctx, true)
+	return c.reloadLocked(ctx, loadConfig)
 }
 
-func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context) {
+func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context, loadConfig bool) {
 	if c.stopped {
 		return
 	}
@@ -1952,12 +1970,12 @@ func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context) {
 	generation := c.trailingGeneration
 	trailingCtx := context.WithoutCancel(ctx)
 	c.trailingTimer = time.AfterFunc(c.debounce, func() {
-		c.runTrailingReload(trailingCtx, generation)
+		c.runTrailingReload(trailingCtx, generation, loadConfig)
 	})
 	c.log.Debug().Msg("coalescing config reload trigger")
 }
 
-func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation uint64) {
+func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation uint64, loadConfig bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -1965,7 +1983,7 @@ func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation ui
 		return
 	}
 	c.trailingTimer = nil
-	if err := c.reloadLocked(ctx, true); err != nil {
+	if err := c.reloadLocked(ctx, loadConfig); err != nil {
 		c.log.Error().Err(err).Msg("failed trailing config reload")
 	}
 }
@@ -1979,13 +1997,6 @@ func (c *reloadCoordinator) Stop() {
 		c.trailingTimer.Stop()
 		c.trailingTimer = nil
 	}
-}
-
-func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.reloadLocked(ctx, false)
 }
 
 func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {

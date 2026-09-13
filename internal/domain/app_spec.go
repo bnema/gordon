@@ -161,16 +161,6 @@ func (s AppService) IsPublicHTTP() bool {
 	return false
 }
 
-// HTTPInterfaceForPort returns the first HTTP interface declaring port.
-func (s AppService) HTTPInterfaceForPort(port int) (AppHTTPInterface, bool) {
-	for _, h := range s.HTTP {
-		if h.Port == port {
-			return h, true
-		}
-	}
-	return AppHTTPInterface{}, false
-}
-
 // InternallyOnlyPort reports whether port is declared by internal HTTP
 // interfaces and by no externally backed HTTP/TCP interface. Such a port
 // is reached over the private network only and must never gain a host
@@ -723,8 +713,8 @@ func (r AppReadiness) validateL4(svc *AppService) error {
 	if hasUDPOnly(svc) {
 		return fmt.Errorf("%w: service %q with UDP-only interfaces must use none or log readiness", ErrInvalidAppSpec, svc.Name)
 	}
-	if countTCPInterfaces(svc) > 1 && r.Port == 0 {
-		return fmt.Errorf("%w: service %q has multiple TCP-capable interfaces, readiness.port is required", ErrInvalidAppSpec, svc.Name)
+	if r.Port == 0 && readinessPortRequired(svc) {
+		return fmt.Errorf("%w: service %q interfaces do not select one readiness port, readiness.port is required", ErrInvalidAppSpec, svc.Name)
 	}
 	if r.Port != 0 && !hasTCPContainerPort(svc, r.Port) {
 		return fmt.Errorf("%w: service %q readiness.port %d matches no declared container port", ErrInvalidAppSpec, svc.Name, r.Port)
@@ -764,6 +754,43 @@ func hasUDPOnly(svc *AppService) bool {
 		return false
 	}
 	return len(svc.HTTP) == 0 && len(svc.TCP) == 0
+}
+
+// readinessPortRequired reports whether an omitted readiness.port leaves
+// the probe target ambiguous. One effective-public HTTP port stays
+// selectable even when internal HTTP interfaces are also declared, and a
+// lone TCP-capable interface selects itself. Several public HTTP ports, any
+// mix of TCP and HTTP, or several TCP interfaces must name it explicitly.
+func readinessPortRequired(svc *AppService) bool {
+	if _, ok := singleEffectivePublicHTTPPort(svc); ok {
+		return false
+	}
+	return countTCPInterfaces(svc) > 1
+}
+
+// singleEffectivePublicHTTPPort returns the only distinct effective-public
+// HTTP container port when the service declares at least one and no TCP
+// interface. Internal HTTP interfaces never contribute: they are not
+// reachable through a host publication, so they cannot make the public
+// backend ambiguous.
+func singleEffectivePublicHTTPPort(svc *AppService) (int, bool) {
+	if len(svc.TCP) > 0 {
+		return 0, false
+	}
+	port := 0
+	for _, h := range svc.HTTP {
+		if !h.IsPublic() {
+			continue
+		}
+		if port != 0 && port != h.Port {
+			return 0, false
+		}
+		port = h.Port
+	}
+	if port == 0 {
+		return 0, false
+	}
+	return port, true
 }
 
 // countTCPInterfaces counts http/tcp container ports.

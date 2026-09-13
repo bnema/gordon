@@ -120,6 +120,7 @@ func TestAppSpec_ValidateInterfacePorts(t *testing.T) {
 	collide := visibilitySpec(
 		domain.AppHTTPInterface{Port: 8080, Visibility: domain.AppVisibilityInternal},
 	)
+	collide.Services[0].Readiness.Port = 8080
 	collide.Services[0].TCP = []domain.AppTCPInterface{{Port: 8080}}
 	require.ErrorIs(t, collide.Validate(), domain.ErrInvalidAppSpec)
 
@@ -127,5 +128,64 @@ func TestAppSpec_ValidateInterfacePorts(t *testing.T) {
 		domain.AppHTTPInterface{Port: 8080, Visibility: domain.AppVisibilityInternal},
 		domain.AppHTTPInterface{Port: 8080, Visibility: domain.AppVisibilityInternal},
 	)
+	// An explicit port keeps this test on the duplicate-internal-port rule
+	// instead of short-circuiting on readiness-port ambiguity.
+	duplicate.Services[0].Readiness.Port = 8080
 	require.ErrorIs(t, duplicate.Validate(), domain.ErrInvalidAppSpec)
+}
+
+// TestAppSpec_ValidateMixedVisibilityReadiness proves one public HTTP
+// interface plus internal HTTP interfaces is a valid readiness target with
+// no explicit readiness.port, while interface sets that cannot select one
+// port stay strict.
+func TestAppSpec_ValidateMixedVisibilityReadiness(t *testing.T) {
+	require.NoError(t, visibilitySpec(
+		domain.AppHTTPInterface{Host: "blog.example.com", Port: 8080, TLS: "auto"},
+		domain.AppHTTPInterface{Port: 9090, Visibility: domain.AppVisibilityInternal},
+	).Validate())
+
+	tcpReadiness := visibilitySpec(
+		domain.AppHTTPInterface{Host: "blog.example.com", Port: 8080, TLS: "auto"},
+		domain.AppHTTPInterface{Port: 9090, Visibility: domain.AppVisibilityInternal},
+	)
+	tcpReadiness.Services[0].Readiness.Type = domain.AppReadinessTCP
+	require.NoError(t, tcpReadiness.Validate())
+
+	explicit := visibilitySpec(
+		domain.AppHTTPInterface{Host: "blog.example.com", Port: 8080, TLS: "auto"},
+		domain.AppHTTPInterface{Port: 9090, Visibility: domain.AppVisibilityInternal},
+	)
+	explicit.Services[0].Readiness.Port = 9090
+	require.NoError(t, explicit.Validate())
+
+	reject := map[string]func(spec domain.AppSpec){
+		"several internal ports": func(spec domain.AppSpec) {
+			spec.Services[0].HTTP = []domain.AppHTTPInterface{
+				{Port: 8080, Visibility: domain.AppVisibilityInternal},
+				{Port: 9090, Visibility: domain.AppVisibilityInternal},
+			}
+		},
+		"public http plus tcp": func(spec domain.AppSpec) {
+			spec.Services[0].TCP = []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 9000, Publish: "9000"}}
+		},
+		"several public http ports": func(spec domain.AppSpec) {
+			spec.Services[0].HTTP = []domain.AppHTTPInterface{
+				{Host: "blog.example.com", Port: 8080, TLS: "auto"},
+				{Host: "www.example.com", Port: 8081, TLS: "auto"},
+			}
+		},
+	}
+	for name, mutate := range reject {
+		t.Run(name, func(t *testing.T) {
+			spec := visibilitySpec(
+				domain.AppHTTPInterface{Host: "blog.example.com", Port: 8080, TLS: "auto"},
+				domain.AppHTTPInterface{Port: 9090, Visibility: domain.AppVisibilityInternal},
+			)
+			mutate(spec)
+			err := spec.Validate()
+			require.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+			assert.Contains(t, err.Error(), "readiness.port is required")
+		})
+	}
 }

@@ -2,12 +2,14 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -138,6 +140,28 @@ func TestCreateAndStart_RefusesRevokedBindBeforeRuntimeMutation(t *testing.T) {
 	runtime.AssertExpectations(t)
 }
 
+// TestCreateContainer_BindBearingRuntimeErrorIsRedactedNotBindPolicy proves a
+// CreateContainer failure on a bind-bearing service is reported as a generic
+// redacted runtime error, never as a bind policy violation, and never leaks
+// the resolved host source embedded in the runtime error.
+func TestCreateContainer_BindBearingRuntimeErrorIsRedactedNotBindPolicy(t *testing.T) {
+	const secretSource = "/srv/gordon/secret-source"
+	runtime := outmocks.NewMockContainerRuntime(t)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).
+		Return(nil, fmt.Errorf("mount %s: permission denied", secretSource)).Once()
+	svc := NewService(Deps{Runtime: runtime}, zerowrap.Default())
+
+	_, err := svc.createContainer(context.Background(), "web", &domain.ContainerConfig{
+		Binds: []domain.ContainerBind{{Name: "config", Source: secretSource, Destination: "/etc/app.conf"}},
+	})
+
+	require.Error(t, err)
+	require.NotErrorIs(t, err, domain.ErrBindPolicy, "a runtime failure is not a policy refusal")
+	assert.NotContains(t, err.Error(), secretSource, "errors must never leak the resolved host source")
+	assert.NotContains(t, err.Error(), "permission denied", "no runtime text may reach the caller")
+	runtime.AssertExpectations(t)
+}
+
 func TestCheckImageVolumes_IncludesBindDestinations(t *testing.T) {
 	t.Run("bind destination maps image volume", func(t *testing.T) {
 		runtime := outmocks.NewMockContainerRuntime(t)
@@ -176,12 +200,26 @@ func TestHTTPEligibleAndSingleWriterGating(t *testing.T) {
 		assert.False(t, singleWriterRequired(httpSpec()))
 	})
 
-	t.Run("internal http-only preserves candidate-first replacement", func(t *testing.T) {
+	t.Run("internal-only http is not overlap eligible", func(t *testing.T) {
 		spec := domain.AppService{
 			Name: "api",
 			HTTP: []domain.AppHTTPInterface{{Port: 8080, Visibility: domain.AppVisibilityInternal}},
 		}
-		assert.True(t, httpEligible(spec))
+		assert.False(t, httpEligible(spec),
+			"an internal-only service has no public generation to cut over and must use interrupted replacement")
+		assert.False(t, singleWriterRequired(spec))
+	})
+
+	t.Run("mixed public and internal http stays overlap eligible", func(t *testing.T) {
+		spec := domain.AppService{
+			Name: "api",
+			HTTP: []domain.AppHTTPInterface{
+				{Host: "app.example.com", Port: 8080, TLS: domain.AppTLSAuto},
+				{Port: 9090, Visibility: domain.AppVisibilityInternal},
+			},
+		}
+		assert.True(t, httpEligible(spec),
+			"one public HTTP interface keeps candidate-first replacement")
 		assert.False(t, singleWriterRequired(spec))
 	})
 

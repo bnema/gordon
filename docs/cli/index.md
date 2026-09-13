@@ -24,9 +24,9 @@ Management commands use the authenticated daemon API. By default they connect th
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
-| `gordon apps` | Manage applications (apply, deploy, lifecycle) | [apps](./apps.md) |
+| `gordon apps` | Manage applications, operations, and app secrets | [apps](./apps.md) |
 | `gordon backups` | Manage declared app database and volume backups | [backup](./backup.md) |
-| `gordon config show` | Show server configuration | [config](./config.md) |
+| `gordon config` | Show and validate server configuration | [config](./config.md) |
 | `gordon images` | List and prune images | [images](./images.md) |
 | `gordon logs` | Display Gordon process logs | [serve](./serve.md#gordon-logs) |
 | `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
@@ -67,6 +67,9 @@ gordon apps restart blog
 gordon apps stop blog
 gordon apps start blog
 gordon apps remove blog
+gordon apps operations show blog --key <operation-key>
+gordon apps secrets list blog
+gordon config validate --file /path/to/gordon.toml
 
 # Push an image (OCI transfer only; deploy separately)
 gordon push myapp --build --remote prod

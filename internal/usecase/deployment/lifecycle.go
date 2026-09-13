@@ -311,15 +311,13 @@ func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, e
 	if err != nil {
 		return fail(err.Error())
 	}
-	resolvedBinds, err := s.resolveServiceBinds(app, eff.Spec)
-	if err != nil {
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
 	pinned := pinnedService{
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage,
 		appEnv:         maps.Clone(rev.Spec.Env),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
-		resolvedBinds:  resolvedBinds,
 	}
 	created, binds, udpBinds, err := s.createAndStart(ctx, app, eff.EffectiveRevision, pinned, opID)
 	if err != nil {
@@ -715,8 +713,7 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
 		return true
 	}
-	resolvedBinds, err := s.resolveServiceBinds(app, eff.Spec)
-	if err != nil {
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
 		step.State = domain.AppStepFailed
 		step.Error = err.Error()
 		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
@@ -725,7 +722,6 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 	pinned := pinnedService{
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage, appEnv: maps.Clone(rev.Spec.Env),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
-		resolvedBinds:  resolvedBinds,
 	}
 	svcResult, _ := s.deployService(ctx, app, rev.Revision, pinned, opID, eff.Container, serviceStopGrace(eff))
 	if svcResult.Result == "failed" {

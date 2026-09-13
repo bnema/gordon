@@ -316,10 +316,6 @@ type pinnedService struct {
 	// service joins. The private incarnation network is derived from the
 	// app UUID at create time so recovery and deploy agree.
 	sharedNetworks []domain.AppSharedNetwork
-	// resolvedBinds are the preflight-resolved ephemeral host binds for
-	// this service. They are never persisted: createAndStart re-resolves
-	// against the current policy before any runtime mutation.
-	resolvedBinds []domain.ContainerBind
 }
 
 // newOpID allocates a time-ordered op- identifier (uuid v7).
@@ -560,14 +556,16 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		if err := s.checkImageVolumes(ctx, svc, runtimeImage); err != nil {
 			return nil, err
 		}
-		resolvedBinds, err := s.resolveServiceBinds(app, svc)
-		if err != nil {
+		// Bind resolution stays a preflight gate: an unresolvable bind
+		// must fail before any workload mutation. The successful values
+		// are discarded because createAndStart re-resolves against the
+		// current policy immediately before the runtime mutation.
+		if _, err := s.resolveServiceBinds(app, svc); err != nil {
 			return nil, err
 		}
 		pinned = append(pinned, pinnedService{
 			name: svc.Name, spec: svc, digest: digest, runtimeImage: runtimeImage, appEnv: appEnv,
 			sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, svc.Name),
-			resolvedBinds:  resolvedBinds,
 		})
 	}
 	if err := s.recheckReservations(ctx, app, rev); err != nil {

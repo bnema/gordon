@@ -472,8 +472,9 @@ func newAppsSecretsCmd() *cobra.Command {
 		Use:   "secrets",
 		Short: "Manage app secret values",
 		Long: `Values are accepted via KEY=VALUE arguments (discouraged: shell history),
---stdin (preferred), or an interactive prompt. Names must already exist in
-desired or active state. Only key names are ever echoed back — never values.`,
+--stdin with KEY=VALUE lines, or --stdin --key KEY for one raw value. Names
+must already exist in desired or active state. Only key names are ever echoed
+back — never values.`,
 	}
 	cmd.AddCommand(newAppsSecretsListCmd(), newAppsSecretsSetCmd(), newAppsSecretsDeleteCmd())
 	return cmd
@@ -627,8 +628,9 @@ func runAppsSecretsDelete(ctx context.Context, plane ControlPlane, out io.Writer
 	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deleted secret %s for %s/%s", key, app, service)))
 }
 
-// parseSecretPairs parses KEY=VALUE arguments. Keys must be non-empty;
-// values may be empty (explicit empty secret).
+// parseSecretPairs parses KEY=VALUE arguments. Keys must be non-empty and
+// each value must pass validateSecretValue (1-MaxAppEnvValueLen bytes on a
+// single line); an empty value is rejected.
 func parseSecretPairs(pairs []string) (map[string]string, error) {
 	values := make(map[string]string, len(pairs))
 	for index, pair := range pairs {

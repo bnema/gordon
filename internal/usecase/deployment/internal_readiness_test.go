@@ -134,6 +134,31 @@ func TestRunInternalProbeAttempt_CleanupFailureIsNeverSuppressed(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrNetworkProbeCleanup)
 }
 
+// TestWaitInternalReady_CombinedCleanupAndStaleErrorAbortsAfterOneAttempt
+// proves a helper cleanup failure wins over the stale-generation retry: a
+// probe error wrapping both a stale sentinel and ErrNetworkProbeCleanup
+// aborts the wait after the first attempt instead of polling until the
+// readiness deadline.
+func TestWaitInternalReady_CombinedCleanupAndStaleErrorAbortsAfterOneAttempt(t *testing.T) {
+	attempts := 0
+	startReads := 0
+	deps := ProbeDeps{
+		containerStart: func(context.Context, string) (time.Time, error) {
+			startReads++
+			return time.Unix(1700000000, 0).UTC(), nil
+		},
+		networkProbe: func(context.Context, domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error) {
+			attempts++
+			return domain.ContainerNetworkProbeResult{}, fmt.Errorf("stale candidate: %w (helper not removed: %w)", domain.ErrAppStateConflict, domain.ErrNetworkProbeCleanup)
+		},
+	}
+	err := waitInternalReadyWithDeps(context.Background(), deps, "c-api", internalSpec(), "net", 8080)
+	require.ErrorIs(t, err, domain.ErrNetworkProbeCleanup)
+	assert.NotContains(t, err.Error(), "timeout")
+	assert.Equal(t, 1, attempts, "a cleanup failure must abort after one attempt")
+	assert.Equal(t, 1, startReads, "a cleanup failure must not re-read the execution boundary")
+}
+
 // TestWaitInternalReady_Timeout proves a never-ready target fails at the
 // readiness deadline.
 func TestWaitInternalReady_Timeout(t *testing.T) {

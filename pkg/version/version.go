@@ -7,15 +7,13 @@ var (
 	version   = "dev"
 	commit    = "unknown"
 	buildDate = "unknown"
-	dirty     = "unknown"
 )
 
 // Set stores build-time version info. Call once from main.
-func Set(v, c, d, isDirty string) {
+func Set(v, c, d, _ string) {
 	version = v
 	commit = c
 	buildDate = d
-	dirty = isDirty
 }
 
 // Version returns the build version string.
@@ -26,6 +24,3 @@ func Commit() string { return commit }
 
 // BuildDate returns the build date string.
 func BuildDate() string { return buildDate }
-
-// Dirty reports whether the source checkout had uncommitted changes.
-func Dirty() string { return dirty }

@@ -12,6 +12,7 @@ Use `--remote` and `--token` to override. See [CLI Overview](./index.md).
 | Subcommand | Description |
 |------------|-------------|
 | `show` | Show server configuration |
+| `validate` | Statically validate a local configuration file |
 
 ---
 
@@ -58,6 +59,51 @@ gordon config show --remote https://gordon.mydomain.com --token $TOKEN
 ```
 
 External route targets and `server.data_dir` are intentionally omitted from the default admin config response because they reveal internal network and filesystem layout.
+
+---
+
+## gordon config validate
+
+Statically validates a candidate configuration file before it is installed.
+This command is local-only: `--remote` is rejected. Validation is static —
+runtime, ACTIVE-state, secret, pull, and listener checks are not performed.
+A file that fails validation exits non-zero; `--json` is still written first.
+
+```bash
+gordon config validate --file ./gordon.toml
+gordon config validate --file ./gordon.toml --json
+```
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--file` | Local candidate configuration file (required) |
+| `--json` | Output as JSON |
+
+### JSON Output
+
+On success:
+
+```json
+{
+  "valid": true,
+  "diagnostics": [],
+  "scope": "static"
+}
+```
+
+On failure, `valid` is `false` and `diagnostics` carries the failure:
+
+```json
+{
+  "valid": false,
+  "diagnostics": [
+    {"code": "config-invalid", "key": "", "message": "configuration failed static validation"}
+  ],
+  "scope": "static"
+}
+```
 
 ## Related
 

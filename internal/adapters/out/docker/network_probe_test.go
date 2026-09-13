@@ -108,11 +108,6 @@ func TestParseProbeStatus(t *testing.T) {
 	assert.Equal(t, 0, parseProbeStatus("1234"))
 }
 
-func TestTruncateProbeOutput(t *testing.T) {
-	assert.Equal(t, "200", truncateProbeOutput("  200\n"))
-	assert.Equal(t, 64, len(truncateProbeOutput(strings.Repeat("x", 200))))
-}
-
 func TestCappedProbeBuffer(t *testing.T) {
 	var buffer cappedProbeBuffer
 	input := strings.Repeat("x", 1024)

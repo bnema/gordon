@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -20,8 +22,27 @@ type AppMountPolicy struct {
 	Root            string   `mapstructure:"root"`
 }
 
+// policyQuotedValue matches the quoted values domain validation embeds in
+// its messages, such as configured source paths or roots.
+var policyQuotedValue = regexp.MustCompile(`"[^"]*"`)
+
+// redactedBindPolicyReason keeps the field-level reason from a domain policy
+// validation error (for example "source must be absolute") while stripping
+// every quoted value so an invalid config never echoes host paths.
+func redactedBindPolicyReason(err error) string {
+	reason := policyQuotedValue.ReplaceAllString(err.Error(), "")
+	reason = strings.Join(strings.Fields(reason), " ")
+	// Keep only the innermost detail: the outer wrap repeats the generic
+	// violation and the policy name, which is already part of the mount key.
+	if idx := strings.LastIndex(reason, ": "); idx >= 0 {
+		reason = reason[idx+2:]
+	}
+	return reason
+}
+
 // buildAppMountPolicies converts configured app mounts into validated domain
-// policies. Failures name only the mount: source paths are never echoed.
+// policies. Failures name only the mount and the field-level reason: source
+// paths are never echoed.
 func buildAppMountPolicies(cfg Config) (map[string]domain.AppBindPolicy, error) {
 	policies := make(map[string]domain.AppBindPolicy, len(cfg.AppMounts))
 	for name, mount := range cfg.AppMounts {
@@ -41,7 +62,7 @@ func buildAppMountPolicies(cfg Config) (map[string]domain.AppBindPolicy, error) 
 			Root:            root,
 		}
 		if err := policy.Validate(); err != nil {
-			return nil, fmt.Errorf("invalid app_mounts.%s: %w", name, domain.ErrBindPolicy)
+			return nil, fmt.Errorf("invalid app_mounts.%s: %w: %s", name, domain.ErrBindPolicy, redactedBindPolicyReason(err))
 		}
 		policies[name] = policy
 	}
