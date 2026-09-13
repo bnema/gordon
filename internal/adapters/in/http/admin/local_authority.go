@@ -116,6 +116,7 @@ func localAppPathAllowed(method string, parts []string) bool {
 		"{app}/stop":                    http.MethodPost,
 		"{app}/start":                   http.MethodPost,
 		"{app}/remove":                  http.MethodPost,
+		"{app}/secrets":                 http.MethodGet,
 		"{app}/secrets/set":             http.MethodPost,
 		"{app}/secrets/delete":          http.MethodPost,
 		"{app}/operations/by-key/{key}": http.MethodGet,

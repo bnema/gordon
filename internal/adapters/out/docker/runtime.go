@@ -13,7 +13,10 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,7 +42,8 @@ import (
 
 // Runtime implements the ContainerRuntime interface using Docker API.
 type Runtime struct {
-	client *client.Client
+	client      *client.Client
+	runtimeName string
 }
 
 var _ out.ContainerRuntime = (*Runtime)(nil)
@@ -114,7 +118,7 @@ func NewRuntimeWithSocket(socketPath string) (*Runtime, error) {
 		return nil, fmt.Errorf("failed to create Docker client for %s: %w", socketPath, err)
 	}
 
-	return &Runtime{client: cli}, nil
+	return &Runtime{client: cli, runtimeName: guessRuntimeName(socketPath)}, nil
 }
 
 // NewRuntimeWithClient creates a new Docker runtime instance with a custom client (for testing).
@@ -140,6 +144,10 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		return nil, err
 	}
 	binds := buildVolumeBinds(config, log)
+	mounts, err := buildBindMounts(config)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -176,6 +184,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		PortBindings:   portBindings,
 		AutoRemove:     config.AutoRemove,
 		Binds:          binds,
+		Mounts:         mounts,
 		NetworkMode:    container.NetworkMode(config.NetworkMode),
 		Resources:      resources,
 		SecurityOpt:    []string{"no-new-privileges:true"},
@@ -286,6 +295,43 @@ func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []str
 		log.Debug().Str("volume", volumeName).Str("mount_path", containerPath).Msg("adding read-only volume mount")
 	}
 	return binds
+}
+
+// buildBindMounts validates ephemeral host binds defensively and translates
+// them into Docker bind mounts. The result is sorted by destination so the
+// create request is deterministic. Host source paths are never logged or
+// echoed in errors.
+func buildBindMounts(config *domain.ContainerConfig) ([]mount.Mount, error) {
+	if len(config.Binds) == 0 {
+		return nil, nil
+	}
+	mounts := make([]mount.Mount, 0, len(config.Binds))
+	seen := make(map[string]string, len(config.Binds))
+	for _, bind := range config.Binds {
+		if bind.Source == "" || !filepath.IsAbs(bind.Source) || filepath.Clean(bind.Source) != bind.Source {
+			return nil, fmt.Errorf("invalid bind %q: source must be an absolute clean path", bind.Name)
+		}
+		if err := domain.ValidateBindDestination(bind.Destination); err != nil {
+			return nil, fmt.Errorf("invalid bind %q: %w", bind.Name, err)
+		}
+		if prev, ok := seen[bind.Destination]; ok {
+			return nil, fmt.Errorf("invalid bind %q: destination %q already used by bind %q", bind.Name, bind.Destination, prev)
+		}
+		seen[bind.Destination] = bind.Name
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   bind.Source,
+			Target:   bind.Destination,
+			ReadOnly: bind.ReadOnly,
+		})
+	}
+	sort.SliceStable(mounts, func(i, j int) bool {
+		if mounts[i].Target != mounts[j].Target {
+			return mounts[i].Target < mounts[j].Target
+		}
+		return mounts[i].Source < mounts[j].Source
+	})
+	return mounts, nil
 }
 
 // StartContainer starts a container.
@@ -628,6 +674,70 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 	return logs, nil
 }
 
+func (r *Runtime) PullImageWithOptions(ctx context.Context, request domain.ImagePullRequest) error {
+	if request.Transport == domain.ImagePullTransportHTTP {
+		if r.runtimeName == "podman" || strings.Contains(strings.ToLower(r.client.DaemonHost()), "podman") {
+			return r.pullPodmanHTTP(ctx, request)
+		}
+		// Docker has no per-pull HTTP switch. Its daemon honors HTTP only for
+		// endpoints configured in insecure-registries; retain the compatible
+		// pull API and let a missing daemon policy fail explicitly.
+		if request.Username != "" || request.Password != "" {
+			return r.PullImageWithAuth(ctx, request.Reference, request.Username, request.Password)
+		}
+		return r.PullImage(ctx, request.Reference)
+	}
+	if request.Username != "" || request.Password != "" {
+		return r.PullImageWithAuth(ctx, request.Reference, request.Username, request.Password)
+	}
+	return r.PullImage(ctx, request.Reference)
+}
+
+func (r *Runtime) pullPodmanHTTP(ctx context.Context, request domain.ImagePullRequest) error {
+	host := r.client.DaemonHost()
+	if !strings.HasPrefix(host, "unix://") {
+		return fmt.Errorf("unsupported Podman endpoint %q for HTTP pull", host)
+	}
+	httpClient := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", strings.TrimPrefix(host, "unix://"))
+	}}}
+	query := url.Values{"reference": {request.Reference}, "tlsVerify": {"false"}, "quiet": {"false"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://podman/v5.0.0/libpod/images/pull?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	if request.Username != "" || request.Password != "" {
+		auth, err := json.Marshal(registry.AuthConfig{Username: request.Username, Password: request.Password})
+		if err != nil {
+			return err
+		}
+		req.Header.Set(registry.AuthHeader, base64.StdEncoding.EncodeToString(auth))
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("podman HTTP image pull: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("podman HTTP image pull returned %s: %s: %w", resp.Status, strings.TrimSpace(string(body)), domain.ErrImagePullFailed)
+	}
+	decoder := json.NewDecoder(resp.Body)
+	for {
+		var event struct {
+			Error string `json:"error"`
+		}
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("decode Podman pull response: %w", err)
+		} else if event.Error != "" {
+			return fmt.Errorf("podman image pull: %s: %w", event.Error, domain.ErrImagePullFailed)
+		}
+	}
+	return nil
+}
+
 // PullImage pulls an image.
 func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -646,10 +756,8 @@ func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 	}
 	defer reader.Close()
 
-	// Read the response to completion (this is required for the pull to complete)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return log.WrapErr(err, "failed to read pull response")
+	if err := reader.Wait(ctx); err != nil {
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to complete image pull")
 	}
 
 	log.Info().Msg("image pulled successfully")
@@ -706,10 +814,8 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 	}
 	defer reader.Close()
 
-	// Read the response to completion (this is required for the pull to complete)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return log.WrapErr(err, "failed to read pull response")
+	if err := reader.Wait(ctx); err != nil {
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to complete authenticated image pull")
 	}
 
 	log.Info().Msg("image pulled successfully with authentication")
@@ -1584,6 +1690,19 @@ func (r *Runtime) GetImageLabels(ctx context.Context, imageRef string) (map[stri
 }
 
 // GetImageID returns the unique image ID (sha256 digest) for the given image reference.
+func (r *Runtime) VerifyImageDigest(ctx context.Context, imageRef, digest string) error {
+	inspect, err := r.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return fmt.Errorf("inspect image digest: %w", err)
+	}
+	for _, repoDigest := range inspect.RepoDigests {
+		if strings.HasSuffix(repoDigest, "@"+digest) {
+			return nil
+		}
+	}
+	return fmt.Errorf("expected digest %s is absent from local image metadata: %w", digest, domain.ErrImagePullFailed)
+}
+
 func (r *Runtime) GetImageID(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",

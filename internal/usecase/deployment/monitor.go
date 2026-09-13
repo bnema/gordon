@@ -358,11 +358,7 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 	if err != nil {
 		return fmt.Errorf("deployment: reconcile %q: load recovery inhibitions: %w", app, err)
 	}
-	inhibited := map[recoveryKey]struct{}{}
-	for _, inhibition := range inhibitions {
-		inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
-	}
-	var failures []error
+	inhibited, failures := s.processRecoveryInhibitions(ctx, app, inhibitions)
 	for _, name := range sortedServiceNames(active) {
 		eff := active.Services[name]
 		if intent.Stopped {
@@ -387,6 +383,22 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 	}
 	s.pruneRecoveryHistory(app, active)
 	return errors.Join(failures...)
+}
+
+func (s *Service) processRecoveryInhibitions(ctx context.Context, app string, inhibitions []domain.AppRecoveryInhibition) (map[recoveryKey]struct{}, []error) {
+	inhibited := map[recoveryKey]struct{}{}
+	var failures []error
+	for _, inhibition := range inhibitions {
+		if inhibition.Reason != domain.AppInhibitRetirementPending {
+			inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
+			continue
+		}
+		retired := s.retireContainer(ctx, app, retireOptions{Service: inhibition.Service}, inhibition.ContainerID)
+		if !retired.Gone {
+			failures = append(failures, fmt.Errorf("deployment: retirement pending for %s/%s", app, inhibition.ContainerID))
+		}
+	}
+	return inhibited, failures
 }
 
 // convergeStoppedService enforces durable stopped intent: it never
@@ -598,7 +610,7 @@ func (s *Service) publishRecoveredService(ctx context.Context, app, name string,
 		return errors.Join(s.withdrawForRecovery(ctx, app, name), err)
 	}
 	if started || restarted || fresh {
-		if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+		if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 			s.backoff.recordFailure(key)
 			return errors.Join(s.withdrawForRecovery(ctx, app, name), err)
 		}
@@ -621,6 +633,11 @@ func (s *Service) publishRecoveredService(ctx context.Context, app, name string,
 // re-inspected: if native restart policy already revived it, no failure
 // is charged and no second restart is issued.
 func (s *Service) startRecovered(serviceCtx context.Context, app, name string, eff domain.AppEffectiveService, key recoveryKey) (bool, error) {
+	// Fail closed before mutating the runtime if a bind's policy was
+	// revoked or became invalid since ACTIVE was published.
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return false, err
+	}
 	if err := s.deps.Runtime.StartContainer(serviceCtx, eff.Container); err != nil {
 		if errors.Is(err, domain.ErrContainerNotFound) {
 			s.backoff.forget(key)
@@ -667,6 +684,11 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	}
 	if !s.backoff.allow(key) {
 		return false, false, nil
+	}
+	// Fail closed before mutating the runtime if a bind's policy was
+	// revoked or became invalid since ACTIVE was published.
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return false, false, err
 	}
 	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil {
 		s.backoff.recordFailure(key)

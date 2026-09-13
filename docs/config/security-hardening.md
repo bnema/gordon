@@ -40,6 +40,29 @@ Use dedicated admin scopes:
 - `admin:volumes:read` for listing volumes.
 - `admin:volumes:write` for prune operations.
 
+## Administrative app bind mounts
+
+App manifests cannot name host paths. A host bind exists only when the operator declares a named policy in `gordon.toml`:
+
+```toml
+[app_mounts.app-logs]
+source = "/srv/gordon/host-logs"
+read_only = true
+allowed_apps = ["metrics-agent"]    # exact, non-empty
+allowed_services = ["web"]          # exact, non-empty
+root = "/srv/gordon"                # optional boundary
+```
+
+The manifest references only the policy name: `[[service.bind]] name = "app-logs"` with an absolute container `path`.
+
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists, so least privilege is enforced by construction. There is no wildcard, prefix, or empty-means-all form.
+- `source` is resolved through symlinks and must be a regular file or directory under `root`. When `root` is omitted, the source's parent directory is the boundary. Devices, sockets, FIFOs, and escaping symlinks are refused.
+- Read-only precedence: `read_only` on the policy or `readonly` on the manifest bind forces the mount read-only; a manifest never weakens its policy.
+- Destinations must be absolute, normalized, and outside reserved container paths (`/`, `/proc`, `/sys`, `/dev`, `/boot`, and their children).
+- The policy is re-resolved immediately before every container create, restart, and recovery. Removing a policy or an allowlist entry blocks future deploys; running containers keep their current mounts until redeployed.
+- `gordon serve` reload republishes validated policies atomically. An edit that fails validation is rejected and the previous policies stay live.
+- Gordon never creates, deletes, chowns, backs up, or prunes the host path; ownership, permissions, and backup remain the operator's responsibility.
+
 ## Pass import plaintext handling
 
 With the `pass` backend, Gordon imports eligible plaintext `.env` files at startup. It removes a source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon fails closed and leaves the plaintext source in place for operator review.
@@ -101,6 +124,18 @@ internal = true
 `internal = false` remains the compatibility default because some applications need direct egress during startup.
 
 Every app container joins an incarnation-owned private network derived from the app's internal UUID; shared memberships come only from explicit `[[network.shared]]` declarations, and memory/CPU/PID limits apply on every create and recovery path.
+
+## Readiness helper containers
+
+Probing an internal HTTP port uses one bounded helper container per readiness attempt, removed immediately after. Gordon force-removes the helper under an independent cleanup context, including on failure and timeout. There is no operator configuration for the helper; its image and limits are fixed.
+
+- The helper image is digest-pinned and multi-arch: `alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc`. The image must be pre-provisioned and available offline on the target host, because the probe never pulls.
+- The helper attaches only to the target app's private network. It never joins a shared network or a host network.
+- It never publishes a host port and has no mounts, volumes, secrets, environment, or runtime socket.
+- It runs non-root (uid/gid `65534`) with a read-only root filesystem, all capabilities dropped, `no-new-privileges`, and bounded CPU, memory, and PIDs.
+- It targets the exact inspected container IP on that network, never a service alias, and revalidates the container's execution start before trusting the result; a restarted generation is discarded.
+- A target that listens only on its own loopback fails readiness.
+- Helpers left behind by an abrupt daemon or host stop are reclaimed by the next probe once they are older than ten minutes; a live session is never touched.
 
 ## Registry exposure
 

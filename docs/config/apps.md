@@ -30,7 +30,7 @@ APP_ENV = "production"
 name = "web"
 image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
-stop_grace = "10s"               # optional, default 10s
+stop_grace = "30s"               # optional, default 30s
 
 [service.readiness]              # optional explicit readiness
 type = "http"
@@ -43,6 +43,10 @@ host = "blog.mydomain.com"
 port = 3000
 tls = "auto"                     # auto | always | never
 
+[[service.http]]                 # optional private interface
+visibility = "internal"          # public (default) | internal
+port = 8080                      # required; no host or tls
+
 [service.secrets]                # ENV name -> secret name (values in pass)
 DATABASE_URL = "database-url"
 
@@ -50,6 +54,11 @@ DATABASE_URL = "database-url"
 name = "web-data"
 path = "/data"
 readonly = false
+
+[[service.bind]]                 # 0..n; name references [app_mounts.<name>]
+name = "app-logs"                # policy name, never a host path
+path = "/var/log/app"            # absolute container destination
+readonly = true
 
 [[service.database]]             # explicit database declarations
 name = "main"
@@ -69,6 +78,7 @@ services = ["web"]
 
 - App name: DNS label (lowercase alphanumerics and hyphens, max 63), must not contain `--`, reserved: `gordon`, `registry`, `admin`, `localhost`. Case-insensitive uniqueness.
 - Service name: `[a-z0-9_.-]`, max 63, unique within the app.
+- Bind name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
 - Removing an app ends its incarnation: the name is freed, volumes and secrets are archived as retained under the old internal UUID, desired/active/intent state is cleared, and the next apply allocates a new UUID. A new app reusing the name never adopts the old secrets or volumes.
 
 ## Services
@@ -101,16 +111,44 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 ## Volumes and Databases
 
-- Named volumes only; no bind mounts, no service-shared volumes. Replacement reuses volumes; removed services leave volumes retained and visible.
+- Named volumes only, and no service-shared volumes. Replacement reuses volumes; removed services leave volumes retained and visible.
+- Manifests never carry host paths. A `[[service.bind]]` references an `[app_mounts.<name>]` policy the operator declares in `gordon.toml`; a bind whose name has no matching policy is rejected at apply time. See [Volumes](./volumes.md) and [Security Hardening](./security-hardening.md).
+- Named volumes are Gordon-owned app data: created, labeled, retained, backed up, and pruned by Gordon. Administrative binds are operator-owned host locations: Gordon mounts them and never creates, deletes, owns, backs up, or prunes them.
+- `[[service.bind]]` requires an absolute, normalized container `path` and an optional `readonly`. The policy's `read_only` and the bind's `readonly` force read-only together: either side wins and a manifest can never weaken its policy. Reserved destinations (`/`, `/proc`, `/sys`, `/dev`, `/boot` and their children) and paths colliding with a declared volume or another bind are rejected at apply time.
+- A service with any bind runs as a single writer, like a volume-backed service: replacements never serve two generations at once.
 - A volume declared `readonly = true` is mounted read-only in the container; the service cannot modify protected data.
 - `[[service.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).
 - `[service.backup]` lists the declared databases (`postgres`) and volumes (`volume`) that are backup targets. A declared database or volume that is not referenced here is never backed up. Schedules follow the declaration through deploys; stored backups are never deleted when declarations change.
 
+## HTTP Interfaces
+
+`[[service.http]]` declares 0..n HTTP interfaces per service. `visibility` is optional and defaults to `public` when the key is absent or empty.
+
+```toml
+[[service.http]]                 # public: proxied by host
+host = "blog.mydomain.com"
+port = 3000
+tls = "auto"                     # auto | always | never
+
+[[service.http]]                 # internal: not published (app private network only)
+visibility = "internal"
+port = 8080
+```
+
+- `public`: `host` is required and must be a valid public hostname, and `tls` is `auto` (default when absent), `always`, or `never`. A public interface gets a proxy route, a global host reservation, a certificate target when TLS applies, and a `127.0.0.1` loopback backend publication.
+- `internal`: creates no proxy route, no host reservation, no certificate target, and no host port publication, so it is never reachable through the host or proxy plane. `port` is required, `host` must be absent, and `tls` must be absent — any declared TLS value is rejected. It is still a declared TCP-capable container port for readiness metadata. Reachability follows network membership, not visibility: any container attached to a network this service joins can reach the port — sibling services on the app's own private network, and peers on any `[[network.shared]]` network the service is enrolled in.
+
+There is no `.internal` pseudo-domain: internal interfaces carry no hostname at all.
+
+A container port declared by both an internal HTTP interface and an externally backed interface (public HTTP or TCP) is rejected at apply time, because publication is socket-level. Duplicate internal HTTP ports within a service are rejected the same way.
+
 ## Readiness
 
-`type = "http"` requires an origin-form `path` beginning with a single `/`. Absolute URLs, authority forms such as `@host:port`, scheme-relative paths, and control characters are rejected at apply time. The probe always dials the declared loopback backend, never follows redirects, ignores environment proxy settings, and is bounded per request and for the whole operation.
+`type = "http"` requires an origin-form `path` beginning with a single `/`. Absolute URLs, authority forms such as `@host:port`, scheme-relative paths, and control characters are rejected at apply time. The probe always dials the declared loopback backend, never follows redirects, ignores environment proxy settings, and is bounded per request and for the whole operation. A public or otherwise published interface keeps this loopback probe. An internal HTTP port is instead probed over the app private network by one bounded, short-lived helper, using HTTP or TCP according to the interface's `[service.readiness]` type; the internal port is never temporarily published to the host to probe it.
 
 ## TLS
+
+TLS applies to public interfaces only; an internal interface never declares `tls`.
 
 - `auto` keeps the host eligible for HTTP and HTTPS; plaintext is redirected when an HTTPS endpoint exists and redirects are enabled.
 - `always` is enforced: a plaintext request to an `always` host is redirected whenever an HTTPS endpoint exists, and refused with `421 Misdirected Request` when none does. The backend is never reached over plaintext.
@@ -119,6 +157,8 @@ Image registry names and digest syntax are validated during manifest apply, reso
 ## Networks
 
 Each app gets a private network automatically. `[[network.shared]]` adds services to named shared networks, created/reused only within verified Gordon ownership. Deploy adds AND removes memberships without disconnecting unrelated services.
+
+Services of the same app communicate over that private network and resolve each other by service alias. Different apps are isolated by default; cross-app traffic requires both services to declare the same `[[network.shared]]` membership. See [Network Isolation](./network-isolation.md).
 
 ## Strictness
 

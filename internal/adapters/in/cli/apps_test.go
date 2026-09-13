@@ -185,12 +185,12 @@ func TestRunAppsSecretsSet_StdinAndValidation(t *testing.T) {
 	plane.EXPECT().SetAppSecrets(mock.Anything, "blog", mock.Anything).
 		Run(func(_ context.Context, _ string, req dto.AppSecretSetRequest) { gotReq = req }).Return(nil).Once()
 	var out bytes.Buffer
-	stdin := strings.NewReader("from_stdin=stdin-value\n\nempty_val=\n")
+	stdin := strings.NewReader("from_stdin=stdin-value\n\nspaced=  preserved  \n")
 	require.NoError(t, runAppsSecretsSet(context.Background(), plane, stdin,
 		&out, "blog", []string{"from_flag=flag-value"}, "web", true, false))
 	assert.Equal(t, map[string]string{
 		"from_stdin": "stdin-value",
-		"empty_val":  "",
+		"spaced":     "  preserved  ",
 		"from_flag":  "flag-value",
 	}, gotReq.Secrets)
 
@@ -528,4 +528,22 @@ func TestRunAppLogs_TextJSONFollow(t *testing.T) {
 	out.Reset()
 	require.NoError(t, runAppLogs(context.Background(), plane, reader, "blog", "web", true, 50, &out, false))
 	assert.Equal(t, "s1\n", out.String())
+}
+
+func TestRunAppsSecretsList_RendersMetadataAndWrapsErrors(t *testing.T) {
+	plane := appPlane(t)
+	plane.EXPECT().ListAppSecrets(mock.Anything, "blog", "web").Return([]dto.AppSecretMetadataDTO{
+		{Service: "web", Key: "DATABASE_URL", Name: "database-url", Source: "desired", Presence: "unknown"},
+	}, nil).Once()
+	var out bytes.Buffer
+	require.NoError(t, runAppsSecretsList(context.Background(), plane, &out, "blog", "web", false))
+	assert.Contains(t, out.String(), "web/DATABASE_URL")
+	assert.Contains(t, out.String(), "desired")
+
+	errPlane := appPlane(t)
+	errPlane.EXPECT().ListAppSecrets(mock.Anything, "blog", "").Return(nil, errors.New("boom")).Once()
+	err := runAppsSecretsList(context.Background(), errPlane, &bytes.Buffer{}, "blog", "", false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "list app secrets for blog")
+	assert.Contains(t, err.Error(), "boom")
 }

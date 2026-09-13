@@ -60,6 +60,10 @@ func (r *remoteControlPlane) OperationByKey(ctx context.Context, app, key string
 	return r.client.OperationByKey(ctx, app, key)
 }
 
+func (r *remoteControlPlane) ListAppSecrets(ctx context.Context, app, service string) ([]dto.AppSecretMetadataDTO, error) {
+	return r.client.ListAppSecrets(ctx, app, service)
+}
+
 func (r *remoteControlPlane) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
 	return r.client.SetAppSecrets(ctx, app, req)
 }

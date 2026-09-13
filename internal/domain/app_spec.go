@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"net"
+	"path"
 	"reflect"
 	"regexp"
 	"sort"
@@ -44,6 +45,13 @@ const (
 	AppTLSNever  = "never"
 )
 
+// App visibility modes for HTTP interfaces. public keeps the historical
+// host/TLS plane; internal is reachable only from the app private network.
+const (
+	AppVisibilityPublic   = "public"
+	AppVisibilityInternal = "internal"
+)
+
 // App database engines. Only postgres in v2.50.
 const (
 	AppDBPostgres = "postgres"
@@ -68,7 +76,7 @@ const (
 	// AppMaxReadinessTimeout bounds readiness timeout above.
 	AppMaxReadinessTimeout = 10 * time.Minute
 	// AppDefaultStopGrace applies when stop_grace is unset.
-	AppDefaultStopGrace = 10 * time.Second
+	AppDefaultStopGrace = 30 * time.Second
 	// AppMaxStopGrace caps stop_grace.
 	AppMaxStopGrace = 5 * time.Minute
 )
@@ -95,6 +103,7 @@ type AppService struct {
 	UDP       []AppUDPInterface
 	Secrets   map[string]string
 	Volumes   []AppVolume
+	Binds     []AppBind
 	Databases []AppDatabase
 	Backup    AppBackup
 }
@@ -108,11 +117,71 @@ type AppReadiness struct {
 	Timeout  time.Duration
 }
 
-// AppHTTPInterface is one HTTP service interface.
+// AppHTTPInterface is one HTTP service interface. Visibility is explicit
+// interface state: public HTTP keeps the historical host/TLS behavior,
+// internal HTTP declares neither host nor tls and is reachable only from
+// the app private network.
 type AppHTTPInterface struct {
 	Host string
 	Port int
 	TLS  string
+	// Visibility is public or internal. The zero value normalizes to
+	// public when read or projected, so manifests and stored state
+	// written before visibility existed keep their meaning.
+	Visibility string
+}
+
+// EffectiveVisibility normalizes absent visibility to public.
+func (h AppHTTPInterface) EffectiveVisibility() string {
+	if h.Visibility == "" {
+		return AppVisibilityPublic
+	}
+	return h.Visibility
+}
+
+// IsPublic reports whether the interface is served on the public plane.
+func (h AppHTTPInterface) IsPublic() bool {
+	return h.EffectiveVisibility() == AppVisibilityPublic
+}
+
+// IsInternal reports whether the interface is reachable only from the
+// app private network.
+func (h AppHTTPInterface) IsInternal() bool {
+	return h.EffectiveVisibility() == AppVisibilityInternal
+}
+
+// IsPublicHTTP reports whether a service declares at least one
+// effective-public HTTP interface.
+func (s AppService) IsPublicHTTP() bool {
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			return true
+		}
+	}
+	return false
+}
+
+// InternallyOnlyPort reports whether port is declared by internal HTTP
+// interfaces and by no externally backed HTTP/TCP interface. Such a port
+// is reached over the private network only and must never gain a host
+// publication, including through readiness metadata.
+func (s AppService) InternallyOnlyPort(port int) bool {
+	internal := false
+	for _, h := range s.HTTP {
+		if h.Port != port {
+			continue
+		}
+		if !h.IsInternal() {
+			return false
+		}
+		internal = true
+	}
+	for _, t := range s.TCP {
+		if t.Port == port {
+			return false
+		}
+	}
+	return internal
 }
 
 // AppTCPInterface is one TCP service interface.
@@ -131,6 +200,15 @@ type AppUDPInterface struct {
 
 // AppVolume is one named volume mount.
 type AppVolume struct {
+	Name     string
+	Path     string
+	ReadOnly bool
+}
+
+// AppBind is one named read-only host bind mount.
+// Name is the stable identity reused across deploys; Path is the
+// container destination.
+type AppBind struct {
 	Name     string
 	Path     string
 	ReadOnly bool
@@ -192,6 +270,61 @@ func ValidateVolumeName(name string) error {
 // ValidateSecretName checks service-local secret names.
 func ValidateSecretName(name string) error {
 	return ValidateServiceName(name)
+}
+
+// ValidateBindName checks the stable bind identity (service charset plus -- ban).
+func ValidateBindName(name string) error {
+	if !serviceNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: bind name %q must match [a-z0-9_.-], max 63", ErrInvalidAppSpec, name)
+	}
+	if strings.Contains(name, "--") {
+		return fmt.Errorf("%w: bind name %q must not contain -- (reserved separator)", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// sensitiveBindDestinations lists container paths a manifest bind must never
+// shadow. Server policy may refuse more, but these are always sensitive.
+var sensitiveBindDestinations = map[string]struct{}{
+	"/":     {},
+	"/proc": {},
+	"/sys":  {},
+	"/dev":  {},
+	"/boot": {},
+}
+
+// IsSensitiveBindDestination reports whether dest is a reserved container path
+// or lies below one. Mounting a child such as /proc/self is as dangerous as
+// shadowing the reserved root itself.
+func IsSensitiveBindDestination(dest string) bool {
+	if dest == "/" {
+		return true
+	}
+	for reserved := range sensitiveBindDestinations {
+		if reserved != "/" && (dest == reserved || strings.HasPrefix(dest, reserved+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateBindDestination checks one bind destination: absolute, clean,
+// normalized, and never a sensitive container path. It is pure and reusable
+// by manifest validation and by server-side source policy.
+func ValidateBindDestination(dest string) error {
+	if dest == "" {
+		return fmt.Errorf("%w: bind destination must not be empty", ErrInvalidAppSpec)
+	}
+	if !path.IsAbs(dest) {
+		return fmt.Errorf("%w: bind destination %q must be absolute", ErrInvalidAppSpec, dest)
+	}
+	if path.Clean(dest) != dest {
+		return fmt.Errorf("%w: bind destination %q must be a normalized clean path", ErrInvalidAppSpec, dest)
+	}
+	if IsSensitiveBindDestination(dest) {
+		return fmt.Errorf("%w: bind destination %q is a sensitive container path", ErrInvalidAppSpec, dest)
+	}
+	return nil
 }
 
 // NormalizeServiceName applies the runtime-identifier normalization.
@@ -389,13 +522,16 @@ func (s *AppService) validate() error {
 	if err != nil {
 		return err
 	}
+	if err := s.validateBinds(); err != nil {
+		return err
+	}
 	if err := s.validateDatabases(volumes); err != nil {
 		return err
 	}
 	return nil
 }
 
-// validateInterfaces checks HTTP/TCP/UDP entries.
+// validateInterfaces checks HTTP/TCP/UDP entries and their port ownership.
 func (s *AppService) validateInterfaces() error {
 	for i := range s.HTTP {
 		if err := s.HTTP[i].validate(s.Name); err != nil {
@@ -411,6 +547,37 @@ func (s *AppService) validateInterfaces() error {
 		if err := s.UDP[i].validate(s.Name); err != nil {
 			return err
 		}
+	}
+	return s.validateInterfacePorts()
+}
+
+// validateInterfacePorts rejects one container port claimed by both an
+// internal HTTP interface and an externally backed HTTP/TCP interface:
+// publication is socket-level, so publishing the port would expose the
+// internal listener beyond the private network. Internal ports must also
+// be declared at most once, since they carry no host to tell them apart.
+func (s *AppService) validateInterfacePorts() error {
+	external := map[int]string{}
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			external[h.Port] = "http"
+		}
+	}
+	for _, t := range s.TCP {
+		external[t.Port] = "tcp"
+	}
+	seenInternal := map[int]struct{}{}
+	for _, h := range s.HTTP {
+		if !h.IsInternal() {
+			continue
+		}
+		if kind, ok := external[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is also declared by an externally backed %s interface", ErrInvalidAppSpec, s.Name, h.Port, kind)
+		}
+		if _, ok := seenInternal[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is declared more than once", ErrInvalidAppSpec, s.Name, h.Port)
+		}
+		seenInternal[h.Port] = struct{}{}
 	}
 	return nil
 }
@@ -440,11 +607,42 @@ func (s *AppService) validateVolumes() (map[string]struct{}, error) {
 			return nil, fmt.Errorf("%w: service %q duplicate volume %q", ErrInvalidAppSpec, s.Name, vol.Name)
 		}
 		seenVolumes[vol.Name] = struct{}{}
-		if !strings.HasPrefix(vol.Path, "/") || strings.Contains(vol.Path, "..") {
-			return nil, fmt.Errorf("%w: service %q volume %q path must be absolute without dot-dot", ErrInvalidAppSpec, s.Name, vol.Name)
+		if !path.IsAbs(vol.Path) || path.Clean(vol.Path) != vol.Path {
+			return nil, fmt.Errorf("%w: service %q volume %q path must be absolute and normalized", ErrInvalidAppSpec, s.Name, vol.Name)
 		}
 	}
 	return seenVolumes, nil
+}
+
+// validateBinds checks bind names, destinations, duplicates, and volume collisions.
+func (s *AppService) validateBinds() error {
+	volumePaths := make(map[string]struct{}, len(s.Volumes))
+	for _, vol := range s.Volumes {
+		volumePaths[vol.Path] = struct{}{}
+	}
+	seenNames := map[string]struct{}{}
+	seenDests := map[string]struct{}{}
+	for i := range s.Binds {
+		bind := &s.Binds[i]
+		if err := ValidateBindName(bind.Name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seenNames[bind.Name]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind name %q", ErrInvalidAppSpec, s.Name, bind.Name)
+		}
+		seenNames[bind.Name] = struct{}{}
+		if err := ValidateBindDestination(bind.Path); err != nil {
+			return fmt.Errorf("%w: service %q bind %q: %v", ErrInvalidAppSpec, s.Name, bind.Name, err)
+		}
+		if _, ok := seenDests[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind destination %q", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+		seenDests[bind.Path] = struct{}{}
+		if _, ok := volumePaths[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q bind destination %q collides with a declared volume", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+	}
+	return nil
 }
 
 // validateDatabases checks database declarations and backup references.
@@ -515,8 +713,8 @@ func (r AppReadiness) validateL4(svc *AppService) error {
 	if hasUDPOnly(svc) {
 		return fmt.Errorf("%w: service %q with UDP-only interfaces must use none or log readiness", ErrInvalidAppSpec, svc.Name)
 	}
-	if countTCPInterfaces(svc) > 1 && r.Port == 0 {
-		return fmt.Errorf("%w: service %q has multiple TCP-capable interfaces, readiness.port is required", ErrInvalidAppSpec, svc.Name)
+	if r.Port == 0 && readinessPortRequired(svc) {
+		return fmt.Errorf("%w: service %q interfaces do not select one readiness port, readiness.port is required", ErrInvalidAppSpec, svc.Name)
 	}
 	if r.Port != 0 && !hasTCPContainerPort(svc, r.Port) {
 		return fmt.Errorf("%w: service %q readiness.port %d matches no declared container port", ErrInvalidAppSpec, svc.Name, r.Port)
@@ -533,11 +731,15 @@ func (r AppReadiness) validateL4(svc *AppService) error {
 // leading slash, no scheme or authority, and no control characters. The
 // path is appended to an immutable loopback URL, so rejecting everything
 // that could be read as a different authority keeps the probe on the
-// declared backend.
+// declared backend. Surrounding whitespace is rejected rather than
+// trimmed: the stored path is used verbatim, and a silently trimmed probe
+// would target a different path than the manifest declares.
 func ValidateReadinessPath(path string) error {
-	path = strings.TrimSpace(path)
-	if path == "" {
+	if strings.TrimSpace(path) == "" {
 		return fmt.Errorf("http readiness requires path")
+	}
+	if path != strings.TrimSpace(path) {
+		return fmt.Errorf("http readiness path must not have leading or trailing whitespace")
 	}
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
 		return fmt.Errorf("http readiness path must be an origin-form path beginning with one slash")
@@ -556,6 +758,43 @@ func hasUDPOnly(svc *AppService) bool {
 		return false
 	}
 	return len(svc.HTTP) == 0 && len(svc.TCP) == 0
+}
+
+// readinessPortRequired reports whether an omitted readiness.port leaves
+// the probe target ambiguous. One effective-public HTTP port stays
+// selectable even when internal HTTP interfaces are also declared, and a
+// lone TCP-capable interface selects itself. Several public HTTP ports, any
+// mix of TCP and HTTP, or several TCP interfaces must name it explicitly.
+func readinessPortRequired(svc *AppService) bool {
+	if _, ok := singleEffectivePublicHTTPPort(svc); ok {
+		return false
+	}
+	return countTCPInterfaces(svc) > 1
+}
+
+// singleEffectivePublicHTTPPort returns the only distinct effective-public
+// HTTP container port when the service declares at least one and no TCP
+// interface. Internal HTTP interfaces never contribute: they are not
+// reachable through a host publication, so they cannot make the public
+// backend ambiguous.
+func singleEffectivePublicHTTPPort(svc *AppService) (int, bool) {
+	if len(svc.TCP) > 0 {
+		return 0, false
+	}
+	port := 0
+	for _, h := range svc.HTTP {
+		if !h.IsPublic() {
+			continue
+		}
+		if port != 0 && port != h.Port {
+			return 0, false
+		}
+		port = h.Port
+	}
+	if port == 0 {
+		return 0, false
+	}
+	return port, true
 }
 
 // countTCPInterfaces counts http/tcp container ports.
@@ -578,21 +817,38 @@ func hasTCPContainerPort(svc *AppService, port int) bool {
 	return false
 }
 
-// validate checks one HTTP interface.
+// validate checks one HTTP interface against its visibility. Public
+// interfaces keep the historical host/TLS rules; internal interfaces are
+// private-network only and must not claim a host or a TLS mode.
 func (h AppHTTPInterface) validate(service string) error {
-	if h.Host == "" {
-		return fmt.Errorf("%w: service %q http host is required", ErrInvalidAppSpec, service)
-	}
-	if _, ok := CanonicalRouteDomain(h.Host); !ok {
-		return fmt.Errorf("%w: service %q http host %q is not a valid public hostname", ErrInvalidAppSpec, service, h.Host)
-	}
-	if h.Port < 1 || h.Port > 65535 {
-		return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
-	}
-	switch h.TLS {
-	case AppTLSAuto, AppTLSAlways, AppTLSNever:
+	switch h.EffectiveVisibility() {
+	case AppVisibilityPublic:
+		if h.Host == "" {
+			return fmt.Errorf("%w: service %q http host is required", ErrInvalidAppSpec, service)
+		}
+		if _, ok := CanonicalRouteDomain(h.Host); !ok {
+			return fmt.Errorf("%w: service %q http host %q is not a valid public hostname", ErrInvalidAppSpec, service, h.Host)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
+		switch h.TLS {
+		case AppTLSAuto, AppTLSAlways, AppTLSNever:
+		default:
+			return fmt.Errorf("%w: service %q http tls must be auto|always|never", ErrInvalidAppSpec, service)
+		}
+	case AppVisibilityInternal:
+		if h.Host != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare host", ErrInvalidAppSpec, service)
+		}
+		if h.TLS != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare tls", ErrInvalidAppSpec, service)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
 	default:
-		return fmt.Errorf("%w: service %q http tls must be auto|always|never", ErrInvalidAppSpec, service)
+		return fmt.Errorf("%w: service %q http visibility must be public|internal", ErrInvalidAppSpec, service)
 	}
 	return nil
 }
@@ -697,13 +953,58 @@ func DiffAppSpec(desired, effective AppSpec) AppDiff {
 	if !equalStringMaps(desired.Env, effective.Env) {
 		diff.Changed = append(diff.Changed, "env")
 	}
-	if !reflect.DeepEqual(desired.Networks, effective.Networks) {
-		diff.Changed = append(diff.Changed, "networks")
-	}
+	diff.Changed = append(diff.Changed, diffNetworks(desired.Networks, effective.Networks)...)
 	sort.Strings(diff.Added)
 	sort.Strings(diff.Removed)
 	sort.Strings(diff.Changed)
 	return diff
+}
+
+func diffNetworks(desired, effective []AppSharedNetwork) []string {
+	desiredByName := make(map[string]AppSharedNetwork, len(desired))
+	for _, network := range desired {
+		desiredByName[network.Network] = network
+	}
+	effectiveByName := make(map[string]AppSharedNetwork, len(effective))
+	for _, network := range effective {
+		effectiveByName[network.Network] = network
+	}
+
+	var changed []string
+	for name, network := range desiredByName {
+		previous, ok := effectiveByName[name]
+		switch {
+		case !ok:
+			changed = append(changed, "network/"+name+"/added")
+		case !equalStringSets(network.Services, previous.Services):
+			changed = append(changed, "network/"+name+"/services")
+		case !equalStringSets(network.Aliases, previous.Aliases):
+			changed = append(changed, "network/"+name+"/aliases")
+		}
+	}
+	for name := range effectiveByName {
+		if _, ok := desiredByName[name]; !ok {
+			changed = append(changed, "network/"+name+"/removed")
+		}
+	}
+	return changed
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, value := range a {
+		counts[value]++
+	}
+	for _, value := range b {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // diffService compares two services field by field.
@@ -735,6 +1036,9 @@ func diffService(name string, desired, effective AppService) []string {
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
 	}
+	if !equalBinds(desired.Binds, effective.Binds) {
+		changed = append(changed, "service/"+name+"/binds")
+	}
 	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
 		changed = append(changed, "service/"+name+"/databases")
 	}
@@ -763,7 +1067,7 @@ func secretPathChanges(desired, effective AppService) map[string]struct{} {
 // interfacesChanged compares interface slices.
 func interfacesChanged(desired, effective AppService) bool {
 	for i := range desired.HTTP {
-		if desired.HTTP[i] != effective.HTTP[i] {
+		if !httpInterfacesEqual(desired.HTTP[i], effective.HTTP[i]) {
 			return true
 		}
 	}
@@ -778,6 +1082,18 @@ func interfacesChanged(desired, effective AppService) bool {
 		}
 	}
 	return false
+}
+
+// httpInterfacesEqual compares two HTTP interfaces with visibility
+// normalized. State written before the field existed reads as the zero
+// value and must equal an explicit public, while a real public/internal
+// flip is still a change.
+func httpInterfacesEqual(a, b AppHTTPInterface) bool {
+	if a.EffectiveVisibility() != b.EffectiveVisibility() {
+		return false
+	}
+	a.Visibility, b.Visibility = "", ""
+	return a == b
 }
 
 // equalStringMaps compares string maps.
@@ -795,6 +1111,19 @@ func equalStringMaps(a, b map[string]string) bool {
 
 // equalVolumes compares volume slices by value.
 func equalVolumes(a, b []AppVolume) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalBinds compares bind slices by value.
+func equalBinds(a, b []AppBind) bool {
 	if len(a) != len(b) {
 		return false
 	}

@@ -311,8 +311,10 @@ install_next() {
     NEXT_VERSION="next-${COMMIT}"
     BINARY="$TMP_DIR/gordon"
     echo "Building ${NEXT_VERSION} for ${OS}/${ARCH}..."
+    # The source is a pristine tarball of the pinned commit, so it can
+    # never be a dirty checkout: dirty is reported as false.
     if ! (cd "$SOURCE_DIR" && CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" GOTOOLCHAIN=local \
-        go build -trimpath -ldflags "-s -w -X main.version=${NEXT_VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+        go build -trimpath -ldflags "-s -w -X main.version=${NEXT_VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE} -X main.dirty=false" \
         -o "$BINARY" .); then
         echo "Error: Failed to build Gordon from source"
         exit 1

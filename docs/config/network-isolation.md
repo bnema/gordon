@@ -21,6 +21,14 @@ internal = false
 
 Per-app isolation is declared in app files, not here: each app gets a private network automatically, and services can join named shared networks with `[[network.shared]]` (see [App Manifest](./apps.md)). Deploy adds AND removes memberships without disconnecting unrelated services. Shared networks are created/reused only within verified Gordon ownership.
 
+## Service-to-Service Networking
+
+Every app container joins an incarnation-owned private network. Services of the same app communicate over that network and can resolve each other by service alias.
+
+Different apps are isolated by default: a container on one app network cannot reach another app's network. Cross-app communication happens only when both services declare the same `[[network.shared]]` membership, which attaches the explicitly enrolled containers to a shared network.
+
+Readiness helpers never join shared networks and exist only on the target app's private network.
+
 ## Inspecting Networks
 
 View Gordon-managed networks:

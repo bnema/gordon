@@ -7,11 +7,16 @@ import (
 
 // ReservationsFor computes the global listener claims for a normalized
 // spec. It is the single owner of reservation derivation; the apps and
-// deployment use cases delegate to it.
+// deployment use cases delegate to it. Only effective-public HTTP
+// interfaces claim a host: internal interfaces are never published, so
+// they hold no global listener reservation.
 func ReservationsFor(spec AppSpec) []AppListenerReservation {
 	var reservations []AppListenerReservation
 	for _, svc := range spec.Services {
 		for _, h := range svc.HTTP {
+			if !h.IsPublic() {
+				continue
+			}
 			reservations = append(reservations, AppListenerReservation{
 				Proto:   "http",
 				Host:    h.Host,

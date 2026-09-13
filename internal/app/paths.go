@@ -4,6 +4,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -23,6 +24,16 @@ func DefaultDataDir() string {
 func ConfigureViper(v *viper.Viper, configPath string) {
 	if configPath != "" {
 		v.SetConfigFile(configPath)
+		switch ext := strings.ToLower(filepath.Ext(configPath)); ext {
+		case ".json":
+			v.SetConfigType("json")
+		case ".yaml", ".yml":
+			v.SetConfigType("yaml")
+		case ".toml":
+			v.SetConfigType("toml")
+		default:
+			v.SetConfigType("toml")
+		}
 	} else {
 		v.SetConfigName("gordon")
 		v.SetConfigType("toml")

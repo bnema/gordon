@@ -151,6 +151,7 @@ type AppActive struct {
 	ConvergedRevision string                         `json:"converged_revision"`
 	Converged         bool                           `json:"converged"`
 	Services          map[string]AppEffectiveService `json:"services"`
+	Networks          []AppSharedNetwork             `json:"networks,omitempty"`
 	StopIntent        bool                           `json:"stop_intent"`
 }
 
@@ -302,6 +303,9 @@ const (
 	// AppInhibitReplacementPending marks the generation being replaced
 	// while a volume-owning candidate may already be writing.
 	AppInhibitReplacementPending = "replacement-pending"
+	// AppInhibitRetirementPending marks a published predecessor that must
+	// remain stopped and be retired by a later reconciliation pass.
+	AppInhibitRetirementPending = "retirement-pending"
 )
 
 // AppOwnership is the ownership record for one app.

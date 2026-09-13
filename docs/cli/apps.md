@@ -29,6 +29,7 @@ See [Local-only Mode](../config/auth.md#local-only-mode).
 | Subcommand | Description |
 |------------|-------------|
 | `apply` | Validate and persist an app manifest |
+| `operations` | Inspect app operation journals |
 | `list` | List applications |
 | `show` | Show desired and active state for an app |
 | `diff` | Show the normalized desired-vs-active diff |
@@ -81,6 +82,26 @@ stopped intent, and the last operation with its outcome.
 
 ---
 
+## gordon apps operations show
+
+```bash
+gordon apps operations show APP --key KEY [--json]
+```
+
+Recovers one operation journal entry by its client-generated request key.
+`--key` is required. Use it to re-query an ambiguous mutation outcome before
+retrying: repeating the same key replays the recorded result, while a key
+reused for a different request is refused.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--key` | Request key (required) |
+| `--json` | Output as JSON |
+
+---
+
 ## gordon apps diff
 
 ```bash
@@ -93,16 +114,84 @@ Shows the normalized desired-vs-active diff (`added`, `removed`, `changed`).
 
 ## gordon apps secrets
 
-Values are accepted via `KEY=VALUE` arguments (discouraged: shell history),
-`--stdin` (preferred), or an interactive prompt. Names must already exist in
-desired or active state. Only key names are ever echoed back — never values.
+Values are accepted via `KEY=VALUE` arguments (discouraged: shell history) or
+stdin. Names must already exist in desired or active state. Only key names are
+ever echoed back — never values. Secrets are service-scoped: `--service` is
+required for `set` and `delete`, and optional for `list` where it filters to
+one service.
+
+### gordon apps secrets list
 
 ```bash
-gordon apps secrets set APP --service SVC KEY=VALUE… [--stdin] [--json]
+gordon apps secrets list APP [--service SVC] [--json]
+```
+
+Lists registration metadata for an app's secrets — service, key, name, source,
+and presence — never secret values. `--service` filters to one service.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--service` | Filter by service |
+| `--json` | Output as JSON |
+
+#### JSON Output
+
+```json
+[
+  {"service": "web", "key": "DATABASE_URL", "name": "app_database_url", "source": "desired", "presence": "unknown"}
+]
+```
+
+### gordon apps secrets set
+
+```bash
+gordon apps secrets set APP --service SVC KEY=VALUE… [--json]
+gordon apps secrets set APP --service SVC --stdin [--json]
+gordon apps secrets set APP --service SVC --stdin --key KEY [--json]
+```
+
+Reads values in one of three ways:
+
+- `KEY=VALUE` arguments: the value must be a single line of 1–65536 bytes.
+- `--stdin`: reads `KEY=VALUE` lines; blank and whitespace-only lines are
+  ignored and every non-blank value byte is preserved.
+- `--stdin --key KEY`: reads one raw value for `KEY`; a single trailing newline
+  is stripped and the value must still be a single non-empty line.
+
+`--key` requires `--stdin` and cannot be combined with `KEY=VALUE` arguments.
+An empty value is rejected, so `KEY=` is invalid.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--service` | Service the secrets belong to (required) |
+| `--stdin` | Read `KEY=VALUE` lines, or one raw value with `--key` |
+| `--key` | Secret key for single-value stdin mode |
+| `--json` | Output as JSON |
+
+#### JSON Output
+
+```json
+{"app": "blog", "service": "web", "keys": ["DATABASE_URL"]}
+```
+
+### gordon apps secrets delete
+
+```bash
 gordon apps secrets delete APP KEY --service SVC [--json]
 ```
 
-`--service` is required: secrets are service-scoped.
+Deletes the registered value for `KEY`.
+
+#### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--service` | Service the secret belongs to (required) |
+| `--json` | Output as JSON |
 
 ---
 

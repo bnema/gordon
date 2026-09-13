@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/in/appmanifest"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 const validWeb = `
@@ -44,6 +45,27 @@ func TestParse_ValidWeb(t *testing.T) {
 	assert.Equal(t, "blog.example.com", svc.HTTP[0].Host)
 	assert.Equal(t, "auto", svc.HTTP[0].TLS)
 	assert.Equal(t, "http", svc.Readiness.Type)
+}
+
+func TestParse_SharedNetwork(t *testing.T) {
+	doc := `
+name = "media"
+[[service]]
+name = "web"
+image = "registry.example.com/media/web:1"
+[[network.shared]]
+network = "backend"
+services = ["web"]
+aliases = ["media-web"]
+`
+
+	spec, warnings, err := appmanifest.Parse([]byte(doc), "media.toml")
+	require.NoError(t, err)
+	assert.Empty(t, warnings)
+	require.Len(t, spec.Networks, 1)
+	assert.Equal(t, domain.AppSharedNetwork{
+		Network: "backend", Services: []string{"web"}, Aliases: []string{"media-web"},
+	}, spec.Networks[0])
 }
 
 func TestParse_FileNameMismatchIsWarning(t *testing.T) {
@@ -112,7 +134,7 @@ func TestParse_Names(t *testing.T) {
 		{"dup service", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n[[service]]\nname = \"web\"\nimage = \"img:2\"\n", "duplicate service"},
 		{"dup service case", "name = \"blog\"\n[[service]]\nname = \"Web\"\nimage = \"img:1\"\n", "must match"},
 		{"normalized collision", "name = \"blog\"\n[[service]]\nname = \"a.b\"\nimage = \"img:1\"\n[[service]]\nname = \"a-b\"\nimage = \"img:2\"\n", "same runtime identifier"},
-		{"replicas rejected", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\nreplicas = 2\n", "missing in the target struct"},
+		{"replicas rejected", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\nreplicas = 2\n", "unknown TOML fields or tables: service.replicas"},
 		{"volume double dash", "name = \"blog\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n[[service.volume]]\nname = \"a--b\"\npath = \"/data\"\n", "--"},
 		{"shared volume", "name = \"blog\"\n[[service]]\nname = \"a\"\nimage = \"img:1\"\n[[service.volume]]\nname = \"d\"\npath = \"/data\"\n[[service]]\nname = \"b\"\nimage = \"img:1\"\n[[service.volume]]\nname = \"d\"\npath = \"/data\"\n", "claimed by both"},
 		{"env secret key collision", "name = \"blog\"\n[env]\nDB_PASSWORD = \"x\"\n[[service]]\nname = \"web\"\nimage = \"img:1\"\n[service.secrets]\nDB_PASSWORD = \"db-password\"\n", "collides with a secret key"},
@@ -156,7 +178,7 @@ func TestParse_Interfaces(t *testing.T) {
 	}{
 		{"tcp needs entrypoint", "name = \"b\"\n[[service]]\nname = \"w\"\nimage = \"i:1\"\n[[service.tcp]]\nport = 9000\npublish = \"9000\"\n", "entrypoint is required"},
 		{"publish hostname", "name = \"b\"\n[[service]]\nname = \"w\"\nimage = \"i:1\"\n[[service.tcp]]\nentrypoint = \"tcp\"\nport = 9000\npublish = \"example.com:9000\"\n", "literal IP"},
-		{"rcon table rejected", "name = \"b\"\n[[service]]\nname = \"w\"\nimage = \"i:1\"\n[[service.rcon]]\nentrypoint = \"tcp\"\nport = 28016\npublish = \"0.0.0.0:28016\"\npublic = true\n", "missing in the target struct"},
+		{"rcon table rejected", "name = \"b\"\n[[service]]\nname = \"w\"\nimage = \"i:1\"\n[[service.rcon]]\nentrypoint = \"tcp\"\nport = 28016\npublish = \"0.0.0.0:28016\"\npublic = true\n", "unknown TOML fields or tables: service.rcon"},
 		{"bad host", "name = \"b\"\n[[service]]\nname = \"w\"\nimage = \"i:1\"\n[[service.http]]\nhost = \"localhost\"\nport = 8080\n", "not a valid public hostname"},
 	}
 	for _, tc := range cases {
@@ -251,4 +273,40 @@ func TestParse_NoFileEnvSecretReads(t *testing.T) {
 	spec, _, err := appmanifest.Parse([]byte(validWeb), "")
 	require.NoError(t, err)
 	assert.Equal(t, "blog", spec.Name)
+}
+
+func TestParse_Binds(t *testing.T) {
+	doc := `
+name = "blog"
+[[service]]
+name = "web"
+image = "registry.example.com/blog/web:1.4.2"
+[[service.bind]]
+name = "config"
+path = "/etc/app.conf"
+readonly = true
+[[service.bind]]
+name = "data"
+path = "/var/lib/app"
+`
+	spec, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+	require.NoError(t, err)
+	require.Len(t, spec.Services[0].Binds, 2)
+	assert.Equal(t, domain.AppBind{Name: "config", Path: "/etc/app.conf", ReadOnly: true}, spec.Services[0].Binds[0])
+	assert.Equal(t, domain.AppBind{Name: "data", Path: "/var/lib/app"}, spec.Services[0].Binds[1])
+}
+
+func TestParse_BindDestinationRejected(t *testing.T) {
+	doc := `
+name = "blog"
+[[service]]
+name = "web"
+image = "registry.example.com/blog/web:1.4.2"
+[[service.bind]]
+name = "dev"
+path = "/dev"
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+	assert.Contains(t, err.Error(), "sensitive container path")
 }

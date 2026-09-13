@@ -52,4 +52,15 @@ const (
 	LabelPort = "gordon.port"
 	// LabelEnvFile specifies the path to .env file inside the image.
 	LabelEnvFile = "gordon.env-file"
+	// LabelPurpose marks Gordon-owned helper containers that are not
+	// managed workloads (volume archives, bounded readiness probes).
+	// Lifecycle, reconcile and prune paths must treat them as helper
+	// infrastructure, never as apps or services.
+	LabelPurpose = "gordon.purpose"
+)
+
+// Purpose values for Gordon-owned helper containers.
+const (
+	// PurposeNetworkProbe identifies one bounded readiness probe helper.
+	PurposeNetworkProbe = "network-probe"
 )

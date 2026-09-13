@@ -102,7 +102,9 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 	images.EXPECT().ResolveDigest(mock.Anything, svcSpec.Image).Return("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil)
 	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("x", nil)
-	runtime.EXPECT().PullImageWithAuth(mock.Anything, "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "gordon", "s3cret").Return(nil).Once()
+	pullRef := "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	runtime.EXPECT().PullImageWithOptions(mock.Anything, domain.ImagePullRequest{Reference: pullRef, Username: "gordon", Password: "s3cret", Transport: domain.ImagePullTransportHTTP}).Return(nil).Once()
+	runtime.EXPECT().VerifyImageDigest(mock.Anything, pullRef, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Return(nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").Return(nil, nil)
 	state.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)

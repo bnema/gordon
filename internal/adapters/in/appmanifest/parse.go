@@ -7,6 +7,7 @@ package appmanifest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -18,10 +19,15 @@ import (
 
 // rawManifest mirrors the frozen TOML schema for strict decoding.
 type rawManifest struct {
-	Name     string             `toml:"name"`
-	Env      map[string]string  `toml:"env"`
-	Services []rawService       `toml:"service"`
-	Networks []rawSharedNetwork `toml:"network.shared"`
+	Name     string            `toml:"name"`
+	Env      map[string]string `toml:"env"`
+	Services []rawService      `toml:"service"`
+	Network  rawNetwork        `toml:"network"`
+}
+
+// rawNetwork mirrors [network] and its [[network.shared]] children.
+type rawNetwork struct {
+	Shared []rawSharedNetwork `toml:"shared"`
 }
 
 // rawService mirrors one [[service]] table.
@@ -37,6 +43,7 @@ type rawService struct {
 	UDP       []rawUDP          `toml:"udp"`
 	Secrets   map[string]string `toml:"secrets"`
 	Volumes   []rawVolume       `toml:"volume"`
+	Binds     []rawBind         `toml:"bind"`
 	Databases []rawDatabase     `toml:"database"`
 	Backup    rawBackup         `toml:"backup"`
 }
@@ -54,7 +61,11 @@ type rawReadiness struct {
 type rawHTTP struct {
 	Host string `toml:"host"`
 	Port int    `toml:"port"`
-	TLS  string `toml:"tls"`
+	// TLS uses presence tracking because internal interfaces reject every
+	// explicit value, including an empty string.
+	TLS *string `toml:"tls"`
+	// Visibility is empty when unset; the parser normalizes it to public.
+	Visibility string `toml:"visibility"`
 }
 
 // rawTCP mirrors [[service.tcp]].
@@ -73,6 +84,13 @@ type rawUDP struct {
 
 // rawVolume mirrors [[service.volume]].
 type rawVolume struct {
+	Name     string `toml:"name"`
+	Path     string `toml:"path"`
+	ReadOnly bool   `toml:"readonly"`
+}
+
+// rawBind mirrors [[service.bind]].
+type rawBind struct {
 	Name     string `toml:"name"`
 	Path     string `toml:"path"`
 	ReadOnly bool   `toml:"readonly"`
@@ -104,7 +122,7 @@ func Parse(data []byte, sourceName string) (domain.AppSpec, []string, error) {
 	var raw rawManifest
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
-		return domain.AppSpec{}, nil, fmt.Errorf("%w: %v", domain.ErrInvalidAppSpec, err)
+		return domain.AppSpec{}, nil, fmt.Errorf("%w: %s", domain.ErrInvalidAppSpec, formatDecodeError(err))
 	}
 	spec, err := toDomain(raw)
 	if err != nil {
@@ -120,13 +138,31 @@ func Parse(data []byte, sourceName string) (domain.AppSpec, []string, error) {
 	return spec, warnings, nil
 }
 
+func formatDecodeError(err error) string {
+	var strictErr *toml.StrictMissingError
+	if !errors.As(err, &strictErr) {
+		return err.Error()
+	}
+	unknown := make([]string, 0, len(strictErr.Errors))
+	for i := range strictErr.Errors {
+		key := strictErr.Errors[i].Key()
+		if len(key) > 0 {
+			unknown = append(unknown, strings.Join(key, "."))
+		}
+	}
+	if len(unknown) == 0 {
+		return strictErr.Error()
+	}
+	return "unknown TOML fields or tables: " + strings.Join(unknown, ", ")
+}
+
 // toDomain maps raw TOML onto domain types with normalization and defaults.
 func toDomain(raw rawManifest) (domain.AppSpec, error) {
 	spec := domain.AppSpec{
 		Name:     raw.Name,
 		Env:      map[string]string{},
 		Services: make([]domain.AppService, 0, len(raw.Services)),
-		Networks: make([]domain.AppSharedNetwork, 0, len(raw.Networks)),
+		Networks: make([]domain.AppSharedNetwork, 0, len(raw.Network.Shared)),
 	}
 	for key, value := range raw.Env {
 		spec.Env[key] = value
@@ -138,7 +174,7 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		}
 		spec.Services = append(spec.Services, svc)
 	}
-	for _, net := range raw.Networks {
+	for _, net := range raw.Network.Shared {
 		spec.Networks = append(spec.Networks, domain.AppSharedNetwork{
 			Network:  net.Network,
 			Services: append([]string(nil), net.Services...),
@@ -146,6 +182,25 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		})
 	}
 	return spec, nil
+}
+
+func toDomainHTTP(service string, h rawHTTP) (domain.AppHTTPInterface, error) {
+	visibility := h.Visibility
+	if visibility == "" {
+		visibility = domain.AppVisibilityPublic
+	}
+	if visibility == domain.AppVisibilityInternal && h.TLS != nil {
+		return domain.AppHTTPInterface{}, fmt.Errorf("%w: service %q internal http port %d must not declare tls", domain.ErrInvalidAppSpec, service, h.Port)
+	}
+	tls := ""
+	if h.TLS != nil {
+		tls = *h.TLS
+	} else if visibility == domain.AppVisibilityPublic {
+		tls = domain.AppTLSAuto
+	}
+	return domain.AppHTTPInterface{
+		Host: domain.CanonicalHTTPHost(h.Host), Port: h.Port, TLS: tls, Visibility: visibility,
+	}, nil
 }
 
 // toDomainService maps one raw service with defaults.
@@ -175,15 +230,11 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 	}
 	svc.Readiness = readiness
 	for _, h := range raw.HTTP {
-		tls := h.TLS
-		if tls == "" {
-			tls = domain.AppTLSAuto
+		iface, err := toDomainHTTP(raw.Name, h)
+		if err != nil {
+			return domain.AppService{}, err
 		}
-		svc.HTTP = append(svc.HTTP, domain.AppHTTPInterface{
-			Host: domain.CanonicalHTTPHost(h.Host),
-			Port: h.Port,
-			TLS:  tls,
-		})
+		svc.HTTP = append(svc.HTTP, iface)
 	}
 	for _, t := range raw.TCP {
 		svc.TCP = append(svc.TCP, domain.AppTCPInterface{
@@ -207,6 +258,13 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 			Name:     v.Name,
 			Path:     v.Path,
 			ReadOnly: v.ReadOnly,
+		})
+	}
+	for _, b := range raw.Binds {
+		svc.Binds = append(svc.Binds, domain.AppBind{
+			Name:     b.Name,
+			Path:     b.Path,
+			ReadOnly: b.ReadOnly,
 		})
 	}
 	for _, db := range raw.Databases {

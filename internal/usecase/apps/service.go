@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -28,6 +29,10 @@ type Service struct {
 	// never snapshot between a staged intent and its materialization.
 	barrier     out.GCBarrier
 	imagePolicy domain.ImageSourcePolicy
+	// bindMu guards bindPolicies. Reload replaces the whole map
+	// atomically; applies read the current map without holding the lock.
+	bindMu       sync.RWMutex
+	bindPolicies map[string]domain.AppBindPolicy
 }
 
 // NewService creates the apps use case over an AppState store.
@@ -47,6 +52,33 @@ func (s *Service) WithGCBarrier(barrier out.GCBarrier) *Service {
 func (s *Service) WithImagePolicy(policy domain.ImageSourcePolicy) *Service {
 	s.imagePolicy = policy
 	return s
+}
+
+// WithBindPolicies supplies the initial administrative bind policies.
+func (s *Service) WithBindPolicies(policies map[string]domain.AppBindPolicy) *Service {
+	s.SetBindPolicies(policies)
+	return s
+}
+
+// SetBindPolicies atomically replaces the administrative bind policies used
+// to authorize manifest binds. The map is copied so later caller mutation
+// cannot race an in-flight apply.
+func (s *Service) SetBindPolicies(policies map[string]domain.AppBindPolicy) {
+	copied := make(map[string]domain.AppBindPolicy, len(policies))
+	for name, policy := range policies {
+		copied[name] = policy
+	}
+	s.bindMu.Lock()
+	s.bindPolicies = copied
+	s.bindMu.Unlock()
+}
+
+// snapshotBindPolicies returns the current policy map. SetBindPolicies never
+// mutates a published map, so the snapshot stays safe after the lock drops.
+func (s *Service) snapshotBindPolicies() map[string]domain.AppBindPolicy {
+	s.bindMu.RLock()
+	defer s.bindMu.RUnlock()
+	return s.bindPolicies
 }
 
 // noopLease is a GC lease for an unwired barrier.
@@ -139,6 +171,9 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 			return nil, nil, fmt.Errorf("apps: service %q image %q: %w", service.Name, service.Image, err)
 		}
 	}
+	if err := s.validateBindPolicies(spec); err != nil {
+		return nil, nil, err
+	}
 	if err := s.validateEntrypointCompatibility(spec); err != nil {
 		return nil, nil, err
 	}
@@ -171,6 +206,26 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 		}, nil
 	}
 	return s.persistApply(ctx, spec, source, prepared)
+}
+
+// validateBindPolicies resolves every declared bind against the
+// administrative bind policies before any desired state is persisted.
+// Errors name only the mount, app, and service: policy source paths never
+// appear in apply errors.
+func (s *Service) validateBindPolicies(spec domain.AppSpec) error {
+	policies := s.snapshotBindPolicies()
+	for _, svc := range spec.Services {
+		for _, bind := range svc.Binds {
+			policy, ok := policies[bind.Name]
+			if !ok {
+				return fmt.Errorf("%w: app %q service %q mount %q: no administrative mount policy configured", domain.ErrBindPolicy, spec.Name, svc.Name, bind.Name)
+			}
+			if _, err := policy.ResolveAppBind(spec.Name, svc.Name, bind); err != nil {
+				return fmt.Errorf("%w: app %q service %q mount %q: refused by administrative mount policy", domain.ErrBindPolicy, spec.Name, svc.Name, bind.Name)
+			}
+		}
+	}
+	return nil
 }
 
 // validateEntrypointCompatibility checks every declared TCP/UDP interface
@@ -285,7 +340,7 @@ func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source 
 
 // activeSpec rebuilds an AppSpec view from effective definitions for diffing.
 func activeSpec(active domain.AppActive) domain.AppSpec {
-	spec := domain.AppSpec{Name: active.App, Env: map[string]string{}}
+	spec := domain.AppSpec{Name: active.App, Env: map[string]string{}, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
 	for name, svc := range active.Services {
 		svcSpec := svc.Spec
 		svcSpec.Name = name

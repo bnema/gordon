@@ -19,6 +19,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // appApplyMaxBytes bounds the apply manifest body (05-api-cli.md §2).
@@ -70,8 +71,8 @@ func appMutationError(op, app, key string, err error) error {
 	var unknown *remote.OutcomeUnknownError
 	if errors.As(err, &unknown) {
 		return fmt.Errorf(
-			"outcome-unknown: %s %s may have executed; query "+
-				"GET /admin/apps/%s/operations/by-key/%s before retrying (same key): %w",
+			"outcome-unknown: %s %s may have executed; run the by-key lookup "+
+				"gordon apps operations show %s --key %s before retrying with the same key: %w",
 			op, app, app, key, err)
 	}
 	return err
@@ -95,8 +96,8 @@ func renderAppOpConflict(out io.Writer, op, app, key string, err error, jsonOut 
 		return rerr, true
 	}
 	return fmt.Errorf(
-		"%s of %s did not succeed (outcome %s, op %s); journal rendered above; query "+
-			"GET /admin/apps/%s/operations/by-key/%s before retrying (same key): %w",
+		"%s of %s did not succeed (outcome %s, op %s); journal rendered above; run the by-key lookup "+
+			"gordon apps operations show %s --key %s before retrying with the same key: %w",
 		op, app, conflict.Response.Outcome, conflict.Response.Op, app, key, err), true
 }
 
@@ -118,6 +119,7 @@ Examples:
 	}
 	cmd.AddCommand(
 		newAppsApplyCmd(),
+		newAppsOperationsCmd(),
 		newAppsListCmd(),
 		newAppsShowCmd(),
 		newAppsDiffCmd(),
@@ -470,16 +472,55 @@ func newAppsSecretsCmd() *cobra.Command {
 		Use:   "secrets",
 		Short: "Manage app secret values",
 		Long: `Values are accepted via KEY=VALUE arguments (discouraged: shell history),
---stdin (preferred), or an interactive prompt. Names must already exist in
-desired or active state. Only key names are ever echoed back — never values.`,
+--stdin with KEY=VALUE lines, or --stdin --key KEY for one raw value. Names
+must already exist in desired or active state. Only key names are ever echoed
+back — never values.`,
 	}
-	cmd.AddCommand(newAppsSecretsSetCmd(), newAppsSecretsDeleteCmd())
+	cmd.AddCommand(newAppsSecretsListCmd(), newAppsSecretsSetCmd(), newAppsSecretsDeleteCmd())
 	return cmd
+}
+
+func newAppsSecretsListCmd() *cobra.Command {
+	var service string
+	var jsonOut bool
+	cmd := &cobra.Command{Use: "list APP", Short: "List app secret registration metadata", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		handle, err := resolveAppPlane()
+		if err != nil {
+			return err
+		}
+		defer handle.close()
+		return runAppsSecretsList(cmd.Context(), handle.plane, cmd.OutOrStdout(), args[0], service, jsonOut)
+	}}
+	cmd.Flags().StringVar(&service, "service", "", "Filter by service")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	return cmd
+}
+
+// runAppsSecretsList renders metadata-only registrations for one app,
+// optionally filtered to one service. Secret values never appear.
+func runAppsSecretsList(ctx context.Context, plane ControlPlane, out io.Writer, app, service string, jsonOut bool) error {
+	entries, err := plane.ListAppSecrets(ctx, app, service)
+	if err != nil {
+		return fmt.Errorf("list app secrets for %s: %w", app, err)
+	}
+	if jsonOut {
+		return writeJSON(out, entries)
+	}
+	for _, entry := range entries {
+		if err := cliWriteLine(out, cliRenderMeta(entry.Service+"/"+entry.Key+":", entry.Name+" "+entry.Source+" "+entry.Presence)); err != nil {
+			return err
+		}
+	}
+	if len(entries) == 0 {
+		return cliWriteLine(out, cliRenderMuted("No registered secrets"))
+	}
+	return nil
 }
 
 // newAppsSecretsSetCmd creates `apps secrets set`.
 func newAppsSecretsSetCmd() *cobra.Command {
 	var service string
+	var key string
 	var fromStdin bool
 	var jsonOut bool
 	cmd := &cobra.Command{
@@ -496,23 +537,37 @@ func newAppsSecretsSetCmd() *cobra.Command {
 			if len(args) == 0 {
 				return fmt.Errorf("missing APP argument")
 			}
-			return runAppsSecretsSet(cmd.Context(), plane, os.Stdin, cmd.OutOrStdout(), args[0], args[1:], service, fromStdin, jsonOut)
+			return runAppsSecretsSetMode(cmd.Context(), plane, cmd.InOrStdin(), cmd.OutOrStdout(), args[0], args[1:], service, key, fromStdin, jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "Service the secrets belong to (required)")
-	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "Read KEY=VALUE lines from stdin")
+	cmd.Flags().StringVar(&key, "key", "", "Secret key for single-value stdin mode")
+	cmd.Flags().BoolVar(&fromStdin, "stdin", false, "Read KEY=VALUE lines, or one raw value with --key")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
 func runAppsSecretsSet(ctx context.Context, plane ControlPlane, stdin io.Reader, out io.Writer, app string, pairs []string, service string, fromStdin, jsonOut bool) error {
+	return runAppsSecretsSetMode(ctx, plane, stdin, out, app, pairs, service, "", fromStdin, jsonOut)
+}
+
+func runAppsSecretsSetMode(ctx context.Context, plane ControlPlane, stdin io.Reader, out io.Writer, app string, pairs []string, service, key string, fromStdin, jsonOut bool) error {
 	if app == "" {
 		return fmt.Errorf("missing APP argument")
 	}
 	if service == "" {
 		return fmt.Errorf("missing required flag --service: secrets are service-scoped")
 	}
-	if fromStdin {
+	if key != "" {
+		if !fromStdin || len(pairs) != 0 {
+			return fmt.Errorf("--key requires --stdin and forbids KEY=VALUE arguments")
+		}
+		value, err := readRawSecretStdin(stdin)
+		if err != nil {
+			return err
+		}
+		pairs = []string{key + "=" + value}
+	} else if fromStdin {
 		stdinPairs, err := readSecretStdin(stdin)
 		if err != nil {
 			return err
@@ -579,30 +634,68 @@ func runAppsSecretsDelete(ctx context.Context, plane ControlPlane, out io.Writer
 	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Deleted secret %s for %s/%s", key, app, service)))
 }
 
-// parseSecretPairs parses KEY=VALUE arguments. Keys must be non-empty;
-// values may be empty (explicit empty secret).
+// parseSecretPairs parses KEY=VALUE arguments. Keys must be non-empty and
+// each value must pass validateSecretValue (1-MaxAppEnvValueLen bytes on a
+// single line); an empty value is rejected.
 func parseSecretPairs(pairs []string) (map[string]string, error) {
 	values := make(map[string]string, len(pairs))
-	for _, pair := range pairs {
+	for index, pair := range pairs {
 		key, value, ok := strings.Cut(pair, "=")
 		if !ok || key == "" {
-			return nil, fmt.Errorf("invalid secret %q: expected KEY=VALUE", pair)
+			return nil, fmt.Errorf("invalid secret input %d: expected KEY=VALUE", index+1)
+		}
+		if err := validateSecretValue(value); err != nil {
+			return nil, fmt.Errorf("invalid secret input %d: %w", index+1, err)
 		}
 		values[key] = value
 	}
 	return values, nil
 }
 
-// readSecretStdin reads KEY=VALUE lines (blank lines ignored).
+func validateSecretValue(value string) error {
+	if value == "" || len(value) > domain.MaxAppEnvValueLen {
+		return fmt.Errorf("value must be 1-%d bytes", domain.MaxAppEnvValueLen)
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("value must be a single line")
+	}
+	return nil
+}
+
+func readRawSecretStdin(in io.Reader) (string, error) {
+	data, err := io.ReadAll(io.LimitReader(in, domain.MaxAppEnvValueLen+3))
+	if err != nil {
+		return "", fmt.Errorf("failed to read secret from stdin: %w", err)
+	}
+	if strings.HasSuffix(string(data), "\r\n") {
+		data = data[:len(data)-2]
+	} else if strings.HasSuffix(string(data), "\n") {
+		data = data[:len(data)-1]
+	}
+	value := string(data)
+	if err := validateSecretValue(value); err != nil {
+		return "", fmt.Errorf("invalid stdin secret: %w", err)
+	}
+	return value, nil
+}
+
+const maxSecretStdinBytes = 1 << 20
+
+// readSecretStdin reads bounded KEY=VALUE lines. Whitespace-only lines are
+// ignored, while every byte in nonblank values is preserved.
 func readSecretStdin(in io.Reader) ([]string, error) {
-	data, err := io.ReadAll(in)
+	data, err := io.ReadAll(io.LimitReader(in, maxSecretStdinBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("failed to read secrets from stdin: %w", err)
 	}
+	if len(data) > maxSecretStdinBytes {
+		return nil, fmt.Errorf("secret input exceeds %d bytes", maxSecretStdinBytes)
+	}
 	var pairs []string
 	for _, line := range strings.Split(string(data), "\n") {
-		if trimmed := strings.TrimSpace(line); trimmed != "" {
-			pairs = append(pairs, trimmed)
+		line = strings.TrimSuffix(line, "\r")
+		if strings.TrimSpace(line) != "" {
+			pairs = append(pairs, line)
 		}
 	}
 	return pairs, nil
@@ -776,7 +869,40 @@ func renderAppDeployResponse(out io.Writer, resp *dto.AppDeployResponse) error {
 	if err := renderDeployServices(out, resp); err != nil {
 		return err
 	}
+	if err := renderDeploySteps(out, resp.Steps); err != nil {
+		return err
+	}
 	return renderDeploySummaries(out, resp)
+}
+
+func renderDeploySteps(out io.Writer, steps []dto.AppStepDTO) error {
+	for _, step := range steps {
+		detail := step.State
+		if step.Detail != "" {
+			detail += ": " + sanitizeTerminalText(step.Detail)
+		}
+		if step.Error != "" {
+			detail += ": " + sanitizeTerminalText(step.Error)
+		}
+		if err := cliWriteLine(out, cliRenderMeta("  step "+step.ID+":", detail)); err != nil {
+			return err
+		}
+		for _, diagnostic := range step.Diagnostics {
+			if err := cliWriteLine(out, cliRenderMuted("    "+sanitizeTerminalText(diagnostic))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func sanitizeTerminalText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r >= ' ' && r != '\x7f' {
+			return r
+		}
+		return '�'
+	}, value)
 }
 
 func renderDeployHeadline(out io.Writer, resp *dto.AppDeployResponse) error {

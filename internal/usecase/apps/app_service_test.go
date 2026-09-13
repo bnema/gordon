@@ -2,6 +2,7 @@ package apps_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -87,4 +88,39 @@ func TestAppServiceImpl_OperationByKey(t *testing.T) {
 	store.EXPECT().LoadOperation(mock.Anything, "blog", "missing").Return(domain.AppOperation{}, domain.ErrAppOperationNotFound).Once()
 	_, err = svc.OperationByKey(ctx, "blog", "missing")
 	require.ErrorIs(t, err, domain.ErrAppOperationNotFound)
+}
+
+func TestAppServiceImpl_ListSecrets_MissingAppNotFound(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	store.EXPECT().AppExists(mock.Anything, "blog").Return(false, nil).Once()
+	_, err := svc.ListSecrets(ctx, "blog", "")
+	require.ErrorIs(t, err, domain.ErrAppNotFound)
+}
+
+func TestAppServiceImpl_ListSecrets_OwnershipOnlyAppStaysLive(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	store.EXPECT().AppExists(mock.Anything, "blog").Return(true, nil).Once()
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
+	entries, err := svc.ListSecrets(ctx, "blog", "")
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestAppServiceImpl_ListSecrets_WrapsLoadErrors(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	store.EXPECT().AppExists(mock.Anything, "blog").Return(true, nil).Once()
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, errors.New("boom")).Once()
+	_, err := svc.ListSecrets(ctx, "blog", "")
+	require.ErrorContains(t, err, "load desired")
+	require.ErrorContains(t, err, "boom")
 }

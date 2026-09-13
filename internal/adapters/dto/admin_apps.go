@@ -94,6 +94,15 @@ type AppRetainedDTO struct {
 	Images  []string `json:"images"`
 }
 
+// AppSecretMetadataDTO reports registration metadata without secret values.
+type AppSecretMetadataDTO struct {
+	Service  string `json:"service"`
+	Key      string `json:"key"`
+	Name     string `json:"name"`
+	Source   string `json:"source"`
+	Presence string `json:"presence"`
+}
+
 // AppDeployResponse reports deploy outcome with terminal results.
 // Effective and Retained are filled from current app state when the app
 // still exists; they are omitted when it does not.

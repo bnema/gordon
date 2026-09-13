@@ -21,12 +21,13 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. HTTP services without volumes keep the old container
-// serving until the replacement passes readiness, then switch with a
-// bounded drain and retire the old container by exact ID. TCP/UDP, mixed,
-// and volume-owning services use replacement with interruption. Volumes
-// are never deleted: no RemoveVolume call, no volume-deletion flags on
-// container removal.
+// sorted name order. HTTP-only services whose interfaces are all public,
+// with no volumes and no binds, keep the old container serving until the
+// replacement passes readiness, then switch with a bounded drain and
+// retire the old container by exact ID. TCP/UDP, any internal HTTP
+// interface, and bind- or volume-owning services use replacement with
+// interruption. Volumes are never deleted: no RemoveVolume call, no
+// volume-deletion flags on container removal.
 func (s *Service) Deploy(ctx context.Context, input DeployInput) (*DeployResult, error) {
 	release, err := s.acquireAppContext(ctx, input.App)
 	if err != nil {
@@ -71,12 +72,12 @@ func (s *Service) deployLocked(ctx context.Context, input DeployInput) (*DeployR
 		Revision: rev.Revision,
 		Services: map[string]ServiceResult{},
 	}
-	// Reconcile services the new desired state no longer declares BEFORE
-	// publishing anything: a service the operator removed must stop being
-	// reachable, and its exact container must be stopped and removed
-	// while its data is retained.
-	if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
-		return result, err
+	// A targeted deploy is intentionally a partial plan: services omitted
+	// from pinned remain active. Full deploys reconcile actual removals.
+	if input.Service == "" {
+		if err := s.reconcileRemovalsForDeploy(ctx, input.App, active, pinned, op, result, log); err != nil {
+			return result, err
+		}
 	}
 	for i, p := range pinned {
 		if err := s.runServiceStep(ctx, input.App, rev.Revision, i, p, op, active, result, log); err != nil {
@@ -340,12 +341,34 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
 }
 
-// httpEligible reports HTTP-only services without volumes.
+// httpEligible reports HTTP services whose generations may overlap while
+// the candidate proves readiness. Every declared HTTP interface must be
+// effective-public: the proxy repoints each public host to the candidate
+// only after readiness, so overlap buys availability. Any internal HTTP
+// interface is instead resolved over the app private network by service
+// alias, and the candidate joins that network with the same alias as soon
+// as it starts — before readiness — so an internal consumer could reach an
+// unready generation with no cutover gate to stop it. Such a service takes
+// interrupted replacement like L4 services. Volumes, binds, and L4 ports
+// remain interrupted because two generations must not share their state or
+// publications.
 func httpEligible(spec domain.AppService) bool {
-	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 {
+	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
 		return false
 	}
+	for _, h := range spec.HTTP {
+		if !h.IsPublic() {
+			return false
+		}
+	}
 	return true
+}
+
+// singleWriterRequired reports services that must never have two generations
+// running concurrently. Persistent volumes and any bind (especially a
+// writable one) may be written by both, so they are treated identically.
+func singleWriterRequired(spec domain.AppService) bool {
+	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
 }
 
 // deployHTTP keeps the old container serving until the replacement passes
@@ -358,7 +381,7 @@ func (s *Service) deployHTTP(ctx context.Context, app, revision string, p pinned
 	if err != nil {
 		return s.failResult(revision, before, "", err), false
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), created.ID, httpReadiness(p.spec), binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(p.spec), binds); err != nil {
 		// Old version keeps serving. Capture redacted diagnostics while
 		// the failed replacement still exists, then remove only that
 		// candidate.
@@ -419,13 +442,19 @@ func retireContainerID(before, after string) string {
 // the replacement. Volume-owning failures never restart the old image:
 // the replacement may already have written data.
 func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
+	// Revalidate the current authorization and source before inhibiting or
+	// retiring the serving generation. A reload between preflight and this
+	// service step must fail without mutating the existing workload.
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err), true
+	}
 	// A volume-owning replacement may write while the old generation
 	// still exists and could be revived by native restart policy.
 	// Inhibit that generation durably BEFORE the write can happen, so
 	// boot or periodic recovery can never restart the old writer on
 	// top of the new one. Cleared once the safe generation is
 	// published (publishService) or the operator removes the app.
-	inhibited := before != "" && len(p.spec.Volumes) > 0
+	inhibited := before != "" && singleWriterRequired(p.spec)
 	if inhibited {
 		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
 			return s.failResult(revision, before, "", err), true
@@ -447,7 +476,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 	if err != nil {
 		return s.failResult(revision, before, "", err), true
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), created.ID, p.spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, created.ID, p.spec, binds); err != nil {
 		// Capture redacted diagnostics while the candidate still exists,
 		// then remove only that candidate.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
@@ -457,7 +486,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 			EffectiveRevision: revision,
 			Before:            before,
 			After:             created.ID,
-			RestartUnsafe:     len(p.spec.Volumes) > 0,
+			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
 			CleanupWarnings:   cleanup,
@@ -468,7 +497,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 		EffectiveRevision: revision,
 		Before:            before,
 		After:             created.ID,
-		RestartUnsafe:     len(p.spec.Volumes) > 0,
+		RestartUnsafe:     singleWriterRequired(p.spec),
 		BackendBinds:      binds,
 		UDPBackendBinds:   udpBinds,
 	}, true
@@ -540,6 +569,13 @@ func volumeProvenanceLabels(app, appID, service, revision string) map[string]str
 // reconciles intent at boot and in the monitor (accepted decision:
 // native runtime restarts plus daemon reconciliation).
 func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string) (*domain.Container, map[int]int, map[int]int, error) {
+	// Re-resolve binds from the current policy immediately before any
+	// runtime mutation: a bind revoked since preflight must fail here,
+	// before volume ownership or container creation.
+	resolvedBinds, err := s.resolveServiceBinds(app, p.spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	env, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
 		return nil, nil, nil, err
@@ -594,6 +630,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		Entrypoint:      append([]string(nil), p.spec.Command...),
 		Volumes:         volumes,
 		ReadOnlyVolumes: readOnlyVolumes,
+		Binds:           resolvedBinds,
 		Labels:          appLabels(app, p.spec.Name, revision),
 		AutoRemove:      false,
 		RestartPolicy:   domain.RestartPolicyAlways,
@@ -605,9 +642,9 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		NanoCPUs:        s.deps.Limits.NanoCPUs,
 		PidsLimit:       s.deps.Limits.PidsLimit,
 	}
-	created, err := s.deps.Runtime.CreateContainer(ctx, config)
+	created, err := s.createContainer(ctx, p.name, config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("deployment: create container: %w", err)
+		return nil, nil, nil, err
 	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
@@ -625,10 +662,28 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	return created, binds, udpBinds, nil
 }
 
-// backendPublishes collects every interface container port for loopback
-// publication: HTTP + TCP interfaces on tcp plus UDP interfaces on udp,
-// plus an explicit TCP readiness port. Each publishes on 127.0.0.1
-// ephemeral (never public). Deduplicated by (protocol, container port).
+func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {
+	created, err := s.deps.Runtime.CreateContainer(ctx, config)
+	if err == nil {
+		return created, nil
+	}
+	if len(config.Binds) > 0 {
+		// A CreateContainer failure is a runtime error, not a bind policy
+		// violation: policy was already enforced by resolveServiceBinds
+		// before this call. Runtime errors may embed the resolved host
+		// path, so redact the whole cause instead of mislabelling it and
+		// keep it out of operation journals and API/CLI responses.
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative mounts: runtime error redacted", service)
+	}
+	return nil, fmt.Errorf("deployment: create container: %w", err)
+}
+
+// backendPorts collects every interface container port for loopback
+// publication: public HTTP + TCP interfaces on tcp plus UDP interfaces on
+// udp, plus an explicit TCP readiness port. Internal HTTP ports are
+// excluded: they are reached only over the private network and must keep
+// no host binding. Each publish is on 127.0.0.1 ephemeral (never public).
+// Deduplicated by (protocol, container port).
 func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 	seen := map[domain.ContainerBackendPort]struct{}{}
 	var ports []domain.ContainerBackendPort
@@ -643,6 +698,9 @@ func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 		}
 	}
 	for _, h := range spec.HTTP {
+		if !h.IsPublic() {
+			continue
+		}
 		add(h.Port, domain.NetworkProtocolTCP)
 	}
 	for _, t := range spec.TCP {
@@ -653,8 +711,12 @@ func backendPorts(spec domain.AppService) []domain.ContainerBackendPort {
 	}
 	// Readiness probes are TCP-only (validation rejects UDP-only
 	// services with tcp/http readiness); the readiness port matches a
-	// declared TCP container port.
-	add(spec.Readiness.Port, domain.NetworkProtocolTCP)
+	// declared TCP container port. An internal-only port is never
+	// published, so readiness metadata cannot create a host binding for
+	// it.
+	if spec.Readiness.Port > 0 && !spec.InternallyOnlyPort(spec.Readiness.Port) {
+		add(spec.Readiness.Port, domain.NetworkProtocolTCP)
+	}
 	sort.Slice(ports, func(i, j int) bool {
 		if ports[i].Protocol != ports[j].Protocol {
 			return ports[i].Protocol < ports[j].Protocol
@@ -788,25 +850,24 @@ func (s *Service) pullImage(ctx context.Context, image string) (string, error) {
 	if s.deps.Registry.Domain == "" {
 		return image, nil
 	}
-	host, _, _ := strings.Cut(image, "/")
-	if host != s.deps.Registry.Domain {
+	if !s.deps.ImagePolicy.IsInstallationImage(image) {
 		if err := s.deps.Runtime.PullImage(ctx, image); err != nil {
 			return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
 		}
 		return image, nil
 	}
-	if s.deps.Registry.Username == "" {
-		if err := s.deps.Runtime.PullImage(ctx, image); err != nil {
-			return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
-		}
-		return image, nil
+	_, remainder, ok := strings.Cut(image, "/")
+	if !ok || !strings.Contains(remainder, "@sha256:") {
+		return "", fmt.Errorf("deployment: installation image must include an exact sha256 digest: %w", domain.ErrAppImageNotAllowed)
 	}
-	pullImage := image
-	if s.deps.Registry.PullAddress != "" {
-		pullImage = s.deps.Registry.PullAddress + strings.TrimPrefix(image, s.deps.Registry.Domain)
+	pullImage := s.deps.Registry.PullAddress + "/" + remainder
+	request := domain.ImagePullRequest{Reference: pullImage, Username: s.deps.Registry.Username, Password: s.deps.Registry.Password, Transport: domain.ImagePullTransportHTTP}
+	if err := s.deps.Runtime.PullImageWithOptions(ctx, request); err != nil {
+		return "", fmt.Errorf("deployment: pull installation image %q via configured local HTTP transport %q: %w", image, s.deps.Registry.PullAddress, err)
 	}
-	if err := s.deps.Runtime.PullImageWithAuth(ctx, pullImage, s.deps.Registry.Username, s.deps.Registry.Password); err != nil {
-		return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
+	digest := remainder[strings.LastIndex(remainder, "@")+1:]
+	if err := s.deps.Runtime.VerifyImageDigest(ctx, pullImage, digest); err != nil {
+		return "", fmt.Errorf("deployment: verify pulled installation image %q: %w", image, err)
 	}
 	return pullImage, nil
 }
@@ -901,6 +962,9 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 		}
 	}
 	active.Converged = converged
+	if converged {
+		active.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	}
 	if err := s.deps.State.SaveActive(ctx, active); err != nil {
 		return fmt.Errorf("deployment: publish active: %w", err)
 	}
@@ -976,7 +1040,7 @@ func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedServi
 	if ownership.Services == nil {
 		ownership.Services = map[string]domain.AppServiceRecovery{}
 	}
-	ownership.Services[p.spec.Name] = domain.AppServiceRecovery{RestartUnsafe: len(p.spec.Volumes) > 0}
+	ownership.Services[p.spec.Name] = domain.AppServiceRecovery{RestartUnsafe: singleWriterRequired(p.spec)}
 	if err := s.deps.State.SaveOwnership(ctx, ownership); err != nil {
 		return fmt.Errorf("deployment: record ownership: %w", err)
 	}

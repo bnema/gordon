@@ -66,6 +66,18 @@ func (s *AppServiceImpl) WithImagePolicy(policy domain.ImageSourcePolicy) *AppSe
 	return s
 }
 
+// WithBindPolicies supplies the administrative bind policies used at apply time.
+func (s *AppServiceImpl) WithBindPolicies(policies map[string]domain.AppBindPolicy) *AppServiceImpl {
+	s.core.SetBindPolicies(policies)
+	return s
+}
+
+// SetBindPolicies atomically replaces the administrative bind policies. It is
+// safe to call from a config reload while applies are in flight.
+func (s *AppServiceImpl) SetBindPolicies(policies map[string]domain.AppBindPolicy) {
+	s.core.SetBindPolicies(policies)
+}
+
 var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.
@@ -337,6 +349,62 @@ func (s *AppServiceImpl) OperationByKey(ctx context.Context, app, key string) (*
 		return nil, err
 	}
 	return &op, nil
+}
+
+// ListSecrets implements in.AppService without reading secret values. A
+// name with no live identity is not found; ownership-only apps remain live
+// and report their registrations (possibly none).
+func (s *AppServiceImpl) ListSecrets(ctx context.Context, app, service string) ([]in.AppSecretMetadata, error) {
+	live, err := s.store.AppExists(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("list app secrets: check app %q: %w", app, err)
+	}
+	if !live {
+		return nil, fmt.Errorf("apps: app %q does not exist: %w", app, domain.ErrAppNotFound)
+	}
+	entries := []in.AppSecretMetadata{}
+	desired, ok, err := s.store.LoadDesired(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("list app secrets: load desired for %q: %w", app, err)
+	}
+	if ok {
+		for _, svc := range desired.Spec.Services {
+			entries = appendSecretMetadata(entries, service, svc.Name, svc.Secrets, "desired")
+		}
+	}
+	active, ok, err := s.store.LoadActive(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("list app secrets: load active for %q: %w", app, err)
+	}
+	if ok {
+		for svcName, svc := range active.Services {
+			entries = appendSecretMetadata(entries, service, svcName, svc.Spec.Secrets, "active")
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.Service != b.Service {
+			return a.Service < b.Service
+		}
+		if a.Key != b.Key {
+			return a.Key < b.Key
+		}
+		if a.Source != b.Source {
+			return a.Source < b.Source
+		}
+		return a.Name < b.Name
+	})
+	return entries, nil
+}
+
+func appendSecretMetadata(entries []in.AppSecretMetadata, filter, service string, secrets map[string]string, source string) []in.AppSecretMetadata {
+	if filter != "" && filter != service {
+		return entries
+	}
+	for key, name := range secrets {
+		entries = append(entries, in.AppSecretMetadata{Service: service, Key: key, Name: name, Source: source, Presence: "unknown"})
+	}
+	return entries
 }
 
 // SetSecrets implements in.AppService.

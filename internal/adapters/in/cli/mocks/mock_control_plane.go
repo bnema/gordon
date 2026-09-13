@@ -760,6 +760,80 @@ func (_c *MockControlPlane_GetTrafficStatus_Call) RunAndReturn(run func(ctx cont
 	return _c
 }
 
+// ListAppSecrets provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) ListAppSecrets(ctx context.Context, app string, service string) ([]dto.AppSecretMetadataDTO, error) {
+	ret := _mock.Called(ctx, app, service)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListAppSecrets")
+	}
+
+	var r0 []dto.AppSecretMetadataDTO
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) ([]dto.AppSecretMetadataDTO, error)); ok {
+		return returnFunc(ctx, app, service)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) []dto.AppSecretMetadataDTO); ok {
+		r0 = returnFunc(ctx, app, service)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]dto.AppSecretMetadataDTO)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_ListAppSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListAppSecrets'
+type MockControlPlane_ListAppSecrets_Call struct {
+	*mock.Call
+}
+
+// ListAppSecrets is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+func (_e *MockControlPlane_Expecter) ListAppSecrets(ctx any, app any, service any) *MockControlPlane_ListAppSecrets_Call {
+	return &MockControlPlane_ListAppSecrets_Call{Call: _e.mock.On("ListAppSecrets", ctx, app, service)}
+}
+
+func (_c *MockControlPlane_ListAppSecrets_Call) Run(run func(ctx context.Context, app string, service string)) *MockControlPlane_ListAppSecrets_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_ListAppSecrets_Call) Return(appSecretMetadataDTOs []dto.AppSecretMetadataDTO, err error) *MockControlPlane_ListAppSecrets_Call {
+	_c.Call.Return(appSecretMetadataDTOs, err)
+	return _c
+}
+
+func (_c *MockControlPlane_ListAppSecrets_Call) RunAndReturn(run func(ctx context.Context, app string, service string) ([]dto.AppSecretMetadataDTO, error)) *MockControlPlane_ListAppSecrets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListApps provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) ListApps(ctx context.Context) ([]dto.AppSummaryDTO, error) {
 	ret := _mock.Called(ctx)

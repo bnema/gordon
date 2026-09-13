@@ -196,7 +196,10 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 }
 
 // Restart restarts from pinned digests without re-resolution. Empty
-// service means all services in sorted order.
+// service means all services in sorted order. HTTP-only, volume-less
+// services restart with zero downtime: the old container keeps serving
+// until the candidate passes readiness and traffic has moved to it.
+// HTTP-with-volume, TCP/UDP, and mixed services restart in place.
 func (s *Service) Restart(ctx context.Context, app, service, opID string) (*LifecycleResult, error) {
 	release, err := s.acquireAppContext(ctx, app)
 	if err != nil {
@@ -241,7 +244,13 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	var failures []string
 	for _, name := range names {
 		eff := active.Services[name]
-		step, svcResult := s.restartOneService(ctx, app, name, eff)
+		var step domain.AppOperationStep
+		var svcResult ServiceResult
+		if httpEligible(eff.Spec) {
+			step, svcResult = s.restartOneHTTPService(ctx, app, name, eff, op.Op)
+		} else {
+			step, svcResult = s.restartOneService(ctx, app, name, eff)
+		}
 		op.Steps = append(op.Steps, step)
 		result.Services[name] = svcResult
 		if svcResult.Result != "deployed" {
@@ -263,6 +272,129 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	return result, nil
 }
 
+// restartOneHTTPService restarts one HTTP-only, volume-less service with
+// zero downtime, gated by the same httpEligible rule as deploy. The old
+// container keeps ACTIVE and serving while a candidate is created and
+// started from the pinned ACTIVE digest and revision, and readiness is
+// awaited against its fresh loopback binds. Only then is ACTIVE narrowly
+// repointed at the candidate (carrying the restart operation identity and
+// the unchanged revision, so convergence metadata stays intact), traffic
+// applied, and the old generation drained and retired.
+//
+// Every failure before the repoint leaves the old generation ACTIVE and
+// serving and removes only the candidate: the restart never trades a
+// working generation for an unverified one.
+func (s *Service) restartOneHTTPService(ctx context.Context, app, name string, eff domain.AppEffectiveService, opID string) (domain.AppOperationStep, ServiceResult) {
+	step := domain.AppOperationStep{ID: "service." + name + ".restart", State: domain.AppStepPending, Before: eff.Container}
+	result := ServiceResult{Result: "failed", Before: eff.Container, After: eff.Container}
+	fail := func(msg string) (domain.AppOperationStep, ServiceResult) {
+		step.State = domain.AppStepFailed
+		step.Error = msg
+		result.Result = "failed"
+		result.Error = msg
+		return step, result
+	}
+	if eff.Container == "" {
+		result.After = ""
+		return fail("no active container")
+	}
+	// A durably inhibited generation is never revived, not even as the
+	// candidate's predecessor: its replacement may already own its data.
+	if err := s.refuseInhibitedRestart(ctx, app, name, eff.Container); err != nil {
+		return fail(err.Error())
+	}
+	rev, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
+	if err != nil {
+		return fail(err.Error())
+	}
+	runtimeImage, err := s.preflightImage(ctx, eff.Spec.Image, eff.Digest)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return fail(err.Error())
+	}
+	pinned := pinnedService{
+		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage,
+		appEnv:         maps.Clone(rev.Spec.Env),
+		appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
+		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
+	}
+	created, binds, udpBinds, err := s.createAndStart(ctx, app, eff.EffectiveRevision, pinned, opID)
+	if err != nil {
+		return fail(err.Error())
+	}
+	if err := s.waitServiceReady(ctx, app, created.ID, httpReadiness(eff.Spec), binds); err != nil {
+		// The old generation is still ACTIVE and serving: capture redacted
+		// diagnostics while the failed candidate exists, then remove only
+		// that candidate.
+		tail := s.redactDiagnostics(ctx, app, pinned, s.logTail(ctx, created.ID))
+		step.State = domain.AppStepFailed
+		step.Error = err.Error()
+		step.Diagnostics = tail
+		result.Error = err.Error()
+		result.Diagnostics = tail
+		result.CleanupWarnings = s.retireCandidate(ctx, app, name, created.ID)
+		return step, result
+	}
+	result = ServiceResult{
+		Result:            "deployed",
+		EffectiveRevision: eff.EffectiveRevision,
+		Before:            eff.Container,
+		After:             created.ID,
+		BackendBinds:      binds,
+		UDPBackendBinds:   udpBinds,
+	}
+	// Narrow ACTIVE repoint: only this service's effective entry moves.
+	// ActivatedBy is the restart operation, ActivatedAt is refreshed, and
+	// the pinned revision is unchanged, so ConvergedRevision/Converged
+	// stay truthful for the app.
+	if err := s.publishService(ctx, app, eff.EffectiveRevision, pinned, result, opID); err != nil {
+		// Publication can fail before ACTIVE is written (the candidate was
+		// never published, so remove it and keep the old generation
+		// serving) or after it is written (a post-save failure such as
+		// ownership persistence: ACTIVE now names the candidate, which must
+		// keep running). An unprovable publication state keeps the
+		// candidate: an unconfirmed leftover is safer than retiring the
+		// live generation.
+		if s.candidateUnpublished(ctx, app, name, created.ID) {
+			result.CleanupWarnings = append(result.CleanupWarnings, s.retireCandidate(ctx, app, name, created.ID)...)
+		}
+		return fail(err.Error())
+	}
+	step.After = created.ID
+	// Traffic is applied before the old generation drains: the proxy only
+	// switches to the candidate's verified loopback binds at the rebuild,
+	// and only a routable candidate may cost the old generation its drain
+	// window. A traffic failure retains the old container for the next
+	// convergence pass.
+	if err := s.refreshTraffic(ctx, app); err != nil {
+		if inhibitErr := s.inhibitRecovery(ctx, app, name, eff.Container, domain.AppInhibitRetirementPending, opID); inhibitErr != nil {
+			return fail(errors.Join(err, inhibitErr).Error())
+		}
+		return fail(err.Error())
+	}
+	drainWithDeadline(ctx, eff.Spec.StopGrace)
+	retired := s.retireContainer(ctx, app, retireOptions{Service: name, Grace: serviceStopGrace(eff)}, eff.Container)
+	result.CleanupWarnings = append(result.CleanupWarnings, retired.Warnings...)
+	step.State = domain.AppStepSucceeded
+	step.After = created.ID
+	return step, result
+}
+
+// candidateUnpublished reports whether a candidate that failed
+// publication is provably not the app's current generation. It is only
+// true when ACTIVE loads and designates some other container for the
+// service: a candidate whose state cannot be read is treated as possibly
+// published and retained, never removed.
+func (s *Service) candidateUnpublished(ctx context.Context, app, service, containerID string) bool {
+	active, ok, err := s.deps.State.LoadActive(ctx, app)
+	if err != nil || !ok {
+		return false
+	}
+	return active.Services[service].Container != containerID
+}
+
 // restartOneService withdraws one service, restarts its exact container,
 // re-inspects its binds, and verifies readiness before it may be published
 // again. Every failure leaves the service withdrawn with its recorded binds
@@ -280,6 +412,11 @@ func (s *Service) restartOneService(ctx context.Context, app, name string, eff d
 		result.After = ""
 		return fail("no active container")
 	}
+	// Fail closed before any runtime mutation if a bind's policy was
+	// revoked or became invalid since ACTIVE was published.
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return fail(err.Error())
+	}
 	if err := s.refuseInhibitedRestart(ctx, app, name, eff.Container); err != nil {
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
@@ -296,12 +433,12 @@ func (s *Service) restartOneService(ctx context.Context, app, name string, eff d
 	// Ephemeral loopback binds are not guaranteed stable across a runtime
 	// restart: re-inspect before probing so the proxy never dials a stale
 	// bind.
-	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff)
+	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
@@ -538,6 +675,12 @@ func (s *Service) reconcileBootApp(ctx context.Context, app string) error {
 // step inline (false, reserved for future fallible publishes).
 func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name string, eff domain.AppEffectiveService, step *domain.AppOperationStep, result *LifecycleResult) bool {
 	if eff.Container != "" {
+		// Fail closed before any runtime mutation if a bind's policy was
+		// revoked or became invalid since ACTIVE was published.
+		if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
+			return true
+		}
 		// Boot recovery refuses a generation whose recovery is durably
 		// inhibited: a replacement may already have written to its
 		// volume, so reviving this ID could corrupt the newer data.
@@ -574,8 +717,15 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
 		return true
 	}
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		step.State = domain.AppStepFailed
+		step.Error = err.Error()
+		result.Services[name] = ServiceResult{Result: "failed", Before: eff.Container, Error: err.Error()}
+		return true
+	}
 	pinned := pinnedService{
 		name: name, spec: eff.Spec, digest: eff.Digest, runtimeImage: runtimeImage, appEnv: maps.Clone(rev.Spec.Env),
+		appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 		sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, name),
 	}
 	svcResult, _ := s.deployService(ctx, app, rev.Revision, pinned, opID, eff.Container, serviceStopGrace(eff))
@@ -629,12 +779,12 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}
-	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff)
+	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}
-	if err := waitServiceReadyWithDeps(ctx, s.probeDeps(), eff.Container, eff.Spec, binds); err != nil {
+	if err := s.waitServiceReady(ctx, app, eff.Container, eff.Spec, binds); err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return true
 	}
@@ -648,12 +798,12 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 }
 
 // refreshBackendBinds re-inspects the loopback publishes of a restarted
-// container and persists them to the active record when they changed.
+// container and persists them to the current active record when needed.
 // Ephemeral binds may shift across runtime restarts; the proxy must
 // never dial the stale recorded bind. Uses the non-destructive
 // inspectBackendBinds: an existing ACTIVE container is never stopped
 // or removed by re-inspection.
-func (s *Service) refreshBackendBinds(ctx context.Context, app, name string, eff domain.AppEffectiveService) (map[int]int, map[int]int, error) {
+func (s *Service) refreshBackendBinds(ctx context.Context, app, name string, eff domain.AppEffectiveService, forcePersist bool) (map[int]int, map[int]int, error) {
 	ports := backendPorts(eff.Spec)
 	if len(ports) == 0 {
 		return nil, nil, nil
@@ -662,22 +812,40 @@ func (s *Service) refreshBackendBinds(ctx context.Context, app, name string, eff
 	if err != nil {
 		return nil, nil, err
 	}
-	if !equalBinds(binds, eff.BackendBinds) || !equalBinds(udpBinds, eff.UDPBackendBinds) {
-		active, ok, err := s.deps.State.LoadActive(ctx, app)
-		if err != nil {
-			return nil, nil, fmt.Errorf("deployment: reload active for bind refresh: %w", err)
-		}
-		if !ok {
-			return nil, nil, fmt.Errorf("deployment: app %q has no active state: %w", app, domain.ErrAppStateConflict)
-		}
-		eff.BackendBinds = binds
-		eff.UDPBackendBinds = udpBinds
-		active.Services[name] = eff
-		if err := s.deps.State.SaveActive(ctx, active); err != nil {
-			return nil, nil, fmt.Errorf("deployment: persist refreshed binds: %w", err)
-		}
+	if !forcePersist && equalBinds(binds, eff.BackendBinds) && equalBinds(udpBinds, eff.UDPBackendBinds) {
+		return binds, udpBinds, nil
+	}
+	active, ok, err := s.deps.State.LoadActive(ctx, app)
+	if err != nil {
+		return nil, nil, fmt.Errorf("deployment: reload active for bind refresh: %w", err)
+	}
+	if !ok {
+		return nil, nil, fmt.Errorf("deployment: app %q has no active state: %w", app, domain.ErrAppStateConflict)
+	}
+	if err := s.persistBackendBinds(ctx, active, name, eff, binds, udpBinds, forcePersist); err != nil {
+		return nil, nil, err
 	}
 	return binds, udpBinds, nil
+}
+
+func (s *Service) persistBackendBinds(ctx context.Context, active domain.AppActive, name string, eff domain.AppEffectiveService, binds, udpBinds map[int]int, force bool) error {
+	current, exists := active.Services[name]
+	if exists && current.Container != eff.Container {
+		return fmt.Errorf("deployment: active generation changed during bind refresh: %w", domain.ErrAppStateConflict)
+	}
+	if !force && exists && equalBinds(binds, current.BackendBinds) && equalBinds(udpBinds, current.UDPBackendBinds) {
+		return nil
+	}
+	if !exists {
+		current = eff
+	}
+	current.BackendBinds = binds
+	current.UDPBackendBinds = udpBinds
+	active.Services[name] = current
+	if err := s.deps.State.SaveActive(ctx, active); err != nil {
+		return fmt.Errorf("deployment: persist refreshed binds: %w", err)
+	}
+	return nil
 }
 
 // failServiceStep records a failed service step and withdraws its

@@ -56,6 +56,9 @@ type AppService interface {
 	// client-supplied idempotency key.
 	OperationByKey(ctx context.Context, app, key string) (*domain.AppOperation, error)
 
+	// ListSecrets returns metadata-only desired and active registrations.
+	ListSecrets(ctx context.Context, app, service string) ([]AppSecretMetadata, error)
+
 	// SetSecrets writes secret values for pre-registered names in one
 	// service. service is required; every key must already exist in
 	// desired or active state.
@@ -66,6 +69,15 @@ type AppService interface {
 }
 
 // AppApplyResult describes one accepted (or no-op) apply.
+// AppSecretMetadata is a secret registration without its value.
+type AppSecretMetadata struct {
+	Service  string
+	Key      string
+	Name     string
+	Source   string
+	Presence string
+}
+
 type AppApplyResult struct {
 	App               string
 	FormerRevision    string

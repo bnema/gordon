@@ -17,7 +17,7 @@ func newConfigCmd() *cobra.Command {
 		Short: "Inspect Gordon configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigValidateCmd())
 
 	return cmd
 }

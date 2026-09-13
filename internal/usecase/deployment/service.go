@@ -10,6 +10,7 @@ import (
 	"maps"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -97,6 +98,11 @@ type Service struct {
 	// generation, so a native restart is detected without restarting
 	// the workload ourselves.
 	executions executionTracker
+	// bindMu guards bindPolicies. A config reload replaces the whole
+	// map atomically; deploy paths read the current map without holding
+	// the lock.
+	bindMu       sync.RWMutex
+	bindPolicies map[string]domain.AppBindPolicy
 }
 
 // NewService creates the deployment engine. All deps are required;
@@ -121,6 +127,56 @@ func NewService(deps Deps, log zerowrap.Logger) *Service {
 func (s *Service) WithGCBarrier(barrier out.GCBarrier) *Service {
 	s.barrier = barrier
 	return s
+}
+
+// WithBindPolicies supplies the initial administrative bind policies.
+func (s *Service) WithBindPolicies(policies map[string]domain.AppBindPolicy) *Service {
+	s.SetBindPolicies(policies)
+	return s
+}
+
+// SetBindPolicies atomically replaces the administrative bind policies used
+// to authorize service binds. The map is copied so later caller mutation
+// cannot race an in-flight deploy.
+func (s *Service) SetBindPolicies(policies map[string]domain.AppBindPolicy) {
+	copied := make(map[string]domain.AppBindPolicy, len(policies))
+	for name, policy := range policies {
+		copied[name] = policy
+	}
+	s.bindMu.Lock()
+	s.bindPolicies = copied
+	s.bindMu.Unlock()
+}
+
+// snapshotBindPolicies returns the current policy map. SetBindPolicies never
+// mutates a published map, so the snapshot stays safe after the lock drops.
+func (s *Service) snapshotBindPolicies() map[string]domain.AppBindPolicy {
+	s.bindMu.RLock()
+	defer s.bindMu.RUnlock()
+	return s.bindPolicies
+}
+
+// resolveServiceBinds resolves every declared bind against the current
+// administrative policies into ephemeral runtime binds. Errors name only the
+// app, service, and mount: host source paths never appear.
+func (s *Service) resolveServiceBinds(app string, svc domain.AppService) ([]domain.ContainerBind, error) {
+	if len(svc.Binds) == 0 {
+		return nil, nil
+	}
+	policies := s.snapshotBindPolicies()
+	resolved := make([]domain.ContainerBind, 0, len(svc.Binds))
+	for _, bind := range svc.Binds {
+		policy, ok := policies[bind.Name]
+		if !ok {
+			return nil, fmt.Errorf("deployment: app %q service %q mount %q: no administrative mount policy configured: %w", app, svc.Name, bind.Name, domain.ErrBindPolicy)
+		}
+		r, err := policy.ResolveAppBind(app, svc.Name, bind)
+		if err != nil {
+			return nil, fmt.Errorf("deployment: app %q service %q mount %q: refused by administrative mount policy: %w", app, svc.Name, bind.Name, domain.ErrBindPolicy)
+		}
+		resolved = append(resolved, domain.ContainerBind(r))
+	}
+	return resolved, nil
 }
 
 // acquireAppContext takes the GC shared lease first and the per-app
@@ -256,6 +312,7 @@ type pinnedService struct {
 	digest       string
 	runtimeImage string
 	appEnv       map[string]string
+	appNetworks  []domain.AppSharedNetwork
 	// sharedNetworks are the declared shared-network memberships this
 	// service joins. The private incarnation network is derived from the
 	// app UUID at create time so recovery and deploy agree.
@@ -303,7 +360,7 @@ func (s *Service) preflightLocked(ctx context.Context, input DeployInput) ([]pin
 		return nil, nil, false, err
 	}
 	if input.Service != "" {
-		if err := s.checkConverged(ctx, input.App, rev); err != nil {
+		if err := s.checkConverged(ctx, input.App, input.Service, rev); err != nil {
 			return nil, nil, false, err
 		}
 	}
@@ -431,8 +488,10 @@ func (s *Service) requireKnownApp(ctx context.Context, app string) error {
 	return nil
 }
 
-// checkConverged refuses service-targeted deploy on desired/effective divergence.
-func (s *Service) checkConverged(ctx context.Context, app string, rev domain.AppDesiredRevision) error {
+// checkConverged permits a targeted deploy when every desired/effective
+// difference belongs to that service. App-wide and other-service changes
+// must be deployed together so ACTIVE never combines incompatible specs.
+func (s *Service) checkConverged(ctx context.Context, app, service string, rev domain.AppDesiredRevision) error {
 	active, ok, err := s.deps.State.LoadActive(ctx, app)
 	if err != nil {
 		return err
@@ -440,29 +499,55 @@ func (s *Service) checkConverged(ctx context.Context, app string, rev domain.App
 	if !ok {
 		return fmt.Errorf("deployment: app %q was never deployed, targeted deploy refused: %w", app, domain.ErrAppStateConflict)
 	}
-	if !active.Converged || active.ConvergedRevision != rev.Revision {
-		return fmt.Errorf(
-			"%w: service-targeted deploy refused, desired %s diverges from effective state",
-			domain.ErrAppStateConflict, rev.Revision,
-		)
+	if active.Converged && active.ConvergedRevision == rev.Revision {
+		return nil
 	}
-	return nil
+	diff := domain.DiffAppSpec(rev.Spec, effectiveAppSpec(active))
+	prefix := "service/" + service + "/"
+	if len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) > 0 {
+		for _, path := range diff.Changed {
+			if !strings.HasPrefix(path, prefix) {
+				return targetedDivergenceError(rev.Revision, path)
+			}
+		}
+		return nil
+	}
+	return targetedDivergenceError(rev.Revision, "application structure")
+}
+
+func effectiveAppSpec(active domain.AppActive) domain.AppSpec {
+	spec := domain.AppSpec{Name: active.App, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
+	for name, service := range active.Services {
+		effective := service.Spec
+		effective.Name = name
+		spec.Services = append(spec.Services, effective)
+	}
+	return spec
+}
+
+func targetedDivergenceError(revision, path string) error {
+	return fmt.Errorf("%w: service-targeted deploy refused, desired %s also changes %s", domain.ErrAppStateConflict, revision, path)
+}
+
+// selectPreflightServices copies and optionally narrows a revision's services.
+func selectPreflightServices(rev domain.AppDesiredRevision, onlyService string) ([]domain.AppService, error) {
+	services := append([]domain.AppService(nil), rev.Spec.Services...)
+	if onlyService == "" {
+		return services, nil
+	}
+	for _, svc := range services {
+		if svc.Name == onlyService {
+			return []domain.AppService{svc}, nil
+		}
+	}
+	return nil, fmt.Errorf("deployment: service %q not in revision %s: %w", onlyService, rev.Revision, domain.ErrAppStateConflict)
 }
 
 // preflightServices runs the five preflight gates in order. No mutation.
 func (s *Service) preflightServices(ctx context.Context, app string, rev domain.AppDesiredRevision, onlyService string) ([]pinnedService, error) {
-	services := append([]domain.AppService(nil), rev.Spec.Services...)
-	if onlyService != "" {
-		filtered := services[:0]
-		for _, svc := range services {
-			if svc.Name == onlyService {
-				filtered = append(filtered, svc)
-			}
-		}
-		if len(filtered) == 0 {
-			return nil, fmt.Errorf("deployment: service %q not in revision %s: %w", onlyService, rev.Revision, domain.ErrAppStateConflict)
-		}
-		services = filtered
+	services, err := selectPreflightServices(rev, onlyService)
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(services, func(i, j int) bool { return services[i].Name < services[j].Name })
 
@@ -495,8 +580,16 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		if err := s.checkImageVolumes(ctx, svc, runtimeImage); err != nil {
 			return nil, err
 		}
+		// Bind resolution stays a preflight gate: an unresolvable bind
+		// must fail before any workload mutation. The successful values
+		// are discarded because createAndStart re-resolves against the
+		// current policy immediately before the runtime mutation.
+		if _, err := s.resolveServiceBinds(app, svc); err != nil {
+			return nil, err
+		}
 		pinned = append(pinned, pinnedService{
 			name: svc.Name, spec: svc, digest: digest, runtimeImage: runtimeImage, appEnv: appEnv,
+			appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 			sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, svc.Name),
 		})
 	}
@@ -579,6 +672,11 @@ func (s *Service) checkImageVolumes(ctx context.Context, svc domain.AppService, 
 	mapped := map[string]struct{}{}
 	for _, vol := range svc.Volumes {
 		mapped[vol.Path] = struct{}{}
+	}
+	// Bind destinations also map image-declared volumes: a bind that
+	// mounts over an image VOLUME is an explicit operator mapping.
+	for _, bind := range svc.Binds {
+		mapped[bind.Path] = struct{}{}
 	}
 	for _, path := range declared {
 		if _, ok := mapped[path]; !ok {
