@@ -839,6 +839,27 @@ func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
 	return limits, nil
 }
 
+// appDeployEngine is the deployment-engine subset the daemon-owned app
+// service executes through. It mirrors the usecase's own port so the
+// composition root stays decoupled from engine internals.
+type appDeployEngine interface {
+	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
+	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
+	Start(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
+	Restart(ctx context.Context, app, service, opID string) (*deployment.LifecycleResult, error)
+	Remove(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
+}
+
+// newAppDaemonService builds the daemon-owned app administration service.
+// ctx is the daemon/supervisor lifecycle context: background deploy
+// executions derive from it and are cancelled by Shutdown during graceful
+// teardown. It is deliberately never an HTTP request context, so request
+// cancellation cannot abort an in-flight replacement.
+func newAppDaemonService(ctx context.Context, store out.AppState, deploy appDeployEngine, secrets out.SecretWriter, log zerowrap.Logger) *apps.AppServiceImpl {
+	return apps.NewAppServiceImpl(store, deploy, secrets, log).WithDaemonContext(ctx)
+}
+
 // initApps wires the single v2.50 app engine: bbolt state, image digests,
 // pass-backed secrets, deployment/lifecycle execution, and traffic
 // activation. The daemon is the sole app-state writer; CLI reaches the
@@ -909,7 +930,7 @@ func (si *serviceInit) initApps() error {
 		return err
 	}
 	si.svc.appDeploySvc.SetBindPolicies(mountPolicies)
-	appSvcImpl := apps.NewAppServiceImpl(store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
+	appSvcImpl := newAppDaemonService(si.ctx, store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
 		WithImagePolicy(imagePolicy).
@@ -3085,7 +3106,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	// so no new mutation can begin during shutdown.
 	localAdmin.Close()
 	registrySrvs := []*http.Server{registrySrv, internalRegistrySrv}
-	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appState, log)
+	gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appSvcImpl, svc.appState, log)
 	return nil
 }
 
@@ -3401,9 +3422,29 @@ func waitForShutdown(ctx context.Context, errChan <-chan error, reloadChan <-cha
 	}
 }
 
+// appAdministration is the daemon-owned application lifecycle torn down
+// during graceful shutdown: it refuses new background deploys, cancels
+// in-flight executions on the daemon context, and joins them.
+type appAdministration interface {
+	Shutdown(context.Context) error
+}
+
+// quiesceAppAdministration cancels and joins daemon-owned app work on the
+// bounded shutdown context. A shutdown error (the bound expiring while work
+// unwinds) is reported, never fatal: new executions are refused once
+// Shutdown runs.
+func quiesceAppAdministration(ctx context.Context, appAdmin appAdministration, log zerowrap.Logger) {
+	if appAdmin == nil {
+		return
+	}
+	if err := appAdmin.Shutdown(ctx); err != nil {
+		log.Warn().Err(err).Msg("app administration shutdown error")
+	}
+}
+
 // gracefulShutdown stops HTTP servers with a 30s timeout, then shuts down
 // the container service and cleans up runtime files.
-func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, appState out.AppState, log zerowrap.Logger) {
+func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server, containerSvc *container.Service, proxySvc *proxy.Service, pkiSvc *pkiusecase.Service, publicTLS in.PublicTLSService, trafficManager *trafficadapter.Manager, monitor *appMonitor, appAdmin appAdministration, appState out.AppState, log zerowrap.Logger) {
 	log.Info().Msg("shutting down Gordon...")
 
 	// Phase 0: stop periodic app recovery first and wait for any in-flight
@@ -3413,6 +3454,12 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
+
+	// Phase 0.5: quiesce daemon-owned app administration. New background
+	// deploys are refused and in-flight executions are cancelled on the
+	// daemon context and joined here — before traffic, runtime, or the app
+	// state store is torn down, so no execution can write to closed state.
+	quiesceAppAdministration(shutdownCtx, appAdmin, log)
 
 	// Phase 1: Stop ingress frontends (TLS, then proxy) — no new traffic accepted
 	for _, srv := range []*http.Server{tlsSrv, proxySrv} {
