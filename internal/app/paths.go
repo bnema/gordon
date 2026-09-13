@@ -23,6 +23,11 @@ func DefaultDataDir() string {
 func ConfigureViper(v *viper.Viper, configPath string) {
 	if configPath != "" {
 		v.SetConfigFile(configPath)
+		switch filepath.Ext(configPath) {
+		case ".json", ".yaml", ".yml", ".toml":
+		default:
+			v.SetConfigType("toml")
+		}
 	} else {
 		v.SetConfigName("gordon")
 		v.SetConfigType("toml")

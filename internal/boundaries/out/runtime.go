@@ -40,6 +40,7 @@ type ContainerRuntime interface {
 
 	// Image operations
 	PullImage(ctx context.Context, image string) error
+	PullImageWithOptions(ctx context.Context, request domain.ImagePullRequest) error
 	PullImageWithAuth(ctx context.Context, image, username, password string) error
 	TagImage(ctx context.Context, sourceRef, targetRef string) error
 	UntagImage(ctx context.Context, imageRef string) error
@@ -81,6 +82,7 @@ type ContainerRuntime interface {
 
 	// Image identity
 	GetImageID(ctx context.Context, imageRef string) (string, error)
+	VerifyImageDigest(ctx context.Context, imageRef, digest string) error
 
 	// In-container operations
 	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)

@@ -20,6 +20,7 @@ var (
 	Version   = "dev"
 	Commit    = "unknown"
 	BuildDate = "unknown"
+	Dirty     = "unknown"
 
 	// Global flags for remote targeting
 	remoteFlag      string
@@ -229,6 +230,9 @@ func newVersionCmd() *cobra.Command {
 			if err := cliWriteLine(out, cliRenderMeta("Build Date:", BuildDate)); err != nil {
 				return err
 			}
+			if err := cliWriteLine(out, cliRenderMeta("Dirty:", Dirty)); err != nil {
+				return err
+			}
 			return nil
 		},
 	}
@@ -312,8 +316,9 @@ func runProcessLogs(ctx context.Context, cp ControlPlane, follow bool, lines int
 }
 
 // SetVersionInfo sets the version information for the CLI.
-func SetVersionInfo(version, commit, date string) {
+func SetVersionInfo(version, commit, date, dirty string) {
 	Version = version
 	Commit = commit
 	BuildDate = date
+	Dirty = dirty
 }

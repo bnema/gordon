@@ -621,6 +621,11 @@ func (s *Service) publishRecoveredService(ctx context.Context, app, name string,
 // re-inspected: if native restart policy already revived it, no failure
 // is charged and no second restart is issued.
 func (s *Service) startRecovered(serviceCtx context.Context, app, name string, eff domain.AppEffectiveService, key recoveryKey) (bool, error) {
+	// Fail closed before mutating the runtime if a bind's policy was
+	// revoked or became invalid since ACTIVE was published.
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return false, err
+	}
 	if err := s.deps.Runtime.StartContainer(serviceCtx, eff.Container); err != nil {
 		if errors.Is(err, domain.ErrContainerNotFound) {
 			s.backoff.forget(key)
@@ -667,6 +672,11 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	}
 	if !s.backoff.allow(key) {
 		return false, false, nil
+	}
+	// Fail closed before mutating the runtime if a bind's policy was
+	// revoked or became invalid since ACTIVE was published.
+	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return false, false, err
 	}
 	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil {
 		s.backoff.recordFailure(key)

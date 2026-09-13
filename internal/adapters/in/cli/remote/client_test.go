@@ -379,6 +379,16 @@ func TestParseErrorResponse_ReturnsHTTPError(t *testing.T) {
 	assert.Equal(t, "insufficient scope", httpErr.Body)
 }
 
+func TestParseErrorResponse_AppErrorMessage(t *testing.T) {
+	resp := &http.Response{StatusCode: 400, Status: "400 Bad Request"}
+	err := parseErrorResponse(resp, []byte(`{"error":"invalid-manifest","message":"invalid app manifest: service \"metrics\" readiness.port 9090 matches no declared container port"}`))
+
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, `invalid app manifest: service "metrics" readiness.port 9090 matches no declared container port`, httpErr.Body)
+	assert.Contains(t, err.Error(), `service "metrics" readiness.port 9090`)
+}
+
 func TestParseErrorResponse_DeployFailureFields(t *testing.T) {
 	resp := &http.Response{
 		StatusCode: 500,

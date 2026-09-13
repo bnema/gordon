@@ -340,12 +340,21 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	return s.deployInterrupted(ctx, app, revision, p, opID, before, beforeGrace)
 }
 
-// httpEligible reports HTTP-only services without volumes.
+// httpEligible reports HTTP-only services without volumes or binds. A bind
+// (especially a writable one) is treated like a persistent volume: two
+// generations must never serve concurrently.
 func httpEligible(spec domain.AppService) bool {
-	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 {
+	if len(spec.HTTP) == 0 || len(spec.TCP) > 0 || len(spec.UDP) > 0 || len(spec.Volumes) > 0 || len(spec.Binds) > 0 {
 		return false
 	}
 	return true
+}
+
+// singleWriterRequired reports services that must never have two generations
+// running concurrently. Persistent volumes and any bind (especially a
+// writable one) may be written by both, so they are treated identically.
+func singleWriterRequired(spec domain.AppService) bool {
+	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
 }
 
 // deployHTTP keeps the old container serving until the replacement passes
@@ -419,13 +428,19 @@ func retireContainerID(before, after string) string {
 // the replacement. Volume-owning failures never restart the old image:
 // the replacement may already have written data.
 func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration) (ServiceResult, bool) {
+	// Revalidate the current authorization and source before inhibiting or
+	// retiring the serving generation. A reload between preflight and this
+	// service step must fail without mutating the existing workload.
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err), true
+	}
 	// A volume-owning replacement may write while the old generation
 	// still exists and could be revived by native restart policy.
 	// Inhibit that generation durably BEFORE the write can happen, so
 	// boot or periodic recovery can never restart the old writer on
 	// top of the new one. Cleared once the safe generation is
 	// published (publishService) or the operator removes the app.
-	inhibited := before != "" && len(p.spec.Volumes) > 0
+	inhibited := before != "" && singleWriterRequired(p.spec)
 	if inhibited {
 		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
 			return s.failResult(revision, before, "", err), true
@@ -457,7 +472,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 			EffectiveRevision: revision,
 			Before:            before,
 			After:             created.ID,
-			RestartUnsafe:     len(p.spec.Volumes) > 0,
+			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
 			CleanupWarnings:   cleanup,
@@ -468,7 +483,7 @@ func (s *Service) deployInterrupted(ctx context.Context, app, revision string, p
 		EffectiveRevision: revision,
 		Before:            before,
 		After:             created.ID,
-		RestartUnsafe:     len(p.spec.Volumes) > 0,
+		RestartUnsafe:     singleWriterRequired(p.spec),
 		BackendBinds:      binds,
 		UDPBackendBinds:   udpBinds,
 	}, true
@@ -540,6 +555,13 @@ func volumeProvenanceLabels(app, appID, service, revision string) map[string]str
 // reconciles intent at boot and in the monitor (accepted decision:
 // native runtime restarts plus daemon reconciliation).
 func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string) (*domain.Container, map[int]int, map[int]int, error) {
+	// Re-resolve binds from the current policy immediately before any
+	// runtime mutation: a bind revoked since preflight must fail here,
+	// before volume ownership or container creation.
+	resolvedBinds, err := s.resolveServiceBinds(app, p.spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	env, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
 		return nil, nil, nil, err
@@ -594,6 +616,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		Entrypoint:      append([]string(nil), p.spec.Command...),
 		Volumes:         volumes,
 		ReadOnlyVolumes: readOnlyVolumes,
+		Binds:           resolvedBinds,
 		Labels:          appLabels(app, p.spec.Name, revision),
 		AutoRemove:      false,
 		RestartPolicy:   domain.RestartPolicyAlways,
@@ -605,9 +628,9 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		NanoCPUs:        s.deps.Limits.NanoCPUs,
 		PidsLimit:       s.deps.Limits.PidsLimit,
 	}
-	created, err := s.deps.Runtime.CreateContainer(ctx, config)
+	created, err := s.createContainer(ctx, p.name, config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("deployment: create container: %w", err)
+		return nil, nil, nil, err
 	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
@@ -623,6 +646,19 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		return nil, nil, nil, err
 	}
 	return created, binds, udpBinds, nil
+}
+
+func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {
+	created, err := s.deps.Runtime.CreateContainer(ctx, config)
+	if err == nil {
+		return created, nil
+	}
+	if len(config.Binds) > 0 {
+		// Runtime errors may contain the resolved host path. Keep it out of
+		// operation journals and ordinary API/CLI responses.
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative mounts: %w", service, domain.ErrBindPolicy)
+	}
+	return nil, fmt.Errorf("deployment: create container: %w", err)
 }
 
 // backendPublishes collects every interface container port for loopback
@@ -788,25 +824,24 @@ func (s *Service) pullImage(ctx context.Context, image string) (string, error) {
 	if s.deps.Registry.Domain == "" {
 		return image, nil
 	}
-	host, _, _ := strings.Cut(image, "/")
-	if host != s.deps.Registry.Domain {
+	if !s.deps.ImagePolicy.IsInstallationImage(image) {
 		if err := s.deps.Runtime.PullImage(ctx, image); err != nil {
 			return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
 		}
 		return image, nil
 	}
-	if s.deps.Registry.Username == "" {
-		if err := s.deps.Runtime.PullImage(ctx, image); err != nil {
-			return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
-		}
-		return image, nil
+	_, remainder, ok := strings.Cut(image, "/")
+	if !ok || !strings.Contains(remainder, "@sha256:") {
+		return "", fmt.Errorf("deployment: installation image must include an exact sha256 digest: %w", domain.ErrAppImageNotAllowed)
 	}
-	pullImage := image
-	if s.deps.Registry.PullAddress != "" {
-		pullImage = s.deps.Registry.PullAddress + strings.TrimPrefix(image, s.deps.Registry.Domain)
+	pullImage := s.deps.Registry.PullAddress + "/" + remainder
+	request := domain.ImagePullRequest{Reference: pullImage, Username: s.deps.Registry.Username, Password: s.deps.Registry.Password, Transport: domain.ImagePullTransportHTTP}
+	if err := s.deps.Runtime.PullImageWithOptions(ctx, request); err != nil {
+		return "", fmt.Errorf("deployment: pull installation image %q via configured local HTTP transport %q: %w", image, s.deps.Registry.PullAddress, err)
 	}
-	if err := s.deps.Runtime.PullImageWithAuth(ctx, pullImage, s.deps.Registry.Username, s.deps.Registry.Password); err != nil {
-		return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
+	digest := remainder[strings.LastIndex(remainder, "@")+1:]
+	if err := s.deps.Runtime.VerifyImageDigest(ctx, pullImage, digest); err != nil {
+		return "", fmt.Errorf("deployment: verify pulled installation image %q: %w", image, err)
 	}
 	return pullImage, nil
 }
@@ -976,7 +1011,7 @@ func (s *Service) recordOwnership(ctx context.Context, app string, p pinnedServi
 	if ownership.Services == nil {
 		ownership.Services = map[string]domain.AppServiceRecovery{}
 	}
-	ownership.Services[p.spec.Name] = domain.AppServiceRecovery{RestartUnsafe: len(p.spec.Volumes) > 0}
+	ownership.Services[p.spec.Name] = domain.AppServiceRecovery{RestartUnsafe: singleWriterRequired(p.spec)}
 	if err := s.deps.State.SaveOwnership(ctx, ownership); err != nil {
 		return fmt.Errorf("deployment: record ownership: %w", err)
 	}

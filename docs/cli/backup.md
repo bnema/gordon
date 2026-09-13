@@ -32,6 +32,10 @@ volume = ["data"]
 A declared database or volume that the service's backup declaration does not
 reference is not a backup target.
 
+Administrative bind mounts are never backup targets. `[service.backup]` accepts
+only declared databases and volumes, and Gordon never archives an
+operator-owned host path exposed through a bind.
+
 ## gordon backups
 
 Database backups are logical PostgreSQL backups made with `pg_dump`.

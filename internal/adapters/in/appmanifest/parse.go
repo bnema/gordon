@@ -7,6 +7,7 @@ package appmanifest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ type rawService struct {
 	UDP       []rawUDP          `toml:"udp"`
 	Secrets   map[string]string `toml:"secrets"`
 	Volumes   []rawVolume       `toml:"volume"`
+	Binds     []rawBind         `toml:"bind"`
 	Databases []rawDatabase     `toml:"database"`
 	Backup    rawBackup         `toml:"backup"`
 }
@@ -78,6 +80,13 @@ type rawVolume struct {
 	ReadOnly bool   `toml:"readonly"`
 }
 
+// rawBind mirrors [[service.bind]].
+type rawBind struct {
+	Name     string `toml:"name"`
+	Path     string `toml:"path"`
+	ReadOnly bool   `toml:"readonly"`
+}
+
 // rawDatabase mirrors [[service.database]].
 type rawDatabase struct {
 	Name     string `toml:"name"`
@@ -104,7 +113,7 @@ func Parse(data []byte, sourceName string) (domain.AppSpec, []string, error) {
 	var raw rawManifest
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
-		return domain.AppSpec{}, nil, fmt.Errorf("%w: %v", domain.ErrInvalidAppSpec, err)
+		return domain.AppSpec{}, nil, fmt.Errorf("%w: %s", domain.ErrInvalidAppSpec, formatDecodeError(err))
 	}
 	spec, err := toDomain(raw)
 	if err != nil {
@@ -118,6 +127,24 @@ func Parse(data []byte, sourceName string) (domain.AppSpec, []string, error) {
 		return domain.AppSpec{}, warnings, err
 	}
 	return spec, warnings, nil
+}
+
+func formatDecodeError(err error) string {
+	var strictErr *toml.StrictMissingError
+	if !errors.As(err, &strictErr) {
+		return err.Error()
+	}
+	unknown := make([]string, 0, len(strictErr.Errors))
+	for i := range strictErr.Errors {
+		key := strictErr.Errors[i].Key()
+		if len(key) > 0 {
+			unknown = append(unknown, strings.Join(key, "."))
+		}
+	}
+	if len(unknown) == 0 {
+		return strictErr.Error()
+	}
+	return "unknown TOML fields or tables: " + strings.Join(unknown, ", ")
 }
 
 // toDomain maps raw TOML onto domain types with normalization and defaults.
@@ -207,6 +234,13 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 			Name:     v.Name,
 			Path:     v.Path,
 			ReadOnly: v.ReadOnly,
+		})
+	}
+	for _, b := range raw.Binds {
+		svc.Binds = append(svc.Binds, domain.AppBind{
+			Name:     b.Name,
+			Path:     b.Path,
+			ReadOnly: b.ReadOnly,
 		})
 	}
 	for _, db := range raw.Databases {

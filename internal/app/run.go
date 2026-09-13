@@ -128,6 +128,10 @@ type Config struct {
 		RevisionRetention int `mapstructure:"revision_retention"`
 	} `mapstructure:"apps"`
 
+	// AppMounts declares administrative bind policies keyed by stable mount
+	// name, referenced by name from an app manifest's [[service.bind]].
+	AppMounts map[string]AppMountPolicy `mapstructure:"app_mounts"`
+
 	Logging struct {
 		Level  string `mapstructure:"level"`
 		Format string `mapstructure:"format"`
@@ -320,6 +324,7 @@ type services struct {
 	gcBarrier            out.GCBarrier
 	appDeploySvc         *deployment.Service
 	appSvc               in.AppService
+	appSvcImpl           *apps.AppServiceImpl
 	appActivator         *apptraffic.Activator
 	appHostIndex         *apptraffic.HostIndex
 	appTrafficPublisher  *appTrafficPublisher
@@ -440,6 +445,9 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if err := validateRetiredAppConfig(v); err != nil {
 		return nil, Config{}, err
 	}
+	if _, err := buildAppMountPolicies(cfg); err != nil {
+		return nil, Config{}, err
+	}
 
 	return v, cfg, nil
 }
@@ -459,7 +467,6 @@ var retiredAppConfigKeys = []struct {
 	{"auto", "feature removed; declare explicit interfaces"},
 	{"auto_route", "feature removed; declare explicit interfaces"},
 	{"auto_route_allowed_domains", "feature removed; declare explicit interfaces"},
-	{"network_isolation", "installation network policy; per-app isolation is declared via [[network.shared]] in app files"},
 	{"previews", "staging is an ordinary app file"},
 }
 
@@ -468,10 +475,14 @@ var retiredAppConfigKeys = []struct {
 // (not IsSet) targets explicit file keys only — installation defaults
 // registered via SetDefault must not trip the rejection.
 func validateRetiredAppConfig(v *viper.Viper) error {
+	diagnostics := make([]string, 0, len(retiredAppConfigKeys))
 	for _, retired := range retiredAppConfigKeys {
 		if v.InConfig(retired.key) {
-			return fmt.Errorf("config-retired: key %q was removed in v2.50; %s", retired.key, retired.hint)
+			diagnostics = append(diagnostics, fmt.Sprintf("key %q was removed in v2.50; %s", retired.key, retired.hint))
 		}
+	}
+	if len(diagnostics) > 0 {
+		return fmt.Errorf("config-retired: %s", strings.Join(diagnostics, "; "))
 	}
 	return nil
 }
@@ -893,10 +904,18 @@ func (si *serviceInit) initApps() error {
 		Traffic:     si.svc.appTrafficPublisher,
 	}, si.log).WithGCBarrier(si.svc.gcBarrier)
 	si.svc.appActivator = apptraffic.NewActivator(si.log)
-	si.svc.appSvc = apps.NewAppServiceImpl(store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
+	mountPolicies, err := buildAppMountPolicies(si.cfg)
+	if err != nil {
+		return err
+	}
+	si.svc.appDeploySvc.SetBindPolicies(mountPolicies)
+	appSvcImpl := apps.NewAppServiceImpl(store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
-		WithImagePolicy(imagePolicy)
+		WithImagePolicy(imagePolicy).
+		WithBindPolicies(mountPolicies)
+	si.svc.appSvcImpl = appSvcImpl
+	si.svc.appSvc = appSvcImpl
 	// Health checks resolve from ACTIVE state (loopback backends).
 	si.svc.healthSvc = health.NewService(store, si.svc.runtime, httpprober.New(), si.log)
 	// ACTIVE-derived host index for the proxy: rebuilt after every
@@ -1035,7 +1054,23 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 
 // initHandlers creates the auth, health, log, preview, and admin handlers.
 func (si *serviceInit) registerReloadCoordinatorHooks() {
-	if si.svc.reloadCoordinator == nil || si.svc.containerSvc == nil {
+	if si.svc.reloadCoordinator == nil {
+		return
+	}
+	if si.svc.appSvcImpl != nil {
+		si.svc.reloadCoordinator.SetAppMountPoliciesApplier(func(_ context.Context, reloadCfg Config) error {
+			policies, err := buildAppMountPolicies(reloadCfg)
+			if err != nil {
+				return err
+			}
+			si.svc.appSvcImpl.SetBindPolicies(policies)
+			if si.svc.appDeploySvc != nil {
+				si.svc.appDeploySvc.SetBindPolicies(policies)
+			}
+			return nil
+		})
+	}
+	if si.svc.containerSvc == nil {
 		return
 	}
 
@@ -1836,14 +1871,18 @@ type loadedConfigApplier interface {
 }
 
 type reloadCoordinator struct {
-	mu       sync.Mutex
-	lastRun  time.Time
-	debounce time.Duration
+	mu                 sync.Mutex
+	lastRun            time.Time
+	debounce           time.Duration
+	trailingTimer      *time.Timer
+	trailingGeneration uint64
+	stopped            bool
 
 	configSvc            configReloader
 	v                    *viper.Viper
 	proxySvc             proxyConfigUpdater
 	applyContainerConfig func(context.Context, Config) error
+	applyAppMountPolicy  func(context.Context, Config) error
 	registryLimits       interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
@@ -1881,11 +1920,65 @@ func (c *reloadCoordinator) SetContainerConfigApplier(apply func(context.Context
 	c.applyContainerConfig = apply
 }
 
+// SetAppMountPoliciesApplier wires the callback that atomically republishes
+// validated administrative bind policies after a successful reload.
+func (c *reloadCoordinator) SetAppMountPoliciesApplier(apply func(context.Context, Config) error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.applyAppMountPolicy = apply
+}
+
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
+	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
+		c.scheduleTrailingReloadLocked(ctx)
+		return nil
+	}
+
 	return c.reloadLocked(ctx, true)
+}
+
+func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context) {
+	if c.stopped {
+		return
+	}
+	if c.trailingTimer != nil {
+		c.trailingTimer.Stop()
+	}
+	c.trailingGeneration++
+	generation := c.trailingGeneration
+	trailingCtx := context.WithoutCancel(ctx)
+	c.trailingTimer = time.AfterFunc(c.debounce, func() {
+		c.runTrailingReload(trailingCtx, generation)
+	})
+	c.log.Debug().Msg("coalescing config reload trigger")
+}
+
+func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.stopped || generation != c.trailingGeneration {
+		return
+	}
+	c.trailingTimer = nil
+	if err := c.reloadLocked(ctx, true); err != nil {
+		c.log.Error().Err(err).Msg("failed trailing config reload")
+	}
+}
+
+func (c *reloadCoordinator) Stop() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stopped = true
+	c.trailingGeneration++
+	if c.trailingTimer != nil {
+		c.trailingTimer.Stop()
+		c.trailingTimer = nil
+	}
 }
 
 func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
@@ -1897,11 +1990,6 @@ func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
 
 func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {
 	now := time.Now()
-	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
-		c.log.Debug().Dur("since_last_reload", now.Sub(c.lastRun)).Msg("skipping config reload trigger due to debounce")
-		return nil
-	}
-
 	if loadConfig {
 		if err := c.configSvc.Reload(ctx); err != nil {
 			c.log.Error().Err(err).Msg("failed to reload config")
@@ -1928,6 +2016,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateRetiredAppConfig(c.v); err != nil {
 		return err
 	}
+	if _, err := buildAppMountPolicies(reloadCfg); err != nil {
+		return err
+	}
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
 	if err != nil {
@@ -1939,6 +2030,14 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 		if err := c.applyContainerConfig(ctx, reloadCfg); err != nil {
 			c.log.Error().Err(err).Msg("failed to apply container config on reload")
 			return fmt.Errorf("failed to apply container config on reload: %w", err)
+		}
+	}
+	// Publish the reloaded bind policies only after conversion and shape
+	// validation succeed, so a bad edit keeps the previous policies live.
+	if c.applyAppMountPolicy != nil {
+		if err := c.applyAppMountPolicy(ctx, reloadCfg); err != nil {
+			c.log.Error().Err(err).Msg("failed to apply app mount policies on reload")
+			return fmt.Errorf("failed to apply app mount policies on reload: %w", err)
 		}
 	}
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
@@ -2329,6 +2428,9 @@ func registerEventHandlers(ctx context.Context, svc *services) (func(), error) {
 	}
 
 	cleanup := func() {
+		if svc.reloadCoordinator != nil {
+			svc.reloadCoordinator.Stop()
+		}
 	}
 
 	return cleanup, nil
@@ -2909,10 +3011,23 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
-	if err := waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, registryReady, proxyReady, errChan); err != nil {
+	if err := waitForCoreProxyReady(ctx, registryReady, proxyReady, errChan); err != nil {
 		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
 		return err
 	}
+	// Apply only the installation graph fail-fast before slower app
+	// readiness checks. Persisted ACTIVE binds are intentionally excluded
+	// until boot reconciliation re-inspects them.
+	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, nil); err != nil {
+		closeStarted(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)
+		return err
+	}
+
+	// Reconcile ACTIVE and rebuild its host index before announcing the
+	// daemon ready. Applying traffic first publishes an empty app graph and
+	// leaves healthy converged apps returning 404 until a later lifecycle
+	// operation happens to rebuild it.
+	reconcileAppsAtBoot(ctx, svc, log)
 
 	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
@@ -2933,14 +3048,6 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	if schedulerCleanup != nil {
 		defer schedulerCleanup()
 	}
-
-	// Reconcile declarative apps intended to run: recovery first, then
-	// start missing/stopped instances without duplicating running ones.
-	// Explicitly stopped apps stay stopped across reboot. This is the sole
-	// boot recovery path — the pre-v2.50 configured-route recovery was
-	// removed with the declarative-apps cutover. The periodic recovery
-	// monitor starts here and is cancelled and joined on shutdown.
-	reconcileAppsAtBoot(ctx, svc, log)
 
 	waitForShutdown(ctx, errChan, reloadChan, reload, svc.eventBus, log)
 	cleanupHandlers() // Stop debounce timers before draining containers
@@ -2980,17 +3087,11 @@ func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime,
 	}
 }
 
-func waitForCoreProxyReadyAndApplyTraffic(ctx context.Context, cfg Config, svc *services, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
+func waitForCoreProxyReady(_ context.Context, registryReady <-chan struct{}, proxyReady <-chan struct{}, errChan <-chan error) error {
 	if err := waitForServerReady(registryReady, errChan); err != nil {
 		return err
 	}
-	if err := waitForServerReady(proxyReady, errChan); err != nil {
-		return err
-	}
-	if err := applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, svc.appHostIndex); err != nil {
-		return err
-	}
-	return nil
+	return waitForServerReady(proxyReady, errChan)
 }
 
 func shutdownTrafficManagerForStartupCleanup(manager *trafficadapter.Manager, log zerowrap.Logger) {

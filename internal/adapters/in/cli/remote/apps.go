@@ -260,6 +260,23 @@ func (c *Client) OperationByKey(ctx context.Context, app, key string) (*dto.AppD
 	return &result, nil
 }
 
+// ListAppSecrets returns metadata-only secret registrations.
+func (c *Client) ListAppSecrets(ctx context.Context, app, service string) ([]dto.AppSecretMetadataDTO, error) {
+	path := "/apps/" + url.PathEscape(app) + "/secrets"
+	if service != "" {
+		path += "?service=" + url.QueryEscape(service)
+	}
+	resp, err := c.request(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	var result []dto.AppSecretMetadataDTO
+	if err := parseResponse(resp, &result); err != nil {
+		return nil, fmt.Errorf("list app secrets: %w", err)
+	}
+	return result, nil
+}
+
 // SetAppSecrets writes secret values for pre-registered names.
 func (c *Client) SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error {
 	resp, err := c.mutationPost(ctx, "/apps/"+url.PathEscape(app)+"/secrets/set", newIdempotencyKey(), req)

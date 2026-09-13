@@ -101,25 +101,55 @@ func (r *reloadRecorder) Calls() int {
 }
 
 type proxyRecorder struct {
+	mu     sync.Mutex
 	calls  int
 	config proxy.Config
 }
 
 func (p *proxyRecorder) UpdateConfig(config proxy.Config) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.calls++
 	p.config = config
 }
 
+func (p *proxyRecorder) Calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *proxyRecorder) Config() proxy.Config {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.config
+}
+
 type registryLimitsRecorder struct {
+	mu               sync.Mutex
 	calls            int
 	maxBlobChunkSize int64
 	maxBlobSize      int64
 }
 
 func (r *registryLimitsRecorder) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls++
 	r.maxBlobChunkSize = maxBlobChunkSize
 	r.maxBlobSize = maxBlobSize
+}
+
+func (r *registryLimitsRecorder) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func (r *registryLimitsRecorder) Limits() (chunk, size int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.maxBlobChunkSize, r.maxBlobSize
 }
 
 type containerConfigApplyRecorder struct {
@@ -166,6 +196,12 @@ func (e *eventBusRecorder) Calls() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.calls
+}
+
+func (e *eventBusRecorder) Type() domain.EventType {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.eventType
 }
 
 func TestSetupConfigHotReload_WatchCallbackInvokesCoordinator(t *testing.T) {
@@ -225,13 +261,14 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	require.NoError(t, coord.ApplyLoadedConfig(ctx))
 
 	require.Equal(t, 0, reloadSvc.Calls())
-	require.Equal(t, 1, proxySvc.calls)
+	require.Equal(t, 1, proxySvc.Calls())
 	require.Equal(t, 1, events.Calls())
-	require.Equal(t, 1, registryLimits.calls)
+	require.Equal(t, 1, registryLimits.Calls())
 	require.Equal(t, 1, containerCfg.calls)
-	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
-	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	rlChunk, rlSize := registryLimits.Limits()
+	require.Equal(t, int64(6<<20), rlChunk)
+	require.Equal(t, int64(8<<20), rlSize)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 	require.Equal(t, "reload.example.com", containerCfg.cfg.Server.GordonDomain)
 	require.Equal(t, []string{"old.example.com"}, containerCfg.cfg.Server.LegacyRegistryDomains)
 	require.Equal(t, []string{"docker.io"}, containerCfg.cfg.Images.AllowedRegistries)
@@ -241,7 +278,7 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 		MaxBodySize:        5 << 20,
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
-	}, proxySvc.config)
+	}, proxySvc.Config())
 }
 
 // newTestServices wires the serialized traffic publisher the reload hook
@@ -412,24 +449,15 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_AppliesTraffic(t *testing.T)
 	assert.NotEmpty(t, manager.Status().EntryPoints)
 }
 
-func TestWaitForCoreProxyReadyAndApplyTraffic_AppliesTraffic(t *testing.T) {
+func TestWaitForCoreProxyReady_WaitsWithoutPublishingEmptyTraffic(t *testing.T) {
 	ctx := context.Background()
-	v := viper.New()
-	configSvc := cfgusecase.NewService(v, nil)
-	require.NoError(t, configSvc.Load(ctx))
 	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
 
-	cfg := Config{}
-	cfg.EntryPoints = map[string]traffic.EntryPointConfig{"game": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTCP}}
-	cfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "game", Ports: []traffic.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolTCP}}}}
-	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "game", EntryPoint: "game", Service: "network_service:game:game"}}
-
 	ready := make(chan struct{})
 	close(ready)
-	svc := &services{configSvc: configSvc, trafficManager: manager}
-	require.NoError(t, waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, ready, ready, nil))
-	assert.NotEmpty(t, manager.Status().EntryPoints)
+	require.NoError(t, waitForCoreProxyReady(ctx, ready, ready, nil))
+	assert.Empty(t, manager.Status().EntryPoints)
 }
 
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
@@ -449,23 +477,85 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 
 	registryLimits := &registryLimitsRecorder{}
 	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 
-	require.Equal(t, 1, reloadSvc.Calls())
-	require.Equal(t, 1, proxySvc.calls)
-	require.Equal(t, 1, events.Calls())
-	require.Equal(t, 1, registryLimits.calls)
-	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
-	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	// Observe the trailing reload through the recorders' own locks instead of
+	// locking the coordinator: the reload event is published last, so waiting
+	// for all recorders proves the trailing reload finished applying.
+	require.Eventually(t, func() bool {
+		return reloadSvc.Calls() == 2 && proxySvc.Calls() == 2 &&
+			events.Calls() == 2 && registryLimits.Calls() == 2
+	}, time.Second, 5*time.Millisecond)
+	// No further reload may fire: the debounce window is over.
+	require.Never(t, func() bool {
+		return proxySvc.Calls() > 2 || events.Calls() > 2
+	}, 50*time.Millisecond, 5*time.Millisecond)
+	require.Equal(t, 2, proxySvc.Calls())
+	require.Equal(t, 2, events.Calls())
+	require.Equal(t, 2, registryLimits.Calls())
+	rlChunk, rlSize := registryLimits.Limits()
+	require.Equal(t, int64(6<<20), rlChunk)
+	require.Equal(t, int64(8<<20), rlSize)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 	require.Equal(t, proxy.Config{
 		RegistryDomain:     "new.example.com",
 		RegistryPort:       5000,
 		MaxBodySize:        5 << 20,
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
-	}, proxySvc.config)
+	}, proxySvc.Config())
+}
+
+func TestReloadCoordinator_TrailingReloadAppliesFinalState(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "initial.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+
+	require.NoError(t, coord.Trigger(ctx))
+	v.Set("server.gordon_domain", "intermediate.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+	v.Set("server.gordon_domain", "final.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+
+	// The trailing reload is the only writer of the final state: wait for
+	// the observable outcome instead of locking the coordinator.
+	require.Eventually(t, func() bool {
+		return proxySvc.Config().RegistryDomain == "final.example.com"
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestReloadCoordinator_InvalidReloadKeepsActiveConfigThenAcceptsValidChange(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "active.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 10 * time.Millisecond
+
+	require.NoError(t, coord.Trigger(ctx))
+	require.Equal(t, "active.example.com", proxySvc.Config().RegistryDomain)
+
+	time.Sleep(coord.debounce)
+	v.Set("server.max_proxy_body_size", "invalid")
+	require.Error(t, coord.Trigger(ctx))
+	require.Equal(t, "active.example.com", proxySvc.Config().RegistryDomain)
+
+	v.Set("server.max_proxy_body_size", "5MB")
+	v.Set("server.gordon_domain", "recovered.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+	require.Equal(t, "recovered.example.com", proxySvc.Config().RegistryDomain)
 }
 
 func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
@@ -492,7 +582,7 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 
 	require.NoError(t, coord.Trigger(ctx))
 	require.Equal(t, 2, reloadSvc.Calls())
-	assert.Equal(t, 1, proxySvc.calls)
+	assert.Equal(t, 1, proxySvc.Calls())
 }
 
 func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T) {
@@ -520,10 +610,10 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	require.ErrorIs(t, err, publishErr)
 
 	require.Equal(t, 2, reloadSvc.Calls())
-	require.Equal(t, 2, proxySvc.calls)
+	require.Equal(t, 2, proxySvc.Calls())
 	require.Equal(t, 2, events.Calls())
 	require.Equal(t, 2, publicTLS.calls)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 }
 
 func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
@@ -545,6 +635,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 	}}
 	proxySvc := &proxyRecorder{}
 	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
 
 	firstDone := make(chan struct{})
 	go func() {
@@ -585,6 +676,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 		t.Fatal("second reload did not finish")
 	}
 
-	require.Equal(t, 1, reloadSvc.Calls())
-	assert.Equal(t, 1, proxySvc.calls)
+	require.Eventually(t, func() bool { return proxySvc.Calls() == 2 }, time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return proxySvc.Calls() > 2 }, 50*time.Millisecond, 5*time.Millisecond)
+	assert.Equal(t, 2, proxySvc.Calls())
 }

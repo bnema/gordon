@@ -3,7 +3,7 @@
 Gordon has two backup flows:
 
 - **Database backups**: PostgreSQL logical dumps via `pg_dump`, stored on the local filesystem.
-- **Volume backups**: best-effort filesystem archives of Gordon-managed named volumes, uploaded to S3.
+- **Volume backups**: best-effort filesystem archives of Gordon-managed named volumes, uploaded to S3. Administrative bind mounts are operator-owned host paths and are never archived.
 
 Backups are identified by app, service, and the declared database or volume
 (see [Apps](../config/apps.md)). Domains are routing addresses and are never a

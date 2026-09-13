@@ -150,6 +150,21 @@ auto_create = true                           # Auto-create volumes from Dockerfi
 prefix = "gordon"                            # Volume name prefix
 preserve = true                              # Keep volumes when containers are removed
 
+# =============================================================================
+# ADMINISTRATIVE APP BIND MOUNTS
+# =============================================================================
+# A named policy is the only way an app manifest may reference a host path.
+# App manifests declare [[service.bind]] with name = "<mount>"; direct host
+# paths are always rejected, and the policy's allowlists are exact and
+# non-empty. read_only on the policy and readonly on the bind both force
+# read-only: either side wins and a bind never weakens its policy.
+# [app_mounts.app-logs]
+# source = "/srv/gordon/host-logs"           # Required; absolute, normalized
+# read_only = true                           # Force read-only for this mount
+# allowed_apps = ["metrics-agent"]           # Required; exact, non-empty
+# allowed_services = ["web"]                 # Required; exact, non-empty
+# root = "/srv/gordon"                       # Optional; default: parent of source
+
 # REMOVED in v2.50: [routes], [attachments], [network_groups],
 # [[services]]-as-apps, [service_routes], [auto_route], [previews].
 # Declare apps in standalone files (see ./apps.md).
@@ -286,6 +301,11 @@ keep_last = 3                                # Keep N newest tags per repository
 | `volumes.auto_create` | `true` | Auto-create volumes |
 | `volumes.prefix` | `"gordon"` | Volume prefix |
 | `volumes.preserve` | `true` | Keep volumes |
+| `app_mounts.<name>.source` | none | Required host source of a named administrative bind; absolute and normalized. The only host path that mount may come from |
+| `app_mounts.<name>.allowed_apps` | none | Required exact, non-empty app allowlist for this mount (no wildcard or empty-means-all form) |
+| `app_mounts.<name>.allowed_services` | none | Required exact, non-empty service allowlist for this mount |
+| `app_mounts.<name>.read_only` | `false` | Force every bind resolved under this policy read-only; a manifest bind can never weaken it |
+| `app_mounts.<name>.root` | parent of `source` | Optional administrative boundary the resolved source must stay under |
 | `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |

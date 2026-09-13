@@ -171,3 +171,87 @@ func TestRuntime_CreateContainerAppliesNetworkAndResourceLimits(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, endpoints, "gordon-app-abc123")
 }
+
+// TestRuntime_CreateContainerTranslatesBindMounts proves ephemeral host binds
+// reach the Docker create request as TypeBind mounts in deterministic
+// destination order, read-only preserved, alongside named-volume Binds.
+func TestRuntime_CreateContainerTranslatesBindMounts(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:   "nginx:latest",
+		Name:    "gordon-app",
+		Volumes: map[string]string{"/data": "gordon-vol-data"},
+		Binds: []domain.ContainerBind{
+			{Name: "rw", Source: "/srv/binds/rw", Destination: "/etc/app.conf"},
+			{Name: "ro", Source: "/srv/binds/ro", Destination: "/var/lib/data", ReadOnly: true},
+		},
+	})
+
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+
+	// Existing named-volume Binds are preserved alongside explicit mounts.
+	binds, ok := hostConfig["Binds"].([]any)
+	require.True(t, ok)
+	assert.Contains(t, binds, "gordon-vol-data:/data")
+
+	mounts, ok := hostConfig["Mounts"].([]any)
+	require.True(t, ok)
+	require.Len(t, mounts, 2)
+
+	first, ok := mounts[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "bind", first["Type"])
+	assert.Equal(t, "/srv/binds/rw", first["Source"])
+	assert.Equal(t, "/etc/app.conf", first["Target"])
+	assert.NotContains(t, first, "ReadOnly")
+
+	second, ok := mounts[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "bind", second["Type"])
+	assert.Equal(t, "/srv/binds/ro", second["Source"])
+	assert.Equal(t, "/var/lib/data", second["Target"])
+	assert.Equal(t, true, second["ReadOnly"])
+}
+
+func TestBuildBindMounts(t *testing.T) {
+	t.Run("sorts by destination", func(t *testing.T) {
+		mounts, err := buildBindMounts(&domain.ContainerConfig{Binds: []domain.ContainerBind{
+			{Name: "z", Source: "/srv/binds/z", Destination: "/z"},
+			{Name: "a", Source: "/srv/binds/a", Destination: "/a"},
+		}})
+		require.NoError(t, err)
+		require.Len(t, mounts, 2)
+		assert.Equal(t, "/a", mounts[0].Target)
+		assert.Equal(t, "/z", mounts[1].Target)
+	})
+
+	t.Run("invalid paths rejected without echoing source", func(t *testing.T) {
+		cases := []struct {
+			name string
+			bind domain.ContainerBind
+		}{
+			{"relative source", domain.ContainerBind{Name: "b", Source: "srv/binds", Destination: "/etc/app.conf"}},
+			{"empty source", domain.ContainerBind{Name: "b", Destination: "/etc/app.conf"}},
+			{"unclean source", domain.ContainerBind{Name: "b", Source: "/srv/../binds", Destination: "/etc/app.conf"}},
+			{"relative destination", domain.ContainerBind{Name: "b", Source: "/srv/binds", Destination: "etc/app.conf"}},
+			{"sensitive destination", domain.ContainerBind{Name: "b", Source: "/srv/binds", Destination: "/dev"}},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := buildBindMounts(&domain.ContainerConfig{Binds: []domain.ContainerBind{tc.bind}})
+				require.Error(t, err)
+				if tc.bind.Source != "" {
+					assert.NotContains(t, err.Error(), tc.bind.Source, "errors must never echo the host source")
+				}
+			})
+		}
+	})
+
+	t.Run("duplicate destination rejected", func(t *testing.T) {
+		_, err := buildBindMounts(&domain.ContainerConfig{Binds: []domain.ContainerBind{
+			{Name: "one", Source: "/srv/binds/one", Destination: "/etc/app.conf"},
+			{Name: "two", Source: "/srv/binds/two", Destination: "/etc/app.conf"},
+		}})
+		require.Error(t, err)
+	})
+}

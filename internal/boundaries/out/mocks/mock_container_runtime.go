@@ -1984,6 +1984,63 @@ func (_c *MockContainerRuntime_PullImageWithAuth_Call) RunAndReturn(run func(ctx
 	return _c
 }
 
+// PullImageWithOptions provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) PullImageWithOptions(ctx context.Context, request domain.ImagePullRequest) error {
+	ret := _mock.Called(ctx, request)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PullImageWithOptions")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.ImagePullRequest) error); ok {
+		r0 = returnFunc(ctx, request)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerRuntime_PullImageWithOptions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PullImageWithOptions'
+type MockContainerRuntime_PullImageWithOptions_Call struct {
+	*mock.Call
+}
+
+// PullImageWithOptions is a helper method to define mock.On call
+//   - ctx context.Context
+//   - request domain.ImagePullRequest
+func (_e *MockContainerRuntime_Expecter) PullImageWithOptions(ctx any, request any) *MockContainerRuntime_PullImageWithOptions_Call {
+	return &MockContainerRuntime_PullImageWithOptions_Call{Call: _e.mock.On("PullImageWithOptions", ctx, request)}
+}
+
+func (_c *MockContainerRuntime_PullImageWithOptions_Call) Run(run func(ctx context.Context, request domain.ImagePullRequest)) *MockContainerRuntime_PullImageWithOptions_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.ImagePullRequest
+		if args[1] != nil {
+			arg1 = args[1].(domain.ImagePullRequest)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_PullImageWithOptions_Call) Return(err error) *MockContainerRuntime_PullImageWithOptions_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_PullImageWithOptions_Call) RunAndReturn(run func(ctx context.Context, request domain.ImagePullRequest) error) *MockContainerRuntime_PullImageWithOptions_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RemoveContainer provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) RemoveContainer(ctx context.Context, containerID string, force bool) error {
 	ret := _mock.Called(ctx, containerID, force)
@@ -2592,6 +2649,69 @@ func (_c *MockContainerRuntime_UntagImage_Call) Return(err error) *MockContainer
 }
 
 func (_c *MockContainerRuntime_UntagImage_Call) RunAndReturn(run func(ctx context.Context, imageRef string) error) *MockContainerRuntime_UntagImage_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// VerifyImageDigest provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) VerifyImageDigest(ctx context.Context, imageRef string, digest string) error {
+	ret := _mock.Called(ctx, imageRef, digest)
+
+	if len(ret) == 0 {
+		panic("no return value specified for VerifyImageDigest")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
+		r0 = returnFunc(ctx, imageRef, digest)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerRuntime_VerifyImageDigest_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'VerifyImageDigest'
+type MockContainerRuntime_VerifyImageDigest_Call struct {
+	*mock.Call
+}
+
+// VerifyImageDigest is a helper method to define mock.On call
+//   - ctx context.Context
+//   - imageRef string
+//   - digest string
+func (_e *MockContainerRuntime_Expecter) VerifyImageDigest(ctx any, imageRef any, digest any) *MockContainerRuntime_VerifyImageDigest_Call {
+	return &MockContainerRuntime_VerifyImageDigest_Call{Call: _e.mock.On("VerifyImageDigest", ctx, imageRef, digest)}
+}
+
+func (_c *MockContainerRuntime_VerifyImageDigest_Call) Run(run func(ctx context.Context, imageRef string, digest string)) *MockContainerRuntime_VerifyImageDigest_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_VerifyImageDigest_Call) Return(err error) *MockContainerRuntime_VerifyImageDigest_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_VerifyImageDigest_Call) RunAndReturn(run func(ctx context.Context, imageRef string, digest string) error) *MockContainerRuntime_VerifyImageDigest_Call {
 	_c.Call.Return(run)
 	return _c
 }

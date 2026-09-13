@@ -5,6 +5,10 @@ ARG BUILDPLATFORM
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
+# Whether the source checkout had uncommitted changes. The Makefile passes
+# the value reported by `git describe --dirty`; the default is accurate for
+# contexts without .git metadata (see .dockerignore).
+ARG DIRTY=false
 
 FROM --platform=$BUILDPLATFORM golang:1.27-alpine3.22 AS builder
 
@@ -13,6 +17,7 @@ ARG TARGETARCH=amd64
 ARG VERSION
 ARG COMMIT
 ARG BUILD_DATE
+ARG DIRTY
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -25,7 +30,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build \
     -trimpath \
-    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE}" \
+    -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${BUILD_DATE} -X main.dirty=${DIRTY}" \
     -o /gordon ./main.go
 
 FROM alpine:3.22

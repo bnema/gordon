@@ -90,6 +90,16 @@ type ContainerBackendBind struct {
 	Protocol      NetworkProtocol
 }
 
+// ContainerBind is one ephemeral host bind mount for a container. Source is a
+// resolved host path produced by administrative policy: it is never persisted
+// and never logged by the runtime adapter. Destination is the container path.
+type ContainerBind struct {
+	Name        string
+	Source      string
+	Destination string
+	ReadOnly    bool
+}
+
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
 	Image           string
@@ -105,6 +115,7 @@ type ContainerConfig struct {
 	RestartPolicy   string
 	Volumes         map[string]string // map[containerPath]volumeName
 	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
+	Binds           []ContainerBind   // ephemeral resolved host binds, keyed by destination
 	NetworkMode     string            // Network to join
 	Hostname        string            // Container hostname for DNS
 	Aliases         []string          // Additional network aliases

@@ -410,6 +410,80 @@ func (_c *MockAppService_List_Call) RunAndReturn(run func(ctx context.Context) (
 	return _c
 }
 
+// ListSecrets provides a mock function for the type MockAppService
+func (_mock *MockAppService) ListSecrets(ctx context.Context, app string, service string) ([]in.AppSecretMetadata, error) {
+	ret := _mock.Called(ctx, app, service)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListSecrets")
+	}
+
+	var r0 []in.AppSecretMetadata
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) ([]in.AppSecretMetadata, error)); ok {
+		return returnFunc(ctx, app, service)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) []in.AppSecretMetadata); ok {
+		r0 = returnFunc(ctx, app, service)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]in.AppSecretMetadata)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
+		r1 = returnFunc(ctx, app, service)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppService_ListSecrets_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSecrets'
+type MockAppService_ListSecrets_Call struct {
+	*mock.Call
+}
+
+// ListSecrets is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+func (_e *MockAppService_Expecter) ListSecrets(ctx any, app any, service any) *MockAppService_ListSecrets_Call {
+	return &MockAppService_ListSecrets_Call{Call: _e.mock.On("ListSecrets", ctx, app, service)}
+}
+
+func (_c *MockAppService_ListSecrets_Call) Run(run func(ctx context.Context, app string, service string)) *MockAppService_ListSecrets_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppService_ListSecrets_Call) Return(appSecretMetadatas []in.AppSecretMetadata, err error) *MockAppService_ListSecrets_Call {
+	_c.Call.Return(appSecretMetadatas, err)
+	return _c
+}
+
+func (_c *MockAppService_ListSecrets_Call) RunAndReturn(run func(ctx context.Context, app string, service string) ([]in.AppSecretMetadata, error)) *MockAppService_ListSecrets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // OperationByKey provides a mock function for the type MockAppService
 func (_mock *MockAppService) OperationByKey(ctx context.Context, app string, key string) (*domain.AppOperation, error) {
 	ret := _mock.Called(ctx, app, key)

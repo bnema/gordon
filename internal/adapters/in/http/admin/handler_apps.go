@@ -67,7 +67,11 @@ func (h *Handler) dispatchAppSubroute(w http.ResponseWriter, r *http.Request, pa
 		return
 	}
 	if len(parts) == 2 {
-		h.dispatchAppVerb(w, r, app, parts[1])
+		if parts[1] == "secrets" && r.Method == http.MethodGet {
+			h.handleAppSecretsList(w, r, app)
+		} else {
+			h.dispatchAppVerb(w, r, app, parts[1])
+		}
 		return
 	}
 	if len(parts) == 3 && parts[1] == "secrets" {
@@ -416,6 +420,28 @@ func (h *Handler) handleAppOpLookup(w http.ResponseWriter, r *http.Request, app,
 	h.sendJSON(w, http.StatusOK, toAppDeployResponse(app, op, includeDiagnostics))
 }
 
+func (h *Handler) handleAppSecretsList(w http.ResponseWriter, r *http.Request, app string) {
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceApps, domain.AdminActionRead) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for apps:read")
+		return
+	}
+	svc, ok := h.appService(w)
+	if !ok {
+		return
+	}
+	entries, err := svc.ListSecrets(ctx, app, r.URL.Query().Get("service"))
+	if err != nil {
+		h.sendAppOpError(w, err)
+		return
+	}
+	result := make([]dto.AppSecretMetadataDTO, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, dto.AppSecretMetadataDTO{Service: entry.Service, Key: entry.Key, Name: entry.Name, Source: entry.Source, Presence: entry.Presence})
+	}
+	h.sendJSON(w, http.StatusOK, result)
+}
+
 // handleAppSecretsSet writes secret values for pre-registered names.
 func (h *Handler) handleAppSecretsSet(w http.ResponseWriter, r *http.Request, app string) {
 	ctx := r.Context()
@@ -478,6 +504,7 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 		}
 	}
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
+		errors.Is(err, domain.ErrBindPolicy) ||
 		errors.Is(err, domain.ErrAppNotFound) ||
 		errors.Is(err, domain.ErrAppReservationConflict) ||
 		errors.Is(err, domain.ErrAppImageUnresolvable) ||
@@ -494,6 +521,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrInvalidAppSpec):
 		h.sendAppError(w, http.StatusBadRequest, "invalid-manifest", err.Error(), "", "")
+	case errors.Is(err, domain.ErrBindPolicy):
+		h.sendAppError(w, http.StatusBadRequest, "bind-policy-violation", err.Error(), "", "check the administrative mount authorization")
 	case errors.Is(err, domain.ErrAppReservationConflict):
 		h.sendAppError(w, http.StatusConflict, "reservation-conflict", err.Error(), "", "")
 	case errors.Is(err, domain.ErrAppImageUnresolvable):

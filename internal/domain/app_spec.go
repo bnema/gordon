@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"net"
+	"path"
 	"reflect"
 	"regexp"
 	"sort"
@@ -68,7 +69,7 @@ const (
 	// AppMaxReadinessTimeout bounds readiness timeout above.
 	AppMaxReadinessTimeout = 10 * time.Minute
 	// AppDefaultStopGrace applies when stop_grace is unset.
-	AppDefaultStopGrace = 10 * time.Second
+	AppDefaultStopGrace = 30 * time.Second
 	// AppMaxStopGrace caps stop_grace.
 	AppMaxStopGrace = 5 * time.Minute
 )
@@ -95,6 +96,7 @@ type AppService struct {
 	UDP       []AppUDPInterface
 	Secrets   map[string]string
 	Volumes   []AppVolume
+	Binds     []AppBind
 	Databases []AppDatabase
 	Backup    AppBackup
 }
@@ -131,6 +133,15 @@ type AppUDPInterface struct {
 
 // AppVolume is one named volume mount.
 type AppVolume struct {
+	Name     string
+	Path     string
+	ReadOnly bool
+}
+
+// AppBind is one named read-only host bind mount.
+// Name is the stable identity reused across deploys; Path is the
+// container destination.
+type AppBind struct {
 	Name     string
 	Path     string
 	ReadOnly bool
@@ -192,6 +203,61 @@ func ValidateVolumeName(name string) error {
 // ValidateSecretName checks service-local secret names.
 func ValidateSecretName(name string) error {
 	return ValidateServiceName(name)
+}
+
+// ValidateBindName checks the stable bind identity (service charset plus -- ban).
+func ValidateBindName(name string) error {
+	if !serviceNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: bind name %q must match [a-z0-9_.-], max 63", ErrInvalidAppSpec, name)
+	}
+	if strings.Contains(name, "--") {
+		return fmt.Errorf("%w: bind name %q must not contain -- (reserved separator)", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// sensitiveBindDestinations lists container paths a manifest bind must never
+// shadow. Server policy may refuse more, but these are always sensitive.
+var sensitiveBindDestinations = map[string]struct{}{
+	"/":     {},
+	"/proc": {},
+	"/sys":  {},
+	"/dev":  {},
+	"/boot": {},
+}
+
+// IsSensitiveBindDestination reports whether dest is a reserved container path
+// or lies below one. Mounting a child such as /proc/self is as dangerous as
+// shadowing the reserved root itself.
+func IsSensitiveBindDestination(dest string) bool {
+	if dest == "/" {
+		return true
+	}
+	for reserved := range sensitiveBindDestinations {
+		if reserved != "/" && (dest == reserved || strings.HasPrefix(dest, reserved+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateBindDestination checks one bind destination: absolute, clean,
+// normalized, and never a sensitive container path. It is pure and reusable
+// by manifest validation and by server-side source policy.
+func ValidateBindDestination(dest string) error {
+	if dest == "" {
+		return fmt.Errorf("%w: bind destination must not be empty", ErrInvalidAppSpec)
+	}
+	if !path.IsAbs(dest) {
+		return fmt.Errorf("%w: bind destination %q must be absolute", ErrInvalidAppSpec, dest)
+	}
+	if path.Clean(dest) != dest {
+		return fmt.Errorf("%w: bind destination %q must be a normalized clean path", ErrInvalidAppSpec, dest)
+	}
+	if IsSensitiveBindDestination(dest) {
+		return fmt.Errorf("%w: bind destination %q is a sensitive container path", ErrInvalidAppSpec, dest)
+	}
+	return nil
 }
 
 // NormalizeServiceName applies the runtime-identifier normalization.
@@ -389,6 +455,9 @@ func (s *AppService) validate() error {
 	if err != nil {
 		return err
 	}
+	if err := s.validateBinds(); err != nil {
+		return err
+	}
 	if err := s.validateDatabases(volumes); err != nil {
 		return err
 	}
@@ -440,11 +509,42 @@ func (s *AppService) validateVolumes() (map[string]struct{}, error) {
 			return nil, fmt.Errorf("%w: service %q duplicate volume %q", ErrInvalidAppSpec, s.Name, vol.Name)
 		}
 		seenVolumes[vol.Name] = struct{}{}
-		if !strings.HasPrefix(vol.Path, "/") || strings.Contains(vol.Path, "..") {
-			return nil, fmt.Errorf("%w: service %q volume %q path must be absolute without dot-dot", ErrInvalidAppSpec, s.Name, vol.Name)
+		if !path.IsAbs(vol.Path) || path.Clean(vol.Path) != vol.Path {
+			return nil, fmt.Errorf("%w: service %q volume %q path must be absolute and normalized", ErrInvalidAppSpec, s.Name, vol.Name)
 		}
 	}
 	return seenVolumes, nil
+}
+
+// validateBinds checks bind names, destinations, duplicates, and volume collisions.
+func (s *AppService) validateBinds() error {
+	volumePaths := make(map[string]struct{}, len(s.Volumes))
+	for _, vol := range s.Volumes {
+		volumePaths[vol.Path] = struct{}{}
+	}
+	seenNames := map[string]struct{}{}
+	seenDests := map[string]struct{}{}
+	for i := range s.Binds {
+		bind := &s.Binds[i]
+		if err := ValidateBindName(bind.Name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seenNames[bind.Name]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind name %q", ErrInvalidAppSpec, s.Name, bind.Name)
+		}
+		seenNames[bind.Name] = struct{}{}
+		if err := ValidateBindDestination(bind.Path); err != nil {
+			return fmt.Errorf("%w: service %q bind %q: %v", ErrInvalidAppSpec, s.Name, bind.Name, err)
+		}
+		if _, ok := seenDests[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind destination %q", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+		seenDests[bind.Path] = struct{}{}
+		if _, ok := volumePaths[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q bind destination %q collides with a declared volume", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+	}
+	return nil
 }
 
 // validateDatabases checks database declarations and backup references.
@@ -735,6 +835,9 @@ func diffService(name string, desired, effective AppService) []string {
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
 	}
+	if !equalBinds(desired.Binds, effective.Binds) {
+		changed = append(changed, "service/"+name+"/binds")
+	}
 	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
 		changed = append(changed, "service/"+name+"/databases")
 	}
@@ -795,6 +898,19 @@ func equalStringMaps(a, b map[string]string) bool {
 
 // equalVolumes compares volume slices by value.
 func equalVolumes(a, b []AppVolume) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalBinds compares bind slices by value.
+func equalBinds(a, b []AppBind) bool {
 	if len(a) != len(b) {
 		return false
 	}

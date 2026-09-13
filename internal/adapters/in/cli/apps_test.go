@@ -185,12 +185,12 @@ func TestRunAppsSecretsSet_StdinAndValidation(t *testing.T) {
 	plane.EXPECT().SetAppSecrets(mock.Anything, "blog", mock.Anything).
 		Run(func(_ context.Context, _ string, req dto.AppSecretSetRequest) { gotReq = req }).Return(nil).Once()
 	var out bytes.Buffer
-	stdin := strings.NewReader("from_stdin=stdin-value\n\nempty_val=\n")
+	stdin := strings.NewReader("from_stdin=stdin-value\n\nspaced=  preserved  \n")
 	require.NoError(t, runAppsSecretsSet(context.Background(), plane, stdin,
 		&out, "blog", []string{"from_flag=flag-value"}, "web", true, false))
 	assert.Equal(t, map[string]string{
 		"from_stdin": "stdin-value",
-		"empty_val":  "",
+		"spaced":     "  preserved  ",
 		"from_flag":  "flag-value",
 	}, gotReq.Secrets)
 

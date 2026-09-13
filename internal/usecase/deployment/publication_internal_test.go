@@ -42,7 +42,8 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-1", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
-
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{"web": {Container: "c-1"}}}, true, nil).Once()
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default()).
 		WithProbeDeps(NewTestProbeDeps(runtime,
 			func(context.Context, string) (int, error) { return 500, nil },
@@ -59,7 +60,7 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 	// the canonical boundary; the fail-closed ACTIVE write itself is
 	// covered by the publisher tests in internal/app.
 	assert.Equal(t, []string{"blog/web", "blog/web"}, traffic.withdrawn)
-	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
+	state.AssertNumberOfCalls(t, "SaveActive", 1)
 }
 
 // TestVerifyRunningService_ReadyPublishesBinds proves a ready generation is

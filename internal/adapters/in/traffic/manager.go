@@ -3,6 +3,7 @@ package traffic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -337,6 +339,9 @@ func conflictingTCPRuntime(current map[string]*entryPointRuntime, entryPoint dom
 func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*entryPointRuntime, error) {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", entryPoint.Address)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return nil, fmt.Errorf("bind tcp entrypoint %q on %s: inspect host-level TCP listeners, including other users or Gordon instances: %w", entryPoint.Name, entryPoint.Address, err)
+		}
 		return nil, fmt.Errorf("bind tcp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
 	trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)
@@ -405,6 +410,9 @@ func conflictingUDPRuntime(current map[string]*udpEntryPointRuntime, entryPoint 
 func (m *Manager) bindUDPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*udpEntryPointRuntime, error) {
 	packetConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", entryPoint.Address)
 	if err != nil {
+		if errors.Is(err, syscall.EADDRINUSE) {
+			return nil, fmt.Errorf("bind udp entrypoint %q on %s: inspect host-level UDP listeners, including other users or Gordon instances: %w", entryPoint.Name, entryPoint.Address, err)
+		}
 		return nil, fmt.Errorf("bind udp entrypoint %q on %s: %w", entryPoint.Name, entryPoint.Address, err)
 	}
 	trusted, err := parseTrustedCIDRs(entryPoint.TrustedCIDRs)

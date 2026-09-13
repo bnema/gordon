@@ -30,7 +30,7 @@ APP_ENV = "production"
 name = "web"
 image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
-stop_grace = "10s"               # optional, default 10s
+stop_grace = "30s"               # optional, default 30s
 
 [service.readiness]              # optional explicit readiness
 type = "http"
@@ -51,6 +51,11 @@ name = "web-data"
 path = "/data"
 readonly = false
 
+[[service.bind]]                 # 0..n; name references [app_mounts.<name>]
+name = "app-logs"                # policy name, never a host path
+path = "/var/log/app"            # absolute container destination
+readonly = true
+
 [[service.database]]             # explicit database declarations
 name = "main"
 type = "postgres"
@@ -69,6 +74,7 @@ services = ["web"]
 
 - App name: DNS label (lowercase alphanumerics and hyphens, max 63), must not contain `--`, reserved: `gordon`, `registry`, `admin`, `localhost`. Case-insensitive uniqueness.
 - Service name: `[a-z0-9_.-]`, max 63, unique within the app.
+- Bind name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
 - Removing an app ends its incarnation: the name is freed, volumes and secrets are archived as retained under the old internal UUID, desired/active/intent state is cleared, and the next apply allocates a new UUID. A new app reusing the name never adopts the old secrets or volumes.
 
 ## Services
@@ -101,7 +107,11 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 ## Volumes and Databases
 
-- Named volumes only; no bind mounts, no service-shared volumes. Replacement reuses volumes; removed services leave volumes retained and visible.
+- Named volumes only, and no service-shared volumes. Replacement reuses volumes; removed services leave volumes retained and visible.
+- Manifests never carry host paths. A `[[service.bind]]` references an `[app_mounts.<name>]` policy the operator declares in `gordon.toml`; a bind whose name has no matching policy is rejected at apply time. See [Volumes](./volumes.md) and [Security Hardening](./security-hardening.md).
+- Named volumes are Gordon-owned app data: created, labeled, retained, backed up, and pruned by Gordon. Administrative binds are operator-owned host locations: Gordon mounts them and never creates, deletes, owns, backs up, or prunes them.
+- `[[service.bind]]` requires an absolute, normalized container `path` and an optional `readonly`. The policy's `read_only` and the bind's `readonly` force read-only together: either side wins and a manifest can never weaken its policy. Reserved destinations (`/`, `/proc`, `/sys`, `/dev`, `/boot` and their children) and paths colliding with a declared volume or another bind are rejected at apply time.
+- A service with any bind runs as a single writer, like a volume-backed service: replacements never serve two generations at once.
 - A volume declared `readonly = true` is mounted read-only in the container; the service cannot modify protected data.
 - `[[service.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).
 - `[service.backup]` lists the declared databases (`postgres`) and volumes (`volume`) that are backup targets. A declared database or volume that is not referenced here is never backed up. Schedules follow the declaration through deploys; stored backups are never deleted when declarations change.

@@ -11,6 +11,30 @@ import (
 
 var defaultImageRegistries = []string{"docker.io", "ghcr.io", "quay.io"}
 
+type ImagePullTransport string
+
+const (
+	ImagePullTransportVerifiedTLS ImagePullTransport = "verified-tls"
+	ImagePullTransportHTTP        ImagePullTransport = "http"
+)
+
+type ImagePullRequest struct {
+	Reference string
+	Username  string
+	Password  string
+	Transport ImagePullTransport
+}
+
+// IsInstallationImage reports whether ref belongs to the configured installation registry.
+func (p ImageSourcePolicy) IsInstallationImage(ref string) bool {
+	host, _, err := parseImageRegistry(strings.TrimSpace(ref))
+	if err != nil || p.InstallationRegistry == "" {
+		return false
+	}
+	installation, err := canonicalRegistryHost(p.InstallationRegistry)
+	return err == nil && host == installation
+}
+
 // ImageSourcePolicy is the installation policy for every image reference
 // the daemon validates, resolves, pulls, or runs.
 type ImageSourcePolicy struct {
