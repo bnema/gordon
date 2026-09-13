@@ -174,6 +174,29 @@ func (s *Service) ExecuteDeploy(ctx context.Context, claim DeployClaim) (*Deploy
 	return s.executeLocked(ctx, claim)
 }
 
+// AbandonDeploy settles a claim this process owns but will never execute, such
+// as when daemon shutdown races the hand-off between StartDeploy and
+// ExecuteDeploy. It drops the in-process live marker and converges the still
+// non-terminal journal as an interrupted operation, so no durable claim stays
+// marked live forever and a later reconciliation reads a terminal outcome
+// instead of a permanently in-flight key. It takes the app lock but performs
+// no workload effect.
+func (s *Service) AbandonDeploy(ctx context.Context, claim DeployClaim) error {
+	if claim.App == "" || claim.Op == "" {
+		return fmt.Errorf("deployment: abandon requires an app and operation identity: %w", domain.ErrAppStateConflict)
+	}
+	// The marker is dropped before any fallible step: even if convergence
+	// fails, the claim is no longer owned here, so a later reconciliation
+	// (foreground or boot) can converge it instead of skipping it as live.
+	s.clearOperationLive(claim.App, claim.Op)
+	release, err := s.coord.acquire(ctx, claim.App)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return s.reconcileInterruptedDeploy(ctx, claim.App)
+}
+
 // executeLocked runs the claimed, non-terminal operation. The caller holds
 // the app lock. Every failure that happens before a terminal outcome is
 // recorded (load active, revision, service step, traffic) leaves the journal

@@ -29,18 +29,23 @@ type AppServiceImpl struct {
 	// lifecycleMu guards the daemon lifecycle. daemonCtx is the
 	// daemon-owned parent for background executions: it is never a request
 	// context, so request cancellation cannot abort an in-flight deploy.
-	// stopped gates new executions once Shutdown runs, and executions
-	// tracks the in-flight ones so Shutdown can wait for them.
+	// stopped gates new executions once Shutdown runs, handoffs tracks the
+	// Deploy request hand-offs (claim through scheduling or settling) so
+	// Shutdown never closes state under a claim it did not wait for, and
+	// executions tracks the in-flight background executions so Shutdown can
+	// wait for them.
 	lifecycleMu sync.Mutex
 	daemonCtx   context.Context
 	daemonStop  context.CancelFunc
 	stopped     bool
+	handoffs    sync.WaitGroup
 	executions  sync.WaitGroup
 }
 
 // deployEngine is the subset of the deployment engine the app service needs.
 type deployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
 	Start(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
@@ -85,7 +90,10 @@ func (s *AppServiceImpl) WithDaemonContext(parent context.Context) *AppServiceIm
 
 // Shutdown stops scheduling background deploy executions, cancels the daemon
 // context so in-flight executions abort with a recoverable non-terminal
-// journal, and waits for them to unwind or for ctx to expire.
+// journal, and waits for the in-flight hand-offs and executions to unwind or
+// for ctx to expire. Waiting for the hand-offs first means a Deploy that
+// claimed an operation just before Shutdown always schedules or settles it
+// before Shutdown returns.
 func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 	s.lifecycleMu.Lock()
 	if !s.stopped {
@@ -96,6 +104,7 @@ func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 
 	done := make(chan struct{})
 	go func() {
+		s.handoffs.Wait()
 		s.executions.Wait()
 		close(done)
 	}()
@@ -110,14 +119,22 @@ func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 // scheduleExecution runs the claimed operation's effects on the daemon
 // context. Only the owner of a freshly claimed key reaches it, so a duplicate
 // key can never spawn a second execution. The journal claimed by StartDeploy
-// is already durable when the goroutine starts.
-func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) {
+// is already durable when the goroutine starts. When Shutdown won the race
+// between the claim and scheduling, the claim is settled without starting:
+// the live marker is released and the journal converged as interrupted, so it
+// can neither execute nor stay marked live forever.
+func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) error {
 	s.lifecycleMu.Lock()
 	if s.stopped {
+		settleCtx := context.WithoutCancel(s.daemonCtx)
 		s.lifecycleMu.Unlock()
 		s.log.Warn().Str("app", claim.App).Str("op", claim.Op).
-			Msg("apps: deploy claimed during shutdown; non-terminal journal left for reconciliation")
-		return
+			Msg("apps: deploy claimed during shutdown; settling the claim without executing")
+		if err := s.deploy.AbandonDeploy(settleCtx, claim); err != nil {
+			s.log.Warn().Err(err).Str("app", claim.App).Str("op", claim.Op).
+				Msg("apps: failed to settle a deploy claimed during shutdown")
+		}
+		return fmt.Errorf("apps: deploy claimed during shutdown: %w", domain.ErrAppStateConflict)
 	}
 	ctx := s.daemonCtx
 	s.executions.Add(1)
@@ -130,6 +147,7 @@ func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) {
 				Msg("apps: background deploy execution failed")
 		}
 	}()
+	return nil
 }
 
 // WithEntrypoints supplies the installation entrypoint listeners used to
@@ -361,13 +379,22 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 	return domain.DiffAppSpec(desired.Spec, activeSpec(active)), nil
 }
 
-// Deploy implements in.AppService. StartDeploy claims and persists the
-// operation under the app lock, then the effects run in the background on
-// the daemon context, so Deploy returns the still-running journal promptly
-// and request cancellation cannot abort an in-flight replacement. A repeated
-// idempotency key is never owned twice: its stored journal replays instead
-// of spawning a second execution, and only the owner schedules any work.
+// Deploy implements in.AppService. It enrolls the request hand-off with the
+// lifecycle first, so a deploy arriving after shutdown began is refused before
+// any claim, and one already in flight is always scheduled or settled before
+// Shutdown returns. StartDeploy then claims and persists the operation under
+// the app lock, and the effects run in the background on the daemon context,
+// so Deploy returns the still-running journal promptly and request
+// cancellation cannot abort an in-flight replacement. A repeated idempotency
+// key is never owned twice: its stored journal replays instead of spawning a
+// second execution, and only the owner schedules any work.
 func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
+	done, err := s.beginDeploy()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
 	started, err := s.deploy.StartDeploy(ctx, deployment.DeployInput{App: app, Revision: revision, Service: service, Op: idempotencyKey})
 	if err != nil {
 		return nil, err
@@ -377,8 +404,25 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, ide
 		// result and no workload is touched again.
 		return s.operationResult(ctx, app, started.Claim.Op, started.ReplayError())
 	}
-	s.scheduleExecution(started.Claim)
+	if err := s.scheduleExecution(started.Claim); err != nil {
+		return s.operationResult(ctx, app, started.Claim.Op, err)
+	}
 	return s.operationResult(ctx, app, started.Claim.Op, nil)
+}
+
+// beginDeploy enrolls one Deploy hand-off before the engine claims anything.
+// It refuses the request once Shutdown began, and otherwise guarantees Shutdown
+// waits for the hand-off (claim, schedule, or settle) to finish before state is
+// torn down, so no claim is made or settled against closed state. The returned
+// done func must be called exactly once.
+func (s *AppServiceImpl) beginDeploy() (func(), error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.stopped {
+		return nil, fmt.Errorf("apps: deploy refused: daemon is shutting down: %w", domain.ErrAppStateConflict)
+	}
+	s.handoffs.Add(1)
+	return s.handoffs.Done, nil
 }
 
 // Stop implements in.AppService.

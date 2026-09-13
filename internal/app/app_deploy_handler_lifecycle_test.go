@@ -45,6 +45,10 @@ func (e *blockingHandlerDeployEngine) ExecuteDeploy(ctx context.Context, _ deplo
 	return &deployment.DeployResult{Op: "op-1", App: "blog"}, nil
 }
 
+func (e *blockingHandlerDeployEngine) AbandonDeploy(context.Context, deployment.DeployClaim) error {
+	return nil
+}
+
 func (e *blockingHandlerDeployEngine) Stop(context.Context, string, string) (*deployment.LifecycleResult, error) {
 	return nil, nil
 }

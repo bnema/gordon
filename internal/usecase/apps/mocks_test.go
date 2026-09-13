@@ -17,9 +17,11 @@ import (
 type mockDeployEngine struct {
 	mock.Mock
 
-	// startDeployFn and executeDeployFn override the testify expectations
-	// when set, for tests that script per-call results or block execution.
+	// startDeployFn, abandonDeployFn and executeDeployFn override the testify
+	// expectations when set, for tests that script per-call results or block
+	// execution.
 	startDeployFn   func(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	abandonDeployFn func(ctx context.Context, claim deployment.DeployClaim) error
 	executeDeployFn func(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 }
 
@@ -39,6 +41,14 @@ func (m *mockDeployEngine) StartDeploy(ctx context.Context, input deployment.Dep
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*deployment.StartDeployResult), args.Error(1)
+}
+
+func (m *mockDeployEngine) AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error {
+	if m.abandonDeployFn != nil {
+		return m.abandonDeployFn(ctx, claim)
+	}
+	args := m.Called(ctx, claim)
+	return args.Error(0)
 }
 
 func (m *mockDeployEngine) ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error) {

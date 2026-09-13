@@ -415,3 +415,45 @@ func TestStartDeploy_LiveClaimSurvivesForegroundReconciliation(t *testing.T) {
 	assert.Equal(t, desired.Revision, final.InputRevision, "the owner executed the revision it claimed, not the stale one")
 	runtime.AssertNumberOfCalls(t, "CreateContainer", 1)
 }
+
+// TestAbandonDeploy_SettlesClaimWithoutStarting proves a claimed but never
+// scheduled operation can be settled safely: the journal becomes terminal, the
+// in-process live marker is released, and a later claim succeeds instead of
+// being refused as a permanently unfinished operation. No runtime effect is
+// touched.
+func TestAbandonDeploy_SettlesClaimWithoutStarting(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	_, desired := seedReplaceableApp(t, ctx, store)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default())
+
+	started, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-abandon", Revision: desired.Revision})
+	require.NoError(t, err)
+	require.True(t, started.Owned)
+
+	// While the claim is live, a different key is refused as unfinished.
+	_, err = svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-blocked", Revision: desired.Revision})
+	require.ErrorIs(t, err, domain.ErrAppStateConflict)
+
+	require.NoError(t, svc.AbandonDeploy(ctx, started.Claim))
+
+	settled, err := store.LoadOperation(ctx, "blog", "op-abandon")
+	require.NoError(t, err)
+	require.True(t, settled.Terminal(), "a settled claim must not remain in flight")
+	assert.Equal(t, domain.AppOutcomeFailed, settled.Outcome)
+
+	// The live marker is gone and the journal terminal, so the next claim is
+	// accepted cleanly instead of hanging on a false live operation.
+	next, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Op: "op-next", Revision: desired.Revision})
+	require.NoError(t, err)
+	require.True(t, next.Owned, "a settled claim never blocks the next owner")
+	require.NoError(t, svc.AbandonDeploy(ctx, next.Claim))
+
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+}

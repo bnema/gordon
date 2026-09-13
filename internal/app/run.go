@@ -844,6 +844,7 @@ func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
 // composition root stays decoupled from engine internals.
 type appDeployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
 	Start(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)

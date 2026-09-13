@@ -236,8 +236,10 @@ func TestAppServiceImpl_Deploy_TerminalFailureRemainsQueryable(t *testing.T) {
 		return replayStart(failed), nil
 	}
 	var execCalls atomic.Int32
+	executed := make(chan struct{}, 1)
 	deploy.executeDeployFn = func(context.Context, deployment.DeployClaim) (*deployment.DeployResult, error) {
 		execCalls.Add(1)
+		executed <- struct{}{}
 		return nil, errors.New("replacement failed")
 	}
 
@@ -245,19 +247,24 @@ func TestAppServiceImpl_Deploy_TerminalFailureRemainsQueryable(t *testing.T) {
 	require.NoError(t, res.err, "a failed execution is reported through the journal, not the start call")
 	require.NotNil(t, res.op)
 	assert.True(t, res.op.Terminal())
-
-	require.NoError(t, svc.Shutdown(context.Background()))
+	// Join the background execution before asserting the journal, so the
+	// count is deterministic rather than a race with the goroutine.
+	<-executed
 	assert.Equal(t, int32(1), execCalls.Load())
 
-	got, err := svc.OperationByKey(ctx, "blog", "op-1")
-	require.NoError(t, err)
-	assert.Equal(t, domain.AppOutcomeFailed, got.Outcome, "terminal failure remains queryable by key")
-
+	// A terminal replay stays queryable and never executes again, even
+	// though it is answered as a conflict.
 	retry := awaitDeploy(t, callDeploy(t, svc, ctx, "key-1"))
 	require.ErrorIs(t, retry.err, domain.ErrAppStateConflict)
 	require.NotNil(t, retry.op)
 	assert.Equal(t, domain.AppOutcomeFailed, retry.op.Outcome)
 	assert.Equal(t, int32(1), execCalls.Load(), "a terminal replay never executes again")
+
+	require.NoError(t, svc.Shutdown(context.Background()))
+
+	got, err := svc.OperationByKey(ctx, "blog", "op-1")
+	require.NoError(t, err)
+	assert.Equal(t, domain.AppOutcomeFailed, got.Outcome, "terminal failure remains queryable by key")
 }
 
 // TestAppServiceImpl_Deploy_ShutdownLeavesRecoverableNonTerminalJournal proves
@@ -295,4 +302,86 @@ func TestAppServiceImpl_Deploy_ShutdownLeavesRecoverableNonTerminalJournal(t *te
 	require.NoError(t, err)
 	assert.False(t, got.Terminal(), "shutdown must leave the non-terminal journal for reconciliation")
 	assert.Equal(t, "op-1", got.Op)
+}
+
+// TestAppServiceImpl_Deploy_RefusesAfterShutdownBeforeClaim proves a deploy
+// that arrives after shutdown began is refused with a state conflict before
+// the engine can claim it, so neither a durable 202-running journal nor a
+// workload effect can be produced. The engine mock has no expectations, so
+// any StartDeploy or ExecuteDeploy call fails the test.
+func TestAppServiceImpl_Deploy_RefusesAfterShutdownBeforeClaim(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	deploy := newMockDeployEngine(t)
+	svc := apps.NewAppServiceImpl(store, deploy, newMockSecretWriter(t), zerowrap.Default())
+
+	require.NoError(t, svc.Shutdown(context.Background()))
+
+	res := awaitDeploy(t, callDeploy(t, svc, ctx, "key-1"))
+	require.ErrorIs(t, res.err, domain.ErrAppStateConflict, "a deploy after shutdown is refused with a state conflict")
+	require.Nil(t, res.op, "a refused deploy never produces a journal to answer 202")
+}
+
+// TestAppServiceImpl_Deploy_ShutdownRacingClaimSettlesWithoutExecuting proves
+// the claim/schedule hand-off is closed against shutdown: once Shutdown starts
+// after StartDeploy claimed the operation but before it was scheduled, the
+// owned claim is settled without starting, Shutdown waits for that settle, and
+// the request answers a conflict instead of a false 202-running orphan.
+func TestAppServiceImpl_Deploy_ShutdownRacingClaimSettlesWithoutExecuting(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	deploy := newMockDeployEngine(t)
+	svc := apps.NewAppServiceImpl(store, deploy, newMockSecretWriter(t), zerowrap.Default())
+
+	op := runningDeployOp()
+	store.EXPECT().LoadOperation(mock.Anything, "blog", "op-1").Return(op, nil)
+
+	claimed := make(chan struct{})
+	releaseClaim := make(chan struct{})
+	deploy.startDeployFn = func(context.Context, deployment.DeployInput) (*deployment.StartDeployResult, error) {
+		close(claimed)
+		<-releaseClaim
+		return ownedStart(op), nil
+	}
+	var execCalls atomic.Int32
+	deploy.executeDeployFn = func(context.Context, deployment.DeployClaim) (*deployment.DeployResult, error) {
+		execCalls.Add(1)
+		return nil, nil
+	}
+	abandoned := make(chan deployment.DeployClaim, 1)
+	deploy.abandonDeployFn = func(_ context.Context, claim deployment.DeployClaim) error {
+		abandoned <- claim
+		return nil
+	}
+
+	resCh := callDeploy(t, svc, ctx, "key-1")
+	<-claimed
+
+	shutdownDone := make(chan error, 1)
+	go func() { shutdownDone <- svc.Shutdown(context.Background()) }()
+
+	// Shutdown must wait for the hand-off rather than return while the claim
+	// is still being made.
+	select {
+	case <-shutdownDone:
+		t.Fatal("Shutdown returned before the in-flight claim hand-off settled")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// The claim completes now; shutdown is already set, so it must be settled
+	// rather than executed.
+	close(releaseClaim)
+
+	select {
+	case claim := <-abandoned:
+		assert.Equal(t, "op-1", claim.Op)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the raced claim was not settled")
+	}
+	require.NoError(t, <-shutdownDone, "Shutdown waits for the settle and returns cleanly")
+
+	res := awaitDeploy(t, resCh)
+	require.ErrorIs(t, res.err, domain.ErrAppStateConflict, "a settled claim answers a conflict, never 202-running")
+	require.NotNil(t, res.op)
+	assert.Equal(t, int32(0), execCalls.Load(), "a claim settled during shutdown never executes")
 }

@@ -44,6 +44,10 @@ func (f *fakeAppDeployEngine) ExecuteDeploy(ctx context.Context, _ deployment.De
 	return nil, ctx.Err()
 }
 
+func (f *fakeAppDeployEngine) AbandonDeploy(context.Context, deployment.DeployClaim) error {
+	return nil
+}
+
 func (f *fakeAppDeployEngine) Stop(context.Context, string, string) (*deployment.LifecycleResult, error) {
 	return nil, nil
 }
