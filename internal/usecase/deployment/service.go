@@ -312,6 +312,7 @@ type pinnedService struct {
 	digest       string
 	runtimeImage string
 	appEnv       map[string]string
+	appNetworks  []domain.AppSharedNetwork
 	// sharedNetworks are the declared shared-network memberships this
 	// service joins. The private incarnation network is derived from the
 	// app UUID at create time so recovery and deploy agree.
@@ -565,6 +566,7 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		}
 		pinned = append(pinned, pinnedService{
 			name: svc.Name, spec: svc, digest: digest, runtimeImage: runtimeImage, appEnv: appEnv,
+			appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 			sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, svc.Name),
 		})
 	}

@@ -956,6 +956,9 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 		}
 	}
 	active.Converged = converged
+	if converged {
+		active.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	}
 	if err := s.deps.State.SaveActive(ctx, active); err != nil {
 		return fmt.Errorf("deployment: publish active: %w", err)
 	}

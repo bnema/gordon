@@ -949,13 +949,58 @@ func DiffAppSpec(desired, effective AppSpec) AppDiff {
 	if !equalStringMaps(desired.Env, effective.Env) {
 		diff.Changed = append(diff.Changed, "env")
 	}
-	if !reflect.DeepEqual(desired.Networks, effective.Networks) {
-		diff.Changed = append(diff.Changed, "networks")
-	}
+	diff.Changed = append(diff.Changed, diffNetworks(desired.Networks, effective.Networks)...)
 	sort.Strings(diff.Added)
 	sort.Strings(diff.Removed)
 	sort.Strings(diff.Changed)
 	return diff
+}
+
+func diffNetworks(desired, effective []AppSharedNetwork) []string {
+	desiredByName := make(map[string]AppSharedNetwork, len(desired))
+	for _, network := range desired {
+		desiredByName[network.Network] = network
+	}
+	effectiveByName := make(map[string]AppSharedNetwork, len(effective))
+	for _, network := range effective {
+		effectiveByName[network.Network] = network
+	}
+
+	var changed []string
+	for name, network := range desiredByName {
+		previous, ok := effectiveByName[name]
+		switch {
+		case !ok:
+			changed = append(changed, "network/"+name+"/added")
+		case !equalStringSets(network.Services, previous.Services):
+			changed = append(changed, "network/"+name+"/services")
+		case !equalStringSets(network.Aliases, previous.Aliases):
+			changed = append(changed, "network/"+name+"/aliases")
+		}
+	}
+	for name := range effectiveByName {
+		if _, ok := desiredByName[name]; !ok {
+			changed = append(changed, "network/"+name+"/removed")
+		}
+	}
+	return changed
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, value := range a {
+		counts[value]++
+	}
+	for _, value := range b {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // diffService compares two services field by field.
