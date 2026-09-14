@@ -310,3 +310,66 @@ path = "/dev"
 	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
 	assert.Contains(t, err.Error(), "sensitive container path")
 }
+
+func TestParse_Devices(t *testing.T) {
+	doc := `
+name = "demo"
+[[service]]
+name = "worker"
+image = "registry.example.com/demo/worker:1"
+devices = ["test_gpu"]
+`
+	spec, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.NoError(t, err)
+	require.Len(t, spec.Services, 1)
+	assert.Equal(t, []string{"test_gpu"}, spec.Services[0].Devices)
+}
+
+func TestParse_DevicesWrongType(t *testing.T) {
+	doc := `
+name = "demo"
+[[service]]
+name = "worker"
+image = "registry.example.com/demo/worker:1"
+devices = "test_gpu"
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.Error(t, err)
+}
+
+func TestParse_DevicesMalformedRejected(t *testing.T) {
+	doc := `
+name = "demo"
+[[service]]
+name = "worker"
+image = "registry.example.com/demo/worker:1"
+devices = ["Bad Name!"]
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+}
+
+func TestParse_DevicesDuplicateRejected(t *testing.T) {
+	doc := `
+name = "demo"
+[[service]]
+name = "worker"
+image = "registry.example.com/demo/worker:1"
+devices = ["test_gpu", "test_gpu"]
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+	assert.Contains(t, err.Error(), "duplicate device")
+}
+
+func TestParse_UnknownGPUFieldRejected(t *testing.T) {
+	doc := `
+name = "demo"
+[[service]]
+name = "worker"
+image = "registry.example.com/demo/worker:1"
+gpus = "all"
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.Error(t, err)
+}

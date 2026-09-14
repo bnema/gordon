@@ -103,6 +103,11 @@ type Service struct {
 	// the lock.
 	bindMu       sync.RWMutex
 	bindPolicies map[string]domain.AppBindPolicy
+	// deviceMu guards devicePolicies. A config reload replaces the whole
+	// map atomically; deploy paths read the current map without holding
+	// the lock.
+	deviceMu       sync.RWMutex
+	devicePolicies map[string]domain.AppDevicePolicy
 	// liveMu guards liveOps. liveOps holds the operations this process
 	// owns between the StartDeploy claim and the end of ExecuteDeploy. It
 	// is in-memory only: a fresh Service (boot) starts empty and may
@@ -199,6 +204,51 @@ func (s *Service) snapshotBindPolicies() map[string]domain.AppBindPolicy {
 	s.bindMu.RLock()
 	defer s.bindMu.RUnlock()
 	return s.bindPolicies
+}
+
+// WithDevicePolicies supplies the initial administrative device policies.
+func (s *Service) WithDevicePolicies(policies map[string]domain.AppDevicePolicy) *Service {
+	s.SetDevicePolicies(policies)
+	return s
+}
+
+// SetDevicePolicies atomically replaces the administrative device policies
+// used to authorize service devices. The map and its slices are copied so
+// later caller mutation cannot race an in-flight deploy.
+func (s *Service) SetDevicePolicies(policies map[string]domain.AppDevicePolicy) {
+	copied := make(map[string]domain.AppDevicePolicy, len(policies))
+	for name, policy := range policies {
+		policy.CDI = append([]string(nil), policy.CDI...)
+		policy.AllowedApps = append([]string(nil), policy.AllowedApps...)
+		policy.AllowedServices = append([]string(nil), policy.AllowedServices...)
+		copied[name] = policy
+	}
+	s.deviceMu.Lock()
+	s.devicePolicies = copied
+	s.deviceMu.Unlock()
+}
+
+// snapshotDevicePolicies returns the current policy map. SetDevicePolicies
+// never mutates a published map, so the snapshot stays safe after the
+// lock drops.
+func (s *Service) snapshotDevicePolicies() map[string]domain.AppDevicePolicy {
+	s.deviceMu.RLock()
+	defer s.deviceMu.RUnlock()
+	return s.devicePolicies
+}
+
+// resolveServiceDevices resolves every declared logical device against the
+// current administrative policies into runtime CDI IDs. Errors name only
+// the app, service, and device: host inventory never appears.
+func (s *Service) resolveServiceDevices(app string, svc domain.AppService) ([]string, error) {
+	if len(svc.Devices) == 0 {
+		return nil, nil
+	}
+	ids, err := domain.ResolveAppDevices(app, svc.Name, svc.Devices, s.snapshotDevicePolicies())
+	if err != nil {
+		return nil, fmt.Errorf("deployment: %w", err)
+	}
+	return ids, nil
 }
 
 // resolveServiceBinds resolves every declared bind against the current
@@ -617,7 +667,7 @@ func selectPreflightServices(rev domain.AppDesiredRevision, onlyService string) 
 	return nil, fmt.Errorf("deployment: service %q not in revision %s: %w", onlyService, rev.Revision, domain.ErrAppStateConflict)
 }
 
-// preflightServices runs the five preflight gates in order. No mutation.
+// preflightServices runs the preflight gates in order. No mutation.
 func (s *Service) preflightServices(ctx context.Context, app string, rev domain.AppDesiredRevision, onlyService string) ([]pinnedService, error) {
 	services, err := selectPreflightServices(rev, onlyService)
 	if err != nil {
@@ -661,6 +711,9 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		if _, err := s.resolveServiceBinds(app, svc); err != nil {
 			return nil, err
 		}
+		if err := s.preflightServiceDevices(ctx, app, svc, pinned); err != nil {
+			return nil, err
+		}
 		pinned = append(pinned, pinnedService{
 			name: svc.Name, spec: svc, digest: digest, runtimeImage: runtimeImage, appEnv: appEnv,
 			appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
@@ -674,6 +727,61 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		return nil, err
 	}
 	return pinned, nil
+}
+
+// preflightServiceDevices runs the device authorization and engine
+// capability gates for one service. Split from preflightServices to keep
+// its complexity within budget.
+func (s *Service) preflightServiceDevices(ctx context.Context, app string, svc domain.AppService, pinned []pinnedService) error {
+	if _, err := s.resolveServiceDevices(app, svc); err != nil {
+		return err
+	}
+	// Engine capability is a knowable-before-mutation failure: a
+	// device-bearing revision on an unsupported engine must fail here,
+	// before withdrawal retires the serving generation. The check runs
+	// once per revision, on the first device-bearing service;
+	// CreateContainer keeps the same gate as defense.
+	if len(svc.Devices) > 0 && !devicesEngineChecked(pinned) {
+		if s.deps.Runtime == nil {
+			return fmt.Errorf("deployment: runtime unavailable: %w", domain.ErrRuntimeUnsupported)
+		}
+		// Sanitize the adapter cause: version-probe failures may embed
+		// the daemon endpoint, which must not reach journals or API
+		// responses. Cancellation and deadlines are the exception: they
+		// stay recognizable so aborted deploys are not misread as
+		// incapable engines.
+		if err := s.deps.Runtime.SupportsCDIDevices(ctx); err != nil {
+			return sanitizedEngineProbeError(svc.Name, err)
+		}
+	}
+	return nil
+}
+
+// sanitizedEngineProbeError maps an engine device-capability probe failure
+// onto the caller-visible error. Cancellation and deadlines survive so
+// shutdown and timeout handling keep working; every other cause collapses
+// to ErrRuntimeUnsupported alone, dropping the adapter text that may embed
+// the daemon endpoint.
+func sanitizedEngineProbeError(service string, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, context.DeadlineExceeded)
+	default:
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, domain.ErrRuntimeUnsupported)
+	}
+}
+
+// devicesEngineChecked reports whether an earlier pinned service already
+// triggered the engine capability probe for this revision.
+func devicesEngineChecked(pinned []pinnedService) bool {
+	for _, p := range pinned {
+		if len(p.spec.Devices) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSecrets reads every required secret path once. Values stay in

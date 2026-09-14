@@ -519,6 +519,14 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 	}
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
 		errors.Is(err, domain.ErrBindPolicy) ||
+		errors.Is(err, domain.ErrDevicePolicy) ||
+		isPreflightErrorRest(err)
+}
+
+// isPreflightErrorRest covers the remaining preflight-mappable sentinels.
+// Split from isMappedPreflightError to keep its complexity within budget.
+func isPreflightErrorRest(err error) bool {
+	return errors.Is(err, domain.ErrRuntimeUnsupported) ||
 		errors.Is(err, domain.ErrAppNotFound) ||
 		errors.Is(err, domain.ErrAppReservationConflict) ||
 		errors.Is(err, domain.ErrAppImageUnresolvable) ||
@@ -537,6 +545,10 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "invalid-manifest", err.Error(), "", "")
 	case errors.Is(err, domain.ErrBindPolicy):
 		h.sendAppError(w, http.StatusBadRequest, "bind-policy-violation", err.Error(), "", "check the administrative mount authorization")
+	case errors.Is(err, domain.ErrDevicePolicy):
+		h.sendAppError(w, http.StatusBadRequest, "device-policy-violation", err.Error(), "", "check the administrative device authorization")
+	case errors.Is(err, domain.ErrRuntimeUnsupported):
+		h.sendAppError(w, http.StatusBadRequest, "runtime-unsupported", err.Error(), "", "use an engine with native CDI support")
 	case errors.Is(err, domain.ErrAppReservationConflict):
 		h.sendAppError(w, http.StatusConflict, "reservation-conflict", err.Error(), "", "")
 	case errors.Is(err, domain.ErrAppImageUnresolvable):

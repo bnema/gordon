@@ -148,6 +148,15 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if err != nil {
 		return nil, err
 	}
+	// Device-bearing creates require a CDI-capable engine. The gate runs
+	// only when devices are requested: ordinary apps never pay for it
+	// and never fail it.
+	if len(config.CDIDevices) > 0 {
+		if err := r.requireCDISupport(ctx); err != nil {
+			return nil, err
+		}
+	}
+	deviceRequests := buildDeviceRequests(config)
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -168,6 +177,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Ulimits: []*units.Ulimit{
 			{Name: "nofile", Soft: 65536, Hard: 65536},
 		},
+		DeviceRequests: deviceRequests,
 	}
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
@@ -332,6 +342,162 @@ func buildBindMounts(config *domain.ContainerConfig) ([]mount.Mount, error) {
 		return mounts[i].Source < mounts[j].Source
 	})
 	return mounts, nil
+}
+
+// requireCDISupport fails closed when the connected engine cannot serve
+// native CDI device requests. Family and version come from the daemon's
+// own /version response; Gordon requires Podman 5.4+ or Docker 28.3+ for
+// device-bearing creates. The version is a capability gate, not hardware
+// proof: CDI specs, toolkit, and node permissions must still be correct
+// on the host.
+func (r *Runtime) requireCDISupport(ctx context.Context) error {
+	version, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return engineProbeError(ctx, err)
+	}
+	if err := checkCDISupport(version, r.runtimeName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// engineProbeError maps a failed /version probe onto the CDI capability
+// gate. Cancellation and deadlines survive so callers can still tell an
+// aborted probe from an incapable engine; every other cause collapses to
+// ErrRuntimeUnsupported with the cause text dropped, because transport
+// errors embed the daemon endpoint and the operator's home path.
+func engineProbeError(ctx context.Context, err error) error {
+	var ctxErr error
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		ctxErr = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		ctxErr = context.DeadlineExceeded
+	}
+	if ctxErr != nil {
+		return fmt.Errorf("%w: cannot verify engine version: %w", domain.ErrRuntimeUnsupported, ctxErr)
+	}
+	return fmt.Errorf("%w: cannot verify engine version", domain.ErrRuntimeUnsupported)
+}
+
+// SupportsCDIDevices implements out.ContainerRuntime. Deployment calls it
+// in preflight for device-bearing revisions so an unsupported engine
+// fails before any workload mutation; CreateContainer keeps the same gate
+// as defense in depth.
+func (r *Runtime) SupportsCDIDevices(ctx context.Context) error {
+	return r.requireCDISupport(ctx)
+}
+
+// checkCDISupport verifies one daemon version response against the CDI
+// support matrix. Family detection prefers the daemon's own components
+// (Podman Engine vs Engine) and falls back to the socket-path hint only
+// when the response names nothing recognizable.
+func checkCDISupport(version client.ServerVersionResult, socketHint string) error {
+	family, daemonVersion := cdiEngineIdentity(version, socketHint)
+	var minimum string
+	switch family {
+	case "podman":
+		minimum = "5.4"
+	case "docker":
+		minimum = "28.3"
+	default:
+		return fmt.Errorf("%w: unrecognized engine %q version %q: device requests require Podman 5.4+ or Docker 28.3+ with native CDI configured", domain.ErrRuntimeUnsupported, family, daemonVersion)
+	}
+	if compareEngineVersion(daemonVersion, minimum) < 0 {
+		return fmt.Errorf("%w: %s %s below minimum %s: device requests require Podman 5.4+ or Docker 28.3+ with native CDI configured (check engine upgrade, CDI specs, toolkit, and device permissions)", domain.ErrRuntimeUnsupported, family, daemonVersion, minimum)
+	}
+	return nil
+}
+
+// cdiEngineIdentity names the daemon family and its version from the
+// /version response. Podman answers with a "Podman Engine" component;
+// Docker answers with an "Engine" component and its version at top
+// level. Unknown responses keep the raw version with an "unknown"
+// family so the caller fails closed.
+func cdiEngineIdentity(version client.ServerVersionResult, socketHint string) (family, daemonVersion string) {
+	for _, component := range version.Components {
+		switch component.Name {
+		case "Podman Engine":
+			return "podman", component.Version
+		case "Engine":
+			return "docker", component.Version
+		}
+	}
+	if strings.Contains(strings.ToLower(version.Platform.Name), "podman") {
+		return "podman", version.Version
+	}
+	switch socketHint {
+	case "podman", "docker":
+		return socketHint, version.Version
+	}
+	return "unknown", version.Version
+}
+
+// compareEngineVersion compares dotted major.minor versions. A missing
+// or unparsable version compares below any minimum: the gate fails
+// closed rather than trusting an engine it cannot identify.
+func compareEngineVersion(version, minimum string) int {
+	parse := func(value string) (int, int) {
+		parts := strings.SplitN(value, ".", 3)
+		if len(parts) < 2 {
+			return -1, -1
+		}
+		major, ok := parseEngineVersionComponent(parts[0])
+		if !ok {
+			return -1, -1
+		}
+		minor, ok := parseEngineVersionComponent(parts[1])
+		if !ok {
+			return -1, -1
+		}
+		return major, minor
+	}
+	major, minor := parse(version)
+	minMajor, minMinor := parse(minimum)
+	switch {
+	case major != minMajor:
+		return major - minMajor
+	default:
+		return minor - minMinor
+	}
+}
+
+// parseEngineVersionComponent parses one numeric major/minor component.
+// Anything but digits is refused, so prerelease suffixes such as "-rc1"
+// and malformed versions can never lift an engine above the gate.
+func parseEngineVersionComponent(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// buildDeviceRequests encodes ephemeral CDI device IDs as one native CDI
+// DeviceRequest. Capabilities and Options stay empty; Count stays 0 so the
+// explicit DeviceIDs are the only grant. CDI IDs are never logged or echoed
+// in errors: they are host inventory.
+func buildDeviceRequests(config *domain.ContainerConfig) []container.DeviceRequest {
+	if len(config.CDIDevices) == 0 {
+		return nil
+	}
+	ids := append([]string(nil), config.CDIDevices...)
+	sort.Strings(ids)
+	return []container.DeviceRequest{
+		{
+			Driver:    "cdi",
+			DeviceIDs: ids,
+		},
+	}
 }
 
 // StartContainer starts a container.

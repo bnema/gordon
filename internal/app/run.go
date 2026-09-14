@@ -132,6 +132,11 @@ type Config struct {
 	// name, referenced by name from an app manifest's [[service.bind]].
 	AppMounts map[string]AppMountPolicy `mapstructure:"app_mounts"`
 
+	// AppDevices declares administrative device grants keyed by stable
+	// logical device name, referenced by name from an app manifest's
+	// `devices` list.
+	AppDevices map[string]AppDevicePolicy `mapstructure:"app_devices"`
+
 	Logging struct {
 		Level  string `mapstructure:"level"`
 		Format string `mapstructure:"format"`
@@ -446,6 +451,9 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 		return nil, Config{}, err
 	}
 	if _, err := buildAppMountPolicies(cfg); err != nil {
+		return nil, Config{}, err
+	}
+	if err := validateDeviceConfig(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
 
@@ -930,12 +938,18 @@ func (si *serviceInit) initApps() error {
 	if err != nil {
 		return err
 	}
+	devicePolicies, err := buildAppDevicePolicies(si.cfg)
+	if err != nil {
+		return err
+	}
 	si.svc.appDeploySvc.SetBindPolicies(mountPolicies)
+	si.svc.appDeploySvc.SetDevicePolicies(devicePolicies)
 	appSvcImpl := newAppDaemonService(si.ctx, store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
 		WithImagePolicy(imagePolicy).
-		WithBindPolicies(mountPolicies)
+		WithBindPolicies(mountPolicies).
+		WithDevicePolicies(devicePolicies)
 	si.svc.appSvcImpl = appSvcImpl
 	si.svc.appSvc = appSvcImpl
 	// Health checks resolve from ACTIVE state (loopback backends).
@@ -1085,9 +1099,15 @@ func (si *serviceInit) registerReloadCoordinatorHooks() {
 			if err != nil {
 				return err
 			}
+			devicePolicies, err := buildAppDevicePolicies(reloadCfg)
+			if err != nil {
+				return err
+			}
 			si.svc.appSvcImpl.SetBindPolicies(policies)
+			si.svc.appSvcImpl.SetDevicePolicies(devicePolicies)
 			if si.svc.appDeploySvc != nil {
 				si.svc.appDeploySvc.SetBindPolicies(policies)
+				si.svc.appDeploySvc.SetDevicePolicies(devicePolicies)
 			}
 			return nil
 		})
@@ -2062,7 +2082,7 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateRetiredAppConfig(c.v); err != nil {
 		return err
 	}
-	if _, err := buildAppMountPolicies(reloadCfg); err != nil {
+	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
 		return err
 	}
 

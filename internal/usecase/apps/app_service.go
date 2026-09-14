@@ -187,6 +187,18 @@ func (s *AppServiceImpl) SetBindPolicies(policies map[string]domain.AppBindPolic
 	s.core.SetBindPolicies(policies)
 }
 
+// WithDevicePolicies supplies the administrative device policies used at apply time.
+func (s *AppServiceImpl) WithDevicePolicies(policies map[string]domain.AppDevicePolicy) *AppServiceImpl {
+	s.core.SetDevicePolicies(policies)
+	return s
+}
+
+// SetDevicePolicies atomically replaces the administrative device policies. It is
+// safe to call from a config reload while applies are in flight.
+func (s *AppServiceImpl) SetDevicePolicies(policies map[string]domain.AppDevicePolicy) {
+	s.core.SetDevicePolicies(policies)
+}
+
 var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.

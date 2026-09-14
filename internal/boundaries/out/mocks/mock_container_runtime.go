@@ -2599,6 +2599,57 @@ func (_c *MockContainerRuntime_StopContainer_Call) RunAndReturn(run func(ctx con
 	return _c
 }
 
+// SupportsCDIDevices provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) SupportsCDIDevices(ctx context.Context) error {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SupportsCDIDevices")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) error); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerRuntime_SupportsCDIDevices_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SupportsCDIDevices'
+type MockContainerRuntime_SupportsCDIDevices_Call struct {
+	*mock.Call
+}
+
+// SupportsCDIDevices is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockContainerRuntime_Expecter) SupportsCDIDevices(ctx any) *MockContainerRuntime_SupportsCDIDevices_Call {
+	return &MockContainerRuntime_SupportsCDIDevices_Call{Call: _e.mock.On("SupportsCDIDevices", ctx)}
+}
+
+func (_c *MockContainerRuntime_SupportsCDIDevices_Call) Run(run func(ctx context.Context)) *MockContainerRuntime_SupportsCDIDevices_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_SupportsCDIDevices_Call) Return(err error) *MockContainerRuntime_SupportsCDIDevices_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_SupportsCDIDevices_Call) RunAndReturn(run func(ctx context.Context) error) *MockContainerRuntime_SupportsCDIDevices_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // TagImage provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) TagImage(ctx context.Context, sourceRef string, targetRef string) error {
 	ret := _mock.Called(ctx, sourceRef, targetRef)
