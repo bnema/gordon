@@ -568,24 +568,27 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	if existing != nil {
 		existingID = existing.ID
 	}
-	// Snapshot volume identity before orphan cleanup removes the owner.
-	// After a reboot the owner is exited (invisible to resolveExistingContainer)
-	// and cleanup deletes it, destroying the only proof of which volume holds
-	// the data. Carry its mounts as preferred volumes (same pattern as
-	// attachment redeploys) so setupVolumes reuses them instead of creating
-	// a fresh empty volume or failing closed on unverified legacy ownership.
-	// Read the snapshot from the same listing the cleanup pass consumes, so no
-	// extra ListContainers call is added to the deploy path.
-	allContainers, err := s.runtime.ListContainers(ctx, true)
-	if err != nil {
-		log.WrapErr(err, "failed to list containers for deploy, proceeding without volume snapshot")
+	// After a reboot the volume owner is exited, so it is invisible to
+	// resolveExistingContainer and orphan cleanup deletes it. Snapshot its
+	// mounts first so setupVolumes reuses the existing volumes instead of
+	// creating empty replacements or failing closed on unverified legacy
+	// ownership. The snapshot reads the same listing cleanup consumes, so the
+	// deploy path needs no extra runtime call.
+	allContainers, listErr := s.runtime.ListContainers(ctx, true)
+	if listErr != nil {
+		// A failed listing leaves no snapshot, and removing the route's
+		// containers without one would delete the last evidence of where the
+		// data lives: skip cleanup rather than retrying it blind. A leftover
+		// container can then block container creation with a name conflict, which
+		// the operator sees as a failed deploy and can retry.
+		log.WrapErr(listErr, "failed to list containers for deploy; skipping volume snapshot and orphan cleanup")
 	}
-	preferredVolumes := namedVolumeMounts(existing)
-	if existing == nil {
-		preferredVolumes = snapshotRouteVolumeMounts(allContainers, route.Domain)
-	}
-	if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID, allContainers); err != nil {
-		log.WrapErr(err, "failed to cleanup orphaned containers")
+	preferredVolumes := volumePreference{mounts: namedVolumeMounts(existing)}
+	if existing == nil && listErr == nil {
+		preferredVolumes = volumePreference{
+			mounts:              snapshotRouteVolumeMounts(allContainers, route.Domain),
+			fromExitedContainer: true,
+		}
 	}
 
 	imageRef, err := s.buildValidatedImageRef(ctx, route.Image)
@@ -626,6 +629,17 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 	volumes, err := s.setupVolumes(ctx, route.Domain, actualImageRef, preferredVolumes)
 	if err != nil {
 		return nil, err
+	}
+
+	// Cleanup runs last because it deletes the exited owner whose mounts were
+	// snapshotted above: every step that may still need that evidence (image
+	// resolution, legacy volume ownership probes) must have completed. The new
+	// container is created only after this function returns, so the names are
+	// free by then.
+	if listErr == nil {
+		if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID, allContainers); err != nil {
+			log.WrapErr(err, "failed to cleanup orphaned containers")
+		}
 	}
 
 	return &deployResources{
@@ -2529,13 +2543,24 @@ func (s *Service) loadEnvironment(ctx context.Context, preResolved []string, dom
 	return mergeEnvironmentVariables(dockerfileEnvVars, userEnvVars), nil
 }
 
-func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string, preferredVolumes map[string]namedVolumeMount) (map[string]string, error) {
+// volumePreference is the set of named-volume mounts a deploy wants to reuse.
+type volumePreference struct {
+	mounts map[string]namedVolumeMount
+	// fromExitedContainer marks mounts snapshotted from an exited container.
+	// Those mounts are evidence of where the data lives, not a promise that it
+	// still does: a volume deleted while its container was stopped holds no data
+	// to preserve, so such a path falls back to normal volume resolution
+	// instead of failing the deploy with domain.ErrVolumeNotFound.
+	fromExitedContainer bool
+}
+
+func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string, preferred volumePreference) (map[string]string, error) {
 	s.mu.RLock()
 	cfg := s.config
 	s.mu.RUnlock()
 
 	log := zerowrap.FromCtx(ctx)
-	volumes, err := s.validatePreferredVolumes(ctx, preferredVolumes)
+	volumes, err := s.validatePreferredVolumes(ctx, preferred)
 	if err != nil {
 		return nil, err
 	}
@@ -2598,20 +2623,28 @@ func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string,
 	return volumes, nil
 }
 
-func (s *Service) validatePreferredVolumes(ctx context.Context, preferredVolumes map[string]namedVolumeMount) (map[string]string, error) {
+func (s *Service) validatePreferredVolumes(ctx context.Context, preferred volumePreference) (map[string]string, error) {
+	log := zerowrap.FromCtx(ctx)
 	volumes := make(map[string]string)
-	for path, preferred := range preferredVolumes {
-		if preferred.Name == "" {
+	for path, mount := range preferred.mounts {
+		if mount.Name == "" {
 			continue
 		}
-		exists, err := s.runtime.VolumeExists(ctx, preferred.Name)
+		exists, err := s.runtime.VolumeExists(ctx, mount.Name)
 		if err != nil {
-			return nil, fmt.Errorf("check previously mounted volume %q: %w", preferred.Name, err)
+			return nil, fmt.Errorf("check previously mounted volume %q: %w", mount.Name, err)
 		}
 		if !exists {
-			return nil, fmt.Errorf("previously mounted volume %q no longer exists: %w", preferred.Name, domain.ErrVolumeNotFound)
+			if preferred.fromExitedContainer {
+				log.Info().
+					Str("volume", mount.Name).
+					Str(zerowrap.FieldPath, path).
+					Msg("snapshotted volume no longer exists, resolving volume through the normal path")
+				continue
+			}
+			return nil, fmt.Errorf("previously mounted volume %q no longer exists: %w", mount.Name, domain.ErrVolumeNotFound)
 		}
-		volumes[path] = preferred.Name
+		volumes[path] = mount.Name
 	}
 	return volumes, nil
 }
@@ -2685,43 +2718,64 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 }
 
 // snapshotRouteVolumeMounts returns the named volume mounts of the route's
-// canonical container (usually exited after a reboot) from an already-fetched
-// container listing. Only containers owned by this route contribute, so a
-// foreign workload squatting the same name can never inject its volumes.
+// exited containers from an already-fetched container listing. Canonical, -new
+// and -next are all valid names left behind by an interrupted deploy, checked
+// in that order so the canonical container wins when several exist. Only
+// containers whose labels prove they belong to this route contribute: matching
+// on the name alone would let a foreign workload squatting a gordon name inject
+// its volumes into this route.
 func snapshotRouteVolumeMounts(allContainers []*domain.Container, domainName string) map[string]namedVolumeMount {
-	for _, c := range allContainers {
-		if c.Name != managedContainerName(domainName) {
-			continue
+	canonicalName := managedContainerName(domainName)
+	for _, name := range []string{canonicalName, canonicalName + "-new", canonicalName + "-next"} {
+		for _, c := range allContainers {
+			if c == nil || c.Name != name || !hasRouteOwnershipLabels(c, domainName) {
+				continue
+			}
+			return namedVolumeMounts(c)
 		}
-		if !isManagedRouteContainerForDomain(c, domainName) {
-			return nil
-		}
-		return namedVolumeMounts(c)
 	}
 	return nil
 }
 
+// hasRouteOwnershipLabels reports whether the container labels prove the
+// container belongs to the route. isManagedRouteContainerForDomain cannot answer
+// that for the names matched by snapshotRouteVolumeMounts, because its name
+// clause holds by definition once the name matches. Only leftover containers
+// reach this check: a running container holding the route's canonical name is
+// already resolved as the previous deploy by resolveExistingContainer.
+func hasRouteOwnershipLabels(c *domain.Container, domainName string) bool {
+	if c.Labels == nil || c.Labels[domain.LabelManaged] != "true" {
+		return false
+	}
+	if c.Labels[domain.LabelAttachment] == "true" {
+		return false
+	}
+	return c.Labels[domain.LabelRoute] == domainName || c.Labels[domain.LabelDomain] == domainName
+}
+
+// cleanupOrphanedContainers removes the route's canonical, -new and -next
+// containers left behind by a previous or interrupted deploy. allContainers is
+// the listing the caller already fetched: cleanup must decide on the same
+// snapshot the caller used, so it never re-lists on its own.
 func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string, allContainers []*domain.Container) error {
 	log := zerowrap.FromCtx(ctx)
 	expectedName := managedContainerName(domainName)
 	expectedNewName := expectedName + "-new"
 	expectedNextName := expectedName + "-next"
 
-	if allContainers == nil {
-		var err error
-		allContainers, err = s.runtime.ListContainers(ctx, true)
-		if err != nil {
-			return err
-		}
-	}
-
 	for _, c := range allContainers {
-		if (c.Name == expectedName || c.Name == expectedNewName || c.Name == expectedNextName) && c.ID != skipContainerID {
-			// Without a selected active container, preserve anything that may still
-			// be serving traffic. When an active container is selected, other active
-			// temp-name containers are stale candidates left by interrupted deploys.
-			isActive := c.Status == "running" || c.Status == "restarting"
-			if isActive && (skipContainerID == "" || c.Name == expectedName) {
+		if c == nil || c.ID == skipContainerID {
+			continue
+		}
+		if c.Name != expectedName && c.Name != expectedNewName && c.Name != expectedNextName {
+			continue
+		}
+
+		// Without a selected active container, preserve anything that may still
+		// be serving traffic. When an active container is selected, other active
+		// temp-name containers are stale candidates left by interrupted deploys.
+		if c.Status == "running" || c.Status == "restarting" {
+			if skipContainerID == "" || c.Name == expectedName {
 				log.Debug().
 					Str(zerowrap.FieldEntityID, c.ID).
 					Str("container_name", c.Name).
@@ -2729,20 +2783,51 @@ func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName stri
 					Msg("skipping active container during orphan cleanup")
 				continue
 			}
+		} else if s.startedSinceListing(ctx, log, c.ID) {
+			continue
+		}
 
-			log.Info().Str(zerowrap.FieldEntityID, c.ID).Str("container_name", c.Name).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
+		log.Info().Str(zerowrap.FieldEntityID, c.ID).Str("container_name", c.Name).Str(zerowrap.FieldStatus, c.Status).Msg("found orphaned container, removing")
 
-			if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
-				log.WrapErrWithFields(err, "failed to stop orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
-			}
+		if err := s.runtime.StopContainer(ctx, c.ID); err != nil {
+			log.WrapErrWithFields(err, "failed to stop orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
+		}
 
-			if err := s.runtime.RemoveContainer(ctx, c.ID, true); err != nil {
-				log.WrapErrWithFields(err, "failed to remove orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
-			}
+		if err := s.runtime.RemoveContainer(ctx, c.ID, true); err != nil {
+			log.WrapErrWithFields(err, "failed to remove orphaned container", map[string]any{zerowrap.FieldEntityID: c.ID})
 		}
 	}
 
 	return nil
+}
+
+// startedSinceListing reports whether a container the listing reported as
+// inactive is running now. Callers may take that listing well before removal
+// runs (the volume snapshot reads it before the image pull), so an operator or
+// external supervisor can restart a leftover container in between; cleanup must
+// not stop a container that is serving traffic again. An unreadable status is
+// treated as running: skipping a removable leftover is recoverable, killing a
+// live container is not.
+func (s *Service) startedSinceListing(ctx context.Context, log zerowrap.Logger, containerID string) bool {
+	current, err := s.runtime.InspectContainer(ctx, containerID)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str(zerowrap.FieldEntityID, containerID).
+			Msg("could not confirm leftover container status, skipping removal")
+		return true
+	}
+	if current == nil {
+		return false
+	}
+	if current.Status != "running" && current.Status != "restarting" {
+		return false
+	}
+	log.Debug().
+		Str(zerowrap.FieldEntityID, containerID).
+		Str(zerowrap.FieldStatus, current.Status).
+		Msg("skipping container that started during deploy")
+	return true
 }
 
 func (s *Service) cleanupVolumesForDomain(_ context.Context, _ string) error {
@@ -3105,7 +3190,7 @@ func (s *Service) attachmentExposedPorts(ctx context.Context, imageRef string) [
 }
 
 func (s *Service) attachmentVolumes(ctx context.Context, containerName, imageRef string, preferredVolumes map[string]namedVolumeMount) (map[string]string, map[string]string, error) {
-	volumes, err := s.setupVolumes(ctx, containerName, imageRef, preferredVolumes)
+	volumes, err := s.setupVolumes(ctx, containerName, imageRef, volumePreference{mounts: preferredVolumes})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to setup volumes for attachment %s with image %s: %w", containerName, imageRef, err)
 	}
