@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -276,4 +277,28 @@ func TestCreateContainer_RuntimeUnsupportedSurvivesRedaction(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrRuntimeUnsupported)
 	assert.NotContains(t, err.Error(), "GPU-test-uuid", "the sanitized error must not echo CDI IDs")
 	runtime.AssertExpectations(t)
+}
+
+// TestSanitizedEngineProbeError proves the capability-probe error keeps
+// cancellation meaningful, collapses every other cause to the unsupported
+// sentinel alone, and never echoes the adapter text.
+func TestSanitizedEngineProbeError(t *testing.T) {
+	t.Run("cancellation is preserved and reported as cancellation", func(t *testing.T) {
+		err := sanitizedEngineProbeError("web", fmt.Errorf("dial unix /run/podman/podman.sock: %w", context.Canceled))
+		require.ErrorIs(t, err, context.Canceled)
+		assert.False(t, errors.Is(err, domain.ErrRuntimeUnsupported), "an aborted probe is not an incapable engine")
+		assert.NotContains(t, err.Error(), "podman.sock")
+	})
+
+	t.Run("deadline is preserved", func(t *testing.T) {
+		err := sanitizedEngineProbeError("web", fmt.Errorf("probe: %w", context.DeadlineExceeded))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		assert.NotContains(t, err.Error(), "probe")
+	})
+
+	t.Run("other causes collapse to the unsupported sentinel", func(t *testing.T) {
+		err := sanitizedEngineProbeError("web", errors.New("dial unix /run/podman/podman.sock: connection refused"))
+		require.ErrorIs(t, err, domain.ErrRuntimeUnsupported)
+		assert.NotContains(t, err.Error(), "podman.sock")
+	})
 }

@@ -31,6 +31,7 @@ name = "web"
 image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
 stop_grace = "30s"               # optional, default 30s
+devices = ["transcode-gpu"]      # 0..n logical names from [app_devices.<name>]
 
 [service.readiness]              # optional explicit readiness
 type = "http"
@@ -59,8 +60,6 @@ readonly = false
 name = "app-logs"                # policy name, never a host path
 path = "/var/log/app"            # absolute container destination
 readonly = true
-
-devices = ["transcode-gpu"]       # 0..n logical names from [app_devices.<name>]
 
 [[service.database]]             # explicit database declarations
 name = "main"

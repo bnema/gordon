@@ -747,12 +747,30 @@ func (s *Service) preflightServiceDevices(ctx context.Context, app string, svc d
 		}
 		// Sanitize the adapter cause: version-probe failures may embed
 		// the daemon endpoint, which must not reach journals or API
-		// responses. The sentinel survives for the structured envelope.
+		// responses. Cancellation and deadlines are the exception: they
+		// stay recognizable so aborted deploys are not misread as
+		// incapable engines.
 		if err := s.deps.Runtime.SupportsCDIDevices(ctx); err != nil {
-			return fmt.Errorf("deployment: engine device capability check for service %q: %w", svc.Name, domain.ErrRuntimeUnsupported)
+			return sanitizedEngineProbeError(svc.Name, err)
 		}
 	}
 	return nil
+}
+
+// sanitizedEngineProbeError maps an engine device-capability probe failure
+// onto the caller-visible error. Cancellation and deadlines survive so
+// shutdown and timeout handling keep working; every other cause collapses
+// to ErrRuntimeUnsupported alone, dropping the adapter text that may embed
+// the daemon endpoint.
+func sanitizedEngineProbeError(service string, err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, context.DeadlineExceeded)
+	default:
+		return fmt.Errorf("deployment: engine device capability check for service %q: %w", service, domain.ErrRuntimeUnsupported)
+	}
 }
 
 // devicesEngineChecked reports whether an earlier pinned service already

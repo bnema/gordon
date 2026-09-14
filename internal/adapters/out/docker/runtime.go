@@ -353,12 +353,31 @@ func buildBindMounts(config *domain.ContainerConfig) ([]mount.Mount, error) {
 func (r *Runtime) requireCDISupport(ctx context.Context) error {
 	version, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
 	if err != nil {
-		return fmt.Errorf("%w: cannot verify engine version: %v", domain.ErrRuntimeUnsupported, err)
+		return engineProbeError(ctx, err)
 	}
 	if err := checkCDISupport(version, r.runtimeName); err != nil {
 		return err
 	}
 	return nil
+}
+
+// engineProbeError maps a failed /version probe onto the CDI capability
+// gate. Cancellation and deadlines survive so callers can still tell an
+// aborted probe from an incapable engine; every other cause collapses to
+// ErrRuntimeUnsupported with the cause text dropped, because transport
+// errors embed the daemon endpoint and the operator's home path.
+func engineProbeError(ctx context.Context, err error) error {
+	var ctxErr error
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		ctxErr = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		ctxErr = context.DeadlineExceeded
+	}
+	if ctxErr != nil {
+		return fmt.Errorf("%w: cannot verify engine version: %w", domain.ErrRuntimeUnsupported, ctxErr)
+	}
+	return fmt.Errorf("%w: cannot verify engine version", domain.ErrRuntimeUnsupported)
 }
 
 // SupportsCDIDevices implements out.ContainerRuntime. Deployment calls it
@@ -423,18 +442,12 @@ func compareEngineVersion(version, minimum string) int {
 		if len(parts) < 2 {
 			return -1, -1
 		}
-		major, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err != nil {
+		major, ok := parseEngineVersionComponent(parts[0])
+		if !ok {
 			return -1, -1
 		}
-		minorDigits := strings.Map(func(r rune) rune {
-			if r >= '0' && r <= '9' {
-				return r
-			}
-			return -1
-		}, parts[1])
-		minor, err := strconv.Atoi(minorDigits)
-		if err != nil {
+		minor, ok := parseEngineVersionComponent(parts[1])
+		if !ok {
 			return -1, -1
 		}
 		return major, minor
@@ -447,6 +460,26 @@ func compareEngineVersion(version, minimum string) int {
 	default:
 		return minor - minMinor
 	}
+}
+
+// parseEngineVersionComponent parses one numeric major/minor component.
+// Anything but digits is refused, so prerelease suffixes such as "-rc1"
+// and malformed versions can never lift an engine above the gate.
+func parseEngineVersionComponent(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // buildDeviceRequests encodes ephemeral CDI device IDs as one native CDI

@@ -35,14 +35,15 @@ func TestDevicePolicyNameRejected(t *testing.T) {
 
 func TestDevicePolicyCDIRejected(t *testing.T) {
 	cases := map[string][]string{
-		"empty":        {},
-		"empty entry":  {""},
-		"raw path":     {"/dev/card0"},
-		"unqualified":  {"gpu0"},
-		"missing name": {"example.com/gpu="},
-		"missing kind": {"=gpu0"},
-		"aggregate":    {"example.com/gpu=all"},
-		"duplicate":    {"example.com/gpu=0", "example.com/gpu=0"},
+		"empty":               {},
+		"empty entry":         {""},
+		"raw path":            {"/dev/card0"},
+		"unqualified":         {"gpu0"},
+		"missing name":        {"example.com/gpu="},
+		"missing kind":        {"=gpu0"},
+		"aggregate":           {"example.com/gpu=all"},
+		"duplicate":           {"example.com/gpu=0", "example.com/gpu=0"},
+		"qualified host path": {"example.com/gpu=/dev/card0"},
 	}
 	for name, cdi := range cases {
 		p := validDevicePolicy()
@@ -56,7 +57,9 @@ func TestDevicePolicyCDIRejected(t *testing.T) {
 func TestDevicePolicyAllowlistRejected(t *testing.T) {
 	p := validDevicePolicy()
 	p.AllowedApps = nil
-	require.Error(t, p.Validate())
+	err := p.Validate()
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrDevicePolicy))
 
 	p = validDevicePolicy()
 	p.AllowedApps = []string{"demo", "demo"}
@@ -65,6 +68,15 @@ func TestDevicePolicyAllowlistRejected(t *testing.T) {
 	p = validDevicePolicy()
 	p.AllowedServices = []string{"worker", "worker"}
 	require.Error(t, p.Validate())
+
+	// An invalid allowlist entry is both a policy violation and an invalid
+	// app spec: callers must be able to detect either sentinel.
+	p = validDevicePolicy()
+	p.AllowedServices = []string{"Bad Name"}
+	err = p.Validate()
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrDevicePolicy))
+	assert.True(t, errors.Is(err, ErrInvalidAppSpec), "the invalid-spec chain must survive allowlist validation")
 }
 
 func TestResolveAppDeviceDenyByDefault(t *testing.T) {

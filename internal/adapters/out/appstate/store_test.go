@@ -539,19 +539,54 @@ func TestStore_DesiredDevicesRoundTrip(t *testing.T) {
 	assert.Equal(t, []string{"test_gpu"}, desired.Spec.Services[0].Devices, "logical names persist in revisions")
 }
 
+// TestStore_DesiredWithoutDevicesLoads proves a desired record written by a
+// Gordon release that predates service devices still loads: the absent JSON
+// key decodes to a nil slice, never an error or a phantom device.
 func TestStore_DesiredWithoutDevicesLoads(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
-	// Old records predate the devices field: the missing JSON key must
-	// decode to a nil slice, never an error or a phantom device.
-	require.NoError(t, store.StageApply(ctx, testIntent("blog", "rev-1")))
-	require.NoError(t, store.CommitApply(ctx, "blog", "apply-test-rev-1"))
-	require.NoError(t, store.MaterializeApply(ctx, "blog", "apply-test-rev-1"))
+	require.NoError(t, appstate.SeedDesiredRecordForTest(store, "blog", []byte(legacyDesiredWithoutDevices)))
 
 	desired, ok, err := store.LoadDesired(ctx, "blog")
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Len(t, desired.Spec.Services, 1)
-	assert.Empty(t, desired.Spec.Services[0].Devices)
+	assert.Nil(t, desired.Spec.Services[0].Devices, "a missing devices key must not become a phantom device")
 }
+
+// legacyDesiredWithoutDevices is a verbatim state.db desired record from a
+// release predating service devices. Unlike current serializer output, its
+// service object carries no "Devices" key at all rather than a null one.
+const legacyDesiredWithoutDevices = `{
+  "revision": "rev-1",
+  "app": "blog",
+  "accepted_at": "2026-01-01T00:00:00Z",
+  "source_sha256": "",
+  "spec": {
+    "Name": "blog",
+    "Env": null,
+    "Services": [
+      {
+        "Name": "web",
+        "Image": "img:1",
+        "Command": null,
+        "StopGrace": 10000000000,
+        "Readiness": {"Type": "", "Path": "", "Contains": "", "Port": 0, "Timeout": 0},
+        "HTTP": null,
+        "TCP": null,
+        "UDP": null,
+        "Secrets": null,
+        "Volumes": null,
+        "Binds": null,
+        "Databases": null,
+        "Backup": {"Postgres": null, "Volume": null}
+      }
+    ],
+    "Networks": null
+  },
+  "reservations": [{"proto": "http", "host": "blog.example.com", "service": "web", "app": "blog"}],
+  "secrets_required": null,
+  "secrets_env": {},
+  "status": "pending"
+}`

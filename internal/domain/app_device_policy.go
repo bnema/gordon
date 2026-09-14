@@ -2,9 +2,15 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 )
+
+// cdiDeviceNamePattern matches the CDI device-name grammar: an alphanumeric
+// start followed by alphanumerics, '_', '.', or '-'. Host paths and raw
+// device nodes never match.
+var cdiDeviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.\-]*$`)
 
 // AppDevicePolicy is one named administrative device grant declared under
 // [app_devices.<name>]. The installation maps a logical device name to
@@ -43,10 +49,10 @@ func (p AppDevicePolicy) Validate() error {
 		return err
 	}
 	if err := validateAllowlist("app", p.AllowedApps, ValidateAppName); err != nil {
-		return fmt.Errorf("%w: device policy %q: %v", ErrDevicePolicy, p.Name, err)
+		return fmt.Errorf("%w: device policy %q: %w", ErrDevicePolicy, p.Name, err)
 	}
 	if err := validateAllowlist("service", p.AllowedServices, ValidateServiceName); err != nil {
-		return fmt.Errorf("%w: device policy %q: %v", ErrDevicePolicy, p.Name, err)
+		return fmt.Errorf("%w: device policy %q: %w", ErrDevicePolicy, p.Name, err)
 	}
 	return nil
 }
@@ -101,6 +107,9 @@ func validateDeviceCDIID(id string) error {
 	}
 	if name == "all" {
 		return fmt.Errorf("cdi device %q: aggregate \"=all\" selectors are not allowed, name each device explicitly", id)
+	}
+	if !cdiDeviceNamePattern.MatchString(name) {
+		return fmt.Errorf("cdi device %q: name %q must match [A-Za-z0-9][A-Za-z0-9_.-]*, not a host path or raw device node", id, name)
 	}
 	return nil
 }
