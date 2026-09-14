@@ -88,7 +88,7 @@ func validateAllowlist(kind string, names []string, validate func(string) error)
 	seen := map[string]struct{}{}
 	for _, name := range names {
 		if err := validate(name); err != nil {
-			return fmt.Errorf("allowed %s %q: %v", kind, name, err)
+			return fmt.Errorf("allowed %s %q: %w", kind, name, err)
 		}
 		if _, ok := seen[name]; ok {
 			return fmt.Errorf("allowed %s %q is duplicated", kind, name)

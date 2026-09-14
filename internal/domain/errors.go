@@ -11,6 +11,10 @@ var (
 	ErrContainerNotRunning = errors.New("container is not running")
 	ErrContainerRunning    = errors.New("container is already running")
 	ErrContainerExited     = errors.New("container exited")
+	// ErrRuntimeUnsupported wraps device-bearing create failures on
+	// engines that cannot serve CDI device requests. It fails closed:
+	// Gordon never retries without devices.
+	ErrRuntimeUnsupported = errors.New("runtime does not support CDI device requests")
 
 	// Image errors
 	ErrImageNotFound      = errors.New("image not found")
@@ -75,6 +79,10 @@ var (
 	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
 	// installation policy refuses to serve it.
 	ErrBindPolicy = errors.New("bind policy violation")
+	// ErrDevicePolicy wraps administrative device policy violations. It is
+	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
+	// installation policy refuses to serve it.
+	ErrDevicePolicy = errors.New("device policy violation")
 
 	// App state errors
 	ErrAppStateIO           = errors.New("app state storage failure")

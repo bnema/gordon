@@ -50,6 +50,13 @@ type ContainerRuntime interface {
 	// Runtime information
 	Ping(ctx context.Context) error
 	Version(ctx context.Context) (string, error)
+	// SupportsCDIDevices reports whether the connected engine can serve
+	// native CDI device requests. It fails closed with
+	// domain.ErrRuntimeUnsupported on engines below the support matrix
+	// (Podman 5.4+, Docker 28.3+). Callers invoke it before any workload
+	// mutation so an unsupported engine fails in preflight, never after
+	// withdrawing the serving generation.
+	SupportsCDIDevices(ctx context.Context) error
 
 	// Health and status
 	IsContainerRunning(ctx context.Context, containerID string) (bool, error)

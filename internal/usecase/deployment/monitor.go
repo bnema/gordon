@@ -638,6 +638,10 @@ func (s *Service) startRecovered(serviceCtx context.Context, app, name string, e
 	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
 		return false, err
 	}
+	// Revoked device grants fail before any runtime mutation.
+	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
+		return false, err
+	}
 	if err := s.deps.Runtime.StartContainer(serviceCtx, eff.Container); err != nil {
 		if errors.Is(err, domain.ErrContainerNotFound) {
 			s.backoff.forget(key)
@@ -688,6 +692,10 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	// Fail closed before mutating the runtime if a bind's policy was
 	// revoked or became invalid since ACTIVE was published.
 	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		return false, false, err
+	}
+	// Revoked device grants fail before any runtime mutation.
+	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return false, false, err
 	}
 	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil {

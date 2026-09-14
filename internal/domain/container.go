@@ -116,16 +116,20 @@ type ContainerConfig struct {
 	Volumes         map[string]string // map[containerPath]volumeName
 	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
 	Binds           []ContainerBind   // ephemeral resolved host binds, keyed by destination
-	NetworkMode     string            // Network to join
-	Hostname        string            // Container hostname for DNS
-	Aliases         []string          // Additional network aliases
-	MemoryLimit     int64             // Memory limit in bytes (0 = no limit)
-	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
-	PidsLimit       int64             // Max number of PIDs (0 = no limit)
-	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
-	User            string            // User to run as
-	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
-	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults
+	// CDIDevices holds explicit CDI device IDs resolved from administrative
+	// device policy at activation time. It is ephemeral like Binds: never
+	// persisted, never logged by the runtime adapter.
+	CDIDevices     []string // ephemeral resolved CDI IDs, encoded as one native CDI DeviceRequest
+	NetworkMode    string   // Network to join
+	Hostname       string   // Container hostname for DNS
+	Aliases        []string // Additional network aliases
+	MemoryLimit    int64    // Memory limit in bytes (0 = no limit)
+	NanoCPUs       int64    // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit      int64    // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS bool     // Mount container root filesystem read-only
+	User           string   // User to run as
+	CapDrop        []string // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd         []string // Linux capabilities to add; nil uses runtime compat defaults
 }
 
 // ContainerStatus represents the current state of a container.

@@ -27,6 +27,19 @@ func CorruptCheckpointForTest(s *Store, rewrite func([]byte) []byte) error {
 	})
 }
 
+// SeedDesiredRecordForTest writes an exact desired-record payload, creating
+// the app bucket when absent. Tests use it to plant records written by an
+// older Gordon, whose JSON omits fields the current schema has.
+func SeedDesiredRecordForTest(s *Store, app string, raw []byte) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket, err := appBucket(tx, app, true)
+		if err != nil {
+			return err
+		}
+		return bucket.Put(keyDesired, raw)
+	})
+}
+
 // CorruptDesiredForTest rewrites one app's desired record. Tests use it
 // to simulate a corrupt desired payload with other apps unaffected.
 func CorruptDesiredForTest(s *Store, app string, rewrite func([]byte) []byte) error {

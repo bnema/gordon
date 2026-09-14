@@ -287,3 +287,49 @@ func TestDeploy_HoldsSharedGCBarrierAcrossResourceSelection(t *testing.T) {
 	assert.Equal(t, "deployed", result.Services["web"].Result)
 	assert.False(t, held, "the shared lease must be released when the operation ends")
 }
+
+// deviceRevision returns a device-bearing revision over the standard
+// mockRevision shape with device policies authorizing it.
+func deviceRevision() domain.AppDesiredRevision {
+	rev := mockRevision()
+	rev.Spec.Services[0].Devices = []string{"test_gpu"}
+	return rev
+}
+
+func devicePolicies() map[string]domain.AppDevicePolicy {
+	return map[string]domain.AppDevicePolicy{
+		"test_gpu": {
+			Name:            "test_gpu",
+			CDI:             []string{"example.com/gpu=GPU-test-uuid"},
+			AllowedApps:     []string{"blog"},
+			AllowedServices: []string{"web"},
+		},
+	}
+}
+
+// TestDeploy_UnsupportedEngineFailsBeforeMutation proves a device-bearing
+// revision on an engine that cannot serve CDI fails in preflight with
+// ErrRuntimeUnsupported: the serving generation is never withdrawn and no
+// container is created, started, stopped, or removed.
+func TestDeploy_UnsupportedEngineFailsBeforeMutation(t *testing.T) {
+	ctx := context.Background()
+	state, runtime, images, secrets := mockDeps(t)
+	rev := deviceRevision()
+
+	state.EXPECT().Recover(mock.Anything).Return(nil)
+	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
+	images.EXPECT().ResolveDigest(mock.Anything, rev.Spec.Services[0].Image).Return(restartTestDigest, nil).Once()
+	secrets.EXPECT().GetSecret(mock.Anything, "gordon/apps/app-blog/web/database-url").Return("x", nil)
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, rev.Spec.Services[0].Image).Return(nil, nil)
+	runtime.EXPECT().SupportsCDIDevices(mock.Anything).Return(domain.ErrRuntimeUnsupported).Once()
+	saved := recordSavedOperations(state)
+
+	svc := keyedService(t, state, runtime, images, secrets).WithDevicePolicies(devicePolicies())
+	_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+
+	require.ErrorIs(t, err, domain.ErrRuntimeUnsupported)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	assertNoDeployMutation(t, runtime, state)
+	assertPreflightGateJournal(t, *saved)
+}

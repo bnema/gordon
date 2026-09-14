@@ -3,6 +3,7 @@ package deployment
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -804,6 +805,9 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
 		return s.failResult(revision, before, "", err)
 	}
+	if _, err := s.resolveServiceDevices(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err)
+	}
 	// Withdraw the service from traffic first and confirm it: a withdrawal
 	// that cannot be applied must block every container mutation, so no
 	// unverified generation stays routable. A first deployment has no
@@ -977,6 +981,12 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	// Re-resolve devices from the current policy under the same
+	// fail-closed rule: revoked grants never reach the runtime.
+	resolvedDevices, err := s.resolveServiceDevices(app, p.spec)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	env, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
 		return nil, nil, nil, err
@@ -1026,6 +1036,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		Volumes:         volumes,
 		ReadOnlyVolumes: readOnlyVolumes,
 		Binds:           resolvedBinds,
+		CDIDevices:      resolvedDevices,
 		Labels:          appLabels(app, p.spec.Name, revision),
 		AutoRemove:      false,
 		RestartPolicy:   domain.RestartPolicyAlways,
@@ -1098,6 +1109,14 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 	if err == nil {
 		return created, nil
 	}
+	// The engine-unsupported sentinel survives redaction so callers can
+	// map it to the structured runtime-unsupported envelope. It carries
+	// no host inventory (engine family/version only), and the device
+	// gate runs only for device-bearing creates, so this branch also
+	// covers services that declare both binds and devices.
+	if errors.Is(err, domain.ErrRuntimeUnsupported) {
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: %w", service, domain.ErrRuntimeUnsupported)
+	}
 	if len(config.Binds) > 0 {
 		// A CreateContainer failure is a runtime error, not a bind policy
 		// violation: policy was already enforced by resolveServiceBinds
@@ -1105,6 +1124,12 @@ func (s *Service) createContainer(ctx context.Context, service string, config *d
 		// path, so redact the whole cause instead of mislabelling it and
 		// keep it out of operation journals and API/CLI responses.
 		return nil, fmt.Errorf("deployment: create container for service %q with administrative mounts: runtime error redacted", service)
+	}
+	if len(config.CDIDevices) > 0 {
+		// Same redaction rule for device-bearing creates: runtime errors
+		// may embed resolved CDI IDs, which are host inventory. Policy
+		// was already enforced by resolveServiceDevices before this call.
+		return nil, fmt.Errorf("deployment: create container for service %q with administrative devices: runtime error redacted", service)
 	}
 	return nil, fmt.Errorf("deployment: create container: %w", err)
 }
