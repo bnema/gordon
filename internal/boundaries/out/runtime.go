@@ -51,6 +51,10 @@ type ContainerRuntime interface {
 
 	// Volume management
 	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
+	// VolumeExists reports whether the named volume exists. Callers use it to
+	// decide whether preserved data is gone, so an adapter must return false only
+	// when the volume is definitively absent, and an error when the check itself
+	// failed.
 	VolumeExists(ctx context.Context, volumeName string) (bool, error)
 	CreateVolume(ctx context.Context, volumeName string) error
 	RemoveVolume(ctx context.Context, volumeName string, force bool) error
