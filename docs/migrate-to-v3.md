@@ -42,7 +42,7 @@ name = "example-app"
 
 [[service]]
 name = "web"
-image = "registry.example.com/example-app:v3.0.0"
+image = "registry.example.com/example-app:1.2.3"
 
 [service.secrets]
 DATABASE_URL = "database-url"

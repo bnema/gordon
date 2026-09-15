@@ -81,24 +81,6 @@ Keep `server.registry_port` for Docker/Podman push and pull traffic; it is separ
 - TLS-ALPN-01 is unsupported.
 - Normal HTTPS fallback certificate priority is static certificates, then public ACME certificates, then Gordon's internal CA.
 
-### Public listener migration
-
-`server.port` and `server.tls_port` no longer create public listeners. Gordon refuses to start when either legacy key is present without an `[entrypoints]` entry, preventing routes from silently becoming unavailable.
-
-Replace the legacy listener settings with a route-capable entrypoint:
-
-```toml
-[server]
-registry_port = 5000
-gordon_domain = "gordon.example.com"
-
-[entrypoints.edge]
-address = ":443"
-protocol = "smart_tcp"
-```
-
-Keep `server.registry_port` for Docker and Podman registry traffic. For public TLS, configure `[tls.acme]` or static certificates; do not use `server.tls_port`.
-
 ### Required for Cloudflare/Proxy Setups: `proxy_allowed_ips`
 
 The internal CA's HTTP onboarding gate rejects non-localhost HTTP requests by default. If Gordon sits behind Cloudflare or another reverse proxy, add the proxy's edge IPs to `proxy_allowed_ips`:
