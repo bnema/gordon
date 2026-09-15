@@ -5,7 +5,7 @@
 Self-hosted container deployment. Push an image, declare an app, deploy it.
 
 - Website: https://bnema.dev/gordon
-- Documentation: [Docs](https://gordon.bnema.dev/docs) | [Wiki](https://gordon.bnema.dev/wiki)
+- Documentation: [Docs](https://bnema.dev/gordon/docs) | [Wiki](https://bnema.dev/gordon/wiki)
 - Discuss: [GitHub Discussions](https://github.com/bnema/gordon/discussions)
 
 ---
@@ -20,7 +20,7 @@ The flow is explicit: build and push an image, declare the app in a standalone T
 
 ```bash
 # Install the latest stable release to ~/.local/bin
-curl -fsSL https://gordon.bnema.dev/install.sh | sh
+curl -fsSL https://bnema.dev/gordon/install | sh
 
 # Start the server (restart your shell first if the installer updated PATH)
 gordon serve
@@ -28,9 +28,9 @@ gordon serve
 
 The installer uses `~/.local/bin` without `sudo` and can add the effective install directory to Fish, Bash, or Zsh PATH configuration. Set `GORDON_UPDATE_PATH=1` to update PATH without prompting or `GORDON_UPDATE_PATH=0` to leave configuration unchanged. Override the destination with an absolute path such as `GORDON_INSTALL_DIR="$HOME/bin"`, `GORDON_INSTALL_DIR="$HOME/.local/bin"`, or `GORDON_INSTALL_DIR=/usr/local/bin`.
 
-To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://gordon.bnema.dev/docs/installation#choosing-an-install-channel).
+To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://bnema.dev/gordon/docs/installation#choosing-an-install-channel).
 
-Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://gordon.bnema.dev/docs/getting-started) for full setup.
+Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://bnema.dev/gordon/docs/getting-started) for full setup.
 
 ## Deploy with the CLI
 
@@ -169,7 +169,7 @@ gordon apps deploy blog --remote prod
 
 ## Documentation
 
-Full documentation at **[gordon.bnema.dev](https://bnema.dev/gordon)**
+Full documentation at **[bnema.dev/gordon](https://bnema.dev/gordon)**
 
 - [Docs](https://bnema.dev/gordon/docs) — Installation, configuration, CLI reference
 - [Wiki](https://bnema.dev/gordon/wiki) — Tutorials, guides, and examples

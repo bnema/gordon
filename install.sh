@@ -2,9 +2,9 @@
 set -e
 
 # Gordon installer script
-# Usage: curl -fsSL https://gordon.bnema.dev/install | sh
-# Usage with pre-release: curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 sh
-# Usage with next source build: curl -fsSL https://gordon.bnema.dev/install | GORDON_CHANNEL=next sh
+# Usage: curl -fsSL https://bnema.dev/gordon/install | sh
+# Usage with pre-release: curl -fsSL https://bnema.dev/gordon/install | GORDON_PRERELEASE=1 sh
+# Usage with next source build: curl -fsSL https://bnema.dev/gordon/install | GORDON_CHANNEL=next sh
 
 REPO="bnema/gordon"
 VERSION="${GORDON_VERSION:-latest}"

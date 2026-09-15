@@ -284,7 +284,7 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 5. **Upgrade the binary** and restart:
 
    ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
+   curl -fsSL https://bnema.dev/gordon/install | bash
    systemctl --user restart gordon
    ```
 
@@ -455,7 +455,7 @@ If using pass or sops, update your secret paths:
 3. **Test in staging** if possible
 4. **Upgrade the binary**:
    ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
+   curl -fsSL https://bnema.dev/gordon/install | bash
    ```
 5. **Restart Gordon**:
    ```bash
@@ -469,4 +469,4 @@ If using pass or sops, update your secret paths:
 ## Getting Help
 
 - [GitHub Issues](https://github.com/bnema/gordon/issues)
-- [Documentation](https://gordon.bnema.dev/docs)
+- [Documentation](https://bnema.dev/gordon/docs)
