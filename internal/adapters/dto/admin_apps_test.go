@@ -1,6 +1,6 @@
 package dto
 
-// Frozen-wire tests for the v2.50 app admin DTOs pin the exact JSON field
+// Frozen-wire tests for the v3 app admin DTOs pin the exact JSON field
 // names the daemon and the CLI exchange, and prove no response shape can
 // carry secret values. The single intentional exception is
 // AppSecretSetRequest: the write path must transport values.

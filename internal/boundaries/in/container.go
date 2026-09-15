@@ -10,7 +10,7 @@ import (
 )
 
 // ContainerService defines the contract for container runtime reads and
-// lifecycle retained by the v2.50 cutover. The route-container engine
+// lifecycle retained by the v3 cutover. The route-container engine
 // (deploy/restart/remove/reconcile/attachments/sync/autostart) was
 // removed with the declarative-apps cutover; the deployment engine owns
 // workload effects through out.ContainerRuntime directly.

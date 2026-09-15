@@ -1,6 +1,6 @@
 # Rollback
 
-Roll forward to a previous version when a deploy misbehaves. There is no historical rollback command in v2.50: rolling back means applying and deploying a previous manifest or image reference. Redeploying a mutable tag (for example `latest`) does not guarantee the previous image bytes; keep immutable versioned tags.
+Roll forward to a previous version when a deploy misbehaves. There is no historical rollback command in v3: rolling back means applying and deploying a previous manifest or image reference. Redeploying a mutable tag (for example `latest`) does not guarantee the previous image bytes; keep immutable versioned tags.
 
 ## Roll Forward to a Previous Tag
 

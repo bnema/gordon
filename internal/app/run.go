@@ -460,7 +460,7 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	return v, cfg, nil
 }
 
-// retiredAppConfigKeys are pre-v2.50 application keys removed with the
+// retiredAppConfigKeys are pre-v3 application keys removed with the
 // declarative-apps cutover. Presence fails boot/reload closed with a
 // config-retired diagnostic naming the fix — never a silent migration.
 var retiredAppConfigKeys = []struct {
@@ -486,7 +486,7 @@ func validateRetiredAppConfig(v *viper.Viper) error {
 	diagnostics := make([]string, 0, len(retiredAppConfigKeys))
 	for _, retired := range retiredAppConfigKeys {
 		if v.InConfig(retired.key) {
-			diagnostics = append(diagnostics, fmt.Sprintf("key %q was removed in v2.50; %s", retired.key, retired.hint))
+			diagnostics = append(diagnostics, fmt.Sprintf("key %q was removed in v3; %s", retired.key, retired.hint))
 		}
 	}
 	if len(diagnostics) > 0 {
@@ -869,7 +869,7 @@ func newAppDaemonService(ctx context.Context, store out.AppState, deploy appDepl
 	return apps.NewAppServiceImpl(store, deploy, secrets, log).WithDaemonContext(ctx)
 }
 
-// initApps wires the single v2.50 app engine: bbolt state, image digests,
+// initApps wires the single v3 app engine: bbolt state, image digests,
 // pass-backed secrets, deployment/lifecycle execution, and traffic
 // activation. The daemon is the sole app-state writer; CLI reaches the
 // engine only through the admin /apps surface.
@@ -2481,7 +2481,7 @@ func validateVolumeBackupS3Settings(enabled bool, keep, maxConcurrency int, buck
 // registerEventHandlers registers event handlers. Push-triggered
 // route creation (auto-route, previews, image-pushed deploy) is
 // retired: pushes transfer OCI content only and apps deploy
-// explicitly via `gordon apps deploy`. The pre-v2.50 route-engine
+// explicitly via `gordon apps deploy`. The pre-v3 route-engine
 // deploy arms (config-reload redeploy, manual SIGUSR2 deploy,
 // secrets-changed redeploy) are removed with the declarative-apps
 // cutover: reload never activates app state, and app secret changes

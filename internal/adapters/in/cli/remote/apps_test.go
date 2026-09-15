@@ -1,6 +1,6 @@
 package remote
 
-// Tests for the v2.50 app mutation transport (apps.go): every mutation
+// Tests for the v3 app mutation transport (apps.go): every mutation
 // carries a client-generated Idempotency-Key, retryable gateway statuses
 // surface OutcomeUnknownError without replaying the mutation, and
 // ambiguous outcomes recover via the by-key endpoint.

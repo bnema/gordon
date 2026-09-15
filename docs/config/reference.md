@@ -167,7 +167,7 @@ preserve = true                              # Keep volumes when containers are 
 # allowed_apps = ["video"]                   # Required; exact, non-empty
 # allowed_services = ["transcoder"]          # Required; exact, non-empty
 
-# REMOVED in v2.50: [routes], [attachments], [network_groups],
+# REMOVED in v3: [routes], [attachments], [network_groups],
 # [[services]]-as-apps, [service_routes], [auto_route], [previews].
 # Declare apps in standalone files (see ./apps.md).
 

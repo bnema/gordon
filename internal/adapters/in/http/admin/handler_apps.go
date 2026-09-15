@@ -497,7 +497,7 @@ func (h *Handler) handleAppSecretsDelete(w http.ResponseWriter, r *http.Request,
 	h.sendJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
-// sendAppError writes the v2.50 error envelope (never carries logs).
+// sendAppError writes the v3 error envelope (never carries logs).
 func (h *Handler) sendAppError(w http.ResponseWriter, status int, code, message, cause, hint string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

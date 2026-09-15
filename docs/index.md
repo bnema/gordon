@@ -48,7 +48,7 @@ Gordon runs on your VPS and provides:
 - [Configuration Overview](./config/index.md) - All configuration options
 - [Server Settings](./config/server.md) - Ports, domains, and runtime
 - [App Manifest](./config/apps.md) - Declarative app files (services, hosts, secrets, volumes)
-- [Migrate to Gordon v2.50](./migrate-to-v2.50.md) - Breaking upgrade and explicit secret migration
+- [Migrate to Gordon v3](./migrate-to-v3.md) - Breaking upgrade and explicit secret migration
 - [Traffic Plane](./config/traffic.md) - TCP, UDP, and TLS passthrough entrypoints
 - [Authentication](./config/auth.md) - Registry auth plus remote CLI login/token workflows
 - [Secrets](./config/secrets.md) - Installation secrets and app secret values

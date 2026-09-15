@@ -31,7 +31,7 @@ var reservedAppNames = map[string]struct{}{
 	"localhost": {},
 }
 
-// App readiness types. HTTP is new in v2.50.
+// App readiness types. HTTP is new in v3.
 const (
 	AppReadinessNone = "none"
 	AppReadinessTCP  = "tcp"
@@ -53,7 +53,7 @@ const (
 	AppVisibilityInternal = "internal"
 )
 
-// App database engines. Only postgres in v2.50.
+// App database engines. Only postgres in v3.
 const (
 	AppDBPostgres = "postgres"
 )
@@ -91,7 +91,7 @@ type AppSpec struct {
 }
 
 // AppService is one explicitly named image-backed service.
-// v2.50 runs exactly one container per service: no replicas field.
+// v3 runs exactly one container per service: no replicas field.
 // RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
 type AppService struct {
 	Name      string
