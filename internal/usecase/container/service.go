@@ -607,11 +607,24 @@ func mayFinalizeRetainedOwner(ctx context.Context, resources *deployResources, r
 }
 
 // deployVolumePreference returns the volumes a deploy should reuse and the exited
-// owner to retain as ownership evidence for them. An existing container is
-// authoritative on its own, and a failed listing has no snapshot to offer.
+// owner to retain as ownership evidence for them. A container that is still there
+// is authoritative on its own mounts, and a failed listing offers no snapshot.
 func deployVolumePreference(existing *domain.Container, allContainers []*domain.Container, listed bool, domainName string) (volumePreference, *domain.Container) {
-	if existing != nil || !listed {
-		return volumePreference{mounts: namedVolumeMounts(existing)}, nil
+	if existing != nil {
+		mounts := namedVolumeMounts(existing)
+		if !listed {
+			return volumePreference{mounts: mounts}, nil
+		}
+
+		// An interrupted deploy can leave a temporary container running while the
+		// canonical one is exited, and resolveExistingContainer then selects the
+		// temporary one. The mounts only the exited container carries are the last
+		// record of where that data lives, so the replacement has to take them
+		// over before cleanup removes their only owner.
+		return mergeExitedOwnerMounts(mounts, exitedOwnerMounts(allContainers, domainName, existing.ID)), nil
+	}
+	if !listed {
+		return volumePreference{}, nil
 	}
 
 	owner := snapshotRouteVolumeOwner(allContainers, domainName)
@@ -624,7 +637,58 @@ func deployVolumePreference(existing *domain.Container, allContainers []*domain.
 	// these volumes: while it is the only container mounting them, deleting it
 	// first would leave a failed deploy without any way to prove that a legacy
 	// volume belongs to this route.
-	return volumePreference{mounts: mounts, fromExitedContainer: true}, owner
+	fromExitedOwner := make(map[string]bool, len(mounts))
+	for path := range mounts {
+		fromExitedOwner[path] = true
+	}
+
+	return volumePreference{mounts: mounts, fromExitedOwner: fromExitedOwner}, owner
+}
+
+// exitedOwnerMounts returns the named volume mounts of the route's exited
+// containers from an already-fetched listing, canonical first so the container
+// that outlived the others wins a destination. skipContainerID is the container
+// the deploy replaces, which contributes its own mounts separately.
+func exitedOwnerMounts(allContainers []*domain.Container, domainName, skipContainerID string) map[string]namedVolumeMount {
+	mounts := make(map[string]namedVolumeMount)
+	canonicalName := managedContainerName(domainName)
+	for _, name := range []string{canonicalName, canonicalName + "-new", canonicalName + "-next"} {
+		for _, c := range allContainers {
+			if c == nil || c.ID == skipContainerID || c.Name != name || !hasRouteOwnershipLabels(c, domainName) {
+				continue
+			}
+			if c.Status == "running" || c.Status == "restarting" {
+				continue
+			}
+			for path, mount := range namedVolumeMounts(c) {
+				if _, taken := mounts[path]; !taken {
+					mounts[path] = mount
+				}
+			}
+		}
+	}
+	return mounts
+}
+
+// mergeExitedOwnerMounts fills the destinations only the exited owner has, and
+// records them in fromExitedOwner. A container that is still there stays
+// authoritative for the destinations it already mounts.
+func mergeExitedOwnerMounts(mounts, exitedOwner map[string]namedVolumeMount) volumePreference {
+	merged := make(map[string]namedVolumeMount, len(mounts)+len(exitedOwner))
+	for path, mount := range mounts {
+		merged[path] = mount
+	}
+
+	fromExitedOwner := make(map[string]bool, len(exitedOwner))
+	for path, mount := range exitedOwner {
+		if _, taken := merged[path]; taken {
+			continue
+		}
+		merged[path] = mount
+		fromExitedOwner[path] = true
+	}
+
+	return volumePreference{mounts: merged, fromExitedOwner: fromExitedOwner}
 }
 
 func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route, existing *domain.Container) (*deployResources, error) {
@@ -2610,12 +2674,13 @@ func (s *Service) loadEnvironment(ctx context.Context, preResolved []string, dom
 // volumePreference is the set of named-volume mounts a deploy wants to reuse.
 type volumePreference struct {
 	mounts map[string]namedVolumeMount
-	// fromExitedContainer marks mounts snapshotted from an exited container.
+	// fromExitedOwner marks the mount paths that come from an exited container.
 	// Those mounts are evidence of where the data lives, not a promise that it
 	// still does: a volume deleted while its container was stopped holds no data
-	// to preserve, so such a path falls back to normal volume resolution
-	// instead of failing the deploy with domain.ErrVolumeNotFound.
-	fromExitedContainer bool
+	// to preserve, so such a path falls back to normal volume resolution instead
+	// of failing the deploy with domain.ErrVolumeNotFound. Mounts of a container
+	// that is still there stay authoritative and fail closed.
+	fromExitedOwner map[string]bool
 }
 
 func (s *Service) setupVolumes(ctx context.Context, domainName, imageRef string, preferred volumePreference) (map[string]string, error) {
@@ -2699,7 +2764,7 @@ func (s *Service) validatePreferredVolumes(ctx context.Context, preferred volume
 			return nil, fmt.Errorf("check previously mounted volume %q: %w", mount.Name, err)
 		}
 		if !exists {
-			if preferred.fromExitedContainer {
+			if preferred.fromExitedOwner[path] {
 				log.Info().
 					Str("volume", mount.Name).
 					Str(zerowrap.FieldPath, path).
