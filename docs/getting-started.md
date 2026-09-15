@@ -12,7 +12,7 @@ Deploy your first app with Gordon in under 5 minutes.
 ## 1. Install Gordon
 
 ```bash
-curl -fsSL https://gordon.bnema.dev/install | bash
+curl -fsSL https://bnema.dev/gordon/install | bash
 ```
 
 This script automatically detects your OS and architecture, downloads the appropriate binary, and installs it to `/usr/local/bin`.
@@ -81,7 +81,7 @@ address = ":443"                         # Public smart TCP edge (choose your bi
 protocol = "smart_tcp"
 ```
 
-Application workloads are NOT declared in `gordon.toml`. Each app lives in its own standalone TOML file (see step 8). The old `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed in v2.50 — Gordon refuses to start when any of them is present.
+Application workloads are NOT declared in `gordon.toml`. Each app lives in its own standalone TOML file (see step 8). The old `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed in v3 — Gordon refuses to start when any of them is present.
 
 ## 5. Set Up DNS (Including Wildcard)
 

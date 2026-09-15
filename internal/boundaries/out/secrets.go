@@ -15,7 +15,7 @@ type SecretProvider interface {
 }
 
 // SecretWriter defines the contract for writing app secret values by path.
-// v2.50 app secrets live in pass at gordon/apps/<app>/<service>/<name>;
+// v3 app secrets live in pass at gordon/apps/<app>/<service>/<name>;
 // values cross this boundary only on the explicit SetSecrets path.
 type SecretWriter interface {
 	// SetSecret writes one secret value by path.

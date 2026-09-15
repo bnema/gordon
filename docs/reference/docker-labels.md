@@ -18,13 +18,13 @@ Queries by logical identity use labels, never name parsing. Resources without th
 
 ### Legacy Labels
 
-Containers created before v2.50 may carry these labels. They are read-only provenance hints for prune guards — Gordon never infers app state from them:
+Containers created before v3 may carry these labels. They are read-only provenance hints for prune guards — Gordon never infers app state from them:
 
 | Label | Value | Description |
 |-------|-------|-------------|
-| `gordon.domain` | Domain name | Pre-v2.50 domain this container served |
+| `gordon.domain` | Domain name | Pre-v3 domain this container served |
 | `gordon.image` | Image:tag | Original image from configuration |
-| `gordon.route` | Domain name | Pre-v2.50 route this container handled |
+| `gordon.route` | Domain name | Pre-v3 route this container handled |
 
 ### Backup Metadata
 
@@ -32,7 +32,7 @@ Backups are declarative rather than label-driven. App manifests declare database
 
 ## Image Labels
 
-No image-label inference exists in v2.50: Gordon never creates routes, deploys, or resolves image names from Dockerfile labels. Push with a domain-like name or a `gordon.domain` label is treated as an ordinary image name. Readiness and proxy ports come from the app manifest (`[service.readiness]`, `[[service.http]]`), not from image labels.
+No image-label inference exists in v3: Gordon never creates routes, deploys, or resolves image names from Dockerfile labels. Push with a domain-like name or a `gordon.domain` label is treated as an ordinary image name. Readiness and proxy ports come from the app manifest (`[service.readiness]`, `[[service.http]]`), not from image labels.
 
 ## Container Naming
 

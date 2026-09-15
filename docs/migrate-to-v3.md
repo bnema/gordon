@@ -1,8 +1,8 @@
-# Migrate to Gordon v2.50
+# Migrate to Gordon v3
 
-Gordon v2.50 replaces domain-based route workloads with declarative apps. The upgrade is intentionally explicit: Gordon does not infer app ownership from domains, does not adopt existing volumes, and does not copy domain secrets into app secrets automatically.
+Gordon v3 replaces domain-based route workloads with declarative apps. The upgrade is intentionally explicit: Gordon does not infer app ownership from domains, does not adopt existing volumes, and does not copy domain secrets into app secrets automatically.
 
-Use this guide before starting the v2.50 daemon with production traffic.
+Use this guide before starting the v3 daemon with production traffic.
 
 ## Before the upgrade
 
@@ -15,7 +15,7 @@ Do not delete old containers, volumes, pass entries, or registry tags during the
 
 ## 1. Update the installation configuration
 
-Remove workload declarations that v2.50 no longer accepts from `gordon.toml`:
+Remove workload declarations that v3 no longer accepts from `gordon.toml`:
 
 - `[routes]`;
 - `[attachments]`;
@@ -26,7 +26,7 @@ Remove workload declarations that v2.50 no longer accepts from `gordon.toml`:
 
 Keep installation-level settings such as entrypoints, TLS, limits, registry policy, external routes, backup destinations, logging, and authentication.
 
-Review every app image registry before applying manifests. v2.50 allows Docker Hub (`docker.io`, including its canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry by default. Add each other registry, including private registries, as an exact hostname and optional non-default port:
+Review every app image registry before applying manifests. v3 allows Docker Hub (`docker.io`, including its canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry by default. Add each other registry, including private registries, as an exact hostname and optional non-default port:
 
 ```toml
 [images]
@@ -42,7 +42,7 @@ name = "example-app"
 
 [[service]]
 name = "web"
-image = "registry.example.com/example-app:v2.50.0"
+image = "registry.example.com/example-app:1.2.3"
 
 [service.secrets]
 DATABASE_URL = "database-url"
@@ -85,7 +85,7 @@ gordon apps deploy example-app --remote production
 gordon apps status example-app --json --remote production
 ```
 
-Push only uploads OCI content in v2.50; it does not deploy. Apply and deploy explicitly.
+Push only uploads OCI content in v3; it does not deploy. Apply and deploy explicitly.
 
 ## 5. Replace tokens and automation
 
@@ -96,7 +96,7 @@ Replace removed route scopes with app scopes:
 
 Generate replacement CI and operator tokens with the minimum required scopes. Update automation that expected push-to-deploy, route mutation commands, previews, attachments, bootstrap, autoroute, pin, or rollback commands.
 
-To roll back an application release in v2.50, apply a manifest containing the previous image tag and deploy it.
+To roll back an application release in v3, apply a manifest containing the previous image tag and deploy it.
 
 ## 6. Validate before opening traffic
 
@@ -125,16 +125,16 @@ Run destructive prune commands only after their dry-run candidate list matches t
 
 ## Rollback
 
-A binary downgrade against v2.50 app state is unsupported. To roll back:
+A binary downgrade against v3 app state is unsupported. To roll back:
 
-1. stop the v2.50 daemon;
+1. stop the v3 daemon;
 2. restore the previous signed binary;
 3. restore its matching configuration and state backup as one set;
 4. restore secret-store entries if any were removed;
 5. restart with automatic pruning disabled;
 6. verify workloads and data before reopening traffic.
 
-Do not attempt rollback by adopting unknown containers or volumes into v2.50 state.
+Do not attempt rollback by adopting unknown containers or volumes into v3 state.
 
 ## Related
 

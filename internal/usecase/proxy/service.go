@@ -41,7 +41,7 @@ type TargetProvider interface {
 
 // Service implements the ProxyService interface.
 // App backends resolve through appTargets (ACTIVE-derived projection);
-// the pre-v2.50 container-service + image-label resolution is removed.
+// the pre-v3 container-service + image-label resolution is removed.
 type Service struct {
 	configSvc in.ConfigService
 	config    Config

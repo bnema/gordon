@@ -105,7 +105,7 @@ enabled = true                           # Gordon-managed network policy
 network_prefix = "gordon"                # Network name prefix
 internal = false                          # Set true to block direct egress from isolated networks
 
-# REMOVED in v2.50 (declare apps in standalone files, see ./apps.md):
+# REMOVED in v3 (declare apps in standalone files, see ./apps.md):
 # [routes], [attachments], [network_groups], [[services]]-as-apps,
 # [service_routes], [auto_route], [previews]
 

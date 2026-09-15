@@ -8,7 +8,7 @@ import "time"
 // change from ErrorResponse for app mutations; clients accept both
 // during the mixed-version window.
 
-// AppError is the v2.50 app-mutation error envelope. Its stable fields are
+// AppError is the v3 app-mutation error envelope. Its stable fields are
 // error/message/cause/hint.
 // `logs` never appears on mutations. Clients accept the legacy
 // single-field ErrorResponse during the mixed-version window.

@@ -192,7 +192,7 @@ keep = 14
 [external_routes]
 # "status.example.com" = "127.0.0.1:9000"
 #
-# NOTE: the pre-v2.50 application keys below were removed by the
+# NOTE: the pre-v3 application keys below were removed by the
 # declarative-apps cutover. Gordon fails boot/reload closed when any of
 # them is present (see validateRetiredAppConfig in internal/app/run.go).
 # Declare application workloads in standalone <app>.toml files instead:

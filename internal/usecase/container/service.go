@@ -1,6 +1,6 @@
 // Package container implements the retained container lifecycle use case.
 //
-// The v2.50 declarative-apps cutover removed the route-container engine
+// The v3 declarative-apps cutover removed the route-container engine
 // (deploy/restart/remove/reconcile/attachments/sync/autostart, image-label
 // inference, readiness cascade, monitor). Workload effects belong to the
 // deployment engine through out.ContainerRuntime directly. What remains:

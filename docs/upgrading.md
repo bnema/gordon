@@ -2,11 +2,11 @@
 
 This guide covers breaking changes and migration steps between major versions.
 
-## v2.50.0: Declarative Apps (breaking)
+## v3.0.0: Declarative Apps (breaking)
 
-v2.50 replaces route-container management with declarative apps. One standalone TOML file defines one app; `gordon apps apply` persists desired state and `gordon apps deploy` activates it. Push transfers OCI content only and never deploys.
+Gordon v3 replaces route-container management with declarative apps. One standalone TOML file defines one app; `gordon apps apply` persists desired state and `gordon apps deploy` activates it. Push transfers OCI content only and never deploys.
 
-Follow [Migrate to Gordon v2.50](./migrate-to-v2.50.md) for the complete cutover procedure, including explicit migration from domain-scoped secrets to app- and service-scoped secrets.
+Follow [Migrate to Gordon v3](./migrate-to-v3.md) for the complete cutover procedure, including explicit migration from domain-scoped secrets to app- and service-scoped secrets.
 
 ### Removed
 
@@ -20,7 +20,7 @@ Follow [Migrate to Gordon v2.50](./migrate-to-v2.50.md) for the complete cutover
 1. Back up databases/volumes and pass entries with the existing procedures. Record original ownership and image versions. No update hook deletes volumes: unknown resources are preserved, never adopted.
 2. Delete the removed keys from `gordon.toml` (installation settings only: entrypoints, TLS, limits, external routes, images policy, backups destinations stay).
 3. Write one `<app>.toml` per app (see [App Manifest](./config/apps.md)): services, `[[service.http]]` hosts, `[service.secrets]` names, volumes, `[[network.shared]]`, backup declarations.
-4. Migrate secret values explicitly with `gordon apps secrets set` after applying each manifest. Gordon does not copy `gordon/env/<domain>/...` entries into `gordon/apps/<uuid>/<service>/...`; follow the [v2.50 secrets migration procedure](./migrate-to-v2.50.md#2-migrate-domain-secrets).
+4. Migrate secret values explicitly with `gordon apps secrets set` after applying each manifest. Gordon does not copy `gordon/env/<domain>/...` entries into `gordon/apps/<uuid>/<service>/...`; follow the [v3 secrets migration procedure](./migrate-to-v3.md#2-migrate-domain-secrets).
 5. `gordon apps apply --file <app>.toml`, then `gordon apps deploy <app>`.
 6. Staging is an ordinary app in another file. A binary downgrade against the new app-state format is unsupported: restore the old installation/config/state and backups through an operator-approved procedure.
 
@@ -28,7 +28,7 @@ Follow [Migrate to Gordon v2.50](./migrate-to-v2.50.md) for the complete cutover
 
 Route keys must be plain hostnames. Use inline tables like `"app.example.com" = { image = "myapp:latest" }`. Gordon still reads legacy `http://...` route entries for backward compatibility and rewrites them on the next save. Update `[routes]`, CLI commands, and automation that reference the old values.
 
-## Next major: Unified smart TCP entrypoints
+## v2.31.0: Unified smart TCP entrypoints
 
 ### Breaking: `server.port` / `server.tls_port` no longer define public listeners
 
@@ -80,26 +80,6 @@ Keep `server.registry_port` for Docker/Podman push and pull traffic; it is separ
 - HTTP-01 requires an HTTP-capable `smart_tcp` entrypoint reachable on external port 80 for each hostname being validated.
 - TLS-ALPN-01 is unsupported.
 - Normal HTTPS fallback certificate priority is static certificates, then public ACME certificates, then Gordon's internal CA.
-
-## v2.30.0 to v2.31.0
-
-### Breaking: Public listener migration
-
-`server.port` and `server.tls_port` no longer create public listeners. Gordon refuses to start when either legacy key is present without an `[entrypoints]` entry, preventing routes from silently becoming unavailable.
-
-Replace the legacy listener settings with a route-capable entrypoint:
-
-```toml
-[server]
-registry_port = 5000
-gordon_domain = "gordon.example.com"
-
-[entrypoints.edge]
-address = ":443"
-protocol = "smart_tcp"
-```
-
-Keep `server.registry_port` for Docker and Podman registry traffic. For public TLS, configure `[tls.acme]` or static certificates; do not use `server.tls_port`.
 
 ### Required for Cloudflare/Proxy Setups: `proxy_allowed_ips`
 
@@ -284,7 +264,7 @@ Gordon v2.30.0 removes password-based authentication entirely. Only token-based 
 5. **Upgrade the binary** and restart:
 
    ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
+   curl -fsSL https://bnema.dev/gordon/install | bash
    systemctl --user restart gordon
    ```
 
@@ -455,7 +435,7 @@ If using pass or sops, update your secret paths:
 3. **Test in staging** if possible
 4. **Upgrade the binary**:
    ```bash
-   curl -fsSL https://gordon.bnema.dev/install | bash
+   curl -fsSL https://bnema.dev/gordon/install | bash
    ```
 5. **Restart Gordon**:
    ```bash
@@ -469,4 +449,4 @@ If using pass or sops, update your secret paths:
 ## Getting Help
 
 - [GitHub Issues](https://github.com/bnema/gordon/issues)
-- [Documentation](https://gordon.bnema.dev/docs)
+- [Documentation](https://bnema.dev/gordon/docs)

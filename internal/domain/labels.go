@@ -12,7 +12,7 @@ const (
 	// exposing secret values.
 	LabelEnvHash = "gordon.env-hash"
 
-	// App ownership labels are stamped by the v2.50 deploy engine on every
+	// App ownership labels are stamped by the v3 deploy engine on every
 	// container and volume it creates (03-deployment.md §4A/B, frozen here
 	// so prune/backup guards can consume them before the engine activates).
 	// The engine wiring that stamps them lands at cutover; until then no

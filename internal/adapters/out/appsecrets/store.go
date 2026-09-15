@@ -1,4 +1,4 @@
-// Package appsecrets implements out.SecretWriter on pass for v2.50 app
+// Package appsecrets implements out.SecretWriter on pass for v3 app
 // secrets at gordon/apps/<app>/<service>/<name>. Values never pass
 // through app state, diffs, logs, or backup metadata — only this
 // explicit write path and the deployment-time read path carry them.

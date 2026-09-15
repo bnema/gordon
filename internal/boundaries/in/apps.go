@@ -7,7 +7,7 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// AppService is the driving port for the v2.50 app lifecycle:
+// AppService is the driving port for the v3 app lifecycle:
 // apply + reads (list/show/diff), lifecycle verbs
 // (deploy/stop/start/restart/remove), op recovery by idempotency key,
 // and service-scoped secret value writes.

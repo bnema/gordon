@@ -19,7 +19,7 @@ Detailed installation guide for production environments.
   set -euo pipefail
   installer="$(mktemp)"
   trap 'rm -f "$installer"' EXIT
-  curl -fsSL --output "$installer" https://gordon.bnema.dev/install
+  curl -fsSL --output "$installer" https://bnema.dev/gordon/install
   if command -v less >/dev/null 2>&1; then
     less "$installer"
   else
@@ -35,16 +35,16 @@ For unattended installs, control PATH configuration explicitly:
 
 ```bash
 # Update supported shell configuration without prompting
-curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=1 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_UPDATE_PATH=1 sh
 
 # Never modify shell configuration
-curl -fsSL https://gordon.bnema.dev/install | GORDON_UPDATE_PATH=0 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_UPDATE_PATH=0 sh
 
 # Use another user-local directory
-curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR="$HOME/bin" GORDON_UPDATE_PATH=1 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_INSTALL_DIR="$HOME/bin" GORDON_UPDATE_PATH=1 sh
 
 # Explicit global installation (may request sudo)
-curl -fsSL https://gordon.bnema.dev/install | GORDON_INSTALL_DIR=/usr/local/bin GORDON_UPDATE_PATH=0 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_INSTALL_DIR=/usr/local/bin GORDON_UPDATE_PATH=0 sh
 ```
 
 `GORDON_INSTALL_DIR` accepts arbitrary safe absolute destinations, including `"$HOME/bin"`, `"$HOME/.local/bin"`, and `/usr/local/bin`. PATH detection and shell configuration use that effective directory. Relative paths, PATH separators, and control characters are rejected. `GORDON_UPDATE_PATH` accepts only `0` or `1`. Do not run the default installer through `sudo`: it refuses to infer a user home and install silently under `/root`.
@@ -341,13 +341,13 @@ Without this setting, Cloudflare traffic receives `403 Forbidden: Only certifica
 
 ```bash
 # Install an exact release
-curl -fsSL https://gordon.bnema.dev/install | GORDON_VERSION=v2.30.1 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_VERSION=v2.30.1 sh
 
 # Install the latest pre-release
-curl -fsSL https://gordon.bnema.dev/install | GORDON_PRERELEASE=1 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_PRERELEASE=1 sh
 
 # Build the current next branch commit from source
-curl -fsSL https://gordon.bnema.dev/install | GORDON_CHANNEL=next sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_CHANNEL=next sh
 ```
 
 Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.

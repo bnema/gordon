@@ -6,7 +6,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
-// retiredMutationPaths are legacy mutation endpoints removed by the v2.50
+// retiredMutationPaths are legacy mutation endpoints removed by the v3
 // declarative-apps cutover. Only the 410 Gone rejection dispatcher below
 // remains; no old business handlers or compatibility behavior is kept.
 var retiredMutationPaths = []string{
@@ -42,7 +42,7 @@ func isRetiredMutation(path string) bool {
 func (h *Handler) handleRetiredMutation(w http.ResponseWriter, _ *http.Request, _ string) {
 	h.sendJSON(w, http.StatusGone, dto.AppError{
 		Error:   "endpoint-retired",
-		Message: "this endpoint was removed by the v2.50 declarative-apps cutover; use /admin/apps/* instead",
+		Message: "this endpoint was removed by the v3 declarative-apps cutover; use /admin/apps/* instead",
 		Hint:    "see gordon apps --help",
 	})
 }
