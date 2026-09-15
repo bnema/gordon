@@ -353,14 +353,22 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		}
 	}
 
-	newContainer, err := s.createStartedContainer(ctx, route, existing, resources)
+	// The container this deploy replaces. The exited owner is treated as the
+	// predecessor, so the replacement runs under a temporary name and the owner
+	// survives until the switch completes.
+	previous := previousContainerForDeploy(existing, resources.retainedOwner)
+
+	newContainer, err := s.createStartedContainer(ctx, route, previous, resources)
 	if err != nil {
+		// The retained owner is still there: a retry snapshots its mounts again.
 		return nil, err
 	}
 
 	invalidated := s.activateDeployedContainer(ctx, route.Domain, newContainer)
 
-	// Post-switch stabilization: verify new container stays running
+	// Post-switch stabilization: verify new container stays running. Only a
+	// running predecessor can be rolled back to, so a retained exited owner is
+	// not stabilized against.
 	if hasExisting {
 		stable, stabilizeErr := s.stabilizeNewContainer(ctx, route.Domain, newContainer, existing)
 		if stabilizeErr != nil {
@@ -375,6 +383,10 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 		}
 	}
 
+	if !mayFinalizeRetainedOwner(ctx, resources, newContainer) {
+		previous = nil
+	}
+
 	// Finalize old container in the background — the new container is already
 	// serving traffic, so there's no reason to block the deploy response while
 	// waiting for the old container to stop (which can take 20s if the app
@@ -382,7 +394,7 @@ func (s *Service) Deploy(ctx context.Context, route domain.Route) (*domain.Conta
 	s.cleanupWg.Add(1)
 	go func() {
 		defer s.cleanupWg.Done()
-		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, existing, hasExisting, invalidated, newContainer.ID)
+		s.finalizePreviousContainer(context.WithoutCancel(ctx), route.Domain, previous, previous != nil, invalidated, newContainer.ID)
 	}()
 
 	// Start container log collection (non-blocking, errors don't fail deployment)
@@ -495,6 +507,10 @@ type deployResources struct {
 	envVars        []string
 	envHash        string
 	volumes        map[string]string
+	// retainedOwner is the route's exited volume owner. It holds the only proof
+	// that the preserved volumes belong to this route, so Deploy replaces it
+	// under a temporary name and removes it only once the replacement runs.
+	retainedOwner *domain.Container
 }
 
 // resolveExistingContainer returns the currently running container for a domain.
@@ -561,6 +577,56 @@ func (s *Service) resolveExistingContainer(ctx context.Context, domainName strin
 	return nil, false
 }
 
+// previousContainerForDeploy returns the container a deploy replaces: the tracked
+// one when there is one, otherwise the exited owner retained as ownership
+// evidence. Naming the replacement after it leaves that owner on disk until the
+// switch completes.
+func previousContainerForDeploy(existing, retainedOwner *domain.Container) *domain.Container {
+	if existing != nil {
+		return existing
+	}
+	return retainedOwner
+}
+
+// mayFinalizeRetainedOwner reports whether the deploy may remove the exited owner
+// it retained as ownership evidence. The owner is kept unless the replacement
+// mounts every volume it preserved: it is the last container proving which
+// volumes belong to the route, so dropping it while the data is unaccounted for
+// would leave the route unable to resolve its own volumes.
+func mayFinalizeRetainedOwner(ctx context.Context, resources *deployResources, replacement *domain.Container) bool {
+	if resources.retainedOwner == nil || containerOwnsEveryVolume(replacement, resources.volumes) {
+		return true
+	}
+
+	log := zerowrap.FromCtx(ctx)
+	log.Warn().
+		Str(zerowrap.FieldEntityID, resources.retainedOwner.ID).
+		Msg("replacement container does not mount every preserved volume; keeping the exited owner as ownership evidence")
+
+	return false
+}
+
+// deployVolumePreference returns the volumes a deploy should reuse and the exited
+// owner to retain as ownership evidence for them. An existing container is
+// authoritative on its own, and a failed listing has no snapshot to offer.
+func deployVolumePreference(existing *domain.Container, allContainers []*domain.Container, listed bool, domainName string) (volumePreference, *domain.Container) {
+	if existing != nil || !listed {
+		return volumePreference{mounts: namedVolumeMounts(existing)}, nil
+	}
+
+	owner := snapshotRouteVolumeOwner(allContainers, domainName)
+	mounts := namedVolumeMounts(owner)
+	if len(mounts) == 0 {
+		return volumePreference{}, nil
+	}
+
+	// The owner is kept as ownership evidence until the replacement mounts
+	// these volumes: while it is the only container mounting them, deleting it
+	// first would leave a failed deploy without any way to prove that a legacy
+	// volume belongs to this route.
+	return volumePreference{mounts: mounts, fromExitedContainer: true}, owner
+}
+
 func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route, existing *domain.Container) (*deployResources, error) {
 	log := zerowrap.FromCtx(ctx)
 
@@ -583,13 +649,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		// the operator sees as a failed deploy and can retry.
 		log.WrapErr(listErr, "failed to list containers for deploy; skipping volume snapshot and orphan cleanup")
 	}
-	preferredVolumes := volumePreference{mounts: namedVolumeMounts(existing)}
-	if existing == nil && listErr == nil {
-		preferredVolumes = volumePreference{
-			mounts:              snapshotRouteVolumeMounts(allContainers, route.Domain),
-			fromExitedContainer: true,
-		}
-	}
+	preferredVolumes, retainedOwner := deployVolumePreference(existing, allContainers, listErr == nil, route.Domain)
 
 	imageRef, err := s.buildValidatedImageRef(ctx, route.Image)
 	if err != nil {
@@ -631,13 +691,16 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		return nil, err
 	}
 
-	// Cleanup runs last because it deletes the exited owner whose mounts were
-	// snapshotted above: every step that may still need that evidence (image
-	// resolution, legacy volume ownership probes) must have completed. The new
-	// container is created only after this function returns, so the names are
-	// free by then.
+	// Cleanup runs last because it removes route containers whose mounts were
+	// needed above: every step that may still need that evidence (image
+	// resolution, legacy volume ownership probes) must have completed. The
+	// retained owner is not removed here, only after the replacement runs.
 	if listErr == nil {
-		if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID, allContainers); err != nil {
+		retainedID := ""
+		if retainedOwner != nil {
+			retainedID = retainedOwner.ID
+		}
+		if err := s.cleanupOrphanedContainers(ctx, route.Domain, existingID, retainedID, allContainers); err != nil {
 			log.WrapErr(err, "failed to cleanup orphaned containers")
 		}
 	}
@@ -650,6 +713,7 @@ func (s *Service) prepareDeployResources(ctx context.Context, route domain.Route
 		envVars:        envVars,
 		envHash:        envHash,
 		volumes:        volumes,
+		retainedOwner:  retainedOwner,
 	}, nil
 }
 
@@ -2717,21 +2781,21 @@ func (s *Service) createNetworkIfNeeded(ctx context.Context, networkName string)
 	return nil
 }
 
-// snapshotRouteVolumeMounts returns the named volume mounts of the route's
-// exited containers from an already-fetched container listing. Canonical, -new
-// and -next are all valid names left behind by an interrupted deploy, checked
-// in that order so the canonical container wins when several exist. Only
-// containers whose labels prove they belong to this route contribute: matching
-// on the name alone would let a foreign workload squatting a gordon name inject
-// its volumes into this route.
-func snapshotRouteVolumeMounts(allContainers []*domain.Container, domainName string) map[string]namedVolumeMount {
+// snapshotRouteVolumeOwner returns the route's leftover volume owner from an
+// already-fetched container listing. Canonical, -new and -next are all valid
+// names left behind by an interrupted deploy, checked in that order so the
+// canonical container wins when several exist. Only containers whose labels
+// prove they belong to this route are returned: matching on the name alone
+// would let a foreign workload squatting a gordon name inject its volumes into
+// this route.
+func snapshotRouteVolumeOwner(allContainers []*domain.Container, domainName string) *domain.Container {
 	canonicalName := managedContainerName(domainName)
 	for _, name := range []string{canonicalName, canonicalName + "-new", canonicalName + "-next"} {
 		for _, c := range allContainers {
 			if c == nil || c.Name != name || !hasRouteOwnershipLabels(c, domainName) {
 				continue
 			}
-			return namedVolumeMounts(c)
+			return c
 		}
 	}
 	return nil
@@ -2739,7 +2803,7 @@ func snapshotRouteVolumeMounts(allContainers []*domain.Container, domainName str
 
 // hasRouteOwnershipLabels reports whether the container labels prove the
 // container belongs to the route. isManagedRouteContainerForDomain cannot answer
-// that for the names matched by snapshotRouteVolumeMounts, because its name
+// that for the names matched by snapshotRouteVolumeOwner, because its name
 // clause holds by definition once the name matches. Only leftover containers
 // reach this check: a running container holding the route's canonical name is
 // already resolved as the previous deploy by resolveExistingContainer.
@@ -2756,15 +2820,17 @@ func hasRouteOwnershipLabels(c *domain.Container, domainName string) bool {
 // cleanupOrphanedContainers removes the route's canonical, -new and -next
 // containers left behind by a previous or interrupted deploy. allContainers is
 // the listing the caller already fetched: cleanup must decide on the same
-// snapshot the caller used, so it never re-lists on its own.
-func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName string, skipContainerID string, allContainers []*domain.Container) error {
+// snapshot the caller used, so it never re-lists on its own. skipContainerID is
+// the container the deploy is replacing; keepContainerID, when set, is an exited
+// owner retained as ownership evidence, and is never removed here.
+func (s *Service) cleanupOrphanedContainers(ctx context.Context, domainName, skipContainerID, keepContainerID string, allContainers []*domain.Container) error {
 	log := zerowrap.FromCtx(ctx)
 	expectedName := managedContainerName(domainName)
 	expectedNewName := expectedName + "-new"
 	expectedNextName := expectedName + "-next"
 
 	for _, c := range allContainers {
-		if c == nil || c.ID == skipContainerID {
+		if c == nil || c.ID == skipContainerID || c.ID == keepContainerID {
 			continue
 		}
 		if c.Name != expectedName && c.Name != expectedNewName && c.Name != expectedNextName {
@@ -3436,6 +3502,24 @@ func containerMountsVolume(container *domain.Container, volumeName string) bool 
 		}
 	}
 	return false
+}
+
+// containerOwnsEveryVolume reports whether the container mounts every volume in
+// volumes. Callers use it to confirm a replacement took over preserved data
+// before they drop the container that proved where that data lives.
+func containerOwnsEveryVolume(container *domain.Container, volumes map[string]string) bool {
+	if len(volumes) == 0 {
+		return true
+	}
+	if container == nil {
+		return false
+	}
+	for _, name := range volumes {
+		if !containerMountsVolume(container, name) {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeEnvironmentVariables(dockerfileEnv, userEnv []string) []string {

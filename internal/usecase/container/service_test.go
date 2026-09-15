@@ -1908,16 +1908,11 @@ func TestService_PrepareDeployResources_ReusesExitedOwnerVolumes(t *testing.T) {
 		},
 	}
 
-	// One listing serves both the mount snapshot and the cleanup pass. Cleanup
-	// runs only after volume resolution finished, so the exited owner is still
-	// listed while the snapshot is validated; without the snapshot the owner is
-	// removed first and the legacy ownership probe finds no owner, failing the
-	// deploy closed with ErrVolumeOwnershipUnverified.
+	// One listing serves both the mount snapshot and the cleanup pass. The owner
+	// is not removed here: the snapshot stays the last proof of which volume
+	// holds the data until the replacement container mounts it.
 	runtime.EXPECT().ListContainers(mock.Anything, true).
 		Return([]*domain.Container{exitedOwner}, nil).Once()
-	runtime.EXPECT().InspectContainer(mock.Anything, "exited-owner").Return(exitedOwner, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "exited-owner").Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "exited-owner", true).Return(nil).Once()
 
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
@@ -1937,11 +1932,14 @@ func TestService_PrepareDeployResources_ReusesExitedOwnerVolumes(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": legacyName}, resources.volumes)
+	assert.Same(t, exitedOwner, resources.retainedOwner)
 	runtime.AssertNotCalled(t, "VolumeExists", mock.Anything, stableName)
 	runtime.AssertNotCalled(t, "CreateVolume", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
 }
 
-func TestService_PrepareDeployResources_ResolvesOwnershipBeforeRemovingOwner(t *testing.T) {
+func TestService_PrepareDeployResources_KeepsExitedOwnerForLegacyOwnershipProbe(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
 	envLoader := mocks.NewMockEnvLoader(t)
 	svc := NewService(runtime, envLoader, nil, nil, Config{
@@ -1969,21 +1967,11 @@ func TestService_PrepareDeployResources_ResolvesOwnershipBeforeRemovingOwner(t *
 		},
 	}
 
-	// The listing reflects removals like Docker does: once orphan cleanup
-	// deletes the owner, the ownership probe can no longer see it. Removing the
-	// owner before volume resolution would therefore fail the deploy closed with
-	// ErrVolumeOwnershipUnverified.
-	listed := []*domain.Container{exitedOwner}
-	runtime.EXPECT().ListContainers(mock.Anything, true).RunAndReturn(
-		func(context.Context, bool) ([]*domain.Container, error) {
-			return listed, nil
-		},
-	).Times(2)
-	runtime.EXPECT().InspectContainer(mock.Anything, "exited-owner").Return(exitedOwner, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "exited-owner").Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "exited-owner", true).Run(
-		func(context.Context, string, bool) { listed = nil },
-	).Return(nil).Once()
+	// The owner outlives the preparation pass, so the ownership probe that runs
+	// while resolving the image's own volume path still sees it. Removing the
+	// owner first would fail the deploy closed with ErrVolumeOwnershipUnverified.
+	runtime.EXPECT().ListContainers(mock.Anything, true).
+		Return([]*domain.Container{exitedOwner}, nil).Times(2)
 
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
@@ -2003,7 +1991,10 @@ func TestService_PrepareDeployResources_ResolvesOwnershipBeforeRemovingOwner(t *
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": legacyName, "/var/lib/legacy": legacyName}, resources.volumes)
+	assert.Same(t, exitedOwner, resources.retainedOwner)
 	runtime.AssertNotCalled(t, "VolumeExists", mock.Anything, stableName)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
 }
 
 func TestService_PrepareDeployResources_PrefersExistingContainerMounts(t *testing.T) {
@@ -2084,9 +2075,6 @@ func TestService_PrepareDeployResources_ReusesExitedTempNameOwnerVolumes(t *test
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).
 		Return([]*domain.Container{exitedTempOwner}, nil).Once()
-	runtime.EXPECT().InspectContainer(mock.Anything, "exited-new-owner").Return(exitedTempOwner, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "exited-new-owner").Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "exited-new-owner", true).Return(nil).Once()
 
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
@@ -2104,8 +2092,10 @@ func TestService_PrepareDeployResources_ReusesExitedTempNameOwnerVolumes(t *test
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": legacyName}, resources.volumes)
+	assert.Same(t, exitedTempOwner, resources.retainedOwner)
 	runtime.AssertNotCalled(t, "VolumeExists", mock.Anything, stableName)
 	runtime.AssertNotCalled(t, "CreateVolume", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-new-owner", true)
 }
 
 func TestService_PrepareDeployResources_IgnoresForeignContainerOnCanonicalName(t *testing.T) {
@@ -2143,7 +2133,6 @@ func TestService_PrepareDeployResources_IgnoresForeignContainerOnCanonicalName(t
 	runtime.EXPECT().InspectContainer(mock.Anything, "foreign-container").Return(foreign, nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "foreign-container").Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "foreign-container", true).Return(nil).Once()
-
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
 	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
@@ -2164,6 +2153,7 @@ func TestService_PrepareDeployResources_IgnoresForeignContainerOnCanonicalName(t
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": stableName}, resources.volumes)
+	assert.Nil(t, resources.retainedOwner)
 	runtime.AssertNotCalled(t, "VolumeExists", mock.Anything, foreignVolume)
 }
 
@@ -2197,9 +2187,6 @@ func TestService_PrepareDeployResources_IgnoresDeletedSnapshottedVolume(t *testi
 
 	runtime.EXPECT().ListContainers(mock.Anything, true).
 		Return([]*domain.Container{exitedOwner}, nil).Once()
-	runtime.EXPECT().InspectContainer(mock.Anything, "exited-owner").Return(exitedOwner, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "exited-owner").Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "exited-owner", true).Return(nil).Once()
 
 	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
 	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
@@ -2220,6 +2207,8 @@ func TestService_PrepareDeployResources_IgnoresDeletedSnapshottedVolume(t *testi
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"/data": stableName}, resources.volumes)
+	assert.Same(t, exitedOwner, resources.retainedOwner)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
 }
 
 func TestService_PrepareDeployResources_SkipsCleanupWhenListingFails(t *testing.T) {
@@ -2279,6 +2268,227 @@ func TestService_PrepareDeployResources_SkipsCleanupWhenListingFails(t *testing.
 	assert.Equal(t, map[string]string{"/data": legacyName}, resources.volumes)
 	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
+}
+
+// exitedOwnerDeployFixture wires a Deploy for a route whose only container is
+// an exited volume owner left by a reboot: resolveExistingContainer cannot see
+// it, so the deploy knows it only through the container listing.
+type exitedOwnerDeployFixture struct {
+	svc        *Service
+	runtime    *mocks.MockContainerRuntime
+	eventBus   *mocks.MockEventPublisher
+	route      domain.Route
+	owner      *domain.Container
+	legacyName string
+}
+
+func newExitedOwnerDeployFixture(t *testing.T, ownerName string) *exitedOwnerDeployFixture {
+	t.Helper()
+
+	runtime := mocks.NewMockContainerRuntime(t)
+	envLoader := mocks.NewMockEnvLoader(t)
+	eventBus := mocks.NewMockEventPublisher(t)
+	svc := NewService(runtime, envLoader, eventBus, nil, Config{
+		AllowedRegistries:  []string{"docker.io"},
+		VolumeAutoCreate:   true,
+		VolumePrefix:       "gordon",
+		ReadinessDelay:     time.Millisecond,
+		StabilizationDelay: time.Millisecond,
+	}, nil)
+
+	legacyName := legacyVolumeName("gordon", "app.example.com", "/data")
+	owner := &domain.Container{
+		ID:     "exited-owner",
+		Name:   ownerName,
+		Status: "exited",
+		Labels: map[string]string{
+			domain.LabelManaged: "true",
+			domain.LabelRoute:   "app.example.com",
+			domain.LabelDomain:  "app.example.com",
+		},
+		VolumeMounts: []domain.ContainerVolumeMount{
+			{Name: legacyName, Type: "volume", Destination: "/data"},
+		},
+	}
+
+	runtime.EXPECT().ListContainers(mock.Anything, false).Return([]*domain.Container{}, nil).Once()
+	runtime.EXPECT().ListContainers(mock.Anything, true).
+		Return([]*domain.Container{owner}, nil).Once()
+
+	runtime.EXPECT().ListImages(mock.Anything).Return([]string{"myapp:latest"}, nil)
+	runtime.EXPECT().GetImageExposedPorts(mock.Anything, "myapp:latest").Return([]int{8080}, nil)
+	runtime.EXPECT().GetImageLabels(mock.Anything, "myapp:latest").Return(nil, nil)
+	envLoader.EXPECT().LoadEnv(mock.Anything, "app.example.com").Return([]string{}, nil)
+	runtime.EXPECT().InspectImageEnv(mock.Anything, "myapp:latest").Return([]string{}, nil)
+
+	// The snapshot resolves the image path to the volume the owner mounts, so
+	// resolution only has to confirm that volume still exists.
+	runtime.EXPECT().VolumeExists(mock.Anything, legacyName).Return(true, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "myapp:latest").Return([]string{"/data"}, nil).Once()
+
+	return &exitedOwnerDeployFixture{
+		svc:        svc,
+		runtime:    runtime,
+		eventBus:   eventBus,
+		route:      domain.Route{Domain: "app.example.com", Image: "myapp:latest"},
+		owner:      owner,
+		legacyName: legacyName,
+	}
+}
+
+func TestService_Deploy_KeepsExitedOwnerUntilReplacementRuns(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com")
+
+	// The exited owner still holds the canonical name, so the replacement runs
+	// under a temporary name and takes over the preserved volume.
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-app.example.com-new", Status: "created"}
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-app.example.com-new" && cfg.Volumes["/data"] == f.legacyName
+	})).Return(newContainer, nil)
+	f.runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	f.runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	inspectCall := f.runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:           "new-container",
+		Name:         "gordon-app.example.com-new",
+		Status:       "running",
+		Ports:        []int{8080},
+		VolumeMounts: []domain.ContainerVolumeMount{{Name: f.legacyName, Type: "volume", Destination: "/data"}},
+	}, nil)
+	f.eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	// The owner is dropped and the replacement promoted only once that
+	// replacement was created, started, ready and inspected with the volume.
+	f.runtime.EXPECT().StopContainer(mock.Anything, "exited-owner").Return(nil).NotBefore(inspectCall.Call)
+	f.runtime.EXPECT().RemoveContainer(mock.Anything, "exited-owner", true).Return(nil).NotBefore(inspectCall.Call)
+	f.runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).NotBefore(inspectCall.Call)
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "new-container", result.ID)
+	f.svc.WaitForCleanup()
+}
+
+func TestService_Deploy_KeepsExitedOwnerUntilReplacementRuns_AfterTempNameOwner(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com-new")
+
+	// The owner already holds a temporary name, so the replacement must take the
+	// other one instead of colliding with it.
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-app.example.com-next", Status: "created"}
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return cfg.Name == "gordon-app.example.com-next"
+	})).Return(newContainer, nil)
+	f.runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	f.runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	inspectCall := f.runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:           "new-container",
+		Name:         "gordon-app.example.com-next",
+		Status:       "running",
+		Ports:        []int{8080},
+		VolumeMounts: []domain.ContainerVolumeMount{{Name: f.legacyName, Type: "volume", Destination: "/data"}},
+	}, nil)
+	f.eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	f.runtime.EXPECT().StopContainer(mock.Anything, "exited-owner").Return(nil).NotBefore(inspectCall.Call)
+	f.runtime.EXPECT().RemoveContainer(mock.Anything, "exited-owner", true).Return(nil).NotBefore(inspectCall.Call)
+	f.runtime.EXPECT().RenameContainer(mock.Anything, "new-container", "gordon-app.example.com").Return(nil).NotBefore(inspectCall.Call)
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "new-container", result.ID)
+	f.svc.WaitForCleanup()
+}
+
+func TestService_Deploy_KeepsExitedOwnerWhenReplacementCreationFails(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com")
+
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).
+		Return(nil, errors.New("create failed"))
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+
+	// The owner survives the failed deploy, so a retry snapshots its mounts
+	// instead of losing the only proof of where the volumes live.
+	f.runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	f.runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
+}
+
+func TestService_Deploy_KeepsExitedOwnerWhenReplacementFailsToStart(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com")
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-app.example.com-new", Status: "created"}
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	f.runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(errors.New("start failed"))
+	// The failed candidate is cleaned up; the exited owner is not.
+	f.runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil)
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	f.runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	f.runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
+}
+
+func TestService_Deploy_KeepsExitedOwnerWhenReplacementFailsReadiness(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com")
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-app.example.com-new", Status: "created"}
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	f.runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	// Fail readiness through a missing healthcheck: the delay mode would wait
+	// out its recovery window before giving up.
+	f.svc.mu.Lock()
+	f.svc.config.ReadinessMode = "docker-health"
+	f.svc.mu.Unlock()
+	f.runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Once()
+	f.runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "new-container").Return("", false, nil).Once()
+	f.runtime.EXPECT().GetContainerLogs(mock.Anything, "new-container", false).Return(dockerLogFrames(1, "boom\n"), nil)
+	f.runtime.EXPECT().StopContainer(mock.Anything, "new-container").Return(nil)
+	f.runtime.EXPECT().RemoveContainer(mock.Anything, "new-container", true).Return(nil)
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	var deployErr *domain.DeployFailureError
+	require.ErrorAs(t, err, &deployErr)
+	assert.Nil(t, result)
+	f.runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	f.runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
+}
+
+func TestService_Deploy_KeepsExitedOwnerWhenReplacementMissesVolume(t *testing.T) {
+	f := newExitedOwnerDeployFixture(t, "gordon-app.example.com")
+
+	newContainer := &domain.Container{ID: "new-container", Name: "gordon-app.example.com-new", Status: "created"}
+	f.runtime.EXPECT().CreateContainer(mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Return(newContainer, nil)
+	f.runtime.EXPECT().StartContainer(mock.Anything, "new-container").Return(nil)
+	f.runtime.EXPECT().IsContainerRunning(mock.Anything, "new-container").Return(true, nil).Times(2)
+	// The inspected replacement mounts nothing, so it never took over the data.
+	f.runtime.EXPECT().InspectContainer(mock.Anything, "new-container").Return(&domain.Container{
+		ID:     "new-container",
+		Name:   "gordon-app.example.com-new",
+		Status: "running",
+		Ports:  []int{8080},
+	}, nil)
+	f.eventBus.EXPECT().Publish(domain.EventContainerDeployed, mock.AnythingOfType("*domain.ContainerEventPayload")).Return(nil)
+
+	result, err := f.svc.Deploy(testContext(), f.route)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	f.svc.WaitForCleanup()
+
+	// Lifeless ownership evidence beats none: the owner is kept, and the
+	// replacement keeps its temporary name because the canonical one is taken.
+	f.runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "exited-owner")
+	f.runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "exited-owner", true)
+	f.runtime.AssertNotCalled(t, "RenameContainer", mock.Anything, "new-container", "gordon-app.example.com")
 }
 
 func TestService_SetupVolumes_RejectsLegacyVolumeSharedWithForeignWorkload(t *testing.T) {
@@ -4179,7 +4389,7 @@ func TestService_CleanupOrphanedContainers_SkipsRestartingContainer(t *testing.T
 	svc := NewService(runtime, envLoader, eventBus, nil, Config{}, nil)
 	ctx := testContext()
 
-	err := svc.cleanupOrphanedContainers(ctx, "test.example.com", "", []*domain.Container{
+	err := svc.cleanupOrphanedContainers(ctx, "test.example.com", "", "", []*domain.Container{
 		{
 			ID:     "restarting-container",
 			Name:   "gordon-test.example.com",
@@ -4202,7 +4412,7 @@ func TestService_CleanupOrphanedContainers_SkipsContainerStartedSinceListing(t *
 		Status: "running",
 	}, nil).Once()
 
-	err := svc.cleanupOrphanedContainers(testContext(), "test.example.com", "", []*domain.Container{
+	err := svc.cleanupOrphanedContainers(testContext(), "test.example.com", "", "", []*domain.Container{
 		{
 			ID:     "revived-container",
 			Name:   "gordon-test.example.com",
@@ -4223,7 +4433,7 @@ func TestService_CleanupOrphanedContainers_SkipsRemovalWhenStatusUnreadable(t *t
 	// is recoverable, killing a live container is not.
 	runtime.EXPECT().InspectContainer(mock.Anything, "unknown-container").Return(nil, errors.New("inspect failed")).Once()
 
-	err := svc.cleanupOrphanedContainers(testContext(), "test.example.com", "", []*domain.Container{
+	err := svc.cleanupOrphanedContainers(testContext(), "test.example.com", "", "", []*domain.Container{
 		{
 			ID:     "unknown-container",
 			Name:   "gordon-test.example.com",
