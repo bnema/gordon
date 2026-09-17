@@ -161,6 +161,47 @@ func TestParse_RetiredArraySyntaxHintIsActionable(t *testing.T) {
 	}
 }
 
+// TestParse_NonArrayTablesKeepPlainDiagnostic proves the keyed-schema hint
+// stays reserved for real array-of-tables shapes: a [service] table, a
+// scalar service value, and a string array under services are not array
+// tables, so they keep the plain unknown-field diagnostic instead of
+// being described as [[service]]/[[services]].
+func TestParse_NonArrayTablesKeepPlainDiagnostic(t *testing.T) {
+	cases := []struct {
+		name    string
+		doc     string
+		wantErr string
+	}{
+		{
+			"service table",
+			"name = \"blog\"\n[service]\nimage = \"img:1\"\n",
+			"unknown TOML fields or tables: service",
+		},
+		{
+			"service scalar",
+			"name = \"blog\"\nservice = \"web\"\n",
+			"unknown TOML fields or tables: service",
+		},
+		{
+			// services is a keyed table, so an array value fails to decode.
+			// Assert only that the diagnostic names the key, never go-toml's
+			// internal wording.
+			"services string array",
+			"name = \"blog\"\nservices = [\"web\"]\n",
+			"services",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := appmanifest.Parse([]byte(tc.doc), "blog.toml")
+			require.Error(t, err)
+			assert.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+			assert.Contains(t, strings.ToLower(err.Error()), strings.ToLower(tc.wantErr))
+			assert.NotContains(t, err.Error(), "array-of-tables is a retired app shape")
+		})
+	}
+}
+
 // TestParse_UnknownNestedFieldRejected proves strict decoding still
 // reports the dotted path of an unknown table or field under a service.
 func TestParse_UnknownNestedFieldRejected(t *testing.T) {

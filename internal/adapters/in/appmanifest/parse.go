@@ -176,7 +176,7 @@ func legacyKeyedSchemaHint(data []byte) string {
 	}
 	const fix = "array-of-tables is a retired app shape; use one [services.<name>] table per service (keyed schema), e.g. [services.web]"
 	switch {
-	case doc["service"] != nil:
+	case isArrayTable(doc["service"]):
 		return "[[service]] " + fix
 	case isArrayTable(doc["services"]):
 		return "[[services]] " + fix
@@ -185,11 +185,21 @@ func legacyKeyedSchemaHint(data []byte) string {
 	}
 }
 
-// isArrayTable reports whether a loosely decoded value is an array of
-// tables (the [[name]] TOML shape), as opposed to a keyed table.
+// isArrayTable reports whether a loosely decoded value is the [[name]]
+// TOML shape: a non-empty array whose elements are all tables. Scalar
+// values, string arrays, and keyed tables are not array tables, so they
+// keep the plain unknown-field diagnostic.
 func isArrayTable(v any) bool {
-	_, ok := v.([]any)
-	return ok
+	tables, ok := v.([]any)
+	if !ok || len(tables) == 0 {
+		return false
+	}
+	for _, table := range tables {
+		if _, ok := table.(map[string]any); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // toDomain maps raw TOML onto domain types with normalization and defaults.
