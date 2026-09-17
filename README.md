@@ -56,11 +56,10 @@ Minimal app file (`blog.toml`):
 ```toml
 name = "blog"
 
-[[service]]
-name = "web"
+[services.web]
 image = "gordon.mydomain.com/myapp:v1.2.0"
 
-[[service.http]]
+[[services.web.http]]
 host = "blog.mydomain.com"
 port = 3000
 ```

@@ -112,7 +112,7 @@ syslog_identifier = "gordon-access"
 # ADMINISTRATIVE APP BIND MOUNTS
 # =============================================================================
 # A named policy is the only way an app manifest may reference a host path.
-# The manifest declares [[service.bind]] name = "<mount>"; direct host paths
+# The manifest declares [[services.<name>.bind]] name = "<mount>"; direct host paths
 # are always rejected. allowed_apps/allowed_services are exact and non-empty,
 # and read_only/readonly force read-only: either side wins.
 # [app_mounts.app-logs]
@@ -186,7 +186,7 @@ prefix = ""
 [backups.volumes.retention]
 keep = 14
 
-[routes]
+# [routes] is retired (see REMOVED list below): declaring it fails boot/reload closed.
 # "app.example.com" = { image = "myapp:latest" }
 
 [external_routes]
@@ -199,18 +199,19 @@ keep = 14
 # one file per app, applied with `gordon apps apply --file <app>.toml`
 # and activated with `gordon apps deploy <app>`.
 #
-# REMOVED: [routes]            -> [[service.http]] in an app file
-# REMOVED: [attachments]       -> [[service]] + volumes in an app file
+# REMOVED: [routes]            -> [[services.<name>.http]] in an app file
+# REMOVED: [attachments]       -> [services.<name>] + volumes in an app file
 # REMOVED: [network_groups]    -> [[network.shared]] in an app file
-# REMOVED: [[services]]-as-app -> one [[service]] per app file
-# REMOVED: [service_routes]    -> [[service.http]] in an app file
+# REMOVED: app-like [[services]] -> one [services.<name>] table per app file
+#          (installation [[services]] below stays valid for L4 workloads)
+# REMOVED: [service_routes]    -> [[services.<name>.http]] in an app file
 # REMOVED: [auto]/[auto_route] -> explicit interfaces in an app file
 # REMOVED: [previews]          -> staging is an ordinary app file
 
 # Gordon-managed standalone L4 services. Use service:<name>:<port> from
 # traffic routers to expose published loopback ports. Standalone services
 # are installation-level: they live in gordon.toml, not in app files.
-# (App services are declared with [[service]] in <app>.toml files and
+# (App services are declared with [services.<name>] tables in <app>.toml files and
 # managed with `gordon apps`; see docs/cli/apps.md.)
 # [[services]]
 # name = "rust"

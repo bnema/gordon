@@ -48,15 +48,14 @@ name = "blog"
 [env]
 APP_ENV = "production"   # app-wide public env, injected into all services
 
-[[service]]
-name = "web"
+[services.web]
 image = "gordon.mydomain.com/blog:1.4.2"
 
-[[service.http]]
+[[services.web.http]]
 host = "blog.mydomain.com"
 port = 3000
 
-[service.secrets]        # ENV name -> secret name (values stay in pass)
+[services.web.secrets]        # ENV name -> secret name (values stay in pass)
 DATABASE_URL = "database-url"
 ```
 
@@ -101,7 +100,7 @@ Safe removal is the default. `gordon apps remove` withdraws workloads and frees 
 An app's HTTP interfaces declare the hosts Gordon serves:
 
 ```toml
-[[service.http]]
+[[services.web.http]]
 host = "app.example.com"
 port = 3000
 ```
@@ -131,7 +130,7 @@ Deploy adds AND removes memberships without disconnecting unrelated services. Sh
 Services declare persistent storage in the app manifest. Every Dockerfile `VOLUME` path must be declared explicitly; deployment rejects unmanaged image volumes:
 
 ```toml
-[[service.volume]]
+[[services.web.volume]]
 name = "web-data"
 path = "/data"
 ```
@@ -152,7 +151,7 @@ APP_ENV = "production"
 Service-specific values use `secrets` even when non-confidential:
 
 ```toml
-[service.secrets]
+[services.web.secrets]
 DATABASE_URL = "database-url"
 ```
 
@@ -174,7 +173,7 @@ Gordon uses an internal event system for coordination. Registry storage events n
 
 ## Backups and Recovery
 
-Gordon runs PostgreSQL logical backups and volume archives to S3 for explicitly declared app targets. Declarations live in the app manifest (`[[service.database]]`, `[service.backup]`); storage infrastructure (destinations, schedules, retention) stays global.
+Gordon runs PostgreSQL logical backups and volume archives to S3 for explicitly declared app targets. Declarations live in the app manifest (`[[services.<name>.database]]`, `[services.<name>.backup]`); storage infrastructure (destinations, schedules, retention) stays global.
 
 Stored backups are never deleted when declarations change — only schedules update on deploy.
 

@@ -20,7 +20,7 @@ Remove workload declarations that v3 no longer accepts from `gordon.toml`:
 - `[routes]`;
 - `[attachments]`;
 - `[network_groups]`;
-- app-like `[[services]]` and `[service_routes]`;
+- app-workload entries formerly declared as `[[services]]`, and `[service_routes]` (installation-level `[[services]]` used for standalone L4 workloads stays valid);
 - `[auto_route]` and `[auto_route_allowed_domains]`;
 - `[previews]`.
 
@@ -40,23 +40,24 @@ Create one app manifest per workload. See [App Manifest](./config/apps.md).
 ```toml
 name = "example-app"
 
-[[service]]
-name = "web"
+[services.web]
 image = "registry.example.com/example-app:1.2.3"
 
-[service.secrets]
+[services.web.secrets]
 DATABASE_URL = "database-url"
 
-[[service.http]]
+[[services.web.http]]
 host = "app.example.com"
 port = 8080
 ```
 
 The manifest contains secret **names**, never secret values.
 
+Manifests written for an early v3 alpha used `[[service]]` with a `name` field; that shape is rejected, not converted. Rewrite each service as a keyed `[services.<name>]` table with `[services.<name>.*]` children — see [Migrating a v3 alpha app manifest](./upgrading.md#migrating-a-v3-alpha-app-manifest).
+
 ## 2. Migrate domain secrets
 
-Gordon does not convert domain-scoped secrets into app secrets. Inventory the old key names, declare them under `[service.secrets]`, then apply the manifest before setting values:
+Gordon does not convert domain-scoped secrets into app secrets. Inventory the old key names, declare them under `[services.<name>.secrets]`, then apply the manifest before setting values:
 
 ```bash
 gordon apps apply --file ./example-app.toml --remote production

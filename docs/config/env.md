@@ -1,6 +1,6 @@
 # Environment Variables
 
-App environment comes from two places: public `[env]` in the app file (injected into all services at deploy) and per-service `[service.secrets]` (values in pass, resolved at deploy). This page covers the installation `[env]` store location and the provider syntax used in env files.
+App environment comes from two places: public `[env]` in the app file (injected into all services at deploy) and per-service `[services.<name>.secrets]` (values in pass, resolved at deploy). This page covers the installation `[env]` store location and the provider syntax used in env files.
 
 ## Configuration
 
@@ -23,7 +23,7 @@ The `[env]` directory backs the installation secret store:
 - With the `pass` backend, Gordon imports eligible plaintext `.env` files into pass at startup and removes each source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon leaves the source file in place for operator review.
 - With the `sops` or `unsafe` backend, env files remain the source of truth; use `${sops:...}` syntax for encrypted values when `secrets_backend = "sops"`.
 
-App containers do NOT read these files: services receive the app file's `[env]` plus their resolved `[service.secrets]` at deploy time (see [App Manifest](./apps.md)).
+App containers do NOT read these files: services receive the app file's `[env]` plus their resolved `[services.<name>.secrets]` at deploy time (see [App Manifest](./apps.md)).
 
 ## Secret Provider Syntax
 

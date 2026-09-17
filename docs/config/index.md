@@ -21,7 +21,7 @@ address = ":443"
 protocol = "smart_tcp"
 ```
 
-Application workloads live in standalone app files, not in `gordon.toml` — see [App Manifest](./apps.md). Retired workload keys such as `[routes]`, `[attachments]`, `[network_groups]`, app-like `[[services]]`, `[service_routes]`, `[auto_route]`, and `[previews]` are rejected at startup.
+Application workloads live in standalone app files, not in `gordon.toml` — see [App Manifest](./apps.md). Retired workload keys such as `[routes]`, `[attachments]`, `[network_groups]`, `[service_routes]`, `[auto_route]`, and `[previews]` are rejected at startup. Installation-level `[[services]]` for standalone L4 workloads remains valid.
 
 > **Note:** `gordon_domain` is the canonical registry and Admin API host.
 >
@@ -106,7 +106,7 @@ network_prefix = "gordon"                # Network name prefix
 internal = false                          # Set true to block direct egress from isolated networks
 
 # REMOVED in v3 (declare apps in standalone files, see ./apps.md):
-# [routes], [attachments], [network_groups], [[services]]-as-apps,
+# [routes], [attachments], [network_groups],
 # [service_routes], [auto_route], [previews]
 
 # Backups

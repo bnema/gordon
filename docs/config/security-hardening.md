@@ -53,7 +53,7 @@ allowed_services = ["web"]          # exact, non-empty
 root = "/srv/gordon"                # optional boundary
 ```
 
-The manifest references only the policy name: `[[service.bind]] name = "app-logs"` with an absolute container `path`.
+The manifest references only the policy name: `[[services.<name>.bind]] name = "app-logs"` with an absolute container `path`.
 
 - `allowed_apps` and `allowed_services` are exact, non-empty allowlists, so least privilege is enforced by construction. There is no wildcard, prefix, or empty-means-all form.
 - `source` is resolved through symlinks and must be a regular file or directory under `root`. When `root` is omitted, the source's parent directory is the boundary. Devices, sockets, FIFOs, and escaping symlinks are refused.

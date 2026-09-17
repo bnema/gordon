@@ -26,10 +26,9 @@ import (
 // surface (one service, one HTTP host).
 const validLocalAppManifest = `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "img:1"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 `
