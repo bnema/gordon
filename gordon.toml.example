@@ -186,7 +186,7 @@ prefix = ""
 [backups.volumes.retention]
 keep = 14
 
-[routes]
+# [routes] is retired (see REMOVED list below): declaring it fails boot/reload closed.
 # "app.example.com" = { image = "myapp:latest" }
 
 [external_routes]
