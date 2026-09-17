@@ -28,11 +28,11 @@ Containers created before v3 may carry these labels. They are read-only provenan
 
 ### Backup Metadata
 
-Backups are declarative rather than label-driven. App manifests declare database and volume targets in `[service.backup]`; Gordon does not define or write Docker labels to enable backups, select database types or schedules, or identify backup sidecars.
+Backups are declarative rather than label-driven. App manifests declare database and volume targets in `[services.<name>.backup]`; Gordon does not define or write Docker labels to enable backups, select database types or schedules, or identify backup sidecars.
 
 ## Image Labels
 
-No image-label inference exists in v3: Gordon never creates routes, deploys, or resolves image names from Dockerfile labels. Push with a domain-like name or a `gordon.domain` label is treated as an ordinary image name. Readiness and proxy ports come from the app manifest (`[service.readiness]`, `[[service.http]]`), not from image labels.
+No image-label inference exists in v3: Gordon never creates routes, deploys, or resolves image names from Dockerfile labels. Push with a domain-like name or a `gordon.domain` label is treated as an ordinary image name. Readiness and proxy ports come from the app manifest (`[services.<name>.readiness]`, `[[services.<name>.http]]`), not from image labels.
 
 ## Container Naming
 

@@ -113,8 +113,7 @@ docker push gordon.example.com/myapp:latest
 Reference it from the app manifest:
 
 ```toml
-[[service]]
-name = "web"
+[services.web]
 image = "gordon.example.com/myapp:latest"
 ```
 

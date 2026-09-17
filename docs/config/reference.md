@@ -142,7 +142,7 @@ preserve = true                              # Keep volumes when containers are 
 # ADMINISTRATIVE APP BIND MOUNTS
 # =============================================================================
 # A named policy is the only way an app manifest may reference a host path.
-# App manifests declare [[service.bind]] with name = "<mount>"; direct host
+# App manifests declare [[services.<name>.bind]] with name = "<mount>"; direct host
 # paths are always rejected, and the policy's allowlists are exact and
 # non-empty. read_only on the policy and readonly on the bind both force
 # read-only: either side wins and a bind never weakens its policy.
@@ -168,8 +168,9 @@ preserve = true                              # Keep volumes when containers are 
 # allowed_services = ["transcoder"]          # Required; exact, non-empty
 
 # REMOVED in v3: [routes], [attachments], [network_groups],
-# [[services]]-as-apps, [service_routes], [auto_route], [previews].
-# Declare apps in standalone files (see ./apps.md).
+# app-like [[services]], [service_routes], [auto_route], [previews].
+# Declare apps in standalone files (see ./apps.md). The standalone
+# [[services]] table below stays valid for installation-level L4 workloads.
 
 # =============================================================================
 # EXTERNAL ROUTES
@@ -342,14 +343,14 @@ Note: for all `backups.retention.*` keys, `0` means keep no backups for that ret
 
 ## App Manifest HTTP Interfaces
 
-`[[service.http]]` declares HTTP interfaces in a standalone app manifest (see [App Manifest](./apps.md)).
+`[[services.<name>.http]]` declares HTTP interfaces in a standalone app manifest (see [App Manifest](./apps.md)).
 
 | Key | Values | Default | Description |
 |-----|--------|---------|-------------|
-| `service.http[].visibility` | `"public"`, `"internal"` | `"public"` | `public` is proxied by host and may terminate TLS; `internal` is reachable only from the app's private network |
-| `service.http[].host` | hostname | none | Required for public interfaces; must be absent for `visibility = "internal"` |
-| `service.http[].port` | integer | none | Required container port for every interface |
-| `service.http[].tls` | `"auto"`, `"always"`, `"never"` | `"auto"` | Public interfaces only; `visibility = "internal"` rejects any declared value |
+| `services.<name>.http[].visibility` | `"public"`, `"internal"` | `"public"` | `public` is proxied by host and may terminate TLS; `internal` is reachable only from the app's private network |
+| `services.<name>.http[].host` | hostname | none | Required for public interfaces; must be absent for `visibility = "internal"` |
+| `services.<name>.http[].port` | integer | none | Required container port for every interface |
+| `services.<name>.http[].tls` | `"auto"`, `"always"`, `"never"` | `"auto"` | Public interfaces only; `visibility = "internal"` rejects any declared value |
 
 `visibility = "internal"` creates no proxy route, host reservation, certificate target, or host port publication. A container port declared by both an internal HTTP interface and an externally backed interface (public HTTP or TCP) is rejected, as are duplicate internal HTTP ports.
 

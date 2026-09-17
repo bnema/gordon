@@ -11,20 +11,19 @@ A service declares its databases and volumes in the app manifest, and lists
 which of them are backed up:
 
 ```toml
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/shop/api:1.4.2"
 
-[[service.database]]
+[[services.api.database]]
 name = "orders"
 type = "postgres"
 schedule = "daily"
 
-[[service.volume]]
+[[services.api.volume]]
 name = "data"
 path = "/var/lib/data"
 
-[service.backup]
+[services.api.backup]
 postgres = ["orders"]
 volume = ["data"]
 ```
@@ -32,7 +31,7 @@ volume = ["data"]
 A declared database or volume that the service's backup declaration does not
 reference is not a backup target.
 
-Administrative bind mounts are never backup targets. `[service.backup]` accepts
+Administrative bind mounts are never backup targets. `[services.<name>.backup]` accepts
 only declared databases and volumes, and Gordon never archives an
 operator-owned host path exposed through a bind.
 

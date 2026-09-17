@@ -81,10 +81,9 @@ func appsServerDo(t *testing.T, srv *httptest.Server, method, target string, bod
 
 const validAppManifest = `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "img:1"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 `

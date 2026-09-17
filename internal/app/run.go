@@ -129,7 +129,7 @@ type Config struct {
 	} `mapstructure:"apps"`
 
 	// AppMounts declares administrative bind policies keyed by stable mount
-	// name, referenced by name from an app manifest's [[service.bind]].
+	// name, referenced by name from an app manifest's [[services.<name>.bind]].
 	AppMounts map[string]AppMountPolicy `mapstructure:"app_mounts"`
 
 	// AppDevices declares administrative device grants keyed by stable
@@ -463,15 +463,17 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 // retiredAppConfigKeys are pre-v3 application keys removed with the
 // declarative-apps cutover. Presence fails boot/reload closed with a
 // config-retired diagnostic naming the fix — never a silent migration.
+// Keys that remain live installation-level settings are deliberately
+// absent: top-level "services" still declares standalone L4 workloads
+// (see config.services), so it must never be rejected here.
 var retiredAppConfigKeys = []struct {
 	key  string
 	hint string
 }{
-	{"routes", "declare [[service.http]] in an app file, then 'gordon apps apply'"},
-	{"attachments", "declare [[service]] + volumes; attachments are removed"},
+	{"routes", "declare [[services.<name>.http]] in an app file, then 'gordon apps apply'"},
+	{"attachments", "declare [services.<name>] + volumes; attachments are removed"},
 	{"network_groups", "declare [[network.shared]] with ownership verification"},
-	{"services", "one [[service]] per app file"},
-	{"service_routes", "declare [[service.http]] instead"},
+	{"service_routes", "declare [[services.<name>.http]] instead"},
 	{"auto", "feature removed; declare explicit interfaces"},
 	{"auto_route", "feature removed; declare explicit interfaces"},
 	{"auto_route_allowed_domains", "feature removed; declare explicit interfaces"},

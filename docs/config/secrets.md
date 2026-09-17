@@ -139,7 +139,7 @@ API_SECRET=${sops:production.yaml:api.key}
 
 ## App Secret Values
 
-App secret names are registered in the app manifest (`[service.secrets]` maps ENV name to secret name); values are written separately and stay in pass:
+App secret names are registered in the app manifest (`[services.<name>.secrets]` maps ENV name to secret name); values are written separately and stay in pass:
 
 ```bash
 gordon apps secrets set blog --service web DATABASE_URL=...

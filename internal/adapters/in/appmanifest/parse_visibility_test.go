@@ -17,10 +17,9 @@ func TestParse_VisibilityNormalization(t *testing.T) {
 	t.Run("absent visibility stays public with auto tls", func(t *testing.T) {
 		doc := `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "registry.example.com/blog/web:1.0.0"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 `
@@ -35,13 +34,12 @@ port = 8080
 	t.Run("explicit internal keeps tls absent and has no host", func(t *testing.T) {
 		doc := `
 name = "blog"
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/blog/api:1.0.0"
-[service.readiness]
+[services.api.readiness]
 type = "http"
 path = "/healthz"
-[[service.http]]
+[[services.api.http]]
 visibility = "internal"
 port = 8080
 `
@@ -58,10 +56,9 @@ port = 8080
 	t.Run("explicit public normalizes to auto tls", func(t *testing.T) {
 		doc := `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "registry.example.com/blog/web:1.0.0"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 visibility = "public"
@@ -79,53 +76,48 @@ func TestParse_VisibilityRejections(t *testing.T) {
 	tests := map[string]string{
 		"internal forbids host": `
 name = "blog"
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/blog/api:1.0.0"
-[[service.http]]
+[[services.api.http]]
 host = "blog.example.com"
 port = 8080
 visibility = "internal"
 `,
 		"internal forbids tls": `
 name = "blog"
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/blog/api:1.0.0"
-[[service.http]]
+[[services.api.http]]
 port = 8080
 visibility = "internal"
 tls = "auto"
 `,
 		"internal forbids explicitly empty tls": `
 name = "blog"
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/blog/api:1.0.0"
-[[service.http]]
+[[services.api.http]]
 port = 8080
 visibility = "internal"
 tls = ""
 `,
 		"unknown visibility value": `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "registry.example.com/blog/web:1.0.0"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 visibility = "vpn"
 `,
 		"internal port also published as tcp": `
 name = "blog"
-[[service]]
-name = "api"
+[services.api]
 image = "registry.example.com/blog/api:1.0.0"
-[[service.http]]
+[[services.api.http]]
 port = 8080
 visibility = "internal"
-[[service.tcp]]
+[[services.api.tcp]]
 port = 8080
 `,
 	}
@@ -143,10 +135,9 @@ port = 8080
 func TestParse_VisibilityUnknownFieldStillRejected(t *testing.T) {
 	doc := `
 name = "blog"
-[[service]]
-name = "web"
+[services.web]
 image = "registry.example.com/blog/web:1.0.0"
-[[service.http]]
+[[services.web.http]]
 host = "blog.example.com"
 port = 8080
 visibilities = "internal"

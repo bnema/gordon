@@ -10,16 +10,50 @@ Follow [Migrate to Gordon v3](./migrate-to-v3.md) for the complete cutover proce
 
 ### Removed
 
-- `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]` (+ `_allowed_domains`), `network_services`-as-apps, `[previews]` keys in `gordon.toml`. Gordon fails boot/reload closed with a `config-retired` diagnostic naming the fix when any of them is present — never a silent migration.
+- App-workload keys in `gordon.toml`: `[routes]`, `[attachments]`, `[network_groups]`, `[service_routes]`, `[auto_route]` (+ `_allowed_domains`), and `[previews]`. Gordon fails boot/reload closed with a `config-retired` diagnostic naming the fix when any of them is present — never a silent migration.
+- Installation-level `[[services]]` (standalone L4 workloads) and `[[network_services]]` (L4 traffic plane) stay valid. Only their old app-workload semantics were removed; declare application workloads in standalone files instead. See [Standalone Services](./config/services.md).
 - CLI: `pin`, `preview`, `attachments`, `bootstrap`, `autoroute allow`, `routes add/remove/purge`, push deploy/route inference, implicit deploys on push/reload, label/env-file inference. Removed HTTP mutation endpoints answer `410 Gone`.
 - Scopes `admin:routes:*` are replaced by `admin:apps:read` (list, show, diff, status) and `admin:apps:write` (apply, deploy, lifecycle, secrets). Regenerate CI tokens, e.g. `--scopes "push,pull,admin:apps:read,admin:apps:write"`.
 - No historical rollback command: roll back by applying a manifest that references the previous tag and deploying again.
+
+### Migrating a v3 alpha app manifest
+
+Early v3 alpha manifests used the array-of-tables form `[[service]]` with a `name` field and `[service.*]` children. That shape is rejected with a keyed-schema diagnostic, not converted. Rewrite each service as a `[services.<name>]` table.
+
+Before (alpha, rejected):
+
+```toml
+name = "blog"
+
+[[service]]
+name = "web"
+image = "registry.example.com/blog/web:1.2.3"
+
+[[service.http]]
+host = "blog.example.com"
+port = 8080
+```
+
+After (current keyed schema):
+
+```toml
+name = "blog"
+
+[services.web]
+image = "registry.example.com/blog/web:1.2.3"
+
+[[services.web.http]]
+host = "blog.example.com"
+port = 8080
+```
+
+Names containing dots must be quoted: `[services."web.api"]` and `[[services."web.api".http]]`. See [App Manifest](./config/apps.md).
 
 ### Manual migration
 
 1. Back up databases/volumes and pass entries with the existing procedures. Record original ownership and image versions. No update hook deletes volumes: unknown resources are preserved, never adopted.
 2. Delete the removed keys from `gordon.toml` (installation settings only: entrypoints, TLS, limits, external routes, images policy, backups destinations stay).
-3. Write one `<app>.toml` per app (see [App Manifest](./config/apps.md)): services, `[[service.http]]` hosts, `[service.secrets]` names, volumes, `[[network.shared]]`, backup declarations.
+3. Write one `<app>.toml` per app (see [App Manifest](./config/apps.md)): services, `[[services.<name>.http]]` hosts, `[services.<name>.secrets]` names, volumes, `[[network.shared]]`, backup declarations.
 4. Migrate secret values explicitly with `gordon apps secrets set` after applying each manifest. Gordon does not copy `gordon/env/<domain>/...` entries into `gordon/apps/<uuid>/<service>/...`; follow the [v3 secrets migration procedure](./migrate-to-v3.md#2-migrate-domain-secrets).
 5. `gordon apps apply --file <app>.toml`, then `gordon apps deploy <app>`.
 6. Staging is an ordinary app in another file. A binary downgrade against the new app-state format is unsupported: restore the old installation/config/state and backups through an operator-approved procedure.

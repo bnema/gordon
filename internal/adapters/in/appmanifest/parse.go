@@ -9,6 +9,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +21,12 @@ import (
 )
 
 // rawManifest mirrors the frozen TOML schema for strict decoding.
+// Services is keyed by service name: [services.<name>].
 type rawManifest struct {
-	Name     string            `toml:"name"`
-	Env      map[string]string `toml:"env"`
-	Services []rawService      `toml:"service"`
-	Network  rawNetwork        `toml:"network"`
+	Name     string                `toml:"name"`
+	Env      map[string]string     `toml:"env"`
+	Services map[string]rawService `toml:"services"`
+	Network  rawNetwork            `toml:"network"`
 }
 
 // rawNetwork mirrors [network] and its [[network.shared]] children.
@@ -30,9 +34,9 @@ type rawNetwork struct {
 	Shared []rawSharedNetwork `toml:"shared"`
 }
 
-// rawService mirrors one [[service]] table.
+// rawService mirrors one [services.<name>] table. The service name is
+// the table key, so there is no name field inside the table.
 type rawService struct {
-	Name      string            `toml:"name"`
 	Image     string            `toml:"image"`
 	Command   []string          `toml:"command"`
 	StopGrace string            `toml:"stop_grace"`
@@ -50,7 +54,7 @@ type rawService struct {
 	Backup    rawBackup     `toml:"backup"`
 }
 
-// rawReadiness mirrors [service.readiness].
+// rawReadiness mirrors [services.<name>.readiness].
 type rawReadiness struct {
 	Type     string `toml:"type"`
 	Path     string `toml:"path"`
@@ -59,7 +63,7 @@ type rawReadiness struct {
 	Timeout  string `toml:"timeout"`
 }
 
-// rawHTTP mirrors [[service.http]].
+// rawHTTP mirrors [[services.<name>.http]].
 type rawHTTP struct {
 	Host string `toml:"host"`
 	Port int    `toml:"port"`
@@ -70,42 +74,42 @@ type rawHTTP struct {
 	Visibility string `toml:"visibility"`
 }
 
-// rawTCP mirrors [[service.tcp]].
+// rawTCP mirrors [[services.<name>.tcp]].
 type rawTCP struct {
 	Entrypoint string `toml:"entrypoint"`
 	Port       int    `toml:"port"`
 	Publish    string `toml:"publish"`
 }
 
-// rawUDP mirrors [[service.udp]].
+// rawUDP mirrors [[services.<name>.udp]].
 type rawUDP struct {
 	Entrypoint string `toml:"entrypoint"`
 	Port       int    `toml:"port"`
 	Publish    string `toml:"publish"`
 }
 
-// rawVolume mirrors [[service.volume]].
+// rawVolume mirrors [[services.<name>.volume]].
 type rawVolume struct {
 	Name     string `toml:"name"`
 	Path     string `toml:"path"`
 	ReadOnly bool   `toml:"readonly"`
 }
 
-// rawBind mirrors [[service.bind]].
+// rawBind mirrors [[services.<name>.bind]].
 type rawBind struct {
 	Name     string `toml:"name"`
 	Path     string `toml:"path"`
 	ReadOnly bool   `toml:"readonly"`
 }
 
-// rawDatabase mirrors [[service.database]].
+// rawDatabase mirrors [[services.<name>.database]].
 type rawDatabase struct {
 	Name     string `toml:"name"`
 	Type     string `toml:"type"`
 	Schedule string `toml:"schedule"`
 }
 
-// rawBackup mirrors [service.backup].
+// rawBackup mirrors [services.<name>.backup].
 type rawBackup struct {
 	Postgres []string `toml:"postgres"`
 	Volume   []string `toml:"volume"`
@@ -124,6 +128,9 @@ func Parse(data []byte, sourceName string) (domain.AppSpec, []string, error) {
 	var raw rawManifest
 	decoder := toml.NewDecoder(bytes.NewReader(data)).DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
+		if hint := legacyKeyedSchemaHint(data); hint != "" {
+			return domain.AppSpec{}, nil, fmt.Errorf("%w: %s", domain.ErrInvalidAppSpec, hint)
+		}
 		return domain.AppSpec{}, nil, fmt.Errorf("%w: %s", domain.ErrInvalidAppSpec, formatDecodeError(err))
 	}
 	spec, err := toDomain(raw)
@@ -158,6 +165,33 @@ func formatDecodeError(err error) string {
 	return "unknown TOML fields or tables: " + strings.Join(unknown, ", ")
 }
 
+// legacyKeyedSchemaHint recognizes the retired array-of-tables app shapes
+// ([[service]] and [[services]]) and returns a stable, actionable
+// diagnostic. It inspects the loosely decoded document rather than
+// matching go-toml error wording, which is not a stable contract.
+func legacyKeyedSchemaHint(data []byte) string {
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return ""
+	}
+	const fix = "array-of-tables is a retired app shape; use one [services.<name>] table per service (keyed schema), e.g. [services.web]"
+	switch {
+	case doc["service"] != nil:
+		return "[[service]] " + fix
+	case isArrayTable(doc["services"]):
+		return "[[services]] " + fix
+	default:
+		return ""
+	}
+}
+
+// isArrayTable reports whether a loosely decoded value is an array of
+// tables (the [[name]] TOML shape), as opposed to a keyed table.
+func isArrayTable(v any) bool {
+	_, ok := v.([]any)
+	return ok
+}
+
 // toDomain maps raw TOML onto domain types with normalization and defaults.
 func toDomain(raw rawManifest) (domain.AppSpec, error) {
 	spec := domain.AppSpec{
@@ -169,8 +203,11 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 	for key, value := range raw.Env {
 		spec.Env[key] = value
 	}
-	for i := range raw.Services {
-		svc, err := toDomainService(raw.Services[i])
+	// Iterate the service map in sorted key order so that domain
+	// conversion and every downstream projection are deterministic
+	// regardless of TOML declaration order.
+	for _, name := range slices.Sorted(maps.Keys(raw.Services)) {
+		svc, err := toDomainService(name, raw.Services[name])
 		if err != nil {
 			return domain.AppSpec{}, err
 		}
@@ -205,10 +242,11 @@ func toDomainHTTP(service string, h rawHTTP) (domain.AppHTTPInterface, error) {
 	}, nil
 }
 
-// toDomainService maps one raw service with defaults.
-func toDomainService(raw rawService) (domain.AppService, error) {
+// toDomainService maps one raw service with defaults. serviceName is the
+// [services.<name>] table key and becomes the service identity.
+func toDomainService(serviceName string, raw rawService) (domain.AppService, error) {
 	svc := domain.AppService{
-		Name:    raw.Name,
+		Name:    serviceName,
 		Image:   normalizeImage(raw.Image),
 		Command: append([]string(nil), raw.Command...),
 		Secrets: map[string]string{},
@@ -221,18 +259,18 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 	if raw.StopGrace != "" {
 		parsed, err := time.ParseDuration(raw.StopGrace)
 		if err != nil {
-			return domain.AppService{}, fmt.Errorf("%w: service %q stop_grace %q is invalid: %v", domain.ErrInvalidAppSpec, raw.Name, raw.StopGrace, err)
+			return domain.AppService{}, fmt.Errorf("%w: service %q stop_grace %q is invalid: %v", domain.ErrInvalidAppSpec, serviceName, raw.StopGrace, err)
 		}
 		stopGrace = parsed
 	}
 	svc.StopGrace = stopGrace
-	readiness, err := toDomainReadiness(raw.Name, raw.Readiness)
+	readiness, err := toDomainReadiness(serviceName, raw.Readiness)
 	if err != nil {
 		return domain.AppService{}, err
 	}
 	svc.Readiness = readiness
 	for _, h := range raw.HTTP {
-		iface, err := toDomainHTTP(raw.Name, h)
+		iface, err := toDomainHTTP(serviceName, h)
 		if err != nil {
 			return domain.AppService{}, err
 		}
@@ -280,7 +318,7 @@ func toDomainService(raw rawService) (domain.AppService, error) {
 		})
 	}
 	if len(raw.Env) > 0 {
-		return domain.AppService{}, fmt.Errorf("%w: service %q [service.env] is not allowed, use secrets", domain.ErrInvalidAppSpec, raw.Name)
+		return domain.AppService{}, fmt.Errorf("%w: service %q [services.%s.env] is not allowed, use secrets", domain.ErrInvalidAppSpec, serviceName, tomlKey(serviceName))
 	}
 	return svc, nil
 }
@@ -305,6 +343,30 @@ func toDomainReadiness(service string, raw rawReadiness) (domain.AppReadiness, e
 		readiness.Timeout = parsed
 	}
 	return readiness, nil
+}
+
+// tomlKey renders a service name as a TOML key, quoting it when it is
+// not a bare key (service names may contain dots, e.g. web.api).
+func tomlKey(name string) string {
+	if isBareTOMLKey(name) {
+		return name
+	}
+	return strconv.Quote(name)
+}
+
+// isBareTOMLKey reports whether name is a TOML bare key (A-Za-z0-9_-).
+func isBareTOMLKey(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // normalizeImage records a missing tag as explicit :latest.

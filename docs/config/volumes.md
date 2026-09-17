@@ -7,7 +7,7 @@ Persistent app storage is declared in each app manifest. The installation-level 
 Services declare persistent mounts in the app manifest:
 
 ```toml
-[[service.volume]]
+[[services.web.volume]]
 name = "database-data"
 path = "/var/lib/postgresql/data"
 ```
@@ -30,7 +30,7 @@ allowed_services = ["web"]         # required; exact, non-empty
 
 ```toml
 # app manifest
-[[service.bind]]
+[[services.web.bind]]
 name = "app-logs"        # must match [app_mounts.<name>]
 path = "/var/lib/collector/host-logs"   # container destination
 readonly = true
@@ -47,15 +47,14 @@ A read-only log collector is the typical use. Its own state is a named volume; t
 ```toml
 name = "metrics-agent"
 
-[[service]]
-name = "collector"
+[services.collector]
 image = "registry.example.com/metrics/collector:2.1.0"
 
-[[service.volume]]
+[[services.collector.volume]]
 name = "collector-state"
 path = "/var/lib/collector"
 
-[[service.bind]]
+[[services.collector.bind]]
 name = "app-logs"
 path = "/var/lib/collector/host-logs"
 readonly = true
@@ -63,7 +62,7 @@ readonly = true
 
 Collection is one-way: the collector reads operator-owned logs and cannot write back through the bind.
 
-Every Dockerfile `VOLUME` path must be mapped explicitly. A matching `[[service.volume]]` declaration maps it to a Gordon-owned volume; a `[[service.bind]]` whose container `path` equals the `VOLUME` path also satisfies the mapping, because the bind mounts over that image-declared volume. Any `VOLUME` path with neither mapping fails closed at deploy with an unmanaged-volume error. A bind destination may not collide with a declared volume path.
+Every Dockerfile `VOLUME` path must be mapped explicitly. A matching `[[services.<name>.volume]]` declaration maps it to a Gordon-owned volume; a `[[services.<name>.bind]]` whose container `path` equals the `VOLUME` path also satisfies the mapping, because the bind mounts over that image-declared volume. Any `VOLUME` path with neither mapping fails closed at deploy with an unmanaged-volume error. A bind destination may not collide with a declared volume path.
 
 Runtime volume names are implementation details. Use `gordon volumes list` and ownership labels to inspect them; do not derive ownership from a name, rename volumes, or edit Gordon's ownership records.
 

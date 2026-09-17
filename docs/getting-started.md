@@ -81,7 +81,7 @@ address = ":443"                         # Public smart TCP edge (choose your bi
 protocol = "smart_tcp"
 ```
 
-Application workloads are NOT declared in `gordon.toml`. Each app lives in its own standalone TOML file (see step 8). The old `[routes]`, `[attachments]`, `[network_groups]`, `[[services]]`-as-apps, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed in v3 — Gordon refuses to start when any of them is present.
+Application workloads are NOT declared in `gordon.toml`. Each app lives in its own standalone TOML file (see step 8). The old `[routes]`, `[attachments]`, `[network_groups]`, `[service_routes]`, `[auto_route]`, and `[previews]` keys were removed in v3 — Gordon refuses to start when any of them is present. Installation-level `[[services]]` for standalone L4 workloads remains valid.
 
 ## 5. Set Up DNS (Including Wildcard)
 
@@ -156,11 +156,10 @@ Write the app file (`blog.toml`). The file is intended for Git: it must never co
 ```toml
 name = "blog"
 
-[[service]]
-name = "web"
+[services.web]
 image = "gordon.mydomain.com/myapp:latest"
 
-[[service.http]]
+[[services.web.http]]
 host = "app.mydomain.com"
 port = 3000
 ```
@@ -178,7 +177,7 @@ What these commands do:
 - `gordon apps apply` validates the manifest and persists it as desired state.
 - `gordon apps deploy` activates the accepted revision: runs preflight, withdraws the service from traffic, stops and removes the old container, starts the new container, waits for readiness, publishes the new `ACTIVE` state, and routes traffic to it.
 
-If the app needs secrets, register their names in the manifest (`[service.secrets]` maps ENV name to secret name), then write values — values stay in pass, never in the file:
+If the app needs secrets, register their names in the manifest (`[services.<name>.secrets]` maps ENV name to secret name), then write values — values stay in pass, never in the file:
 
 ```bash
 gordon apps secrets set blog --service web APP_ENV=production --remote prod
