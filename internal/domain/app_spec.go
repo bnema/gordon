@@ -111,6 +111,12 @@ type AppService struct {
 	Devices   []string
 	Databases []AppDatabase
 	Backup    AppBackup
+	// LogExportDisabled opts the service out of OTLP log export. The
+	// manifest resolves it from [services.<name>.telemetry] logs, then
+	// the app-level [telemetry] logs, then the default (export on). The
+	// zero value keeps export enabled for states persisted before the
+	// field existed.
+	LogExportDisabled bool
 }
 
 // AppReadiness is the explicit readiness check for a service.
@@ -1065,11 +1071,20 @@ func diffService(name string, desired, effective AppService) []string {
 		changed = append(changed, "service/"+name+"/binds")
 	}
 	changed = appendDeviceChanges(changed, name, desired.Devices, effective.Devices)
+	return appendOperationChanges(changed, name, desired, effective)
+}
+
+// appendOperationChanges compares the operational (non-runtime) service
+// settings: databases, backups, and telemetry.
+func appendOperationChanges(changed []string, name string, desired, effective AppService) []string {
 	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
 		changed = append(changed, "service/"+name+"/databases")
 	}
 	if !reflect.DeepEqual(desired.Backup, effective.Backup) {
 		changed = append(changed, "service/"+name+"/backup")
+	}
+	if desired.LogExportDisabled != effective.LogExportDisabled {
+		changed = append(changed, "service/"+name+"/telemetry")
 	}
 	return changed
 }
