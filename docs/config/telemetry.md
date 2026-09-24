@@ -72,7 +72,7 @@ Loki indexes `service.name` and `service.namespace` as stream labels by default;
 {service_namespace=~".+"} | gordon_service="web"    # every "web" service, all apps
 ```
 
-Container output is followed from the moment Gordon starts following a container; earlier output is not replayed. Lines longer than 64 KiB are truncated. Export is buffered and never slows the proxy or the app: on overload, the oldest records are dropped.
+Container output is exported from the moment Gordon starts, including the first lines of every container deployed afterwards. Output emitted while Gordon is stopped is not exported. Lines longer than 64 KiB are truncated. Export is buffered and never slows the proxy or the app: on overload, the oldest records are dropped.
 
 ### Per-app opt-out
 

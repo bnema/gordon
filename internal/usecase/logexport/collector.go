@@ -32,7 +32,11 @@ type Collector struct {
 
 	reconcileInterval time.Duration
 	retryDelay        time.Duration
-	now               func() time.Time
+	// startedAt bounds replay: a follower exports output emitted since
+	// the collector was created, so a container deployed later is
+	// exported from its first line, while restarting Gordon never
+	// re-exports older output.
+	startedAt time.Time
 
 	mu        sync.Mutex
 	followers map[string]*follower
@@ -52,7 +56,7 @@ func NewCollector(state out.AppStateReader, streamer out.ContainerLogStreamer, e
 		exporter:          exporter,
 		reconcileInterval: defaultReconcileInterval,
 		retryDelay:        defaultRetryDelay,
-		now:               time.Now,
+		startedAt:         time.Now(),
 		followers:         map[string]*follower{},
 	}
 }
@@ -146,13 +150,12 @@ func (c *Collector) startLocked(parent context.Context, containerID string, sour
 	}()
 }
 
-// follow streams one container until canceled. A stream that ends
-// (container restarting) resumes after the last exported line, so a
-// reconnect neither duplicates nor replays older output. Output emitted
-// before the follower started is not exported.
+// follow streams one container until canceled, starting at startedAt.
+// A stream that ends (container restarting) resumes after the last
+// exported line, so a reconnect neither duplicates nor replays output.
 func (c *Collector) follow(ctx context.Context, containerID string, source domain.LogSource) {
 	log := zerowrap.FromCtx(ctx)
-	since := c.now()
+	since := c.startedAt
 	for {
 		err := c.streamer.StreamContainerLogs(ctx, containerID, since, func(line domain.ContainerLogLine) {
 			c.exporter.Export(ctx, domain.LogRecord{

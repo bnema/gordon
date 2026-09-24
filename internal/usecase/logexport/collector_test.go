@@ -164,7 +164,7 @@ func TestCollector_ResumesAfterLastLineOnReconnect(t *testing.T) {
 	exporter.EXPECT().Export(mock.Anything, mock.Anything).Return()
 
 	c := NewCollector(state, streamer, exporter)
-	c.now = func() time.Time { return start }
+	c.startedAt = start
 	c.retryDelay = time.Millisecond
 	defer c.stopAll()
 	require.NoError(t, c.Reconcile(context.Background()))
