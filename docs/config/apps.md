@@ -163,6 +163,20 @@ Each app gets a private network automatically. `[[network.shared]]` adds service
 
 Services of the same app communicate over that private network and resolve each other by service alias. Different apps are isolated by default; cross-app traffic requires both services to declare the same `[[network.shared]]` membership. See [Network Isolation](./network-isolation.md).
 
+## Telemetry
+
+When [telemetry log export](./telemetry.md#logs) is enabled, the stdout and stderr of every service are exported by default under `service.name = "<app>.<service>"`. `logs = false` opts out; a service setting overrides the app setting:
+
+```toml
+[telemetry]
+logs = false         # no service of this app exports...
+
+[services.web.telemetry]
+logs = true          # ...except web
+```
+
+Changing either setting is a service change: it applies on the next deploy.
+
 ## Strictness
 
 Unknown fields, duplicate service names, unresolved service/entrypoint/backup refs, secret/env collisions, unsafe identities, and forbidden mounts are hard errors at apply time. Canonical host conflicts (including system domains and external routes) fail before persistence.

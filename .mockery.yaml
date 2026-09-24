@@ -20,6 +20,8 @@ packages:
       EnvLoader:
       ContainerLogWriter:
       Metrics:
+      LogExporter:
+      ContainerLogStreamer:
       TokenStore:
       AppState:
       AppStateReader:

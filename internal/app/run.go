@@ -83,6 +83,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/deployment"
 	"github.com/bnema/gordon/internal/usecase/health"
 	"github.com/bnema/gordon/internal/usecase/images"
+	"github.com/bnema/gordon/internal/usecase/logexport"
 	"github.com/bnema/gordon/internal/usecase/logs"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/gordon/internal/usecase/proxy"
@@ -343,6 +344,9 @@ type services struct {
 	registryHandler      interface {
 		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 	}
+	// workloadLogs exports proxy access and app container logs over
+	// OTLP. Nil when telemetry log export is disabled.
+	workloadLogs out.LogExporter
 }
 
 // Run initializes and starts the Gordon application.
@@ -401,6 +405,7 @@ func Run(ctx context.Context, configPath string) error {
 	if err != nil {
 		return err
 	}
+	svc.workloadLogs = workloadLogExporter(telProvider)
 
 	// Register event handlers
 	cleanupHandlers, err := registerEventHandlers(ctx, svc)
@@ -3023,6 +3028,7 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	if accessWriterConcrete != nil {
 		accessWriter = accessWriterConcrete
 	}
+	accessWriter = withAccessLogExport(svc, accessWriter)
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -3103,6 +3109,8 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	// leaves healthy converged apps returning 404 until a later lifecycle
 	// operation happens to rebuild it.
 	reconcileAppsAtBoot(ctx, svc, log)
+	stopLogExport := startContainerLogExport(ctx, svc, log)
+	defer stopLogExport()
 
 	logEvent := log.Info().
 		Int("proxy_port", cfg.Server.Port).
@@ -3152,6 +3160,47 @@ func reconcileAppsAtBoot(ctx context.Context, svc *services, log zerowrap.Logger
 		svc.appMonitor = newAppMonitor(svc.appDeploySvc, log)
 	}
 	svc.appMonitor.Start(ctx)
+}
+
+// workloadLogExporter returns the OTLP workload log exporter, or nil
+// when telemetry log export is disabled. A typed nil must not leak into
+// the out.LogExporter interface.
+func workloadLogExporter(provider *telemetry.Provider) out.LogExporter {
+	if provider == nil || provider.WorkloadLogs == nil {
+		return nil
+	}
+	return provider.WorkloadLogs
+}
+
+// withAccessLogExport also exports access entries over OTLP when
+// workload log export is enabled. next may be nil (no local sink).
+func withAccessLogExport(svc *services, next out.AccessLogWriter) out.AccessLogWriter {
+	if svc.workloadLogs == nil {
+		return next
+	}
+	return logexport.NewAccessLogExporter(svc.appHostIndex, svc.workloadLogs, next)
+}
+
+// startContainerLogExport follows ACTIVE app containers and exports
+// their output when telemetry log export is enabled. The returned stop
+// function cancels every follower and waits for them, so buffered
+// records reach the exporter before telemetry shuts down.
+func startContainerLogExport(ctx context.Context, svc *services, log zerowrap.Logger) func() {
+	if svc.workloadLogs == nil || svc.appState == nil || svc.runtime == nil {
+		return func() {}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	collector := logexport.NewCollector(svc.appState, svc.runtime, svc.workloadLogs)
+	go func() {
+		defer close(done)
+		collector.Run(ctx)
+	}()
+	log.Info().Msg("app container log export enabled")
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 func startPublicTLSRuntimeWithWarning(ctx context.Context, svc publicTLSRuntime, log zerowrap.Logger) {

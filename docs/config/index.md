@@ -86,7 +86,7 @@ endpoint = "http://localhost:5080/api/default"  # OTLP HTTP endpoint
 auth_token = ""                          # Base64 user:password for Basic auth
 traces = true                            # Export traces
 metrics = true                           # Export metrics
-logs = true                              # Bridge zerolog to OTLP logs
+logs = true                              # Export Gordon, access, and app logs
 trace_sample_rate = 1.0                  # 0.0 = none, 1.0 = all
 
 # Installation secret store location

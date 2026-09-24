@@ -64,6 +64,15 @@ func (h *HostIndex) Lookup(host string) (RouteEntry, bool) {
 	return entry, ok
 }
 
+// HostOwner returns the app and service serving a canonical host.
+func (h *HostIndex) HostOwner(host string) (app, service string, ok bool) {
+	entry, found := h.Lookup(host)
+	if !found {
+		return "", "", false
+	}
+	return entry.App, entry.Service, true
+}
+
 // LookupHost implements proxy.TargetProvider over the host index.
 // The proxy package owns the interface; apptraffic implements it to
 // keep app-state interpretation out of the proxy.
