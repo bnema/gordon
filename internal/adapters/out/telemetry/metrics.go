@@ -1,12 +1,16 @@
 package telemetry
 
 import (
+	"context"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 )
 
 // Metrics holds Gordon-specific OTel metrics instruments.
 type Metrics struct {
+	meter metric.Meter
+
 	// Deployments
 	DeployTotal    metric.Int64Counter
 	DeployDuration metric.Float64Histogram
@@ -15,7 +19,6 @@ type Metrics struct {
 	// Container lifecycle
 	ContainerRestarts   metric.Int64Counter
 	ContainerCrashLoops metric.Int64Counter
-	ManagedContainers   metric.Int64UpDownCounter
 
 	// Registry
 	ImagePushTotal metric.Int64Counter
@@ -31,7 +34,7 @@ type Metrics struct {
 // (OTel returns noop instruments when no MeterProvider is set).
 func NewMetrics() (*Metrics, error) {
 	meter := otel.Meter("gordon")
-	m := &Metrics{}
+	m := &Metrics{meter: meter}
 	var err error
 
 	if m.DeployTotal, err = meter.Int64Counter("gordon.deploy.total",
@@ -56,10 +59,6 @@ func NewMetrics() (*Metrics, error) {
 		metric.WithDescription("Total crash loop detections")); err != nil {
 		return nil, err
 	}
-	if m.ManagedContainers, err = meter.Int64UpDownCounter("gordon.container.managed",
-		metric.WithDescription("Currently managed containers")); err != nil {
-		return nil, err
-	}
 	if m.ImagePushTotal, err = meter.Int64Counter("gordon.registry.push.total",
 		metric.WithDescription("Total image pushes")); err != nil {
 		return nil, err
@@ -79,4 +78,22 @@ func NewMetrics() (*Metrics, error) {
 	}
 
 	return m, nil
+}
+
+// ObserveManagedContainers registers the gordon.container.managed gauge.
+// count is called at each collection, so the exported value always reflects
+// current state instead of drifting like an incremental counter. A count
+// error skips that observation rather than exporting a wrong value.
+func (m *Metrics) ObserveManagedContainers(count func(context.Context) (int64, error)) error {
+	_, err := m.meter.Int64ObservableGauge("gordon.container.managed",
+		metric.WithDescription("Currently managed containers"),
+		metric.WithInt64Callback(func(ctx context.Context, o metric.Int64Observer) error {
+			n, err := count(ctx)
+			if err != nil {
+				return err
+			}
+			o.Observe(n)
+			return nil
+		}))
+	return err
 }

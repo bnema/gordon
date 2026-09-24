@@ -98,9 +98,9 @@ Attributes: `domain`, `image`
 |--------|------|------|-------------|
 | `gordon.container.restarts` | Counter | - | Container restart count |
 | `gordon.container.crash_loops` | Counter | - | Crash loop detections |
-| `gordon.container.managed` | UpDownCounter | - | Currently tracked containers |
+| `gordon.container.managed` | Gauge | - | Containers of running app services, read from ACTIVE app state at each export |
 
-Attributes: `source` (restarts only: `monitor` or `api`); `gordon.container.managed` is a global gauge with no attributes
+Attributes: `source` (restarts only: `monitor` or `api`). `gordon.container.managed` has no attributes; tell instances apart with the `host.name` resource attribute.
 
 ### Registry
 
