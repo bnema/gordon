@@ -15,10 +15,8 @@ import (
 	"github.com/bnema/zerowrap"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/bnema/gordon/internal/adapters/out/telemetry"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/registrystate"
@@ -32,13 +30,13 @@ type Service struct {
 	blobStorage     out.BlobStorage
 	manifestStorage out.ManifestStorage
 	eventBus        out.EventPublisher
-	metrics         *telemetry.Metrics
+	metrics         out.Metrics
 	mutationMu      *sync.RWMutex
 	registryState   *registrystate.State
 }
 
 // SetMetrics sets the telemetry metrics for the registry service.
-func (s *Service) SetMetrics(m *telemetry.Metrics) {
+func (s *Service) SetMetrics(m out.Metrics) {
 	s.metrics = m
 }
 
@@ -132,12 +130,7 @@ func (s *Service) PutManifest(ctx context.Context, manifest *domain.Manifest) (s
 
 	// Record push metrics
 	if s.metrics != nil {
-		attrs := metric.WithAttributes(
-			attribute.String("name", manifest.Name),
-			attribute.String("reference", manifest.Reference),
-		)
-		s.metrics.ImagePushTotal.Add(ctx, 1, attrs)
-		s.metrics.ImagePushSize.Add(ctx, int64(len(manifest.Data)), attrs)
+		s.metrics.RecordImagePush(ctx, manifest.Name, manifest.Reference, int64(len(manifest.Data)))
 	}
 
 	// Publish image pushed event only for tag references (not digests).

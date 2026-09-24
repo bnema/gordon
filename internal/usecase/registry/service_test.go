@@ -88,6 +88,26 @@ func TestService_PutManifest_Success(t *testing.T) {
 	assert.True(t, strings.HasPrefix(digest, "sha256:"))
 }
 
+func TestService_PutManifest_RecordsPushMetrics(t *testing.T) {
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	metrics := mocks.NewMockMetrics(t)
+	svc := NewService(mocks.NewMockBlobStorage(t), manifestStorage, nil)
+	svc.SetMetrics(metrics)
+
+	data := []byte(`{"schemaVersion": 2}`)
+	manifestStorage.EXPECT().PutManifest("myapp", "latest", "application/vnd.oci.image.manifest.v1+json", data).Return(nil)
+	metrics.EXPECT().RecordImagePush(mock.Anything, "myapp", "latest", int64(len(data))).Return()
+
+	_, err := svc.PutManifest(testContext(), &domain.Manifest{
+		Name:        "myapp",
+		Reference:   "latest",
+		ContentType: "application/vnd.oci.image.manifest.v1+json",
+		Data:        data,
+	})
+
+	require.NoError(t, err)
+}
+
 func TestService_PutManifest_RejectsUnownedBlob(t *testing.T) {
 	const digest = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
 	blobStorage := mocks.NewMockBlobStorage(t)
