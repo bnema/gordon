@@ -105,6 +105,26 @@ func TestClientLifecycle_MutationsCarryKeys(t *testing.T) {
 	assert.NotEqual(t, keys[0], keys[1], "each mutation gets a fresh key")
 }
 
+func TestClientRestartApp_SendsServiceScope(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{Op: "op-x", Outcome: "success"})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL)
+	for _, tc := range []struct {
+		service string
+		all     bool
+	}{{"", false}, {"web", false}, {"", true}} {
+		_, _, err := client.RestartApp(context.Background(), "blog", tc.service, tc.all)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, []string{"", "service=web", "all=true"}, queries)
+}
+
 // TestClientDeployApp_AcceptedRunningJournal proves the remote client accepts
 // the 202 running response: it decodes the journal and returns the key so the
 // caller can poll operations/by-key.

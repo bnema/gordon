@@ -246,10 +246,23 @@ Deletes the registered value for `KEY`.
 ## gordon apps deploy
 
 ```bash
-gordon apps deploy APP [--revision REV] [--service SVC] [--json]
+gordon apps deploy APP [--revision REV] [--service SVC | --all] [--json]
 ```
 
-Activates a revision (default: desired head). Fail-fast across services:
+Activates a revision (default: desired head). An app with several services
+needs `--service NAME` (one service) or `--all` (every service); without
+either, the command fails before any change and lists the services. A
+single-service app needs neither. `apps apply --deploy` always deploys every
+service.
+
+| Flag | Description |
+|------|-------------|
+| `--revision REV` | Revision to activate (default: desired head) |
+| `--service NAME` | Deploy one service only |
+| `--all` | Deploy every service |
+| `--json` | Output as JSON |
+
+Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
 later services stay unchanged.
 
@@ -266,10 +279,11 @@ local polling (the daemon-side operation keeps running) and prints the
 ## gordon apps restart
 
 ```bash
-gordon apps restart APP [--service SVC] [--json]
+gordon apps restart APP [--service SVC | --all] [--json]
 ```
 
-Restarts from pinned digests without re-resolution.
+Restarts from pinned digests without re-resolution. Like `deploy`, an app
+with several services needs `--service NAME` or `--all`.
 
 ---
 

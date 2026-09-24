@@ -47,6 +47,8 @@ type AppApplyResponse struct {
 type AppDeployRequest struct {
 	Revision string `json:"revision,omitempty"`
 	Service  string `json:"service,omitempty"`
+	// All confirms an app-wide deploy of a multi-service app.
+	All bool `json:"all,omitempty"`
 }
 
 // AppServiceResultDTO is one service's terminal deployment result.

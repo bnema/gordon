@@ -48,8 +48,8 @@ func (r *remoteControlPlane) StartApp(ctx context.Context, app string) (*dto.App
 	return r.client.StartApp(ctx, app)
 }
 
-func (r *remoteControlPlane) RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error) {
-	return r.client.RestartApp(ctx, app, service)
+func (r *remoteControlPlane) RestartApp(ctx context.Context, app, service string, all bool) (*dto.AppDeployResponse, string, error) {
+	return r.client.RestartApp(ctx, app, service, all)
 }
 
 func (r *remoteControlPlane) RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {

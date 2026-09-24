@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/bnema/zerowrap"
@@ -405,7 +406,10 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 // cancellation cannot abort an in-flight replacement. A repeated idempotency
 // key is never owned twice: its stored journal replays instead of spawning a
 // second execution, and only the owner schedules any work.
-func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error) {
+func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
+	if err := s.requireServiceScope(ctx, app, service, all, true); err != nil {
+		return nil, err
+	}
 	done, err := s.beginDeploy()
 	if err != nil {
 		return nil, err
@@ -425,6 +429,51 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service, ide
 		return s.operationResult(ctx, app, started.Claim.Op, err)
 	}
 	return s.operationResult(ctx, app, started.Claim.Op, nil)
+}
+
+// requireServiceScope refuses an app-wide deploy or restart of a
+// multi-service app unless the caller asked for it with all, so an
+// unrelated service (a database, say) is never replaced by accident. It
+// runs before any claim or idempotency key is recorded. Deploy counts the
+// desired services too, so a first deploy is covered.
+func (s *AppServiceImpl) requireServiceScope(ctx context.Context, app, service string, all, includeDesired bool) error {
+	if all && service != "" {
+		return fmt.Errorf("apps: --all and --service are mutually exclusive: %w", domain.ErrAppServiceScope)
+	}
+	if all || service != "" {
+		return nil
+	}
+	names := map[string]struct{}{}
+	if includeDesired {
+		desired, ok, err := s.store.LoadDesired(ctx, app)
+		if err != nil {
+			return err
+		}
+		if ok {
+			for _, svc := range desired.Spec.Services {
+				names[svc.Name] = struct{}{}
+			}
+		}
+	}
+	active, ok, err := s.store.LoadActive(ctx, app)
+	if err != nil {
+		return err
+	}
+	if ok {
+		for name := range active.Services {
+			names[name] = struct{}{}
+		}
+	}
+	if len(names) <= 1 {
+		return nil
+	}
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+	return fmt.Errorf("app %s has several services (%s): pass --service NAME or --all: %w",
+		app, strings.Join(sorted, ", "), domain.ErrAppServiceScope)
 }
 
 // beginDeploy enrolls one Deploy hand-off before the engine claims anything.
@@ -461,7 +510,10 @@ func (s *AppServiceImpl) Start(ctx context.Context, app, idempotencyKey string) 
 }
 
 // Restart implements in.AppService.
-func (s *AppServiceImpl) Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error) {
+func (s *AppServiceImpl) Restart(ctx context.Context, app, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
+	if err := s.requireServiceScope(ctx, app, service, all, false); err != nil {
+		return nil, err
+	}
 	result, err := s.deploy.Restart(ctx, app, service, idempotencyKey)
 	if result == nil {
 		return nil, err

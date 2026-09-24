@@ -204,7 +204,7 @@ func TestRunAppDeploy_OutcomeUnknownMentionsKey(t *testing.T) {
 	plane := appPlane(t)
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		nil, "key-abc", &remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/deploy", Err: errors.New("boom")}).Once()
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &bytes.Buffer{}, &bytes.Buffer{}, false)
+	err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &bytes.Buffer{}, &bytes.Buffer{}, false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outcome-unknown")
 	assert.Contains(t, err.Error(), "key-abc")
@@ -223,7 +223,7 @@ func TestRunAppDeploy_ConflictRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, false)
+	err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &bytes.Buffer{}, false)
 	require.Error(t, err, "conflict must retain failure semantics")
 	text := out.String()
 	assert.Contains(t, text, "web:")
@@ -246,7 +246,7 @@ func TestRunAppDeploy_ConflictJSONRendersJournal(t *testing.T) {
 		},
 	}).Once()
 	var out bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &bytes.Buffer{}, true)
+	err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &bytes.Buffer{}, true)
 	require.Error(t, err)
 	var got dto.AppDeployResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
@@ -440,16 +440,16 @@ func TestRunAppsSecretsDelete(t *testing.T) {
 func TestRunAppRestart_AndLifecycle(t *testing.T) {
 	resp := &dto.AppDeployResponse{Op: "op-2", App: "blog", Revision: "rev-b", Outcome: "success"}
 	plane := appPlane(t)
-	plane.EXPECT().RestartApp(mock.Anything, "blog", "").Return(resp, "key-lc", nil).Times(2)
+	plane.EXPECT().RestartApp(mock.Anything, "blog", "", false).Return(resp, "key-lc", nil).Times(2)
 	plane.EXPECT().StopApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
 	plane.EXPECT().StartApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
 	plane.EXPECT().RemoveApp(mock.Anything, "blog").Return(resp, "key-lc", nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppRestart(context.Background(), plane, "blog", "", &out, false))
+	require.NoError(t, runAppRestart(context.Background(), plane, "blog", "", false, &out, false))
 	assert.Contains(t, out.String(), "success")
 
 	out.Reset()
-	require.NoError(t, runAppRestart(context.Background(), plane, "blog", "", &out, true))
+	require.NoError(t, runAppRestart(context.Background(), plane, "blog", "", false, &out, true))
 	var got dto.AppDeployResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
 	assert.Equal(t, *resp, got)
