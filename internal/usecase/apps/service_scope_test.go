@@ -22,6 +22,12 @@ func scopeDesired(names ...string) domain.AppDesiredRevision {
 	return rev
 }
 
+func scopeRevision(revision string, names ...string) domain.AppDesiredRevision {
+	rev := scopeDesired(names...)
+	rev.Revision = revision
+	return rev
+}
+
 func scopeActive(names ...string) domain.AppActive {
 	active := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{}}
 	for _, name := range names {
@@ -45,6 +51,28 @@ func TestAppServiceImpl_Deploy_MultiServiceRequiresScope(t *testing.T) {
 	}
 
 	op, err := svc.Deploy(context.Background(), "blog", "", "", false, "key-1")
+	require.ErrorIs(t, err, domain.ErrAppServiceScope)
+	assert.Nil(t, op)
+	assert.Contains(t, err.Error(), "app blog has several services (db, web): pass --service NAME or --all")
+}
+
+func TestAppServiceImpl_Deploy_OldRevisionWithMultipleServicesRequiresScope(t *testing.T) {
+	store := newMockAppState(t)
+	deploy := newMockDeployEngine(t)
+	svc := apps.NewAppServiceImpl(store, deploy, newMockSecretWriter(t), zerowrap.Default())
+	t.Cleanup(func() { require.NoError(t, svc.Shutdown(context.Background())) })
+
+	// The head and ACTIVE know only one service, but the revision the
+	// deploy would activate declares two: the scope check must count the
+	// selected revision, not the head.
+	store.EXPECT().LoadRevision(mock.Anything, "blog", "rev-2").Return(scopeRevision("rev-2", "web", "db"), nil)
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(scopeActive("web"), true, nil)
+	deploy.startDeployFn = func(context.Context, deployment.DeployInput) (*deployment.StartDeployResult, error) {
+		t.Fatal("no claim may be made without a service scope")
+		return nil, nil
+	}
+
+	op, err := svc.Deploy(context.Background(), "blog", "rev-2", "", false, "key-1")
 	require.ErrorIs(t, err, domain.ErrAppServiceScope)
 	assert.Nil(t, op)
 	assert.Contains(t, err.Error(), "app blog has several services (db, web): pass --service NAME or --all")

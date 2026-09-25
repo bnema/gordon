@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -407,7 +408,7 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 // key is never owned twice: its stored journal replays instead of spawning a
 // second execution, and only the owner schedules any work.
 func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
-	if err := s.requireServiceScope(ctx, app, service, all, true); err != nil {
+	if err := s.requireServiceScope(ctx, app, revision, service, all, true); err != nil {
 		return nil, err
 	}
 	done, err := s.beginDeploy()
@@ -435,8 +436,11 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service stri
 // multi-service app unless the caller asked for it with all, so an
 // unrelated service (a database, say) is never replaced by accident. It
 // runs before any claim or idempotency key is recorded. Deploy counts the
-// desired services too, so a first deploy is covered.
-func (s *AppServiceImpl) requireServiceScope(ctx context.Context, app, service string, all, includeDesired bool) error {
+// selected revision — an explicit revision when one is given, the desired
+// head otherwise — plus ACTIVE, so an older multi-service revision cannot
+// slip through a single-service head, and a first deploy is covered.
+// Restart counts ACTIVE only.
+func (s *AppServiceImpl) requireServiceScope(ctx context.Context, app, revision, service string, all, includeDesired bool) error {
 	if all && service != "" {
 		return fmt.Errorf("apps: --all and --service are mutually exclusive: %w", domain.ErrAppServiceScope)
 	}
@@ -445,19 +449,17 @@ func (s *AppServiceImpl) requireServiceScope(ctx context.Context, app, service s
 	}
 	names := map[string]struct{}{}
 	if includeDesired {
-		desired, ok, err := s.store.LoadDesired(ctx, app)
+		desired, err := s.loadScopeRevision(ctx, app, revision)
 		if err != nil {
 			return err
 		}
-		if ok {
-			for _, svc := range desired.Spec.Services {
-				names[svc.Name] = struct{}{}
-			}
+		for _, svc := range desired.Spec.Services {
+			names[svc.Name] = struct{}{}
 		}
 	}
 	active, ok, err := s.store.LoadActive(ctx, app)
 	if err != nil {
-		return err
+		return fmt.Errorf("apps: load active of app %q for service scope: %w", app, err)
 	}
 	if ok {
 		for name := range active.Services {
@@ -474,6 +476,32 @@ func (s *AppServiceImpl) requireServiceScope(ctx context.Context, app, service s
 	sort.Strings(sorted)
 	return fmt.Errorf("app %s has several services (%s): pass --service NAME or --all: %w",
 		app, strings.Join(sorted, ", "), domain.ErrAppServiceScope)
+}
+
+// loadScopeRevision returns the revision a deploy would activate: the
+// explicit revision when one is selected, the desired head otherwise. A
+// missing revision counts no services: an unknown explicit revision is
+// left for StartDeploy to report, and a missing desired head means a
+// first deploy with nothing captured yet.
+func (s *AppServiceImpl) loadScopeRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error) {
+	if revision != "" {
+		rev, err := s.store.LoadRevision(ctx, app, revision)
+		if err != nil {
+			if errors.Is(err, domain.ErrAppRevisionNotFound) {
+				return domain.AppDesiredRevision{}, nil
+			}
+			return domain.AppDesiredRevision{}, fmt.Errorf("apps: load revision %q of app %q for service scope: %w", revision, app, err)
+		}
+		return rev, nil
+	}
+	desired, ok, err := s.store.LoadDesired(ctx, app)
+	if err != nil {
+		return domain.AppDesiredRevision{}, fmt.Errorf("apps: load desired of app %q for service scope: %w", app, err)
+	}
+	if !ok {
+		return domain.AppDesiredRevision{}, nil
+	}
+	return desired, nil
 }
 
 // beginDeploy enrolls one Deploy hand-off before the engine claims anything.
@@ -511,7 +539,7 @@ func (s *AppServiceImpl) Start(ctx context.Context, app, idempotencyKey string) 
 
 // Restart implements in.AppService.
 func (s *AppServiceImpl) Restart(ctx context.Context, app, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
-	if err := s.requireServiceScope(ctx, app, service, all, false); err != nil {
+	if err := s.requireServiceScope(ctx, app, "", service, all, false); err != nil {
 		return nil, err
 	}
 	result, err := s.deploy.Restart(ctx, app, service, idempotencyKey)
