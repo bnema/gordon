@@ -84,3 +84,11 @@ func TestParseTimestampedLine_KeepsBodyWithoutTimestamp(t *testing.T) {
 	line := parseTimestampedLine("plain text line", domain.LogStreamStdout)
 	assert.Equal(t, "plain text line", line.Body)
 }
+
+func TestParseTimestampedLine_SanitizesInvalidUTF8(t *testing.T) {
+	line := parseTimestampedLine("2026-09-10T12:00:01Z bad\xffbytes", domain.LogStreamStdout)
+	assert.Equal(t, "bad\uFFFDbytes", line.Body)
+
+	plain := parseTimestampedLine("plain\xff", domain.LogStreamStdout)
+	assert.Equal(t, "plain\uFFFD", plain.Body)
+}

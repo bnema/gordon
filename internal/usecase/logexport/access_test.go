@@ -79,3 +79,26 @@ func TestAccessLogExporter_ReturnsLocalSinkError(t *testing.T) {
 
 	assert.ErrorIs(t, a.Write(out.AccessLogEntry{Status: 404}), sinkErr)
 }
+
+func TestAccessLogExporter_DropsQueryAttribute(t *testing.T) {
+	exporter, records := captureExport(t)
+	a := NewAccessLogExporter(fakeHosts{}, exporter, nil)
+
+	require.NoError(t, a.Write(out.AccessLogEntry{Path: "/search", Query: "q=secret", Status: 200}))
+
+	require.Len(t, *records, 1)
+	_, ok := (*records)[0].Attributes["url.query"]
+	assert.False(t, ok, "query must not be exported over OTLP")
+	assert.Equal(t, "/search", (*records)[0].Attributes["url.path"])
+}
+
+func TestAccessLogExporter_SanitizesInvalidUTF8(t *testing.T) {
+	exporter, records := captureExport(t)
+	a := NewAccessLogExporter(fakeHosts{}, exporter, nil)
+
+	require.NoError(t, a.Write(out.AccessLogEntry{Path: "/bad\xff", UserAgent: "agent\xff", Status: 200}))
+
+	require.Len(t, *records, 1)
+	assert.Equal(t, "/bad\uFFFD", (*records)[0].Attributes["url.path"])
+	assert.Equal(t, "agent\uFFFD", (*records)[0].Attributes["user_agent.original"])
+}

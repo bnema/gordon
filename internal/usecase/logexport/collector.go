@@ -5,6 +5,7 @@ package logexport
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -40,6 +41,7 @@ type Collector struct {
 
 	mu        sync.Mutex
 	followers map[string]*follower
+	cursors   map[string]time.Time
 	wg        sync.WaitGroup
 }
 
@@ -58,6 +60,7 @@ func NewCollector(state out.AppStateReader, streamer out.ContainerLogStreamer, e
 		retryDelay:        defaultRetryDelay,
 		startedAt:         time.Now(),
 		followers:         map[string]*follower{},
+		cursors:           map[string]time.Time{},
 	}
 }
 
@@ -88,7 +91,7 @@ func (c *Collector) Run(ctx context.Context) {
 // Reconcile starts followers for new exportable containers and stops
 // followers whose container is gone, stopped, or opted out.
 func (c *Collector) Reconcile(ctx context.Context) error {
-	desired, err := c.desiredContainers(ctx)
+	desired, activeIDs, err := c.desiredContainers(ctx)
 	if err != nil {
 		return err
 	}
@@ -107,32 +110,45 @@ func (c *Collector) Reconcile(ctx context.Context) error {
 		}
 		c.startLocked(ctx, containerID, source)
 	}
+	for containerID := range c.cursors {
+		if _, ok := activeIDs[containerID]; !ok {
+			delete(c.cursors, containerID)
+		}
+	}
 	return nil
 }
 
-// desiredContainers maps exportable ACTIVE container IDs to their source.
-func (c *Collector) desiredContainers(ctx context.Context) (map[string]domain.LogSource, error) {
+// desiredContainers maps exportable ACTIVE container IDs to their source,
+// plus the set of every container ID referenced by an ACTIVE service
+// (exportable or not) so callers can retire per-container state only when
+// the ID is gone from all ACTIVE services.
+func (c *Collector) desiredContainers(ctx context.Context) (map[string]domain.LogSource, map[string]struct{}, error) {
 	apps, err := c.state.ListApps(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("logexport: list apps: %w", err)
 	}
 	desired := map[string]domain.LogSource{}
+	activeIDs := map[string]struct{}{}
 	for _, app := range apps {
 		active, found, err := c.state.LoadActive(ctx, app)
 		if err != nil {
-			return nil, err
+			return nil, nil, fmt.Errorf("logexport: load active state for app %q: %w", app, err)
 		}
 		if !found || active.StopIntent {
 			continue
 		}
 		for name, svc := range active.Services {
-			if svc.Container == "" || svc.Spec.LogExportDisabled {
+			if svc.Container == "" {
+				continue
+			}
+			activeIDs[svc.Container] = struct{}{}
+			if svc.Spec.LogExportDisabled {
 				continue
 			}
 			desired[svc.Container] = domain.LogSource{App: app, Service: name}
 		}
 	}
-	return desired, nil
+	return desired, activeIDs, nil
 }
 
 func (c *Collector) startLocked(parent context.Context, containerID string, source domain.LogSource) {
@@ -143,19 +159,22 @@ func (c *Collector) startLocked(parent context.Context, containerID string, sour
 		"service":              source.Service,
 	})
 	c.followers[containerID] = &follower{source: source, cancel: cancel}
+	since := c.startedAt
+	if cursor, ok := c.cursors[containerID]; ok && cursor.After(since) {
+		since = cursor
+	}
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		c.follow(ctx, containerID, source)
+		c.follow(ctx, containerID, source, since)
 	}()
 }
 
-// follow streams one container until canceled, starting at startedAt.
+// follow streams one container until canceled, starting at since.
 // A stream that ends (container restarting) resumes after the last
 // exported line, so a reconnect neither duplicates nor replays output.
-func (c *Collector) follow(ctx context.Context, containerID string, source domain.LogSource) {
+func (c *Collector) follow(ctx context.Context, containerID string, source domain.LogSource, since time.Time) {
 	log := zerowrap.FromCtx(ctx)
-	since := c.startedAt
 	for {
 		err := c.streamer.StreamContainerLogs(ctx, containerID, since, func(line domain.ContainerLogLine) {
 			c.exporter.Export(ctx, domain.LogRecord{
@@ -167,6 +186,11 @@ func (c *Collector) follow(ctx context.Context, containerID string, source domai
 			})
 			if line.Time.After(since) {
 				since = line.Time.Add(time.Nanosecond)
+				c.mu.Lock()
+				if cursor, ok := c.cursors[containerID]; !ok || since.After(cursor) {
+					c.cursors[containerID] = since
+				}
+				c.mu.Unlock()
 			}
 		})
 		if ctx.Err() != nil {

@@ -119,6 +119,7 @@ func readBoundedLine(reader *bufio.Reader) (string, error) {
 // parseTimestampedLine splits the RFC3339Nano prefix Docker adds when
 // Timestamps is set. Lines without a valid prefix keep the receive time.
 func parseTimestampedLine(raw, stream string) domain.ContainerLogLine {
+	raw = strings.ToValidUTF8(raw, "\uFFFD")
 	line := domain.ContainerLogLine{Time: time.Now().UTC(), Stream: stream, Body: raw}
 	prefix, body, ok := strings.Cut(raw, " ")
 	if !ok {

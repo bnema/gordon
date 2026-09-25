@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
@@ -46,6 +47,8 @@ func (a *AccessLogExporter) Write(entry out.AccessLogEntry) error {
 
 func (a *AccessLogExporter) record(entry out.AccessLogEntry) domain.LogRecord {
 	host := domain.CanonicalHTTPHost(stripPort(entry.Host))
+	path := strings.ToValidUTF8(entry.Path, "\uFFFD")
+	userAgent := strings.ToValidUTF8(entry.UserAgent, "\uFFFD")
 	var source domain.LogSource
 	if app, service, ok := a.hosts.HostOwner(host); ok {
 		source = domain.LogSource{App: app, Service: service}
@@ -55,15 +58,14 @@ func (a *AccessLogExporter) record(entry out.AccessLogEntry) domain.LogRecord {
 		Source:   source,
 		Type:     domain.LogTypeAccess,
 		Severity: accessSeverity(entry.Status),
-		Body:     fmt.Sprintf("%s %s%s %d", entry.Method, host, entry.Path, entry.Status),
+		Body:     fmt.Sprintf("%s %s%s %d", entry.Method, host, path, entry.Status),
 		Attributes: map[string]string{
 			"http.request.method":         entry.Method,
 			"http.response.status_code":   strconv.Itoa(entry.Status),
 			"server.address":              host,
-			"url.path":                    entry.Path,
-			"url.query":                   entry.Query,
+			"url.path":                    path,
 			"client.address":              entry.ClientIP,
-			"user_agent.original":         entry.UserAgent,
+			"user_agent.original":         userAgent,
 			"http.request.header.referer": entry.Referer,
 			"network.protocol.name":       entry.Proto,
 			"http.response.body.size":     strconv.Itoa(entry.BytesSent),
