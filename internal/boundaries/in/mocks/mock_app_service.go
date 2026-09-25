@@ -197,8 +197,8 @@ func (_c *MockAppService_DeleteSecret_Call) RunAndReturn(run func(ctx context.Co
 }
 
 // Deploy provides a mock function for the type MockAppService
-func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision string, service string, idempotencyKey string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app, revision, service, idempotencyKey)
+func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision string, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, revision, service, all, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Deploy")
@@ -206,18 +206,18 @@ func (_mock *MockAppService) Deploy(ctx context.Context, app string, revision st
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app, revision, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, bool, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, revision, service, all, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app, revision, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string, bool, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, revision, service, all, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string, string) error); ok {
-		r1 = returnFunc(ctx, app, revision, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string, bool, string) error); ok {
+		r1 = returnFunc(ctx, app, revision, service, all, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -234,12 +234,13 @@ type MockAppService_Deploy_Call struct {
 //   - app string
 //   - revision string
 //   - service string
+//   - all bool
 //   - idempotencyKey string
-func (_e *MockAppService_Expecter) Deploy(ctx any, app any, revision any, service any, idempotencyKey any) *MockAppService_Deploy_Call {
-	return &MockAppService_Deploy_Call{Call: _e.mock.On("Deploy", ctx, app, revision, service, idempotencyKey)}
+func (_e *MockAppService_Expecter) Deploy(ctx any, app any, revision any, service any, all any, idempotencyKey any) *MockAppService_Deploy_Call {
+	return &MockAppService_Deploy_Call{Call: _e.mock.On("Deploy", ctx, app, revision, service, all, idempotencyKey)}
 }
 
-func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app string, revision string, service string, idempotencyKey string)) *MockAppService_Deploy_Call {
+func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app string, revision string, service string, all bool, idempotencyKey string)) *MockAppService_Deploy_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -257,9 +258,13 @@ func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app stri
 		if args[3] != nil {
 			arg3 = args[3].(string)
 		}
-		var arg4 string
+		var arg4 bool
 		if args[4] != nil {
-			arg4 = args[4].(string)
+			arg4 = args[4].(bool)
+		}
+		var arg5 string
+		if args[5] != nil {
+			arg5 = args[5].(string)
 		}
 		run(
 			arg0,
@@ -267,6 +272,7 @@ func (_c *MockAppService_Deploy_Call) Run(run func(ctx context.Context, app stri
 			arg2,
 			arg3,
 			arg4,
+			arg5,
 		)
 	})
 	return _c
@@ -277,7 +283,7 @@ func (_c *MockAppService_Deploy_Call) Return(appOperation *domain.AppOperation, 
 	return _c
 }
 
-func (_c *MockAppService_Deploy_Call) RunAndReturn(run func(ctx context.Context, app string, revision string, service string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Deploy_Call {
+func (_c *MockAppService_Deploy_Call) RunAndReturn(run func(ctx context.Context, app string, revision string, service string, all bool, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Deploy_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -633,8 +639,8 @@ func (_c *MockAppService_Remove_Call) RunAndReturn(run func(ctx context.Context,
 }
 
 // Restart provides a mock function for the type MockAppService
-func (_mock *MockAppService) Restart(ctx context.Context, app string, service string, idempotencyKey string) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, app, service, idempotencyKey)
+func (_mock *MockAppService) Restart(ctx context.Context, app string, service string, all bool, idempotencyKey string) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, service, all, idempotencyKey)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Restart")
@@ -642,18 +648,18 @@ func (_mock *MockAppService) Restart(ctx context.Context, app string, service st
 
 	var r0 *domain.AppOperation
 	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, app, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool, string) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, service, all, idempotencyKey)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, string) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, app, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool, string) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, service, all, idempotencyKey)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.AppOperation)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, string) error); ok {
-		r1 = returnFunc(ctx, app, service, idempotencyKey)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, bool, string) error); ok {
+		r1 = returnFunc(ctx, app, service, all, idempotencyKey)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -669,12 +675,13 @@ type MockAppService_Restart_Call struct {
 //   - ctx context.Context
 //   - app string
 //   - service string
+//   - all bool
 //   - idempotencyKey string
-func (_e *MockAppService_Expecter) Restart(ctx any, app any, service any, idempotencyKey any) *MockAppService_Restart_Call {
-	return &MockAppService_Restart_Call{Call: _e.mock.On("Restart", ctx, app, service, idempotencyKey)}
+func (_e *MockAppService_Expecter) Restart(ctx any, app any, service any, all any, idempotencyKey any) *MockAppService_Restart_Call {
+	return &MockAppService_Restart_Call{Call: _e.mock.On("Restart", ctx, app, service, all, idempotencyKey)}
 }
 
-func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app string, service string, idempotencyKey string)) *MockAppService_Restart_Call {
+func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app string, service string, all bool, idempotencyKey string)) *MockAppService_Restart_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -688,15 +695,20 @@ func (_c *MockAppService_Restart_Call) Run(run func(ctx context.Context, app str
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
-		var arg3 string
+		var arg3 bool
 		if args[3] != nil {
-			arg3 = args[3].(string)
+			arg3 = args[3].(bool)
+		}
+		var arg4 string
+		if args[4] != nil {
+			arg4 = args[4].(string)
 		}
 		run(
 			arg0,
 			arg1,
 			arg2,
 			arg3,
+			arg4,
 		)
 	})
 	return _c
@@ -707,7 +719,7 @@ func (_c *MockAppService_Restart_Call) Return(appOperation *domain.AppOperation,
 	return _c
 }
 
-func (_c *MockAppService_Restart_Call) RunAndReturn(run func(ctx context.Context, app string, service string, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Restart_Call {
+func (_c *MockAppService_Restart_Call) RunAndReturn(run func(ctx context.Context, app string, service string, all bool, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Restart_Call {
 	_c.Call.Return(run)
 	return _c
 }

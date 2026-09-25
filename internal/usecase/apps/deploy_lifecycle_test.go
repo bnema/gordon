@@ -29,7 +29,7 @@ func callDeploy(t *testing.T, svc *apps.AppServiceImpl, ctx context.Context, key
 	t.Helper()
 	out := make(chan deployCall, 1)
 	go func() {
-		op, err := svc.Deploy(ctx, "blog", "rev-1", "web", key)
+		op, err := svc.Deploy(ctx, "blog", "rev-1", "web", false, key)
 		out <- deployCall{op: op, err: err}
 	}()
 	return out

@@ -303,7 +303,7 @@ func (h *Handler) handleAppDeploy(w http.ResponseWriter, r *http.Request, app st
 	if !ok {
 		return
 	}
-	op, err := svc.Deploy(ctx, app, req.Revision, req.Service, key)
+	op, err := svc.Deploy(ctx, app, req.Revision, req.Service, req.All, key)
 	if err != nil && (op == nil || isMappedPreflightError(err, op)) {
 		h.sendAppOpError(w, err)
 		return
@@ -376,8 +376,9 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	if !ok {
 		return
 	}
-	service := r.URL.Query().Get("service")
-	op, err := svc.Restart(ctx, app, service, key)
+	query := r.URL.Query()
+	all := query.Get("all") == "true"
+	op, err := svc.Restart(ctx, app, query.Get("service"), all, key)
 	if err != nil && op == nil {
 		h.sendAppOpError(w, err)
 		return
@@ -557,6 +558,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "secret-missing", err.Error(), "", "set the secret, then redeploy")
 	case errors.Is(err, domain.ErrAppUnmanagedImageVolume):
 		h.sendAppError(w, http.StatusBadRequest, "unmanaged-image-volume", err.Error(), "", "")
+	case errors.Is(err, domain.ErrAppServiceScope):
+		h.sendAppError(w, http.StatusBadRequest, "service-scope-required", err.Error(), "", "pass --service NAME or --all")
 	case errors.Is(err, domain.ErrAppNotFound):
 		h.sendAppError(w, http.StatusNotFound, "app-not-found", err.Error(), "", "check the app name")
 	case errors.Is(err, domain.ErrAppRevisionNotFound),

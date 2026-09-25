@@ -102,6 +102,9 @@ var (
 	ErrAppImageNotAllowed      = errors.New("image reference not allowed by installation policy")
 	ErrAppSecretMissing        = errors.New("required app secret missing")
 	ErrAppUnmanagedImageVolume = errors.New("image declares unmanaged volume")
+	// ErrAppServiceScope marks an app-wide mutation of a multi-service app
+	// that named neither one service nor all of them.
+	ErrAppServiceScope = errors.New("app service scope required")
 	// ErrPruneDisabled means prune could not establish a safe scope for
 	// the requested operation at all (for example, its protection or
 	// runtime ports are not wired). It is never returned merely because

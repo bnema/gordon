@@ -35,8 +35,9 @@ type AppService interface {
 	Diff(ctx context.Context, app string) (domain.AppDiff, error)
 
 	// Deploy activates a captured revision (empty revision means the
-	// desired head; empty service means all services).
-	Deploy(ctx context.Context, app, revision, service, idempotencyKey string) (*domain.AppOperation, error)
+	// desired head). An empty service targets every service, which a
+	// multi-service app accepts only with all set (domain.ErrAppServiceScope).
+	Deploy(ctx context.Context, app, revision, service string, all bool, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Stop persists the durable stopped intent and stops exact containers.
 	Stop(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
@@ -45,8 +46,9 @@ type AppService interface {
 	Start(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Restart restarts from pinned digests without re-resolution.
-	// Empty service means all services.
-	Restart(ctx context.Context, app, service, idempotencyKey string) (*domain.AppOperation, error)
+	// An empty service targets every service, which a multi-service app
+	// accepts only with all set (domain.ErrAppServiceScope).
+	Restart(ctx context.Context, app, service string, all bool, idempotencyKey string) (*domain.AppOperation, error)
 
 	// Remove withdraws workloads; volumes and secrets are retained as
 	// owned orphans and the name stays reserved.

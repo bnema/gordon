@@ -166,11 +166,19 @@ func (c *Client) StartApp(ctx context.Context, app string) (*dto.AppDeployRespon
 }
 
 // RestartApp restarts from pinned digests (no re-resolution).
-func (c *Client) RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error) {
+// all confirms an app-wide restart of a multi-service app.
+func (c *Client) RestartApp(ctx context.Context, app, service string, all bool) (*dto.AppDeployResponse, string, error) {
 	key := newIdempotencyKey()
 	path := "/apps/" + url.PathEscape(app) + "/restart"
+	query := url.Values{}
 	if service != "" {
-		path += "?service=" + url.QueryEscape(service)
+		query.Set("service", service)
+	}
+	if all {
+		query.Set("all", "true")
+	}
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 	resp, err := c.doMutation(ctx, http.MethodPost, path, key, nil)
 	if err != nil {

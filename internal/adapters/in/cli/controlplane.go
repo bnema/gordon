@@ -20,7 +20,7 @@ type ControlPlane interface {
 	DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)
 	StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
 	StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
-	RestartApp(ctx context.Context, app, service string) (*dto.AppDeployResponse, string, error)
+	RestartApp(ctx context.Context, app, service string, all bool) (*dto.AppDeployResponse, string, error)
 	RemoveApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
 	OperationByKey(ctx context.Context, app, key string) (*dto.AppDeployResponse, error)
 	ListAppSecrets(ctx context.Context, app, service string) ([]dto.AppSecretMetadataDTO, error)

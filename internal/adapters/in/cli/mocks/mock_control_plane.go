@@ -1560,8 +1560,8 @@ func (_c *MockControlPlane_RemoveApp_Call) RunAndReturn(run func(ctx context.Con
 }
 
 // RestartApp provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) RestartApp(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error) {
-	ret := _mock.Called(ctx, app, service)
+func (_mock *MockControlPlane) RestartApp(ctx context.Context, app string, service string, all bool) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, service, all)
 
 	if len(ret) == 0 {
 		panic("no return value specified for RestartApp")
@@ -1570,23 +1570,23 @@ func (_mock *MockControlPlane) RestartApp(ctx context.Context, app string, servi
 	var r0 *dto.AppDeployResponse
 	var r1 string
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (*dto.AppDeployResponse, string, error)); ok {
-		return returnFunc(ctx, app, service)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, service, all)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) *dto.AppDeployResponse); ok {
-		r0 = returnFunc(ctx, app, service)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, bool) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, service, all)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*dto.AppDeployResponse)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) string); ok {
-		r1 = returnFunc(ctx, app, service)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, bool) string); ok {
+		r1 = returnFunc(ctx, app, service, all)
 	} else {
 		r1 = ret.Get(1).(string)
 	}
-	if returnFunc, ok := ret.Get(2).(func(context.Context, string, string) error); ok {
-		r2 = returnFunc(ctx, app, service)
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, string, bool) error); ok {
+		r2 = returnFunc(ctx, app, service, all)
 	} else {
 		r2 = ret.Error(2)
 	}
@@ -1602,11 +1602,12 @@ type MockControlPlane_RestartApp_Call struct {
 //   - ctx context.Context
 //   - app string
 //   - service string
-func (_e *MockControlPlane_Expecter) RestartApp(ctx any, app any, service any) *MockControlPlane_RestartApp_Call {
-	return &MockControlPlane_RestartApp_Call{Call: _e.mock.On("RestartApp", ctx, app, service)}
+//   - all bool
+func (_e *MockControlPlane_Expecter) RestartApp(ctx any, app any, service any, all any) *MockControlPlane_RestartApp_Call {
+	return &MockControlPlane_RestartApp_Call{Call: _e.mock.On("RestartApp", ctx, app, service, all)}
 }
 
-func (_c *MockControlPlane_RestartApp_Call) Run(run func(ctx context.Context, app string, service string)) *MockControlPlane_RestartApp_Call {
+func (_c *MockControlPlane_RestartApp_Call) Run(run func(ctx context.Context, app string, service string, all bool)) *MockControlPlane_RestartApp_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -1620,10 +1621,15 @@ func (_c *MockControlPlane_RestartApp_Call) Run(run func(ctx context.Context, ap
 		if args[2] != nil {
 			arg2 = args[2].(string)
 		}
+		var arg3 bool
+		if args[3] != nil {
+			arg3 = args[3].(bool)
+		}
 		run(
 			arg0,
 			arg1,
 			arg2,
+			arg3,
 		)
 	})
 	return _c
@@ -1634,7 +1640,7 @@ func (_c *MockControlPlane_RestartApp_Call) Return(appDeployResponse *dto.AppDep
 	return _c
 }
 
-func (_c *MockControlPlane_RestartApp_Call) RunAndReturn(run func(ctx context.Context, app string, service string) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RestartApp_Call {
+func (_c *MockControlPlane_RestartApp_Call) RunAndReturn(run func(ctx context.Context, app string, service string, all bool) (*dto.AppDeployResponse, string, error)) *MockControlPlane_RestartApp_Call {
 	_c.Call.Return(run)
 	return _c
 }
