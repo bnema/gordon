@@ -211,6 +211,10 @@ Reads values in one of three ways:
 `--key` requires `--stdin` and cannot be combined with `KEY=VALUE` arguments.
 An empty value is rejected, so `KEY=` is invalid.
 
+Running containers keep the values they were created with. Apply new values
+with `gordon apps restart APP --service SVC`; `deploy` skips a service whose
+image and spec did not change.
+
 #### Flags
 
 | Flag | Description |
@@ -262,6 +266,13 @@ service.
 | `--all` | Deploy every service |
 | `--json` | Output as JSON |
 
+A deploy changes versions, not secrets. A service already running the same
+image digest, spec, and app environment keeps its container and is reported
+`unchanged`; nothing is restarted. A new image behind the same tag (for
+example `latest`) has a new digest and is deployed. Secret values are read
+only when a container is created: after `gordon apps secrets set`, run
+`gordon apps restart` to apply them.
+
 Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
 later services stay unchanged.
@@ -282,8 +293,12 @@ local polling (the daemon-side operation keeps running) and prints the
 gordon apps restart APP [--service SVC | --all] [--json]
 ```
 
-Restarts from pinned digests without re-resolution. Like `deploy`, an app
-with several services needs `--service NAME` or `--all`.
+Recreates each service's container from its pinned digest, without
+re-resolving the image tag. The new container reads the current secret
+values, so this is the command to run after `gordon apps secrets set`. Like
+`deploy`, the old container is withdrawn from traffic and stopped before the
+new one starts, and readiness is checked before traffic returns. An app with
+several services needs `--service NAME` or `--all`.
 
 ---
 

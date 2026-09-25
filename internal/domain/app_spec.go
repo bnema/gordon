@@ -1038,6 +1038,12 @@ func equalStringSets(a, b []string) bool {
 	return true
 }
 
+// SameAppService reports whether two service specs are equal under the
+// same normalized comparison DiffAppSpec uses.
+func SameAppService(a, b AppService) bool {
+	return len(diffService(a.Name, a, b)) == 0
+}
+
 // diffService compares two services field by field.
 func diffService(name string, desired, effective AppService) []string {
 	var changed []string

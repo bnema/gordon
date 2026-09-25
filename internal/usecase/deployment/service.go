@@ -358,6 +358,10 @@ type DeployResult struct {
 	Removed []string
 }
 
+// ServiceResultUnchanged marks a deploy step that kept the running
+// container because its image, spec, and environment were already current.
+const ServiceResultUnchanged = domain.AppServiceUnchanged
+
 // ServiceResult is one service's terminal deployment result.
 type ServiceResult struct {
 	Result            string
@@ -932,7 +936,7 @@ func ComputeOutcome(results map[string]ServiceResult) string {
 	failed := 0
 	for _, result := range results {
 		switch result.Result {
-		case "deployed":
+		case "deployed", ServiceResultUnchanged:
 			deployed++
 		case "failed":
 			failed++

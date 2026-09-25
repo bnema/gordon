@@ -2,6 +2,7 @@ package deployment_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/deployment"
 )
@@ -52,15 +54,31 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 
 	t.Run("restart", func(t *testing.T) {
 		ctx := context.Background()
-		state, runtime, _, _ := mockDeps(t)
-		active := activeWithGrace("c-1", grace)
-		state.EXPECT().Recover(mock.Anything).Return(nil)
-		state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
-		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
-		runtime.EXPECT().RestartContainer(mock.Anything, "c-1", grace).Return(nil).Once()
-		state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
+		store := newTestStore(t)
+		runtime := outmocks.NewMockContainerRuntime(t)
+		spec := graceSpec(grace)
+		spec.Image = "docker.io/example/web:1.4.2"
+		spec.Secrets = map[string]string{}
+		spec.Readiness = domain.AppReadiness{Type: "none", Timeout: time.Second}
+		rev := testRevision("blog", spec)
+		require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
+		require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+			"web": {Container: "c-1", EffectiveRevision: rev.Revision, Image: spec.Image, Digest: "sha256:" + strings.Repeat("a", 64), Spec: rev.Spec.Services[0]},
+		}}))
+		require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
+		seedRevision(t, ctx, store, "intent-0", "", rev)
 
-		svc := deployment.NewService(deployment.Deps{State: state, Runtime: runtime}, zerowrap.Default())
+		// Restart recreates the container: the superseded generation is
+		// stopped with the effective grace before its replacement exists.
+		runtime.EXPECT().StopContainer(mock.Anything, "c-1", grace).Return(nil).Once()
+		runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
+		expectNetworkProvision(runtime, "app-blog", 1)
+		runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-2"}, nil).Once()
+		runtime.EXPECT().StartContainer(mock.Anything, "c-2").Return(nil).Once()
+		runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-2", mock.Anything).Return(nil, nil).Maybe()
+		runtime.EXPECT().InspectContainer(mock.Anything, "c-2").Return(&domain.Container{ID: "c-2", Status: "running"}, nil).Maybe()
+
+		svc := deployment.NewService(deployment.Deps{State: store, Runtime: runtime}, zerowrap.Default())
 		_, err := svc.Restart(ctx, "blog", "web", "")
 		require.NoError(t, err)
 	})

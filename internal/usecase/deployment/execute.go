@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -332,7 +334,20 @@ func (s *Service) runServiceStep(
 		Digest: p.digest, Image: p.runtimeImage,
 		Before: before, State: domain.AppStepPending,
 	}
-	svcResult := s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name), s.journalCandidate(op, index+1))
+	var svcResult ServiceResult
+	if current, ok := s.unchangedService(ctx, app, p, active); ok {
+		// Same image, spec, and app environment already running: keep the
+		// container. Secrets are re-read only by restart, which recreates it.
+		svcResult = ServiceResult{
+			Result: ServiceResultUnchanged, EffectiveRevision: revision,
+			Before: before, After: before,
+			BackendBinds: current.BackendBinds, UDPBackendBinds: current.UDPBackendBinds,
+			RestartUnsafe: singleWriterRequired(p.spec),
+		}
+		step.Detail = domain.AppServiceUnchanged + ": already running " + p.spec.Image + " (" + p.digest + ")"
+	} else {
+		svcResult = s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name), s.journalCandidate(op, index+1))
+	}
 	result.Services[p.name] = svcResult
 	// A recorded candidate is authoritative while the step is unresolved: a
 	// replacement that failed after creating its container must stay traceable
@@ -380,6 +395,30 @@ func (s *Service) runServiceStep(
 		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
 	}
 	return nil
+}
+
+// unchangedService reports whether the service already runs exactly what p
+// would create: the same digest, service spec, app environment, and shared
+// networks, in a container that is still running. Secret values are not
+// compared: they are applied by restart, never by deploy.
+func (s *Service) unchangedService(ctx context.Context, app string, p pinnedService, active domain.AppActive) (domain.AppEffectiveService, bool) {
+	eff, ok := active.Services[p.name]
+	if !ok || eff.Container == "" || eff.Digest == "" || eff.Digest != p.digest {
+		return eff, false
+	}
+	if !domain.SameAppService(p.spec, eff.Spec) {
+		return eff, false
+	}
+	previous, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
+	if err != nil || !maps.Equal(previous.Spec.Env, p.appEnv) ||
+		!reflect.DeepEqual(domain.AppServiceSharedNetworks(previous.Spec, p.name), p.sharedNetworks) {
+		return eff, false
+	}
+	container, err := s.deps.Runtime.InspectContainer(ctx, eff.Container)
+	if err != nil || container.Status != string(domain.ContainerStatusRunning) {
+		return eff, false
+	}
+	return eff, true
 }
 
 // failOperation records a terminal failure on an already claimed

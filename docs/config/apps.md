@@ -108,7 +108,7 @@ Image registry names and digest syntax are validated during manifest apply, reso
 ## Environment and Secrets
 
 - `[env]` is app-wide public env injected into all services. Each key must be disjoint from every `[services.<name>.secrets]` key in the app.
-- `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Secret updates affect the next deploy/restart, not running containers.
+- `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Running containers keep the values they were created with; `gordon apps restart` applies new values.
 - There is no `[services.<name>.env]` key — service-specific values must use secrets.
 
 ## Volumes and Databases

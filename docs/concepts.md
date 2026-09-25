@@ -82,7 +82,7 @@ Deployment stops at the first service failure: services already deployed in that
 
 A deploy interrupted after the replacement container was created but before it was published leaves the failure explicit: the candidate is recorded in the deployment journal, and Gordon removes it before it creates or rebuilds any generation of that app — at boot and before every mutation — so two generations of one service never run together. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. If the recorded candidate cannot be removed, reconciliation fails closed: the operation is not finalized, stays the latest journal, and every later mutation is refused so a newer operation can never mask the orphan. The next recovery pass republishes routing within its 15-second cadence if the final traffic publication was the step that failed.
 
-`gordon apps restart` is separate from deploy and stays in place: it withdraws traffic, restarts the same pinned container, verifies readiness, and republishes traffic. No second container is created. When the recorded container is gone, restart rebuilds the service from its pinned `ACTIVE` digest and publishes it.
+`gordon apps restart` is separate from deploy: it withdraws traffic, stops the running container, creates a new one from the pinned `ACTIVE` digest (the image tag is never re-resolved), verifies readiness, and republishes traffic. The new container reads the current secret values. A deploy keeps a service whose image digest, spec, and app environment are unchanged and reports it `unchanged`.
 
 ## Deletion and Cleanup Lifecycle
 
@@ -155,7 +155,7 @@ Service-specific values use `secrets` even when non-confidential:
 DATABASE_URL = "database-url"
 ```
 
-Secret values stay in pass under `gordon/apps/<uuid>/<service>/<name>`, keyed by the stable internal UUID so a removed app's secrets are never adopted by a new app reusing the name. Secret updates affect the next deploy/restart, not running containers. Write values with `gordon apps secrets set`; only key names are ever echoed back, never values.
+Secret values stay in pass under `gordon/apps/<uuid>/<service>/<name>`, keyed by the stable internal UUID so a removed app's secrets are never adopted by a new app reusing the name. Running containers keep the values they were created with; `gordon apps restart` applies new values. Write values with `gordon apps secrets set`; only key names are ever echoed back, never values.
 
 ## Installation Reload
 

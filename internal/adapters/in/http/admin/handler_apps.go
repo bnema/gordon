@@ -607,6 +607,9 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		switch step.State {
 		case domain.AppStepSucceeded:
 			entry.Result = "deployed"
+			if strings.HasPrefix(step.Detail, domain.AppServiceUnchanged+":") {
+				entry.Result = domain.AppServiceUnchanged
+			}
 		case domain.AppStepFailed:
 			entry.Result = "failed"
 			entry.Error = step.Error

@@ -30,6 +30,11 @@ const (
 	AppStepNotRun    = "not-run"
 )
 
+// AppServiceUnchanged is the result of a deploy step that kept the running
+// container because its image, spec, and environment were already current.
+// A succeeded step whose Detail starts with it reports this result.
+const AppServiceUnchanged = "unchanged"
+
 // App operation outcomes over terminal per-service results.
 const (
 	AppOutcomeSuccess = "success"

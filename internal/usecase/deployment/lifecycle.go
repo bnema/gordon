@@ -201,11 +201,12 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 	return result, nil
 }
 
-// Restart restarts from pinned digests without re-resolution. Empty
-// service means all services in sorted order. Every service restarts in
-// place: traffic is withdrawn, the same pinned container is restarted, its
-// readiness probe is checked, and traffic is republished. No second
-// container is created and the pinned digest never changes.
+// Restart recreates services from their pinned digests without
+// re-resolution. Empty service means all services in sorted order. Each
+// service gets a new container built from the digest and spec pinned in
+// ACTIVE, so current secret values are re-read; the image never changes.
+// Use it after changing secrets: deploy skips services whose image and
+// spec are unchanged.
 func (s *Service) Restart(ctx context.Context, app, service, opID string) (*LifecycleResult, error) {
 	release, err := s.acquireAppContext(ctx, app)
 	if err != nil {
@@ -314,54 +315,30 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
 	}
-	// Withdraw before restarting: a restarting or unverified generation
-	// must not keep receiving traffic.
-	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
-		return fail(err.Error())
-	}
-	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
-		if errors.Is(err, domain.ErrContainerNotFound) {
-			// The recorded generation is gone: rebuild and publish it from the
-			// pinned ACTIVE digest instead of leaving the service withdrawn
-			// until a deploy.
-			svcResult, rebuildErr := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
-			if rebuildErr != nil {
-				svcResult.Error = rebuildErr.Error()
-				step.State = domain.AppStepFailed
-				step.Error = rebuildErr.Error()
-				step.Diagnostics = svcResult.Diagnostics
-				// The recorded container is proven gone: the inhibition the
-				// rebuild wrote for it protects nothing, and keeping it would
-				// refuse every later start, recovery pass, and restart.
-				if clearErr := s.clearRecoveryInhibition(ctx, app, name, eff.Container); clearErr != nil {
-					svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, CleanupWarning{
-						Service: name, Leftover: eff.Container, Detail: "clear recovery inhibition: " + clearErr.Error(),
-					})
-				}
-				return svcResult
-			}
-			step.State = domain.AppStepSucceeded
-			step.After = svcResult.After
-			return svcResult
-		}
-		s.clearServiceBinds(ctx, app, name)
-		return fail(err.Error())
-	}
-	// Ephemeral loopback binds are not guaranteed stable across a runtime
-	// restart: re-inspect before probing so the proxy never dials a stale
-	// bind.
-	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
+	// Recreate the generation from the digest pinned in ACTIVE: container
+	// environment is fixed at creation, so only a new container re-reads
+	// the current secret values. The replacement withdraws, retires the
+	// old container, starts the new one, checks readiness, and publishes.
+	svcResult, err := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
 	if err != nil {
-		s.clearServiceBinds(ctx, app, name)
-		return fail(err.Error())
-	}
-	if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
-		s.clearServiceBinds(ctx, app, name)
-		return fail(err.Error())
+		svcResult.Error = err.Error()
+		step.State = domain.AppStepFailed
+		step.Error = err.Error()
+		step.Diagnostics = svcResult.Diagnostics
+		// Once the recorded container is proven gone, its inhibition protects
+		// nothing and would refuse every later start, recovery, and restart.
+		if _, inspectErr := s.deps.Runtime.InspectContainer(ctx, eff.Container); errors.Is(inspectErr, domain.ErrContainerNotFound) {
+			if clearErr := s.clearRecoveryInhibition(ctx, app, name, eff.Container); clearErr != nil {
+				svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, CleanupWarning{
+					Service: name, Leftover: eff.Container, Detail: "clear recovery inhibition: " + clearErr.Error(),
+				})
+			}
+		}
+		return svcResult
 	}
 	step.State = domain.AppStepSucceeded
-	step.After = eff.Container
-	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
+	step.After = svcResult.After
+	return svcResult
 }
 
 // Remove withdraws workloads by exact container ID; volumes, secrets, and

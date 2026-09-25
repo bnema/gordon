@@ -772,59 +772,47 @@ func TestStart_BindVerificationFailureFailsClosed(t *testing.T) {
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 }
 
-// TestRestart_MixedServiceRefreshesBothProtocols proves a runtime restart
-// re-inspects TCP and UDP binds together: shifted ephemeral ports on
-// both protocols persist to ACTIVE and surface in the result.
+// TestRestart_MixedServiceRefreshesBothProtocols proves a restart records
+// the recreated container's TCP and UDP binds together: the new ephemeral
+// ports on both protocols persist to ACTIVE and surface in the result.
 func TestRestart_MixedServiceRefreshesBothProtocols(t *testing.T) {
 	ctx := context.Background()
-	state, runtime, images, secrets := mockDeps(t)
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
 	svcSpec := webService()
 	svcSpec.HTTP = nil
 	svcSpec.TCP = []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 9000, Publish: "9000"}}
 	svcSpec.UDP = []domain.AppUDPInterface{{Entrypoint: "udp", Port: 9000, Publish: "9000"}}
 	svcSpec.Readiness = domain.AppReadiness{Type: "none", Timeout: time.Second}
 	svcSpec.Secrets = map[string]string{}
-	active := domain.AppActive{
-		App: "blog",
-		Services: map[string]domain.AppEffectiveService{
-			"web": {
-				EffectiveRevision: "rev-1",
-				Image:             svcSpec.Image,
-				Digest:            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-				Container:         "c-old",
-				Spec:              svcSpec,
-				BackendBinds:      map[int]int{9000: 32770},
-				UDPBackendBinds:   map[int]int{9000: 32780},
-			},
+	rev := testRevision("blog", svcSpec)
+	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
+	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+		"web": {
+			EffectiveRevision: rev.Revision, Image: svcSpec.Image,
+			Digest:    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Container: "c-old", Spec: rev.Spec.Services[0],
+			BackendBinds: map[int]int{9000: 32770}, UDPBackendBinds: map[int]int{9000: 32780},
 		},
-	}
-	state.EXPECT().Recover(mock.Anything).Return(nil)
-	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
-	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
-	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
-	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
-	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return([]domain.ContainerBackendBind{
+	}}))
+	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
+	seedRevision(t, ctx, store, "intent-0", "", rev)
+
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	expectNetworkProvision(runtime, "app-blog", 1)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{
 		{ContainerPort: 9000, HostPort: 32771, Protocol: domain.NetworkProtocolTCP},
 		{ContainerPort: 9000, HostPort: 32781, Protocol: domain.NetworkProtocolUDP},
 	}, nil).Once()
-	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.MatchedBy(func(claims []domain.AppListenerReservation) bool {
-		if len(claims) != 2 {
-			return false
-		}
-		byProto := map[string]int{}
-		for _, claim := range claims {
-			byProto[claim.Proto] = claim.Port
-		}
-		return byProto["tcp"] == 32771 && byProto["udp"] == 32781
-	})).Return(nil).Once()
-	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
-	state.EXPECT().SaveActive(mock.Anything, mock.MatchedBy(func(a domain.AppActive) bool {
-		svc := a.Services["web"]
-		return svc.BackendBinds[9000] == 32771 && svc.UDPBackendBinds[9000] == 32781
-	})).Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running"}, nil).Maybe()
 
 	svc := deployment.NewService(
-		deployment.Deps{State: state, Runtime: runtime, Images: images, Secrets: secrets},
+		deployment.Deps{State: store, Runtime: runtime, Images: images, Secrets: secrets},
 		zerowrap.Default(),
 	)
 	result, err := svc.Restart(ctx, "blog", "", "")
@@ -833,4 +821,10 @@ func TestRestart_MixedServiceRefreshesBothProtocols(t *testing.T) {
 	assert.Equal(t, "deployed", result.Services["web"].Result)
 	assert.Equal(t, map[int]int{9000: 32771}, result.Services["web"].BackendBinds)
 	assert.Equal(t, map[int]int{9000: 32781}, result.Services["web"].UDPBackendBinds)
+
+	active, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, map[int]int{9000: 32771}, active.Services["web"].BackendBinds)
+	assert.Equal(t, map[int]int{9000: 32781}, active.Services["web"].UDPBackendBinds)
 }
