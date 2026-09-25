@@ -78,7 +78,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-2", mock.Anything).Return(nil, nil).Maybe()
 		runtime.EXPECT().InspectContainer(mock.Anything, "c-2").Return(&domain.Container{ID: "c-2", Status: "running"}, nil).Maybe()
 
-		svc := deployment.NewService(deployment.Deps{State: store, Runtime: runtime}, zerowrap.Default())
+		svc := deployment.NewService(deployment.Deps{State: store, Runtime: runtime, Secrets: outmocks.NewMockSecretProvider(t)}, zerowrap.Default())
 		_, err := svc.Restart(ctx, "blog", "web", "")
 		require.NoError(t, err)
 	})

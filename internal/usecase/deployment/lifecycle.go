@@ -254,8 +254,8 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	var failures []string
 	for _, name := range names {
 		eff := active.Services[name]
-		// The step is journaled before the runtime work, so a candidate
-		// created by a rebuild of a missing generation is durably recorded.
+		// The step is journaled before the runtime work, so the recreated
+		// candidate is durably recorded as soon as it exists.
 		op.Steps = append(op.Steps, domain.AppOperationStep{
 			ID: "service." + name + ".restart", State: domain.AppStepPending, Before: eff.Container, Service: name,
 		})
@@ -280,12 +280,11 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	return result, nil
 }
 
-// restartOneService withdraws one service, restarts its exact container,
-// re-inspects its binds, and verifies readiness before it may be published
-// again. Every failure leaves the service withdrawn with its recorded binds
-// cleared, so a failed restart is never served. A generation whose recorded
-// container no longer exists is rebuilt from the pinned ACTIVE digest, so a
-// failed replacement cannot leave restart as a permanent dead end.
+// restartOneService recreates one service from its pinned ACTIVE digest via
+// redeployPinned: the old container is withdrawn and retired, a new one is
+// created with the current secret values, and it is published only once
+// ready. A failure after retirement leaves the service down; the old
+// container is not recreated.
 func (s *Service) restartOneService(ctx context.Context, app, opID, name string, eff domain.AppEffectiveService, op *domain.AppOperation, index int) ServiceResult {
 	step := &op.Steps[index]
 	result := ServiceResult{Result: "failed", Before: eff.Container, After: eff.Container}
@@ -306,8 +305,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		return fail(err.Error())
 	}
 	// A device grant revoked since ACTIVE was published must fail
-	// before any runtime mutation, under the same rule as binds. An
-	// in-place restart never rewrites device configuration.
+	// before any runtime mutation, under the same rule as binds.
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
@@ -631,11 +629,12 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 	result.Services[name] = svcResult
 }
 
-// redeployPinned rebuilds one service from the revision pinned in ACTIVE and
-// publishes it. It is the shared recovery path for a recorded container that
-// no longer exists: boot/start recovery, and a restart of a missing
-// generation. The returned result is always populated, so a caller can
-// journal the attempt even when err is non-nil.
+// redeployPinned recreates one service from the revision and digest pinned in
+// ACTIVE and publishes it. It serves restart (which always recreates, so the
+// new container reads current secrets) and boot/start recovery of a recorded
+// container that no longer exists. Image, bind, device, and secret checks run
+// before the existing container is touched. The returned result is always
+// populated, so a caller can journal the attempt even when err is non-nil.
 func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, eff domain.AppEffectiveService, journal candidateJournal) (ServiceResult, error) {
 	rev, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
 	if err != nil {
@@ -650,6 +649,16 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 	}
 	// Revoked device grants fail before any runtime mutation.
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
+		return failedServiceResult(eff.Container, err), err
+	}
+	// Secrets are read into the new container's environment only after the
+	// old generation is retired: a missing or unreadable secret must fail
+	// here, while the running container is still untouched.
+	appID, err := s.appSecretID(ctx, app)
+	if err != nil {
+		return failedServiceResult(eff.Container, err), err
+	}
+	if err := s.checkSecrets(ctx, app, appID, eff.Spec); err != nil {
 		return failedServiceResult(eff.Container, err), err
 	}
 	pinned := pinnedService{

@@ -398,27 +398,73 @@ func (s *Service) runServiceStep(
 }
 
 // unchangedService reports whether the service already runs exactly what p
-// would create: the same digest, service spec, app environment, and shared
-// networks, in a container that is still running. Secret values are not
-// compared: they are applied by restart, never by deploy.
+// would create, in a healthy published state: the same digest, service spec,
+// app environment, and shared networks, in a running container that is not
+// withdrawn or recovery-inhibited and whose recorded binds cover every
+// backend port. Services with host binds or devices are never skipped: their
+// resolved sources depend on host policy that ACTIVE does not record. Secret
+// values are not compared: they are applied by restart, never by deploy.
 func (s *Service) unchangedService(ctx context.Context, app string, p pinnedService, active domain.AppActive) (domain.AppEffectiveService, bool) {
 	eff, ok := active.Services[p.name]
 	if !ok || eff.Container == "" || eff.Digest == "" || eff.Digest != p.digest {
 		return eff, false
 	}
-	if !domain.SameAppService(p.spec, eff.Spec) {
-		return eff, false
-	}
-	previous, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
-	if err != nil || !maps.Equal(previous.Spec.Env, p.appEnv) ||
-		!reflect.DeepEqual(domain.AppServiceSharedNetworks(previous.Spec, p.name), p.sharedNetworks) {
-		return eff, false
-	}
-	container, err := s.deps.Runtime.InspectContainer(ctx, eff.Container)
-	if err != nil || container.Status != string(domain.ContainerStatusRunning) {
+	reason := s.unchangedRefusal(ctx, app, p, eff)
+	if reason != "" {
+		log := zerowrap.FromCtx(ctx)
+		log.Debug().Str("app", app).Str("service", p.name).Str("reason", reason).
+			Msg("deployment: same digest, replacing service")
 		return eff, false
 	}
 	return eff, true
+}
+
+// unchangedRefusal returns why a service running the same digest must still
+// be replaced, or "" when it can be kept.
+func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedService, eff domain.AppEffectiveService) string {
+	switch {
+	case len(p.spec.Binds) > 0 || len(p.spec.Devices) > 0:
+		return "host binds or devices"
+	case !domain.SameAppService(p.spec, eff.Spec):
+		return "spec changed"
+	case !bindsCover(eff, backendPorts(p.spec)):
+		return "backend binds missing"
+	case s.publication.inhibited(app, p.name):
+		return "withdrawal pending"
+	}
+	previous, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
+	if err != nil {
+		return "load effective revision: " + err.Error()
+	}
+	if !maps.Equal(previous.Spec.Env, p.appEnv) {
+		return "app env changed"
+	}
+	if !reflect.DeepEqual(domain.AppServiceSharedNetworks(previous.Spec, p.name), p.sharedNetworks) {
+		return "shared networks changed"
+	}
+	if inhibited, err := s.recoveryInhibited(ctx, app, p.name, eff.Container); err != nil || inhibited {
+		return "recovery inhibited"
+	}
+	container, err := s.deps.Runtime.InspectContainer(ctx, eff.Container)
+	if err != nil || container.Status != string(domain.ContainerStatusRunning) {
+		return "container not running"
+	}
+	return ""
+}
+
+// bindsCover reports whether the recorded loopback binds publish every
+// backend port the spec requires, so a kept container stays routable.
+func bindsCover(eff domain.AppEffectiveService, ports []domain.ContainerBackendPort) bool {
+	for _, port := range ports {
+		binds := eff.BackendBinds
+		if port.Protocol == domain.NetworkProtocolUDP {
+			binds = eff.UDPBackendBinds
+		}
+		if binds[port.ContainerPort] == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // failOperation records a terminal failure on an already claimed
@@ -1438,10 +1484,15 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 	if active.Services == nil {
 		active.Services = map[string]domain.AppEffectiveService{}
 	}
+	activatedBy, activatedAt := opID, time.Now().UTC()
+	if previous, ok := active.Services[p.name]; ok && result.Result == ServiceResultUnchanged {
+		// A kept container keeps the activation of the operation that created it.
+		activatedBy, activatedAt = previous.ActivatedBy, previous.ActivatedAt
+	}
 	active.Services[p.name] = domain.AppEffectiveService{
 		EffectiveRevision: revision,
-		ActivatedBy:       opID,
-		ActivatedAt:       time.Now().UTC(),
+		ActivatedBy:       activatedBy,
+		ActivatedAt:       activatedAt,
 		Image:             p.spec.Image,
 		Digest:            p.digest,
 		Container:         result.After,

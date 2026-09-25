@@ -1002,7 +1002,7 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 		svc := resp.Services[name]
 		detail := svc.Result + " " + svc.EffectiveRevision
 		if svc.Result == domain.AppServiceUnchanged {
-			detail = "unchanged (already running this image; use `gordon apps restart` to re-read secrets)"
+			detail += " (already running this image; `gordon apps restart` re-reads secrets)"
 		}
 		if svc.RestartUnsafe {
 			detail += " restart_unsafe"

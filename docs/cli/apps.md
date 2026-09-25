@@ -266,12 +266,14 @@ service.
 | `--all` | Deploy every service |
 | `--json` | Output as JSON |
 
-A deploy changes versions, not secrets. A service already running the same
-image digest, spec, and app environment keeps its container and is reported
-`unchanged`; nothing is restarted. A new image behind the same tag (for
-example `latest`) has a new digest and is deployed. Secret values are read
-only when a container is created: after `gordon apps secrets set`, run
-`gordon apps restart` to apply them.
+A deploy changes versions, not secrets. A service already running and
+routed with the same image digest, spec, and app environment keeps its
+container and is reported `unchanged`; nothing is restarted. A new image
+behind the same tag (for example `latest`) has a new digest and is deployed.
+Services with host binds or devices are always replaced, so bind and device
+policy changes apply on deploy. Secret values, installation resource limits,
+and a running container that misbehaves are handled by `gordon apps
+restart`, which recreates the container.
 
 Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
@@ -297,8 +299,12 @@ Recreates each service's container from its pinned digest, without
 re-resolving the image tag. The new container reads the current secret
 values, so this is the command to run after `gordon apps secrets set`. Like
 `deploy`, the old container is withdrawn from traffic and stopped before the
-new one starts, and readiness is checked before traffic returns. An app with
-several services needs `--service NAME` or `--all`.
+new one starts, and readiness is checked before traffic returns. The service
+is briefly down during every restart. Image, secret, bind, and device checks
+run before the old container is touched; if the new container then fails to
+start or become ready, the service stays down and the old container is not
+recreated: fix the cause and run `restart` again. An app with several
+services needs `--service NAME` or `--all`.
 
 ---
 
