@@ -107,7 +107,7 @@ endpoint = ""                                # OTLP HTTP endpoint URL
 auth_token = ""                              # Base64-encoded user:password for Basic auth
 traces = true                                # Export distributed traces
 metrics = true                               # Export metrics
-logs = true                                  # Bridge zerolog output to OTLP logs
+logs = true                                  # Export Gordon, access, and app logs
 trace_sample_rate = 1.0                      # Fraction of traces to sample (0.0–1.0)
 
 # =============================================================================
@@ -288,7 +288,7 @@ keep_last = 3                                # Keep N newest tags per repository
 | `telemetry.auth_token` | `""` | Base64 `user:password` for Basic auth |
 | `telemetry.traces` | `true` | Export distributed traces |
 | `telemetry.metrics` | `true` | Export metrics |
-| `telemetry.logs` | `true` | Bridge zerolog to OTLP logs |
+| `telemetry.logs` | `true` | Export Gordon, proxy access, and app container logs to OTLP |
 | `telemetry.trace_sample_rate` | `1.0` | Fraction of traces to sample (0.0–1.0) |
 | `containers.security_profile` | `"compat"` | Runtime hardening profile: `compat` preserves existing behavior, `strict` enables read-only rootfs and narrower capabilities |
 | `network_isolation.enabled` | `true` | Network isolation enabled |

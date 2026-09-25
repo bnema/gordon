@@ -1,9 +1,17 @@
 package telemetry
 
 import (
+	"context"
+
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/bnema/gordon/internal/boundaries/out"
+	"github.com/bnema/gordon/internal/domain"
 )
+
+var _ out.Metrics = (*Metrics)(nil)
 
 // Metrics holds Gordon-specific OTel metrics instruments.
 type Metrics struct {
@@ -79,4 +87,24 @@ func NewMetrics() (*Metrics, error) {
 	}
 
 	return m, nil
+}
+
+// RecordImagePush implements out.Metrics.
+func (m *Metrics) RecordImagePush(ctx context.Context, name, reference string, sizeBytes int64) {
+	attrs := metric.WithAttributes(
+		attribute.String("name", name),
+		attribute.String("reference", reference),
+	)
+	m.ImagePushTotal.Add(ctx, 1, attrs)
+	m.ImagePushSize.Add(ctx, sizeBytes, attrs)
+}
+
+// RecordEventProcessed implements out.Metrics.
+func (m *Metrics) RecordEventProcessed(ctx context.Context, eventType domain.EventType) {
+	m.EventsProcessed.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", string(eventType))))
+}
+
+// RecordEventDropped implements out.Metrics.
+func (m *Metrics) RecordEventDropped(ctx context.Context, eventType domain.EventType) {
+	m.EventsDropped.Add(ctx, 1, metric.WithAttributes(attribute.String("event_type", string(eventType))))
 }

@@ -26,7 +26,7 @@ trace_sample_rate = 1.0
 | `auth_token` | string | `""` | Base64-encoded `user:password` for Basic auth |
 | `traces` | bool | `true` | Export distributed traces |
 | `metrics` | bool | `true` | Export metrics (deploy counters, container lifecycle, registry, events) |
-| `logs` | bool | `true` | Bridge zerolog output to OTLP logs |
+| `logs` | bool | `true` | Export Gordon, proxy access, and app container logs to OTLP |
 | `trace_sample_rate` | float | `1.0` | Fraction of traces to sample (`0.0` = none, `1.0` = all) |
 
 ## How It Works
@@ -35,9 +35,58 @@ Gordon initializes an OTel provider at startup. When telemetry is enabled:
 
 1. **Traces** -- Spans wrap critical operations: container deploy, image pull, registry manifest push, and proxy target resolution. The `otelhttp` middleware adds a span to every HTTP request on both the proxy and registry servers.
 2. **Metrics** -- Gordon records custom counters and histograms for deploys, container restarts, crash loops, managed container count, registry pushes, and event bus throughput.
-3. **Logs** -- A zerowrap/otel hook bridges all structured log output to the OTLP log pipeline. Every log line automatically carries `trace_id` and `span_id` when emitted inside a traced request.
+3. **Logs** -- Gordon exports three log families (see [Logs](#logs)).
 
 When telemetry is disabled (the default), all OTel instruments are noop -- zero overhead.
+
+## Logs
+
+With `logs = true`, Gordon exports:
+
+| Family | Source | `service.name` |
+|--------|--------|----------------|
+| Gordon process logs | zerowrap output, with `trace_id`/`span_id` inside traced requests | `gordon` |
+| Proxy access logs | Every proxied request, attributed to the app service owning the host | `<app>.<service>` (`gordon` for registry and unknown hosts) |
+| App container logs | stdout and stderr of every running app service container | `<app>.<service>` |
+
+Every app record carries these resource attributes:
+
+| Attribute | Example | Use |
+|-----------|---------|-----|
+| `service.name` | `blog.web` | One exact service; unique across apps |
+| `service.namespace` | `blog` | All services of one app |
+| `gordon.app` | `blog` | Filter by app |
+| `gordon.service` | `web` | Filter by service name across apps |
+
+Record attributes:
+
+- `log.type`: `access` or `container`
+- `log.iostream`: `stdout` or `stderr` (container logs)
+- Access logs: `http.request.method`, `http.response.status_code`, `server.address`, `url.path`, `client.address`, `request.id`, and more. Severity follows the status: `5xx` is `ERROR`, `4xx` is `WARN`, otherwise `INFO`.
+
+Loki indexes `service.name` and `service.namespace` as stream labels by default; the other attributes are structured metadata, filtered after the stream selector. Example queries in Grafana:
+
+```text
+{service_namespace="blog"}                          # every log of the blog app
+{service_name="blog.web"} | log_type="access"       # access logs of one service
+{service_namespace=~".+"} | gordon_service="web"    # every "web" service, all apps
+```
+
+Container output is exported from the moment Gordon starts, including the first lines of every container deployed afterwards. Output emitted while Gordon is stopped is not exported. Lines longer than 64 KiB are truncated. Export is buffered and never slows the proxy or the app: on overload, the oldest records are dropped.
+
+### Per-app opt-out
+
+App container logs are exported by default. Opt out in the [app manifest](./apps.md#telemetry), per app or per service; a service setting overrides the app setting:
+
+```toml
+[telemetry]
+logs = true          # app default
+
+[services.db.telemetry]
+logs = false         # only "db" stops exporting
+```
+
+The opt-out covers container output only; access logs of the app's hosts are still exported.
 
 ## Endpoint URL
 

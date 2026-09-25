@@ -23,10 +23,18 @@ import (
 // rawManifest mirrors the frozen TOML schema for strict decoding.
 // Services is keyed by service name: [services.<name>].
 type rawManifest struct {
-	Name     string                `toml:"name"`
-	Env      map[string]string     `toml:"env"`
-	Services map[string]rawService `toml:"services"`
-	Network  rawNetwork            `toml:"network"`
+	Name      string                `toml:"name"`
+	Env       map[string]string     `toml:"env"`
+	Services  map[string]rawService `toml:"services"`
+	Network   rawNetwork            `toml:"network"`
+	Telemetry rawTelemetry          `toml:"telemetry"`
+}
+
+// rawTelemetry mirrors [telemetry] and [services.<name>.telemetry].
+// A nil Logs means "inherit": service inherits the app, the app
+// inherits the default (export on).
+type rawTelemetry struct {
+	Logs *bool `toml:"logs"`
 }
 
 // rawNetwork mirrors [network] and its [[network.shared]] children.
@@ -52,6 +60,7 @@ type rawService struct {
 	Devices   []string      `toml:"devices"`
 	Databases []rawDatabase `toml:"database"`
 	Backup    rawBackup     `toml:"backup"`
+	Telemetry rawTelemetry  `toml:"telemetry"`
 }
 
 // rawReadiness mirrors [services.<name>.readiness].
@@ -221,6 +230,7 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		if err != nil {
 			return domain.AppSpec{}, err
 		}
+		svc.LogExportDisabled = !resolveLogExport(raw.Telemetry.Logs, raw.Services[name].Telemetry.Logs)
 		spec.Services = append(spec.Services, svc)
 	}
 	for _, net := range raw.Network.Shared {
@@ -231,6 +241,17 @@ func toDomain(raw rawManifest) (domain.AppSpec, error) {
 		})
 	}
 	return spec, nil
+}
+
+// resolveLogExport applies the precedence service > app > default (on).
+func resolveLogExport(app, service *bool) bool {
+	if service != nil {
+		return *service
+	}
+	if app != nil {
+		return *app
+	}
+	return true
 }
 
 func toDomainHTTP(service string, h rawHTTP) (domain.AppHTTPInterface, error) {

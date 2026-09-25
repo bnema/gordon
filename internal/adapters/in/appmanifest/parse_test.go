@@ -571,3 +571,35 @@ gpus = "all"
 	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
 	require.Error(t, err)
 }
+
+func TestParse_TelemetryLogsPrecedence(t *testing.T) {
+	const manifest = `
+name = "blog"
+
+[telemetry]
+logs = false
+
+[services.web]
+image = "registry.example.com/blog/web:1"
+
+[services.web.telemetry]
+logs = true
+
+[services.db]
+image = "postgres:17"
+`
+	spec, _, err := appmanifest.Parse([]byte(manifest), "blog.toml")
+	require.NoError(t, err)
+	byName := map[string]domain.AppService{}
+	for _, svc := range spec.Services {
+		byName[svc.Name] = svc
+	}
+	assert.False(t, byName["web"].LogExportDisabled, "service override wins")
+	assert.True(t, byName["db"].LogExportDisabled, "service inherits app")
+}
+
+func TestParse_TelemetryLogsDefaultOn(t *testing.T) {
+	spec, _, err := appmanifest.Parse([]byte(validWeb), "blog.toml")
+	require.NoError(t, err)
+	assert.False(t, spec.Services[0].LogExportDisabled)
+}
