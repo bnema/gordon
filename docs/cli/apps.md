@@ -212,8 +212,8 @@ Reads values in one of three ways:
 An empty value is rejected, so `KEY=` is invalid.
 
 Running containers keep the values they were created with. Apply new values
-with `gordon apps restart APP --service SVC`; `deploy` skips a service whose
-image and spec did not change.
+with `gordon apps deploy APP --service SVC`: deploy sees the changed secret and
+recreates the service. `restart` does not apply new values.
 
 #### Flags
 
@@ -266,14 +266,12 @@ service.
 | `--all` | Deploy every service |
 | `--json` | Output as JSON |
 
-A deploy changes versions, not secrets. A service already running and
-routed with the same image digest, spec, and app environment keeps its
-container and is reported `unchanged`; nothing is restarted. A new image
-behind the same tag (for example `latest`) has a new digest and is deployed.
-Services with host binds or devices are always replaced, so bind and device
-policy changes apply on deploy. Secret values, installation resource limits,
-and a running container that misbehaves are handled by `gordon apps
-restart`, which recreates the container.
+Deploy is the only command that applies changes. It recreates a service
+when its image digest, spec, app environment, or secret values changed. A
+new image behind the same tag (for example `latest`) has a new digest and is
+deployed. A service already running with all of these unchanged keeps its
+container and is reported `unchanged`. Services with host binds or devices
+are always replaced, so bind and device policy changes apply on deploy.
 
 Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
@@ -295,16 +293,11 @@ local polling (the daemon-side operation keeps running) and prints the
 gordon apps restart APP [--service SVC | --all] [--json]
 ```
 
-Recreates each service's container from its pinned digest, without
-re-resolving the image tag. The new container reads the current secret
-values, so this is the command to run after `gordon apps secrets set`. Like
-`deploy`, the old container is withdrawn from traffic and stopped before the
-new one starts, and readiness is checked before traffic returns. The service
-is briefly down during every restart. Image, secret, bind, and device checks
-run before the old container is touched; if the new container then fails to
-start or become ready, the service stays down and the old container is not
-recreated: fix the cause and run `restart` again. An app with several
-services needs `--service NAME` or `--all`.
+Restarts the same container. Nothing is applied: new secret values, env,
+image, or config need `gordon apps deploy`. Traffic is withdrawn, the
+container restarts, readiness is checked, and traffic returns. If the
+container no longer exists, restart rebuilds it from its pinned digest. An
+app with several services needs `--service NAME` or `--all`.
 
 ---
 

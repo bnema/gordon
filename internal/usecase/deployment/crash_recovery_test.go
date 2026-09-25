@@ -377,8 +377,8 @@ func TestRestart_FailedRebuildClearsTheInhibitionOfTheMissingContainer(t *testin
 	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
 	seedRevision(t, ctx, store, "intent-0", "", rev)
 
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
-	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(nil, domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateVolume(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -624,6 +624,7 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 	secrets := outmocks.NewMockSecretProvider(t)
 	seedReplaceableApp(t, ctx, store)
 
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)

@@ -3,7 +3,6 @@ package deployment_test
 import (
 	"context"
 	"errors"
-	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/deployment"
 )
@@ -50,158 +48,116 @@ func (r *restartTrafficRecorder) WithdrawServiceState(context.Context, string, s
 
 const restartTestDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-// TestRestart_RecreatesFromPinnedDigestAndRereadsSecrets proves the restart
-// contract: the service is withdrawn, the running container is retired, and
-// a NEW container is created from the digest pinned in ACTIVE, with the
-// current secret values in its environment. The image is never re-resolved.
-func TestRestart_RecreatesFromPinnedDigestAndRereadsSecrets(t *testing.T) {
+func restartActive(t *testing.T, spec domain.AppService) domain.AppActive {
+	t.Helper()
+	return domain.AppActive{App: "blog", ConvergedRevision: "rev-1", Converged: true, Services: map[string]domain.AppEffectiveService{"web": {EffectiveRevision: "rev-1", ActivatedBy: "op-before", ActivatedAt: time.Now().Add(-time.Hour).UTC(), Image: spec.Image, Digest: restartTestDigest, Container: "c-old", Spec: spec, BackendBinds: map[int]int{8080: 32770}}}}
+}
+
+// TestRestart_InPlaceWithdrawsRestartsVerifiesAndRepublishes proves the
+// restart contract: the service is withdrawn from traffic, the SAME pinned
+// container is restarted, readiness is verified against its refreshed
+// loopback bind, and traffic is republished. No second container is created
+// and no container is stopped or removed.
+func TestRestart_InPlaceWithdrawsRestartsVerifiesAndRepublishes(t *testing.T) {
 	ctx := context.Background()
-	store := newTestStore(t)
-	runtime := outmocks.NewMockContainerRuntime(t)
-	images := outmocks.NewMockImageResolver(t)
-	secrets := outmocks.NewMockSecretProvider(t)
+	state, runtime, images, secrets := mockDeps(t)
 	spec := webService()
-	spec.Readiness = domain.AppReadiness{Type: domain.AppReadinessHTTP, Path: "/healthz", Timeout: time.Second}
-	rev := testRevision("blog", spec)
-	rev.Revision = "rev-0"
-	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
-	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
-		"web": {Container: "c-old", EffectiveRevision: "rev-0", Image: spec.Image, Digest: restartTestDigest, Spec: rev.Spec.Services[0], BackendBinds: map[int]int{8080: 18080}},
-	}}))
-	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
-	seedRevision(t, ctx, store, "intent-0", "", rev)
+	spec.Secrets = map[string]string{}
+	spec.StopGrace = 10 * time.Millisecond
+	// No declared readiness probe: the implicit HTTP check still applies to a
+	// stateless public HTTP service on restart, exactly as it does on deploy.
+	spec.Readiness = domain.AppReadiness{Timeout: time.Second}
+	active := restartActive(t, spec)
 
 	var order []string
-	secrets.EXPECT().GetSecret(mock.Anything, mock.Anything).Return("rotated-value", nil).Twice()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(
-		func(context.Context, string, time.Duration) error { recordEvent(&order, "stop-old"); return nil }).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
-	expectNetworkProvision(runtime, "app-blog", 1)
-	var created *domain.ContainerConfig
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(
-		func(_ context.Context, cfg *domain.ContainerConfig) (*domain.Container, error) {
-			created = cfg
-			recordEvent(&order, "create-new")
-			return &domain.Container{ID: "c-new", Name: "web"}, nil
+	state.EXPECT().Recover(mock.Anything).Return(nil)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(
+		func(context.Context, string, time.Duration) error {
+			recordEvent(&order, "restart")
+			return nil
 		}).Once()
-	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
-	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
-		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
+	var saved domain.AppActive
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(
+		func(_ context.Context, refreshed domain.AppActive) error {
+			saved = refreshed
+			recordEvent(&order, "persist-binds")
+			return nil
+		}).Once()
+	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
+	var probedURL string
 	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+		State: state, Runtime: runtime, Images: images, Secrets: secrets,
 		Traffic: &restartTrafficRecorder{events: &order},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
-		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(_ context.Context, url, _ string) (int, error) {
+			probedURL = url
+			recordEvent(&order, "ready")
+			return 200, nil
+		},
 		func(context.Context, string) error { return nil },
 	))
 
-	result, err := svc.Restart(ctx, "blog", "web", "op-restart")
+	result, err := svc.Restart(ctx, "blog", "web", "")
 	require.NoError(t, err)
+	require.NotNil(t, result)
 	assert.Equal(t, "deployed", result.Services["web"].Result)
-	assert.Equal(t, "c-new", result.Services["web"].After, "restart creates a new container")
-	require.NotNil(t, created)
-	assert.Contains(t, created.Env, "DATABASE_URL=rotated-value", "the new container reads the current secret value")
-	assert.Less(t, slices.Index(order, "withdraw"), slices.Index(order, "stop-old"), "traffic is withdrawn before the old container stops")
-	assert.Less(t, slices.Index(order, "stop-old"), slices.Index(order, "create-new"), "the old generation is gone before the new one exists")
-	images.AssertNotCalled(t, "ResolveDigest", mock.Anything, mock.Anything)
-
-	active, ok, err := store.LoadActive(ctx, "blog")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "c-new", active.Services["web"].Container)
-	assert.Equal(t, restartTestDigest, active.Services["web"].Digest, "the pinned digest is reused, never re-resolved")
+	assert.Equal(t, "c-old", result.Services["web"].After, "the same pinned container is restarted in place")
+	assert.Contains(t, probedURL, "127.0.0.1:32771", "readiness dials the refreshed loopback bind")
+	assert.Equal(t, []string{"withdraw", "restart", "persist-binds", "ready", "traffic"}, order)
+	assert.Equal(t, map[int]int{8080: 32771}, saved.Services["web"].BackendBinds)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
 }
 
-// TestRestart_ReadinessFailureFailsTheRestart proves a recreated container
-// that never becomes ready is not served: the restart fails and the service
-// is not published on the new container.
-func TestRestart_ReadinessFailureFailsTheRestart(t *testing.T) {
+// TestRestart_ReadinessFailureLeavesTheRestartedContainerWithdrawn proves a
+// restart is never served unverified: the failure leaves the same container
+// in place but withdraws its recorded binds, and the graph is republished
+// fail-closed. Nothing is created, stopped, or removed.
+func TestRestart_ReadinessFailureLeavesTheRestartedContainerWithdrawn(t *testing.T) {
 	ctx := context.Background()
-	store := newTestStore(t)
-	runtime := outmocks.NewMockContainerRuntime(t)
-	images := outmocks.NewMockImageResolver(t)
-	secrets := outmocks.NewMockSecretProvider(t)
-	seedReplaceableApp(t, ctx, store)
+	state, runtime, images, secrets := mockDeps(t)
+	spec := webService()
+	spec.Secrets = map[string]string{}
+	spec.StopGrace = 10 * time.Millisecond
+	spec.Readiness = domain.AppReadiness{Timeout: 50 * time.Millisecond}
+	active := restartActive(t, spec)
 
-	// The old generation is retired exactly once before the candidate
-	// exists; the unready candidate is then removed.
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-new", mock.Anything).Return(nil).Maybe()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", mock.Anything).Return(nil).Maybe()
-	runtime.EXPECT().InspectContainer(mock.Anything, mock.Anything).Return(nil, domain.ErrContainerNotFound).Maybe()
-	runtime.EXPECT().GetContainerLogs(mock.Anything, mock.Anything, mock.Anything).Return(nil, domain.ErrContainerNotFound).Maybe()
-	expectNetworkProvision(runtime, "app-blog", 1)
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
-	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
-	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
-		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+	var order []string
+	state.EXPECT().Recover(mock.Anything).Return(nil)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
 	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+		State: state, Runtime: runtime, Images: images, Secrets: secrets,
+		Traffic: &restartTrafficRecorder{events: &order},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },
 	))
 
-	result, err := svc.Restart(ctx, "blog", "web", "op-restart-unready")
+	result, err := svc.Restart(ctx, "blog", "web", "")
 	require.Error(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "failed", result.Services["web"].Result)
-
-	active, ok, err := store.LoadActive(ctx, "blog")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.NotEqual(t, "c-new", active.Services["web"].Container, "an unready container is never published")
-
-	op, err := store.LoadOperation(ctx, "blog", "op-restart-unready")
-	require.NoError(t, err)
-	step, found := opStep(op, "service.web.restart")
-	require.True(t, found)
-	assert.Equal(t, domain.AppStepFailed, step.State)
-	assert.Equal(t, "c-new", step.After, "the failed candidate stays journaled for reconciliation")
-}
-
-// TestRestart_MissingSecretLeavesTheRunningContainerUntouched proves every
-// check that can fail runs before the old container is retired: a secret
-// that cannot be read fails the restart while the service keeps running.
-func TestRestart_MissingSecretLeavesTheRunningContainerUntouched(t *testing.T) {
-	ctx := context.Background()
-	store := newTestStore(t)
-	runtime := outmocks.NewMockContainerRuntime(t)
-	images := outmocks.NewMockImageResolver(t)
-	secrets := outmocks.NewMockSecretProvider(t)
-	spec := webService()
-	rev := testRevision("blog", spec)
-	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
-	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
-		"web": {Container: "c-old", EffectiveRevision: rev.Revision, Image: spec.Image, Digest: restartTestDigest, Spec: rev.Spec.Services[0], BackendBinds: map[int]int{8080: 18080}},
-	}}))
-	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
-	seedRevision(t, ctx, store, "intent-0", "", rev)
-
-	secrets.EXPECT().GetSecret(mock.Anything, mock.Anything).Return("", assert.AnError).Once()
-	// The failure path checks whether the recorded container is gone before
-	// clearing its inhibition; it is still running, so nothing is cleared.
-	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").
-		Return(&domain.Container{ID: "c-old", Status: string(domain.ContainerStatusRunning)}, nil).Once()
-
-	svc := deployment.NewService(deployment.Deps{
-		State: store, Runtime: runtime, Images: images, Secrets: secrets,
-	}, zerowrap.Default())
-
-	result, err := svc.Restart(ctx, "blog", "web", "op-restart-secret")
-	require.Error(t, err)
-	assert.Equal(t, "failed", result.Services["web"].Result)
-	assert.ErrorContains(t, err, "restart failed for web")
+	assert.Contains(t, result.Services["web"].Error, "readiness")
+	assert.Contains(t, order, "withdraw-state", "the unverified generation is withdrawn from state")
+	assert.Contains(t, order, "traffic", "the graph is republished fail-closed")
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
-	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
-
-	active, ok, err := store.LoadActive(ctx, "blog")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "c-old", active.Services["web"].Container, "the running container stays published")
-	assert.Equal(t, map[int]int{8080: 18080}, active.Services["web"].BackendBinds)
 }

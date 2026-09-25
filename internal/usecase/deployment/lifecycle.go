@@ -201,12 +201,11 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 	return result, nil
 }
 
-// Restart recreates services from their pinned digests without
-// re-resolution. Empty service means all services in sorted order. Each
-// service gets a new container built from the digest and spec pinned in
-// ACTIVE, so current secret values are re-read; the image never changes.
-// Use it after changing secrets: deploy skips services whose image and
-// spec are unchanged.
+// Restart restarts from pinned digests without re-resolution. Empty
+// service means all services in sorted order. Every service restarts in
+// place: traffic is withdrawn, the same pinned container is restarted, its
+// readiness probe is checked, and traffic is republished. No second
+// container is created and the pinned digest never changes.
 func (s *Service) Restart(ctx context.Context, app, service, opID string) (*LifecycleResult, error) {
 	release, err := s.acquireAppContext(ctx, app)
 	if err != nil {
@@ -254,8 +253,8 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	var failures []string
 	for _, name := range names {
 		eff := active.Services[name]
-		// The step is journaled before the runtime work, so the recreated
-		// candidate is durably recorded as soon as it exists.
+		// The step is journaled before the runtime work, so a candidate
+		// created by a rebuild of a missing generation is durably recorded.
 		op.Steps = append(op.Steps, domain.AppOperationStep{
 			ID: "service." + name + ".restart", State: domain.AppStepPending, Before: eff.Container, Service: name,
 		})
@@ -280,11 +279,12 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 	return result, nil
 }
 
-// restartOneService recreates one service from its pinned ACTIVE digest via
-// redeployPinned: the old container is withdrawn and retired, a new one is
-// created with the current secret values, and it is published only once
-// ready. A failure after retirement leaves the service down; the old
-// container is not recreated.
+// restartOneService withdraws one service, restarts its exact container,
+// re-inspects its binds, and verifies readiness before it may be published
+// again. Every failure leaves the service withdrawn with its recorded binds
+// cleared, so a failed restart is never served. A generation whose recorded
+// container no longer exists is rebuilt from the pinned ACTIVE digest, so a
+// failed replacement cannot leave restart as a permanent dead end.
 func (s *Service) restartOneService(ctx context.Context, app, opID, name string, eff domain.AppEffectiveService, op *domain.AppOperation, index int) ServiceResult {
 	step := &op.Steps[index]
 	result := ServiceResult{Result: "failed", Before: eff.Container, After: eff.Container}
@@ -305,7 +305,8 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		return fail(err.Error())
 	}
 	// A device grant revoked since ACTIVE was published must fail
-	// before any runtime mutation, under the same rule as binds.
+	// before any runtime mutation, under the same rule as binds. An
+	// in-place restart never rewrites device configuration.
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
@@ -313,30 +314,54 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
 	}
-	// Recreate the generation from the digest pinned in ACTIVE: container
-	// environment is fixed at creation, so only a new container re-reads
-	// the current secret values. The replacement withdraws, retires the
-	// old container, starts the new one, checks readiness, and publishes.
-	svcResult, err := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
-	if err != nil {
-		svcResult.Error = err.Error()
-		step.State = domain.AppStepFailed
-		step.Error = err.Error()
-		step.Diagnostics = svcResult.Diagnostics
-		// Once the recorded container is proven gone, its inhibition protects
-		// nothing and would refuse every later start, recovery, and restart.
-		if _, inspectErr := s.deps.Runtime.InspectContainer(ctx, eff.Container); errors.Is(inspectErr, domain.ErrContainerNotFound) {
-			if clearErr := s.clearRecoveryInhibition(ctx, app, name, eff.Container); clearErr != nil {
-				svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, CleanupWarning{
-					Service: name, Leftover: eff.Container, Detail: "clear recovery inhibition: " + clearErr.Error(),
-				})
+	// Withdraw before restarting: a restarting or unverified generation
+	// must not keep receiving traffic.
+	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
+		return fail(err.Error())
+	}
+	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
+		if errors.Is(err, domain.ErrContainerNotFound) {
+			// The recorded generation is gone: rebuild and publish it from the
+			// pinned ACTIVE digest instead of leaving the service withdrawn
+			// until a deploy.
+			svcResult, rebuildErr := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
+			if rebuildErr != nil {
+				svcResult.Error = rebuildErr.Error()
+				step.State = domain.AppStepFailed
+				step.Error = rebuildErr.Error()
+				step.Diagnostics = svcResult.Diagnostics
+				// The recorded container is proven gone: the inhibition the
+				// rebuild wrote for it protects nothing, and keeping it would
+				// refuse every later start, recovery pass, and restart.
+				if clearErr := s.clearRecoveryInhibition(ctx, app, name, eff.Container); clearErr != nil {
+					svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, CleanupWarning{
+						Service: name, Leftover: eff.Container, Detail: "clear recovery inhibition: " + clearErr.Error(),
+					})
+				}
+				return svcResult
 			}
+			step.State = domain.AppStepSucceeded
+			step.After = svcResult.After
+			return svcResult
 		}
-		return svcResult
+		s.clearServiceBinds(ctx, app, name)
+		return fail(err.Error())
+	}
+	// Ephemeral loopback binds are not guaranteed stable across a runtime
+	// restart: re-inspect before probing so the proxy never dials a stale
+	// bind.
+	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
+	if err != nil {
+		s.clearServiceBinds(ctx, app, name)
+		return fail(err.Error())
+	}
+	if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
+		s.clearServiceBinds(ctx, app, name)
+		return fail(err.Error())
 	}
 	step.State = domain.AppStepSucceeded
-	step.After = svcResult.After
-	return svcResult
+	step.After = eff.Container
+	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
 }
 
 // Remove withdraws workloads by exact container ID; volumes, secrets, and
@@ -629,12 +654,11 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 	result.Services[name] = svcResult
 }
 
-// redeployPinned recreates one service from the revision and digest pinned in
-// ACTIVE and publishes it. It serves restart (which always recreates, so the
-// new container reads current secrets) and boot/start recovery of a recorded
-// container that no longer exists. Image, bind, device, and secret checks run
-// before the existing container is touched. The returned result is always
-// populated, so a caller can journal the attempt even when err is non-nil.
+// redeployPinned rebuilds one service from the revision pinned in ACTIVE and
+// publishes it. It is the shared recovery path for a recorded container that
+// no longer exists: boot/start recovery, and a restart of a missing
+// generation. The returned result is always populated, so a caller can
+// journal the attempt even when err is non-nil.
 func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, eff domain.AppEffectiveService, journal candidateJournal) (ServiceResult, error) {
 	rev, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
 	if err != nil {
@@ -649,16 +673,6 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 	}
 	// Revoked device grants fail before any runtime mutation.
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
-		return failedServiceResult(eff.Container, err), err
-	}
-	// Secrets are read into the new container's environment only after the
-	// old generation is retired: a missing or unreadable secret must fail
-	// here, while the running container is still untouched.
-	appID, err := s.appSecretID(ctx, app)
-	if err != nil {
-		return failedServiceResult(eff.Container, err), err
-	}
-	if err := s.checkSecrets(ctx, app, appID, eff.Spec); err != nil {
 		return failedServiceResult(eff.Container, err), err
 	}
 	pinned := pinnedService{

@@ -336,8 +336,8 @@ func (s *Service) runServiceStep(
 	}
 	var svcResult ServiceResult
 	if current, ok := s.unchangedService(ctx, app, p, active); ok {
-		// Same image, spec, and app environment already running: keep the
-		// container. Secrets are re-read only by restart, which recreates it.
+		// Same image, spec, environment, and secret values already running:
+		// keep the container.
 		svcResult = ServiceResult{
 			Result: ServiceResultUnchanged, EffectiveRevision: revision,
 			Before: before, After: before,
@@ -401,9 +401,9 @@ func (s *Service) runServiceStep(
 // would create, in a healthy published state: the same digest, service spec,
 // app environment, and shared networks, in a running container that is not
 // withdrawn or recovery-inhibited and whose recorded binds cover every
-// backend port. Services with host binds or devices are never skipped: their
-// resolved sources depend on host policy that ACTIVE does not record. Secret
-// values are not compared: they are applied by restart, never by deploy.
+// backend port, and whose environment already holds the current secret
+// values. Services with host binds or devices are never skipped: their
+// resolved sources depend on host policy that ACTIVE does not record.
 func (s *Service) unchangedService(ctx context.Context, app string, p pinnedService, active domain.AppActive) (domain.AppEffectiveService, bool) {
 	eff, ok := active.Services[p.name]
 	if !ok || eff.Container == "" || eff.Digest == "" || eff.Digest != p.digest {
@@ -449,7 +449,32 @@ func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedServ
 	if err != nil || container.Status != string(domain.ContainerStatusRunning) {
 		return "container not running"
 	}
+	if !s.envCurrent(ctx, app, p, container.Env) {
+		return "environment or secrets changed"
+	}
 	return ""
+}
+
+// envCurrent reports whether the running container was created with the
+// environment p would get now, including current secret values. The
+// runtime env also holds image-declared keys, so every desired entry must
+// be present; removed keys are caught by the spec and app env comparisons.
+// Values are compared in memory only and never logged.
+func (s *Service) envCurrent(ctx context.Context, app string, p pinnedService, running []string) bool {
+	desired, err := s.serviceEnv(ctx, app, p)
+	if err != nil {
+		return false
+	}
+	have := make(map[string]struct{}, len(running))
+	for _, entry := range running {
+		have[entry] = struct{}{}
+	}
+	for _, entry := range desired {
+		if _, ok := have[entry]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // bindsCover reports whether the recorded loopback binds publish every

@@ -199,3 +199,66 @@ func TestDeploy_ReplacesWhenTheDigestChanged(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, newDigest, active.Services["web"].Digest)
 }
+
+// TestDeploy_RecreatesWhenASecretValueChanged proves deploy applies new
+// secret values: a running container created with an old value is replaced,
+// and one created with the current value is kept.
+func TestDeploy_RecreatesWhenASecretValueChanged(t *testing.T) {
+	tests := []struct {
+		name       string
+		runningEnv []string
+		wantResult string
+	}{
+		{name: "secret changed", runningEnv: []string{"DB_PASSWORD=old", "PATH=/bin"}, wantResult: "deployed"},
+		{name: "secret current", runningEnv: []string{"DB_PASSWORD=new", "PATH=/bin"}, wantResult: deployment.ServiceResultUnchanged},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, runtime, secrets, ctx := secretDeployService(t)
+			secrets.EXPECT().GetSecret(mock.Anything, mock.Anything).Return("new", nil)
+			runtime.EXPECT().InspectContainer(mock.Anything, "c-old").
+				Return(&domain.Container{ID: "c-old", Status: string(domain.ContainerStatusRunning), Env: tc.runningEnv}, nil).Once()
+			if tc.wantResult == "deployed" {
+				expectReplacement(runtime)
+			}
+
+			result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-secret"})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantResult, result.Services["web"].Result)
+		})
+	}
+}
+
+// secretDeployService wires an unchanged app whose service reads one secret.
+func secretDeployService(t *testing.T) (*deployment.Service, *outmocks.MockContainerRuntime, *outmocks.MockSecretProvider, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	spec := webService()
+	spec.Secrets = map[string]string{"DB_PASSWORD": "db-password"}
+	spec.Readiness = domain.AppReadiness{Type: domain.AppReadinessHTTP, Path: "/healthz", Timeout: time.Second}
+	activeRev := testRevision("blog", spec)
+	activeRev.Revision = "rev-0"
+	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
+	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+		"web": {
+			Container: "c-old", EffectiveRevision: "rev-0", Image: spec.Image, ActivatedBy: "op-created",
+			Digest: restartTestDigest, Spec: activeRev.Spec.Services[0], BackendBinds: map[int]int{8080: 18080},
+		},
+	}}))
+	require.NoError(t, store.SaveOwnership(ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
+	seedRevision(t, ctx, store, "intent-0", "", activeRev)
+	seedRevision(t, ctx, store, "intent-1", "rev-0", testRevision("blog", spec))
+	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return(restartTestDigest, nil).Once()
+	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+	return svc, runtime, secrets, ctx
+}
