@@ -17,10 +17,19 @@ func NewMockCloudflareZoneResolver(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *MockCloudflareZoneResolver {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &MockCloudflareZoneResolver{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
