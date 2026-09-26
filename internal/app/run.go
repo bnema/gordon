@@ -31,8 +31,6 @@ import (
 	acmelego "github.com/bnema/gordon/internal/adapters/out/acmelego"
 	acmestore "github.com/bnema/gordon/internal/adapters/out/acmestore"
 	"github.com/bnema/gordon/internal/adapters/out/docker"
-	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
-	"github.com/bnema/gordon/internal/adapters/out/envloader"
 	"github.com/bnema/gordon/internal/adapters/out/eventbus"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	"github.com/bnema/gordon/internal/adapters/out/httpprober"
@@ -90,7 +88,6 @@ import (
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	registrySvc "github.com/bnema/gordon/internal/usecase/registry"
 	"github.com/bnema/gordon/internal/usecase/registrystate"
-	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	"github.com/bnema/gordon/internal/usecase/traffic"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
@@ -167,10 +164,6 @@ type Config struct {
 			SyslogIdentifier    string `mapstructure:"syslog_identifier"`
 		} `mapstructure:"access_log"`
 	} `mapstructure:"logging"`
-
-	Env struct {
-		Dir string `mapstructure:"dir"`
-	} `mapstructure:"env"`
 
 	Volumes struct {
 		AutoCreate bool   `mapstructure:"auto_create"`
@@ -298,11 +291,9 @@ type services struct {
 	backupStorage         *filesystem.BackupStorage
 	volumeBackupStore     out.VolumeBackupStorage
 	volumeBackupCfg       domain.VolumeBackupConfig
-	envLoader             out.EnvLoader
 	logWriter             *logwriter.LogWriter
 	tokenStore            out.TokenStore
 	configSvc             *config.Service
-	secretSvc             *secretsSvc.Service
 	containerSvc          *container.Service
 	backupSvc             *backup.Service
 	volumeBackupSvc       *backup.VolumeService
@@ -320,7 +311,6 @@ type services struct {
 	httpsProxyHandler     http.Handler
 	internalRegUser       string
 	internalRegPass       string
-	envDir                string
 	maxBlobChunkSize      int64
 	maxBlobSize           int64
 	caAdapter             *pkiadapter.CA
@@ -814,20 +804,14 @@ func startPublicTLSRuntime(ctx context.Context, svc publicTLSRuntime, log zerowr
 	return reconcileErr
 }
 
-// initSecrets creates the domain secret store, env loader, and secret service.
+// initSecrets validates the secrets backend and creates the app service
+// secret provider.
 func (si *serviceInit) initSecrets() error {
-	envDir, backend, passStore, domainSecretStore, err := createDomainSecretStore(si.cfg, si.log)
+	backend, err := resolveSecretsBackend(si.cfg.Auth.SecretsBackend)
 	if err != nil {
-		return err
+		return si.log.WrapErr(err, "failed to resolve secrets backend")
 	}
-	si.svc.envDir = envDir
-
-	if si.svc.envLoader, err = createEnvLoader(backend, envDir, passStore, si.log); err != nil {
-		return err
-	}
-
 	si.svc.serviceSecretProvider = createStandaloneServiceSecretProvider(backend, resolveDataDir(si.cfg.Server.DataDir), si.log)
-	si.svc.secretSvc = secretsSvc.NewService(domainSecretStore, si.log, si.svc.eventBus)
 	return nil
 }
 
@@ -1180,7 +1164,6 @@ func (si *serviceInit) initHandlers() {
 		AuthSvc:         si.svc.authSvc,
 		ContainerSvc:    si.svc.containerSvc,
 		HealthSvc:       si.svc.healthSvc,
-		SecretSvc:       si.svc.secretSvc,
 		LogSvc:          si.svc.logSvc,
 		RegistrySvc:     si.svc.registrySvc,
 		ReloadTrigger:   si.svc.reloadCoordinator,
@@ -1238,32 +1221,6 @@ func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {
 
 	log.Debug().Msg("internal registry auth generated for loopback pulls")
 	return nil
-}
-
-func createDomainSecretStore(cfg Config, log zerowrap.Logger) (string, domain.SecretsBackend, *domainsecrets.PassStore, out.DomainSecretStore, error) {
-	envDir := resolveEnvDir(cfg)
-	backend, err := resolveSecretsBackend(cfg.Auth.SecretsBackend)
-	if err != nil {
-		return "", "", nil, nil, log.WrapErr(err, "failed to resolve secrets backend")
-	}
-
-	switch backend {
-	case domain.SecretsBackendPass:
-		passStore, err := domainsecrets.NewPassStore(log)
-		if err != nil {
-			return "", backend, nil, nil, log.WrapErr(err, "failed to create pass domain secret store")
-		}
-		if err := migrateEnvFilesToPass(envDir, passStore, log); err != nil {
-			return "", backend, nil, nil, log.WrapErr(err, "failed to migrate env files to pass")
-		}
-		return envDir, backend, passStore, passStore, nil
-	default:
-		store, err := domainsecrets.NewFileStore(envDir, log)
-		if err != nil {
-			return "", backend, nil, nil, log.WrapErr(err, "failed to create domain secret store")
-		}
-		return envDir, backend, nil, store, nil
-	}
 }
 
 // resolveLogFilePath returns the configured log file path or a default.
@@ -1368,38 +1325,6 @@ func createStorage(cfg Config, log zerowrap.Logger) (*filesystem.BlobStorage, *f
 	}
 
 	return blobStorage, manifestStorage, nil
-}
-
-// createEnvLoader creates the environment loader with secret providers.
-func createEnvLoader(backend domain.SecretsBackend, envDir string, passStore *domainsecrets.PassStore, log zerowrap.Logger) (out.EnvLoader, error) {
-	switch backend {
-	case domain.SecretsBackendPass:
-		loader, err := envloader.NewPassLoader(passStore, log)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to create pass env loader")
-		}
-		return loader, nil
-	default:
-		loader, err := envloader.NewFileLoader(envDir, log)
-		if err != nil {
-			return nil, log.WrapErr(err, "failed to create env loader")
-		}
-
-		// Register secret providers
-		passProvider := secrets.NewPassProvider(log)
-		if passProvider.IsAvailable() {
-			loader.RegisterSecretProvider(passProvider)
-			log.Debug().Msg("pass secret provider registered")
-		}
-
-		sopsProvider := secrets.NewSopsProvider(log)
-		if sopsProvider.IsAvailable() {
-			loader.RegisterSecretProvider(sopsProvider)
-			log.Debug().Msg("sops secret provider registered")
-		}
-
-		return loader, nil
-	}
 }
 
 // createLogWriter creates the container log writer.
@@ -1665,15 +1590,6 @@ func resolveDataDir(dataDir string) string {
 		return DefaultDataDir()
 	}
 	return dataDir
-}
-
-func resolveEnvDir(cfg Config) string {
-	dataDir := resolveDataDir(cfg.Server.DataDir)
-	envDir := cfg.Env.Dir
-	if envDir == "" {
-		envDir = filepath.Join(dataDir, "env")
-	}
-	return envDir
 }
 
 func resolveRegistryDomains(cfg Config) (string, []string) {
@@ -2265,7 +2181,7 @@ func createContainerService(ctx context.Context, v *viper.Viper, cfg Config, svc
 	if err != nil {
 		return nil, err
 	}
-	return container.NewService(svc.runtime, svc.envLoader, svc.eventBus, svc.logWriter, containerConfig), nil
+	return container.NewService(svc.runtime, svc.eventBus, svc.logWriter, containerConfig), nil
 }
 
 type databaseBackupSettingsConfig struct {
@@ -4225,7 +4141,6 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("logging.access_log.max_age", 28)
 	v.SetDefault("logging.access_log.exclude_health_checks", true)
 	v.SetDefault("logging.access_log.syslog_identifier", "gordon-access")
-	v.SetDefault("env.dir", "") // defaults to {data_dir}/env when empty
 	v.SetDefault("auth.enabled", true)
 	// Note: auth.type defaults to "token" (the only supported mode)
 	v.SetDefault("auth.secrets_backend", "")

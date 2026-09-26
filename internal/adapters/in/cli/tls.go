@@ -16,21 +16,10 @@ import (
 var tlsResolveControlPlane = resolveControlPlane
 
 func newTLSCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "tls",
-		Short: "Inspect TLS certificate status",
-	}
-
-	cmd.AddCommand(newTLSStatusCmd())
-
-	return cmd
-}
-
-func newTLSStatusCmd() *cobra.Command {
 	var jsonOut bool
 
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "tls",
 		Short: "Show public TLS certificate status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			handle, err := tlsResolveControlPlane(cliConfigPath)

@@ -77,7 +77,6 @@ const (
 // Admin scope resource constants.
 const (
 	AdminResourceRoutes  = "routes"
-	AdminResourceSecrets = "secrets"
 	AdminResourceConfig  = "config"
 	AdminResourceStatus  = "status"
 	AdminResourceLogs    = "logs"
@@ -285,11 +284,6 @@ func AdminScopeAll() string {
 // AdminScopeRoutes creates an admin scope for routes with the given actions.
 func AdminScopeRoutes(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceRoutes, strings.Join(actions, ","))
-}
-
-// AdminScopeSecrets creates an admin scope for secrets with the given actions.
-func AdminScopeSecrets(actions ...string) string {
-	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceSecrets, strings.Join(actions, ","))
 }
 
 // AdminScopeConfig creates an admin scope for config with the given actions.

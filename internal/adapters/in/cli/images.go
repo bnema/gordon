@@ -69,10 +69,11 @@ var imagesListTableColumns = []components.TableColumn{
 func newImagesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "images",
-		Short: "List and prune images",
-		Long:  `Inspect and clean up runtime and registry images through the selected daemon.`,
+		Short: "Push, list, and prune images",
+		Long:  `Push, inspect, and clean up runtime and registry images through the selected daemon.`,
 	}
 
+	cmd.AddCommand(newPushCmd())
 	cmd.AddCommand(newImagesListCmd())
 	cmd.AddCommand(newImagesPruneCmd())
 	cmd.AddCommand(newImagesTagsCmd())
@@ -144,7 +145,7 @@ func newImagesTagsCmd() *cobra.Command {
 Examples:
   gordon images tags myapp
   gordon images tags myapp --json
-  gordon images tags myapp --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon images tags myapp --remote prod`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()

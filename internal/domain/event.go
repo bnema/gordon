@@ -9,10 +9,9 @@ import (
 type EventType string
 
 const (
-	EventImagePushed    EventType = "image.pushed"
-	EventImageDeleted   EventType = "image.deleted"
-	EventConfigReload   EventType = "config.reload"
-	EventSecretsChanged EventType = "secrets.changed"
+	EventImagePushed  EventType = "image.pushed"
+	EventImageDeleted EventType = "image.deleted"
+	EventConfigReload EventType = "config.reload"
 )
 
 // Event represents a domain event that occurred in the system.
@@ -41,13 +40,6 @@ type ConfigReloadPayload struct {
 	AddedRoutes   []string
 	RemovedRoutes []string
 	UpdatedRoutes []string
-}
-
-// SecretsChangedPayload contains data for secrets.changed events.
-type SecretsChangedPayload struct {
-	Domain    string   // Route domain whose secrets changed
-	Operation string   // "set" or "delete"
-	Keys      []string // Secret key names (not values)
 }
 
 // Context keys for domain-level concerns.

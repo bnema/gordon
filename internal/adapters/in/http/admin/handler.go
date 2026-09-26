@@ -41,7 +41,6 @@ type Handler struct {
 	volumeBackupSvc in.VolumeBackupService
 	imageSvc        in.ImageService
 	healthSvc       in.HealthService
-	secretSvc       in.SecretService
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
 	registrySvc     in.RegistryService
@@ -115,7 +114,6 @@ type HandlerDeps struct {
 	AuthSvc         in.AuthService
 	ContainerSvc    in.ContainerService
 	HealthSvc       in.HealthService
-	SecretSvc       in.SecretService
 	LogSvc          in.LogService
 	RegistrySvc     in.RegistryService
 	Log             zerowrap.Logger
@@ -139,7 +137,6 @@ func NewHandler(deps HandlerDeps) *Handler {
 		volumeBackupSvc: deps.VolumeBackupSvc,
 		imageSvc:        deps.ImageSvc,
 		healthSvc:       deps.HealthSvc,
-		secretSvc:       deps.SecretSvc,
 		logSvc:          deps.LogSvc,
 		volumeSvc:       deps.VolumeSvc,
 		registrySvc:     deps.RegistrySvc,
@@ -214,7 +211,6 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 	}{
 		{"/apps", h.handleApps},
 		{"/backups", h.handleBackups},
-		{"/secrets", h.handleSecrets},
 		{"/tags", h.handleTags},
 		{"/images", h.handleImages},
 		{"/logs", h.handleLogs},
@@ -274,112 +270,6 @@ func (h *Handler) handleNetworks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.sendJSON(w, http.StatusOK, dto.NetworksResponse{Networks: response})
-}
-
-// handleSecrets handles /admin/secrets endpoints.
-func (h *Handler) handleSecrets(w http.ResponseWriter, r *http.Request, path string) {
-	// Parse path: /secrets/{domain} or /secrets/{domain}/{key}
-	parts := strings.Split(strings.TrimPrefix(path, "/secrets/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		h.sendError(w, http.StatusBadRequest, "domain required")
-		return
-	}
-
-	secretDomain := parts[0]
-
-	secretKey := ""
-	if len(parts) > 1 {
-		secretKey = parts[1]
-	}
-
-	switch r.Method {
-	case http.MethodGet:
-		h.handleSecretsGet(w, r, secretDomain)
-	case http.MethodPost:
-		h.handleSecretsPost(w, r, secretDomain)
-	case http.MethodDelete:
-		h.handleSecretsDelete(w, r, secretDomain, secretKey)
-	default:
-		h.sendError(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
-}
-
-// handleSecretsPost handles POST /admin/secrets/{domain} - set secrets.
-func (h *Handler) handleSecretsPost(w http.ResponseWriter, r *http.Request, secretDomain string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxAdminRequestSize)
-
-	var data map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&data); err != nil {
-		log.Warn().Err(err).Msg("invalid secrets JSON")
-		h.sendError(w, http.StatusBadRequest, "invalid JSON")
-		return
-	}
-
-	if err := h.secretSvc.Set(ctx, secretDomain, data); err != nil {
-		log.Error().Err(err).Str("domain", secretDomain).Msg("failed to set secrets")
-		h.sendError(w, http.StatusBadRequest, "invalid domain")
-		return
-	}
-
-	log.Info().Str("domain", secretDomain).Int("count", len(data)).Msg("secrets set")
-	h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "updated"})
-}
-
-// handleSecretsDelete handles DELETE /admin/secrets/{domain}/{key} - delete a secret.
-func (h *Handler) handleSecretsDelete(w http.ResponseWriter, r *http.Request, secretDomain, secretKey string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionWrite) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:write")
-		return
-	}
-	if secretKey == "" {
-		h.sendError(w, http.StatusBadRequest, "key required in path")
-		return
-	}
-
-	if err := h.secretSvc.Delete(ctx, secretDomain, secretKey); err != nil {
-		log.Error().Err(err).Str("domain", secretDomain).Str("key", secretKey).Msg("failed to delete secret")
-		h.sendError(w, http.StatusBadRequest, "invalid domain")
-		return
-	}
-
-	log.Info().Str("domain", secretDomain).Str("key", secretKey).Msg("secret deleted")
-	h.sendJSON(w, http.StatusOK, dto.SecretsStatusResponse{Status: "deleted"})
-}
-
-// handleSecretsGet handles GET /admin/secrets/{domain} - list secrets.
-func (h *Handler) handleSecretsGet(w http.ResponseWriter, r *http.Request, secretDomain string) {
-	ctx := r.Context()
-	log := zerowrap.FromCtx(ctx)
-
-	// Check read permission
-	if !HasAccess(ctx, domain.AdminResourceSecrets, domain.AdminActionRead) {
-		h.sendError(w, http.StatusForbidden, "insufficient permissions for secrets:read")
-		return
-	}
-
-	// List secrets for domain (names only, not values).
-	keys, err := h.secretSvc.ListKeys(ctx, secretDomain)
-	if err != nil {
-		log.Error().Err(err).Str("domain", secretDomain).Msg("failed to list secrets")
-		h.sendError(w, http.StatusBadRequest, "invalid domain")
-		return
-	}
-
-	h.sendJSON(w, http.StatusOK, dto.SecretsListResponse{
-		Domain: secretDomain,
-		Keys:   keys,
-	})
 }
 
 // handleHealth handles /admin/health endpoint.

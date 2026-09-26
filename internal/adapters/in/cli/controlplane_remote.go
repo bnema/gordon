@@ -72,18 +72,6 @@ func (r *remoteControlPlane) DeleteAppSecret(ctx context.Context, app string, re
 	return r.client.DeleteAppSecret(ctx, app, req)
 }
 
-func (r *remoteControlPlane) ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error) {
-	return r.client.ListSecretsWithAttachments(ctx, secretDomain)
-}
-
-func (r *remoteControlPlane) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
-	return r.client.SetSecrets(ctx, secretDomain, secrets)
-}
-
-func (r *remoteControlPlane) DeleteSecret(ctx context.Context, secretDomain, key string) error {
-	return r.client.DeleteSecret(ctx, secretDomain, key)
-}
-
 func (r *remoteControlPlane) GetStatus(ctx context.Context) (*remote.Status, error) {
 	return r.client.GetStatus(ctx)
 }

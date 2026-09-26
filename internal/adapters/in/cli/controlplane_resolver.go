@@ -51,10 +51,6 @@ func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHan
 	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}
 }
 
-func resolveControlPlaneForDomain(ctx context.Context, _ string) (*controlPlaneHandle, error) {
-	return resolveControlPlaneWithInference(ctx, inferExplicitTarget)
-}
-
 func resolveControlPlaneForRepository(ctx context.Context, repository string) (*controlPlaneHandle, error) {
 	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
 		return inferRemoteForRepository(ctx, repository)

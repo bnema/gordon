@@ -18,7 +18,7 @@ func testContext() context.Context {
 
 func TestService_ListNetworks(t *testing.T) {
 	runtime := mocks.NewMockContainerRuntime(t)
-	svc := NewService(runtime, nil, nil, nil, Config{NetworkPrefix: "gordon"})
+	svc := NewService(runtime, nil, nil, Config{NetworkPrefix: "gordon"})
 	ctx := testContext()
 
 	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{

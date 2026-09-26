@@ -86,7 +86,6 @@ func newTestHandler(t *testing.T, opts ...func(*HandlerDeps)) *Handler {
 		AuthSvc:       inmocks.NewMockAuthService(t),
 		ContainerSvc:  inmocks.NewMockContainerService(t),
 		HealthSvc:     inmocks.NewMockHealthService(t),
-		SecretSvc:     inmocks.NewMockSecretService(t),
 		Log:           testLogger(),
 		ReloadTrigger: noopReloadTrigger{},
 	}
@@ -156,180 +155,15 @@ func TestHandler_VolumesPrune_RequiresVolumesWriteScope(t *testing.T) {
 
 // Routes endpoint tests
 
-func TestHandler_SecretsGet_RequiresReadScope(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-	})
-
-	tests := []struct {
-		name       string
-		scopes     []string
-		wantStatus int
-	}{
-		{
-			name:       "secrets read access granted",
-			scopes:     []string{"admin:secrets:read"},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "secrets wildcard access granted",
-			scopes:     []string{"admin:secrets:*"},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "all admin access granted",
-			scopes:     []string{"admin:*:*"},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "only write access denied",
-			scopes:     []string{"admin:secrets:write"},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name:       "wrong resource denied",
-			scopes:     []string{"admin:routes:read"},
-			wantStatus: http.StatusForbidden,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantStatus == http.StatusOK {
-				secretSvc.EXPECT().ListKeys(mock.Anything, "app.example.com").Return([]string{}, nil).Maybe()
-			}
-
-			req := httptest.NewRequest("GET", "/admin/secrets/app.example.com", nil)
-			req = req.WithContext(ctxWithScopes(tt.scopes...))
-			rec := httptest.NewRecorder()
-
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-		})
-	}
-}
-
-func TestHandler_SecretsPost_RequiresWriteScope(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-	})
-
-	secretsJSON := `{"API_KEY": "secret123"}`
-
-	tests := []struct {
-		name       string
-		scopes     []string
-		wantStatus int
-	}{
-		{
-			name:       "secrets write access granted",
-			scopes:     []string{"admin:secrets:write"},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "only read access denied",
-			scopes:     []string{"admin:secrets:read"},
-			wantStatus: http.StatusForbidden,
-		},
-		{
-			name:       "wrong resource denied",
-			scopes:     []string{"admin:routes:write"},
-			wantStatus: http.StatusForbidden,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantStatus == http.StatusOK {
-				secretSvc.EXPECT().Set(mock.Anything, "app.example.com", mock.AnythingOfType("map[string]string")).Return(nil).Maybe()
-			}
-
-			req := httptest.NewRequest("POST", "/admin/secrets/app.example.com", bytes.NewBufferString(secretsJSON))
-			req = req.WithContext(ctxWithScopes(tt.scopes...))
-			rec := httptest.NewRecorder()
-
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-		})
-	}
-}
-
-func TestHandler_SecretsDelete_RequiresWriteScope(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-	})
-
-	tests := []struct {
-		name       string
-		scopes     []string
-		wantStatus int
-	}{
-		{
-			name:       "secrets write access granted",
-			scopes:     []string{"admin:secrets:write"},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "only read access denied",
-			scopes:     []string{"admin:secrets:read"},
-			wantStatus: http.StatusForbidden,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.wantStatus == http.StatusOK {
-				secretSvc.EXPECT().Delete(mock.Anything, "app.example.com", "API_KEY").Return(nil).Maybe()
-			}
-
-			req := httptest.NewRequest("DELETE", "/admin/secrets/app.example.com/API_KEY", nil)
-			req = req.WithContext(ctxWithScopes(tt.scopes...))
-			rec := httptest.NewRecorder()
-
-			handler.ServeHTTP(rec, req)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-		})
-	}
-}
-
 func TestHandler_Status_RequiresReadScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 	})
 
 	tests := []struct {
@@ -408,13 +242,11 @@ func TestHandler_Config_RequiresReadScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 	})
 
 	tests := []struct {
@@ -468,14 +300,12 @@ func TestHandler_Reload_RequiresWriteScope(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	reloadTrigger := &reloadTriggerRecorder{}
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.ReloadTrigger = reloadTrigger
 	})
 
@@ -567,61 +397,15 @@ func TestHandler_Reload_UsesDetachedContextWithDeadline(t *testing.T) {
 
 // Functional tests
 
-func TestHandler_Secrets_MissingDomain(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-	})
-
-	req := httptest.NewRequest("GET", "/admin/secrets/", nil)
-	req = req.WithContext(ctxWithScopes("admin:secrets:read"))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
-func TestHandler_SecretsDelete_MissingKey(t *testing.T) {
-	configSvc := inmocks.NewMockConfigService(t)
-	authSvc := inmocks.NewMockAuthService(t)
-	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
-
-	handler := newTestHandler(t, func(d *HandlerDeps) {
-		d.ConfigSvc = configSvc
-		d.AuthSvc = authSvc
-		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
-	})
-
-	req := httptest.NewRequest("DELETE", "/admin/secrets/app.example.com", nil)
-	req = req.WithContext(ctxWithScopes("admin:secrets:write"))
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-}
-
 func TestHandler_MethodNotAllowed(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 	})
 
 	tests := []struct {
@@ -653,13 +437,11 @@ func TestHandler_Tags_InvalidRepository(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 	})
 
 	tests := []struct {
@@ -688,14 +470,12 @@ func TestHandler_Tags_Success(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.RegistrySvc = registrySvc
 	})
 
@@ -721,14 +501,12 @@ func TestHandler_Tags_Error(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.RegistrySvc = registrySvc
 	})
 
@@ -748,14 +526,12 @@ func TestHandler_Tags_URLDecodedRepository(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	registrySvc := inmocks.NewMockRegistryService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.RegistrySvc = registrySvc
 	})
 
@@ -775,13 +551,11 @@ func TestHandler_NotFound(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 	})
 
 	req := httptest.NewRequest("GET", "/admin/unknown", nil)
@@ -797,7 +571,6 @@ func TestHandler_BackupsStatus(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
 	backupSvc.EXPECT().Status(mock.Anything).Return([]domain.BackupJob{{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted, FilePath: "/var/lib/gordon/backups/private.bak"}}, nil)
@@ -806,7 +579,6 @@ func TestHandler_BackupsStatus(t *testing.T) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.BackupSvc = backupSvc
 	})
 
@@ -826,7 +598,6 @@ func TestHandler_BackupsListApp(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
 	backupSvc.EXPECT().ListBackups(mock.Anything, "shop").Return([]domain.BackupJob{{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
@@ -835,7 +606,6 @@ func TestHandler_BackupsListApp(t *testing.T) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.BackupSvc = backupSvc
 	})
 
@@ -853,7 +623,6 @@ func TestHandler_BackupsRunApp(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
 	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
@@ -862,7 +631,6 @@ func TestHandler_BackupsRunApp(t *testing.T) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.BackupSvc = backupSvc
 	})
 
@@ -925,7 +693,6 @@ func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 	backupSvc := inmocks.NewMockBackupService(t)
 
 	backupSvc.EXPECT().RunBackup(mock.Anything, "shop", "api", "orders").Return(&domain.BackupResult{Job: domain.BackupJob{App: "shop", Service: "api", DBName: "orders", Status: domain.BackupStatusCompleted}}, nil)
@@ -934,7 +701,6 @@ func TestHandler_BackupsRunApp_ChunkedBodyIsDecoded(t *testing.T) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.BackupSvc = backupSvc
 	})
 
@@ -991,7 +757,6 @@ func TestHandler_ImagesGet_ReturnsMappedList(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	createdAt := time.Date(2026, time.February, 8, 14, 30, 0, 0, time.UTC)
 	imageSvc := &stubImageService{
@@ -1021,7 +786,6 @@ func TestHandler_ImagesGet_ReturnsMappedList(t *testing.T) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.ImageSvc = imageSvc
 	})
 
@@ -1059,7 +823,6 @@ func TestHandler_ImagesPrune_AcceptsOptionalKeepLast(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	tests := []struct {
 		name             string
@@ -1088,7 +851,6 @@ func TestHandler_ImagesPrune_AcceptsOptionalKeepLast(t *testing.T) {
 				d.ConfigSvc = configSvc
 				d.AuthSvc = authSvc
 				d.ContainerSvc = containerSvc
-				d.SecretSvc = secretSvc
 				d.ImageSvc = imageSvc
 			})
 
@@ -1111,7 +873,6 @@ func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
 		configSvc := inmocks.NewMockConfigService(t)
 		authSvc := inmocks.NewMockAuthService(t)
 		containerSvc := inmocks.NewMockContainerService(t)
-		secretSvc := inmocks.NewMockSecretService(t)
 
 		imageSvc := &stubImageService{
 			listImagesFunc: func(context.Context) ([]domain.ImageInfo, error) {
@@ -1123,7 +884,6 @@ func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
 			d.ConfigSvc = configSvc
 			d.AuthSvc = authSvc
 			d.ContainerSvc = containerSvc
-			d.SecretSvc = secretSvc
 			d.ImageSvc = imageSvc
 		})
 
@@ -1142,7 +902,6 @@ func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
 		configSvc := inmocks.NewMockConfigService(t)
 		authSvc := inmocks.NewMockAuthService(t)
 		containerSvc := inmocks.NewMockContainerService(t)
-		secretSvc := inmocks.NewMockSecretService(t)
 
 		imageSvc := &stubImageService{
 			pruneFunc: func(context.Context, domain.ImagePruneOptions) (domain.ImagePruneReport, error) {
@@ -1154,7 +913,6 @@ func TestHandler_Images_ErrorMappingForServiceFailures(t *testing.T) {
 			d.ConfigSvc = configSvc
 			d.AuthSvc = authSvc
 			d.ContainerSvc = containerSvc
-			d.SecretSvc = secretSvc
 			d.ImageSvc = imageSvc
 		})
 
@@ -1175,13 +933,11 @@ func TestHandler_ImagesPrune_ValidationAndAvailability(t *testing.T) {
 		configSvc := inmocks.NewMockConfigService(t)
 		authSvc := inmocks.NewMockAuthService(t)
 		containerSvc := inmocks.NewMockContainerService(t)
-		secretSvc := inmocks.NewMockSecretService(t)
 
 		handler := newTestHandler(t, func(d *HandlerDeps) {
 			d.ConfigSvc = configSvc
 			d.AuthSvc = authSvc
 			d.ContainerSvc = containerSvc
-			d.SecretSvc = secretSvc
 			d.ImageSvc = &stubImageService{}
 		})
 
@@ -1199,13 +955,11 @@ func TestHandler_ImagesPrune_ValidationAndAvailability(t *testing.T) {
 		configSvc := inmocks.NewMockConfigService(t)
 		authSvc := inmocks.NewMockAuthService(t)
 		containerSvc := inmocks.NewMockContainerService(t)
-		secretSvc := inmocks.NewMockSecretService(t)
 
 		handler := newTestHandler(t, func(d *HandlerDeps) {
 			d.ConfigSvc = configSvc
 			d.AuthSvc = authSvc
 			d.ContainerSvc = containerSvc
-			d.SecretSvc = secretSvc
 		})
 
 		req := httptest.NewRequest("GET", "/admin/images", nil)
@@ -1223,7 +977,6 @@ func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	tests := []struct {
 		name                  string
@@ -1281,7 +1034,6 @@ func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
 				d.ConfigSvc = configSvc
 				d.AuthSvc = authSvc
 				d.ContainerSvc = containerSvc
-				d.SecretSvc = secretSvc
 				d.ImageSvc = imageSvc
 			})
 
@@ -1306,13 +1058,11 @@ func TestHandler_Images_Authorization(t *testing.T) {
 	configSvc := inmocks.NewMockConfigService(t)
 	authSvc := inmocks.NewMockAuthService(t)
 	containerSvc := inmocks.NewMockContainerService(t)
-	secretSvc := inmocks.NewMockSecretService(t)
 
 	handler := newTestHandler(t, func(d *HandlerDeps) {
 		d.ConfigSvc = configSvc
 		d.AuthSvc = authSvc
 		d.ContainerSvc = containerSvc
-		d.SecretSvc = secretSvc
 		d.ImageSvc = &stubImageService{}
 	})
 

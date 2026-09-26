@@ -10,7 +10,6 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
-	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
 // Kernel provides in-process service access for local CLI execution.
@@ -19,7 +18,6 @@ import (
 type Kernel struct {
 	authEnabled     bool
 	configSvc       in.ConfigService
-	secretSvc       in.SecretService
 	containerSvc    in.ContainerService
 	backupSvc       in.BackupService
 	volumeBackupSvc in.VolumeBackupService
@@ -87,7 +85,6 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		kernel := &Kernel{
 			authEnabled:     cfg.Auth.Enabled,
 			configSvc:       svc.configSvc,
-			secretSvc:       svc.secretSvc,
 			containerSvc:    svc.containerSvc,
 			backupSvc:       svc.backupSvc,
 			volumeBackupSvc: svc.volumeBackupSvc,
@@ -116,18 +113,9 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	_, _, _, domainSecretStore, err := createDomainSecretStore(cfg, log)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("failed to create local secret store: %w", err)
-	}
-
-	secretSvc := secretsusecase.NewService(domainSecretStore, log, nil)
-
 	return &Kernel{
 		authEnabled: cfg.Auth.Enabled,
 		configSvc:   configSvc,
-		secretSvc:   secretSvc,
 		log:         log,
 		cleanup:     cleanup,
 	}, nil
@@ -161,8 +149,6 @@ func (k *Kernel) Close() error {
 }
 
 func (k *Kernel) Config() in.ConfigService { return k.configSvc }
-
-func (k *Kernel) Secrets() in.SecretService { return k.secretSvc }
 
 func (k *Kernel) Container() in.ContainerService { return k.containerSvc }
 

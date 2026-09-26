@@ -19,19 +19,14 @@ import (
 
 func TestTrafficCommandExists(t *testing.T) {
 	cmd := NewRootCmd()
-	traffic, _, err := cmd.Find([]string{"traffic"})
+	traffic, _, err := cmd.Find([]string{"daemon", "traffic"})
 	require.NoError(t, err)
 	require.NotNil(t, traffic)
 	assert.Equal(t, "traffic", traffic.Name())
-
-	status, _, err := cmd.Find([]string{"traffic", "status"})
-	require.NoError(t, err)
-	require.NotNil(t, status)
-	assert.Equal(t, "status", status.Name())
 }
 
 func TestTrafficStatusRejectsArgs(t *testing.T) {
-	cmd := newTrafficStatusCmd()
+	cmd := newTrafficCmd()
 	require.Error(t, cmd.Args(cmd, []string{"extra"}))
 }
 

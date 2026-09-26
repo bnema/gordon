@@ -141,7 +141,7 @@ func TestGracefulShutdown_FailsClosedWhenAppAdministrationDoesNotQuiesce(t *test
 
 	store := outmocks.NewMockAppState(t)
 
-	containerSvc := container.NewService(nil, nil, nil, nil, container.Config{})
+	containerSvc := container.NewService(nil, nil, nil, container.Config{})
 	err := gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default())
 
 	require.Error(t, err)
@@ -164,7 +164,7 @@ func TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState(t *testing
 	store := outmocks.NewMockAppState(t)
 	store.EXPECT().Close().Run(func() { order = append(order, "state-close") }).Return(nil)
 
-	containerSvc := container.NewService(nil, nil, nil, nil, container.Config{})
+	containerSvc := container.NewService(nil, nil, nil, container.Config{})
 	require.NoError(t, gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default()))
 
 	require.Equal(t, []string{"app-shutdown", "state-close"}, order)

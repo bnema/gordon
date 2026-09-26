@@ -37,7 +37,6 @@ secrets_backend = "unsafe"
 	t.Cleanup(func() { require.NoError(t, kernel.Close()) })
 
 	require.NotNil(t, kernel.Config())
-	require.NotNil(t, kernel.Secrets())
 }
 
 // TestKernelClose_QuiescenceTimeoutSkipsCleanup proves the fail-closed kernel

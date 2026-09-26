@@ -12,29 +12,18 @@ import (
 )
 
 func newNetworksCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "networks",
-		Short: "Inspect Gordon-managed networks",
-	}
-
-	cmd.AddCommand(newNetworksListCmd())
-
-	return cmd
-}
-
-func newNetworksListCmd() *cobra.Command {
 	var jsonOut bool
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List Gordon-managed Docker networks",
+		Use:   "networks",
+		Short: "List Gordon-managed networks",
 		Long: `Display Docker networks managed by Gordon, including which containers
 are connected to each network.
 
 Examples:
-  gordon networks list
-  gordon networks list --json
-  gordon networks list --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon daemon networks
+  gordon daemon networks --json
+  gordon daemon networks --remote prod`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			handle, err := resolveControlPlane(cliConfigPath)

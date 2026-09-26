@@ -55,11 +55,11 @@ func NewRootCmd() *cobra.Command {
 container registry, an app runtime, and a reverse proxy.
 
 Applications are declared in standalone TOML files and managed with
-gordon apps; push transfers OCI content only and never deploys.
+gordon apps; gordon images push transfers OCI content only and never deploys.
 
 Commands are organized by where they run:
   Server-only:  Run on the machine hosting Gordon (serve, auth, ca)
-  Management:   Work locally or remotely via --remote flag (apps, secrets, etc.)
+  Management:   Work locally or remotely via --remote flag (apps, daemon, images, etc.)
   Client-only:  CLI utilities that don't require a running Gordon server`,
 	}
 
@@ -88,57 +88,16 @@ Commands are organized by where they run:
 	caCmd.GroupID = groupServer
 	rootCmd.AddCommand(caCmd)
 
-	secretsCmd := newSecretsCmd()
-	secretsCmd.GroupID = groupManage
-	rootCmd.AddCommand(secretsCmd)
-
-	pushCmd := newPushCmd()
-	pushCmd.GroupID = groupManage
-	rootCmd.AddCommand(pushCmd)
-
-	reloadCmd := newReloadCmd()
-	reloadCmd.GroupID = groupManage
-	rootCmd.AddCommand(reloadCmd)
-
-	logsCmd := newLogsCmd()
-	logsCmd.GroupID = groupManage
-	rootCmd.AddCommand(logsCmd)
-
-	statusCmd := newStatusCmd()
-	statusCmd.GroupID = groupManage
-	rootCmd.AddCommand(statusCmd)
-
-	backupCmd := newBackupCmd()
-	backupCmd.GroupID = groupManage
-	rootCmd.AddCommand(backupCmd)
-
-	imagesCmd := newImagesCmd()
-	imagesCmd.GroupID = groupManage
-	rootCmd.AddCommand(imagesCmd)
-
-	configCmd := newConfigCmd()
-	configCmd.GroupID = groupManage
-	rootCmd.AddCommand(configCmd)
-
-	networksCmd := newNetworksCmd()
-	networksCmd.GroupID = groupManage
-	rootCmd.AddCommand(networksCmd)
-
-	volumesCmd := newVolumesCmd()
-	volumesCmd.GroupID = groupManage
-	rootCmd.AddCommand(volumesCmd)
-
-	tlsCmd := newTLSCmd()
-	tlsCmd.GroupID = groupManage
-	rootCmd.AddCommand(tlsCmd)
-
-	trafficCmd := newTrafficCmd()
-	trafficCmd.GroupID = groupManage
-	rootCmd.AddCommand(trafficCmd)
-
-	appsCmd := newAppsCmd()
-	appsCmd.GroupID = groupManage
-	rootCmd.AddCommand(appsCmd)
+	for _, cmd := range []*cobra.Command{
+		newAppsCmd(),
+		newBackupCmd(),
+		newDaemonCmd(),
+		newImagesCmd(),
+		newVolumesCmd(),
+	} {
+		cmd.GroupID = groupManage
+		rootCmd.AddCommand(cmd)
+	}
 
 	// Client-only commands (no server needed)
 	remotesCmd := newRemotesCmd()
@@ -257,12 +216,12 @@ Application workload output is read with gordon apps logs APP --service SVC,
 which resolves the app's active container through the daemon.
 
 Examples:
-  gordon logs        # Gordon process logs
-  gordon logs -f     # Follow process logs
-  gordon logs -n 100 # Last 100 lines
+  gordon daemon logs        # Gordon process logs
+  gordon daemon logs -f     # Follow process logs
+  gordon daemon logs -n 100 # Last 100 lines
 
 Remote mode:
-  gordon logs --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon daemon logs --remote prod`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runLogs(cmd.Context(), logsConfigPath, follow, lines, cmd.OutOrStdout())

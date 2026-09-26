@@ -17,7 +17,6 @@ packages:
       EventSubscriber:
       EventHandler:
       SecretProvider:
-      EnvLoader:
       ContainerLogWriter:
       Metrics:
       LogExporter:
@@ -27,7 +26,6 @@ packages:
       AppStateReader:
       ImageResolver:
       SecretWriter:
-      DomainSecretStore:
       RateLimiter:
       BackupStorage:
       HTTPChallengeSink:
@@ -52,7 +50,6 @@ packages:
       AuthService:
       HealthService:
       HTTPProber:
-      SecretService:
       LogService:
       VolumeService:
       PublicTLSService:

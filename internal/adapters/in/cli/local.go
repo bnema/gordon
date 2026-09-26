@@ -4,25 +4,18 @@ package cli
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
-	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
 
-	"github.com/bnema/gordon/internal/adapters/out/domainsecrets"
 	"github.com/bnema/gordon/internal/app"
 	"github.com/bnema/gordon/internal/boundaries/in"
-	"github.com/bnema/gordon/internal/boundaries/out"
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/config"
-	secretsSvc "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
 // LocalServices provides direct access to local services for CLI operations.
 type LocalServices struct {
 	configSvc  in.ConfigService
-	secretSvc  in.SecretService
 	dataDir    string
 	tlsEnabled bool
 }
@@ -30,11 +23,6 @@ type LocalServices struct {
 // GetConfigService returns the config service.
 func (l *LocalServices) GetConfigService() in.ConfigService {
 	return l.configSvc
-}
-
-// GetSecretService returns the secret service.
-func (l *LocalServices) GetSecretService() in.SecretService {
-	return l.secretSvc
 }
 
 // GetDataDir returns the data directory.
@@ -67,8 +55,6 @@ func GetLocalServices(cliConfigPath string) (*LocalServices, error) {
 		// Config file not found is OK for some operations
 	}
 
-	log := zerowrap.New(cliLogConfig)
-
 	// Create config service (without event bus for CLI operations)
 	configSvc := config.NewService(v, nil)
 	ctx := context.Background()
@@ -76,27 +62,13 @@ func GetLocalServices(cliConfigPath string) (*LocalServices, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// Determine data directory and env directory
 	dataDir := v.GetString("server.data_dir")
 	if dataDir == "" {
 		dataDir = app.DefaultDataDir()
 	}
 
-	envDir := v.GetString("env.dir")
-	if envDir == "" {
-		envDir = filepath.Join(dataDir, "env")
-	}
-
-	// Create domain secret store using configured backend (pass or file-based)
-	domainSecretStore, err := createLocalDomainSecretStore(v, envDir, log)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create domain secret store: %w", err)
-	}
-	secretSvc := secretsSvc.NewService(domainSecretStore, log, nil)
-
 	return &LocalServices{
 		configSvc:  configSvc,
-		secretSvc:  secretSvc,
 		dataDir:    dataDir,
 		tlsEnabled: hasLocalTLSCapableEntrypoint(v),
 	}, nil
@@ -114,37 +86,4 @@ func hasLocalTLSCapableEntrypoint(v *viper.Viper) bool {
 		}
 	}
 	return false
-}
-
-func createLocalDomainSecretStore(v *viper.Viper, envDir string, log zerowrap.Logger) (out.DomainSecretStore, error) {
-	backend := resolveLocalSecretsBackend(v)
-	switch backend {
-	case domain.SecretsBackendPass:
-		return domainsecrets.NewPassStore(log)
-	case domain.SecretsBackendSops:
-		return nil, fmt.Errorf("sops backend not yet supported for domain secrets")
-	default:
-		return domainsecrets.NewFileStore(envDir, log)
-	}
-}
-
-func resolveLocalSecretsBackend(v *viper.Viper) domain.SecretsBackend {
-	backend := strings.TrimSpace(v.GetString("auth.secrets_backend"))
-	if backend == "" {
-		// Legacy key support for older configs.
-		backend = strings.TrimSpace(v.GetString("secrets.backend"))
-	}
-
-	switch backend {
-	case "pass":
-		return domain.SecretsBackendPass
-	case "sops":
-		return domain.SecretsBackendSops
-	case "unsafe", "":
-		return domain.SecretsBackendUnsafe
-	default:
-		log := zerowrap.Default()
-		log.Warn().Str("backend", backend).Msg("unrecognized secrets backend, falling back to unsafe")
-		return domain.SecretsBackendUnsafe
-	}
 }

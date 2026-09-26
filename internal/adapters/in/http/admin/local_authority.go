@@ -22,7 +22,6 @@ var localAuthorityScopes = []string{
 	domain.AdminScopeApps(domain.AdminActionRead, domain.AdminActionWrite),
 	domain.AdminScopeStatus(domain.AdminActionRead),
 	domain.AdminScopeConfig(domain.AdminActionRead, domain.AdminActionWrite),
-	domain.AdminScopeSecrets(domain.AdminActionRead, domain.AdminActionWrite),
 	domain.AdminScopeLogs(domain.AdminActionRead),
 	domain.AdminScopeVolumes(domain.AdminActionRead, domain.AdminActionWrite),
 }
@@ -64,17 +63,11 @@ func localPathAllowed(method, cleanedPath string) bool {
 	prefixRules := map[string]func(string, []string) bool{
 		"apps":    localAppPathAllowed,
 		"backups": localBackupPathAllowed,
-		"secrets": localSecretPathAllowed,
 		"logs":    localLogPathAllowed,
 		"tags":    localTagPathAllowed,
 	}
 	rule, ok := prefixRules[parts[0]]
 	return ok && rule(method, parts)
-}
-
-func localSecretPathAllowed(method string, parts []string) bool {
-	return len(parts) == 2 && parts[1] != "" && (method == http.MethodGet || method == http.MethodPost) ||
-		len(parts) == 3 && parts[1] != "" && parts[2] != "" && method == http.MethodDelete
 }
 
 func localLogPathAllowed(method string, parts []string) bool {

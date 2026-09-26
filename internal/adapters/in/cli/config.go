@@ -32,9 +32,9 @@ func newConfigShowCmd() *cobra.Command {
 auto-route, network isolation, routes, and external routes.
 
 Examples:
-  gordon config show
-  gordon config show --json
-  gordon config show --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon daemon config show
+  gordon daemon config show --json
+  gordon daemon config show --remote prod`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			handle, err := resolveControlPlane(cliConfigPath)
