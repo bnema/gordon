@@ -108,7 +108,7 @@ Image registry names and digest syntax are validated during manifest apply, reso
 ## Environment and Secrets
 
 - `[env]` is app-wide public env injected into all services. Each key must be disjoint from every `[services.<name>.secrets]` key in the app.
-- `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Secret updates affect the next deploy/restart, not running containers.
+- `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Running containers keep the values they were created with; `gordon apps deploy` applies new values. `restart` does not.
 - There is no `[services.<name>.env]` key — service-specific values must use secrets.
 
 ## Volumes and Databases
@@ -162,6 +162,20 @@ TLS applies to public interfaces only; an internal interface never declares `tls
 Each app gets a private network automatically. `[[network.shared]]` adds services to named shared networks, created/reused only within verified Gordon ownership. Deploy adds AND removes memberships without disconnecting unrelated services.
 
 Services of the same app communicate over that private network and resolve each other by service alias. Different apps are isolated by default; cross-app traffic requires both services to declare the same `[[network.shared]]` membership. See [Network Isolation](./network-isolation.md).
+
+## Telemetry
+
+When [telemetry log export](./telemetry.md#logs) is enabled, the stdout and stderr of every service are exported by default under `service.name = "<app>.<service>"`. `logs = false` opts out; a service setting overrides the app setting:
+
+```toml
+[telemetry]
+logs = false         # no service of this app exports...
+
+[services.web.telemetry]
+logs = true          # ...except web
+```
+
+Changing either setting is a service change: it applies on the next deploy.
 
 ## Strictness
 

@@ -131,7 +131,7 @@ func TestHandler_AppDeploy_MapsOp(t *testing.T) {
 			{ID: "service.web.replace", State: domain.AppStepSucceeded, Before: "c-old", After: "c-new"},
 		},
 	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(op, nil).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(op, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{
 		App: "blog", Converged: true, ConvergedRevision: "rev-1",
 		Services: map[string]in.AppServiceView{"web": {EffectiveRevision: "rev-1", Container: "c-new"}},
@@ -171,7 +171,7 @@ func TestHandler_AppDeploy_MapsCleanupWarnings(t *testing.T) {
 			Service: "web", Leftover: "ctr-old", Detail: "remove: still present",
 		}},
 	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(op, nil).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(op, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog"}, nil).Once()
 
 	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
@@ -201,7 +201,7 @@ func TestHandler_AppDeploy_RunningReturns202(t *testing.T) {
 			{ID: "service.web.replace", State: domain.AppStepPending},
 		},
 	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, nil).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(running, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
 	srv := newScopedTestServer(t, handler, "admin:apps:write")
@@ -229,7 +229,7 @@ func TestHandler_AppDeploy_TerminalReplayReturnsOK(t *testing.T) {
 		Outcome: domain.AppOutcomeSuccess,
 		Steps:   []domain.AppOperationStep{{ID: "service.web.replace", State: domain.AppStepSucceeded}},
 	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(terminal, nil).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(terminal, nil).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
 	srv := newScopedTestServer(t, handler, "admin:apps:write")
@@ -258,7 +258,7 @@ func TestHandler_AppDeploy_TerminalFailureReplayIsVisible(t *testing.T) {
 		}},
 	}
 	replayErr := fmt.Errorf("deployment: operation op-fail previously ended with outcome failed: %w", domain.ErrAppStateConflict)
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(failed, replayErr).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(failed, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
 	srv := newScopedTestServer(t, handler, "admin:apps:write")
@@ -326,7 +326,7 @@ func TestHandler_AppDeploy_RunningReplayBeforeServiceSteps(t *testing.T) {
 		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}},
 	}
 	replayErr := fmt.Errorf("deployment: operation op-run-pre has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(running, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
 	srv := newScopedTestServer(t, handler, "admin:apps:write")
@@ -351,13 +351,52 @@ func TestHandler_AppDeploy_RunningReplayAfterServiceSteps(t *testing.T) {
 		},
 	}
 	replayErr := fmt.Errorf("deployment: operation op-run-post has not reached a terminal outcome: %w", domain.ErrAppStateConflict)
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", "test-operation-key").Return(running, replayErr).Once()
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(running, replayErr).Once()
 	appSvc.EXPECT().Show(mock.Anything, "blog").Return(&in.AppDetail{App: "blog", Services: map[string]in.AppServiceView{}}, nil).Once()
 
 	srv := newScopedTestServer(t, handler, "admin:apps:write")
 	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
 
 	assertRunningReplayJournal(t, status, body, "op-run-post", "service.web.replace")
+}
+
+func TestHandler_AppDeploy_ServiceScopeRequiredIs400(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	scopeErr := fmt.Errorf("app blog has several services (db, web): pass --service NAME or --all: %w", domain.ErrAppServiceScope)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(nil, scopeErr).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, body := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{})
+	require.Equal(t, http.StatusBadRequest, status)
+
+	var resp dto.AppError
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, "service-scope-required", resp.Error)
+	assert.Contains(t, resp.Message, "(db, web)")
+}
+
+func TestHandler_AppDeploy_PassesAll(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", true, "test-operation-key").Return(nil, domain.ErrAppStateConflict).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, _ := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/deploy", dto.AppDeployRequest{All: true})
+	require.Equal(t, http.StatusConflict, status)
+}
+
+func TestHandler_AppRestart_PassesServiceAndAll(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	appSvc.EXPECT().Restart(mock.Anything, "blog", "", true, "test-operation-key").Return(nil, domain.ErrAppStateConflict).Once()
+	appSvc.EXPECT().Restart(mock.Anything, "blog", "web", false, "test-operation-key").Return(nil, domain.ErrAppStateConflict).Once()
+
+	srv := newScopedTestServer(t, handler, "admin:apps:write")
+	status, _ := appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/restart?all=true", nil)
+	require.Equal(t, http.StatusConflict, status)
+	status, _ = appsServerDo(t, srv, http.MethodPost, "/admin/apps/blog/restart?service=web", nil)
+	require.Equal(t, http.StatusConflict, status)
 }
 
 // TestHandler_AppDeploy_RejectsMissingIdempotencyKey keeps the request

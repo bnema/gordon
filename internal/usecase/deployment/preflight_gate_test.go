@@ -176,16 +176,21 @@ func TestStartDeploy_TargetedDiffPolicy(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		mutate  func(*domain.AppSpec)
-		wantErr bool
+		name     string
+		mutate   func(*domain.AppSpec)
+		wantPath string
 	}{
 		{name: "requested service image", mutate: func(spec *domain.AppSpec) { spec.Services[0].Image = "img:2" }},
-		{name: "other service", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Services[1].Image = "img:2" }},
-		{name: "environment", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Env = map[string]string{"MODE": "prod"} }},
-		{name: "network", wantErr: true, mutate: func(spec *domain.AppSpec) { spec.Networks[0].Aliases = []string{"peer"} }},
-		{name: "service added", wantErr: true, mutate: func(spec *domain.AppSpec) {
+		{name: "identical spec", mutate: func(*domain.AppSpec) {}},
+		{name: "other service", wantPath: "service/worker/image", mutate: func(spec *domain.AppSpec) { spec.Services[1].Image = "img:2" }},
+		{name: "environment", wantPath: "also changes env", mutate: func(spec *domain.AppSpec) { spec.Env = map[string]string{"MODE": "prod"} }},
+		{name: "network", wantPath: "network/shared/aliases", mutate: func(spec *domain.AppSpec) { spec.Networks[0].Aliases = []string{"peer"} }},
+		{name: "service added", wantPath: "service/job (added)", mutate: func(spec *domain.AppSpec) {
 			spec.Services = append(spec.Services, domain.AppService{Name: "job", Image: "img:1", Readiness: domain.AppReadiness{Type: "none", Timeout: 30 * time.Second}})
+		}},
+		{name: "service removed", wantPath: "service/worker (removed)", mutate: func(spec *domain.AppSpec) {
+			spec.Services = spec.Services[:1]
+			spec.Networks = nil
 		}},
 	}
 	for _, tc := range tests {
@@ -204,15 +209,16 @@ func TestStartDeploy_TargetedDiffPolicy(t *testing.T) {
 			state.EXPECT().Recover(mock.Anything).Return(nil)
 			state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-2").Return(rev, nil).Once()
 			state.EXPECT().LoadActive(mock.Anything, "blog").Return(base, true, nil).Once()
-			if !tc.wantErr {
+			if tc.wantPath == "" {
 				state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil).Once()
 			}
 
 			svc := keyedService(t, state, runtime, images, secrets)
 			started, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Revision: "rev-2", Service: "web"})
 
-			if tc.wantErr {
+			if tc.wantPath != "" {
 				require.ErrorIs(t, err, domain.ErrAppStateConflict)
+				assert.Contains(t, err.Error(), tc.wantPath)
 				state.AssertNotCalled(t, "SaveOperation", mock.Anything, mock.Anything)
 			} else {
 				require.NoError(t, err)

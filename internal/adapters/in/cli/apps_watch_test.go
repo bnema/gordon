@@ -46,7 +46,7 @@ func TestRunAppDeploy_PollsAcceptedToTerminal(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", "", "", &out, &errOut, false))
+	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, false))
 	text := out.String()
 	assert.Contains(t, text, "op op-1:")
 	assert.Contains(t, text, "running")
@@ -69,7 +69,7 @@ func TestRunAppDeploy_UnchangedStateNotReprinted(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", "", "", &out, &errOut, false))
+	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, false))
 	assert.Equal(t, 2, strings.Count(out.String(), "op op-1:"),
 		"initial and one advanced poll render progress; the unchanged poll is not reprinted")
 }
@@ -84,7 +84,7 @@ func TestRunAppDeploy_AcceptedIssuesNoSecondMutation(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", "", "", &out, &errOut, false))
+	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, false))
 }
 
 func TestRunAppDeploy_TerminalPartialRendersAndFails(t *testing.T) {
@@ -99,7 +99,7 @@ func TestRunAppDeploy_TerminalPartialRendersAndFails(t *testing.T) {
 	}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	err := runAppDeploy(context.Background(), plane, "blog", "", "", &out, &errOut, false)
+	err := runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, false)
 	require.Error(t, err, "a terminal partial outcome must exit nonzero")
 	assert.Contains(t, err.Error(), "partial")
 	assert.Contains(t, out.String(), "boom", "the terminal journal is rendered before failing")
@@ -116,7 +116,7 @@ func TestRunAppDeploy_JSONKeepsStdoutMachineReadable(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", "", "", &out, &errOut, true))
+	require.NoError(t, runAppDeploy(context.Background(), plane, "blog", dto.AppDeployRequest{}, &out, &errOut, true))
 
 	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
 	var got dto.AppDeployResponse

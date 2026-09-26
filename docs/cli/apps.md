@@ -211,6 +211,10 @@ Reads values in one of three ways:
 `--key` requires `--stdin` and cannot be combined with `KEY=VALUE` arguments.
 An empty value is rejected, so `KEY=` is invalid.
 
+Running containers keep the values they were created with. Apply new values
+with `gordon apps deploy APP --service SVC`: deploy sees the changed secret and
+recreates the service. `restart` does not apply new values.
+
 #### Flags
 
 | Flag | Description |
@@ -246,10 +250,30 @@ Deletes the registered value for `KEY`.
 ## gordon apps deploy
 
 ```bash
-gordon apps deploy APP [--revision REV] [--service SVC] [--json]
+gordon apps deploy APP [--revision REV] [--service SVC | --all] [--json]
 ```
 
-Activates a revision (default: desired head). Fail-fast across services:
+Activates a revision (default: desired head). An app with several services
+needs `--service NAME` (one service) or `--all` (every service); without
+either, the command fails before any change and lists the services. A
+single-service app needs neither. `apps apply --deploy` always deploys every
+service.
+
+| Flag | Description |
+|------|-------------|
+| `--revision REV` | Revision to activate (default: desired head) |
+| `--service NAME` | Deploy one service only |
+| `--all` | Deploy every service |
+| `--json` | Output as JSON |
+
+Deploy is the only command that applies changes. It recreates a service
+when its image digest, spec, app environment, or secret values changed. A
+new image behind the same tag (for example `latest`) has a new digest and is
+deployed. A service already running with all of these unchanged keeps its
+container and is reported `unchanged`. Services with host binds or devices
+are always replaced, so bind and device policy changes apply on deploy.
+
+Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
 later services stay unchanged.
 
@@ -266,10 +290,14 @@ local polling (the daemon-side operation keeps running) and prints the
 ## gordon apps restart
 
 ```bash
-gordon apps restart APP [--service SVC] [--json]
+gordon apps restart APP [--service SVC | --all] [--json]
 ```
 
-Restarts from pinned digests without re-resolution.
+Restarts the same container. Nothing is applied: new secret values, env,
+image, or config need `gordon apps deploy`. Traffic is withdrawn, the
+container restarts, readiness is checked, and traffic returns. If the
+container no longer exists, restart rebuilds it from its pinned digest. An
+app with several services needs `--service NAME` or `--all`.
 
 ---
 

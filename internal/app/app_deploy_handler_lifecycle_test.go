@@ -77,6 +77,9 @@ func TestAppDeployHandler_RequestCancellationDoesNotAbortExecution(t *testing.T)
 	store.EXPECT().LoadOperation(mock.Anything, "blog", "op-1").Return(running, nil).Once()
 	// Show resolves no app: the response carries the journal alone.
 	store.EXPECT().AppExists(mock.Anything, "blog").Return(false, nil).Once()
+	// The app-wide service scope check sees no services and lets it through.
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
 
 	release := make(chan struct{})
 	var releaseOnce sync.Once

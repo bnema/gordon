@@ -219,7 +219,7 @@ type appApplyDeployDocument struct {
 // that the daemon-side operation keeps running. A terminal partial/failed
 // outcome exits nonzero without hiding the successful apply.
 func runAppsApplyDeploy(ctx context.Context, plane ControlPlane, apply *dto.AppApplyResponse, out, errOut io.Writer) error {
-	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision})
+	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision, All: true})
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "deploy", apply.App, key, err, false); ok {
 			return applySucceededError(apply, conflictErr)
@@ -241,7 +241,7 @@ func runAppsApplyDeploy(ctx context.Context, plane ControlPlane, apply *dto.AppA
 // running document is emitted, and progress, transient warnings, and Ctrl-C
 // resume guidance go to errOut so stdout stays machine-readable.
 func runAppsApplyDeployJSON(ctx context.Context, plane ControlPlane, apply *dto.AppApplyResponse, out, errOut io.Writer) error {
-	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision})
+	deployResp, key, err := plane.DeployApp(ctx, apply.App, dto.AppDeployRequest{Revision: apply.ResultingRevision, All: true})
 	if err != nil {
 		var conflict *remote.AppOpConflictError
 		if errors.As(err, &conflict) {
@@ -655,7 +655,10 @@ func runAppsSecretsSetMode(ctx context.Context, plane ControlPlane, stdin io.Rea
 	if jsonOut {
 		return writeJSON(out, map[string]any{"app": app, "service": service, "keys": keys})
 	}
-	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Set %d secret(s) for %s/%s: %s", len(keys), app, service, strings.Join(keys, ", "))))
+	if err := cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Set %d secret(s) for %s/%s: %s", len(keys), app, service, strings.Join(keys, ", ")))); err != nil {
+		return err
+	}
+	return cliWriteLine(out, cliRenderMuted(fmt.Sprintf("Running containers keep their old values. Apply them with: gordon apps deploy %s --service %s", app, service)))
 }
 
 // newAppsSecretsDeleteCmd creates `apps secrets delete`.
@@ -770,6 +773,7 @@ func readSecretStdin(in io.Reader) ([]string, error) {
 func newAppDeployCmd() *cobra.Command {
 	var revision string
 	var service string
+	var all bool
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "deploy APP",
@@ -782,11 +786,14 @@ func newAppDeployCmd() *cobra.Command {
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppDeploy(cmd.Context(), plane, args[0], revision, service, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
+			req := dto.AppDeployRequest{Revision: revision, Service: service, All: all}
+			return runAppDeploy(cmd.Context(), plane, args[0], req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&revision, "revision", "", "Revision to activate (default: desired head)")
 	cmd.Flags().StringVar(&service, "service", "", "Deploy a single service only")
+	cmd.Flags().BoolVar(&all, "all", false, "Deploy every service (required for multi-service apps without --service)")
+	cmd.MarkFlagsMutuallyExclusive("service", "all")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
@@ -794,8 +801,8 @@ func newAppDeployCmd() *cobra.Command {
 // runAppDeploy issues one deploy mutation and, when the daemon answers 202
 // with a running journal, polls the existing by-key endpoint to terminal
 // rather than reissuing the mutation or hiding the outcome.
-func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, service string, out, errOut io.Writer, jsonOut bool) error {
-	resp, key, err := plane.DeployApp(ctx, app, dto.AppDeployRequest{Revision: revision, Service: service})
+func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.AppDeployRequest, out, errOut io.Writer, jsonOut bool) error {
+	resp, key, err := plane.DeployApp(ctx, app, req)
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "deploy", app, key, err, jsonOut); ok {
 			return conflictErr
@@ -814,6 +821,7 @@ func runAppDeploy(ctx context.Context, plane ControlPlane, app, revision, servic
 // newAppRestartCmd creates `restart APP`: pinned digests, no re-resolve.
 func newAppRestartCmd() *cobra.Command {
 	var service string
+	var all bool
 	var jsonOut bool
 	cmd := &cobra.Command{
 		Use:   "restart APP",
@@ -826,16 +834,18 @@ func newAppRestartCmd() *cobra.Command {
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppRestart(cmd.Context(), plane, args[0], service, cmd.OutOrStdout(), jsonOut)
+			return runAppRestart(cmd.Context(), plane, args[0], service, all, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "Restart a single service only")
+	cmd.Flags().BoolVar(&all, "all", false, "Restart every service (required for multi-service apps without --service)")
+	cmd.MarkFlagsMutuallyExclusive("service", "all")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runAppRestart(ctx context.Context, plane ControlPlane, app, service string, out io.Writer, jsonOut bool) error {
-	resp, key, err := plane.RestartApp(ctx, app, service)
+func runAppRestart(ctx context.Context, plane ControlPlane, app, service string, all bool, out io.Writer, jsonOut bool) error {
+	resp, key, err := plane.RestartApp(ctx, app, service, all)
 	if err != nil {
 		if conflictErr, ok := renderAppOpConflict(out, "restart", app, key, err, jsonOut); ok {
 			return conflictErr
@@ -991,6 +1001,9 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 	for _, name := range names {
 		svc := resp.Services[name]
 		detail := svc.Result + " " + svc.EffectiveRevision
+		if svc.Result == domain.AppServiceUnchanged {
+			detail += " (already running this image, config, and secrets)"
+		}
 		if svc.RestartUnsafe {
 			detail += " restart_unsafe"
 		}

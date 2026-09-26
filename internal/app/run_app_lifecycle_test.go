@@ -85,7 +85,7 @@ func TestNewAppDaemonService_DaemonCancellationReachesInFlightDeploy(t *testing.
 	deployDone := make(chan struct{})
 	go func() {
 		defer close(deployDone)
-		_, _ = svc.Deploy(requestCtx, "blog", "rev-1", "web", "key-1")
+		_, _ = svc.Deploy(requestCtx, "blog", "rev-1", "web", false, "key-1")
 	}()
 
 	var execCtx context.Context
