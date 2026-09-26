@@ -129,39 +129,6 @@ func isRemoteNotFoundError(err error) bool {
 	return errors.Is(err, domain.ErrRouteNotFound)
 }
 
-func resolveExplicitRemote() (*remote.ResolvedRemote, bool, error) {
-	target, ok := resolveExplicitTargetName()
-	if !ok {
-		return nil, false, nil
-	}
-
-	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
-		return &remote.ResolvedRemote{
-			URL:         target,
-			Token:       resolveTokenForTarget("", remote.RemoteEntry{}),
-			InsecureTLS: resolveInsecureForTarget("", remote.RemoteEntry{}),
-		}, true, nil
-	}
-
-	remotes, err := remote.LoadRemotes("")
-	if err != nil {
-		return nil, false, err
-	}
-
-	if remotes != nil {
-		if entry, found := remotes.Remotes[target]; found {
-			return &remote.ResolvedRemote{
-				Name:        target,
-				URL:         entry.URL,
-				Token:       resolveTokenForTarget(target, entry),
-				InsecureTLS: resolveInsecureForTarget(target, entry),
-			}, true, nil
-		}
-	}
-
-	return nil, false, nil
-}
-
 func resolveExplicitTargetName() (string, bool) {
 	if target := strings.TrimSpace(remoteFlag); target != "" {
 		return target, true
@@ -202,13 +169,4 @@ func resolveInsecureForTarget(name string, entry remote.RemoteEntry) bool {
 
 func newInferenceTargetClient(name string, entry remote.RemoteEntry) *remote.Client {
 	return remote.NewClient(entry.URL, remoteClientOptions(resolveTokenForTarget(name, entry), resolveInsecureForTarget(name, entry))...)
-}
-
-// inferExplicitTarget resolves --remote/GORDON_REMOTE without probing saved remotes.
-func inferExplicitTarget(_ context.Context) (*remote.ResolvedRemote, error) {
-	resolved, ok, err := resolveExplicitRemote()
-	if err != nil || !ok {
-		return nil, err
-	}
-	return resolved, nil
 }

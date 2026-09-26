@@ -30,7 +30,7 @@ func newConfigValidateCmd() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if remoteFlag != "" {
-				return fmt.Errorf("config validate is local-only; --remote is not supported")
+				return fmt.Errorf("daemon config validate is local-only; --remote is not supported")
 			}
 			return runConfigValidate(cmd.OutOrStdout(), file, jsonOut)
 		},

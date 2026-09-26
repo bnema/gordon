@@ -35,8 +35,6 @@ func TestLocalAuthorityInjectsLeastPrivilegeScopes(t *testing.T) {
 			{domain.AdminResourceStatus, domain.AdminActionRead},
 			{domain.AdminResourceConfig, domain.AdminActionRead},
 			{domain.AdminResourceConfig, domain.AdminActionWrite},
-			{domain.AdminResourceSecrets, domain.AdminActionRead},
-			{domain.AdminResourceSecrets, domain.AdminActionWrite},
 			{domain.AdminResourceLogs, domain.AdminActionRead},
 			{domain.AdminResourceVolumes, domain.AdminActionRead},
 			{domain.AdminResourceVolumes, domain.AdminActionWrite},
@@ -44,6 +42,7 @@ func TestLocalAuthorityInjectsLeastPrivilegeScopes(t *testing.T) {
 			assert.True(t, HasAccess(ctx, access.resource, access.action), "%s:%s", access.resource, access.action)
 		}
 		assert.False(t, HasAccess(ctx, domain.AdminResourceRoutes, domain.AdminActionRead))
+		assert.False(t, HasAccess(ctx, "secrets", domain.AdminActionRead))
 		assert.False(t, HasAccess(ctx, domain.AdminResourceStatus, domain.AdminActionWrite))
 		assert.False(t, HasAccess(ctx, domain.AdminResourceLogs, domain.AdminActionWrite))
 		assert.False(t, HasAccess(ctx, domain.AdminResourceAll, domain.AdminActionAll))
@@ -70,9 +69,6 @@ func TestLocalAuthorityCanonicalAllowlist(t *testing.T) {
 		{http.MethodGet, "/tags/repository"},
 		{http.MethodGet, "/logs"},
 		{http.MethodGet, "/logs/blog/web"},
-		{http.MethodGet, "/secrets/blog.example.com"},
-		{http.MethodPost, "/secrets/blog.example.com"},
-		{http.MethodDelete, "/secrets/blog.example.com/API_KEY"},
 		{http.MethodGet, "/backups"},
 		{http.MethodGet, "/backups/status"},
 		{http.MethodGet, "/backups/shop"},
@@ -116,6 +112,8 @@ func TestLocalAuthorityDeniesNearMissesAndNonCanonicalPaths(t *testing.T) {
 		{http.MethodGet, "/health"},
 		{http.MethodGet, "/appsX"},
 		{http.MethodGet, "/secrets"},
+		{http.MethodGet, "/secrets/blog.example.com"},
+		{http.MethodPost, "/secrets/blog.example.com"},
 		{http.MethodDelete, "/secrets/blog"},
 		{http.MethodGet, "/images/anything"},
 		{http.MethodGet, "/tags/repository/extra"},

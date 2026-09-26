@@ -164,12 +164,12 @@ gordon remotes use <name>
 
 When a remote is active, it's used automatically for most remote-capable commands without needing to specify `--remote` and `--token`.
 
-If no remote is active and you do not pass `--remote`, Gordon can also auto-infer a saved remote for `gordon push` and `gordon images tags <repository>`. It only auto-selects when exactly one saved remote matches. Ambiguous matches and probe failures require an explicit `--remote`.
+If no remote is active and you do not pass `--remote`, Gordon can also auto-infer a saved remote for `gordon images push` and `gordon images tags <repository>`. It only auto-selects when exactly one saved remote matches. Ambiguous matches and probe failures require an explicit `--remote`.
 
 ```bash
 gordon remotes use prod
-gordon secrets list app.com     # Uses prod remote automatically
-gordon status                   # Uses prod remote automatically
+gordon apps list        # Uses prod remote automatically
+gordon daemon status    # Uses prod remote automatically
 ```
 
 ### Example
@@ -270,7 +270,7 @@ This allows overriding specific values while keeping defaults:
 
 ```bash
 # Force one target
-GORDON_REMOTE=prod gordon status
+GORDON_REMOTE=prod gordon daemon status
 ```
 
 ---
@@ -287,12 +287,12 @@ gordon remotes add dev https://gordon.dev.example.com --token-env DEV_TOKEN
 
 # Work with prod
 gordon remotes use prod
-gordon secrets list myapp.example.com
-gordon status --remote prod
+gordon apps list
+gordon daemon status
 
 # Switch to staging
 gordon remotes use staging
-GORDON_REMOTE=staging gordon status
+GORDON_REMOTE=staging gordon daemon status
 ```
 
 ### CI/CD Pipeline
@@ -306,19 +306,19 @@ env:
 steps:
   - name: Push to Gordon
     run: |
-      gordon push myapp --build --remote ${{ secrets.GORDON_URL }}
+      gordon images push myapp --build --remote ${{ secrets.GORDON_URL }}
 ```
 
 ### Compare Environments
 
 ```bash
 # Compare one target at a time
-gordon status --remote https://gordon.example.com --token $PROD_TOKEN
-GORDON_REMOTE=staging gordon status
+gordon daemon status --remote https://gordon.example.com --token $PROD_TOKEN
+GORDON_REMOTE=staging gordon daemon status
 
 # Or switch between active remotes for other commands
-gordon remotes use prod && gordon secrets list myapp.example.com
-gordon remotes use staging && gordon secrets list myapp.example.com
+gordon remotes use prod && gordon apps list
+gordon remotes use staging && gordon apps list
 ```
 
 ### Private Admin + Wildcard App Domains

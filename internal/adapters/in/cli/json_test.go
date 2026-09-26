@@ -10,18 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 	"github.com/bnema/gordon/internal/domain"
 )
-
-func TestSecretsList_JSONFlag_Accepted(t *testing.T) {
-	cmd := newSecretsListCmd()
-	f := cmd.Flags().Lookup("json")
-	assert.NotNil(t, f)
-	if f != nil {
-		assert.Equal(t, "false", f.DefValue)
-	}
-}
 
 func TestImagesList_JSONFlag_Accepted(t *testing.T) {
 	cmd := newImagesListCmd()
@@ -145,21 +135,6 @@ func TestRemotesList_JSONShape_RoundTripsRemoteObjects(t *testing.T) {
 	assert.Equal(t, "https://prod.example.com", got[0].URL)
 	assert.True(t, got[0].Active)
 	assert.True(t, got[0].InsecureTLS)
-}
-
-func TestSecretsList_JSONShape_RoundTripsPayload(t *testing.T) {
-	payload := remote.SecretsListResult{
-		Domain: "app.example.com",
-		Keys:   []string{"API_KEY"},
-	}
-
-	encoded, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	var got remote.SecretsListResult
-	require.NoError(t, json.Unmarshal(encoded, &got))
-	assert.Equal(t, payload.Domain, got.Domain)
-	assert.Equal(t, payload.Keys, got.Keys)
 }
 
 func TestWriteJSON_ProducesValidIndentedJSON(t *testing.T) {

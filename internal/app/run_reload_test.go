@@ -311,7 +311,7 @@ func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 		log: zerowrap.Default(),
 		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
 			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
@@ -361,7 +361,7 @@ func TestServiceInit_ReloadUpdatesManagementHosts(t *testing.T) {
 		log: zerowrap.Default(),
 		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
 			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, publicTLS, zerowrap.Default()),
@@ -393,7 +393,7 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(
 		log: zerowrap.Default(),
 		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
 			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
@@ -429,7 +429,7 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_AppliesTraffic(t *testing.T)
 		log: zerowrap.Default(),
 		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
 			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),

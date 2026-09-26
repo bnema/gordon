@@ -20,7 +20,6 @@ func retiredTestHandler(t *testing.T) *Handler {
 		AuthSvc:       inmocks.NewMockAuthService(t),
 		ContainerSvc:  inmocks.NewMockContainerService(t),
 		HealthSvc:     inmocks.NewMockHealthService(t),
-		SecretSvc:     inmocks.NewMockSecretService(t),
 		Log:           testLogger(),
 		ReloadTrigger: noopReloadTrigger{},
 	})
@@ -46,6 +45,9 @@ func TestHandler_RetiredMutations_Return410(t *testing.T) {
 		{http.MethodPost, "/admin/preview/blog"},
 		{http.MethodGet, "/admin/previews"},
 		{http.MethodPost, "/admin/autoroute/allowed-domains"},
+		{http.MethodGet, "/admin/secrets/example.com"},
+		{http.MethodPost, "/admin/secrets/example.com"},
+		{http.MethodDelete, "/admin/secrets/example.com/KEY"},
 	}
 	for _, target := range targets {
 		req := httptest.NewRequest(target.method, target.path, nil)

@@ -91,4 +91,4 @@ By default Gordon removes old or disabled service containers while preserving vo
 
 - [Traffic Plane Configuration](./traffic.md)
 - [Configuration Reference](./reference.md)
-- [CLI traffic status](../cli/traffic.md)
+- [CLI traffic status](../cli/daemon.md#gordon-daemon-traffic)

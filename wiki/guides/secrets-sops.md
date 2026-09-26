@@ -208,17 +208,7 @@ The path format is `file:key.path` where:
 - `file` is the SOPS-encrypted file path
 - `key.path` is dot-notation to the value
 
-Route secrets remain in `.env` files with `${sops:...}` references. The SOPS backend is used for auth secrets (like `token_secret`) and provider lookups.
-
-### Using Secrets in Environment Files
-
-Reference SOPS secrets in your app's environment files:
-
-```bash
-# ~/.gordon/env/app_mydomain_com.env
-DATABASE_URL=postgresql://user:${sops:secrets.yaml:database.password}@postgres:5432/app
-API_KEY=${sops:secrets.yaml:api.key}
-```
+The SOPS backend is used for auth secrets such as `token_secret`. App secret values are managed with `gordon apps secrets` (see [Apps CLI](/docs/cli/apps.md)).
 
 ## File Organization
 

@@ -27,10 +27,6 @@ type ControlPlane interface {
 	SetAppSecrets(ctx context.Context, app string, req dto.AppSecretSetRequest) error
 	DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error
 
-	ListSecrets(ctx context.Context, secretDomain string) (*remote.SecretsListResult, error)
-	SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error
-	DeleteSecret(ctx context.Context, secretDomain, key string) error
-
 	GetStatus(ctx context.Context) (*remote.Status, error)
 	GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error)
 	GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error)

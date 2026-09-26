@@ -32,7 +32,7 @@ protocol = "smart_tcp"
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
 | `registry_domain` | string | - | Deprecated migration key. Set `gordon_domain` instead. |
 | `legacy_registry_domains` | []string | `[]` | Additional Gordon registry hosts treated as aliases during staged migration. See [Upgrading: Staged Registry Host Rename](../upgrading.md#staged-registry-host-rename). |
-| `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and env files |
+| `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and state |
 | `max_proxy_body_size` | string | `"512MB"` | Maximum request body size for proxied requests |
 | `max_blob_chunk_size` | string | `"95MB"` | Maximum request body size for a single registry blob upload chunk |
 | `max_blob_size` | string | `"1GB"` | Maximum cumulative size for one registry blob/layer upload |
@@ -220,7 +220,6 @@ data_dir = "~/.gordon"  # Default for user installations
 ├── registry/           # Container images and manifests
 │   ├── blobs/
 │   └── manifests/
-├── env/                # Installation secret-store data
 ├── logs/               # Gordon process and file-based access logs
 │   ├── gordon.log
 │   └── access.log

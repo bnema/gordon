@@ -26,16 +26,8 @@ Management commands use the authenticated daemon API. By default they connect th
 |---------|-------------|---------------|
 | `gordon apps` | Manage applications, operations, and app secrets | [apps](./apps.md) |
 | `gordon backups` | Manage declared app database and volume backups | [backup](./backup.md) |
-| `gordon config` | Show and validate server configuration | [config](./config.md) |
-| `gordon images` | List and prune images | [images](./images.md) |
-| `gordon logs` | Display Gordon process logs | [serve](./serve.md#gordon-logs) |
-| `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
-| `gordon push` | Tag and push an image (never deploys) | [push](./push.md) |
-| `gordon reload` | Reload installation configuration | [serve](./serve.md#gordon-reload) |
-| `gordon secrets` | Manage installation secrets | [secrets](./secrets.md) |
-| `gordon status` | Show Gordon server status | [status](./status.md) |
-| `gordon tls` | Inspect TLS status | [tls](./tls.md) |
-| `gordon traffic` | Inspect traffic plane status | [traffic](./traffic.md) |
+| `gordon daemon` | Daemon status, logs, reload, config, TLS, traffic, and networks | [daemon](./daemon.md) |
+| `gordon images` | Push, list, and prune images | [images](./images.md) |
 | `gordon volumes` | Manage volumes | [volumes](./volumes.md) |
 
 ## Client Commands
@@ -54,7 +46,7 @@ gordon serve
 gordon serve --config /path/to/config.toml
 
 # Reload installation configuration (never activates app state)
-gordon reload
+gordon daemon reload
 
 # Applications (daemon-owned; fail without a reachable daemon)
 gordon apps apply --file blog.toml
@@ -70,15 +62,21 @@ gordon apps remove blog
 gordon apps operations show blog --key <operation-key>
 gordon apps operations watch blog --key <operation-key>
 gordon apps secrets list blog
-gordon config validate --file /path/to/gordon.toml
+
+# Daemon
+gordon daemon status
+gordon daemon config show
+gordon daemon config validate --file /path/to/gordon.toml
+gordon daemon tls
+gordon daemon networks
 
 # Push an image (OCI transfer only; deploy separately)
-gordon push myapp --build --remote prod
+gordon images push myapp --build --remote prod
 
 # View logs
-gordon logs                                      # Gordon process logs
-gordon logs -f                                   # Follow process logs
-gordon logs -n 100                               # Last 100 process-log lines
+gordon daemon logs                                      # Gordon process logs
+gordon daemon logs -f                                   # Follow process logs
+gordon daemon logs -n 100                               # Last 100 process-log lines
 gordon apps logs blog --service web              # App service logs
 gordon apps logs blog --service web --follow     # Follow app service logs
 
@@ -86,8 +84,8 @@ gordon apps logs blog --service web --follow     # Follow app service logs
 gordon version
 
 # Traffic plane
-gordon traffic status --remote prod
-gordon traffic status --remote prod --json
+gordon daemon traffic --remote prod
+gordon daemon traffic --remote prod --json
 
 # Backups
 gordon backups list
@@ -96,6 +94,7 @@ gordon backups volume run shop --service api --volume data
 gordon backups status
 
 # Images
+gordon images push myapp --build --remote prod
 gordon images list
 gordon images prune --dry-run
 gordon images prune --keep-releases 3
@@ -109,11 +108,6 @@ gordon auth token generate --subject ci-bot --expiry 0
 gordon auth token list
 gordon auth token revoke <token-id>
 gordon auth internal
-
-# Secrets
-gordon secrets list myapp.example.com
-gordon secrets set myapp.example.com --from-file ./app.env
-gordon secrets remove myapp.example.com DATABASE_URL
 
 # Remotes
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
@@ -141,14 +135,14 @@ or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global 
 when you want to bypass your saved configuration.
 
 When no explicit remote is selected and no active remote is configured, Gordon can
-**auto-infer a saved remote** for `gordon push`. It probes your saved remotes and uses the
+**auto-infer a saved remote** for `gordon images push`. It probes your saved remotes and uses the
 remote automatically when exactly one matches. If multiple remotes match, Gordon stops with
 an ambiguity error and asks you to use `--remote`. If any remote probe fails, Gordon also
 stops rather than guessing.
 
 ```bash
 # Auto-inferred single match from saved remotes
-gordon push myapp --build
+gordon images push myapp --build
 ```
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
@@ -159,16 +153,16 @@ or in a specific entry in `~/.config/gordon/remotes.toml`.
 
 ```bash
 # Using flags (use the gordon_domain from remote Gordon config)
-gordon status --remote https://gordon.example.com --token $TOKEN
+gordon daemon status --remote https://gordon.example.com --token $TOKEN
 
 # Against self-signed/private CA endpoint
-gordon --remote https://gordon.example.com --token $TOKEN --insecure status
+gordon --remote https://gordon.example.com --token $TOKEN --insecure daemon status
 
 # Using environment variables
 export GORDON_REMOTE=https://gordon.example.com
 export GORDON_TOKEN=$TOKEN
 export GORDON_INSECURE=true
-gordon status
+gordon daemon status
 ```
 
 ## Exit Codes

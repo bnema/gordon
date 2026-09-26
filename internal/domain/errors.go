@@ -117,7 +117,6 @@ var (
 	ErrSecretNotFound              = errors.New("secret not found")
 	ErrSecretsAlreadyExist         = errors.New("secrets already exist")
 	ErrProviderNotFound            = errors.New("secret provider not found")
-	ErrInvalidContainerName        = errors.New("invalid container name")
 	ErrAttachmentOwnershipMismatch = errors.New("attachment ownership mismatch")
 	ErrReadinessLogSizeExceeded    = errors.New("readiness log exceeds maximum")
 

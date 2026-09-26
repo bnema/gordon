@@ -481,48 +481,6 @@ func (c *Client) requestWithRetry(ctx context.Context, method, path string, body
 	return nil, fmt.Errorf("request failed after retries")
 }
 
-// Secrets API
-
-// SecretsListResult contains domain secret keys.
-type SecretsListResult struct {
-	Domain string   `json:"domain"`
-	Keys   []string `json:"keys"`
-}
-
-// ListSecretsWithAttachments returns domain secret keys. Attachment
-// containers are retired: the daemon answers without attachment keys.
-func (c *Client) ListSecretsWithAttachments(ctx context.Context, secretDomain string) (*SecretsListResult, error) {
-	resp, err := c.request(ctx, http.MethodGet, "/secrets/"+url.PathEscape(secretDomain), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var result SecretsListResult
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
-// SetSecrets sets secrets for a domain.
-func (c *Client) SetSecrets(ctx context.Context, secretDomain string, secrets map[string]string) error {
-	resp, err := c.request(ctx, http.MethodPost, "/secrets/"+url.PathEscape(secretDomain), secrets)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
-// DeleteSecret removes a secret from a domain.
-func (c *Client) DeleteSecret(ctx context.Context, secretDomain, key string) error {
-	resp, err := c.request(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(secretDomain)+"/"+url.PathEscape(key), nil)
-	if err != nil {
-		return err
-	}
-	return parseResponse(resp, nil)
-}
-
 // Status API
 
 // Status represents the Gordon server status.

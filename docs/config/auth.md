@@ -95,8 +95,6 @@ Admin scopes (for remote CLI):
 | `admin:logs:read` | Read-only logs access |
 | `admin:volumes:read` | List Docker volumes |
 | `admin:volumes:write` | Prune eligible Gordon-managed volumes |
-| `admin:secrets:read` | List secret keys |
-| `admin:secrets:write` | Set/delete secrets |
 
 Examples:
 

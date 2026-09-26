@@ -28,7 +28,6 @@ func appsTestHandler(t *testing.T, appSvc *inmocks.MockAppService) *Handler {
 		AuthSvc:       inmocks.NewMockAuthService(t),
 		ContainerSvc:  inmocks.NewMockContainerService(t),
 		HealthSvc:     inmocks.NewMockHealthService(t),
-		SecretSvc:     inmocks.NewMockSecretService(t),
 		Log:           testLogger(),
 		ReloadTrigger: noopReloadTrigger{},
 		AppSvc:        appSvc,

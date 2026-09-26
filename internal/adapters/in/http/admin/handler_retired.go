@@ -6,7 +6,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 )
 
-// retiredMutationPaths are legacy mutation endpoints removed by the v3
+// retiredMutationPaths are legacy endpoints removed by the v3
 // declarative-apps cutover. Only the 410 Gone rejection dispatcher below
 // remains; no old business handlers or compatibility behavior is kept.
 var retiredMutationPaths = []string{
@@ -23,6 +23,7 @@ var retiredMutationPaths = []string{
 	"/preview",
 	"/previews",
 	"/autoroute/allowed-domains",
+	"/secrets",
 }
 
 // isRetiredMutation reports whether a request path targets a removed

@@ -36,3 +36,13 @@ func TestInitConfigRejectsRetiredAppKeys(t *testing.T) {
 	require.ErrorContains(t, err, "config-retired")
 	require.ErrorContains(t, err, `"routes"`)
 }
+
+func TestInitConfigRejectsRetiredEnvSection(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(configPath, []byte("[env]\ndir = \"/tmp/env\"\n"), 0o600))
+
+	_, _, err := initConfig(configPath)
+
+	require.ErrorContains(t, err, "config-retired")
+	require.ErrorContains(t, err, `"env"`)
+}

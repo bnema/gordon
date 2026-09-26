@@ -89,17 +89,13 @@ metrics = true                           # Export metrics
 logs = true                              # Export Gordon, access, and app logs
 trace_sample_rate = 1.0                  # 0.0 = none, 1.0 = all
 
-# Installation secret store location
-[env]
-dir = "~/.gordon/env"                    # Default location
-
 # Volume settings
 [volumes]
 auto_create = true                       # Auto-create from Dockerfile VOLUME
 prefix = "gordon"                        # Volume name prefix
 preserve = true                          # Keep volumes on container removal
 
-# Installation network policy (prefix filter for `gordon networks list`)
+# Installation network policy (prefix filter for `gordon daemon networks`)
 [network_isolation]
 enabled = true                           # Gordon-managed network policy
 network_prefix = "gordon"                # Network name prefix
@@ -143,7 +139,6 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `[api.rate_limit]` | Rate limiting configuration | [Rate Limiting](./rate-limiting.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[telemetry]` | OpenTelemetry observability export | [Telemetry](./telemetry.md) |
-| `[env]` | Installation secret store location | [Environment](./env.md) |
 | `[volumes]` | Volume management | [Volumes](./volumes.md) |
 | `[network_isolation]` | Installation network policy | [Network Isolation](./network-isolation.md) |
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
@@ -203,7 +198,7 @@ When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is not reg
 Gordon watches the configuration file and reloads automatically when changes are detected. You can also trigger a manual reload:
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### Hot-reloaded (no restart needed)

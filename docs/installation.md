@@ -377,7 +377,6 @@ Gordon stores data in the following locations:
 | `~/.config/gordon/gordon.toml` | Configuration file |
 | `~/.gordon/` | Default data directory |
 | `~/.gordon/registry/` | Container images |
-| `~/.gordon/env/` | Environment files |
 | `~/.gordon/logs/` | Application logs |
 | `~/.gordon/secrets/` | Secrets (unsafe backend only) |
 

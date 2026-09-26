@@ -148,7 +148,7 @@ gordon remotes add prod https://gordon.mydomain.com --token <your-token>
 gordon remotes use prod
 
 # Build and push the image (OCI transfer only, never deploys)
-gordon push myapp --build --remote prod
+gordon images push myapp --build --remote prod
 ```
 
 Write the app file (`blog.toml`). The file is intended for Git: it must never contain secret values.
@@ -173,7 +173,7 @@ gordon apps deploy blog --remote prod
 
 What these commands do:
 
-- `gordon push` builds, uploads, and stores the image. It never deploys.
+- `gordon images push` builds, uploads, and stores the image. It never deploys.
 - `gordon apps apply` validates the manifest and persists it as desired state.
 - `gordon apps deploy` activates the accepted revision: runs preflight, withdraws the service from traffic, stops and removes the old container, starts the new container, waits for readiness, publishes the new `ACTIVE` state, and routes traffic to it.
 
@@ -191,7 +191,7 @@ Push a new image, update the manifest tag if needed, apply, deploy:
 
 ```bash
 # Make changes, then build + push
-gordon push myapp --build --remote prod
+gordon images push myapp --build --remote prod
 
 # Deploy the new tag (re-resolves mutable tags)
 gordon apps deploy blog --remote prod

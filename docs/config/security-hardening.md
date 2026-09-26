@@ -83,10 +83,6 @@ The manifest references only the logical name: `devices = ["transcode-gpu"]`.
 - Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured. Older or unrecognized engines fail with a structured `runtime-unsupported` error and never run without devices.
 - Gordon installs no drivers, manages no quotas, and injects no device environment: images carry their own runtime expectations.
 
-## Pass import plaintext handling
-
-With the `pass` backend, Gordon imports eligible plaintext `.env` files at startup. It removes a source file only after every entry is stored successfully. If a destination entry already exists or an import fails, Gordon fails closed and leaves the plaintext source in place for operator review.
-
 ## External image registries
 
 Docker Hub, `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add every other registry hostname and non-default port explicitly:

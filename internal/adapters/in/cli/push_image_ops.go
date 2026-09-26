@@ -181,7 +181,7 @@ func (d *dockerImageOps) Build(ctx context.Context, args []string) error {
 				"Podman and other runtimes are not supported for --build.\n" +
 				"Build the image manually and push with:\n" +
 				"  podman build -t <image> .\n" +
-				"  gordon push <image>",
+				"  gordon images push <image>",
 		)
 	}
 	cmd := exec.CommandContext(ctx, "docker", args...) // #nosec G204

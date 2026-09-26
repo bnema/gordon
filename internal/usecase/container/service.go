@@ -29,7 +29,6 @@ type Config struct {
 // Service implements the ContainerService interface.
 type Service struct {
 	runtime   out.ContainerRuntime
-	envLoader out.EnvLoader
 	eventBus  out.EventPublisher
 	logWriter out.ContainerLogWriter
 	config    Config
@@ -39,14 +38,12 @@ type Service struct {
 // NewService creates a new container service.
 func NewService(
 	runtime out.ContainerRuntime,
-	envLoader out.EnvLoader,
 	eventBus out.EventPublisher,
 	logWriter out.ContainerLogWriter,
 	config Config,
 ) *Service {
 	return &Service{
 		runtime:   runtime,
-		envLoader: envLoader,
 		eventBus:  eventBus,
 		logWriter: logWriter,
 		config:    config,

@@ -91,7 +91,7 @@ No restart needed — Podman reads this on each pull/push.
 1. Per-command flag:
 
    ```bash
-   gordon push myapp:latest --insecure
+   gordon images push myapp:latest --insecure
    ```
 
 2. Environment variable:
@@ -164,7 +164,7 @@ gordon apps deploy app
 
 2. Check Gordon logs:
    ```bash
-   gordon logs -f
+   gordon daemon logs -f
    ```
 
 3. Run container manually to debug:
@@ -174,28 +174,23 @@ gordon apps deploy app
 
 ### Environment variables not loaded
 
-**Cause:** Env file not found or wrong format.
+**Cause:** The variable is not declared in the app file, or its secret value was never set.
 
 **Solutions:**
 
-1. Check file exists with correct name:
+1. Declare public values under `[env]` and service values under `[services.<name>.secrets]` in the app file, then apply it:
    ```bash
-   ls ~/.gordon/env/
-   # Should show: app_mydomain_com.env (dots → underscores)
+   gordon apps apply --file ./blog.toml
    ```
 
-2. Check file permissions:
+2. Check which secret values are set (names only):
    ```bash
-   chmod 600 ~/.gordon/env/app_mydomain_com.env
+   gordon apps secrets list blog
    ```
 
-3. Check file format (no spaces around `=`):
+3. Deploy or restart: values apply on the next deploy/restart, never to running containers.
    ```bash
-   # Correct
-   KEY=value
-
-   # Wrong
-   KEY = value
+   gordon apps restart blog
    ```
 
 ### Secrets not resolved
@@ -318,7 +313,7 @@ gordon apps deploy app
 
 **Solution:** Manual reload:
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### Stale `targets.toml` in config directory
@@ -372,7 +367,7 @@ path = "~/.gordon/logs/gordon.log"
 systemctl --user status gordon
 
 # View Gordon logs
-gordon logs -f
+gordon daemon logs -f
 journalctl --user -u gordon -f
 
 # List containers

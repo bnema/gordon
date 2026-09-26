@@ -178,4 +178,4 @@ UDP sessions are keyed by client address and expire after `idle_timeout`. If `ma
 - [Server Settings](./server.md)
 - [App Manifest](./apps.md)
 - [Standalone Services](./services.md)
-- [CLI traffic status](../cli/traffic.md)
+- [CLI traffic status](../cli/daemon.md#gordon-daemon-traffic)

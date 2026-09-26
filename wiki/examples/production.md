@@ -40,10 +40,6 @@ max_age = 90
 # Workload logs are read from the container runtime with
 # `gordon apps logs APP --service SERVICE`.
 
-# Environment directory
-[env]
-dir = "~/.gordon/env"
-
 # Volume settings (all enabled by default)
 [volumes]
 auto_create = true
@@ -82,26 +78,14 @@ openssl rand -base64 32 | pass insert -m gordon/auth/token_secret
 gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
 ```
 
-### 4. Create Environment Files
+### 4. Set App Secrets
+
+Declare public values under `[env]` and secret names under `[services.<name>.secrets]` in each app file, apply it, then set the values:
 
 ```bash
-# App environment
-cat > ~/.gordon/env/app_company_com.env <<EOF
-NODE_ENV=production
-PORT=3000
-DATABASE_URL=postgresql://company-postgres:5432/app
-DATABASE_PASSWORD=\${pass:company/db-password}
-REDIS_URL=redis://company-redis:6379
-EOF
-
-# API environment
-cat > ~/.gordon/env/api_company_com.env <<EOF
-NODE_ENV=production
-PORT=8080
-DATABASE_URL=postgresql://company-postgres:5432/api
-DATABASE_PASSWORD=\${pass:company/db-password}
-REDIS_URL=redis://company-redis:6379
-EOF
+gordon apps apply --file ./app.toml
+pass show company/db-password \
+  | gordon apps secrets set app --service web --stdin --key DATABASE_PASSWORD
 ```
 
 ### 5. Configure Cloudflare
@@ -148,7 +132,7 @@ vim ~/.config/gordon/gordon.toml
 # Change: "app.company.com" = "company-app:v2.2.0"
 
 # Reload to deploy
-gordon reload
+gordon daemon reload
 ```
 
 ## Related

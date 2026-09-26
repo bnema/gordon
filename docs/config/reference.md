@@ -111,12 +111,6 @@ logs = true                                  # Export Gordon, access, and app lo
 trace_sample_rate = 1.0                      # Fraction of traces to sample (0.0–1.0)
 
 # =============================================================================
-# ENVIRONMENT
-# =============================================================================
-[env]
-dir = ""                                     # Env files directory (default: {data_dir}/env)
-
-# =============================================================================
 # CONTAINERS
 # =============================================================================
 [containers]
@@ -127,7 +121,7 @@ security_profile = "compat"                  # "compat" or "strict"
 # =============================================================================
 [network_isolation]
 enabled = true                               # Installation network policy for Gordon-managed networks
-network_prefix = "gordon"                    # Prefix filter for `gordon networks list`
+network_prefix = "gordon"                    # Prefix filter for `gordon daemon networks`
 internal = false                             # Create Docker internal networks (blocks direct egress)
 
 # =============================================================================

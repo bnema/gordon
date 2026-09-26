@@ -57,7 +57,7 @@ Manifests written for an early v3 alpha used `[[service]]` with a `name` field; 
 
 ## 2. Migrate domain secrets
 
-Gordon does not convert domain-scoped secrets into app secrets. Inventory the old key names, declare them under `[services.<name>.secrets]`, then apply the manifest before setting values:
+Gordon does not convert domain-scoped secrets into app secrets, and v3 has no command to list them. With the `pass` backend, inventory the old key names with `pass ls gordon/env`, declare them under `[services.<name>.secrets]`, then apply the manifest before setting values:
 
 ```bash
 gordon apps apply --file ./example-app.toml --remote production
