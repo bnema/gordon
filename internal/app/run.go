@@ -292,6 +292,7 @@ type Config struct {
 type services struct {
 	runtime               *docker.Runtime
 	eventBus              *eventbus.InMemory
+	metrics               *telemetry.Metrics
 	blobStorage           *filesystem.BlobStorage
 	manifestStorage       *filesystem.ManifestStorage
 	backupStorage         *filesystem.BackupStorage
@@ -888,6 +889,7 @@ func (si *serviceInit) initApps() error {
 	}
 	store.WithRevisionRetention(si.cfg.Apps.RevisionRetention)
 	si.svc.appState = store
+	observeManagedContainers(si.svc.metrics, store, si.log)
 	// One process-wide GC barrier owns the ordering between resource
 	// acquisition/publication and destructive prune.
 	si.svc.gcBarrier = newGCBarrier()
@@ -1206,6 +1208,20 @@ func injectTelemetryMetrics(cfg Config, svc *services, log zerowrap.Logger) {
 	}
 	svc.registrySvc.SetMetrics(gordonMetrics)
 	svc.eventBus.SetMetrics(gordonMetrics)
+	svc.metrics = gordonMetrics
+}
+
+// observeManagedContainers exports the managed-container gauge from app
+// state. No-op when metrics are disabled.
+func observeManagedContainers(metrics *telemetry.Metrics, state out.AppStateReader, log zerowrap.Logger) {
+	if metrics == nil {
+		return
+	}
+	if err := metrics.ObserveManagedContainers(func(ctx context.Context) (int64, error) {
+		return apps.CountManagedContainers(ctx, state)
+	}); err != nil {
+		log.Warn().Err(err).Msg("failed to register managed container gauge")
+	}
 }
 
 func setupInternalRegistryAuth(svc *services, log zerowrap.Logger) error {
