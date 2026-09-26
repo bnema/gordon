@@ -2,16 +2,16 @@
 
 Gordon deploys apps in two explicit steps: push the image to its built-in registry, then apply the app manifest and deploy. Push transfers OCI content only — it never deploys, creates routes, or modifies manifests.
 
-## Recommended: gordon push + apps deploy
+## Recommended: gordon images push + apps deploy
 
-`gordon push --build --remote` builds, pushes, and stores the image from CI/CD pipelines. Activation is a separate explicit step with the Gordon CLI.
+`gordon images push --build --remote` builds, pushes, and stores the image from CI/CD pipelines. Activation is a separate explicit step with the Gordon CLI.
 
 - Single secret (`GORDON_TOKEN`): auto-exchanges for a short-lived registry token
 - Auto-detects version from CI environment (`$GITHUB_REF`, `$CI_COMMIT_TAG`, `$BUILD_SOURCEBRANCH`, or `git describe`)
 - Chunked uploads (50MB chunks) — works behind Cloudflare and restrictive proxies
 
 ```bash
-gordon push --build --remote https://gordon.example.com
+gordon images push --build --remote https://gordon.example.com
 ```
 
 Then activate (from CI with the Gordon binary, or from your machine):
@@ -25,10 +25,10 @@ gordon apps deploy blog --remote https://gordon.example.com
 
 | Method | Best For | Secrets Needed | Registry Access | Deploy Control |
 |--------|----------|----------------|-----------------|----------------|
-| `gordon push` + `apps deploy` (Recommended) | CI/CD pipelines | 1 (`GORDON_TOKEN`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
+| `gordon images push` + `apps deploy` (Recommended) | CI/CD pipelines | 1 (`GORDON_TOKEN`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 | `docker push` + `apps deploy` | Simple setups, existing Docker workflows | 2 (`username` + `token`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 
-### Method 1: gordon push + apps deploy (Recommended)
+### Method 1: gordon images push + apps deploy (Recommended)
 
 The Gordon CLI handles authentication, image building, and registry upload in a single step. Deploy stays explicit.
 
@@ -38,7 +38,7 @@ The Gordon CLI handles authentication, image building, and registry upload in a 
 
 ```bash
 # Build and push (OCI transfer only)
-gordon push --build --remote https://gordon.example.com
+gordon images push --build --remote https://gordon.example.com
 
 # Apply the manifest that references the pushed tag, then deploy
 gordon apps apply --file blog.toml --remote https://gordon.example.com

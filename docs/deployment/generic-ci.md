@@ -8,7 +8,7 @@ Deploy with Gordon from any CI/CD system.
 - Network access to the public Gordon HTTPS domain; do not expose or target the loopback `server.registry_port`
 - Gordon binary (optional but recommended)
 
-## Recommended: gordon push
+## Recommended: gordon images push
 
 ### 1. Generate Deployment Token
 
@@ -40,7 +40,7 @@ chmod +x /usr/local/bin/gordon
 
 # 2. Build, push, and deploy
 export GORDON_TOKEN="$GORDON_TOKEN"
-gordon push --build \
+gordon images push --build \
   --remote "$GORDON_REMOTE" \
 
 ```
@@ -52,7 +52,7 @@ Gordon auto-detects the version from CI environment variables:
 | GitHub Actions | `$GITHUB_REF` | `refs/tags/v1.2.0` |
 | GitLab CI | `$CI_COMMIT_TAG` | `v1.2.0` |
 | Azure DevOps | `$BUILD_SOURCEBRANCH` | `refs/tags/v1.2.0` |
-| Other | `--tag` flag | `gordon push --tag v1.2.0` |
+| Other | `--tag` flag | `gordon images push --tag v1.2.0` |
 
 ## Alternative: docker push
 
@@ -89,7 +89,7 @@ pipeline {
                     curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 \
                       -o /usr/local/bin/gordon
                     chmod +x /usr/local/bin/gordon
-                    gordon push --build --remote "$GORDON_REMOTE"
+                    gordon images push --build --remote "$GORDON_REMOTE"
                 '''
             }
         }
@@ -119,7 +119,7 @@ jobs:
       - run:
           name: Deploy
           command: |
-            gordon push --build \
+            gordon images push --build \
               --remote "$GORDON_REMOTE"
 
 workflows:
@@ -152,7 +152,7 @@ steps:
       - apk add --no-cache curl
       - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
       - chmod +x /usr/local/bin/gordon
-      - gordon push --build --remote "$GORDON_REMOTE"
+      - gordon images push --build --remote "$GORDON_REMOTE"
 
 trigger:
   event:
@@ -188,7 +188,7 @@ gordon apps deploy myapp --remote "$GORDON_REMOTE"
 
 Gordon could not detect a version tag. Either:
 - Tag your git repo: `git tag v1.0.0 && git push --tags`
-- Pass explicitly: `gordon push --tag v1.0.0`
+- Pass explicitly: `gordon images push --tag v1.0.0`
 
 ### Large images time out
 
@@ -200,4 +200,4 @@ Gordon uploads in 50MB chunks. For very large images (> 1GB), the push may take 
 - [GitLab CI](./gitlab-ci.md)
 - [Deployment Overview](./index.md)
 - [Authentication](../config/auth.md)
-- [Push Command](../cli/push.md)
+- [Images Commands](../cli/images.md#gordon-images-push)

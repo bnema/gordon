@@ -1,6 +1,6 @@
 # GitHub Actions Deployment
 
-Two approaches for deploying with GitHub Actions: the `gordon push` CLI (recommended) or a Docker-based workflow using Gordon's official action.
+Two approaches for deploying with GitHub Actions: the `gordon images push` CLI (recommended) or a Docker-based workflow using Gordon's official action.
 
 ## Prerequisites
 
@@ -8,9 +8,9 @@ Two approaches for deploying with GitHub Actions: the `gordon push` CLI (recomme
 2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
-## Recommended: gordon push
+## Recommended: gordon images push
 
-Use the `gordon push` CLI for a lightweight, single-step build and deploy.
+Use the `gordon images push` CLI for a lightweight, single-step build and deploy.
 
 ### 1. Generate Token
 
@@ -71,7 +71,7 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }}
 ```
 
@@ -102,7 +102,7 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --tag latest
 ```
@@ -149,7 +149,7 @@ jobs:
 
 #### Monorepo
 
-Deploy multiple services with separate `gordon push` calls:
+Deploy multiple services with separate `gordon images push` calls:
 
 ```yaml
 name: Deploy Services
@@ -171,7 +171,7 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/api/Dockerfile \
             myapp-api
@@ -180,7 +180,7 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/web/Dockerfile \
             myapp-web
@@ -195,7 +195,7 @@ Pass build arguments to the Docker build:
   env:
     GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
   run: |
-    gordon push --build \
+    gordon images push --build \
       --remote ${{ secrets.GORDON_REMOTE }} \
       --build-arg NODE_ENV=production \
       --build-arg API_URL=https://api.example.com \
@@ -478,5 +478,5 @@ Error: unauthorized: authentication required
 - [Generic CI](./generic-ci.md)
 - [Deployment Overview](./index.md)
 - [Authentication](../config/auth.md)
-- [Push Command](../cli/push.md)
+- [Images Commands](../cli/images.md#gordon-images-push)
 - [Rollback](./rollback.md)

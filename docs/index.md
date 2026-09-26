@@ -70,7 +70,6 @@ Gordon runs on your VPS and provides:
 ### Reference
 
 - [Docker Labels](./reference/docker-labels.md) - Container and image labels
-- [Environment Variables](./reference/env-variables.md) - Environment variable syntax
 - [Troubleshooting](./reference/troubleshooting.md) - Common issues and solutions
 
 ## Requirements

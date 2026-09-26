@@ -13,7 +13,9 @@ Follow [Migrate to Gordon v3](./migrate-to-v3.md) for the complete cutover proce
 - App-workload keys in `gordon.toml`: `[routes]`, `[attachments]`, `[network_groups]`, `[service_routes]`, `[auto_route]` (+ `_allowed_domains`), and `[previews]`. Gordon fails boot/reload closed with a `config-retired` diagnostic naming the fix when any of them is present — never a silent migration.
 - Installation-level `[[services]]` (standalone L4 workloads) and `[[network_services]]` (L4 traffic plane) stay valid. Only their old app-workload semantics were removed; declare application workloads in standalone files instead. See [Standalone Services](./config/services.md).
 - CLI: `pin`, `preview`, `attachments`, `bootstrap`, `autoroute allow`, `routes add/remove/purge`, push deploy/route inference, implicit deploys on push/reload, label/env-file inference. Removed HTTP mutation endpoints answer `410 Gone`.
-- Scopes `admin:routes:*` are replaced by `admin:apps:read` (list, show, diff, status) and `admin:apps:write` (apply, deploy, lifecycle, secrets). Regenerate CI tokens, e.g. `--scopes "push,pull,admin:apps:read,admin:apps:write"`.
+- Domain secrets: `gordon secrets`, `/admin/secrets` (now `410 Gone`), the `admin:secrets:*` scopes, the `[env]` config section, and startup `.env` import into pass. Use `gordon apps secrets`. Existing `gordon/env/...` pass entries are left untouched.
+- CLI layout: `gordon push` is now `gordon images push`. `status`, `logs`, `reload`, `config`, `tls status`, `traffic status`, and `networks list` moved under `gordon daemon` (`gordon daemon status`, `gordon daemon tls`, `gordon daemon traffic`, `gordon daemon networks`, …). There are no aliases.
+- Scopes `admin:routes:*` and `admin:secrets:*` are replaced by `admin:apps:read` (list, show, diff, status) and `admin:apps:write` (apply, deploy, lifecycle, secrets). Regenerate CI tokens, e.g. `--scopes "push,pull,admin:apps:read,admin:apps:write"`.
 - No historical rollback command: roll back by applying a manifest that references the previous tag and deploying again.
 
 ### Migrating a v3 alpha app manifest
@@ -52,7 +54,7 @@ Names containing dots must be quoted: `[services."web.api"]` and `[[services."we
 ### Manual migration
 
 1. Back up databases/volumes and pass entries with the existing procedures. Record original ownership and image versions. No update hook deletes volumes: unknown resources are preserved, never adopted.
-2. Delete the removed keys from `gordon.toml` (installation settings only: entrypoints, TLS, limits, external routes, images policy, backups destinations stay).
+2. Delete the removed keys, including `[env]`, from `gordon.toml` (installation settings only: entrypoints, TLS, limits, external routes, images policy, backups destinations stay).
 3. Write one `<app>.toml` per app (see [App Manifest](./config/apps.md)): services, `[[services.<name>.http]]` hosts, `[services.<name>.secrets]` names, volumes, `[[network.shared]]`, backup declarations.
 4. Migrate secret values explicitly with `gordon apps secrets set` after applying each manifest. Gordon does not copy `gordon/env/<domain>/...` entries into `gordon/apps/<uuid>/<service>/...`; follow the [v3 secrets migration procedure](./migrate-to-v3.md#2-migrate-domain-secrets).
 5. `gordon apps apply --file <app>.toml`, then `gordon apps deploy <app>`.
@@ -150,7 +152,7 @@ registry_domain = "gordon.example.com"
 gordon_domain = "gordon.example.com"
 ```
 
-If you do not migrate, `gordon status --remote ...` and `gordon apps list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
+If you do not migrate, `gordon daemon status --remote ...` and `gordon apps list --remote ...` can fail with `/auth/token` `404`, and `reg-domain/v2/` or `/admin/status` can return `404`.
 
 ### Staged Registry Host Rename
 
@@ -477,7 +479,7 @@ If using pass or sops, update your secret paths:
    ```
 6. **Check logs** for any errors:
    ```bash
-   gordon logs
+   gordon daemon logs
    ```
 
 ## Getting Help

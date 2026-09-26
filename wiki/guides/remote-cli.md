@@ -9,7 +9,7 @@ Store the server URL and credentials with Gordon's remote configuration commands
 Verify connectivity:
 
 ```bash
-gordon status --remote https://gordon.example.com --token "$GORDON_TOKEN"
+gordon daemon status --remote https://gordon.example.com --token "$GORDON_TOKEN"
 ```
 
 ## App management
@@ -46,10 +46,10 @@ gordon backups volume status
 
 ## Logs
 
-`gordon logs` streams daemon process logs. Workload logs use the app command:
+`gordon daemon logs` streams daemon process logs. Workload logs use the app command:
 
 ```bash
-gordon logs --remote https://gordon.example.com --token "$GORDON_TOKEN"
+gordon daemon logs --remote https://gordon.example.com --token "$GORDON_TOKEN"
 gordon apps logs APP --service SERVICE --remote https://gordon.example.com --token "$GORDON_TOKEN"
 ```
 

@@ -87,7 +87,7 @@ On your Gordon server, edit `~/.config/gordon/gordon.toml`:
 Reload Gordon:
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### 5. Push to Deploy
@@ -130,7 +130,7 @@ docker login -u deploy -p <token> registry.mydomain.com
 
 2. Check Gordon logs:
    ```bash
-   gordon logs -f
+   gordon daemon logs -f
    ```
 
 3. Ensure DNS points to your server
@@ -159,6 +159,6 @@ Gordon replaces the running container: it withdraws traffic, stops and removes t
 
 ## Next Steps
 
-- [Add environment variables](/docs/config/env.md)
+- [Add environment variables](/docs/config/apps.md)
 - [Add a database](./postgres-service.md)
 - [Set up CI/CD](/docs/deployment/github-actions.md)

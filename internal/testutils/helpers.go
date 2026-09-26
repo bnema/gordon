@@ -59,10 +59,6 @@ auto_create = true
 prefix = "gordon"
 preserve = true
 
-[env]
-dir = "/tmp/env"
-providers = ["pass", "sops"]
-
 [logging]
 enabled = true
 level = "info"`

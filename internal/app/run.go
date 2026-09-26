@@ -474,6 +474,7 @@ var retiredAppConfigKeys = []struct {
 	{"auto_route", "feature removed; declare explicit interfaces"},
 	{"auto_route_allowed_domains", "feature removed; declare explicit interfaces"},
 	{"previews", "staging is an ordinary app file"},
+	{"env", "remove the [env] section; declare [env] and [services.<name>.secrets] in app files"},
 }
 
 // validateRetiredAppConfig rejects obsolete application configuration

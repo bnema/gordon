@@ -1,6 +1,6 @@
 # Secrets Configuration
 
-Configure how Gordon stores and retrieves sensitive data. Two separate stores exist: installation secrets (this page) and app secret values (managed with `gordon apps secrets`, values in pass under `gordon/apps/<uuid>/<service>/<name>`).
+Configure how Gordon stores and retrieves sensitive data: auth secrets such as `token_secret` (this page) and app secret values (managed with `gordon apps secrets`, values in pass under `gordon/apps/<uuid>/<service>/<name>`).
 
 ## Configuration
 
@@ -52,10 +52,6 @@ token_secret = "gordon/auth/token_secret"  # Path in pass store
 - Standard Unix tooling
 - Works with team GPG keys
 
-**Installation secrets storage:**
-- `gordon secrets set <domain> --from-file` stores per-domain secrets in pass under `gordon/env/<sanitized-domain>/<KEY>` (dots/colons/slashes → underscores)
-- Eligible plaintext `.env` files are imported into pass at startup and removed only after all entries are stored successfully; conflicts or failures leave the source file for operator review
-
 ### SOPS
 
 Uses Mozilla SOPS for encrypted file-based secrets:
@@ -73,12 +69,6 @@ brew install sops  # macOS
 
 # Create encrypted secrets file
 sops secrets.yaml
-```
-
-**Usage in env files:**
-```bash
-API_SECRET=${sops:secrets.yaml:api.secret}
-DB_PASSWORD=${sops:secrets.yaml:database.password}
 ```
 
 **Benefits:**
@@ -116,26 +106,6 @@ echo "your-token-secret" > ~/.gordon/secrets/gordon/auth/token_secret
 ```
 
 > **Warning:** Only use for local development. Secrets are stored in plain text.
-
-## Secret Provider Syntax
-
-In environment files, reference secrets using provider syntax:
-
-### Pass Provider
-
-```bash
-# ${pass:<path>}
-DATABASE_PASSWORD=${pass:myapp/database/password}
-API_KEY=${pass:myapp/api-key}
-```
-
-### SOPS Provider
-
-```bash
-# ${sops:<file>:<key.path>}
-DATABASE_PASSWORD=${sops:secrets.yaml:database.password}
-API_SECRET=${sops:production.yaml:api.key}
-```
 
 ## App Secret Values
 

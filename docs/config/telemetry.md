@@ -110,7 +110,7 @@ Set `auth_token` to the Base64-encoded `user:password` string. Gordon sends it a
 
 For OpenObserve, copy the token from **Ingestion > OTLP** in the web UI.
 
-Since Gordon itself is the platform (not a managed container), it does not use `gordon secrets set`. Store the token with one of these methods:
+Gordon itself is the platform, not an app, so the token does not go through `gordon apps secrets`. Store it with one of these methods:
 
 | Method | How |
 |--------|-----|

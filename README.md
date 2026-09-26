@@ -38,7 +38,7 @@ Build locally, push to your Gordon server, declare the app, deploy:
 
 ```bash
 # Push the image (OCI transfer only, never deploys)
-gordon push myapp --build --remote prod
+gordon images push myapp --build --remote prod
 
 # Declare the app (blog.toml references the pushed tag)
 gordon apps apply --file blog.toml --remote prod
@@ -47,7 +47,7 @@ gordon apps apply --file blog.toml --remote prod
 gordon apps deploy blog --remote prod
 
 # Check status
-gordon status
+gordon daemon status
 gordon apps status blog --remote prod
 ```
 
@@ -106,8 +106,10 @@ gordon apps deploy blog --remote prod
 | Command | Description |
 |---------|-------------|
 | `gordon serve` | Start the Gordon server |
-| `gordon status` | Show server and app fleet status |
-| `gordon config show` | Display installation configuration |
+| `gordon daemon status` | Show server and app fleet status |
+| `gordon daemon logs` | Show Gordon process logs |
+| `gordon daemon reload` | Reload installation configuration |
+| `gordon daemon config show` | Display installation configuration |
 
 ### Applications
 
@@ -123,23 +125,22 @@ gordon apps deploy blog --remote prod
 | `gordon apps stop APP` | Stop, preserve all data |
 | `gordon apps start APP` | Start a stopped app |
 | `gordon apps remove APP` | Remove workloads (volumes/secrets retained) |
-| `gordon push [image]` | Tag and push an image (never deploys) |
 
 ### Images & Registry
 
 | Command | Description |
 |---------|-------------|
+| `gordon images push [image]` | Tag and push an image (never deploys) |
 | `gordon images list` | List runtime and registry images |
 | `gordon images prune` | Clean up dangling images and old tags |
 | `gordon images tags <repo>` | List registry tags for a repository |
 
-### Secrets & Config
+### Secrets
 
 | Command | Description |
 |---------|-------------|
+| `gordon apps secrets list APP` | List app secret names |
 | `gordon apps secrets set APP --service SVC KEY=VAL` | Set app secret values |
-| `gordon secrets list <domain>` | List installation secret keys |
-| `gordon secrets set <domain> --from-file PATH` | Set installation secrets |
 
 ### Remotes & Auth
 

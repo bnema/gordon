@@ -164,10 +164,10 @@ Secret values stay in pass under `gordon/apps/<uuid>/<service>/<name>`, keyed by
 Gordon watches `gordon.toml` and reloads installation-only settings (entrypoints, TLS, limits, external routes). Reload never activates pending app desired state, never re-resolves image tags, and never starts app workloads.
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
-`gordon reload` sends `SIGUSR1` to the running Gordon process. `gordon.toml` holds installation settings only — app workloads live in app files.
+`gordon daemon reload` sends `SIGUSR1` to the running Gordon process. `gordon.toml` holds installation settings only — app workloads live in app files.
 
 ## Event System
 

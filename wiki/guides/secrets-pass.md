@@ -106,17 +106,17 @@ token_secret = "gordon/auth/token_secret"
 # password_hash = "gordon/auth/password_hash"
 ```
 
-### Using Route Secrets
+### Using App Secrets
 
-With the pass backend, per-domain secrets are stored in pass, not `.env` files.
+Declare secret names in the app file under `[services.<name>.secrets]`, apply it, then set the values. Values are stored in pass under `gordon/apps/<uuid>/<service>/<name>`.
 
 ```bash
-# Store secrets for a domain
-gordon secrets set app.mydomain.com DATABASE_URL "postgresql://user:pass@postgres:5432/app"
-gordon secrets set app.mydomain.com API_KEY "your-api-key"
+gordon apps apply --file ./blog.toml
+printf 'DATABASE_URL=%s\n' "$(pass show myapp/database-url)" \
+  | gordon apps secrets set blog --service web --stdin
 ```
 
-Gordon migrates existing `.env` files on startup and renames them to `.env.migrated`.
+See [App Manifest](/docs/config/apps.md) and [Apps CLI](/docs/cli/apps.md).
 
 ## Organizing Secrets
 

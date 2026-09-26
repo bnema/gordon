@@ -364,7 +364,7 @@ never accepted. `--service` is required when the app has several services.
 
 ```bash
 # Push the image first (OCI transfer only)
-gordon push myapp --build --remote prod
+gordon images push myapp --build --remote prod
 
 # Apply the manifest that references the pushed tag
 gordon apps apply --file blog.toml --remote prod
@@ -386,5 +386,5 @@ gordon apps status blog --remote prod
 ## Related
 
 - [CLI Overview](./index.md)
-- [Push Command](./push.md)
+- [Images Commands](./images.md#gordon-images-push)
 - [Deployment](../deployment/index.md)

@@ -45,7 +45,7 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
 
@@ -73,7 +73,7 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
 
@@ -96,7 +96,7 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
 
@@ -117,7 +117,7 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
 
@@ -137,7 +137,7 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
         --build-arg NODE_ENV=production
@@ -208,4 +208,4 @@ GitLab CI clones your repository automatically. The build context defaults to th
 - [Generic CI](./generic-ci.md)
 - [Deployment Overview](./index.md)
 - [Authentication](../config/auth.md)
-- [Push Command](../cli/push.md)
+- [Images Commands](../cli/images.md#gordon-images-push)
