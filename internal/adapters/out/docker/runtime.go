@@ -777,6 +777,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		VolumeMounts: volumeMounts,
 		Created:      created,
 		StartedAt:    startedAt,
+		Env:          resp.Config.Env,
 	}, nil
 }
 

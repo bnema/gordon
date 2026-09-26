@@ -358,6 +358,10 @@ type DeployResult struct {
 	Removed []string
 }
 
+// ServiceResultUnchanged marks a deploy step that kept the running
+// container because its image, spec, and environment were already current.
+const ServiceResultUnchanged = domain.AppServiceUnchanged
+
 // ServiceResult is one service's terminal deployment result.
 type ServiceResult struct {
 	Result            string
@@ -628,15 +632,18 @@ func (s *Service) checkConverged(ctx context.Context, app, service string, rev d
 	}
 	diff := domain.DiffAppSpec(rev.Spec, effectiveAppSpec(active))
 	prefix := "service/" + service + "/"
-	if len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) > 0 {
-		for _, path := range diff.Changed {
-			if !strings.HasPrefix(path, prefix) {
-				return targetedDivergenceError(rev.Revision, path)
-			}
-		}
-		return nil
+	if len(diff.Added) > 0 {
+		return targetedDivergenceError(rev.Revision, diff.Added[0]+" (added)")
 	}
-	return targetedDivergenceError(rev.Revision, "application structure")
+	if len(diff.Removed) > 0 {
+		return targetedDivergenceError(rev.Revision, diff.Removed[0]+" (removed)")
+	}
+	for _, path := range diff.Changed {
+		if !strings.HasPrefix(path, prefix) {
+			return targetedDivergenceError(rev.Revision, path)
+		}
+	}
+	return nil
 }
 
 func effectiveAppSpec(active domain.AppActive) domain.AppSpec {
@@ -929,7 +936,7 @@ func ComputeOutcome(results map[string]ServiceResult) string {
 	failed := 0
 	for _, result := range results {
 		switch result.Result {
-		case "deployed":
+		case "deployed", ServiceResultUnchanged:
 			deployed++
 		case "failed":
 			failed++

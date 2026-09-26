@@ -655,7 +655,10 @@ func runAppsSecretsSetMode(ctx context.Context, plane ControlPlane, stdin io.Rea
 	if jsonOut {
 		return writeJSON(out, map[string]any{"app": app, "service": service, "keys": keys})
 	}
-	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Set %d secret(s) for %s/%s: %s", len(keys), app, service, strings.Join(keys, ", "))))
+	if err := cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Set %d secret(s) for %s/%s: %s", len(keys), app, service, strings.Join(keys, ", ")))); err != nil {
+		return err
+	}
+	return cliWriteLine(out, cliRenderMuted(fmt.Sprintf("Running containers keep their old values. Apply them with: gordon apps deploy %s --service %s", app, service)))
 }
 
 // newAppsSecretsDeleteCmd creates `apps secrets delete`.
@@ -998,6 +1001,9 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 	for _, name := range names {
 		svc := resp.Services[name]
 		detail := svc.Result + " " + svc.EffectiveRevision
+		if svc.Result == domain.AppServiceUnchanged {
+			detail += " (already running this image, config, and secrets)"
+		}
 		if svc.RestartUnsafe {
 			detail += " restart_unsafe"
 		}

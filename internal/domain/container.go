@@ -21,6 +21,9 @@ type Container struct {
 	// Readiness scoping uses it so log markers from a previous
 	// execution of the same container ID cannot satisfy a probe.
 	StartedAt time.Time
+	// Env is the container's KEY=value environment as created. It may hold
+	// secret values: compare it in memory only, never persist or log it.
+	Env []string
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.
