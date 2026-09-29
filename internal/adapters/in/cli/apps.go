@@ -62,7 +62,7 @@ func resolveAppPlane() (*controlPlaneHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &controlPlaneHandle{plane: NewRemoteControlPlane(client)}, nil
+	return &controlPlaneHandle{plane: client}, nil
 }
 
 // appMutationError translates ambiguous transport outcomes into the
@@ -1139,8 +1139,7 @@ func newAppLogsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			plane := NewRemoteControlPlane(client)
-			return runAppLogs(cmd.Context(), plane, &remoteAppLogReader{client: client}, args[0], service, follow, tail, cmd.OutOrStdout(), jsonOut)
+			return runAppLogs(cmd.Context(), client, &remoteAppLogReader{client: client}, args[0], service, follow, tail, cmd.OutOrStdout(), jsonOut)
 		},
 	}
 	cmd.Flags().StringVar(&service, "service", "", "Service to read logs from (required when the app has several)")

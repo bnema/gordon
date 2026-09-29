@@ -135,8 +135,8 @@ func TestControlPlane_LocalAndRemoteDTOParity(t *testing.T) {
 	go func() { _ = unixSrv.Serve(ln) }()
 	t.Cleanup(func() { _ = unixSrv.Close() })
 
-	localPlane := NewRemoteControlPlane(remote.NewLocalClientForSocket(localadmin.SocketPath(dir)))
-	remotePlane := NewRemoteControlPlane(remote.NewClient(tcp.URL))
+	localPlane := remote.NewLocalClientForSocket(localadmin.SocketPath(dir))
+	remotePlane := remote.NewClient(tcp.URL)
 
 	ctx := context.Background()
 
