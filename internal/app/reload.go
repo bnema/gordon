@@ -265,11 +265,11 @@ type reloadPlan struct {
 func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 	plan, err := r.prepare(ctx, cfg)
 	if err != nil {
-		return err
+		return fmt.Errorf("prepare reload: %w", err)
 	}
 	if r.svc.containerSvc != nil {
 		if err := r.applyServing(ctx, cfg, plan.containerCfg); err != nil {
-			return err
+			return fmt.Errorf("apply serving config: %w", err)
 		}
 	}
 	r.applyAppPolicies(plan)
