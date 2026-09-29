@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -670,8 +669,8 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 		return nil, err
 	}
 
-	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, si.svc.publicTLSSvc, log)
-	si.registerReloadCoordinatorHooks()
+	runtime := &reloadRuntime{v: v, svc: si.svc, log: log}
+	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, si.svc.publicTLSSvc, runtime.Apply, log)
 
 	si.initHandlers()
 
@@ -1080,64 +1079,6 @@ func (si *serviceInit) initRuntimeAndProxy() error {
 
 	// Wire synchronous proxy cache invalidation for zero-downtime deployments.
 	return nil
-}
-
-// initHandlers creates the auth, health, log, preview, and admin handlers.
-func (si *serviceInit) registerReloadCoordinatorHooks() {
-	if si.svc.reloadCoordinator == nil {
-		return
-	}
-	if si.svc.appSvcImpl != nil {
-		si.svc.reloadCoordinator.SetAppMountPoliciesApplier(func(_ context.Context, reloadCfg Config) error {
-			policies, err := buildAppMountPolicies(reloadCfg)
-			if err != nil {
-				return err
-			}
-			devicePolicies, err := buildAppDevicePolicies(reloadCfg)
-			if err != nil {
-				return err
-			}
-			si.svc.appSvcImpl.SetBindPolicies(policies)
-			si.svc.appSvcImpl.SetDevicePolicies(devicePolicies)
-			if si.svc.appDeploySvc != nil {
-				si.svc.appDeploySvc.SetBindPolicies(policies)
-				si.svc.appDeploySvc.SetDevicePolicies(devicePolicies)
-			}
-			return nil
-		})
-	}
-	if si.svc.containerSvc == nil {
-		return
-	}
-
-	si.svc.reloadCoordinator.SetContainerConfigApplier(func(reloadCtx context.Context, reloadCfg Config) error {
-		containerCfg, err := buildContainerServiceConfig(reloadCtx, si.v, reloadCfg, si.svc, si.log)
-		if err != nil {
-			return err
-		}
-		managementHosts := []string{reloadCfg.Server.GordonDomain}
-		if si.svc.pkiSvc != nil {
-			si.svc.pkiSvc.SetAdditionalDomains(managementHosts)
-		}
-		if si.svc.publicTLSSvc != nil {
-			si.svc.publicTLSSvc.SetAdditionalHosts(reloadCtx, managementHosts)
-		}
-		var tlsConfig *tls.Config
-		if hasTLSCapableEntrypoint(reloadCfg) && si.svc.httpsProxyHandler != nil {
-			var tlsErr error
-			tlsConfig, tlsErr = proxyTLSConfig(reloadCfg, si.svc.pkiSvc, si.svc.publicTLSSvc, si.log)
-			if tlsErr != nil {
-				return tlsErr
-			}
-		}
-		if err := si.svc.appTrafficPublisher.RebuildWithConfig(reloadCtx, reloadCfg); err != nil {
-			return err
-		}
-		si.svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpsProxyHandler, tlsConfig, si.svc.tlsHTTPEntryPoints)
-		si.svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(si.svc.trafficManager, reloadCfg, si.svc.httpProxyHandler, si.svc.httpsProxyHandler, tlsConfig, si.svc.smartHTTPEntryPoints)
-		si.svc.containerSvc.UpdateConfig(containerCfg)
-		return nil
-	})
 }
 
 func (si *serviceInit) initHandlers() {
@@ -1827,252 +1768,6 @@ type proxyConfigResult struct {
 	maxBlobSize      int64
 }
 
-type configWatcher interface {
-	Watch(ctx context.Context, onChange func()) error
-}
-
-// publicTLSReconciler is the interface for reconciling public TLS certificates.
-type publicTLSReconciler interface {
-	Reconcile(context.Context) error
-}
-
-type configReloader interface {
-	Reload(ctx context.Context) error
-}
-
-type proxyConfigUpdater interface {
-	UpdateConfig(config proxy.Config)
-}
-
-type reloadTrigger interface {
-	Trigger(ctx context.Context) error
-}
-
-type loadedConfigApplier interface {
-	ApplyLoadedConfig(ctx context.Context) error
-}
-
-type reloadCoordinator struct {
-	mu                 sync.Mutex
-	lastRun            time.Time
-	debounce           time.Duration
-	trailingTimer      *time.Timer
-	trailingGeneration uint64
-	stopped            bool
-
-	// lifecycleCtx owns the context used by debounced trailing reloads. Its
-	// base is detached from any caller's cancellation so a short-lived request
-	// context cannot abort a coalesced apply, while lifecycleCancel lets Stop
-	// tear the coordinator's own lifecycle down explicitly.
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
-
-	configSvc            configReloader
-	v                    *viper.Viper
-	proxySvc             proxyConfigUpdater
-	applyContainerConfig func(context.Context, Config) error
-	applyAppMountPolicy  func(context.Context, Config) error
-	registryLimits       interface {
-		UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
-	}
-	eventBus  out.EventPublisher
-	publicTLS publicTLSReconciler
-	log       zerowrap.Logger
-}
-
-func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, registryLimits interface {
-	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
-}, eventBus out.EventPublisher, publicTLS publicTLSReconciler, log zerowrap.Logger) *reloadCoordinator {
-	return &reloadCoordinator{
-		debounce:       500 * time.Millisecond,
-		configSvc:      configSvc,
-		v:              v,
-		proxySvc:       proxySvc,
-		registryLimits: registryLimits,
-		eventBus:       eventBus,
-		publicTLS:      publicTLS,
-		log:            log,
-	}
-}
-
-func (c *reloadCoordinator) SetRegistryLimits(limits interface {
-	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
-}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.registryLimits = limits
-}
-
-func (c *reloadCoordinator) SetContainerConfigApplier(apply func(context.Context, Config) error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.applyContainerConfig = apply
-}
-
-// SetAppMountPoliciesApplier wires the callback that atomically republishes
-// validated administrative bind policies after a successful reload.
-func (c *reloadCoordinator) SetAppMountPoliciesApplier(apply func(context.Context, Config) error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.applyAppMountPolicy = apply
-}
-
-// Trigger requests a config reload that first re-reads config from disk.
-func (c *reloadCoordinator) Trigger(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.reloadDebouncedLocked(ctx, true)
-}
-
-// ApplyLoadedConfig requests a reload of the config the watcher already
-// loaded from disk. It shares the debounce/coalescing policy with Trigger so
-// a burst of fsnotify callbacks applies the final state exactly once.
-func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.reloadDebouncedLocked(ctx, false)
-}
-
-// reloadDebouncedLocked is the single owner of the debounce/coalescing policy
-// shared by every reload entrypoint. Requests inside the debounce window are
-// merged into one trailing reload carrying the latest loadConfig intent.
-func (c *reloadCoordinator) reloadDebouncedLocked(ctx context.Context, loadConfig bool) error {
-	now := time.Now()
-	if !c.lastRun.IsZero() && now.Sub(c.lastRun) < c.debounce {
-		c.scheduleTrailingReloadLocked(ctx, loadConfig)
-		return nil
-	}
-
-	return c.reloadLocked(ctx, loadConfig)
-}
-
-func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context, loadConfig bool) {
-	if c.stopped {
-		return
-	}
-	if c.trailingTimer != nil {
-		c.trailingTimer.Stop()
-	}
-	if c.lifecycleCancel == nil {
-		c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.WithoutCancel(ctx))
-	}
-	c.trailingGeneration++
-	generation := c.trailingGeneration
-	trailingCtx := c.lifecycleCtx
-	c.trailingTimer = time.AfterFunc(c.debounce, func() {
-		c.runTrailingReload(trailingCtx, generation, loadConfig)
-	})
-	c.log.Debug().Msg("coalescing config reload trigger")
-}
-
-func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation uint64, loadConfig bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.stopped || generation != c.trailingGeneration {
-		return
-	}
-	c.trailingTimer = nil
-	if err := c.reloadLocked(ctx, loadConfig); err != nil {
-		c.log.Error().Err(err).Msg("failed trailing config reload")
-	}
-}
-
-func (c *reloadCoordinator) Stop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.stopped = true
-	c.trailingGeneration++
-	if c.trailingTimer != nil {
-		c.trailingTimer.Stop()
-		c.trailingTimer = nil
-	}
-	if c.lifecycleCancel != nil {
-		c.lifecycleCancel()
-	}
-}
-
-func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {
-	now := time.Now()
-	if loadConfig {
-		if err := c.configSvc.Reload(ctx); err != nil {
-			c.log.Error().Err(err).Msg("failed to reload config")
-			return fmt.Errorf("failed to reload config: %w", err)
-		}
-	}
-
-	if err := c.applyLoadedConfig(ctx, now); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time) error {
-	var reloadCfg Config
-	if err := c.v.Unmarshal(&reloadCfg); err != nil {
-		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
-		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
-	}
-	if err := validateEntrypointMigration(c.v, reloadCfg); err != nil {
-		return err
-	}
-	if err := validateRetiredAppConfig(c.v); err != nil {
-		return err
-	}
-	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
-		return err
-	}
-
-	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
-	if err != nil {
-		c.log.Error().Err(err).Msg("failed to parse proxy config on reload")
-		return fmt.Errorf("failed to parse proxy config on reload: %w", err)
-	}
-
-	if c.applyContainerConfig != nil {
-		if err := c.applyContainerConfig(ctx, reloadCfg); err != nil {
-			c.log.Error().Err(err).Msg("failed to apply container config on reload")
-			return fmt.Errorf("failed to apply container config on reload: %w", err)
-		}
-	}
-	// Publish the reloaded bind policies only after conversion and shape
-	// validation succeed, so a bad edit keeps the previous policies live.
-	if c.applyAppMountPolicy != nil {
-		if err := c.applyAppMountPolicy(ctx, reloadCfg); err != nil {
-			c.log.Error().Err(err).Msg("failed to apply app mount policies on reload")
-			return fmt.Errorf("failed to apply app mount policies on reload: %w", err)
-		}
-	}
-	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
-	if c.registryLimits != nil {
-		c.registryLimits.UpdateBlobLimits(reloadedProxy.maxBlobChunkSize, reloadedProxy.maxBlobSize)
-	}
-
-	// Reconcile public TLS before publishing reload events so certificate
-	// authorization reflects the loaded config even if event delivery fails.
-	// A transient ACME issue must not abort the rest of the reload.
-	if c.publicTLS != nil {
-		if err := c.publicTLS.Reconcile(ctx); err != nil {
-			c.log.Warn().Err(err).Msg("failed to reconcile public TLS certificates after reload, continuing")
-		}
-	}
-
-	if c.eventBus != nil {
-		if err := c.eventBus.Publish(domain.EventConfigReload, nil); err != nil {
-			c.log.Error().Err(err).Msg("failed to publish config reload event")
-			return fmt.Errorf("failed to publish config reload event: %w", err)
-		}
-	}
-
-	c.lastRun = now
-
-	c.log.Debug().Msg("config hot reload complete")
-	return nil
-}
-
 // buildProxyConfig parses size-related config fields and builds the proxy config.
 func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, error) {
 	maxProxyBodySize := int64(512 << 20) // 512MB default
@@ -2440,17 +2135,6 @@ func registerEventHandlers(ctx context.Context, svc *services) (func(), error) {
 	}
 
 	return cleanup, nil
-}
-
-// setupConfigHotReload sets up config hot reload.
-func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator loadedConfigApplier) error {
-	if err := configSvc.Watch(ctx, func() {
-		_ = coordinator.ApplyLoadedConfig(ctx)
-	}); err != nil {
-		return fmt.Errorf("failed to watch config: %w", err)
-	}
-
-	return nil
 }
 
 func loopbackOnly(next http.Handler, log zerowrap.Logger) http.Handler {
