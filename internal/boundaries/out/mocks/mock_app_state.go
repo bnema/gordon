@@ -47,6 +47,63 @@ func (_m *MockAppState) EXPECT() *MockAppState_Expecter {
 	return &MockAppState_Expecter{mock: &_m.Mock}
 }
 
+// AcceptApply provides a mock function for the type MockAppState
+func (_mock *MockAppState) AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error {
+	ret := _mock.Called(ctx, intent)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AcceptApply")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppApplyIntent) error); ok {
+		r0 = returnFunc(ctx, intent)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAppState_AcceptApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AcceptApply'
+type MockAppState_AcceptApply_Call struct {
+	*mock.Call
+}
+
+// AcceptApply is a helper method to define mock.On call
+//   - ctx context.Context
+//   - intent domain.AppApplyIntent
+func (_e *MockAppState_Expecter) AcceptApply(ctx any, intent any) *MockAppState_AcceptApply_Call {
+	return &MockAppState_AcceptApply_Call{Call: _e.mock.On("AcceptApply", ctx, intent)}
+}
+
+func (_c *MockAppState_AcceptApply_Call) Run(run func(ctx context.Context, intent domain.AppApplyIntent)) *MockAppState_AcceptApply_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.AppApplyIntent
+		if args[1] != nil {
+			arg1 = args[1].(domain.AppApplyIntent)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppState_AcceptApply_Call) Return(err error) *MockAppState_AcceptApply_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAppState_AcceptApply_Call) RunAndReturn(run func(ctx context.Context, intent domain.AppApplyIntent) error) *MockAppState_AcceptApply_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // AppExists provides a mock function for the type MockAppState
 func (_mock *MockAppState) AppExists(ctx context.Context, app string) (bool, error) {
 	ret := _mock.Called(ctx, app)
@@ -298,132 +355,6 @@ func (_c *MockAppState_Close_Call) RunAndReturn(run func() error) *MockAppState_
 	return _c
 }
 
-// CollectGarbage provides a mock function for the type MockAppState
-func (_mock *MockAppState) CollectGarbage(ctx context.Context, app string, inFlight []string) error {
-	ret := _mock.Called(ctx, app, inFlight)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CollectGarbage")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, []string) error); ok {
-		r0 = returnFunc(ctx, app, inFlight)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAppState_CollectGarbage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CollectGarbage'
-type MockAppState_CollectGarbage_Call struct {
-	*mock.Call
-}
-
-// CollectGarbage is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - inFlight []string
-func (_e *MockAppState_Expecter) CollectGarbage(ctx any, app any, inFlight any) *MockAppState_CollectGarbage_Call {
-	return &MockAppState_CollectGarbage_Call{Call: _e.mock.On("CollectGarbage", ctx, app, inFlight)}
-}
-
-func (_c *MockAppState_CollectGarbage_Call) Run(run func(ctx context.Context, app string, inFlight []string)) *MockAppState_CollectGarbage_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 []string
-		if args[2] != nil {
-			arg2 = args[2].([]string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_CollectGarbage_Call) Return(err error) *MockAppState_CollectGarbage_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAppState_CollectGarbage_Call) RunAndReturn(run func(ctx context.Context, app string, inFlight []string) error) *MockAppState_CollectGarbage_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CommitApply provides a mock function for the type MockAppState
-func (_mock *MockAppState) CommitApply(ctx context.Context, app string, intentID string) error {
-	ret := _mock.Called(ctx, app, intentID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CommitApply")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, app, intentID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAppState_CommitApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CommitApply'
-type MockAppState_CommitApply_Call struct {
-	*mock.Call
-}
-
-// CommitApply is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - intentID string
-func (_e *MockAppState_Expecter) CommitApply(ctx any, app any, intentID any) *MockAppState_CommitApply_Call {
-	return &MockAppState_CommitApply_Call{Call: _e.mock.On("CommitApply", ctx, app, intentID)}
-}
-
-func (_c *MockAppState_CommitApply_Call) Run(run func(ctx context.Context, app string, intentID string)) *MockAppState_CommitApply_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_CommitApply_Call) Return(err error) *MockAppState_CommitApply_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAppState_CommitApply_Call) RunAndReturn(run func(ctx context.Context, app string, intentID string) error) *MockAppState_CommitApply_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ListApps provides a mock function for the type MockAppState
 func (_mock *MockAppState) ListApps(ctx context.Context) ([]string, error) {
 	ret := _mock.Called(ctx)
@@ -482,142 +413,6 @@ func (_c *MockAppState_ListApps_Call) Return(strings []string, err error) *MockA
 }
 
 func (_c *MockAppState_ListApps_Call) RunAndReturn(run func(ctx context.Context) ([]string, error)) *MockAppState_ListApps_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ListIntents provides a mock function for the type MockAppState
-func (_mock *MockAppState) ListIntents(ctx context.Context, app string) ([]string, error) {
-	ret := _mock.Called(ctx, app)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListIntents")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
-		return returnFunc(ctx, app)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
-		r0 = returnFunc(ctx, app)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, app)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAppState_ListIntents_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListIntents'
-type MockAppState_ListIntents_Call struct {
-	*mock.Call
-}
-
-// ListIntents is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-func (_e *MockAppState_Expecter) ListIntents(ctx any, app any) *MockAppState_ListIntents_Call {
-	return &MockAppState_ListIntents_Call{Call: _e.mock.On("ListIntents", ctx, app)}
-}
-
-func (_c *MockAppState_ListIntents_Call) Run(run func(ctx context.Context, app string)) *MockAppState_ListIntents_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_ListIntents_Call) Return(strings []string, err error) *MockAppState_ListIntents_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockAppState_ListIntents_Call) RunAndReturn(run func(ctx context.Context, app string) ([]string, error)) *MockAppState_ListIntents_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// ListRevisions provides a mock function for the type MockAppState
-func (_mock *MockAppState) ListRevisions(ctx context.Context, app string) ([]string, error) {
-	ret := _mock.Called(ctx, app)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListRevisions")
-	}
-
-	var r0 []string
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
-		return returnFunc(ctx, app)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) []string); ok {
-		r0 = returnFunc(ctx, app)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]string)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
-		r1 = returnFunc(ctx, app)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAppState_ListRevisions_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRevisions'
-type MockAppState_ListRevisions_Call struct {
-	*mock.Call
-}
-
-// ListRevisions is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-func (_e *MockAppState_Expecter) ListRevisions(ctx any, app any) *MockAppState_ListRevisions_Call {
-	return &MockAppState_ListRevisions_Call{Call: _e.mock.On("ListRevisions", ctx, app)}
-}
-
-func (_c *MockAppState_ListRevisions_Call) Run(run func(ctx context.Context, app string)) *MockAppState_ListRevisions_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_ListRevisions_Call) Return(strings []string, err error) *MockAppState_ListRevisions_Call {
-	_c.Call.Return(strings, err)
-	return _c
-}
-
-func (_c *MockAppState_ListRevisions_Call) RunAndReturn(run func(ctx context.Context, app string) ([]string, error)) *MockAppState_ListRevisions_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -690,78 +485,6 @@ func (_c *MockAppState_LoadActive_Call) Return(appActive domain.AppActive, b boo
 }
 
 func (_c *MockAppState_LoadActive_Call) RunAndReturn(run func(ctx context.Context, app string) (domain.AppActive, bool, error)) *MockAppState_LoadActive_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// LoadApplyIntent provides a mock function for the type MockAppState
-func (_mock *MockAppState) LoadApplyIntent(ctx context.Context, app string, intentID string) (domain.AppApplyIntent, error) {
-	ret := _mock.Called(ctx, app, intentID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for LoadApplyIntent")
-	}
-
-	var r0 domain.AppApplyIntent
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) (domain.AppApplyIntent, error)); ok {
-		return returnFunc(ctx, app, intentID)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) domain.AppApplyIntent); ok {
-		r0 = returnFunc(ctx, app, intentID)
-	} else {
-		r0 = ret.Get(0).(domain.AppApplyIntent)
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string) error); ok {
-		r1 = returnFunc(ctx, app, intentID)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAppState_LoadApplyIntent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadApplyIntent'
-type MockAppState_LoadApplyIntent_Call struct {
-	*mock.Call
-}
-
-// LoadApplyIntent is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - intentID string
-func (_e *MockAppState_Expecter) LoadApplyIntent(ctx any, app any, intentID any) *MockAppState_LoadApplyIntent_Call {
-	return &MockAppState_LoadApplyIntent_Call{Call: _e.mock.On("LoadApplyIntent", ctx, app, intentID)}
-}
-
-func (_c *MockAppState_LoadApplyIntent_Call) Run(run func(ctx context.Context, app string, intentID string)) *MockAppState_LoadApplyIntent_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_LoadApplyIntent_Call) Return(appApplyIntent domain.AppApplyIntent, err error) *MockAppState_LoadApplyIntent_Call {
-	_c.Call.Return(appApplyIntent, err)
-	return _c
-}
-
-func (_c *MockAppState_LoadApplyIntent_Call) RunAndReturn(run func(ctx context.Context, app string, intentID string) (domain.AppApplyIntent, error)) *MockAppState_LoadApplyIntent_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1314,69 +1037,6 @@ func (_c *MockAppState_LoadRevision_Call) RunAndReturn(run func(ctx context.Cont
 	return _c
 }
 
-// MaterializeApply provides a mock function for the type MockAppState
-func (_mock *MockAppState) MaterializeApply(ctx context.Context, app string, intentID string) error {
-	ret := _mock.Called(ctx, app, intentID)
-
-	if len(ret) == 0 {
-		panic("no return value specified for MaterializeApply")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string) error); ok {
-		r0 = returnFunc(ctx, app, intentID)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAppState_MaterializeApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MaterializeApply'
-type MockAppState_MaterializeApply_Call struct {
-	*mock.Call
-}
-
-// MaterializeApply is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - intentID string
-func (_e *MockAppState_Expecter) MaterializeApply(ctx any, app any, intentID any) *MockAppState_MaterializeApply_Call {
-	return &MockAppState_MaterializeApply_Call{Call: _e.mock.On("MaterializeApply", ctx, app, intentID)}
-}
-
-func (_c *MockAppState_MaterializeApply_Call) Run(run func(ctx context.Context, app string, intentID string)) *MockAppState_MaterializeApply_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 string
-		if args[2] != nil {
-			arg2 = args[2].(string)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_MaterializeApply_Call) Return(err error) *MockAppState_MaterializeApply_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAppState_MaterializeApply_Call) RunAndReturn(run func(ctx context.Context, app string, intentID string) error) *MockAppState_MaterializeApply_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // Recover provides a mock function for the type MockAppState
 func (_mock *MockAppState) Recover(ctx context.Context) error {
 	ret := _mock.Called(ctx)
@@ -1886,63 +1546,6 @@ func (_c *MockAppState_SaveRecoveryInhibition_Call) Return(err error) *MockAppSt
 }
 
 func (_c *MockAppState_SaveRecoveryInhibition_Call) RunAndReturn(run func(ctx context.Context, inhibition domain.AppRecoveryInhibition) error) *MockAppState_SaveRecoveryInhibition_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// StageApply provides a mock function for the type MockAppState
-func (_mock *MockAppState) StageApply(ctx context.Context, intent domain.AppApplyIntent) error {
-	ret := _mock.Called(ctx, intent)
-
-	if len(ret) == 0 {
-		panic("no return value specified for StageApply")
-	}
-
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppApplyIntent) error); ok {
-		r0 = returnFunc(ctx, intent)
-	} else {
-		r0 = ret.Error(0)
-	}
-	return r0
-}
-
-// MockAppState_StageApply_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'StageApply'
-type MockAppState_StageApply_Call struct {
-	*mock.Call
-}
-
-// StageApply is a helper method to define mock.On call
-//   - ctx context.Context
-//   - intent domain.AppApplyIntent
-func (_e *MockAppState_Expecter) StageApply(ctx any, intent any) *MockAppState_StageApply_Call {
-	return &MockAppState_StageApply_Call{Call: _e.mock.On("StageApply", ctx, intent)}
-}
-
-func (_c *MockAppState_StageApply_Call) Run(run func(ctx context.Context, intent domain.AppApplyIntent)) *MockAppState_StageApply_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 domain.AppApplyIntent
-		if args[1] != nil {
-			arg1 = args[1].(domain.AppApplyIntent)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppState_StageApply_Call) Return(err error) *MockAppState_StageApply_Call {
-	_c.Call.Return(err)
-	return _c
-}
-
-func (_c *MockAppState_StageApply_Call) RunAndReturn(run func(ctx context.Context, intent domain.AppApplyIntent) error) *MockAppState_StageApply_Call {
 	_c.Call.Return(run)
 	return _c
 }

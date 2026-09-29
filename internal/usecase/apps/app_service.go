@@ -20,7 +20,7 @@ import (
 // daemon owns this implementation; CLI always reaches it via the daemon.
 // All mutations run recovery-before-mutation through the engine.
 type AppServiceImpl struct {
-	store   out.AppState
+	store   out.AppCatalogReader
 	deploy  deployEngine
 	secrets out.SecretWriter
 	log     zerowrap.Logger
@@ -55,8 +55,15 @@ type deployEngine interface {
 	Remove(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
 }
 
+// AppStore is the state the app administration service needs: the
+// read model plus the apply path.
+type AppStore interface {
+	out.AppCatalogReader
+	out.AppApplyStore
+}
+
 // NewAppServiceImpl wires the driving-port implementation.
-func NewAppServiceImpl(store out.AppState, deploy deployEngine, secrets out.SecretWriter, log zerowrap.Logger) *AppServiceImpl {
+func NewAppServiceImpl(store AppStore, deploy deployEngine, secrets out.SecretWriter, log zerowrap.Logger) *AppServiceImpl {
 	daemonCtx, daemonStop := context.WithCancel(context.Background())
 	return &AppServiceImpl{
 		store:      store,

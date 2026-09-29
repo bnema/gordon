@@ -42,10 +42,7 @@ func TestAppServiceImpl_SecretsRoundTrip(t *testing.T) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
-	store.EXPECT().StageApply(mock.Anything, mock.Anything).Return(nil).Once()
-	store.EXPECT().CommitApply(mock.Anything, "blog", mock.Anything).Return(nil).Once()
-	store.EXPECT().MaterializeApply(mock.Anything, "blog", mock.Anything).Return(nil).Once()
-	store.EXPECT().CollectGarbage(mock.Anything, "blog", mock.Anything).Return(nil).Once()
+	store.EXPECT().AcceptApply(mock.Anything, mock.Anything).Return(nil).Once()
 
 	svc := apps.NewAppServiceImpl(store, deploy, secrets, zerowrap.Default())
 	_, _, err := svc.Apply(ctx, secretSpec(), []byte("m"), false)

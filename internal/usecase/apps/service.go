@@ -21,7 +21,7 @@ import (
 
 // Service orchestrates app desired-state transitions.
 type Service struct {
-	store     out.AppState
+	store     out.AppApplyStore
 	log       zerowrap.Logger
 	listeners map[string]domain.EntryPointListener
 	// barrier is the process-wide GC barrier. An apply holds the shared
@@ -40,7 +40,7 @@ type Service struct {
 }
 
 // NewService creates the apps use case over an AppState store.
-func NewService(store out.AppState, log zerowrap.Logger) *Service {
+func NewService(store out.AppApplyStore, log zerowrap.Logger) *Service {
 	return &Service{store: store, log: log}
 }
 
@@ -366,7 +366,7 @@ func (s *Service) prepareApply(ctx context.Context, spec domain.AppSpec) (*apply
 	return &applyPrepared{desired: desired, diff: diff, reservations: reservations}, nil
 }
 
-// persistApply stages, commits, and materializes one accepted apply.
+// persistApply durably accepts one apply.
 func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source []byte, prepared *applyPrepared) (*ApplyResult, *DryRunResult, error) {
 	log := zerowrap.FromCtx(ctx)
 	sourceHash := sha256.Sum256(source)
@@ -381,17 +381,8 @@ func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source 
 		Reservations: prepared.reservations,
 		CreatedAt:    time.Now().UTC(),
 	}
-	if err := s.store.StageApply(ctx, intent); err != nil {
-		return nil, nil, fmt.Errorf("apps: stage apply: %w", err)
-	}
-	if err := s.store.CommitApply(ctx, spec.Name, intent.Intent); err != nil {
-		return nil, nil, fmt.Errorf("apps: commit apply: %w", err)
-	}
-	if err := s.store.MaterializeApply(ctx, spec.Name, intent.Intent); err != nil {
-		return nil, nil, fmt.Errorf("apps: materialize apply (re-query by intent): %w", err)
-	}
-	if err := s.store.CollectGarbage(ctx, spec.Name, []string{intent.Intent}); err != nil {
-		log.Warn().Err(err).Msg("apps: garbage collection failed, continuing")
+	if err := s.store.AcceptApply(ctx, intent); err != nil {
+		return nil, nil, fmt.Errorf("apps: %w", err)
 	}
 	log.Info().Str("revision", intent.Revision).Str("intent", intent.Intent).Msg("apps: apply accepted")
 	return &ApplyResult{
