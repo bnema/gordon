@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -464,6 +465,29 @@ func TestReloadRuntime_InvalidPolicyAppliesNothing(t *testing.T) {
 
 	err := (&reloadRuntime{v: v, svc: svc, log: zerowrap.Default()}).Apply(ctx, reloadCfg)
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
+}
+
+// TestReloadRuntime_TLSLoadFailureAppliesNothing proves an unreadable static
+// TLS keypair fails the reload before management hosts change.
+func TestReloadRuntime_TLSLoadFailureAppliesNothing(t *testing.T) {
+	ctx := t.Context()
+	publicTLS := inmocks.NewMockPublicTLSService(t) // no expectations: any call fails
+
+	svc := newTestServices(&services{
+		containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
+		publicTLSSvc:      publicTLS,
+		httpsProxyHandler: http.NotFoundHandler(),
+	})
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "new.example.com"
+	reloadCfg.Server.TLSCertFile = filepath.Join(t.TempDir(), "missing.crt")
+	reloadCfg.Server.TLSKeyFile = filepath.Join(t.TempDir(), "missing.key")
+	reloadCfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"secure": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	err := (&reloadRuntime{v: viper.New(), svc: svc, log: zerowrap.Default()}).Apply(ctx, reloadCfg)
+	require.ErrorContains(t, err, "load TLS keypair")
 }
 
 func TestWaitForCoreProxyReady_WaitsWithoutPublishingEmptyTraffic(t *testing.T) {

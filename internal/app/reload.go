@@ -246,8 +246,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 // reloadRuntime applies a validated config to the running daemon. It
 // prepares every derived value before the first side effect, so a config
 // that cannot be converted leaves the whole runtime at the previous
-// version. Side effects then run in one fixed order: management hosts,
-// traffic graph, HTTP entrypoints, container config, app policies.
+// version. Side effects then run in one fixed order: traffic graph (the
+// only fallible step), management hosts, HTTP entrypoints, container
+// config, app policies.
 type reloadRuntime struct {
 	v   *viper.Viper
 	svc *services
@@ -257,6 +258,7 @@ type reloadRuntime struct {
 // reloadPlan holds the values derived from one config before any apply.
 type reloadPlan struct {
 	containerCfg   container.Config
+	tlsConfig      *tls.Config
 	bindPolicies   map[string]domain.AppBindPolicy
 	devicePolicies map[string]domain.AppDevicePolicy
 }
@@ -268,7 +270,7 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("prepare reload: %w", err)
 	}
 	if r.svc.containerSvc != nil {
-		if err := r.applyServing(ctx, cfg, plan.containerCfg); err != nil {
+		if err := r.applyServing(ctx, cfg, plan); err != nil {
 			return fmt.Errorf("apply serving config: %w", err)
 		}
 	}
@@ -283,6 +285,14 @@ func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, er
 		if plan.containerCfg, err = buildContainerServiceConfig(ctx, r.v, cfg, r.svc, r.log); err != nil {
 			return plan, err
 		}
+		// The TLS config selects certificates at handshake time, so it is
+		// safe to build before management hosts change; building it here
+		// surfaces keypair load errors before any side effect.
+		if hasTLSCapableEntrypoint(cfg) && r.svc.httpsProxyHandler != nil {
+			if plan.tlsConfig, err = proxyTLSConfig(cfg, r.svc.pkiSvc, r.svc.publicTLSSvc, r.log); err != nil {
+				return plan, err
+			}
+		}
 	}
 	if r.svc.appSvcImpl != nil {
 		if plan.bindPolicies, err = buildAppMountPolicies(cfg); err != nil {
@@ -295,11 +305,15 @@ func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, er
 	return plan, nil
 }
 
-// applyServing updates everything that serves traffic: management hosts,
-// the serialized traffic graph, TLS/smart-TCP HTTP entrypoints, and the
-// container service config.
-func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, containerCfg container.Config) error {
+// applyServing updates everything that serves traffic. The serialized
+// traffic graph rebuild is the only fallible step and runs first, so a
+// rejected graph leaves management hosts, entrypoints, and container
+// config at the previous version.
+func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloadPlan) error {
 	svc := r.svc
+	if err := svc.appTrafficPublisher.RebuildWithConfig(ctx, cfg); err != nil {
+		return err
+	}
 	managementHosts := []string{cfg.Server.GordonDomain}
 	if svc.pkiSvc != nil {
 		svc.pkiSvc.SetAdditionalDomains(managementHosts)
@@ -307,19 +321,9 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, containerC
 	if svc.publicTLSSvc != nil {
 		svc.publicTLSSvc.SetAdditionalHosts(ctx, managementHosts)
 	}
-	var tlsConfig *tls.Config
-	if hasTLSCapableEntrypoint(cfg) && svc.httpsProxyHandler != nil {
-		var err error
-		if tlsConfig, err = proxyTLSConfig(cfg, svc.pkiSvc, svc.publicTLSSvc, r.log); err != nil {
-			return err
-		}
-	}
-	if err := svc.appTrafficPublisher.RebuildWithConfig(ctx, cfg); err != nil {
-		return err
-	}
-	svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(svc.trafficManager, cfg, svc.httpsProxyHandler, tlsConfig, svc.tlsHTTPEntryPoints)
-	svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(svc.trafficManager, cfg, svc.httpProxyHandler, svc.httpsProxyHandler, tlsConfig, svc.smartHTTPEntryPoints)
-	svc.containerSvc.UpdateConfig(containerCfg)
+	svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(svc.trafficManager, cfg, svc.httpsProxyHandler, plan.tlsConfig, svc.tlsHTTPEntryPoints)
+	svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(svc.trafficManager, cfg, svc.httpProxyHandler, svc.httpsProxyHandler, plan.tlsConfig, svc.smartHTTPEntryPoints)
+	svc.containerSvc.UpdateConfig(plan.containerCfg)
 	return nil
 }
 
