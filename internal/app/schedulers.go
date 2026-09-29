@@ -14,6 +14,11 @@ import (
 
 func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger, v *viper.Viper) (func(), error) {
 	schedulers := make([]*cronSvc.Scheduler, 0, 3)
+	stopAll := func() {
+		for i := len(schedulers) - 1; i >= 0; i-- {
+			schedulers[i].Stop()
+		}
+	}
 
 	backupScheduler, err := startBackupScheduler(ctx, cfg, svc, log)
 	if err != nil {
@@ -25,6 +30,7 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 
 	volumeBackupScheduler, err := startVolumeBackupScheduler(ctx, cfg, svc, log)
 	if err != nil {
+		stopAll()
 		return nil, err
 	}
 	if volumeBackupScheduler != nil {
@@ -35,6 +41,7 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 		return v.GetInt("images.prune.keep_last")
 	})
 	if err != nil {
+		stopAll()
 		return nil, err
 	}
 	if imageScheduler != nil {
@@ -45,11 +52,7 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 		return nil, nil
 	}
 
-	return func() {
-		for i := len(schedulers) - 1; i >= 0; i-- {
-			schedulers[i].Stop()
-		}
-	}, nil
+	return stopAll, nil
 }
 
 func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
