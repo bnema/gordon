@@ -40,7 +40,7 @@ func (s *Service) reconcileRemovalsForDeploy(ctx context.Context, app string, ac
 // new revision no longer declares. Traffic is withdrawn first (fail
 // closed), then the exact container is inhibited, stopped, and removed
 // with its data retained, its backend claims released, and its ACTIVE
-// entry deleted. A failure leaves the remaining services untouched and
+// entry deleted and persisted before its recovery inhibition is cleared. A failure leaves the remaining services untouched and
 // stops the deploy before any new state is published.
 func (s *Service) reconcileRemovedServices(ctx context.Context, app string, active domain.AppActive, pinned []pinnedService) ([]domain.AppOperationStep, []string, []CleanupWarning, error) {
 	desired := make(map[string]struct{}, len(pinned))
@@ -65,13 +65,21 @@ func (s *Service) reconcileRemovedServices(ctx context.Context, app string, acti
 		if err != nil {
 			return steps, names, cleanupWarnings, err
 		}
+		// Persist the removal before dropping the recovery inhibition: an
+		// ACTIVE record that still lists the service without its
+		// inhibition would let recovery recreate a removed service.
 		delete(active.Services, name)
+		if err := s.deps.State.SaveActive(ctx, active); err != nil {
+			return steps, names, cleanupWarnings, fmt.Errorf("deployment: persist service removal %q: %w", name, err)
+		}
+		if err := s.clearRecoveryInhibition(ctx, app, name, eff.Container); err != nil {
+			cleanupWarnings = append(cleanupWarnings, CleanupWarning{
+				Service: name, Leftover: eff.Container, Detail: "clear recovery inhibition: " + err.Error(),
+			})
+		}
 	}
 	if len(names) == 0 {
 		return nil, nil, nil, nil
-	}
-	if err := s.deps.State.SaveActive(ctx, active); err != nil {
-		return steps, names, cleanupWarnings, fmt.Errorf("deployment: persist service removals: %w", err)
 	}
 	return steps, names, cleanupWarnings, nil
 }
@@ -97,8 +105,9 @@ func (s *Service) retireRemovedService(ctx context.Context, app, name string, ef
 		if err := s.inhibitRecovery(ctx, app, name, eff.Container, "removed", ""); err != nil {
 			return fail(err)
 		}
+		// The inhibition stays until the caller persisted the removal.
 		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: name, Grace: serviceStopGrace(eff), ClearInhibition: true,
+			Service: name, Grace: serviceStopGrace(eff),
 		}, eff.Container)
 		if !retired.Gone {
 			return fail(fmt.Errorf("deployment: remove %s/%s container %s: %s", app, name, eff.Container, cleanupDetail(retired)))

@@ -62,10 +62,15 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-legacy", false).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-legacy").Return(nil).Once()
-	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "legacy", "c-legacy").Return(nil).Once()
 	var saved domain.AppActive
+	var order []string
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, a domain.AppActive) error {
 		saved = a
+		order = append(order, "save-active")
+		return nil
+	}).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "legacy", "c-legacy").RunAndReturn(func(context.Context, string, string, string) error {
+		order = append(order, "clear-inhibition")
 		return nil
 	}).Once()
 
@@ -85,6 +90,30 @@ func TestReconcileRemovedServices_WithdrawsStopsAndClears(t *testing.T) {
 	_, ok = saved.Services["web"]
 	assert.True(t, ok, "healthy sibling must be preserved")
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
+	assert.Equal(t, []string{"save-active", "clear-inhibition"}, order, "removal must be persisted before its inhibition is cleared")
+}
+
+// TestReconcileRemovedServices_SaveFailureKeepsInhibition proves a removal
+// that cannot be persisted keeps its recovery inhibition, so recovery can
+// never recreate a service ACTIVE still lists.
+func TestReconcileRemovedServices_SaveFailureKeepsInhibition(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	active := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+		"legacy": {Container: "c-legacy", EffectiveRevision: "rev-1", Spec: domain.AppService{Name: "legacy"}},
+	}}
+
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-legacy", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-legacy", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-legacy").Return(nil).Once()
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(assert.AnError).Once()
+
+	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: &stubTraffic{}}, zerowrap.Default())
+	_, _, _, err := svc.reconcileRemovedServices(context.Background(), "blog", active, nil)
+
+	require.ErrorIs(t, err, assert.AnError)
+	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestReconcileRemovedServices_WithdrawFailureAbortsBeforeStop proves a
