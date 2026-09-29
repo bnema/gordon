@@ -129,7 +129,7 @@ func TestCreateAndStart_RefusesRevokedBindBeforeRuntimeMutation(t *testing.T) {
 		},
 	}
 
-	_, _, _, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
+	_, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
 
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
 	assert.Contains(t, err.Error(), "config")

@@ -53,12 +53,12 @@ func TestCreateAndStart_UsesIncarnationPrivateNetworkAndLimits(t *testing.T) {
 		NetworkConfig{Prefix: "gordon", Internal: true},
 		ResourceLimits{MemoryBytes: 1 << 30, NanoCPUs: 2_000_000_000, PidsLimit: 256},
 	)
-	created, binds, udp, err := svc.createAndStart(ctx, "blog", "rev-1",
+	candidate, err := svc.createAndStart(ctx, "blog", "rev-1",
 		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.NoError(t, err)
-	require.NotNil(t, created)
-	assert.Empty(t, binds)
-	assert.Empty(t, udp)
+	require.NotNil(t, candidate.Container)
+	assert.Empty(t, candidate.TCPBinds)
+	assert.Empty(t, candidate.UDPBinds)
 }
 
 // TestCreateAndStart_ReusesOwnedNetwork proves recovery reattaches the
@@ -79,7 +79,7 @@ func TestCreateAndStart_ReusesOwnedNetwork(t *testing.T) {
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
-	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1",
+	_, err := svc.createAndStart(ctx, "blog", "rev-1",
 		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.NoError(t, err)
 }
@@ -99,7 +99,7 @@ func TestCreateAndStart_RefusesForeignNetwork(t *testing.T) {
 	}, nil).Once()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
-	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1",
+	_, err := svc.createAndStart(ctx, "blog", "rev-1",
 		pinnedService{name: "web", spec: domain.AppService{Name: "web"}}, "op-1", nil)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 }
@@ -126,7 +126,7 @@ func TestCreateAndStart_JoinsDeclaredSharedNetworks(t *testing.T) {
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
-	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
+	_, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
 		name:           "web",
 		spec:           domain.AppService{Name: "web"},
 		sharedNetworks: []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}}},
@@ -157,7 +157,7 @@ func TestCreateAndStart_RoutesDeclaredReadOnlyVolumeToReadOnlyMount(t *testing.T
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
-	_, _, _, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
+	_, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
 		name: "web",
 		spec: domain.AppService{
 			Name:    "web",
