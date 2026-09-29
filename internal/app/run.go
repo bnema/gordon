@@ -180,8 +180,6 @@ func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
 	return writer, nil
 }
 
-//nolint:gosec // This is an env var name, not a credential
-
 // runServers starts the HTTP servers and waits for shutdown.
 // Signal handling notes:
 // - SIGINT/SIGTERM: Triggers graceful shutdown via signal.NotifyContext
