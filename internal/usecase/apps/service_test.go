@@ -35,10 +35,7 @@ func applySuccess(store *outmocks.MockAppState, spec domain.AppSpec) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, spec.Name).Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, spec.Name).Return(domain.AppActive{}, false, nil).Once()
-	store.EXPECT().StageApply(mock.Anything, mock.Anything).Return(nil).Once()
-	store.EXPECT().CommitApply(mock.Anything, spec.Name, mock.Anything).Return(nil).Once()
-	store.EXPECT().MaterializeApply(mock.Anything, spec.Name, mock.Anything).Return(nil).Once()
-	store.EXPECT().CollectGarbage(mock.Anything, spec.Name, mock.Anything).Return(nil).Once()
+	store.EXPECT().AcceptApply(mock.Anything, mock.Anything).Return(nil).Once()
 }
 
 // recordingBarrier records shared-lease acquisition for apply tests.
@@ -174,7 +171,7 @@ func TestApply_DryRunWritesNothing(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, dry)
 	assert.True(t, dry.Valid)
-	store.AssertNotCalled(t, "StageApply", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.Anything)
 }
 
 func TestApply_ImageOnlyDiffPreservesActiveNetworks(t *testing.T) {
@@ -224,7 +221,7 @@ func TestApply_RejectsCrossAppConflict(t *testing.T) {
 	store.EXPECT().LoadActive(mock.Anything, "shop").Return(domain.AppActive{}, false, nil).Once()
 	_, _, err = svc.Apply(ctx, other, []byte("m"), false)
 	require.ErrorIs(t, err, domain.ErrAppReservationConflict)
-	store.AssertNotCalled(t, "StageApply", mock.Anything, mock.MatchedBy(func(intent domain.AppApplyIntent) bool {
+	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.MatchedBy(func(intent domain.AppApplyIntent) bool {
 		return intent.App == "shop"
 	}))
 }
@@ -274,7 +271,7 @@ func TestApply_RejectsOverlappingWildcardClaimInCandidate(t *testing.T) {
 	store.EXPECT().LoadActive(mock.Anything, spec.Name).Return(domain.AppActive{}, false, nil).Once()
 	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
 	require.ErrorIs(t, err, domain.ErrAppReservationConflict)
-	store.AssertNotCalled(t, "StageApply", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.Anything)
 }
 
 func TestApply_InvalidSpecFailsBeforeStore(t *testing.T) {

@@ -489,7 +489,7 @@ func (s *Store) LoadRevision(ctx context.Context, app, revision string) (domain.
 	return rev, nil
 }
 
-// ListRevisions implements out.AppState.
+// ListRevisions returns revision ids ordered newest first.
 func (s *Store) ListRevisions(ctx context.Context, app string) ([]string, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -734,7 +734,28 @@ func (s *Store) SaveOwnership(ctx context.Context, ownership domain.AppOwnership
 	})
 }
 
-// StageApply implements out.AppState.
+// AcceptApply implements out.AppState: stage, commit, materialize, then
+// best-effort garbage collection. Each step is its own transaction so a
+// crash leaves a state Recover or GC can finish.
+func (s *Store) AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error {
+	if err := s.StageApply(ctx, intent); err != nil {
+		return fmt.Errorf("appstate: stage apply: %w", err)
+	}
+	if err := s.CommitApply(ctx, intent.App, intent.Intent); err != nil {
+		return fmt.Errorf("appstate: commit apply: %w", err)
+	}
+	if err := s.MaterializeApply(ctx, intent.App, intent.Intent); err != nil {
+		return fmt.Errorf("appstate: materialize apply (re-query by intent): %w", err)
+	}
+	if err := s.CollectGarbage(ctx, intent.App, []string{intent.Intent}); err != nil {
+		s.log.Warn().Err(err).Str("app", intent.App).Msg("appstate: garbage collection failed, continuing")
+	}
+	return nil
+}
+
+// StageApply writes a staged intent. No reservation or revision is
+// visible until CommitApply. It is one step of AcceptApply, exposed for
+// crash-recovery tests.
 func (s *Store) StageApply(ctx context.Context, intent domain.AppApplyIntent) error {
 	if err := checkCtx(ctx); err != nil {
 		return err
@@ -756,7 +777,8 @@ func (s *Store) StageApply(ctx context.Context, intent domain.AppApplyIntent) er
 	})
 }
 
-// CommitApply implements out.AppState: the single atomic commit point.
+// CommitApply is the single atomic commit point: staged→committed. It is
+// one step of AcceptApply, exposed for crash-recovery tests.
 func (s *Store) CommitApply(ctx context.Context, app, intentID string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err
@@ -785,7 +807,8 @@ func (s *Store) CommitApply(ctx context.Context, app, intentID string) error {
 	})
 }
 
-// MaterializeApply implements out.AppState. Idempotent: safe to replay.
+// MaterializeApply finishes a committed intent. Idempotent: safe to
+// replay. It is one step of AcceptApply, exposed for crash-recovery tests.
 func (s *Store) MaterializeApply(ctx context.Context, app, intentID string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err
@@ -948,7 +971,7 @@ func verifySupersedesLocked(bucket *bolt.Bucket, intent domain.AppApplyIntent) e
 	return nil
 }
 
-// LoadApplyIntent implements out.AppState.
+// LoadApplyIntent returns one apply intent by id.
 func (s *Store) LoadApplyIntent(ctx context.Context, app, intentID string) (domain.AppApplyIntent, error) {
 	if err := checkCtx(ctx); err != nil {
 		return domain.AppApplyIntent{}, err
@@ -994,7 +1017,7 @@ func loadApplyIntentLocked(bucket *bolt.Bucket, app, intentID string) (domain.Ap
 	return intent, nil
 }
 
-// ListIntents implements out.AppState.
+// ListIntents returns apply intent ids for recovery scans.
 func (s *Store) ListIntents(ctx context.Context, app string) ([]string, error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, err
@@ -1017,7 +1040,9 @@ func (s *Store) ListIntents(ctx context.Context, app string) ([]string, error) {
 	return ids, nil
 }
 
-// CollectGarbage implements out.AppState.
+// CollectGarbage removes staged orphans, applied intents, and
+// unreferenced revisions beyond retention. Referenced revisions
+// (desired/active/in-flight) are never evicted.
 func (s *Store) CollectGarbage(ctx context.Context, app string, inFlight []string) error {
 	if err := checkCtx(ctx); err != nil {
 		return err

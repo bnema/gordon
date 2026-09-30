@@ -292,6 +292,31 @@ func TestStore_CorruptAndIncompatible(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppStateIncompatible)
 }
 
+func TestStore_AcceptApplyPublishesDesiredRevision(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	require.NoError(t, store.AcceptApply(ctx, testIntent("blog", "rev-1")))
+
+	desired, ok, err := store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, "rev-1", desired.Revision)
+	checkpoint, err := store.LoadCheckpoint(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, checkpoint.Reservations)
+	intent, err := store.LoadApplyIntent(ctx, "blog", "apply-test-rev-1")
+	require.NoError(t, err)
+	assert.Equal(t, domain.AppIntentApplied, intent.State)
+
+	// A stale supersedes pointer is refused at commit and publishes nothing.
+	err = store.AcceptApply(ctx, testIntentAfter("blog", "rev-2", "rev-stale"))
+	require.Error(t, err)
+	desired, _, err = store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	assert.Equal(t, "rev-1", desired.Revision)
+}
+
 func TestStore_GarbageSweepsStagedOrphan(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

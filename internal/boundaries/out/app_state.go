@@ -7,8 +7,10 @@ import (
 )
 
 // AppState persists desired/active app state, reservations, intents,
-// operation journals, and ownership records. Implemented by the
-// atomic-file filesystem adapter; consumed by the apps use case.
+// operation journals, and ownership records. Implemented by the bbolt
+// appstate adapter; consumed whole by the deployment engine. Other use
+// cases depend on the narrower AppStateReader, AppCatalogReader, or
+// AppApplyStore ports.
 // All methods are safe for concurrent use within one process;
 // cross-process coordination is owned by the implementation
 // (store.lock flock). No secret values pass through this boundary.
@@ -65,9 +67,6 @@ type AppState interface {
 	// LoadRevision returns one immutable revision by id.
 	LoadRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error)
 
-	// ListRevisions returns revision ids ordered newest first.
-	ListRevisions(ctx context.Context, app string) ([]string, error)
-
 	// LoadActive returns the per-service effective state.
 	// ok is false when the app was never deployed.
 	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
@@ -84,28 +83,14 @@ type AppState interface {
 	// SaveOwnership persists the ownership record.
 	SaveOwnership(ctx context.Context, ownership domain.AppOwnership) error
 
-	// StageApply writes a staged intent containing the full candidate.
-	// No reservation or revision is visible until CommitApply.
-	StageApply(ctx context.Context, intent domain.AppApplyIntent) error
-
-	// CommitApply is the single atomic commit point: staged→committed.
-	CommitApply(ctx context.Context, app, intentID string) error
-
-	// MaterializeApply finishes a committed intent: revision file,
-	// desired pointer, reservation checkpoint update, intent→applied.
-	// Idempotent by content hash; safe to replay after a crash.
-	MaterializeApply(ctx context.Context, app, intentID string) error
-
-	// LoadIntent returns one apply intent by id.
-	LoadApplyIntent(ctx context.Context, app, intentID string) (domain.AppApplyIntent, error)
-
-	// ListIntents returns apply intent ids for recovery scans.
-	ListIntents(ctx context.Context, app string) ([]string, error)
-
-	// CollectGarbage removes staged orphans, applied intents, and
-	// unreferenced revisions beyond retention. Referenced revisions
-	// (desired/active/in-flight) are never evicted.
-	CollectGarbage(ctx context.Context, app string, inFlight []string) error
+	// AcceptApply durably accepts one apply intent: it stages the full
+	// candidate, commits it (the single atomic commit point), and
+	// materializes the revision, desired pointer, and reservation
+	// checkpoint. Each step is its own transaction, so a crash after the
+	// commit is finished by Recover and a staged orphan is swept by GC.
+	// A garbage-collection failure after materialization is logged and
+	// does not fail the accepted apply.
+	AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error
 
 	// SaveOperation persists an operation journal record atomically.
 	SaveOperation(ctx context.Context, op domain.AppOperation) error
@@ -145,6 +130,28 @@ type AppStateReader interface {
 	ListApps(ctx context.Context) ([]string, error)
 	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
 	LoadIntent(ctx context.Context, app string) (domain.AppStopIntent, error)
+}
+
+// AppCatalogReader is the read-only view the app administration read
+// model needs: identity, desired/active state, and operation journals.
+type AppCatalogReader interface {
+	AppStateReader
+	AppExists(ctx context.Context, app string) (bool, error)
+	LoadDesired(ctx context.Context, app string) (domain.AppDesiredRevision, bool, error)
+	LoadRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error)
+	LoadOwnership(ctx context.Context, app string) (domain.AppOwnership, error)
+	LoadOperation(ctx context.Context, app, opID string) (domain.AppOperation, error)
+	LoadLatestOperation(ctx context.Context, app string) (domain.AppOperation, bool, error)
+}
+
+// AppApplyStore is what accepting desired configuration needs: recovery
+// before mutation, conflict inputs, and one durable accept.
+type AppApplyStore interface {
+	Recover(ctx context.Context) error
+	LoadCheckpoint(ctx context.Context) (domain.AppStoreCheckpoint, error)
+	LoadDesired(ctx context.Context, app string) (domain.AppDesiredRevision, bool, error)
+	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
+	AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error
 }
 
 // AppTrafficRefresher is the app-facing traffic contract: one serialized

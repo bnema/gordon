@@ -6,6 +6,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
@@ -108,7 +109,7 @@ func TestApply_DeviceDryRunRefusedWithoutMutation(t *testing.T) {
 
 	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), true)
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
-	store.AssertNotCalled(t, "StageApply", context.Background(), spec.Name, uint64(0))
+	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.Anything)
 }
 
 func TestApply_RejectsDuplicateCDIIDsAcrossDevices(t *testing.T) {

@@ -15,15 +15,6 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
-var _ ControlPlane = (*remoteControlPlane)(nil)
-
-func TestRemoteControlPlane_ImplementsInterface(t *testing.T) {
-	client := remote.NewClient("https://gordon.example.com")
-	if NewRemoteControlPlane(client) == nil {
-		t.Fatal("expected non-nil remote control-plane")
-	}
-}
-
 func TestRemoteControlPlane_RunVolumeBackupsPreservesPartialResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -36,28 +27,27 @@ func TestRemoteControlPlane_RunVolumeBackupsPreservesPartialResult(t *testing.T)
 	}))
 	t.Cleanup(server.Close)
 
-	cp := NewRemoteControlPlane(remote.NewClient(server.URL))
+	cp := remote.NewClient(server.URL)
 	result, err := cp.RunVolumeBackups(context.Background(), "shop", "api", "data")
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "run volume backups")
+	assert.Contains(t, err.Error(), "one volume failed")
 	require.NotNil(t, result)
 	assert.Equal(t, "partial", result.Status)
 	require.Len(t, result.Backups, 1)
 	assert.Equal(t, "v1", result.Backups[0].ID)
 }
 
-func TestRemoteControlPlane_VolumeBackupErrorsAreWrapped(t *testing.T) {
+func TestRemoteControlPlane_VolumeBackupErrorsKeepHTTPStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusBadGateway)
 	}))
 	t.Cleanup(server.Close)
 
-	cp := NewRemoteControlPlane(remote.NewClient(server.URL))
+	cp := remote.NewClient(server.URL)
 	_, err := cp.VolumeBackupStatus(context.Background())
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "get volume backup status")
 	var httpErr *remote.HTTPError
 	require.True(t, errors.As(err, &httpErr))
 	assert.Equal(t, http.StatusBadGateway, httpErr.StatusCode)

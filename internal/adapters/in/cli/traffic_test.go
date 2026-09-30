@@ -94,7 +94,7 @@ func TestRemoteTrafficStatusControlPlaneStillRenders(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	cp := NewRemoteControlPlane(remote.NewClient(srv.URL))
+	cp := remote.NewClient(srv.URL)
 	var buf bytes.Buffer
 	require.NoError(t, runTrafficStatus(context.Background(), cp, &buf, false))
 

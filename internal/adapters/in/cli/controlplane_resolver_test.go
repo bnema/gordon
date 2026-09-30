@@ -65,7 +65,7 @@ func TestResolveControlPlane_LocalUsesSocketBackedRemotePlane(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, handle)
 	assert.False(t, handle.isRemote)
-	assert.IsType(t, &remoteControlPlane{}, handle.plane)
+	assert.IsType(t, &remote.Client{}, handle.plane)
 	assert.Equal(t, 1, factoryCalls)
 
 	status, err := handle.plane.GetStatus(context.Background())
@@ -103,7 +103,7 @@ func TestResolveControlPlane_ExplicitRemoteDoesNotUseLocalFactory(t *testing.T) 
 	handle, err := resolveControlPlane("")
 	require.NoError(t, err)
 	assert.True(t, handle.isRemote)
-	assert.IsType(t, &remoteControlPlane{}, handle.plane)
+	assert.IsType(t, &remote.Client{}, handle.plane)
 }
 
 func TestResolveControlPlane_ExplicitUnknownRemoteReturnsError(t *testing.T) {

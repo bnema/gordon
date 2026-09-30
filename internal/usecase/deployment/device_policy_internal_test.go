@@ -98,7 +98,7 @@ func TestCreateAndStart_RefusesRevokedDeviceBeforeRuntimeMutation(t *testing.T) 
 		},
 	}
 
-	_, _, _, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
+	_, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
 
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 	assert.Contains(t, err.Error(), "test_gpu")
@@ -132,10 +132,11 @@ func TestCreateAndStart_PassesResolvedCDIIDsToRuntime(t *testing.T) {
 		WithDevicePolicies(map[string]domain.AppDevicePolicy{
 			"test_gpu": devicePolicyFor([]string{"blog"}, []string{"web"}),
 		})
-	created, _, _, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
+	candidate, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
 		name: "web",
 		spec: domain.AppService{Name: "web", Devices: []string{"test_gpu"}},
 	}, "op-1", nil)
+	created := candidate.Container
 	require.NoError(t, err)
 	require.NotNil(t, created)
 	runtime.AssertExpectations(t)

@@ -9,7 +9,8 @@ import (
 )
 
 // ControlPlane defines command operations available to CLI execution paths.
-// Both explicit remote and local-daemon implementations call admin HTTP APIs.
+// *remote.Client implements it for both the explicit remote and the
+// owner-only local admin socket; tests substitute the generated mock.
 type ControlPlane interface {
 	// App lifecycle and reads. App mutations are daemon-owned for both
 	// the explicit remote and the owner-only local admin socket.
@@ -48,3 +49,5 @@ type ControlPlane interface {
 	ListVolumes(ctx context.Context) ([]dto.Volume, error)
 	PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error)
 }
+
+var _ ControlPlane = (*remote.Client)(nil)

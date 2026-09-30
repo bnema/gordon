@@ -43,12 +43,12 @@ func resolveControlPlane(_ string) (*controlPlaneHandle, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: isRemote}, nil
+	return &controlPlaneHandle{plane: client, isRemote: isRemote}, nil
 }
 
 func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHandle {
 	client := remote.NewClient(target.URL, remoteClientOptions(target.Token, target.InsecureTLS)...)
-	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}
+	return &controlPlaneHandle{plane: client, isRemote: true}
 }
 
 func resolveControlPlaneForRepository(ctx context.Context, repository string) (*controlPlaneHandle, error) {
