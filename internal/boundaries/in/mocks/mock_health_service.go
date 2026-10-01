@@ -17,10 +17,19 @@ func NewMockHealthService(t interface {
 	mock.TestingT
 	Cleanup(func())
 }) *MockHealthService {
+	if helper, ok := t.(interface{ Helper() }); ok {
+		helper.Helper()
+	}
+
 	mock := &MockHealthService{}
 	mock.Mock.Test(t)
 
-	t.Cleanup(func() { mock.AssertExpectations(t) })
+	t.Cleanup(func() {
+		if helper, ok := t.(interface{ Helper() }); ok {
+			helper.Helper()
+		}
+		mock.AssertExpectations(t)
+	})
 
 	return mock
 }
@@ -87,65 +96,6 @@ func (_c *MockHealthService_CheckAllRoutes_Call) Return(stringToRouteHealth map[
 }
 
 func (_c *MockHealthService_CheckAllRoutes_Call) RunAndReturn(run func(ctx context.Context) map[string]*domain.RouteHealth) *MockHealthService_CheckAllRoutes_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// CheckRoute provides a mock function for the type MockHealthService
-func (_mock *MockHealthService) CheckRoute(ctx context.Context, route domain.Route) *domain.RouteHealth {
-	ret := _mock.Called(ctx, route)
-
-	if len(ret) == 0 {
-		panic("no return value specified for CheckRoute")
-	}
-
-	var r0 *domain.RouteHealth
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.Route) *domain.RouteHealth); ok {
-		r0 = returnFunc(ctx, route)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.RouteHealth)
-		}
-	}
-	return r0
-}
-
-// MockHealthService_CheckRoute_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'CheckRoute'
-type MockHealthService_CheckRoute_Call struct {
-	*mock.Call
-}
-
-// CheckRoute is a helper method to define mock.On call
-//   - ctx context.Context
-//   - route domain.Route
-func (_e *MockHealthService_Expecter) CheckRoute(ctx any, route any) *MockHealthService_CheckRoute_Call {
-	return &MockHealthService_CheckRoute_Call{Call: _e.mock.On("CheckRoute", ctx, route)}
-}
-
-func (_c *MockHealthService_CheckRoute_Call) Run(run func(ctx context.Context, route domain.Route)) *MockHealthService_CheckRoute_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 domain.Route
-		if args[1] != nil {
-			arg1 = args[1].(domain.Route)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockHealthService_CheckRoute_Call) Return(routeHealth *domain.RouteHealth) *MockHealthService_CheckRoute_Call {
-	_c.Call.Return(routeHealth)
-	return _c
-}
-
-func (_c *MockHealthService_CheckRoute_Call) RunAndReturn(run func(ctx context.Context, route domain.Route) *domain.RouteHealth) *MockHealthService_CheckRoute_Call {
 	_c.Call.Return(run)
 	return _c
 }

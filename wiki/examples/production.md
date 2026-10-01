@@ -37,16 +37,8 @@ max_size = 100
 max_backups = 10
 max_age = 90
 
-[logging.container_logs]
-enabled = true                           # enabled by default
-dir = "~/.gordon/logs/containers"
-max_size = 100
-max_backups = 10
-max_age = 90
-
-# Environment directory
-[env]
-dir = "~/.gordon/env"
+# Workload logs are read from the container runtime with
+# `gordon apps logs APP --service SERVICE`.
 
 # Volume settings (all enabled by default)
 [volumes]
@@ -59,22 +51,8 @@ preserve = true
 enabled = true
 network_prefix = "prod"
 
-# Application routes with pinned versions
-[routes]
-"app.company.com" = "company-app:v2.1.0"
-"api.company.com" = "company-api:v1.5.2"
-"admin.company.com" = "admin-panel:v1.0.1"
-"docs.company.com" = "company-docs:latest"
-
-# Network groups for shared services
-[network_groups]
-"backend" = ["app.company.com", "api.company.com"]
-
-# Service attachments
-[attachments]
-"backend" = ["company-redis:latest"]
-"app.company.com" = ["company-postgres:latest"]
-"api.company.com" = ["company-postgres:latest"]
+# Applications, routes, services, and shared networks are declared in
+# separate app manifest files and applied with `gordon apps apply`.
 ```
 
 ## Setup Steps
@@ -100,26 +78,14 @@ openssl rand -base64 32 | pass insert -m gordon/auth/token_secret
 gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
 ```
 
-### 4. Create Environment Files
+### 4. Set App Secrets
+
+Declare public values under `[env]` and secret names under `[services.<name>.secrets]` in each app file, apply it, then set the values:
 
 ```bash
-# App environment
-cat > ~/.gordon/env/app_company_com.env <<EOF
-NODE_ENV=production
-PORT=3000
-DATABASE_URL=postgresql://company-postgres:5432/app
-DATABASE_PASSWORD=\${pass:company/db-password}
-REDIS_URL=redis://company-redis:6379
-EOF
-
-# API environment
-cat > ~/.gordon/env/api_company_com.env <<EOF
-NODE_ENV=production
-PORT=8080
-DATABASE_URL=postgresql://company-postgres:5432/api
-DATABASE_PASSWORD=\${pass:company/db-password}
-REDIS_URL=redis://company-redis:6379
-EOF
+gordon apps apply --file ./app.toml
+pass show company/db-password \
+  | gordon apps secrets set app --service web --stdin --key DATABASE_PASSWORD
 ```
 
 ### 5. Configure Cloudflare
@@ -166,7 +132,7 @@ vim ~/.config/gordon/gordon.toml
 # Change: "app.company.com" = "company-app:v2.2.0"
 
 # Reload to deploy
-gordon reload
+gordon daemon reload
 ```
 
 ## Related

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,9 +34,13 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 	img, err := random.Image(512, 1)
 	require.NoError(t, err)
 
+	registry := strings.TrimPrefix(harness.server.URL, "http://")
+	versionRef := registry + "/testapp:v1.0.0"
+	latestRef := registry + "/testapp:latest"
+
 	ops := climocks.NewMockpushImageOps(t)
 	ops.On("Tag", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-	ops.On("Exists", mock.Anything, mock.Anything).Return(true, nil)
+	ops.On("Exists", mock.Anything, registry+"/testapp:v1.0.0").Return(true, nil)
 	ops.EXPECT().Push(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, ref string) error {
 		pusher := registrypush.New(
 			registrypush.WithChunkSize(256),
@@ -47,13 +52,10 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 		return pusher.Push(ctx, ref)
 	})
 
-	registry := strings.TrimPrefix(harness.server.URL, "http://")
-	versionRef := registry + "/testapp:v1.0.0"
-	latestRef := registry + "/testapp:latest"
-
-	err = tagAndPush(ctx, ops, imagePush{
+	err = tagAndPush(ctx, io.Discard, ops, imagePush{
 		Registry:   registry,
 		ImageName:  "testapp",
+		SourceRef:  versionRef,
 		Version:    "v1.0.0",
 		VersionRef: versionRef,
 		LatestRef:  latestRef,

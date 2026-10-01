@@ -22,10 +22,10 @@ func TestPublicTLSIntegration_DNS01WildcardStatusAndCertificateLookup(t *testing
 
 	// Routes: app.example.com, api.prod.example.com, example.com
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
-			{Domain: "api.prod.example.com"},
-			{Domain: "example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
+			{Host: "api.prod.example.com"},
+			{Host: "example.com"},
 		},
 	}
 
@@ -168,8 +168,8 @@ func TestPublicTLSIntegration_HTTP01PerRouteChallengeFlow(t *testing.T) {
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "app.example.com"},
+		hosts: []out.AppHost{
+			{Host: "app.example.com"},
 		},
 	}
 
@@ -250,8 +250,8 @@ func TestPublicTLSIntegration_MissingRequiredCertReportsCoverageError(t *testing
 	ctx := context.Background()
 
 	routes := &fakeRoutes{
-		routes: []domain.Route{
-			{Domain: "missing.example.com"},
+		hosts: []out.AppHost{
+			{Host: "missing.example.com"},
 		},
 	}
 

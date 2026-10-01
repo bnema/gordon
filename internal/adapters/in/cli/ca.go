@@ -96,7 +96,7 @@ func newCAInfoCmd() *cobra.Command {
 }
 
 func resolveCADataDir() (string, error) {
-	local, err := GetLocalServices(configPath)
+	local, err := GetLocalServices(cliConfigPath)
 	if err != nil {
 		return "", err
 	}

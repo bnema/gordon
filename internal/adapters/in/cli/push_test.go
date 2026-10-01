@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -11,11 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
-	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/domain"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 )
 
 func TestValidateBuildArg(t *testing.T) {
@@ -79,12 +73,12 @@ func TestClassifyPushArgument(t *testing.T) {
 		arg  string
 		want classifiedPushArg
 	}{
-		{name: "tagged image latest", arg: "myapp:latest", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
-		{name: "tagged image semver", arg: "myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
-		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "registry.example.com/myapp"}},
-		{name: "registry qualified digest", arg: "registry.example.com/myapp@sha256:deadbeef", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "registry.example.com/myapp@sha256:deadbeef"}},
+		{name: "tagged image latest", arg: "myapp:latest", want: classifiedPushArg{kind: pushArgKindImage, sourceRef: "myapp:latest", repository: "myapp"}},
+		{name: "tagged image semver", arg: "myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, sourceRef: "myapp:v1.2.3", repository: "myapp"}},
+		{name: "registry qualified image", arg: "registry.example.com/myapp:v1.2.3", want: classifiedPushArg{kind: pushArgKindImage, sourceRef: "registry.example.com/myapp:v1.2.3", repository: "myapp"}},
+		{name: "registry qualified digest", arg: "registry.example.com/myapp@sha256:deadbeef", want: classifiedPushArg{kind: pushArgKindImage, sourceRef: "registry.example.com/myapp@sha256:deadbeef", repository: "myapp"}},
 		{name: "legacy domain", arg: "app.example.com", want: classifiedPushArg{kind: pushArgKindLegacyDomain, legacyDomain: "app.example.com"}},
-		{name: "bare image name", arg: "myapp", want: classifiedPushArg{kind: pushArgKindImage, lookupImage: "myapp"}},
+		{name: "bare image name", arg: "myapp", want: classifiedPushArg{kind: pushArgKindImage, sourceRef: "myapp", repository: "myapp"}},
 	}
 
 	for _, tt := range tests {
@@ -446,105 +440,6 @@ func TestParseLabelPair(t *testing.T) {
 				assert.Equal(t, tt.wantKey, key)
 				assert.Equal(t, tt.wantValue, value)
 			}
-		})
-	}
-}
-
-func TestResolveFromImage_NoRouteSuggestsBootstrap(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "myapp").Return(nil, nil).Once()
-
-	_, _, _, err := resolveFromImage(context.Background(), cpMock, "myapp", "Dockerfile")
-
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
-	assert.Contains(t, err.Error(), "gordon bootstrap")
-}
-
-func TestResolveRoute_DottedBareImageUsesImageLookup(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/my.app:latest"}}, nil).Once()
-
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "my.app", "", "Dockerfile")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "registry.example.com", registry)
-	assert.Equal(t, "my.app", imageName)
-	assert.Equal(t, "app.example.com", pushDomain)
-}
-
-func TestResolveRoute_DottedBareImageNoRoutesKeepsBootstrapError(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "my.app").Return(nil, nil).Once()
-	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "my.app").Return(nil, domain.ErrRouteNotFound).Once()
-	mock.InOrder(imageLookup, routeLookup)
-
-	_, _, _, err := resolveRoute(context.Background(), cpMock, "my.app", "", "Dockerfile")
-
-	assert.Error(t, err)
-	assert.True(t, errors.Is(err, domain.ErrNoRouteForImage))
-	assert.Contains(t, err.Error(), `no route configured for image "my.app"`)
-	assert.Contains(t, err.Error(), "gordon bootstrap")
-	assert.NotContains(t, err.Error(), "failed to get route for domain")
-}
-
-func TestNoRouteForImageErrorWrapsSentinel(t *testing.T) {
-	err := noRouteForImageError("myapp")
-
-	assert.True(t, errors.Is(err, domain.ErrNoRouteForImage))
-	assert.Contains(t, err.Error(), `no route configured for image "myapp"`)
-}
-
-func TestResolveRoute_DottedBareDomainFallsBackToLegacyLookup(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	imageLookup := cpMock.EXPECT().FindRoutesByImage(context.Background(), "app.example.com").Return(nil, nil).Once()
-	routeLookup := cpMock.EXPECT().GetRoute(context.Background(), "app.example.com").Return(&domain.Route{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}, nil).Once()
-	mock.InOrder(imageLookup, routeLookup)
-
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "app.example.com", "", "Dockerfile")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "registry.example.com", registry)
-	assert.Equal(t, "myapp", imageName)
-	assert.Equal(t, "app.example.com", pushDomain)
-}
-
-func TestResolveRoute_TaggedImageStripsTagBeforeLookup(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "myapp").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil).Once()
-
-	registry, imageName, pushDomain, err := resolveRoute(context.Background(), cpMock, "myapp:v1.2.3", "", "Dockerfile")
-
-	assert.NoError(t, err)
-	assert.Equal(t, "registry.example.com", registry)
-	assert.Equal(t, "myapp", imageName)
-	assert.Equal(t, "app.example.com", pushDomain)
-}
-
-func TestResolveRoute_RegistryQualifiedTaggedImageUsesImageLookup(t *testing.T) {
-	cpMock := climocks.NewMockControlPlane(t)
-	cpMock.EXPECT().FindRoutesByImage(context.Background(), "registry.example.com/myapp").Return([]domain.Route{{Domain: "app.example.com", Image: "registry.example.com/myapp:latest"}}, nil).Once()
-
-	_, _, _, err := resolveRoute(context.Background(), cpMock, "registry.example.com/myapp:v1.2.3", "", "Dockerfile")
-
-	assert.NoError(t, err)
-}
-
-func TestIsInsufficientScope(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{"nil error", nil, false},
-		{"HTTPError 403", &remote.HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "insufficient scope"}, true},
-		{"wrapped HTTPError 403", fmt.Errorf("deploy intent: %w", &remote.HTTPError{StatusCode: 403, Status: "403 Forbidden", Body: "scope"}), true},
-		{"HTTPError 500", &remote.HTTPError{StatusCode: 500, Status: "500 Internal Server Error", Body: "broke"}, false},
-		{"plain error", fmt.Errorf("connection refused"), false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, isInsufficientScope(tt.err))
 		})
 	}
 }

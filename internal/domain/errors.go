@@ -11,6 +11,10 @@ var (
 	ErrContainerNotRunning = errors.New("container is not running")
 	ErrContainerRunning    = errors.New("container is already running")
 	ErrContainerExited     = errors.New("container exited")
+	// ErrRuntimeUnsupported wraps device-bearing create failures on
+	// engines that cannot serve CDI device requests. It fails closed:
+	// Gordon never retries without devices.
+	ErrRuntimeUnsupported = errors.New("runtime does not support CDI device requests")
 
 	// Image errors
 	ErrImageNotFound      = errors.New("image not found")
@@ -36,6 +40,9 @@ var (
 	ErrUnauthorized       = errors.New("unauthorized")
 	ErrBlobSizeExceeded   = errors.New("blob size exceeds maximum")
 	ErrExecOutputExceeded = errors.New("container exec output exceeds maximum")
+	// ErrManifestBlobUnknown marks a manifest that references config or
+	// layer content the repository never completed an upload for.
+	ErrManifestBlobUnknown = errors.New("manifest references a blob the repository does not own")
 
 	// Network errors
 	ErrNetworkNotFound = errors.New("network not found")
@@ -59,12 +66,57 @@ var (
 	ErrInvalidDomainPattern = errors.New("invalid domain pattern")
 	ErrRouteConflict        = errors.New("route conflicts with existing configuration")
 
+	// App manifest errors
+	ErrInvalidAppSpec = errors.New("invalid app manifest")
+	// ErrInvalidNetworkProbe wraps malformed bounded container-network
+	// readiness requests. It is distinct from ErrInvalidAppSpec: the
+	// manifest may be valid while one probe request is not.
+	ErrInvalidNetworkProbe = errors.New("invalid network probe request")
+	// ErrNetworkProbeCleanup marks a helper that could not be force-removed.
+	// Callers must fail immediately rather than create another helper.
+	ErrNetworkProbeCleanup = errors.New("network probe helper cleanup failed")
+	// ErrBindPolicy wraps administrative bind policy violations. It is
+	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
+	// installation policy refuses to serve it.
+	ErrBindPolicy = errors.New("bind policy violation")
+	// ErrDevicePolicy wraps administrative device policy violations. It is
+	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
+	// installation policy refuses to serve it.
+	ErrDevicePolicy = errors.New("device policy violation")
+
+	// App state errors
+	ErrAppStateIO           = errors.New("app state storage failure")
+	ErrAppStateCorrupt      = errors.New("app state is corrupt")
+	ErrAppStateIncompatible = errors.New("app state format is not supported by this binary")
+	ErrAppStateConflict     = errors.New("app state conflict")
+	// ErrAppNotFound marks a lifecycle mutation of a name that has no
+	// live app identity at all. It is distinct from a missing revision
+	// or operation on a known app.
+	ErrAppNotFound             = errors.New("app not found")
+	ErrAppRevisionNotFound     = errors.New("app revision not found")
+	ErrAppIntentNotFound       = errors.New("app apply intent not found")
+	ErrAppOperationNotFound    = errors.New("app operation not found")
+	ErrAppReservationConflict  = errors.New("listener reservation conflict")
+	ErrAppTrafficProjection    = errors.New("app traffic projection failed")
+	ErrAppImageUnresolvable    = errors.New("image reference unresolvable")
+	ErrAppImageNotAllowed      = errors.New("image reference not allowed by installation policy")
+	ErrAppSecretMissing        = errors.New("required app secret missing")
+	ErrAppUnmanagedImageVolume = errors.New("image declares unmanaged volume")
+	// ErrAppServiceScope marks an app-wide mutation of a multi-service app
+	// that named neither one service nor all of them.
+	ErrAppServiceScope = errors.New("app service scope required")
+	// ErrPruneDisabled means prune could not establish a safe scope for
+	// the requested operation at all (for example, its protection or
+	// runtime ports are not wired). It is never returned merely because
+	// app state exists: protected and unknown candidates are reported
+	// per candidate and do not fail the operation.
+	ErrPruneDisabled = errors.New("pruning unavailable: cannot establish a safe prune scope")
+
 	// Environment errors
 	ErrEnvFileNotFound             = errors.New("environment file not found")
 	ErrSecretNotFound              = errors.New("secret not found")
 	ErrSecretsAlreadyExist         = errors.New("secrets already exist")
 	ErrProviderNotFound            = errors.New("secret provider not found")
-	ErrInvalidContainerName        = errors.New("invalid container name")
 	ErrAttachmentOwnershipMismatch = errors.New("attachment ownership mismatch")
 	ErrReadinessLogSizeExceeded    = errors.New("readiness log exceeds maximum")
 

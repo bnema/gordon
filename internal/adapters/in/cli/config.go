@@ -17,7 +17,7 @@ func newConfigCmd() *cobra.Command {
 		Short: "Inspect Gordon configuration",
 	}
 
-	cmd.AddCommand(newConfigShowCmd())
+	cmd.AddCommand(newConfigShowCmd(), newConfigValidateCmd())
 
 	return cmd
 }
@@ -32,12 +32,12 @@ func newConfigShowCmd() *cobra.Command {
 auto-route, network isolation, routes, and external routes.
 
 Examples:
-  gordon config show
-  gordon config show --json
-  gordon config show --remote https://gordon.mydomain.com --token $TOKEN`,
+  gordon daemon config show
+  gordon daemon config show --json
+  gordon daemon config show --remote prod`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}
@@ -72,9 +72,6 @@ func renderConfigTable(out io.Writer, config *remote.Config) error {
 	if err := renderConfigSummary(out, config); err != nil {
 		return err
 	}
-	if err := renderConfigRoutes(out, config); err != nil {
-		return err
-	}
 	return renderConfigExternalRoutes(out, config)
 }
 
@@ -99,44 +96,11 @@ func renderConfigSummary(out io.Writer, config *remote.Config) error {
 			return err
 		}
 	}
-	if err := cliWriteLine(out, cliRenderMeta("Auto-Route:", fmt.Sprintf("%v", config.AutoRoute.Enabled))); err != nil {
-		return err
-	}
 	if err := cliWriteLine(out, cliRenderMeta("Network Isolation:", fmt.Sprintf("%v", config.NetworkIsolation.Enabled))); err != nil {
 		return err
 	}
 	if config.NetworkIsolation.Prefix != "" {
 		if err := cliWriteLine(out, cliRenderMeta("Network Prefix:", config.NetworkIsolation.Prefix)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func renderConfigRoutes(out io.Writer, config *remote.Config) error {
-	if err := cliWriteLine(out, ""); err != nil {
-		return err
-	}
-	if len(config.Routes) == 0 {
-		if err := cliWriteLine(out, cliRenderMuted("No routes configured")); err != nil {
-			return err
-		}
-	} else {
-		if err := cliWriteLine(out, cliRenderTitle("Routes")); err != nil {
-			return err
-		}
-		rows := make([][]string, 0, len(config.Routes))
-		for _, route := range config.Routes {
-			rows = append(rows, []string{route.Domain, route.Image})
-		}
-		table := components.NewTable(
-			components.WithColumns([]components.TableColumn{
-				{Title: "Domain", Width: 30},
-				{Title: "Image", Width: 45},
-			}),
-			components.WithRows(rows),
-		)
-		if err := cliWriteLine(out, table.View()); err != nil {
 			return err
 		}
 	}

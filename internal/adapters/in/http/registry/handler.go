@@ -9,12 +9,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync/atomic"
 
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/http/registry/route"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/manifest"
@@ -95,6 +95,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handleRegistryRoutes(w, r)
 }
 
+// handleRegistryRoutes parses the request path once and dispatches on the
+// resulting operation. Authorization middleware parses the same path with
+// the same parser, so the repository that is authorized is exactly the
+// repository the handler accesses.
 func (h *Handler) handleRegistryRoutes(w http.ResponseWriter, r *http.Request) {
 	ctx := zerowrap.CtxWithFields(r.Context(), map[string]any{
 		zerowrap.FieldLayer:   "adapter",
@@ -105,65 +109,45 @@ func (h *Handler) handleRegistryRoutes(w http.ResponseWriter, r *http.Request) {
 	})
 	r = r.WithContext(ctx)
 
-	path := r.URL.Path
-
-	// Route manifest operations: /v2/{name}/manifests/{reference}
-	if strings.Contains(path, "/manifests/") {
-		h.handleManifestRoutes(w, r)
-		return
-	}
-
-	// Route blob operations: /v2/{name}/blobs/{digest}
-	if strings.Contains(path, "/blobs/") && !strings.Contains(path, "/uploads/") {
-		h.handleBlobRoutes(w, r)
-		return
-	}
-
-	// Route blob upload operations: /v2/{name}/blobs/uploads/
-	if strings.Contains(path, "/blobs/uploads/") {
-		h.handleBlobUploadRoutes(w, r)
-		return
-	}
-
-	// Route tag list operations: /v2/{name}/tags/list
-	if strings.Contains(path, "/tags/list") {
-		h.handleTagListRoutes(w, r)
-		return
-	}
-
-	// Base endpoint: /v2/
-	if path == "/v2/" {
-		h.handleBase(w, r)
-		return
-	}
-	h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
-
-}
-
-func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v2/{name}/manifests/{reference}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
-	if len(parts) < 3 || parts[len(parts)-2] != "manifests" {
+	op, err := route.Parse(r.URL.Path)
+	if err != nil {
+		var parseErr *route.ParseError
+		if errors.As(err, &parseErr) {
+			h.sendRegistryError(w, http.StatusBadRequest, parseErr.Code, parseErr.Error())
+			return
+		}
 		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 		return
 	}
 
-	reference := parts[len(parts)-1]
-	name := strings.Join(parts[:len(parts)-2], "/")
-
-	// Validate inputs to prevent path traversal
-	if err := validation.ValidateRepositoryName(name); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
-		return
+	// Methods are validated per operation kind after the parsed values are
+	// installed, so handlers only read the path values the parser produced.
+	switch op.Kind {
+	case route.KindBase:
+		h.handleBase(w, r)
+	case route.KindManifest:
+		r.SetPathValue("name", op.Repository)
+		r.SetPathValue("reference", op.Reference)
+		h.handleManifestRoutes(w, r)
+	case route.KindBlob:
+		r.SetPathValue("name", op.Repository)
+		r.SetPathValue("digest", op.Digest)
+		h.handleBlobRoutes(w, r)
+	case route.KindUpload:
+		r.SetPathValue("name", op.Repository)
+		if op.UploadID != "" {
+			r.SetPathValue("uuid", op.UploadID)
+		}
+		h.handleBlobUploadRoutes(w, r)
+	case route.KindTagList:
+		r.SetPathValue("name", op.Repository)
+		h.handleTagListRoutes(w, r)
+	default:
+		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
 	}
-	if err := validation.ValidateReference(reference); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "TAG_INVALID", err.Error())
-		return
-	}
+}
 
-	r.SetPathValue("name", name)
-	r.SetPathValue("reference", reference)
-
+func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "HEAD", "GET":
 		h.handleGetManifest(w, r)
@@ -175,29 +159,6 @@ func (h *Handler) handleManifestRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v2/{name}/blobs/{digest}
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v2/"), "/")
-	if len(parts) < 3 || parts[len(parts)-2] != "blobs" {
-		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
-		return
-	}
-
-	digest := parts[len(parts)-1]
-	name := strings.Join(parts[:len(parts)-2], "/")
-
-	// Validate inputs to prevent path traversal
-	if err := validation.ValidateRepositoryName(name); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
-		return
-	}
-	if err := validation.ValidateDigest(digest); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", err.Error())
-		return
-	}
-
-	r.SetPathValue("name", name)
-	r.SetPathValue("digest", digest)
-
 	switch r.Method {
 	case "HEAD", "GET":
 		h.handleGetBlob(w, r)
@@ -207,26 +168,7 @@ func (h *Handler) handleBlobRoutes(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v2/{name}/blobs/uploads/{uuid?}
-	path := strings.TrimPrefix(r.URL.Path, "/v2/")
-	uploadIndex := strings.Index(path, "/blobs/uploads/")
-	if uploadIndex == -1 {
-		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
-		return
-	}
-
-	name := path[:uploadIndex]
-	uploadPart := path[uploadIndex+15:] // len("/blobs/uploads/") = 15
-
-	// Validate repository name to prevent path traversal
-	if err := validation.ValidateRepositoryName(name); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
-		return
-	}
-
-	r.SetPathValue("name", name)
-
-	if uploadPart == "" {
+	if r.PathValue("uuid") == "" {
 		// POST /v2/{name}/blobs/uploads/
 		switch r.Method {
 		case "POST":
@@ -234,41 +176,18 @@ func (h *Handler) handleBlobUploadRoutes(w http.ResponseWriter, r *http.Request)
 		default:
 			h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 		}
-	} else {
-		// Validate UUID to prevent path traversal
-		if err := validation.ValidateUUID(uploadPart); err != nil {
-			h.sendRegistryError(w, http.StatusBadRequest, "BLOB_UPLOAD_INVALID", err.Error())
-			return
-		}
-		// PATCH/PUT /v2/{name}/blobs/uploads/{uuid}
-		r.SetPathValue("uuid", uploadPart)
-		switch r.Method {
-		case "PATCH", "PUT":
-			h.handleBlobUpload(w, r)
-		default:
-			h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
-		}
+		return
+	}
+	// PATCH/PUT /v2/{name}/blobs/uploads/{uuid}
+	switch r.Method {
+	case "PATCH", "PUT":
+		h.handleBlobUpload(w, r)
+	default:
+		h.sendRegistryError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "method not allowed")
 	}
 }
 
 func (h *Handler) handleTagListRoutes(w http.ResponseWriter, r *http.Request) {
-	// Parse path: /v2/{name}/tags/list
-	path := strings.TrimPrefix(r.URL.Path, "/v2/")
-	if !strings.HasSuffix(path, "/tags/list") {
-		h.sendRegistryError(w, http.StatusNotFound, "NOT_FOUND", "route not found")
-		return
-	}
-
-	name := strings.TrimSuffix(path, "/tags/list")
-
-	// Validate repository name to prevent path traversal
-	if err := validation.ValidateRepositoryName(name); err != nil {
-		h.sendRegistryError(w, http.StatusBadRequest, "NAME_INVALID", err.Error())
-		return
-	}
-
-	r.SetPathValue("name", name)
-
 	switch r.Method {
 	case "GET":
 		h.handleListTags(w, r)
@@ -374,6 +293,10 @@ func (h *Handler) handlePutManifest(w http.ResponseWriter, r *http.Request) {
 			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "manifest digest does not match content")
 			return
 		}
+		if errors.Is(err, domain.ErrManifestBlobUnknown) {
+			h.sendRegistryError(w, http.StatusBadRequest, "MANIFEST_BLOB_UNKNOWN", "manifest references unknown content")
+			return
+		}
 		h.sendRegistryError(w, http.StatusInternalServerError, "MANIFEST_INVALID", "failed to store manifest")
 		return
 	}
@@ -457,10 +380,15 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	// copy buffer (~32KB) regardless of chunk size.
 	length, err := h.registrySvc.AppendBlobChunk(ctx, name, uuid, r.Body, r.ContentLength, maxBlobSize)
 	if err != nil {
+		if errors.Is(err, domain.ErrUploadNotFound) {
+			log.Warn().Str("uuid", uuid).Msg("blob upload not found for repository")
+			h.sendRegistryError(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "blob upload unknown")
+			return
+		}
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) {
 			log.Warn().Int64("max_size", maxBlobChunkSize).Msg("blob chunk too large")
-			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+			if !h.cancelUploadAfterError(w, ctx, name, uuid, "failed to cancel oversized blob upload") {
 				return
 			}
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob chunk exceeds maximum size")
@@ -468,7 +396,7 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, domain.ErrBlobSizeExceeded) {
 			log.Warn().Int64("max_size", maxBlobSize).Msg("blob upload too large")
-			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel oversized blob upload") {
+			if !h.cancelUploadAfterError(w, ctx, name, uuid, "failed to cancel oversized blob upload") {
 				return
 			}
 			h.sendRegistryError(w, http.StatusRequestEntityTooLarge, "SIZE_INVALID", "blob exceeds maximum size")
@@ -481,9 +409,13 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// If this is the final chunk (PUT request with digest), finalize the upload
 	if r.Method == "PUT" && digest != "" {
-		if err := h.registrySvc.FinishUpload(ctx, uuid, digest); err != nil {
+		if err := h.registrySvc.FinishUpload(ctx, name, uuid, digest); err != nil {
 			log.Error().Err(err).Str("digest", digest).Msg("failed to finalize blob upload")
-			if !h.cancelUploadAfterError(w, ctx, uuid, "failed to cancel invalid blob upload") {
+			if errors.Is(err, domain.ErrUploadNotFound) {
+				h.sendRegistryError(w, http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "blob upload unknown")
+				return
+			}
+			if !h.cancelUploadAfterError(w, ctx, name, uuid, "failed to cancel invalid blob upload") {
 				return
 			}
 			h.sendRegistryError(w, http.StatusBadRequest, "DIGEST_INVALID", "digest mismatch")
@@ -505,8 +437,8 @@ func (h *Handler) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 }
 
-func (h *Handler) cancelUploadAfterError(w http.ResponseWriter, ctx context.Context, uuid, message string) bool {
-	if err := h.registrySvc.CancelUpload(ctx, uuid); err != nil {
+func (h *Handler) cancelUploadAfterError(w http.ResponseWriter, ctx context.Context, name, uuid, message string) bool {
+	if err := h.registrySvc.CancelUpload(ctx, name, uuid); err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Err(err).Str("uuid", uuid).Msg(message)
 		h.sendRegistryError(w, http.StatusInternalServerError, "UNKNOWN", "failed to cancel upload")

@@ -13,7 +13,10 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -39,7 +42,8 @@ import (
 
 // Runtime implements the ContainerRuntime interface using Docker API.
 type Runtime struct {
-	client *client.Client
+	client      *client.Client
+	runtimeName string
 }
 
 var _ out.ContainerRuntime = (*Runtime)(nil)
@@ -114,7 +118,7 @@ func NewRuntimeWithSocket(socketPath string) (*Runtime, error) {
 		return nil, fmt.Errorf("failed to create Docker client for %s: %w", socketPath, err)
 	}
 
-	return &Runtime{client: cli}, nil
+	return &Runtime{client: cli, runtimeName: guessRuntimeName(socketPath)}, nil
 }
 
 // NewRuntimeWithClient creates a new Docker runtime instance with a custom client (for testing).
@@ -140,6 +144,19 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		return nil, err
 	}
 	binds := buildVolumeBinds(config, log)
+	mounts, err := buildBindMounts(config)
+	if err != nil {
+		return nil, err
+	}
+	// Device-bearing creates require a CDI-capable engine. The gate runs
+	// only when devices are requested: ordinary apps never pay for it
+	// and never fail it.
+	if len(config.CDIDevices) > 0 {
+		if err := r.requireCDISupport(ctx); err != nil {
+			return nil, err
+		}
+	}
+	deviceRequests := buildDeviceRequests(config)
 
 	// Create container configuration
 	containerConfig := &container.Config{
@@ -149,6 +166,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		ExposedPorts: exposedPorts,
 		WorkingDir:   config.WorkingDir,
 		Cmd:          config.Cmd,
+		Entrypoint:   config.Entrypoint,
 		Labels:       config.Labels,
 		User:         config.User,
 	}
@@ -159,6 +177,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		Ulimits: []*units.Ulimit{
 			{Name: "nofile", Soft: 65536, Hard: 65536},
 		},
+		DeviceRequests: deviceRequests,
 	}
 	if config.PidsLimit > 0 {
 		resources.PidsLimit = &config.PidsLimit
@@ -175,6 +194,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		PortBindings:   portBindings,
 		AutoRemove:     config.AutoRemove,
 		Binds:          binds,
+		Mounts:         mounts,
 		NetworkMode:    container.NetworkMode(config.NetworkMode),
 		Resources:      resources,
 		SecurityOpt:    []string{"no-new-privileges:true"},
@@ -287,6 +307,199 @@ func buildVolumeBinds(config *domain.ContainerConfig, log zerowrap.Logger) []str
 	return binds
 }
 
+// buildBindMounts validates ephemeral host binds defensively and translates
+// them into Docker bind mounts. The result is sorted by destination so the
+// create request is deterministic. Host source paths are never logged or
+// echoed in errors.
+func buildBindMounts(config *domain.ContainerConfig) ([]mount.Mount, error) {
+	if len(config.Binds) == 0 {
+		return nil, nil
+	}
+	mounts := make([]mount.Mount, 0, len(config.Binds))
+	seen := make(map[string]string, len(config.Binds))
+	for _, bind := range config.Binds {
+		if bind.Source == "" || !filepath.IsAbs(bind.Source) || filepath.Clean(bind.Source) != bind.Source {
+			return nil, fmt.Errorf("invalid bind %q: source must be an absolute clean path", bind.Name)
+		}
+		if err := domain.ValidateBindDestination(bind.Destination); err != nil {
+			return nil, fmt.Errorf("invalid bind %q: %w", bind.Name, err)
+		}
+		if prev, ok := seen[bind.Destination]; ok {
+			return nil, fmt.Errorf("invalid bind %q: destination %q already used by bind %q", bind.Name, bind.Destination, prev)
+		}
+		seen[bind.Destination] = bind.Name
+		mounts = append(mounts, mount.Mount{
+			Type:     mount.TypeBind,
+			Source:   bind.Source,
+			Target:   bind.Destination,
+			ReadOnly: bind.ReadOnly,
+		})
+	}
+	sort.SliceStable(mounts, func(i, j int) bool {
+		if mounts[i].Target != mounts[j].Target {
+			return mounts[i].Target < mounts[j].Target
+		}
+		return mounts[i].Source < mounts[j].Source
+	})
+	return mounts, nil
+}
+
+// requireCDISupport fails closed when the connected engine cannot serve
+// native CDI device requests. Family and version come from the daemon's
+// own /version response; Gordon requires Podman 5.4+ or Docker 28.3+ for
+// device-bearing creates. The version is a capability gate, not hardware
+// proof: CDI specs, toolkit, and node permissions must still be correct
+// on the host.
+func (r *Runtime) requireCDISupport(ctx context.Context) error {
+	version, err := r.client.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return engineProbeError(ctx, err)
+	}
+	if err := checkCDISupport(version, r.runtimeName); err != nil {
+		return err
+	}
+	return nil
+}
+
+// engineProbeError maps a failed /version probe onto the CDI capability
+// gate. Cancellation and deadlines survive so callers can still tell an
+// aborted probe from an incapable engine; every other cause collapses to
+// ErrRuntimeUnsupported with the cause text dropped, because transport
+// errors embed the daemon endpoint and the operator's home path.
+func engineProbeError(ctx context.Context, err error) error {
+	var ctxErr error
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		ctxErr = context.Canceled
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded):
+		ctxErr = context.DeadlineExceeded
+	}
+	if ctxErr != nil {
+		return fmt.Errorf("%w: cannot verify engine version: %w", domain.ErrRuntimeUnsupported, ctxErr)
+	}
+	return fmt.Errorf("%w: cannot verify engine version", domain.ErrRuntimeUnsupported)
+}
+
+// SupportsCDIDevices implements out.ContainerRuntime. Deployment calls it
+// in preflight for device-bearing revisions so an unsupported engine
+// fails before any workload mutation; CreateContainer keeps the same gate
+// as defense in depth.
+func (r *Runtime) SupportsCDIDevices(ctx context.Context) error {
+	return r.requireCDISupport(ctx)
+}
+
+// checkCDISupport verifies one daemon version response against the CDI
+// support matrix. Family detection prefers the daemon's own components
+// (Podman Engine vs Engine) and falls back to the socket-path hint only
+// when the response names nothing recognizable.
+func checkCDISupport(version client.ServerVersionResult, socketHint string) error {
+	family, daemonVersion := cdiEngineIdentity(version, socketHint)
+	var minimum string
+	switch family {
+	case "podman":
+		minimum = "5.4"
+	case "docker":
+		minimum = "28.3"
+	default:
+		return fmt.Errorf("%w: unrecognized engine %q version %q: device requests require Podman 5.4+ or Docker 28.3+ with native CDI configured", domain.ErrRuntimeUnsupported, family, daemonVersion)
+	}
+	if compareEngineVersion(daemonVersion, minimum) < 0 {
+		return fmt.Errorf("%w: %s %s below minimum %s: device requests require Podman 5.4+ or Docker 28.3+ with native CDI configured (check engine upgrade, CDI specs, toolkit, and device permissions)", domain.ErrRuntimeUnsupported, family, daemonVersion, minimum)
+	}
+	return nil
+}
+
+// cdiEngineIdentity names the daemon family and its version from the
+// /version response. Podman answers with a "Podman Engine" component;
+// Docker answers with an "Engine" component and its version at top
+// level. Unknown responses keep the raw version with an "unknown"
+// family so the caller fails closed.
+func cdiEngineIdentity(version client.ServerVersionResult, socketHint string) (family, daemonVersion string) {
+	for _, component := range version.Components {
+		switch component.Name {
+		case "Podman Engine":
+			return "podman", component.Version
+		case "Engine":
+			return "docker", component.Version
+		}
+	}
+	if strings.Contains(strings.ToLower(version.Platform.Name), "podman") {
+		return "podman", version.Version
+	}
+	switch socketHint {
+	case "podman", "docker":
+		return socketHint, version.Version
+	}
+	return "unknown", version.Version
+}
+
+// compareEngineVersion compares dotted major.minor versions. A missing
+// or unparsable version compares below any minimum: the gate fails
+// closed rather than trusting an engine it cannot identify.
+func compareEngineVersion(version, minimum string) int {
+	parse := func(value string) (int, int) {
+		parts := strings.SplitN(value, ".", 3)
+		if len(parts) < 2 {
+			return -1, -1
+		}
+		major, ok := parseEngineVersionComponent(parts[0])
+		if !ok {
+			return -1, -1
+		}
+		minor, ok := parseEngineVersionComponent(parts[1])
+		if !ok {
+			return -1, -1
+		}
+		return major, minor
+	}
+	major, minor := parse(version)
+	minMajor, minMinor := parse(minimum)
+	switch {
+	case major != minMajor:
+		return major - minMajor
+	default:
+		return minor - minMinor
+	}
+}
+
+// parseEngineVersionComponent parses one numeric major/minor component.
+// Anything but digits is refused, so prerelease suffixes such as "-rc1"
+// and malformed versions can never lift an engine above the gate.
+func parseEngineVersionComponent(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
+}
+
+// buildDeviceRequests encodes ephemeral CDI device IDs as one native CDI
+// DeviceRequest. Capabilities and Options stay empty; Count stays 0 so the
+// explicit DeviceIDs are the only grant. CDI IDs are never logged or echoed
+// in errors: they are host inventory.
+func buildDeviceRequests(config *domain.ContainerConfig) []container.DeviceRequest {
+	if len(config.CDIDevices) == 0 {
+		return nil
+	}
+	ids := append([]string(nil), config.CDIDevices...)
+	sort.Strings(ids)
+	return []container.DeviceRequest{
+		{
+			Driver:    "cdi",
+			DeviceIDs: ids,
+		},
+	}
+}
+
 // StartContainer starts a container.
 func (r *Runtime) StartContainer(ctx context.Context, containerID string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -299,6 +512,9 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 
 	_, err := r.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to start container")
+		}
 		return log.WrapErr(err, "failed to start container")
 	}
 
@@ -330,8 +546,9 @@ func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) erro
 	return nil
 }
 
-// StopContainer stops a container.
-func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
+// StopContainer stops a container, giving it grace to exit before the
+// runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) StopContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -340,9 +557,11 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout})
+	_, err := r.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to stop container")
+		}
 		return log.WrapErr(err, "failed to stop container")
 	}
 
@@ -350,8 +569,9 @@ func (r *Runtime) StopContainer(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// RestartContainer restarts a container.
-func (r *Runtime) RestartContainer(ctx context.Context, containerID string) error {
+// RestartContainer restarts a container, giving it grace to exit before
+// the runtime kills it. A non-positive grace keeps the runtime default.
+func (r *Runtime) RestartContainer(ctx context.Context, containerID string, grace time.Duration) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
@@ -360,14 +580,31 @@ func (r *Runtime) RestartContainer(ctx context.Context, containerID string) erro
 	})
 	log := zerowrap.FromCtx(ctx)
 
-	timeout := 20 // 20 seconds before SIGKILL
-	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: &timeout})
+	_, err := r.client.ContainerRestart(ctx, containerID, client.ContainerRestartOptions{Timeout: stopTimeout(grace)})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to restart container")
+		}
 		return log.WrapErr(err, "failed to restart container")
 	}
 
 	log.Info().Msg("container restarted")
 	return nil
+}
+
+// stopTimeout converts a stop grace into the runtime API's whole-second
+// timeout. A non-positive grace returns nil, which keeps the runtime's
+// own default instead of an immediate kill. A fractional grace rounds up
+// so the container never receives less time than the spec asked for.
+func stopTimeout(grace time.Duration) *int {
+	if grace <= 0 {
+		return nil
+	}
+	seconds := int(math.Ceil(grace.Seconds()))
+	if seconds < 1 {
+		seconds = 1
+	}
+	return &seconds
 }
 
 // RemoveContainer removes a container.
@@ -383,6 +620,10 @@ func (r *Runtime) RemoveContainer(ctx context.Context, containerID string, force
 
 	_, err := r.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: force})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			log.Debug().Msg("container not found, already removed")
+			return nil
+		}
 		return log.WrapErr(err, "failed to remove container")
 	}
 
@@ -480,6 +721,9 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 
 	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil, log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to inspect container")
+		}
 		return nil, log.WrapErr(err, "failed to inspect container")
 	}
 	resp := inspectResult.Container
@@ -502,6 +746,14 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 	name := strings.TrimPrefix(resp.Name, "/")
 
 	created, _ := time.Parse(time.RFC3339Nano, resp.Created)
+	// StartedAt scopes log readiness to the current execution: markers
+	// from a previous execution of the same container ID must not
+	// satisfy a probe. An unparsable value stays zero and is rejected by
+	// the readiness probe rather than silently widening the scope.
+	startedAt, _ := time.Parse(time.RFC3339Nano, resp.State.StartedAt)
+	if startedAt.Year() <= 1 {
+		startedAt = time.Time{}
+	}
 	volumeMounts := make([]domain.ContainerVolumeMount, 0, len(resp.Mounts))
 	for _, m := range resp.Mounts {
 		volumeMounts = append(volumeMounts, domain.ContainerVolumeMount{
@@ -524,7 +776,45 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Labels:       resp.Config.Labels,
 		VolumeMounts: volumeMounts,
 		Created:      created,
+		StartedAt:    startedAt,
+		Env:          resp.Config.Env,
 	}, nil
+}
+
+// GetContainerLogsSince gets container logs emitted at or after since.
+// Readiness uses it with the observed execution start so markers from a
+// previous execution of the same container ID cannot match.
+func (r *Runtime) GetContainerLogsSince(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error) {
+	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
+		zerowrap.FieldLayer:    "adapter",
+		zerowrap.FieldAdapter:  "docker",
+		zerowrap.FieldAction:   "GetContainerLogsSince",
+		zerowrap.FieldEntityID: containerID,
+	})
+	log := zerowrap.FromCtx(ctx)
+
+	options := client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     follow,
+		Timestamps: true,
+		Tail:       "10000",
+	}
+	if !since.IsZero() {
+		// RFC3339Nano keeps the sub-second part of the execution start:
+		// a marker emitted in the same second as a previous execution
+		// must not satisfy the probe.
+		options.Since = since.UTC().Format(time.RFC3339Nano)
+	}
+	logs, err := r.client.ContainerLogs(ctx, containerID, options)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return nil, log.WrapErr(fmt.Errorf("%w: %s", domain.ErrContainerNotFound, containerID), "failed to get container logs")
+		}
+		return nil, log.WrapErr(err, "failed to get container logs")
+	}
+
+	return logs, nil
 }
 
 // GetContainerLogs gets container logs.
@@ -551,6 +841,70 @@ func (r *Runtime) GetContainerLogs(ctx context.Context, containerID string, foll
 	return logs, nil
 }
 
+func (r *Runtime) PullImageWithOptions(ctx context.Context, request domain.ImagePullRequest) error {
+	if request.Transport == domain.ImagePullTransportHTTP {
+		if r.runtimeName == "podman" || strings.Contains(strings.ToLower(r.client.DaemonHost()), "podman") {
+			return r.pullPodmanHTTP(ctx, request)
+		}
+		// Docker has no per-pull HTTP switch. Its daemon honors HTTP only for
+		// endpoints configured in insecure-registries; retain the compatible
+		// pull API and let a missing daemon policy fail explicitly.
+		if request.Username != "" || request.Password != "" {
+			return r.PullImageWithAuth(ctx, request.Reference, request.Username, request.Password)
+		}
+		return r.PullImage(ctx, request.Reference)
+	}
+	if request.Username != "" || request.Password != "" {
+		return r.PullImageWithAuth(ctx, request.Reference, request.Username, request.Password)
+	}
+	return r.PullImage(ctx, request.Reference)
+}
+
+func (r *Runtime) pullPodmanHTTP(ctx context.Context, request domain.ImagePullRequest) error {
+	host := r.client.DaemonHost()
+	if !strings.HasPrefix(host, "unix://") {
+		return fmt.Errorf("unsupported Podman endpoint %q for HTTP pull", host)
+	}
+	httpClient := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", strings.TrimPrefix(host, "unix://"))
+	}}}
+	query := url.Values{"reference": {request.Reference}, "tlsVerify": {"false"}, "quiet": {"false"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://podman/v5.0.0/libpod/images/pull?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	if request.Username != "" || request.Password != "" {
+		auth, err := json.Marshal(registry.AuthConfig{Username: request.Username, Password: request.Password})
+		if err != nil {
+			return err
+		}
+		req.Header.Set(registry.AuthHeader, base64.StdEncoding.EncodeToString(auth))
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("podman HTTP image pull: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("podman HTTP image pull returned %s: %s: %w", resp.Status, strings.TrimSpace(string(body)), domain.ErrImagePullFailed)
+	}
+	decoder := json.NewDecoder(resp.Body)
+	for {
+		var event struct {
+			Error string `json:"error"`
+		}
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			return fmt.Errorf("decode Podman pull response: %w", err)
+		} else if event.Error != "" {
+			return fmt.Errorf("podman image pull: %s: %w", event.Error, domain.ErrImagePullFailed)
+		}
+	}
+	return nil
+}
+
 // PullImage pulls an image.
 func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -569,10 +923,8 @@ func (r *Runtime) PullImage(ctx context.Context, imageRef string) error {
 	}
 	defer reader.Close()
 
-	// Read the response to completion (this is required for the pull to complete)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return log.WrapErr(err, "failed to read pull response")
+	if err := reader.Wait(ctx); err != nil {
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to complete image pull")
 	}
 
 	log.Info().Msg("image pulled successfully")
@@ -629,10 +981,8 @@ func (r *Runtime) PullImageWithAuth(ctx context.Context, imageRef, username, pas
 	}
 	defer reader.Close()
 
-	// Read the response to completion (this is required for the pull to complete)
-	_, err = io.Copy(io.Discard, reader)
-	if err != nil {
-		return log.WrapErr(err, "failed to read pull response")
+	if err := reader.Wait(ctx); err != nil {
+		return log.WrapErr(fmt.Errorf("%w: %w", domain.ErrImagePullFailed, err), "failed to complete authenticated image pull")
 	}
 
 	log.Info().Msg("image pulled successfully with authentication")
@@ -754,54 +1104,6 @@ func (r *Runtime) ListImagesDetailed(ctx context.Context) ([]runtimepkg.ImageDet
 	return result, nil
 }
 
-// PruneImages prunes unused images and reports reclaimed space.
-func (r *Runtime) PruneImages(ctx context.Context, danglingOnly bool) (runtimepkg.PruneReport, error) {
-	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		zerowrap.FieldLayer:   "adapter",
-		zerowrap.FieldAdapter: "docker",
-		zerowrap.FieldAction:  "PruneImages",
-		"dangling_only":       danglingOnly,
-	})
-	log := zerowrap.FromCtx(ctx)
-
-	pruneFilters := make(client.Filters).Add("label", domain.LabelManaged+"=true")
-	if danglingOnly {
-		pruneFilters.Add("dangling", "true")
-	}
-
-	pruneResult, err := r.client.ImagePrune(ctx, client.ImagePruneOptions{Filters: pruneFilters})
-	if err != nil {
-		return runtimepkg.PruneReport{}, log.WrapErr(err, "failed to prune images")
-	}
-
-	deletedIDs := make([]string, 0, len(pruneResult.Report.ImagesDeleted))
-	for _, deleted := range pruneResult.Report.ImagesDeleted {
-		if deleted.Deleted != "" {
-			deletedIDs = append(deletedIDs, deleted.Deleted)
-		}
-		if deleted.Untagged != "" {
-			deletedIDs = append(deletedIDs, deleted.Untagged)
-		}
-	}
-
-	spaceReclaimed := pruneResult.Report.SpaceReclaimed
-	if spaceReclaimed > math.MaxInt64 {
-		log.Warn().
-			Uint64("space_reclaimed_bytes", spaceReclaimed).
-			Int64("space_reclaimed_capped_bytes", math.MaxInt64).
-			Msg("space reclaimed exceeds int64 max; capping value")
-		spaceReclaimed = uint64(math.MaxInt64)
-	}
-
-	//nolint:gosec // spaceReclaimed is capped to MaxInt64 above
-	spaceReclaimedInt := int64(spaceReclaimed)
-
-	return runtimepkg.PruneReport{
-		DeletedIDs:     deletedIDs,
-		SpaceReclaimed: spaceReclaimedInt,
-	}, nil
-}
-
 // Ping checks if Docker is responsive.
 func (r *Runtime) Ping(ctx context.Context) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
@@ -881,42 +1183,60 @@ func hasConfiguredHealthcheck(cfg *container.Config) bool {
 	return !strings.EqualFold(strings.TrimSpace(cfg.Healthcheck.Test[0]), "NONE")
 }
 
-// GetContainerPort gets the host port for a container's internal port.
-func (r *Runtime) GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error) {
+// GetContainerBackendBinds resolves protocol-specific container ports to
+// their host binds in a single container inspection.
+func (r *Runtime) GetContainerBackendBinds(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:    "adapter",
 		zerowrap.FieldAdapter:  "docker",
-		zerowrap.FieldAction:   "GetContainerPort",
+		zerowrap.FieldAction:   "GetContainerBackendBinds",
 		zerowrap.FieldEntityID: containerID,
-		"internal_port":        internalPort,
+		"ports":                len(ports),
 	})
 	log := zerowrap.FromCtx(ctx)
 
 	inspectResult, err := r.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
-		return 0, log.WrapErr(err, "failed to inspect container")
+		return nil, log.WrapErr(err, "failed to inspect container")
 	}
 	resp := inspectResult.Container
 
 	if resp.NetworkSettings == nil || resp.NetworkSettings.Ports == nil {
-		return 0, fmt.Errorf("no port mappings found for container %s", containerID)
+		return nil, fmt.Errorf("no port mappings found for container %s", containerID)
 	}
 
-	containerPort, err := network.ParsePort(fmt.Sprintf("%d/tcp", internalPort))
-	if err != nil {
-		return 0, fmt.Errorf("invalid container port %d: %w", internalPort, err)
-	}
-	bindings, exists := resp.NetworkSettings.Ports[containerPort]
-	if !exists || len(bindings) == 0 {
-		return 0, fmt.Errorf("port %d not mapped for container %s", internalPort, containerID)
+	binds := make([]domain.ContainerBackendBind, 0, len(ports))
+	for _, port := range ports {
+		containerPort, err := network.ParsePort(fmt.Sprintf("%d/%s", port.ContainerPort, port.Protocol))
+		if err != nil {
+			return nil, fmt.Errorf("invalid container port %d: %w", port.ContainerPort, err)
+		}
+		bindings, exists := resp.NetworkSettings.Ports[containerPort]
+		if !exists || len(bindings) == 0 {
+			return nil, fmt.Errorf("port %d/%s not mapped for container %s", port.ContainerPort, port.Protocol, containerID)
+		}
+		// Exactly one loopback binding is required: a wildcard, multiple,
+		// or non-loopback mapping would expose the backend beyond the
+		// loopback contract the proxy and readiness rely on.
+		if len(bindings) != 1 {
+			return nil, fmt.Errorf("port %d/%s has %d host bindings for container %s; exactly one loopback binding is required", port.ContainerPort, port.Protocol, len(bindings), containerID)
+		}
+		binding := bindings[0]
+		if binding.HostIP != netip.MustParseAddr("127.0.0.1") {
+			return nil, fmt.Errorf("port %d/%s is published on host IP %q for container %s; loopback is required", port.ContainerPort, port.Protocol, binding.HostIP, containerID)
+		}
+		hostPort, err := strconv.Atoi(binding.HostPort)
+		if err != nil || hostPort < 1 || hostPort > 65535 {
+			return nil, fmt.Errorf("invalid host port %q for container %s", binding.HostPort, containerID)
+		}
+		binds = append(binds, domain.ContainerBackendBind{
+			ContainerPort: port.ContainerPort,
+			HostPort:      hostPort,
+			Protocol:      port.Protocol,
+		})
 	}
 
-	hostPort, err := strconv.Atoi(bindings[0].HostPort)
-	if err != nil {
-		return 0, fmt.Errorf("invalid host port for container %s: %w", containerID, err)
-	}
-
-	return hostPort, nil
+	return binds, nil
 }
 
 // GetImageExposedPorts gets the exposed ports from an image.
@@ -1177,7 +1497,7 @@ func (r *Runtime) VolumeExists(ctx context.Context, volumeName string) (bool, er
 }
 
 // CreateVolume creates a new Docker volume.
-func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
+func (r *Runtime) CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",
 		zerowrap.FieldAdapter: "docker",
@@ -1186,12 +1506,17 @@ func (r *Runtime) CreateVolume(ctx context.Context, volumeName string) error {
 	})
 	log := zerowrap.FromCtx(ctx)
 
+	// The managed marker and creation time are adapter-owned; every
+	// caller-supplied label is preserved so ownership provenance is
+	// stamped at creation, not reconstructed later.
+	merged := make(map[string]string, len(labels)+2)
+	maps.Copy(merged, labels)
+	merged[domain.LabelManaged] = "true"
+	merged[domain.LabelCreated] = time.Now().UTC().Format(time.RFC3339)
+
 	_, err := r.client.VolumeCreate(ctx, client.VolumeCreateOptions{
-		Name: volumeName,
-		Labels: map[string]string{
-			domain.LabelManaged: "true",
-			domain.LabelCreated: time.Now().UTC().Format(time.RFC3339),
-		},
+		Name:   volumeName,
+		Labels: merged,
 	})
 	if err != nil {
 		return log.WrapErr(err, "failed to create volume")
@@ -1532,6 +1857,19 @@ func (r *Runtime) GetImageLabels(ctx context.Context, imageRef string) (map[stri
 }
 
 // GetImageID returns the unique image ID (sha256 digest) for the given image reference.
+func (r *Runtime) VerifyImageDigest(ctx context.Context, imageRef, digest string) error {
+	inspect, err := r.client.ImageInspect(ctx, imageRef)
+	if err != nil {
+		return fmt.Errorf("inspect image digest: %w", err)
+	}
+	for _, repoDigest := range inspect.RepoDigests {
+		if strings.HasSuffix(repoDigest, "@"+digest) {
+			return nil
+		}
+	}
+	return fmt.Errorf("expected digest %s is absent from local image metadata: %w", digest, domain.ErrImagePullFailed)
+}
+
 func (r *Runtime) GetImageID(ctx context.Context, imageRef string) (string, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "adapter",

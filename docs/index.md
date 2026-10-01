@@ -1,15 +1,16 @@
 # Gordon Documentation
 
-Gordon is a self-hosted container deployment platform that combines a private Docker registry with automatic container deployment.
+Gordon is a self-hosted container deployment platform: a private container registry, a declarative app runtime, and a reverse proxy.
 
 ## What is Gordon?
 
 Gordon runs on your VPS and provides:
 
 - **Private Container Registry** - Push images from your local machine or CI
-- **HTTP Reverse Proxy** - Routes domains to containers automatically
-- **Push-to-Deploy** - Containers deploy when you push new images
-- **Zero-Downtime Updates** - New containers start before old ones stop
+- **Declarative Apps** - One TOML file per app, explicit apply then deploy
+- **HTTP Reverse Proxy** - Routes app hosts to containers
+- **Push, Apply, Deploy** - Push stores images; deploy is always explicit
+- **Sequential Service Replacement** - One service generation at a time: withdraw traffic, replace, verify readiness, republish
 - **Single Binary** - ~15MB RAM footprint
 
 ## How It Works
@@ -31,7 +32,7 @@ Gordon runs on your VPS and provides:
 
 1. Build your container locally where you have computing power
 2. Push to your Gordon registry
-3. Gordon automatically deploys and routes traffic to your container
+3. Apply the app manifest and deploy to activate it
 
 ## Quick Navigation
 
@@ -46,15 +47,13 @@ Gordon runs on your VPS and provides:
 
 - [Configuration Overview](./config/index.md) - All configuration options
 - [Server Settings](./config/server.md) - Ports, domains, and runtime
-- [Routes](./config/routes.md) - Domain to container mapping
+- [App Manifest](./config/apps.md) - Declarative app files (services, hosts, secrets, volumes)
+- [Migrate to Gordon v3](./migrate-to-v3.md) - Breaking upgrade and explicit secret migration
 - [Traffic Plane](./config/traffic.md) - TCP, UDP, and TLS passthrough entrypoints
 - [Authentication](./config/auth.md) - Registry auth plus remote CLI login/token workflows
-- [Secrets](./config/secrets.md) - Secure credential storage
-- [Network Isolation](./config/network-isolation.md) - Per-app network isolation
-- [Preview Environments](./config/preview.md) - Ephemeral per-branch deployments
-- [Attachments](./config/attachments.md) - Service dependencies
+- [Secrets](./config/secrets.md) - Installation secrets and app secret values
+- [Network Isolation](./config/network-isolation.md) - Installation network policy
 - [Logging](./config/logging.md) - Log collection and rotation
-- [Environment Variables](./config/env.md) - Per-route environment configuration
 
 ### CLI Reference
 
@@ -71,7 +70,6 @@ Gordon runs on your VPS and provides:
 ### Reference
 
 - [Docker Labels](./reference/docker-labels.md) - Container and image labels
-- [Environment Variables](./reference/env-variables.md) - Environment variable syntax
 - [Troubleshooting](./reference/troubleshooting.md) - Common issues and solutions
 
 ## Requirements

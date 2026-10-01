@@ -297,7 +297,18 @@ func TestRunImagesPrune_BothScopeFlagsExplicit(t *testing.T) {
 
 func TestRunImagesPrune_DryRunBothScopes(t *testing.T) {
 	client := &imagesClientMock{
-		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}, {Dangling: true}},
+		pruneResp: &dto.ImagePruneResponse{
+			Plan: dto.PruneSummary{
+				Applied:   false,
+				Eligible:  2,
+				Protected: 1,
+				Candidates: []dto.PruneCandidate{
+					{Kind: "runtime-image", Ref: "sha256:a", Verdict: "eligible"},
+					{Kind: "runtime-image", Ref: "sha256:b", Verdict: "eligible"},
+					{Kind: "registry-tag", Ref: "app:v1", Verdict: "protected", Reasons: []string{"protected-active-service"}},
+				},
+			},
+		},
 	}
 
 	var out bytes.Buffer
@@ -307,15 +318,22 @@ func TestRunImagesPrune_DryRunBothScopes(t *testing.T) {
 
 	text := out.String()
 	assert.Contains(t, text, "Dry run")
-	assert.Contains(t, text, "would prune 2 dangling runtime images")
-	assert.Contains(t, text, "would keep latest + 3 previous tags")
-	assert.Equal(t, 1, client.listImagesCalls)
-	assert.Equal(t, 0, client.pruneCalls)
+	assert.Contains(t, text, "would delete 2 images")
+	assert.Contains(t, text, "latest + 3 previous tags")
+	assert.Contains(t, text, "Would delete: 2 (eligible=2 protected=1 unknown=0)")
+	assert.Contains(t, text, "protected-active-service")
+	assert.Equal(t, 1, client.pruneCalls)
+	assert.NotNil(t, client.lastPruneOpts.DryRun)
+	assert.True(t, *client.lastPruneOpts.DryRun)
 }
 
 func TestRunImagesPrune_DryRunDanglingOnlyScope(t *testing.T) {
 	client := &imagesClientMock{
-		listImagesResp: []dto.Image{{Dangling: true}},
+		pruneResp: &dto.ImagePruneResponse{
+			Plan: dto.PruneSummary{
+				Candidates: []dto.PruneCandidate{{Kind: "runtime-image", Ref: "sha256:a", Verdict: "eligible"}},
+			},
+		},
 	}
 
 	var out bytes.Buffer
@@ -324,14 +342,18 @@ func TestRunImagesPrune_DryRunDanglingOnlyScope(t *testing.T) {
 	require.NoError(t, err)
 
 	text := out.String()
-	assert.Contains(t, text, "would prune 1 dangling runtime images")
+	assert.Contains(t, text, "would delete 1 images")
 	assert.Contains(t, text, "Registry cleanup skipped")
-	assert.Equal(t, 0, client.pruneCalls)
+	assert.Equal(t, 1, client.pruneCalls)
 }
 
 func TestRunImagesPrune_DryRunRegistryOnlyScope(t *testing.T) {
 	client := &imagesClientMock{
-		listImagesResp: []dto.Image{{Dangling: true}, {Dangling: false}},
+		pruneResp: &dto.ImagePruneResponse{
+			Plan: dto.PruneSummary{
+				Candidates: []dto.PruneCandidate{{Kind: "registry-tag", Ref: "app:v1", Verdict: "eligible"}},
+			},
+		},
 	}
 
 	var out bytes.Buffer
@@ -341,8 +363,8 @@ func TestRunImagesPrune_DryRunRegistryOnlyScope(t *testing.T) {
 
 	text := out.String()
 	assert.Contains(t, text, "Runtime cleanup skipped")
-	assert.Contains(t, text, "would keep latest + 5 previous tags")
-	assert.Equal(t, 0, client.pruneCalls)
+	assert.Contains(t, text, "latest + 5 previous tags")
+	assert.Equal(t, 1, client.pruneCalls)
 }
 
 // ---------------------------------------------------------------------------
@@ -484,7 +506,7 @@ func TestRunImagesPrune_DryRunNeverPrompts(t *testing.T) {
 	t.Cleanup(func() { pruneConfirmFunc = origConfirm })
 
 	client := &imagesClientMock{
-		listImagesResp: []dto.Image{{Dangling: true}},
+		pruneResp: &dto.ImagePruneResponse{Plan: dto.PruneSummary{}},
 	}
 
 	var out bytes.Buffer
@@ -493,6 +515,7 @@ func TestRunImagesPrune_DryRunNeverPrompts(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.False(t, confirmCalled, "confirmation should not be called during dry-run")
+	assert.Equal(t, 1, client.pruneCalls)
 }
 
 // ---------------------------------------------------------------------------

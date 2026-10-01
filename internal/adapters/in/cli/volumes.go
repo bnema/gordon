@@ -40,7 +40,7 @@ func newVolumesListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List all volumes",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}
@@ -56,9 +56,14 @@ func newVolumesPruneCmd() *cobra.Command {
 	var opts volumesPruneOptions
 	cmd := &cobra.Command{
 		Use:   "prune",
-		Short: "Remove orphaned volumes",
+		Short: "Remove released app-owned volumes",
+		Long: `Remove app-owned volumes that were explicitly released and are unused.
+
+Only a volume whose durable ownership record marks it released, whose runtime
+labels agree with that record, and which no container mounts is removed.
+Attached, retained, legacy-managed, unmanaged, and unknown volumes survive.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			handle, err := resolveControlPlane(configPath)
+			handle, err := resolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}
@@ -66,7 +71,7 @@ func newVolumesPruneCmd() *cobra.Command {
 			return runVolumesPrune(cmd.Context(), handle.plane, opts, cmd.OutOrStdout())
 		},
 	}
-	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "show what would be removed")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "report the plan without deleting")
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.Json, "json", false, "output as JSON")
 	return cmd
@@ -133,33 +138,27 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 		return err
 	}
 
-	if preview.VolumesRemoved == 0 {
-		if opts.Json {
-			return writeJSON(out, preview)
-		}
-		return cliWriteLine(out, "No orphaned volumes to remove.")
-	}
-
 	if opts.DryRun {
-		if opts.Json {
-			return writeJSON(out, preview)
-		}
-		return renderPrunePreview(out, preview)
+		return renderVolumePrunePlan(out, opts.Json, preview)
+	}
+	if preview.Plan.Eligible == 0 {
+		// A zero-eligibility plan is a normal outcome: the report explains
+		// why each volume survived.
+		return renderVolumePrunePlan(out, opts.Json, preview)
 	}
 
 	if !opts.Json {
 		if err := renderPrunePreview(out, preview); err != nil {
 			return err
 		}
-	}
-
-	if !opts.NoConfirm && !opts.Json {
-		confirmed, err := components.RunConfirm("Remove these volumes?")
-		if err != nil {
-			return err
-		}
-		if !confirmed {
-			return cliWriteLine(out, "Cancelled.")
+		if !opts.NoConfirm {
+			confirmed, err := components.RunConfirm("Remove these volumes?")
+			if err != nil {
+				return err
+			}
+			if !confirmed {
+				return cliWriteLine(out, "Cancelled.")
+			}
 		}
 	}
 
@@ -167,10 +166,25 @@ func runVolumesPrune(ctx context.Context, client volumesClient, opts volumesPrun
 	if err != nil {
 		return err
 	}
-
 	if opts.Json {
 		return writeJSON(out, result)
 	}
 
-	return cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Removed %d volumes, reclaimed %s", result.VolumesRemoved, bytesize.Format(result.SpaceReclaimed))))
+	if err := cliWriteLine(out, cliRenderSuccess(fmt.Sprintf("Removed %d volumes, reclaimed %s", result.VolumesRemoved, bytesize.Format(result.SpaceReclaimed)))); err != nil {
+		return err
+	}
+	return cliRenderPruneSummary(out, result.Plan)
+}
+
+// renderVolumePrunePlan writes one plan without deleting anything.
+func renderVolumePrunePlan(out io.Writer, asJSON bool, resp *dto.VolumePruneResponse) error {
+	if asJSON {
+		return writeJSON(out, resp)
+	}
+	if resp.Plan.Eligible == 0 {
+		if err := cliWriteLine(out, "No released volumes to remove."); err != nil {
+			return err
+		}
+	}
+	return cliRenderPruneSummary(out, resp.Plan)
 }

@@ -56,7 +56,7 @@ enabled = true
 Reload Gordon:
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### 4. Configure Database Password

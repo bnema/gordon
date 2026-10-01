@@ -1,165 +1,126 @@
 # Volumes Configuration
 
-Configure automatic persistent storage for containers.
+Persistent app storage is declared in each app manifest. The installation-level `[volumes]` settings apply to non-app volume management and do not control declarative app storage.
 
-## Configuration
+## Declarative app volumes
 
-```toml
-[volumes]
-auto_create = true
-prefix = "gordon"
-preserve = true
-```
-
-## Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `auto_create` | bool | `true` | Automatically create volumes from Dockerfile VOLUME |
-| `prefix` | string | `"gordon"` | Prefix for volume names |
-| `preserve` | bool | `true` | Keep volumes when containers are removed |
-
-## How It Works
-
-Gordon automatically creates Docker volumes from Dockerfile `VOLUME` directives:
-
-```dockerfile
-FROM postgres:18
-VOLUME ["/var/lib/postgresql/data"]
-```
-
-When Gordon deploys this container:
-
-1. Reads `VOLUME` directives from image metadata
-2. Creates named volumes with `prefix-domain-path` naming
-3. Mounts volumes to the container
-4. Preserves data across container updates
-
-## Volume Naming
-
-Volumes are named: `{prefix}-{domain}-{path}`
-
-| Domain | Volume Path | Volume Name |
-|--------|-------------|-------------|
-| `app.mydomain.com` | `/data` | `gordon-app-mydomain-com-data` |
-| `db.mydomain.com` | `/var/lib/postgresql/data` | `gordon-db-mydomain-com-var-lib-postgresql-data` |
-
-## Persistence
-
-### Default: Preserve Volumes
+Services declare persistent mounts in the app manifest:
 
 ```toml
-[volumes]
-preserve = true
+[[services.web.volume]]
+name = "database-data"
+path = "/var/lib/postgresql/data"
 ```
 
-With `preserve = true`:
-- Volumes persist when containers are updated
-- Data survives container restarts
-- Volumes remain even if container is removed
+A volume name is unique within its service. Gordon creates an incarnation-owned runtime volume, records the app, app UUID, service, and logical volume ownership, and reuses it across replacement and restart. Manifests never carry host paths, and sharing one volume between services is not supported. When an app must read an operator-approved host location, use a named administrative bind instead.
 
-### Remove with Container
+## Administrative bind mounts
+
+Manifests cannot name host paths directly. The operator declares a named policy in `gordon.toml`; the manifest only references the policy name:
 
 ```toml
-[volumes]
-preserve = false
+# gordon.toml
+[app_mounts.app-logs]
+source = "/srv/gordon/host-logs"   # required; the only host path this mount may come from
+read_only = true
+allowed_apps = ["metrics-agent"]   # required; exact, non-empty
+allowed_services = ["web"]         # required; exact, non-empty
+# root = "/srv/gordon"             # optional administrative boundary
 ```
-
-With `preserve = false`:
-- Volumes are removed when containers are removed
-- Useful for stateless containers
-- Frees up disk space automatically
-
-## Examples
-
-### Database Container
-
-```dockerfile
-# my-postgres.Dockerfile
-FROM postgres:18
-VOLUME ["/var/lib/postgresql/data"]
-ENV POSTGRES_DB=myapp
-ENV POSTGRES_USER=app
-```
-
-Gordon automatically:
-- Creates `gordon-db-mydomain-com-var-lib-postgresql-data` volume
-- Mounts it to `/var/lib/postgresql/data`
-- Preserves data across postgres container updates
-
-### Application with Uploads
-
-```dockerfile
-FROM node:18
-WORKDIR /app
-VOLUME ["/app/uploads", "/app/data"]
-COPY . .
-CMD ["npm", "start"]
-```
-
-Creates two volumes:
-- `gordon-app-mydomain-com-app-uploads`
-- `gordon-app-mydomain-com-app-data`
-
-### Custom Prefix
 
 ```toml
-[volumes]
-prefix = "prod"
+# app manifest
+[[services.web.bind]]
+name = "app-logs"        # must match [app_mounts.<name>]
+path = "/var/lib/collector/host-logs"   # container destination
+readonly = true
 ```
 
-Volume names become:
-- `prod-app-mydomain-com-data`
-- `prod-db-mydomain-com-var-lib-postgresql-data`
+- `source` must be absolute, normalized, and resolve through symlinks to a regular file or directory that stays under `root`. When `root` is omitted, the source's parent directory is the boundary, so a symlinked source may resolve within it but never escape it.
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists; there is no wildcard, prefix, or empty-means-all form.
+- Read-only precedence: `read_only` on the policy or `readonly` on the bind forces the resolved mount read-only. A bind never weakens its policy.
+- Gordon re-resolves the policy immediately before every container create, restart, and recovery. Removing a policy or an allowlist entry blocks future deploys; running containers keep their current mounts until redeployed. `gordon serve` reload republishes validated policies atomically, and a failing edit keeps the previous policies live.
+- Gordon never creates, copies, deletes, chowns, backs up, or prunes the host path; ownership and permissions stay with the operator.
 
-## Managing Volumes
+A read-only log collector is the typical use. Its own state is a named volume; the host logs are exposed through a bind:
 
-### List Volumes
+```toml
+name = "metrics-agent"
+
+[services.collector]
+image = "registry.example.com/metrics/collector:2.1.0"
+
+[[services.collector.volume]]
+name = "collector-state"
+path = "/var/lib/collector"
+
+[[services.collector.bind]]
+name = "app-logs"
+path = "/var/lib/collector/host-logs"
+readonly = true
+```
+
+Collection is one-way: the collector reads operator-owned logs and cannot write back through the bind.
+
+Every Dockerfile `VOLUME` path must be mapped explicitly. A matching `[[services.<name>.volume]]` declaration maps it to a Gordon-owned volume; a `[[services.<name>.bind]]` whose container `path` equals the `VOLUME` path also satisfies the mapping, because the bind mounts over that image-declared volume. Any `VOLUME` path with neither mapping fails closed at deploy with an unmanaged-volume error. A bind destination may not collide with a declared volume path.
+
+Runtime volume names are implementation details. Use `gordon volumes list` and ownership labels to inspect them; do not derive ownership from a name, rename volumes, or edit Gordon's ownership records.
+
+## Retention
+
+Ordinary app operations retain data:
+
+- deploy and restart reuse the service's volumes;
+- removing a service retains its volumes;
+- `gordon apps remove` retains volumes under the removed app's internal UUID;
+- a new app that reuses the public name does not adopt retained volumes;
+- administrative binds are unaffected by app operations: their host paths are never created, adopted, or retained by Gordon.
+
+Gordon does not automatically delete retained app volumes. Back up persistent data before any manual deletion, and use database-native backup and restore procedures for databases.
+
+## Manual migration
+
+Gordon does not copy data between volumes. Stop every container that can write to the source, verify a backup, create an empty target volume, and perform the copy through the runtime so rootless UID/GID mappings are preserved. For Podman, a disposable helper container is the preferred generic method:
 
 ```bash
-docker volume ls | grep gordon
+podman run --rm --pull=never --network=none \
+  --volume "<source-volume>:/source:ro" \
+  --volume "<target-volume>:/target" \
+  docker.io/library/alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc \
+  sh -c 'cp -a /source/. /target/'
 ```
 
-### Inspect Volume
+Replace the literal `<...>` placeholders before running; they are quoted above so a shell cannot mistake them for redirection. The approved helper image is digest-pinned, must already be available locally, and runs without network access. If direct access to storage paths is unavoidable with rootless Podman, enter its user namespace:
 
 ```bash
-docker volume inspect gordon-app-mydomain-com-data
+podman unshare cp -a "<source-path>"/. "<target-path>"/
 ```
 
-### Backup Volume
+Do not use a plain root `cp` as the default procedure: host ownership IDs may not match the container's user namespace. Applications that rely on ACLs, extended attributes, sparse files, or database consistency need an application-specific export/restore or copy tool. Validate ownership and application behavior against the target, and retain the source volume until the migration is accepted.
+
+## Pruning
+
+Use Gordon's ownership-aware command:
 
 ```bash
-docker run --rm \
-  -v gordon-db-mydomain-com-var-lib-postgresql-data:/data \
-  -v $(pwd):/backup \
-  alpine tar -czf /backup/db-backup.tar.gz -C /data .
+gordon volumes prune --dry-run
+gordon volumes prune
 ```
 
-### Restore Volume
+A volume is eligible only when all of these requirements hold:
 
-```bash
-docker run --rm \
-  -v gordon-db-mydomain-com-var-lib-postgresql-data:/data \
-  -v $(pwd):/backup \
-  alpine tar -xzf /backup/db-backup.tar.gz -C /data
-```
+1. Gordon has a durable ownership record marking it `released`.
+2. Runtime labels agree with the record's app, app incarnation UUID, and service.
+3. No container mounts the volume.
 
-## Volume Cleanup
+Retained, attached, unknown, contradictory, and unrelated volumes survive. A `gordon.managed=true` label or a matching name is not sufficient deletion authority. Administrative binds are out of scope entirely: they are operator-owned host paths, no ownership record exists for them, and they are never candidates. With current lifecycle metadata, no operation marks app volumes `released`, so prune normally succeeds with no deletions.
 
-If you have orphaned volumes:
+> **Warning:** Do not use `docker volume prune`, `podman volume prune`, or equivalent runtime cleanup for Gordon data. Those commands bypass Gordon's ownership and retention checks and can delete an unmounted retained volume.
 
-```bash
-# List all gordon volumes
-docker volume ls -f name=gordon
-
-# Remove specific volume (warning: deletes data!)
-docker volume rm gordon-old-app-data
-
-# Prune unused volumes (be careful!)
-docker volume prune
-```
+See the [Volumes CLI reference](../cli/volumes.md) for flags and plan output.
 
 ## Related
 
-- [Attachments](./attachments.md)
+- [App Manifest](./apps.md)
+- [Volumes CLI](../cli/volumes.md)
 - [Configuration Overview](./index.md)

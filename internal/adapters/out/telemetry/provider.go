@@ -26,7 +26,7 @@ type Config struct {
 	AuthToken       string  `mapstructure:"auth_token"`        // Basic auth token (base64 encoded user:pass)
 	Traces          bool    `mapstructure:"traces"`            // Enable trace export
 	Metrics         bool    `mapstructure:"metrics"`           // Enable metric export
-	Logs            bool    `mapstructure:"logs"`              // Bridge zerowrap logs to OTLP
+	Logs            bool    `mapstructure:"logs"`              // Export Gordon, proxy access, and app container logs to OTLP
 	TraceSampleRate float64 `mapstructure:"trace_sample_rate"` // 0=disabled, (0,1)=ratio-based, >=1=always sample
 }
 
@@ -35,6 +35,9 @@ type Provider struct {
 	TracerProvider *trace.TracerProvider
 	MeterProvider  *metric.MeterProvider
 	LogProvider    *otellog.LoggerProvider
+	// WorkloadLogs exports proxy access and app container logs, each
+	// under its own service identity. Nil when log export is disabled.
+	WorkloadLogs *LogExporter
 }
 
 // endpointConfig holds parsed endpoint details shared across exporter setup.
@@ -218,5 +221,20 @@ func (p *Provider) setupLogging(ctx context.Context, ep *endpointConfig, res *re
 	)
 	p.LogProvider = lp
 	*shutdowns = append(*shutdowns, lp.Shutdown)
+
+	// Workload logs use a dedicated exporter: the SDK forbids concurrent
+	// Export calls, and Gordon's own provider already owns logExp.
+	workloadExp, err := otlploghttp.New(ctx, logOpts...)
+	if err != nil {
+		return fmt.Errorf("create workload log exporter: %w", err)
+	}
+	// Host and OS only: app records must not inherit Gordon's
+	// service.name or service.version.
+	base, err := resource.New(ctx, resource.WithOS(), resource.WithHost())
+	if err != nil {
+		return fmt.Errorf("create workload log resource: %w", err)
+	}
+	p.WorkloadLogs = NewLogExporter(workloadExp, base)
+	*shutdowns = append(*shutdowns, p.WorkloadLogs.Shutdown)
 	return nil
 }

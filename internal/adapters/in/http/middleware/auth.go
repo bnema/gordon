@@ -13,6 +13,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
+	"github.com/bnema/gordon/internal/adapters/in/http/registry/route"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -235,47 +236,26 @@ func actionFromMethod(method string) string {
 	}
 }
 
-// extractRepoName extracts the repository name from a registry path.
-// Returns empty string if the path is not a valid registry path or should be allowed.
-func extractRepoName(path string) (repoName string, shouldAllow bool) {
-	if !strings.HasPrefix(path, "/v2/") {
-		return "", true // Not a registry path, allow
-	}
-
-	pathParts := strings.Split(strings.TrimPrefix(path, "/v2/"), "/")
-	if len(pathParts) < 2 {
-		return "", true // Malformed path or /v2/ root, allow
-	}
-
-	// Find the boundary between repo name and route (manifests, blobs, tags)
-	var repoNameParts []string
-	for i, part := range pathParts {
-		if part == "manifests" || part == "blobs" || part == "tags" || part == "_catalog" {
-			repoNameParts = pathParts[:i]
-			break
-		}
-	}
-	if len(repoNameParts) == 0 {
-		return "", true // Special route like /v2/token, allow
-	}
-
-	return strings.Join(repoNameParts, "/"), false
-}
-
 // checkScopeAccess verifies the token has permission for the requested operation.
-// Maps HTTP method to registry action and checks if any token scope grants access.
+// It parses the path with the same parser the registry handler dispatches
+// on, so authorization and dispatch always name the same repository; a path
+// the handler would reject is denied rather than allowed.
 func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.Logger) bool {
 	action := actionFromMethod(r.Method)
 
-	repoName, shouldAllow := extractRepoName(r.URL.Path)
-	if shouldAllow {
+	op, err := route.Parse(r.URL.Path)
+	if err != nil {
+		log.Debug().Err(err).Str("path", r.URL.Path).Msg("malformed registry path denied")
+		return false
+	}
+	if !op.RequiresRepositoryAuth() {
 		return true
 	}
 
 	// Delegate matching to domain layer
-	if domain.ScopesGrantRegistryAccess(claims.Scopes, repoName, action) {
+	if domain.ScopesGrantRegistryAccess(claims.Scopes, op.Repository, action) {
 		log.Debug().
-			Str("repo", repoName).
+			Str("repo", op.Repository).
 			Str("action", action).
 			Strs("scopes", claims.Scopes).
 			Msg("scope access granted")
@@ -283,7 +263,7 @@ func checkScopeAccess(r *http.Request, claims *domain.TokenClaims, log zerowrap.
 	}
 
 	log.Debug().
-		Str("repo", repoName).
+		Str("repo", op.Repository).
 		Str("action", action).
 		Strs("scopes", claims.Scopes).
 		Msg("no scope grants access")

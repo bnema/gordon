@@ -1,8 +1,8 @@
 # CLI Commands
 
-Gordon provides a command-line interface for server management, deployment, and authentication.
+Gordon provides a command-line interface for server management, app deployment, and authentication.
 
-Most `list` commands also support `--json` for machine-readable output.
+Most `list`/`show` commands also support `--json` for machine-readable output.
 
 Commands are organized by where they run:
 
@@ -20,30 +20,15 @@ Commands are organized by where they run:
 
 ## Management Commands (local or remote)
 
-Management commands run locally through in-process services by default. Add `--remote` to target another Gordon instance.
+Management commands use the authenticated daemon API. By default they connect through the owner-only local Unix socket; add `--remote` to use authenticated HTTP/TLS against another Gordon instance.
 
 | Command | Description | Documentation |
 |---------|-------------|---------------|
-| `gordon attachments` | Manage container attachments | [attachments](./attachments.md) |
-| `gordon autoroute` | Manage auto-route domain allowlist | [autoroute](./autoroute.md) |
-| `gordon backups` | Manage database backups | [backup](./backup.md) |
-| `gordon bootstrap` | Configure a route, attachments, and secrets for an app | [bootstrap](./bootstrap.md) |
-| `gordon config show` | Show server configuration | [config](./config.md) |
-| `gordon deploy` | Manually deploy or redeploy a route | [serve](./serve.md#gordon-deploy) |
-| `gordon images` | List and prune images | [images](./images.md) |
-| `gordon logs` | Display Gordon process or container logs | [serve](./serve.md#gordon-logs) |
-| `gordon networks list` | List Gordon-managed Docker networks | [networks](./networks.md) |
-| `gordon preview` | Create or manage preview environments | [preview](../config/preview.md) |
-| `gordon push` | Tag, push, and optionally deploy an image | [push](./push.md) |
-| `gordon attachments push` | Build/push attachment images to registry | [attachments](./attachments.md) |
-| `gordon reload` | Reload configuration and sync containers | [serve](./serve.md#gordon-reload) |
-| `gordon restart` | Restart a running container | [restart](./restart.md) |
-| `gordon pin` | Pin a route to a specific image tag | [pin](./pin.md) |
-| `gordon routes` | Manage routes | [routes](./routes.md) |
-| `gordon secrets` | Manage secrets | [secrets](./secrets.md) |
-| `gordon status` | Show Gordon server status | [status](./status.md) |
-| `gordon traffic` | Inspect traffic plane status | [traffic](./traffic.md) |
-| `gordon volumes` | Manage volumes | - |
+| `gordon apps` | Manage applications, operations, and app secrets | [apps](./apps.md) |
+| `gordon backups` | Manage declared app database and volume backups | [backup](./backup.md) |
+| `gordon daemon` | Daemon status, logs, reload, config, TLS, traffic, and networks | [daemon](./daemon.md) |
+| `gordon images` | Push, list, and prune images | [images](./images.md) |
+| `gordon volumes` | Manage volumes | [volumes](./volumes.md) |
 
 ## Client Commands
 
@@ -60,54 +45,59 @@ Management commands run locally through in-process services by default. Add `--r
 gordon serve
 gordon serve --config /path/to/config.toml
 
-# Reload configuration
-gordon reload
+# Reload installation configuration (never activates app state)
+gordon daemon reload
 
-# Deploy a specific route
-gordon deploy myapp.example.com
+# Applications (daemon-owned; fail without a reachable daemon)
+gordon apps apply --file blog.toml
+gordon apps apply --file blog.toml --deploy
+gordon apps list
+gordon apps show blog
+gordon apps diff blog
+gordon apps deploy blog
+gordon apps restart blog
+gordon apps stop blog
+gordon apps start blog
+gordon apps remove blog
+gordon apps operations show blog --key <operation-key>
+gordon apps operations watch blog --key <operation-key>
+gordon apps secrets list blog
 
-# Restart a running container
-gordon restart myapp.example.com
+# Daemon
+gordon daemon status
+gordon daemon config show
+gordon daemon config validate --file /path/to/gordon.toml
+gordon daemon tls
+gordon daemon networks
 
-# First-time route setup
-gordon bootstrap app.example.com myapp:latest --attachment postgres:18 --env APP_ENV=production
-
-# Then push and deploy
-gordon push myapp:latest --domain app.example.com --build --no-confirm
-
-# Push an image and deploy
-gordon push myapp --build
-
-# Push and deploy without confirmation
-gordon push myapp --no-confirm
-
-# Pin to a specific tag
-gordon pin myapp.example.com
+# Push an image (OCI transfer only; deploy separately)
+gordon images push myapp --build --remote prod
 
 # View logs
-gordon logs                          # Gordon process logs
-gordon logs -f                       # Follow process logs
-gordon logs -n 100                   # Last 100 lines
-gordon logs myapp.example.com       # Container logs for myapp.example.com
-gordon logs myapp.example.com -f    # Follow container logs
+gordon daemon logs                                      # Gordon process logs
+gordon daemon logs -f                                   # Follow process logs
+gordon daemon logs -n 100                               # Last 100 process-log lines
+gordon apps logs blog --service web              # App service logs
+gordon apps logs blog --service web --follow     # Follow app service logs
 
 # Check version
 gordon version
 
 # Traffic plane
-gordon traffic status --remote prod
-gordon traffic status --remote prod --json
+gordon daemon traffic --remote prod
+gordon daemon traffic --remote prod --json
 
 # Backups
 gordon backups list
-gordon backups run app.example.com
-gordon backups detect app.example.com
+gordon backups run shop --service api --database orders
+gordon backups volume run shop --service api --volume data
 gordon backups status
 
 # Images
+gordon images push myapp --build --remote prod
 gordon images list
-gordon images prune --runtime-only
-gordon images prune --keep 3
+gordon images prune --dry-run
+gordon images prune --keep-releases 3
 
 # Authentication
 gordon auth login --remote https://gordon.example.com --token $TOKEN
@@ -119,43 +109,14 @@ gordon auth token list
 gordon auth token revoke <token-id>
 gordon auth internal
 
-# Routes
-gordon routes list
-gordon routes status
-gordon routes add myapp.example.com myapp:latest
-gordon routes remove myapp.example.com
-gordon routes deploy myapp.example.com
-
-# Attachments
-gordon attachments list
-gordon attachments add app.example.com postgres:18
-gordon attachments remove app.example.com postgres:18
-
-# Secrets
-gordon secrets list myapp.example.com
-gordon secrets set myapp.example.com DATABASE_URL "postgres://..."
-gordon secrets remove myapp.example.com DATABASE_URL
-
 # Remotes
 gordon remotes add prod https://gordon.mydomain.com --token $TOKEN
 gordon remotes list
 gordon remotes use prod
 
-# Preview environments
-gordon preview create app.example.com --branch feature-x
-gordon preview list
-gordon preview extend app.example.com --branch feature-x
-gordon preview delete app.example.com --branch feature-x
-
 # Volumes
 gordon volumes list
 gordon volumes prune
-
-# Auto-route allowlist
-gordon autoroute allow list
-gordon autoroute allow add example.com
-gordon autoroute allow add "*.staging.example.com"
-gordon autoroute allow remove example.com
 ```
 
 ## Global Options
@@ -173,64 +134,35 @@ The CLI can target remote Gordon instances using client config, an active remote
 or `GORDON_REMOTE` environment variable. Use `--remote` and `--token` as global overrides
 when you want to bypass your saved configuration.
 
-When no explicit remote is selected and no active remote is configured, Gordon can now
-**auto-infer a saved remote** for commands that already have a concrete target. It probes your
-saved remotes and uses the remote automatically when exactly one matches. If multiple remotes
-match, Gordon stops with an ambiguity error and asks you to use `--remote`. If any remote probe
-fails, Gordon also stops rather than guessing.
-
-Auto-inference currently applies to target-based commands such as:
-- `gordon push`
-- `gordon attachments push`
-- `gordon deploy <domain>`
-- `gordon restart <domain>`
-- `gordon pin <domain>` / `gordon pin list <domain>`
-- `gordon routes show <domain>` / `gordon routes remove <domain>`
-- `gordon secrets list|set|remove <domain>`
-- `gordon attachments list <target>` / `gordon attachments add|remove <target> ...`
-- `gordon backups list <domain>` / `gordon backups run <domain>` / `gordon backups detect <domain>`
-- `gordon images tags <repository>`
-- `gordon logs <domain>`
-
-`gordon routes list` and `gordon routes status` are the exceptions: when neither `--remote`
-nor `GORDON_REMOTE` is set, they show local routes first, then every saved remote. Set either
-one to force a single target.
+When no explicit remote is selected and no active remote is configured, Gordon can
+**auto-infer a saved remote** for `gordon images push`. It probes your saved remotes and uses the
+remote automatically when exactly one matches. If multiple remotes match, Gordon stops with
+an ambiguity error and asks you to use `--remote`. If any remote probe fails, Gordon also
+stops rather than guessing.
 
 ```bash
-# Aggregate routes views
-gordon routes list
-gordon routes status
-
-# Single-target override
-gordon routes list --remote prod
-GORDON_REMOTE=prod gordon routes status
-
 # Auto-inferred single match from saved remotes
-gordon push myapp --build
-gordon deploy app.example.com
+gordon images push myapp --build
 ```
 
 **Important:** The remote URL must be the `gordon_domain` configured on the remote Gordon instance. This is the domain that serves both the container registry and the Admin API.
-If remote CLI gets a `404` during `/auth/token` exchange, the server likely still sets only `server.registry_domain` and needs `server.gordon_domain` configured.
 
 Use `--insecure` when the remote endpoint uses a self-signed or otherwise untrusted TLS certificate.
 You can make this persistent with `insecure_tls = true` in `[client]` of `~/.config/gordon/gordon.toml`
 or in a specific entry in `~/.config/gordon/remotes.toml`.
-For Tailscale setups, you can also avoid `--insecure` by using the machine `*.ts.net` name with Tailscale-issued TLS certs in Gordon server config.
-Your public app domains can still use wildcard DNS and normal reverse-proxy routing.
 
 ```bash
 # Using flags (use the gordon_domain from remote Gordon config)
-gordon routes list --remote https://gordon.example.com --token $TOKEN
+gordon daemon status --remote https://gordon.example.com --token $TOKEN
 
 # Against self-signed/private CA endpoint
-gordon --remote https://gordon.example.com --token $TOKEN --insecure status
+gordon --remote https://gordon.example.com --token $TOKEN --insecure daemon status
 
 # Using environment variables
 export GORDON_REMOTE=https://gordon.example.com
 export GORDON_TOKEN=$TOKEN
 export GORDON_INSECURE=true
-gordon routes list
+gordon daemon status
 ```
 
 ## Exit Codes

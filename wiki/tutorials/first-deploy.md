@@ -87,7 +87,7 @@ On your Gordon server, edit `~/.config/gordon/gordon.toml`:
 Reload Gordon:
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### 5. Push to Deploy
@@ -130,7 +130,7 @@ docker login -u deploy -p <token> registry.mydomain.com
 
 2. Check Gordon logs:
    ```bash
-   gordon logs -f
+   gordon daemon logs -f
    ```
 
 3. Ensure DNS points to your server
@@ -155,10 +155,10 @@ docker tag my-first-app registry.mydomain.com/my-first-app:latest
 docker push registry.mydomain.com/my-first-app:latest
 ```
 
-Gordon automatically deploys the update with zero downtime.
+Gordon replaces the running container: it withdraws traffic, stops and removes the old container, starts the new one, waits for it to pass its readiness probe, and routes traffic to it. Expect a short interruption at that point.
 
 ## Next Steps
 
-- [Add environment variables](/docs/config/env.md)
+- [Add environment variables](/docs/config/apps.md)
 - [Add a database](./postgres-service.md)
 - [Set up CI/CD](/docs/deployment/github-actions.md)

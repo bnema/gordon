@@ -2,11 +2,13 @@ package in
 
 import (
 	"context"
-
-	"github.com/bnema/gordon/internal/domain"
 )
 
-// ConfigService defines the contract for configuration management.
+// ConfigService defines the contract for installation configuration.
+// Application state (routes, attachments, networks, auto, preview) was
+// removed with the declarative-apps cutover: presence fails startup and
+// reload closed with a config-retired diagnostic, and app data flows
+// through ACTIVE state, never here.
 type ConfigService interface {
 	// Load loads the configuration from the configured source.
 	Load(ctx context.Context) error
@@ -14,28 +16,6 @@ type ConfigService interface {
 	// Reload re-reads the configuration file from disk and loads it into memory.
 	// This is different from Load() which only loads from the cached viper values.
 	Reload(ctx context.Context) error
-
-	// GetRoutes returns all configured routes.
-	GetRoutes(ctx context.Context) []domain.Route
-
-	// GetRoute returns a single route by domain.
-	GetRoute(ctx context.Context, domain string) (*domain.Route, error)
-
-	// FindRoutesByImage returns all routes that match the given image name.
-	// Image names are normalized by stripping the registry domain prefix before comparison.
-	FindRoutesByImage(ctx context.Context, imageName string) []domain.Route
-
-	// AddRoute adds a new route to the configuration.
-	AddRoute(ctx context.Context, route domain.Route) error
-
-	// UpdateRoute updates an existing route.
-	UpdateRoute(ctx context.Context, route domain.Route) error
-
-	// RemoveRoute removes a route from the configuration.
-	RemoveRoute(ctx context.Context, domain string) error
-
-	// Save persists the current configuration to disk.
-	Save(ctx context.Context) error
 
 	// Watch starts watching for configuration changes.
 	// The onChange callback is called when configuration changes are detected.
@@ -53,9 +33,6 @@ type ConfigService interface {
 	// GetDataDir returns the configured data directory.
 	GetDataDir() string
 
-	// IsAutoRouteEnabled returns whether auto-route is enabled.
-	IsAutoRouteEnabled() bool
-
 	// IsNetworkIsolationEnabled returns whether network isolation is enabled.
 	IsNetworkIsolationEnabled() bool
 
@@ -64,31 +41,4 @@ type ConfigService interface {
 
 	// GetExternalRoutes returns all configured external routes.
 	GetExternalRoutes() map[string]string
-
-	// GetAllAttachments returns all configured attachments.
-	GetAllAttachments(ctx context.Context) map[string][]string
-
-	// GetAttachmentsFor returns attachments for a specific domain or network group.
-	GetAttachmentsFor(ctx context.Context, domainOrGroup string) ([]string, error)
-
-	// FindAttachmentTargetsByImage returns all attachment targets that match the given image name.
-	FindAttachmentTargetsByImage(ctx context.Context, imageName string) []string
-
-	// AddAttachment adds an image to a domain/group's attachments.
-	AddAttachment(ctx context.Context, domainOrGroup, image string) error
-
-	// RemoveAttachment removes an image from a domain/group's attachments.
-	RemoveAttachment(ctx context.Context, domainOrGroup, image string) error
-
-	// Auto-route domain allowlist
-	GetAutoRouteAllowedDomains(ctx context.Context) ([]string, error)
-	AddAutoRouteAllowedDomain(ctx context.Context, pattern string) error
-	RemoveAutoRouteAllowedDomain(ctx context.Context, pattern string) error
-
-	// Preview and auto config
-	GetPreviewConfig() domain.PreviewConfig
-	IsPreviewEnabled() bool
-	IsAutoEnabled() bool
-	GetPreviewTagPatterns() []string
-	GetAllowedDomains() []string
 }

@@ -24,37 +24,79 @@ Container and deploy logs can include environment-derived output. Gordon gates l
 gordon auth token generate --subject ops --scopes "admin:logs:read" --expiry 30d
 ```
 
-- `/admin/logs` and deploy failure logs require `admin:logs:read`.
+- `/admin/logs`, app failure diagnostics, and deploy failure logs require `admin:logs:read`.
 - `admin:status:read` does not grant log access.
-- Common secret patterns are redacted before logs are returned.
+- Operation errors returned to `admin:apps:read` callers are stable and log-free. Application diagnostics are a separate field, redacted of the affected service's resolved secret values before storage, and returned only to callers holding `admin:logs:read`. If a declared secret cannot be resolved for redaction, Gordon drops the diagnostics instead of storing unredacted output. Mutation responses never include application output.
+- Process and container log sources remain operator-owned data. Gordon redacts common credential patterns when serving logs through its API, but this is defense in depth rather than proof that arbitrary application output is secret-free. Restrict filesystem, journal, runtime, backup, and `admin:logs:read` access accordingly.
 
 ## Volume pruning scope
 
-Volume pruning only removes unused Docker volumes explicitly managed by Gordon (`gordon.managed=true`). It ignores unrelated Docker volumes even if they are unused.
+Volume pruning removes a volume only when Gordon has a durable `released` ownership record, the runtime app/incarnation/service labels agree with that record, and no container mounts it. A `gordon.managed=true` label by itself is not deletion authority; retained, unknown, contradictory, and unrelated volumes survive.
+
+Use `gordon volumes prune --dry-run` before deletion. Do not substitute `docker volume prune` or an equivalent runtime command: runtime-native pruning bypasses Gordon's ownership and retention checks.
 
 Use dedicated admin scopes:
 
 - `admin:volumes:read` for listing volumes.
 - `admin:volumes:write` for prune operations.
 
-## Pass migration plaintext handling
+## Administrative app bind mounts
 
-When Gordon migrates legacy plaintext `.env` files into `pass`, it removes the plaintext source after a successful migration and does not leave `.env.migrated` copies by default. If pass entries already exist, migration fails closed and leaves the plaintext file in place for manual operator review rather than deleting potentially unique values.
+App manifests cannot name host paths. A host bind exists only when the operator declares a named policy in `gordon.toml`:
+
+```toml
+[app_mounts.app-logs]
+source = "/srv/gordon/host-logs"
+read_only = true
+allowed_apps = ["metrics-agent"]    # exact, non-empty
+allowed_services = ["web"]          # exact, non-empty
+root = "/srv/gordon"                # optional boundary
+```
+
+The manifest references only the policy name: `[[services.<name>.bind]] name = "app-logs"` with an absolute container `path`.
+
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists, so least privilege is enforced by construction. There is no wildcard, prefix, or empty-means-all form.
+- `source` is resolved through symlinks and must be a regular file or directory under `root`. When `root` is omitted, the source's parent directory is the boundary. Devices, sockets, FIFOs, and escaping symlinks are refused.
+- Read-only precedence: `read_only` on the policy or `readonly` on the manifest bind forces the mount read-only; a manifest never weakens its policy.
+- Destinations must be absolute, normalized, and outside reserved container paths (`/`, `/proc`, `/sys`, `/dev`, `/boot`, and their children).
+- The policy is re-resolved immediately before every container create, restart, and recovery. Removing a policy or an allowlist entry blocks future deploys; running containers keep their current mounts until redeployed.
+- `gordon serve` reload republishes validated policies atomically. An edit that fails validation is rejected and the previous policies stay live.
+- Gordon never creates, deletes, chowns, backs up, or prunes the host path; ownership, permissions, and backup remain the operator's responsibility.
+
+## Administrative app devices (CDI)
+
+App manifests cannot name host devices. A device grant exists only when the operator declares a named policy in `gordon.toml`:
+
+```toml
+[app_devices.transcode-gpu]
+cdi = ["example.com/gpu=GPU-device-uuid"]
+allowed_apps = ["video"]          # exact, non-empty
+allowed_services = ["transcoder"]  # exact, non-empty
+```
+
+The manifest references only the logical name: `devices = ["transcode-gpu"]`.
+
+- `cdi` holds explicit CDI device IDs. Raw `/dev` paths, unqualified names, and aggregate `=all` selectors are rejected.
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists, so least privilege is enforced by construction. There is no wildcard, prefix, or empty-means-all form.
+- Gordon resolves logical names to CDI IDs at activation time and encodes them as one native CDI `DeviceRequest`. Revisions persist the logical names, never the host resolution.
+- The grant is re-resolved immediately before every preflight, container create, restart, and recovery. Revoking a grant blocks future deploys while the running service is untouched; changing a mapping never recreates a running container.
+- Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured. Older or unrecognized engines fail with a structured `runtime-unsupported` error and never run without devices.
+- Gordon installs no drivers, manages no quotas, and injects no device environment: images carry their own runtime expectations.
 
 ## External image registries
 
-Gordon's configured registry is always allowed. Explicit external registries must be allowlisted:
+Docker Hub, `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add every other registry hostname and non-default port explicitly:
 
 ```toml
 [images]
-allowed_registries = ["docker.io", "ghcr.io", "registry.example.com:5000"]
+allowed_registries = ["registry.internal:5000"]
 require_digest = true
 ```
 
-- Empty `allowed_registries` rejects explicit external registries.
-- `localhost`, loopback, private, link-local, unspecified, and metadata-style registries are rejected.
-- `require_digest = true` requires allowlisted external images to use `@sha256:<64 hex chars>`.
-- Include ports in allowlist entries when the registry uses a non-default port.
+- `docker.io` and Docker Hub's canonical pull host `registry-1.docker.io` are equivalent.
+- Other registries are accepted only when their exact hostname+port is configured. Allowlisting does not configure credentials; external resolution and pulls are anonymous unless the runtime already has suitable access.
+- `require_digest = true` requires every image, including Gordon registry images, to use `@sha256:<64 hex chars>`.
+- The allowlist restricts hostnames, not resolved IPs. It cannot prove a DNS hostname is non-private and does not replace firewall or runtime egress controls.
 
 ## Smart TCP Raw Fallback
 
@@ -95,7 +137,28 @@ enabled = true
 internal = true
 ```
 
-`internal = false` remains the compatibility default because some applications and attachments need direct egress during startup.
+`internal = false` remains the compatibility default because some applications need direct egress during startup.
+
+Every app container joins an incarnation-owned private network derived from the app's internal UUID; shared memberships come only from explicit `[[network.shared]]` declarations, and memory/CPU/PID limits apply on every create and recovery path.
+
+## Readiness helper containers
+
+Probing an internal HTTP port uses one bounded helper container per readiness attempt, removed immediately after. Gordon force-removes the helper under an independent cleanup context, including on failure and timeout. There is no operator configuration for the helper; its image and limits are fixed.
+
+- The helper image is digest-pinned and multi-arch: `alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc`. The image must be pre-provisioned and available offline on the target host, because the probe never pulls.
+- The helper attaches only to the target app's private network. It never joins a shared network or a host network.
+- It never publishes a host port and has no mounts, volumes, secrets, environment, or runtime socket.
+- It runs non-root (uid/gid `65534`) with a read-only root filesystem, all capabilities dropped, `no-new-privileges`, and bounded CPU, memory, and PIDs.
+- It targets the exact inspected container IP on that network, never a service alias, and revalidates the container's execution start before trusting the result; a restarted generation is discarded.
+- A target that listens only on its own loopback fails readiness.
+- Helpers left behind by an abrupt daemon or host stop are reclaimed by the next probe once they are older than ten minutes; a live session is never touched.
+
+## Registry exposure
+
+- With `auth.enabled = true`, registry requests are authenticated and repository-scoped; the public proxy forwards registry domains to the internal registry.
+- With `auth.enabled = false`, the registry is local-only: the public proxy refuses registry-domain requests, and the registry handler accepts only direct loopback connections carrying the instance credentials.
+- Registry requests are parsed once into a validated operation used by both authorization and dispatch, so the repository a token is checked against is exactly the repository served.
+- Blob and upload access is repository-scoped: an upload UUID is usable only by the repository that started it, and a blob is served only to a repository that completed an upload of that digest.
 
 ## Container runtime profile
 
@@ -114,6 +177,5 @@ Use `strict` for images designed to write only to mounted volumes and run withou
 - [Auth](./auth.md)
 - [Images](./images.md)
 - [Network Isolation](./network-isolation.md)
-- [Deploy](./deploy.md)
 - [Volumes](./volumes.md)
 - [Reference](./reference.md)

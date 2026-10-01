@@ -9,15 +9,9 @@ import (
 type EventType string
 
 const (
-	EventImagePushed          EventType = "image.pushed"
-	EventImageDeleted         EventType = "image.deleted"
-	EventConfigReload         EventType = "config.reload"
-	EventManualDeploy         EventType = "manual.deploy"
-	EventContainerStop        EventType = "container.stop"
-	EventContainerStart       EventType = "container.start"
-	EventContainerHealthCheck EventType = "container.health_check"
-	EventContainerDeployed    EventType = "container.deployed"
-	EventSecretsChanged       EventType = "secrets.changed"
+	EventImagePushed  EventType = "image.pushed"
+	EventImageDeleted EventType = "image.deleted"
+	EventConfigReload EventType = "config.reload"
 )
 
 // Event represents a domain event that occurred in the system.
@@ -40,14 +34,6 @@ type ImagePushedPayload struct {
 	Annotations map[string]string
 }
 
-// ContainerEventPayload contains data for container events.
-type ContainerEventPayload struct {
-	ContainerID string
-	Domain      string
-	Image       string
-	Action      string
-}
-
 // ConfigReloadPayload contains data for config.reload events.
 type ConfigReloadPayload struct {
 	Source        string // "file" or "manual"
@@ -56,38 +42,8 @@ type ConfigReloadPayload struct {
 	UpdatedRoutes []string
 }
 
-// ManualDeployPayload contains data for manual.deploy events.
-type ManualDeployPayload struct {
-	Domain string `json:"domain"`
-}
-
-// SecretsChangedPayload contains data for secrets.changed events.
-type SecretsChangedPayload struct {
-	Domain    string   // Route domain whose secrets changed
-	Operation string   // "set" or "delete"
-	Keys      []string // Secret key names (not values)
-}
-
 // Context keys for domain-level concerns.
 type contextKey string
-
-const (
-	// ContextKeyInternalDeploy indicates the deployment is triggered internally
-	// (e.g., from our own registry's image.pushed event) and should use
-	// internal registry authentication for image pulls.
-	ContextKeyInternalDeploy contextKey = "internal_deploy"
-)
-
-// IsInternalDeploy checks if the context indicates an internal deployment.
-func IsInternalDeploy(ctx context.Context) bool {
-	v, ok := ctx.Value(ContextKeyInternalDeploy).(bool)
-	return ok && v
-}
-
-// WithInternalDeploy returns a context marked as an internal deployment.
-func WithInternalDeploy(ctx context.Context) context.Context {
-	return context.WithValue(ctx, ContextKeyInternalDeploy, true)
-}
 
 const (
 	// ContextKeySkipReadiness indicates that readiness checks should be skipped

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/bnema/zerowrap"
@@ -84,6 +85,10 @@ func (h *Handler) handlePruneVolumes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Error().Err(err).Msg("failed to prune volumes")
+		if errors.Is(err, domain.ErrPruneDisabled) {
+			h.sendJSON(w, http.StatusConflict, dto.AppError{Error: "prune-disabled", Message: err.Error()})
+			return
+		}
 		h.sendError(w, http.StatusInternalServerError, "failed to prune volumes")
 		return
 	}
@@ -100,5 +105,6 @@ func (h *Handler) handlePruneVolumes(w http.ResponseWriter, r *http.Request) {
 		VolumesRemoved: report.VolumesRemoved,
 		SpaceReclaimed: report.SpaceReclaimed,
 		Volumes:        vols,
+		Plan:           toPruneSummary(report.Plan),
 	})
 }

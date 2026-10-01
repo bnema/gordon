@@ -10,7 +10,6 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"
-	secretsusecase "github.com/bnema/gordon/internal/usecase/secrets"
 )
 
 // Kernel provides in-process service access for local CLI execution.
@@ -19,7 +18,6 @@ import (
 type Kernel struct {
 	authEnabled     bool
 	configSvc       in.ConfigService
-	secretSvc       in.SecretService
 	containerSvc    in.ContainerService
 	backupSvc       in.BackupService
 	volumeBackupSvc in.VolumeBackupService
@@ -28,7 +26,13 @@ type Kernel struct {
 	logSvc          in.LogService
 	volumeSvc       in.VolumeService
 	publicTLSSvc    in.PublicTLSService
-	cleanup         func()
+	appSvc          in.AppService
+	// appAdmin is the daemon-owned app lifecycle (when the full wiring is
+	// available). Close cancels and joins its in-flight background deploy
+	// executions before any other kernel resource is torn down.
+	appAdmin appAdministration
+	log      zerowrap.Logger
+	cleanup  func()
 }
 
 // NewKernel initializes local services without starting server listeners.
@@ -78,10 +82,9 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			cleanup()
 		}
 
-		return &Kernel{
+		kernel := &Kernel{
 			authEnabled:     cfg.Auth.Enabled,
 			configSvc:       svc.configSvc,
-			secretSvc:       svc.secretSvc,
 			containerSvc:    svc.containerSvc,
 			backupSvc:       svc.backupSvc,
 			volumeBackupSvc: svc.volumeBackupSvc,
@@ -90,8 +93,16 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 			logSvc:          svc.logSvc,
 			volumeSvc:       svc.volumeSvc,
 			publicTLSSvc:    svc.publicTLSSvc,
+			appSvc:          svc.appSvc,
+			log:             log,
 			cleanup:         wrappedCleanup,
-		}, nil
+		}
+		// A nil *AppServiceImpl must not be stored in the interface: the
+		// interface would be non-nil and Close would call it.
+		if svc.appSvcImpl != nil {
+			kernel.appAdmin = svc.appSvcImpl
+		}
+		return kernel, nil
 	} else {
 		log.Warn().Err(fullErr).Msg("local kernel running in minimal mode")
 	}
@@ -102,18 +113,10 @@ func newKernel(configPath string, initLog kernelLoggerInit) (*Kernel, error) {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	_, _, _, domainSecretStore, err := createDomainSecretStore(cfg, log)
-	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("failed to create local secret store: %w", err)
-	}
-
-	secretSvc := secretsusecase.NewService(domainSecretStore, log, nil)
-
 	return &Kernel{
 		authEnabled: cfg.Auth.Enabled,
 		configSvc:   configSvc,
-		secretSvc:   secretSvc,
+		log:         log,
 		cleanup:     cleanup,
 	}, nil
 }
@@ -122,17 +125,30 @@ func quietInitLogger(Config) (zerowrap.Logger, func(), error) {
 	return zerowrap.New(zerowrap.Config{Level: "disabled", Output: io.Discard}), func() {}, nil
 }
 
+// Close tears the kernel down. It first cancels and joins daemon-owned app
+// administration on a bounded context, so a background deploy execution is
+// never torn down mid-flight alongside the state and runtime it uses. When
+// that quiescence times out the remaining cleanup is skipped and the error is
+// returned: an unfinished execution may still be writing to state.
 func (k *Kernel) Close() error {
-	if k == nil || k.cleanup == nil {
+	if k == nil {
 		return nil
 	}
-	k.cleanup()
+	if k.appAdmin != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := quiesceAppAdministration(ctx, k.appAdmin, k.log)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	if k.cleanup != nil {
+		k.cleanup()
+	}
 	return nil
 }
 
 func (k *Kernel) Config() in.ConfigService { return k.configSvc }
-
-func (k *Kernel) Secrets() in.SecretService { return k.secretSvc }
 
 func (k *Kernel) Container() in.ContainerService { return k.containerSvc }
 
@@ -149,5 +165,7 @@ func (k *Kernel) Logs() in.LogService { return k.logSvc }
 func (k *Kernel) Volumes() in.VolumeService { return k.volumeSvc }
 
 func (k *Kernel) PublicTLS() in.PublicTLSService { return k.publicTLSSvc }
+
+func (k *Kernel) Apps() in.AppService { return k.appSvc }
 
 func (k *Kernel) AuthEnabled() bool { return k != nil && k.authEnabled }

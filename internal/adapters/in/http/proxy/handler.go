@@ -25,10 +25,17 @@ type Handler struct {
 	appTransport      http.RoundTripper
 	h2cTransport      http.RoundTripper
 	registryTransport http.RoundTripper
-	activeConns       atomic.Int64
+	// registryForwarding permits registry-domain requests to reach the
+	// internal registry through this public proxy. It is enabled only
+	// when registry authentication is on: with auth disabled the
+	// registry is a local-only service reached by direct loopback
+	// connection, never through public ingress.
+	registryForwarding bool
+	activeConns        atomic.Int64
 }
 
-// NewHandler creates a new proxy HTTP handler.
+// NewHandler creates a new proxy HTTP handler. Registry forwarding is
+// denied until explicitly enabled with WithRegistryForwarding.
 func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap.Logger) *Handler {
 	return &Handler{
 		proxySvc:          proxySvc,
@@ -38,6 +45,14 @@ func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap
 		h2cTransport:      newH2CTransport(),
 		registryTransport: newRegistryTransport(),
 	}
+}
+
+// WithRegistryForwarding enables forwarding public registry-domain requests
+// to the internal registry. Callers pass the installation auth state: a
+// disabled-auth registry must stay unreachable through public ingress.
+func (h *Handler) WithRegistryForwarding(enabled bool) *Handler {
+	h.registryForwarding = enabled
+	return h
 }
 
 // ServeHTTP handles incoming HTTP requests and proxies them to the appropriate backend.
@@ -80,6 +95,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Check if this is the registry domain
 	if h.proxySvc.IsRegistryDomain(host) {
+		if !h.registryForwarding {
+			// Auth is disabled: the registry is local-only. Forwarding
+			// here would present the proxy's loopback peer to the
+			// registry, which trusts loopback, exposing anonymous
+			// reads and writes on public ingress.
+			log.Warn().Str(zerowrap.FieldHost, host).Msg("registry forwarding denied: authentication disabled")
+			proxyError(w, "404 page not found", http.StatusNotFound)
+			return
+		}
 		log.Debug().Msg("routing request to registry")
 		h.forwardToRegistry(w, r, cfg.RegistryPort)
 		return

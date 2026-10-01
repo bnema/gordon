@@ -1,16 +1,16 @@
 # GitHub Actions Deployment
 
-Two approaches for deploying with GitHub Actions: the `gordon push` CLI (recommended) or a Docker-based workflow using Gordon's official action.
+Two approaches for deploying with GitHub Actions: the `gordon images push` CLI (recommended) or a Docker-based workflow using Gordon's official action.
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Deployment token generated with the required scopes
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
-## Recommended: gordon push
+## Recommended: gordon images push
 
-Use the `gordon push` CLI for a lightweight, single-step build and deploy.
+Use the `gordon images push` CLI for a lightweight, single-step build and deploy.
 
 ### 1. Generate Token
 
@@ -19,7 +19,7 @@ On your Gordon server:
 ```bash
 gordon auth token generate \
   --subject github-actions \
-  --scopes "push,pull,admin:routes:read,admin:config:write" \
+  --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 0
 ```
 
@@ -71,9 +71,8 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
-            --remote ${{ secrets.GORDON_REMOTE }} \
-            --no-confirm
+          gordon images push --build \
+            --remote ${{ secrets.GORDON_REMOTE }}
 ```
 
 #### Continuous Deploy on Main
@@ -103,10 +102,9 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
-            --tag latest \
-            --no-confirm
+            --tag latest
 ```
 
 #### Manual Dispatch
@@ -141,7 +139,7 @@ jobs:
           GORDON_REMOTE: ${{ secrets.GORDON_REMOTE }}
           DEPLOY_TAG: ${{ inputs.tag }}
         run: |
-          args=(push --build --remote "$GORDON_REMOTE" --no-confirm)
+          args=(push --build --remote "$GORDON_REMOTE")
           if [[ -n "$DEPLOY_TAG" ]]; then
             [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
             args+=(--tag "$DEPLOY_TAG")
@@ -151,7 +149,7 @@ jobs:
 
 #### Monorepo
 
-Deploy multiple services with separate `gordon push` calls:
+Deploy multiple services with separate `gordon images push` calls:
 
 ```yaml
 name: Deploy Services
@@ -173,21 +171,19 @@ jobs:
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/api/Dockerfile \
-            myapp-api \
-            --no-confirm
+            myapp-api
 
       - name: Deploy Web
         env:
           GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
         run: |
-          gordon push --build \
+          gordon images push --build \
             --remote ${{ secrets.GORDON_REMOTE }} \
             --file ./services/web/Dockerfile \
-            myapp-web \
-            --no-confirm
+            myapp-web
 ```
 
 #### With Build Args
@@ -199,12 +195,12 @@ Pass build arguments to the Docker build:
   env:
     GORDON_TOKEN: ${{ secrets.GORDON_TOKEN }}
   run: |
-    gordon push --build \
+    gordon images push --build \
       --remote ${{ secrets.GORDON_REMOTE }} \
       --build-arg NODE_ENV=production \
       --build-arg API_URL=https://api.example.com \
       --build-arg BUILD_DATE=${{ github.event.head_commit.timestamp }} \
-      --no-confirm
+
 ```
 
 ### setup-gordon Action Reference
@@ -220,7 +216,7 @@ Pass build arguments to the Docker build:
 
 ## Alternative: Docker-based Workflow
 
-For environments where installing the Gordon binary is not desired, use Docker directly to build and push to the Gordon registry. Gordon auto-deploys when it receives the image — no explicit deploy step is needed.
+For environments where installing the Gordon binary is not desired, use Docker directly to build and push to the Gordon registry. Pushing only stores the image — deploy explicitly with `gordon apps deploy` afterwards.
 
 ### Setup
 
@@ -482,5 +478,5 @@ Error: unauthorized: authentication required
 - [Generic CI](./generic-ci.md)
 - [Deployment Overview](./index.md)
 - [Authentication](../config/auth.md)
-- [Push Command](../cli/push.md)
+- [Images Commands](../cli/images.md#gordon-images-push)
 - [Rollback](./rollback.md)

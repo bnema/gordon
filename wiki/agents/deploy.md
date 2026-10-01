@@ -1,101 +1,51 @@
 # AI Agent Deployment Guide
 
-This guide provides a structured workflow for AI coding assistants to help users deploy applications with Gordon.
+Use Gordon's declarative app workflow. Do not edit daemon state or infer workload identity from domains.
 
-## Deployment Workflow
+## Required files
 
-### Key Paths (VPS)
-
-```
-~/.config/gordon/gordon.toml    # Main config (routes, registry)
-~/.gordon/env/                  # Env files per domain
-~/.gordon/logs/containers/      # Container logs
+```text
+~/.config/gordon/gordon.toml  # Daemon configuration
+app.toml                      # Declarative app manifest
 ```
 
-### Step 1: Add route in gordon.toml
+## Workflow
 
-```toml
-[routes]
-"app.example.com" = "my-app:latest"
-```
+1. Define services, routes, networks, volumes, secrets, readiness, and backups in `app.toml`.
+2. Validate and persist the manifest:
 
-### Step 2: Create env file
+   ```bash
+   gordon apps apply --file app.toml
+   ```
 
-Naming convention: domain with dots replaced by underscores.
+3. Register required secret values without placing them in the manifest:
 
-Example: `app.example.com` → `~/.gordon/env/app_example_com.env`
+   ```bash
+   gordon apps secrets set APP --service SERVICE KEY
+   ```
 
-```bash
-cat > ~/.gordon/env/app_example_com.env << 'EOF'
-NODE_ENV=production
-PUBLIC_API_URL=https://api.example.com
-EOF
-```
+4. Deploy the accepted revision:
 
-### Step 3: Generate registry token (on VPS)
+   ```bash
+   gordon apps deploy APP
+   ```
 
-```bash
-gordon auth token generate --subject username --expiry 720h
-```
+5. Verify state and workload logs:
 
-### Step 4: Login to registry (local machine)
+   ```bash
+   gordon apps show APP
+   gordon apps logs APP --service SERVICE
+   ```
 
-```bash
-echo "TOKEN" | docker login -u username --password-stdin reg.example.com:5000
-```
+The local CLI uses the authenticated owner-only Unix socket. To target another Gordon instance, use the configured authenticated HTTP/TLS remote transport.
 
-### Step 5: Build and push
+## Registry authentication
 
-Tag images to match git tags + latest for bleeding edge:
+Generate a scoped token on the server, then pass it to the registry client through standard input. Never place tokens in manifests, command history, fixtures, or logs.
 
-```bash
-# Get current git tag (falls back to "latest" if no tag)
-TAG=$(git describe --tags --exact-match 2>/dev/null || echo "latest")
+## Safety rules
 
-# Build with version tag and latest
-docker buildx build --platform linux/amd64 \
-  -t reg.example.com:5000/my-app:$TAG \
-  -t reg.example.com:5000/my-app:latest \
-  --push .
-```
-
-Gordon auto-deploys when it receives the pushed image.
-
-### Step 6: Verify
-
-```bash
-curl -I https://app.example.com
-ssh user@vps "cat ~/.gordon/logs/containers/app_example_com.log"
-```
-
-## Framework Notes
-
-### SvelteKit / Next.js
-
-Static env vars (`$env/static/public`, `NEXT_PUBLIC_*`) must be available at build time:
-
-```dockerfile
-ARG PUBLIC_API_URL
-ENV PUBLIC_API_URL=$PUBLIC_API_URL
-```
-
-Build with:
-```bash
-docker buildx build --build-arg PUBLIC_API_URL=https://api.example.com --push .
-```
-
-## Secrets with pass
-
-Use pass integration for sensitive values:
-
-```bash
-DATABASE_PASSWORD=${pass:gordon/app/db_password}
-```
-
-## Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| HTTPS error on push | Add registry to `insecure-registries` in daemon.json |
-| Container not starting | Check env file name matches domain pattern |
-| Env vars not working | SvelteKit static env = build args, not runtime env |
+- Use app and service names as workload identity; domains are routing addresses only.
+- Keep secret values outside manifests and app state.
+- Reuse the same idempotency key only to inspect or retry the same mutation request.
+- Do not delete retained volumes or secrets during app removal.

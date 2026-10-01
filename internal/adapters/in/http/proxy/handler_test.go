@@ -52,7 +52,7 @@ func TestHandler_RoutesToRegistry(t *testing.T) {
 	proxySvc.EXPECT().TrackRegistryRequest().Return()
 	proxySvc.EXPECT().ReleaseRegistryRequest().Return()
 
-	handler := NewHandler(proxySvc, nil, testLogger())
+	handler := NewHandler(proxySvc, nil, testLogger()).WithRegistryForwarding(true)
 
 	req := httptest.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
 	req.Host = "registry.example.com"
@@ -60,6 +60,25 @@ func TestHandler_RoutesToRegistry(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.True(t, w.Code == http.StatusBadGateway || w.Code == http.StatusServiceUnavailable)
+}
+
+// TestHandler_DeniesRegistryForwardingWhenAuthDisabled proves a public
+// registry-domain request cannot reach the internal registry unless
+// forwarding was explicitly enabled (auth on).
+func TestHandler_DeniesRegistryForwardingWhenAuthDisabled(t *testing.T) {
+	proxySvc := inmocks.NewMockProxyService(t)
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{RegistryPort: 5000})
+	proxySvc.EXPECT().IsRegistryDomain("registry.example.com").Return(true)
+
+	handler := NewHandler(proxySvc, nil, testLogger())
+
+	req := httptest.NewRequest(http.MethodGet, "http://registry.example.com/v2/", nil)
+	req.Host = "registry.example.com"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	proxySvc.AssertNotCalled(t, "TrackRegistryRequest")
 }
 
 func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {

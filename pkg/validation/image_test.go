@@ -1,10 +1,28 @@
 package validation
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestValidateImageDigest(t *testing.T) {
+	validLower := "sha256:" + strings.Repeat("a", 64)
+	require.NoError(t, ValidateImageDigest(validLower))
+
+	for _, digest := range []string{
+		"sha256:" + strings.Repeat("A", 64),
+		"",
+		"sha256:" + strings.Repeat("a", 63),
+		"sha256:" + strings.Repeat("a", 65),
+		"sha256:" + strings.Repeat("g", 64),
+		"sha512:" + strings.Repeat("a", 64),
+	} {
+		assert.Error(t, ValidateImageDigest(digest), digest)
+	}
+}
 
 func TestParseImageReference(t *testing.T) {
 	tests := []struct {

@@ -117,7 +117,7 @@ func TestHTTPSRedirect_NoPortHost_OmitsTLSPort(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "app.example.com" })(ok)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -125,13 +125,13 @@ func TestHTTPSRedirect_NoPortHost_OmitsTLSPort(t *testing.T) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
-	req.Host = "o2.bnema.dev"
+	req.Host = "app.example.com"
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
-	assert.Equal(t, "https://o2.bnema.dev/", resp.Header.Get("Location"))
+	assert.Equal(t, "https://app.example.com/", resp.Header.Get("Location"))
 }
 
 func TestHTTPSRedirect_HTTPListenerPort_MapsToTLSPort(t *testing.T) {
@@ -140,7 +140,7 @@ func TestHTTPSRedirect_HTTPListenerPort_MapsToTLSPort(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "app.example.com" })(ok)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -148,13 +148,13 @@ func TestHTTPSRedirect_HTTPListenerPort_MapsToTLSPort(t *testing.T) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
-	req.Host = "o2.bnema.dev:8088"
+	req.Host = "app.example.com:8088"
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
-	assert.Equal(t, "https://o2.bnema.dev:8443/", resp.Header.Get("Location"))
+	assert.Equal(t, "https://app.example.com:8443/", resp.Header.Get("Location"))
 }
 
 func TestHTTPSRedirect_UnknownExplicitPort_IsPreserved(t *testing.T) {
@@ -163,7 +163,7 @@ func TestHTTPSRedirect_UnknownExplicitPort_IsPreserved(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "app.example.com" })(ok)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -171,13 +171,13 @@ func TestHTTPSRedirect_UnknownExplicitPort_IsPreserved(t *testing.T) {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
-	req.Host = "o2.bnema.dev:9999"
+	req.Host = "app.example.com:9999"
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
-	assert.Equal(t, "https://o2.bnema.dev:9999/", resp.Header.Get("Location"))
+	assert.Equal(t, "https://app.example.com:9999/", resp.Header.Get("Location"))
 }
 
 func TestHTTPSRedirect_TrailingDotHostRedirectsToCanonicalHost(t *testing.T) {
@@ -185,7 +185,7 @@ func TestHTTPSRedirect_TrailingDotHostRedirectsToCanonicalHost(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "app.example.com" })(ok)
 
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
@@ -194,13 +194,13 @@ func TestHTTPSRedirect_TrailingDotHostRedirectsToCanonicalHost(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL+"/path", nil)
 	require.NoError(t, err)
-	req.Host = "O2.Bnema.Dev.:8088"
+	req.Host = "App.Example.Com.:8088"
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
-	assert.Equal(t, "https://o2.bnema.dev:8443/path", resp.Header.Get("Location"))
+	assert.Equal(t, "https://app.example.com:8443/path", resp.Header.Get("Location"))
 }
 
 func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
@@ -208,13 +208,13 @@ func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "o2.bnema.dev" })(ok)
+	handler := HTTPSRedirect(nil, 8088, 8443, true, log, func(host string) bool { return host == "app.example.com" })(ok)
 
 	tests := []struct {
 		name string
 		host string
 	}{
-		{name: "invalid port", host: "o2.bnema.dev:abcd"},
+		{name: "invalid port", host: "app.example.com:abcd"},
 
 		{name: "localhost", host: "localhost"},
 		{name: "ipv6", host: "[::1]:8088"},
@@ -236,6 +236,126 @@ func TestHTTPSRedirect_RejectsInvalidHost(t *testing.T) {
 			assert.Empty(t, resp.Header.Get("Location"))
 		})
 	}
+}
+
+// TestHTTPSRedirect_TLSAlwaysNeverServesPlaintext proves a tls=always host
+// is redirected when an HTTPS endpoint exists and refused when it does not:
+// the backend is never reached over plaintext.
+func TestHTTPSRedirect_TLSAlwaysNeverServesPlaintext(t *testing.T) {
+	log := testLogger()
+	served := false
+	backend := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	})
+	isHostAllowed := func(host string) bool { return host == "secure.example.com" }
+	isTLSAlways := func(host string) bool { return host == "secure.example.com" }
+
+	redirected := HTTPSRedirectWithEligibility(nil, 8088, 8443, false, log, isHostAllowed, nil, isTLSAlways)(backend)
+	srv := httptest.NewServer(redirected)
+	defer srv.Close()
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "secure.example.com"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.Equal(t, "https://secure.example.com/", resp.Header.Get("Location"))
+	assert.False(t, served, "the plaintext backend must never be reached")
+
+	// No HTTPS endpoint configured: the request is refused, not served.
+	served = false
+	refused := HTTPSRedirectWithEligibility(nil, 8088, 0, false, log, isHostAllowed, nil, isTLSAlways)(backend)
+	srv2 := httptest.NewServer(refused)
+	defer srv2.Close()
+	req2, err := http.NewRequest(http.MethodGet, srv2.URL+"/", nil)
+	require.NoError(t, err)
+	req2.Host = "secure.example.com"
+	refusedClient := srv2.Client()
+	refusedClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp2, err := refusedClient.Do(req2)
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusMisdirectedRequest, resp2.StatusCode)
+	assert.False(t, served, "plaintext must not be served without an HTTPS endpoint")
+}
+
+// TestHTTPSRedirect_TLSAlwaysIgnoresDisabledRedirectConfig proves tls=always
+// still redirects when redirects are otherwise disabled for untrusted
+// clients.
+func TestHTTPSRedirect_TLSAlwaysIgnoresDisabledRedirectConfig(t *testing.T) {
+	log := testLogger()
+	served := false
+	backend := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		served = true
+		w.WriteHeader(http.StatusOK)
+	})
+	isHostAllowed := func(host string) bool { return host == "secure.example.com" }
+	isTLSAlways := func(host string) bool { return host == "secure.example.com" }
+
+	handler := HTTPSRedirectWithEligibility(nil, 8088, 8443, false, log, isHostAllowed, nil, isTLSAlways)(backend)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "secure.example.com"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusPermanentRedirect, resp.StatusCode)
+	assert.False(t, served)
+}
+
+func TestHTTPSRedirect_IneligibleKnownHostPassesThrough(t *testing.T) {
+	log := testLogger()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	// plain.example.com is known but opted out of TLS (tls=never).
+	handler := HTTPSRedirectWithEligibility(nil, 8088, 8443, true, log,
+		func(host string) bool { return host == "plain.example.com" || host == "app.example.com" },
+		func(host string) bool { return host != "plain.example.com" }, nil)(ok)
+
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+	client := srv.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	// Ineligible known host: served plain HTTP, no redirect.
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "plain.example.com"
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Empty(t, resp.Header.Get("Location"))
+
+	// Eligible known host: still redirected.
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "app.example.com"
+	resp2, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	assert.Equal(t, http.StatusPermanentRedirect, resp2.StatusCode)
+	assert.Equal(t, "https://app.example.com/", resp2.Header.Get("Location"))
+
+	// Unknown host: still 400.
+	req, err = http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	require.NoError(t, err)
+	req.Host = "evil.example.com"
+	resp3, err := client.Do(req)
+	require.NoError(t, err)
+	defer resp3.Body.Close()
+	assert.Equal(t, http.StatusBadRequest, resp3.StatusCode)
 }
 
 func TestProxyCIDRAllowlist(t *testing.T) {

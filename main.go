@@ -12,12 +12,13 @@ var (
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
+	dirty   = "unknown"
 )
 
 func main() {
 	// Set version information globally and for the CLI
-	versionpkg.Set(version, commit, date)
-	cli.SetVersionInfo(version, commit, date)
+	versionpkg.Set(version, commit, date, dirty)
+	cli.SetVersionInfo(version, commit, date, dirty)
 
 	if err := cli.NewRootCmd().Execute(); err != nil {
 		os.Exit(1)

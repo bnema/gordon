@@ -9,7 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/bnema/gordon/internal/boundaries/in/mocks"
+	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
+	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -17,227 +18,113 @@ func testLogger() zerowrap.Logger {
 	return zerowrap.Default()
 }
 
-func TestService_CheckRoute_ContainerNotFound(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(nil, false)
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "not found", health.ContainerStatus)
-	assert.Equal(t, 0, health.HTTPStatus)
-	assert.False(t, health.Healthy)
-	assert.Equal(t, "container not found", health.Error)
+func testActive() domain.AppActive {
+	return domain.AppActive{
+		App: "blog",
+		Services: map[string]domain.AppEffectiveService{
+			"web": {
+				EffectiveRevision: "rev-1",
+				Image:             "img:1",
+				Container:         "c-web",
+				BackendBinds:      map[int]int{8080: 18080},
+				Spec: domain.AppService{
+					HTTP: []domain.AppHTTPInterface{{Host: "blog.example.com", Port: 8080, TLS: "auto"}},
+				},
+			},
+		},
+	}
 }
 
-func TestService_CheckRoute_ContainerNotRunning(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
+func TestService_CheckAllRoutes_Healthy(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	prober := inmocks.NewMockHTTPProber(t)
 
-	container := &domain.Container{
-		ID:     "abc123",
-		Status: "stopped",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
+	state.EXPECT().ListApps(mock.Anything).Return([]string{"blog"}, nil)
+	state.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(testActive(), true, nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-web").Return(true, nil)
+	prober.EXPECT().Probe(mock.Anything, "http://127.0.0.1:18080/").Return(200, int64(45), nil)
 
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "stopped", health.ContainerStatus)
-	assert.Equal(t, 0, health.HTTPStatus)
-	assert.False(t, health.Healthy)
-	assert.Contains(t, health.Error, "container is stopped")
-}
-
-func TestService_CheckRoute_HTTPProbeSuccess(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	container := &domain.Container{
-		ID:     "abc123",
-		Status: "running",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
-	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(200, int64(45), nil)
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "running", health.ContainerStatus)
-	assert.Equal(t, 200, health.HTTPStatus)
-	assert.Equal(t, int64(45), health.ResponseTimeMs)
-	assert.True(t, health.Healthy)
-	assert.Empty(t, health.Error)
-}
-
-func TestService_CheckRoute_HTTPOnlyRouteUsesHTTP(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	container := &domain.Container{
-		ID:     "abc123",
-		Status: "running",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
-	prober.EXPECT().Probe(mock.Anything, "http://app.example.com/").Return(200, int64(45), nil)
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: false}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "running", health.ContainerStatus)
-	assert.Equal(t, 200, health.HTTPStatus)
-	assert.Equal(t, int64(45), health.ResponseTimeMs)
-	assert.True(t, health.Healthy)
-	assert.Empty(t, health.Error)
-}
-
-func TestService_CheckRoute_HTTPProbeFailure(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	container := &domain.Container{
-		ID:     "abc123",
-		Status: "running",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
-	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(0, int64(0), errors.New("connection refused"))
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "running", health.ContainerStatus)
-	assert.Equal(t, 0, health.HTTPStatus)
-	assert.False(t, health.Healthy)
-	assert.Equal(t, "connection refused", health.Error)
-}
-
-func TestService_CheckRoute_HTTPStatus5xx(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	container := &domain.Container{
-		ID:     "abc123",
-		Status: "running",
-	}
-	containerSvc.EXPECT().Get(mock.Anything, "app.example.com").Return(container, true)
-	prober.EXPECT().Probe(mock.Anything, "https://app.example.com/").Return(502, int64(100), nil)
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
-	route := domain.Route{Domain: "app.example.com", Image: "myapp:latest", HTTPS: true}
-
-	health := svc.CheckRoute(context.Background(), route)
-
-	assert.Equal(t, "app.example.com", health.Domain)
-	assert.Equal(t, "running", health.ContainerStatus)
-	assert.Equal(t, 502, health.HTTPStatus)
-	assert.Equal(t, int64(100), health.ResponseTimeMs)
-	assert.False(t, health.Healthy) // 5xx is not healthy
-	assert.Empty(t, health.Error)
-}
-
-func TestService_CheckAllRoutes(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
-
-	routes := []domain.Route{
-		{Domain: "app1.example.com", Image: "app1:latest", HTTPS: true},
-		{Domain: "app2.example.com", Image: "app2:latest", HTTPS: true},
-	}
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return(routes)
-
-	container1 := &domain.Container{ID: "abc", Status: "running"}
-	container2 := &domain.Container{ID: "def", Status: "stopped"}
-	containerSvc.EXPECT().Get(mock.Anything, "app1.example.com").Return(container1, true)
-	containerSvc.EXPECT().Get(mock.Anything, "app2.example.com").Return(container2, true)
-
-	// Only running containers get probed
-	prober.EXPECT().Probe(mock.Anything, "https://app1.example.com/").Return(200, int64(30), nil)
-
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
+	svc := NewService(state, runtime, prober, testLogger())
 
 	results := svc.CheckAllRoutes(context.Background())
 
-	assert.Len(t, results, 2)
-
-	assert.NotNil(t, results["app1.example.com"])
-	assert.Equal(t, "running", results["app1.example.com"].ContainerStatus)
-	assert.Equal(t, 200, results["app1.example.com"].HTTPStatus)
-	assert.True(t, results["app1.example.com"].Healthy)
-
-	assert.NotNil(t, results["app2.example.com"])
-	assert.Equal(t, "stopped", results["app2.example.com"].ContainerStatus)
-	assert.Equal(t, 0, results["app2.example.com"].HTTPStatus)
-	assert.False(t, results["app2.example.com"].Healthy)
+	assert.Len(t, results, 1)
+	health := results["blog.example.com"]
+	assert.Equal(t, "blog.example.com", health.Domain)
+	assert.Equal(t, "running", health.ContainerStatus)
+	assert.Equal(t, 200, health.HTTPStatus)
+	assert.Equal(t, int64(45), health.ResponseTimeMs)
+	assert.True(t, health.Healthy)
+	assert.Empty(t, health.Error)
 }
 
-func TestService_CheckAllRoutes_NoRoutes(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
+func TestService_CheckAllRoutes_ContainerNotRunning(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	prober := inmocks.NewMockHTTPProber(t)
 
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{})
+	state.EXPECT().ListApps(mock.Anything).Return([]string{"blog"}, nil)
+	state.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(testActive(), true, nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-web").Return(false, nil)
 
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
+	svc := NewService(state, runtime, prober, testLogger())
+
+	results := svc.CheckAllRoutes(context.Background())
+
+	assert.Len(t, results, 1)
+	assert.Equal(t, "not running", results["blog.example.com"].ContainerStatus)
+	assert.False(t, results["blog.example.com"].Healthy)
+}
+
+func TestService_CheckAllRoutes_ProbeFailure(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	prober := inmocks.NewMockHTTPProber(t)
+
+	state.EXPECT().ListApps(mock.Anything).Return([]string{"blog"}, nil)
+	state.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(testActive(), true, nil)
+	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-web").Return(true, nil)
+	prober.EXPECT().Probe(mock.Anything, "http://127.0.0.1:18080/").Return(0, int64(0), errors.New("connection refused"))
+
+	svc := NewService(state, runtime, prober, testLogger())
+
+	results := svc.CheckAllRoutes(context.Background())
+
+	assert.Len(t, results, 1)
+	assert.Equal(t, "running", results["blog.example.com"].ContainerStatus)
+	assert.False(t, results["blog.example.com"].Healthy)
+	assert.Equal(t, "connection refused", results["blog.example.com"].Error)
+}
+
+func TestService_CheckAllRoutes_StoppedIntentSkipped(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	prober := inmocks.NewMockHTTPProber(t)
+
+	state.EXPECT().ListApps(mock.Anything).Return([]string{"blog"}, nil)
+	state.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog", Stopped: true}, nil)
+
+	svc := NewService(state, runtime, prober, testLogger())
 
 	results := svc.CheckAllRoutes(context.Background())
 
 	assert.Empty(t, results)
 }
 
-func TestService_CheckRoute_InvalidDomain_Blocked(t *testing.T) {
-	configSvc := mocks.NewMockConfigService(t)
-	containerSvc := mocks.NewMockContainerService(t)
-	prober := mocks.NewMockHTTPProber(t)
+func TestService_CheckAllRoutes_NoApps(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	prober := inmocks.NewMockHTTPProber(t)
 
-	// No container lookup should happen for invalid domains
-	// No probe should happen either
+	state.EXPECT().ListApps(mock.Anything).Return(nil, nil)
 
-	svc := NewService(configSvc, containerSvc, prober, testLogger())
+	svc := NewService(state, runtime, prober, testLogger())
 
-	tests := []struct {
-		name   string
-		domain string
-	}{
-		{"IP address", "192.168.1.1"},
-		{"localhost", "localhost"},
-		{"local TLD", "myapp.local"},
-		{"internal TLD", "service.internal"},
-		{"with port", "example.com:8080"},
-		{"IPv6", "::1"},
-	}
+	results := svc.CheckAllRoutes(context.Background())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			route := domain.Route{Domain: tt.domain, Image: "myapp:latest"}
-			health := svc.CheckRoute(context.Background(), route)
-
-			assert.Equal(t, tt.domain, health.Domain)
-			assert.False(t, health.Healthy)
-			assert.Equal(t, "invalid route domain for health probe", health.Error)
-		})
-	}
+	assert.Empty(t, results)
 }

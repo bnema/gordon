@@ -14,7 +14,6 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	adminhttp "github.com/bnema/gordon/internal/adapters/in/http/admin"
@@ -30,10 +29,7 @@ func newNotFoundProxyService(t *testing.T) *proxyusecase.Service {
 	t.Helper()
 	configSvc := inmocks.NewMockConfigService(t)
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
-	configSvc.EXPECT().GetRoutes(mock.Anything).Return(nil).Maybe()
-	containerSvc := inmocks.NewMockContainerService(t)
-	containerSvc.EXPECT().Get(mock.Anything, mock.Anything).Return(nil, false).Maybe()
-	return proxyusecase.NewService(nil, containerSvc, configSvc, proxyusecase.Config{})
+	return proxyusecase.NewService(configSvc, proxyusecase.Config{})
 }
 
 // testAccessLogWriter is a thread-safe mock AccessLogWriter for tests.
@@ -171,7 +167,7 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_AllPaths(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			req.RemoteAddr = directAddr
-			req.Host = "o2.bnema.dev"
+			req.Host = "app.example.com"
 			rec := httptest.NewRecorder()
 			httpHandler.ServeHTTP(rec, req)
 
@@ -236,13 +232,21 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
 	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
+	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
 	httpHandler.ServeHTTP(rec, req)
 
 	// Direct onboarding must win over force_https_redirect.
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Body.String(), "Trust CA Certificate")
+}
+
+// stubAppTargets is a fixed proxy.TargetProvider for handler tests.
+type stubAppTargets map[string]domain.AppBackend
+
+func (s stubAppTargets) LookupHost(host string) (domain.AppBackend, bool) {
+	backend, ok := s[host]
+	return backend, ok
 }
 
 func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
@@ -255,8 +259,13 @@ func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
 		traffic.DefaultEdgeEntryPointName: {Address: ":9443", Protocol: domain.EntryPointProtocolSmartTCP},
 	}
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoute(mock.Anything, "app.example.com").Return(&domain.Route{Domain: "app.example.com"}, nil)
-	svc := &services{proxySvc: proxyusecase.NewService(nil, nil, configSvc, proxyusecase.Config{})}
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	proxySvc := proxyusecase.NewService(configSvc, proxyusecase.Config{})
+	// app.example.com serves from the ACTIVE-derived index in this test.
+	proxySvc.WithAppTargets(stubAppTargets(map[string]domain.AppBackend{
+		"app.example.com": {Host: "127.0.0.1", Port: 18080, ContainerPort: 8080, ContainerID: "c-app"},
+	}))
+	svc := &services{proxySvc: proxySvc}
 
 	_, httpHandler, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
 
@@ -283,12 +292,12 @@ func TestCreateHTTPHandlers_OnboardingUsesSelectedEntrypointPorts(t *testing.T) 
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/gordon/", nil)
 	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev:9443"
+	req.Host = "app.example.com:9443"
 	rec := httptest.NewRecorder()
 	httpHandler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "https://o2.bnema.dev:9443/")
+	assert.Contains(t, rec.Body.String(), "https://app.example.com:9443/")
 }
 
 func TestCreateHTTPHandlers_HTTPSOnboarding_RemainsAvailableOnGordonDomain(t *testing.T) {
@@ -380,7 +389,7 @@ func TestCreateHTTPHandlers_DirectHTTPOnboarding_HEADRoutesRemainAvailable(t *te
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
-		r.Host = "o2.bnema.dev"
+		r.Host = "app.example.com"
 		httpHandler.ServeHTTP(w, r)
 	}))
 	defer ts.Close()
@@ -415,7 +424,7 @@ func TestCreateHTTPHandlers_DirectHTTPForbiddenHEAD_ReturnsForbidden(t *testing.
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr = directAddr
-		r.Host = "o2.bnema.dev"
+		r.Host = "app.example.com"
 		httpHandler.ServeHTTP(w, r)
 	}))
 	defer ts.Close()
@@ -441,7 +450,7 @@ func TestCreateHTTPHandlers_DirectHTTPACMEChallenge_Returns404(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/acme-challenge/test-token", nil)
 	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
+	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
 	httpHandler.ServeHTTP(rec, req)
 
@@ -459,7 +468,7 @@ func TestCreateHTTPHandlers_TLSDisabled_DoesNotServeHTTPOnboarding(t *testing.T)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = directAddr
-	req.Host = "o2.bnema.dev"
+	req.Host = "app.example.com"
 	rec := httptest.NewRecorder()
 	httpHandler.ServeHTTP(rec, req)
 
@@ -563,32 +572,29 @@ func TestBuildRegistryCIDRAllowlistMiddleware_InvalidEntries_DenyAll(t *testing.
 	}
 }
 
-// TestAccessLog_AdminRejectedByLoopbackOnly_IsLogged verifies that requests
-// to /admin/ blocked by loopbackOnly() still produce an access-log entry.
-// This exercises the outer-deny path: AccessLogger wraps the top-level
-// handler so even gates that run before any inner middleware are logged.
-func TestAccessLog_AdminRejectedByLoopbackOnly_IsLogged(t *testing.T) {
+// TestAccessLog_AdminRemoteRequest_ReachesAuth verifies that authenticated-mode
+// admin routes are reachable remotely and delegated to the auth middleware.
+func TestAccessLog_AdminRemoteRequest_ReachesAuth(t *testing.T) {
 	t.Parallel()
 
 	cfg := Config{}
-	cfg.Auth.Enabled = true // required for admin routes to be registered
+	cfg.Auth.Enabled = true
 
 	svc := &services{adminHandler: &adminhttp.Handler{}}
 	aw := &testAccessLogWriter{}
 	registryHandler, _, _ := createHTTPHandlers(svc, cfg, zerowrap.Default(), aw)
 
-	// Non-loopback IP — loopbackOnly() will reject this with 403 before any
-	// inner middleware runs.
 	req := httptest.NewRequest(http.MethodGet, "/admin/status", nil)
 	req.RemoteAddr = "192.0.2.10:12345"
 
 	rec := httptest.NewRecorder()
 	registryHandler.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.JSONEq(t, `{"error":"authentication service unavailable"}`, rec.Body.String())
 	entries := aw.snapshot()
-	require.Len(t, entries, 1, "access log must capture the loopback-rejected admin request")
-	assert.Equal(t, http.StatusForbidden, entries[0].Status)
+	require.Len(t, entries, 1)
+	assert.Equal(t, http.StatusServiceUnavailable, entries[0].Status)
 	assert.Equal(t, "/admin/status", entries[0].Path)
 }
 

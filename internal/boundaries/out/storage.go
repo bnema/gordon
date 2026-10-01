@@ -38,11 +38,19 @@ type BlobStorage interface {
 	// GetBlobUpload returns a writer for the upload.
 	GetBlobUpload(uuid string) (io.WriteCloser, error)
 
-	// FinishBlobUpload completes an upload and moves it to blob storage.
-	FinishBlobUpload(uuid, digest string) error
+	// FinishBlobUpload completes an upload for the named repository and
+	// records the repository/blob association. The upload must belong to
+	// that repository; a mismatched repository reports ErrUploadNotFound.
+	FinishBlobUpload(name, uuid, digest string) error
 
-	// CancelBlobUpload cancels an in-progress upload.
-	CancelBlobUpload(uuid string) error
+	// CancelBlobUpload cancels an in-progress upload owned by the named
+	// repository.
+	CancelBlobUpload(name, uuid string) error
+
+	// BlobOwnedByRepository reports whether the repository completed an
+	// upload of the digest. Ownership is never inferred from manifest
+	// references, which a repository writer controls.
+	BlobOwnedByRepository(name, digest string) (bool, error)
 
 	// CleanupStaleUploads removes upload files older than maxAge.
 	// Returns the number of uploads removed and total bytes reclaimed.

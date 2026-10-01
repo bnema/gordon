@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
-	"github.com/bnema/gordon/internal/app"
 )
 
 type controlPlaneHandle struct {
@@ -24,39 +23,32 @@ func (h *controlPlaneHandle) close() {
 	}
 }
 
-func resolveControlPlane(configPath string) (*controlPlaneHandle, error) {
+var newLocalControlPlaneClient = remote.NewLocalClient
+
+func resolveDaemonClient() (*remote.Client, bool, error) {
 	client, isRemote, err := GetRemoteClient()
+	if err != nil || isRemote {
+		return client, isRemote, err
+	}
+
+	client, err = newLocalControlPlaneClient()
+	if err != nil {
+		return nil, false, fmt.Errorf("local control plane unavailable: %w", err)
+	}
+	return client, false, nil
+}
+
+func resolveControlPlane(_ string) (*controlPlaneHandle, error) {
+	client, isRemote, err := resolveDaemonClient()
 	if err != nil {
 		return nil, err
 	}
-	if isRemote {
-		return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}, nil
-	}
-
-	return resolveLocalControlPlane(configPath)
+	return &controlPlaneHandle{plane: client, isRemote: isRemote}, nil
 }
 
 func newRemoteControlPlaneHandle(target *remote.ResolvedRemote) *controlPlaneHandle {
 	client := remote.NewClient(target.URL, remoteClientOptions(target.Token, target.InsecureTLS)...)
-	return &controlPlaneHandle{plane: NewRemoteControlPlane(client), isRemote: true}
-}
-
-func resolveControlPlaneForRouteDomain(ctx context.Context, routeDomain string) (*controlPlaneHandle, error) {
-	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
-		return inferRemoteForRouteDomain(ctx, routeDomain)
-	})
-}
-
-func resolveControlPlaneForRouteCleanupDomain(ctx context.Context, routeDomain string) (*controlPlaneHandle, error) {
-	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
-		return inferRemoteForRouteCleanupDomain(ctx, routeDomain)
-	})
-}
-
-func resolveControlPlaneForAttachmentTarget(ctx context.Context, target string) (*controlPlaneHandle, error) {
-	return resolveControlPlaneWithInference(ctx, func(ctx context.Context) (*remote.ResolvedRemote, error) {
-		return inferRemoteForAttachmentTarget(ctx, target)
-	})
+	return &controlPlaneHandle{plane: client, isRemote: true}
 }
 
 func resolveControlPlaneForRepository(ctx context.Context, repository string) (*controlPlaneHandle, error) {
@@ -73,17 +65,5 @@ func resolveControlPlaneWithInference(ctx context.Context, infer func(context.Co
 	if resolved != nil {
 		return newRemoteControlPlaneHandle(resolved), nil
 	}
-	return resolveControlPlane(configPath)
-}
-
-func resolveLocalControlPlane(configPath string) (*controlPlaneHandle, error) {
-	kernel, err := app.NewKernelQuiet(configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize local control plane: %w", err)
-	}
-
-	return &controlPlaneHandle{
-		plane:   NewLocalControlPlane(kernel),
-		closeFn: kernel.Close,
-	}, nil
+	return resolveControlPlane(cliConfigPath)
 }

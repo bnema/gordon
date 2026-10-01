@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ func TestBackupStorage_StoreAndGet(t *testing.T) {
 
 	now := time.Date(2026, 2, 7, 11, 0, 0, 0, time.UTC)
 	payload := []byte("backup-content")
-	path, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, now, bytes.NewReader(payload))
+	path, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, now, bytes.NewReader(payload))
 	require.NoError(t, err)
 
 	rc, err := storage.Get(context.Background(), path)
@@ -40,9 +41,9 @@ func TestBackupStorage_StoreSameSecondBackupsUseDistinctFinalAndTempPaths(t *tes
 	firstPayload := []byte("first-backup")
 	secondPayload := []byte("second-backup")
 
-	firstPath, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, now, bytes.NewReader(firstPayload))
+	firstPath, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, now, bytes.NewReader(firstPayload))
 	require.NoError(t, err)
-	secondPath, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, now, bytes.NewReader(secondPayload))
+	secondPath, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, now, bytes.NewReader(secondPayload))
 	require.NoError(t, err)
 
 	assert.NotEqual(t, firstPath, secondPath)
@@ -64,16 +65,54 @@ func TestBackupStorage_StoreSameSecondBackupsUseDistinctFinalAndTempPaths(t *tes
 	assert.Equal(t, secondPayload, secondData)
 }
 
+func TestBackupStorage_PreservesCanonicalIdentityAndSeparatesSameNamedDatabases(t *testing.T) {
+	storage, err := NewBackupStorage(t.TempDir(), testLogger())
+	require.NoError(t, err)
+
+	started := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	first, err := storage.Store(context.Background(), "shop", "api", "main", domain.ScheduleDaily, started, bytes.NewReader([]byte("api")))
+	require.NoError(t, err)
+	second, err := storage.Store(context.Background(), "shop", "worker", "main", domain.ScheduleDaily, started, bytes.NewReader([]byte("worker")))
+	require.NoError(t, err)
+	assert.NotEqual(t, first, second)
+
+	jobs, err := storage.List(context.Background(), "shop", nil)
+	require.NoError(t, err)
+	require.Len(t, jobs, 2)
+	assert.ElementsMatch(t, []string{"api", "worker"}, []string{jobs[0].Service, jobs[1].Service})
+	for _, job := range jobs {
+		assert.Equal(t, "shop", job.App)
+		assert.Equal(t, "main", job.DBName)
+	}
+}
+
+func TestBackupStorage_DoesNotMergePreCutoverRecords(t *testing.T) {
+	root := t.TempDir()
+	storage, err := NewBackupStorage(root, testLogger())
+	require.NoError(t, err)
+
+	legacyDir := filepath.Join(root, "shop", "main", "daily")
+	require.NoError(t, os.MkdirAll(legacyDir, 0750))
+	require.NoError(t, os.WriteFile(filepath.Join(legacyDir, "20260912T120000Z.bak"), []byte("legacy"), 0600))
+	_, err = storage.Store(context.Background(), "shop", "api", "main", domain.ScheduleDaily, time.Now(), bytes.NewReader([]byte("current")))
+	require.NoError(t, err)
+
+	jobs, err := storage.List(context.Background(), "shop", nil)
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, "api", jobs[0].Service)
+}
+
 func TestBackupStorage_ListWithScheduleFilter(t *testing.T) {
 	storage, err := NewBackupStorage(t.TempDir(), testLogger())
 	require.NoError(t, err)
 
 	base := time.Date(2026, 2, 7, 10, 0, 0, 0, time.UTC)
-	_, err = storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, base, bytes.NewReader([]byte("d1")))
+	_, err = storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, base, bytes.NewReader([]byte("d1")))
 	require.NoError(t, err)
-	_, err = storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, base.Add(time.Hour), bytes.NewReader([]byte("d2")))
+	_, err = storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, base.Add(time.Hour), bytes.NewReader([]byte("d2")))
 	require.NoError(t, err)
-	_, err = storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleWeekly, base.Add(2*time.Hour), bytes.NewReader([]byte("w1")))
+	_, err = storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleWeekly, base.Add(2*time.Hour), bytes.NewReader([]byte("w1")))
 	require.NoError(t, err)
 
 	schedule := domain.ScheduleDaily
@@ -89,7 +128,7 @@ func TestBackupStorage_Delete(t *testing.T) {
 	storage, err := NewBackupStorage(t.TempDir(), testLogger())
 	require.NoError(t, err)
 
-	path, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
+	path, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
 	require.NoError(t, err)
 
 	err = storage.Delete(context.Background(), path)
@@ -105,7 +144,7 @@ func TestBackupStorage_ApplyRetention(t *testing.T) {
 
 	base := time.Date(2026, 2, 7, 6, 0, 0, 0, time.UTC)
 	for i := range 4 {
-		_, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.ScheduleDaily, base.Add(time.Duration(i)*time.Hour), bytes.NewReader([]byte("data")))
+		_, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.ScheduleDaily, base.Add(time.Duration(i)*time.Hour), bytes.NewReader([]byte("data")))
 		require.NoError(t, err)
 	}
 
@@ -123,7 +162,7 @@ func TestBackupStorage_StoreSanitizesDotOnlyPathComponents(t *testing.T) {
 	storage, err := NewBackupStorage(t.TempDir(), testLogger())
 	require.NoError(t, err)
 
-	path, err := storage.Store(context.Background(), "..", "...", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
+	path, err := storage.Store(context.Background(), "..", "service", "...", domain.ScheduleDaily, time.Now().UTC(), bytes.NewReader([]byte("data")))
 	require.NoError(t, err)
 	assert.NotContains(t, path, "..")
 }
@@ -133,7 +172,7 @@ func TestBackupStorage_StoreSanitizesSchedulePathComponent(t *testing.T) {
 	storage, err := NewBackupStorage(rootDir, testLogger())
 	require.NoError(t, err)
 
-	path, err := storage.Store(context.Background(), "app.example.com", "postgres", domain.BackupSchedule("../../escape"), time.Now().UTC(), bytes.NewReader([]byte("data")))
+	path, err := storage.Store(context.Background(), "app.example.com", "postgres", "postgres", domain.BackupSchedule("../../escape"), time.Now().UTC(), bytes.NewReader([]byte("data")))
 	require.NoError(t, err)
 
 	rel, err := filepath.Rel(rootDir, path)

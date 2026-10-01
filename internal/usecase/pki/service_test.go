@@ -9,13 +9,11 @@ import (
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/boundaries/out/mocks"
-	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 )
 
@@ -33,15 +31,21 @@ func (b *blockingCertificateAuthority) IssueCertificate(domain string) (*tls.Cer
 	return b.CertificateAuthority.IssueCertificate(domain)
 }
 
-func newRouteCheckerMock(t *testing.T, domains ...string) *mocks.MockRouteChecker {
-	m := mocks.NewMockRouteChecker(t)
-	routes := make([]domain.Route, len(domains))
-	for i, d := range domains {
-		routes[i] = domain.Route{Domain: d}
+// stubAppRoutes is an ACTIVE-derived host source for PKI tests.
+type stubAppRoutes struct {
+	hosts []out.AppHost
+}
+
+func (s *stubAppRoutes) AppHosts() []out.AppHost { return s.hosts }
+
+func (s *stubAppRoutes) GetExternalRoutes() map[string]string { return nil }
+
+func newRouteCheckerMock(_ *testing.T, domains ...string) *stubAppRoutes {
+	hosts := make([]out.AppHost, 0, len(domains))
+	for _, d := range domains {
+		hosts = append(hosts, out.AppHost{Host: d})
 	}
-	m.EXPECT().GetRoutes(mock.Anything).Return(routes).Maybe()
-	m.EXPECT().GetExternalRoutes().Return(nil).Maybe()
-	return m
+	return &stubAppRoutes{hosts: hosts}
 }
 
 func TestService_GetCertificate_KnownDomain(t *testing.T) {
@@ -188,6 +192,31 @@ func TestService_GetCertificate_WrapsIssuanceError(t *testing.T) {
 	assert.Nil(t, cert)
 	require.ErrorIs(t, err, issuerErr)
 	assert.Equal(t, `issue leaf certificate for "broken.example.com": issuer unavailable`, err.Error())
+}
+
+func TestService_GetCertificate_NeverTLSHostDenied(t *testing.T) {
+	dir := t.TempDir()
+	ca, err := pkiadapter.NewCA(dir, testLogger())
+	require.NoError(t, err)
+
+	cfg := &stubAppRoutes{hosts: []out.AppHost{
+		{Host: "plain.example.com", TLSMode: "never"},
+		{Host: "auto.example.com", TLSMode: "auto"},
+	}}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	svc := pkiusecase.NewService(ctx, ca, cfg, nil, testLogger())
+	defer svc.Stop()
+
+	cert, err := svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "plain.example.com"})
+	assert.NoError(t, err)
+	assert.Nil(t, cert, "tls=never hosts stay plain HTTP: no internal certificate")
+
+	cert, err = svc.GetCertificate(&tls.ClientHelloInfo{ServerName: "auto.example.com"})
+	require.NoError(t, err)
+	require.NotNil(t, cert)
 }
 
 func TestService_GetCertificate_UnknownDomain(t *testing.T) {

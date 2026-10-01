@@ -13,14 +13,14 @@ import (
 
 var trafficResolveControlPlane = resolveControlPlane
 
-func newTrafficStatusCmd() *cobra.Command {
+func newTrafficCmd() *cobra.Command {
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "status",
+		Use:   "traffic",
 		Short: "Show traffic entrypoint, router, and counter status",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			handle, err := trafficResolveControlPlane(configPath)
+			handle, err := trafficResolveControlPlane(cliConfigPath)
 			if err != nil {
 				return err
 			}

@@ -10,12 +10,17 @@ ENGINE := podman
 VERSION := $(shell git describe --tags --always --dirty)
 COMMIT := $(shell git rev-parse --short HEAD)
 BUILD_DATE := $(shell date -u '+%Y-%m-%d_%I:%M:%S%p')
+# Probe the working tree directly (tracked edits and untracked files) instead
+# of parsing VERSION, so an overridden VERSION cannot mask a dirty checkout.
+# `git describe --dirty`, which VERSION uses, only reflects tracked edits.
+DIRTY := $(if $(shell git status --porcelain --untracked-files=normal 2>/dev/null),true,false)
 
 # Build flags
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \
 	-X main.commit=$(COMMIT) \
-	-X main.date=$(BUILD_DATE)
+	-X main.date=$(BUILD_DATE) \
+	-X main.dirty=$(DIRTY)
 
 # Architectures
 ARCHS := amd64 arm64
@@ -83,7 +88,7 @@ build: ## Build binaries for linux (amd64 and arm64)
 	@echo "Building Go binaries..."
 	@mkdir -p $(DIST_DIR)
 	@rm -f $(DIST_DIR)/*
-	@echo "Building with version $(VERSION), commit $(COMMIT), date $(BUILD_DATE)"
+	@echo "Building with version $(VERSION), commit $(COMMIT), date $(BUILD_DATE), dirty $(DIRTY)"
 	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-amd64 ./main.go
 	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o $(DIST_DIR)/gordon-linux-arm64 ./main.go
 	@echo "Go binaries built successfully"
@@ -105,6 +110,7 @@ build-push: ## Build and push Docker images
 			--build-arg VERSION="$(VERSION)" \
 			--build-arg COMMIT="$(COMMIT)" \
 			--build-arg BUILD_DATE="$(BUILD_DATE)" \
+			--build-arg DIRTY="$(DIRTY)" \
 			-t $(REPO):$(TAG)-$$arch .; \
 		$(ENGINE) push $(REPO):$(TAG)-$$arch; \
 	done

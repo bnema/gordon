@@ -14,22 +14,24 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// VolumeService orchestrates volume archive backups.
+// VolumeService orchestrates declarative app volume archive backups.
+// Targets come from the app's ACTIVE record: a service declares its
+// volumes and which of them are backed up, and the app name is the
+// backup identity. No container label or attachment is ever consulted.
 type VolumeService struct {
-	runtime  out.ContainerRuntime
 	exporter out.VolumeArchiveExporter
 	storage  out.VolumeBackupStorage
 	config   domain.VolumeBackupConfig
 	log      zerowrap.Logger
+	state    out.AppStateReader
 
 	mu     sync.Mutex
 	recent map[string]domain.VolumeBackupJob
 }
 
 // NewVolumeService creates a volume backup service.
-func NewVolumeService(runtime out.ContainerRuntime, exporter out.VolumeArchiveExporter, storage out.VolumeBackupStorage, config domain.VolumeBackupConfig, log zerowrap.Logger) *VolumeService {
+func NewVolumeService(exporter out.VolumeArchiveExporter, storage out.VolumeBackupStorage, config domain.VolumeBackupConfig, log zerowrap.Logger) *VolumeService {
 	return &VolumeService{
-		runtime:  runtime,
 		exporter: exporter,
 		storage:  storage,
 		config:   config,
@@ -38,21 +40,61 @@ func NewVolumeService(runtime out.ContainerRuntime, exporter out.VolumeArchiveEx
 	}
 }
 
-// ListVolumeBackups lists completed volume backups for a domain, or all domains when empty.
-func (s *VolumeService) ListVolumeBackups(ctx context.Context, domainName string) ([]domain.VolumeBackupJob, error) {
+// WithAppState wires the ACTIVE app state target resolution reads.
+func (s *VolumeService) WithAppState(state out.AppStateReader) *VolumeService {
+	s.state = state
+	return s
+}
+
+// VolumeTargets returns every declared volume target of one app.
+func (s *VolumeService) VolumeTargets(ctx context.Context, app string) ([]domain.VolumeBackupTarget, error) {
+	if s.state == nil {
+		return nil, fmt.Errorf("backup: app state is not wired")
+	}
+	_, targets, err := declaredTargets(ctx, s.state, app)
+	if err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+// allVolumeTargets returns the declared volume targets of every app.
+func (s *VolumeService) allVolumeTargets(ctx context.Context) ([]domain.VolumeBackupTarget, error) {
+	if s.state == nil {
+		return nil, fmt.Errorf("backup: app state is not wired")
+	}
+	apps, err := appNames(ctx, s.state)
+	if err != nil {
+		return nil, err
+	}
+	var targets []domain.VolumeBackupTarget
+	for _, app := range apps {
+		appTargets, err := s.VolumeTargets(ctx, app)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, appTargets...)
+	}
+	return targets, nil
+}
+
+// ListVolumeBackups lists completed volume backups of one app, or every
+// app when app is empty.
+func (s *VolumeService) ListVolumeBackups(ctx context.Context, app string) ([]domain.VolumeBackupJob, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "ListVolumeBackups",
-		"domain":              domainName,
+		"app":                 app,
 	})
-	jobs, err := s.storage.ListVolumeArchives(ctx, domainName)
+	jobs, err := s.storage.ListVolumeArchives(ctx, app)
 	if err != nil {
 		return nil, fmt.Errorf("list volume archives: %w", err)
 	}
 	return jobs, nil
 }
 
-// VolumeBackupStatus returns completed backup artifacts plus current/recent in-memory job state.
+// VolumeBackupStatus returns completed backup artifacts plus current or
+// recent in-memory jobs.
 func (s *VolumeService) VolumeBackupStatus(ctx context.Context) ([]domain.VolumeBackupJob, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -71,148 +113,100 @@ func (s *VolumeService) VolumeBackupStatus(ctx context.Context) ([]domain.Volume
 	}
 	s.mu.Unlock()
 
-	sort.Slice(jobs, func(i, j int) bool {
-		if !jobs[i].StartedAt.Equal(jobs[j].StartedAt) {
-			return jobs[i].StartedAt.After(jobs[j].StartedAt)
-		}
-		return jobs[i].VolumeName < jobs[j].VolumeName
-	})
+	sortVolumeJobs(jobs)
 	return jobs, nil
 }
 
-// RunVolumeBackups runs volume backups for all eligible targets, optionally scoped to a domain and volume.
-func (s *VolumeService) RunVolumeBackups(ctx context.Context, domainName, volumeName string) ([]domain.VolumeBackupJob, error) {
+// RunVolumeBackups runs the declared volume backups of one app. service
+// and volume are explicit selectors: an omitted selector succeeds only
+// when exactly one compatible target exists.
+func (s *VolumeService) RunVolumeBackups(ctx context.Context, app, service, volume string) ([]domain.VolumeBackupJob, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "RunVolumeBackups",
-		"domain":              domainName,
-		"volume":              volumeName,
+		"app":                 app,
+		"volume":              volume,
 	})
-	log := zerowrap.FromCtx(ctx)
 	if !s.config.Enabled {
 		return []domain.VolumeBackupJob{}, nil
 	}
-
-	containers, err := s.runtime.ListContainers(ctx, true)
+	targets, err := s.VolumeTargets(ctx, app)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list containers for volume backups: %w", err)
+		return nil, err
 	}
-	targets := SelectVolumeBackupTargetsForScope(containers, s.config.VolumePrefix, domainName, volumeName)
-	log.Info().
-		Str("domain", domainName).
-		Str("volume", volumeName).
-		Int("targets", len(targets)).
-		Msg("selected volume backup targets")
-	if len(targets) == 0 {
-		return []domain.VolumeBackupJob{}, nil
+	target, err := selectTarget(targets, "volume", service, volume, volumeTargetKey)
+	if err != nil {
+		return nil, err
 	}
-
-	results, firstErr := s.runVolumeBackupTargets(ctx, targets)
-	if err := s.applyRetentionForSuccessfulVolumeBackups(ctx, results); err != nil && firstErr == nil {
-		firstErr = err
-	}
-	return results, firstErr
-}
-
-func (s *VolumeService) runVolumeBackupTargets(ctx context.Context, targets []domain.VolumeBackupTarget) ([]domain.VolumeBackupJob, error) {
-	runCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	sem := make(chan struct{}, max(s.config.MaxConcurrency, 1))
-	results := make([]domain.VolumeBackupJob, 0, len(targets))
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-
-launchLoop:
-	for _, target := range targets {
-		select {
-		case <-runCtx.Done():
-			firstErr = runCtx.Err()
-			break launchLoop
-		case sem <- struct{}{}:
+	job := s.runVolumeBackup(ctx, target)
+	if job.Status == domain.BackupStatusCompleted {
+		if _, err := s.storage.ApplyVolumeRetention(ctx, job.App, s.config.Retention); err != nil {
+			return []domain.VolumeBackupJob{job}, fmt.Errorf("apply volume backup retention for %s: %w", job.App, err)
 		}
-		wg.Add(1)
-		go func(target domain.VolumeBackupTarget) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			job := s.runVolumeBackup(runCtx, target)
-			mu.Lock()
-			results = append(results, job)
-			mu.Unlock()
-		}(target)
 	}
-	if firstErr != nil {
-		cancel()
+	if job.Status == domain.BackupStatusFailed {
+		return []domain.VolumeBackupJob{job}, fmt.Errorf("volume backup failed for %s/%s: %s", job.App, job.VolumeName, job.Error)
 	}
-	wg.Wait()
-	return results, firstVolumeBackupError(results, firstErr)
+	return []domain.VolumeBackupJob{job}, nil
 }
 
-func (s *VolumeService) applyRetentionForSuccessfulVolumeBackups(ctx context.Context, results []domain.VolumeBackupJob) error {
-	successDomains, failedDomains := volumeBackupResultDomains(results)
-	for domainName := range successDomains {
-		if _, failed := failedDomains[domainName]; failed {
+// RunVolumeBackupsForSchedule runs every declared volume backup of every
+// app under the installation's schedule, then applies retention. Volume
+// declarations carry no schedule of their own: the installation preset is
+// the schedule, and the label is only used for the caller's own filter.
+func (s *VolumeService) RunVolumeBackupsForSchedule(ctx context.Context, schedule domain.BackupSchedule) error {
+	if !s.config.Enabled {
+		return nil
+	}
+	if schedule != "" && !isValidBackupSchedule(schedule) {
+		return fmt.Errorf("invalid backup schedule: %q", schedule)
+	}
+	targets, err := s.allVolumeTargets(ctx)
+	if err != nil {
+		return err
+	}
+	var firstErr error
+	apps := map[string]struct{}{}
+	for _, target := range targets {
+		job := s.runVolumeBackup(ctx, target)
+		if job.Status != domain.BackupStatusCompleted {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("volume backup %s/%s: %s", job.App, job.VolumeName, job.Error)
+			}
 			continue
 		}
-		deleted, err := s.storage.ApplyVolumeRetention(ctx, domainName, s.config.Retention)
-		if err != nil {
-			return fmt.Errorf("apply volume backup retention for %s: %w", domainName, err)
-		}
-		log := zerowrap.FromCtx(ctx)
-		log.Info().
-			Str("domain", domainName).
-			Int("deleted", deleted).
-			Msg("volume backup retention applied")
+		apps[job.App] = struct{}{}
 	}
-	return nil
-}
-
-func firstVolumeBackupError(results []domain.VolumeBackupJob, firstErr error) error {
-	if firstErr != nil {
-		return firstErr
-	}
-	for _, job := range results {
-		if job.Status == domain.BackupStatusFailed {
-			return fmt.Errorf("volume backup failed for %s/%s: %s", job.Domain, job.VolumeName, job.Error)
+	for _, app := range sortedSet(apps) {
+		if _, err := s.storage.ApplyVolumeRetention(ctx, app, s.config.Retention); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("apply volume backup retention for %s: %w", app, err)
+			}
 		}
 	}
-	return nil
-}
-
-func volumeBackupResultDomains(results []domain.VolumeBackupJob) (map[string]struct{}, map[string]struct{}) {
-	successDomains := make(map[string]struct{})
-	failedDomains := make(map[string]struct{})
-	for _, job := range results {
-		switch job.Status {
-		case domain.BackupStatusCompleted:
-			successDomains[job.Domain] = struct{}{}
-		case domain.BackupStatusFailed:
-			failedDomains[job.Domain] = struct{}{}
-		}
-	}
-	return successDomains, failedDomains
+	return firstErr
 }
 
 func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.VolumeBackupTarget) domain.VolumeBackupJob {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
-		"domain":         target.Domain,
+		"app":            target.App,
+		"service":        target.Service,
 		"volume":         target.VolumeName,
-		"container_name": target.ContainerName,
+		"runtime_volume": target.RuntimeVolumeName,
 		"mount_path":     target.MountPath,
 	})
 	log := zerowrap.FromCtx(ctx)
 	started := time.Now().UTC()
 	job := domain.VolumeBackupJob{
-		ID:            newBackupJobID(started),
-		Domain:        target.Domain,
-		ContainerName: target.ContainerName,
-		ContainerID:   target.ContainerID,
-		VolumeName:    target.VolumeName,
-		MountPath:     target.MountPath,
-		Type:          domain.BackupTypeVolumeArchive,
-		Status:        domain.BackupStatusRunning,
-		StartedAt:     started,
+		ID:                newBackupJobID(started),
+		App:               target.App,
+		Service:           target.Service,
+		VolumeName:        target.VolumeName,
+		RuntimeVolumeName: target.RuntimeVolumeName,
+		MountPath:         target.MountPath,
+		Type:              domain.BackupTypeVolumeArchive,
+		Status:            domain.BackupStatusRunning,
+		StartedAt:         started,
 		Metadata: map[string]string{
 			"compression": string(s.config.Compression),
 		},
@@ -227,7 +221,7 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 	defer cancel()
 
 	archive, err := s.exporter.ExportVolumeArchive(exportCtx, domain.VolumeArchiveRequest{
-		VolumeName:  target.VolumeName,
+		VolumeName:  target.RuntimeVolumeName,
 		MountPath:   target.MountPath,
 		Compression: s.config.Compression,
 		HelperImage: s.config.HelperImage,
@@ -257,6 +251,11 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 	return job
 }
 
+// volumeTargetKey reports the (service, volume) identity of one target.
+func volumeTargetKey(target domain.VolumeBackupTarget) (string, string) {
+	return target.Service, target.VolumeName
+}
+
 func (s *VolumeService) failJob(ctx context.Context, job domain.VolumeBackupJob, err error) domain.VolumeBackupJob {
 	job.Status = domain.BackupStatusFailed
 	job.CompletedAt = time.Now().UTC()
@@ -270,7 +269,7 @@ func (s *VolumeService) failJob(ctx context.Context, job domain.VolumeBackupJob,
 func (s *VolumeService) remember(job domain.VolumeBackupJob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.recent[job.Domain+"/"+job.VolumeName] = job
+	s.recent[job.App+"/"+job.VolumeName] = job
 	if len(s.recent) > 100 {
 		for k := range s.recent {
 			delete(s.recent, k)
@@ -282,5 +281,14 @@ func (s *VolumeService) remember(job domain.VolumeBackupJob) {
 func (s *VolumeService) forget(job domain.VolumeBackupJob) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.recent, job.Domain+"/"+job.VolumeName)
+	delete(s.recent, job.App+"/"+job.VolumeName)
+}
+
+func sortVolumeJobs(jobs []domain.VolumeBackupJob) {
+	sort.Slice(jobs, func(i, j int) bool {
+		if !jobs[i].StartedAt.Equal(jobs[j].StartedAt) {
+			return jobs[i].StartedAt.After(jobs[j].StartedAt)
+		}
+		return jobs[i].VolumeName < jobs[j].VolumeName
+	})
 }

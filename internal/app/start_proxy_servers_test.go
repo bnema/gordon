@@ -8,18 +8,18 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/bnema/zerowrap"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	"github.com/bnema/gordon/internal/adapters/localadmin"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
-	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
@@ -30,7 +30,7 @@ func TestWaitForServerReady_NilReadyReturnsImmediately(t *testing.T) {
 	done := make(chan error, 1)
 
 	go func() {
-		done <- waitForServerReady(nil, errChan)
+		done <- waitForServerReady(context.Background(), nil, errChan)
 	}()
 
 	select {
@@ -46,8 +46,48 @@ func TestWaitForServerReady_NonNilReadyPreservesErrorBehavior(t *testing.T) {
 	errChan := make(chan error, 1)
 	errChan <- expected
 
-	err := waitForServerReady(make(chan struct{}), errChan)
+	err := waitForServerReady(context.Background(), make(chan struct{}), errChan)
 	require.ErrorIs(t, err, expected)
+}
+
+func TestWaitForServerReady_ReturnsOnContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// A canceled startup context must unblock readiness instead of waiting on a
+	// server that will never signal ready.
+	err := waitForServerReady(ctx, make(chan struct{}), make(chan error))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestCleanupStartupResources_ClosesAdminSocketsServersAndTrafficManager(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", xdg)
+
+	localAdmin, err := startLocalAdminServer(localAdminTestServices(t, inmocks.NewMockAppService(t)), make(chan error, 4), zerowrap.Default())
+	require.NoError(t, err)
+	require.NotNil(t, localAdmin)
+	socketPath := localadmin.SocketPath(filepath.Join(xdg, "gordon"))
+	require.NoError(t, localadmin.ValidateSocket(socketPath))
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	started := make(chan struct{})
+	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})}
+	go func() {
+		close(started)
+		_ = srv.Serve(ln)
+	}()
+	<-started
+	addr := ln.Addr().String()
+
+	manager := trafficadapter.NewManager()
+	cleanupStartupResources(localAdmin, manager, zerowrap.Default(), srv)
+
+	require.NoFileExists(t, socketPath, "local admin socket must be closed")
+	_, err = net.DialTimeout("tcp", addr, 200*time.Millisecond)
+	require.Error(t, err, "bound server must be shut down")
+	require.Empty(t, manager.Status().EntryPoints)
 }
 
 func TestStartProxyServers_DoesNotStartLegacyHTTPListenerFromServerPort(t *testing.T) {
@@ -129,9 +169,8 @@ func TestStartProxyServers_ConfiguresSmartTCPHTTPAndHTTPSRoutesWithoutPublicHTTP
 	assertTCPPortClosed(t, fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port))
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts("app.example.com")))
 
 	_, smartPortText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -170,9 +209,8 @@ func TestStartProxyServers_ConfiguresTrafficManagerHTTPSRoute(t *testing.T) {
 	require.Nil(t, tlsReady)
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}})
 	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{})
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts("app.example.com")))
 
 	_, portText, err := net.SplitHostPort(cfg.EntryPoints[traffic.DefaultEdgeEntryPointName].Address)
 	require.NoError(t, err)
@@ -212,9 +250,8 @@ func TestStartProxyServers_ConfiguresCustomTLSMuxHTTPSRoute(t *testing.T) {
 	require.Nil(t, tlsReady)
 
 	configSvc := inmocks.NewMockConfigService(t)
-	configSvc.EXPECT().GetRoutes(context.Background()).Return(nil)
 	configSvc.EXPECT().GetExternalRoutes().Return(nil)
-	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc))
+	require.NoError(t, applyTrafficRuntimeConfig(context.Background(), manager, cfg, configSvc, stubHosts()))
 
 	_, customPort, err := net.SplitHostPort(cfg.EntryPoints["custom-secure"].Address)
 	require.NoError(t, err)
@@ -282,9 +319,7 @@ func TestStartProxyServers_TLSRequiresTrafficManager(t *testing.T) {
 
 func newTestPKIService(t *testing.T) *pkiusecase.Service {
 	t.Helper()
-	routes := outmocks.NewMockRouteChecker(t)
-	routes.EXPECT().GetRoutes(mock.Anything).Return([]domain.Route{{Domain: "app.example.com", HTTPS: true}}).Maybe()
-	routes.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	routes := newRoutesMock(t, "app.example.com")
 	ca, err := pkiadapter.NewCA(t.TempDir(), zerowrap.Default())
 	require.NoError(t, err)
 	pkiSvc := pkiusecase.NewService(context.Background(), ca, routes, nil, zerowrap.Default())

@@ -6,6 +6,7 @@ package out
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -16,8 +17,14 @@ type ContainerRuntime interface {
 	// Container lifecycle
 	CreateContainer(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error)
 	StartContainer(ctx context.Context, containerID string) error
-	StopContainer(ctx context.Context, containerID string) error
-	RestartContainer(ctx context.Context, containerID string) error
+	// StopContainer stops one exact container, giving it grace to exit
+	// before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	StopContainer(ctx context.Context, containerID string, grace time.Duration) error
+	// RestartContainer restarts one exact container, giving it grace to
+	// exit before the runtime kills it. A non-positive grace keeps the
+	// runtime's own default.
+	RestartContainer(ctx context.Context, containerID string, grace time.Duration) error
 	RemoveContainer(ctx context.Context, containerID string, force bool) error
 	RenameContainer(ctx context.Context, containerID, newName string) error
 
@@ -25,9 +32,15 @@ type ContainerRuntime interface {
 	ListContainers(ctx context.Context, all bool) ([]*domain.Container, error)
 	InspectContainer(ctx context.Context, containerID string) (*domain.Container, error)
 	GetContainerLogs(ctx context.Context, containerID string, follow bool) (io.ReadCloser, error)
+	// GetContainerLogsSince returns logs emitted at or after since, so
+	// readiness can scope a probe to the current execution of one
+	// exact container ID. A missing container reports the
+	// domain.ErrContainerNotFound sentinel.
+	GetContainerLogsSince(ctx context.Context, containerID string, since time.Time, follow bool) (io.ReadCloser, error)
 
 	// Image operations
 	PullImage(ctx context.Context, image string) error
+	PullImageWithOptions(ctx context.Context, request domain.ImagePullRequest) error
 	PullImageWithAuth(ctx context.Context, image, username, password string) error
 	TagImage(ctx context.Context, sourceRef, targetRef string) error
 	UntagImage(ctx context.Context, imageRef string) error
@@ -37,11 +50,20 @@ type ContainerRuntime interface {
 	// Runtime information
 	Ping(ctx context.Context) error
 	Version(ctx context.Context) (string, error)
+	// SupportsCDIDevices reports whether the connected engine can serve
+	// native CDI device requests. It fails closed with
+	// domain.ErrRuntimeUnsupported on engines below the support matrix
+	// (Podman 5.4+, Docker 28.3+). Callers invoke it before any workload
+	// mutation so an unsupported engine fails in preflight, never after
+	// withdrawing the serving generation.
+	SupportsCDIDevices(ctx context.Context) error
 
 	// Health and status
 	IsContainerRunning(ctx context.Context, containerID string) (bool, error)
 	GetContainerHealthStatus(ctx context.Context, containerID string) (status string, hasHealthcheck bool, err error)
-	GetContainerPort(ctx context.Context, containerID string, internalPort int) (int, error)
+	// GetContainerBackendBinds resolves protocol-specific container ports to
+	// their host binds in one container inspection.
+	GetContainerBackendBinds(ctx context.Context, containerID string, ports []domain.ContainerBackendPort) ([]domain.ContainerBackendBind, error)
 
 	// Image and port inspection
 	GetImageExposedPorts(ctx context.Context, imageRef string) ([]int, error)
@@ -52,7 +74,10 @@ type ContainerRuntime interface {
 	// Volume management
 	InspectImageVolumes(ctx context.Context, imageRef string) ([]string, error)
 	VolumeExists(ctx context.Context, volumeName string) (bool, error)
-	CreateVolume(ctx context.Context, volumeName string) error
+	// CreateVolume creates one named volume with the given labels.
+	// Labels carry ownership provenance; a caller that omits them
+	// creates an unmanaged volume that prune never adopts.
+	CreateVolume(ctx context.Context, volumeName string, labels map[string]string) error
 	RemoveVolume(ctx context.Context, volumeName string, force bool) error
 	ListVolumes(ctx context.Context) ([]*domain.VolumeInfo, error)
 
@@ -64,6 +89,7 @@ type ContainerRuntime interface {
 
 	// Image identity
 	GetImageID(ctx context.Context, imageRef string) (string, error)
+	VerifyImageDigest(ctx context.Context, imageRef, digest string) error
 
 	// In-container operations
 	ExecInContainer(ctx context.Context, containerID string, cmd []string) (*ExecResult, error)
@@ -76,6 +102,17 @@ type ContainerRuntime interface {
 	NetworkExists(ctx context.Context, name string) (bool, error)
 	ConnectContainerToNetwork(ctx context.Context, containerName, networkName string) error
 	DisconnectContainerFromNetwork(ctx context.Context, containerName, networkName string) error
+
+	// Bounded network readiness
+	//
+	// ProbeContainerNetwork runs one bounded readiness session against one
+	// declared internal container port, which has no host publication. The
+	// adapter owns the helper lifecycle: it resolves the target endpoint on
+	// the exact network in the request, runs one hardened helper attached
+	// only to that network, and always removes the helper under an
+	// independent bounded cleanup context. It never publishes a host port
+	// and never targets a service alias.
+	ProbeContainerNetwork(ctx context.Context, request domain.ContainerNetworkProbeRequest) (domain.ContainerNetworkProbeResult, error)
 }
 
 // ContainerLister is the subset of ContainerRuntime needed by the orphan GC.

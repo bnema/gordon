@@ -26,9 +26,9 @@ func TestParseAndConvertScopes_SpecificRepoPushOnly(t *testing.T) {
 }
 
 func TestParseAndConvertScopes_MixedWithAdminScopes(t *testing.T) {
-	got, err := parseAndConvertScopes("push,pull,admin:routes:read", "myapp")
+	got, err := parseAndConvertScopes("push,pull,admin:apps:read", "myapp")
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"repository:myapp:push,pull", "admin:routes:read"}, got)
+	assert.ElementsMatch(t, []string{"repository:myapp:push,pull", "admin:apps:read"}, got)
 }
 
 func TestParseAndConvertScopes_AlreadyV2Format_RepoIgnored(t *testing.T) {

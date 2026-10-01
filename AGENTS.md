@@ -111,10 +111,9 @@ CLI commands do NOT use zerowrap — they use `cliWriteLine`/`cliWritef` for out
 
 ### ControlPlane Pattern
 
-`ControlPlane` interface (`controlplane.go`) abstracts local vs remote operations.
-- `controlplane_remote.go` — delegates to `remote.Client` HTTP methods.
-- `controlplane_local.go` — calls service interfaces directly.
-- Test fakes in `push_test.go` — update when adding interface methods.
+`ControlPlane` interface (`controlplane.go`) is the seam CLI commands depend on.
+- `*remote.Client` implements it for both the explicit remote and the local admin socket.
+- Tests use the mockery mock in `cli/mocks/` — run `mockery` after adding interface methods.
 
 ### HTTP Admin Handlers
 

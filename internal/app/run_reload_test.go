@@ -6,10 +6,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,10 +23,10 @@ import (
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/apps"
 	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
 	"github.com/bnema/gordon/internal/usecase/container"
 	"github.com/bnema/gordon/internal/usecase/proxy"
-	servicecfg "github.com/bnema/gordon/internal/usecase/services"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
 )
 
@@ -106,25 +104,55 @@ func (r *reloadRecorder) Calls() int {
 }
 
 type proxyRecorder struct {
+	mu     sync.Mutex
 	calls  int
 	config proxy.Config
 }
 
 func (p *proxyRecorder) UpdateConfig(config proxy.Config) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.calls++
 	p.config = config
 }
 
+func (p *proxyRecorder) Calls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+func (p *proxyRecorder) Config() proxy.Config {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.config
+}
+
 type registryLimitsRecorder struct {
+	mu               sync.Mutex
 	calls            int
 	maxBlobChunkSize int64
 	maxBlobSize      int64
 }
 
 func (r *registryLimitsRecorder) UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.calls++
 	r.maxBlobChunkSize = maxBlobChunkSize
 	r.maxBlobSize = maxBlobSize
+}
+
+func (r *registryLimitsRecorder) Calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls
+}
+
+func (r *registryLimitsRecorder) Limits() (chunk, size int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.maxBlobChunkSize, r.maxBlobSize
 }
 
 type containerConfigApplyRecorder struct {
@@ -138,37 +166,6 @@ func (r *containerConfigApplyRecorder) Apply(ctx context.Context, cfg Config) er
 	r.ctx = ctx
 	r.cfg = cfg
 	return nil
-}
-
-type standaloneServiceRecorder struct {
-	mu          sync.Mutex
-	calls       int
-	services    []domain.StandaloneService
-	err         error
-	onReconcile func()
-}
-
-func (r *standaloneServiceRecorder) Reconcile(_ context.Context, services []domain.StandaloneService) error {
-	r.mu.Lock()
-	r.calls++
-	r.services = append([]domain.StandaloneService(nil), services...)
-	err := r.err
-	onReconcile := r.onReconcile
-	r.mu.Unlock()
-	if onReconcile != nil {
-		onReconcile()
-	}
-	return err
-}
-
-func (r *standaloneServiceRecorder) Status(context.Context) ([]domain.StandaloneServiceStatus, error) {
-	return nil, nil
-}
-
-func (r *standaloneServiceRecorder) Calls() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.calls
 }
 
 type publicTLSReconcileRecorder struct {
@@ -202,6 +199,12 @@ func (e *eventBusRecorder) Calls() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.calls
+}
+
+func (e *eventBusRecorder) Type() domain.EventType {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.eventType
 }
 
 func TestSetupConfigHotReload_WatchCallbackInvokesCoordinator(t *testing.T) {
@@ -256,18 +259,18 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	containerCfg := &containerConfigApplyRecorder{}
 
 	registryLimits := &registryLimitsRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
-	coord.SetContainerConfigApplier(containerCfg.Apply)
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, containerCfg.Apply, zerowrap.Default())
 	require.NoError(t, coord.ApplyLoadedConfig(ctx))
 
 	require.Equal(t, 0, reloadSvc.Calls())
-	require.Equal(t, 1, proxySvc.calls)
+	require.Equal(t, 1, proxySvc.Calls())
 	require.Equal(t, 1, events.Calls())
-	require.Equal(t, 1, registryLimits.calls)
+	require.Equal(t, 1, registryLimits.Calls())
 	require.Equal(t, 1, containerCfg.calls)
-	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
-	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	rlChunk, rlSize := registryLimits.Limits()
+	require.Equal(t, int64(6<<20), rlChunk)
+	require.Equal(t, int64(8<<20), rlSize)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 	require.Equal(t, "reload.example.com", containerCfg.cfg.Server.GordonDomain)
 	require.Equal(t, []string{"old.example.com"}, containerCfg.cfg.Server.LegacyRegistryDomains)
 	require.Equal(t, []string{"docker.io"}, containerCfg.cfg.Images.AllowedRegistries)
@@ -277,10 +280,17 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 		MaxBodySize:        5 << 20,
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
-	}, proxySvc.config)
+	}, proxySvc.Config())
 }
 
-func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
+// newTestServices wires the serialized traffic publisher the reload hook
+// requires. Tests that omit app state still exercise the graph apply.
+func newTestServices(svc *services) *services {
+	svc.appTrafficPublisher = newAppTrafficPublisher(svc, Config{})
+	return svc
+}
+
+func TestReloadRuntime_RegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
 	v.Set("server.gordon_domain", "reload.example.com")
@@ -301,18 +311,17 @@ func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 		v:   v,
 		cfg: Config{},
 		log: zerowrap.Default(),
-		svc: &services{
+		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
-			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, nil, zerowrap.Default()),
 			trafficManager:    manager,
 			httpsProxyHandler: httpsHandler,
 			pkiSvc:            pkiSvc,
-		},
+		}),
 	}
-	si.registerReloadCoordinatorHooks()
 
 	reloadCfg := Config{}
 	reloadCfg.Server.GordonDomain = "reload.example.com"
@@ -322,7 +331,7 @@ func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 		"custom-secure": {Address: customAddress, Protocol: domain.EntryPointProtocolTLSMux},
 	}
 
-	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
+	require.NoError(t, (&reloadRuntime{v: si.v, svc: si.svc, log: si.log}).Apply(ctx, reloadCfg))
 	managementCert, err := pkiSvc.GetCertificate(&tls.ClientHelloInfo{ServerName: "reload.example.com"})
 	require.NoError(t, err)
 	require.NotNil(t, managementCert)
@@ -335,7 +344,7 @@ func TestServiceInit_ReloadRegistersCustomTLSMuxHTTPSFallback(t *testing.T) {
 	require.Contains(t, body, "reload secure")
 }
 
-func TestServiceInit_ReloadUpdatesManagementHostsBeforeLaterFailure(t *testing.T) {
+func TestReloadRuntime_UpdatesManagementHosts(t *testing.T) {
 	ctx := t.Context()
 	v := viper.New()
 	v.Set("server.gordon_domain", "old.example.com")
@@ -345,35 +354,30 @@ func TestServiceInit_ReloadUpdatesManagementHostsBeforeLaterFailure(t *testing.T
 	require.NoError(t, configSvc.Load(ctx))
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().SetAdditionalHosts(mock.Anything, []string{"new.example.com"}).Once()
-	reconcileErr := errors.New("standalone reconcile failed")
 
 	si := &serviceInit{
 		ctx: ctx,
 		v:   v,
 		cfg: Config{},
 		log: zerowrap.Default(),
-		svc: &services{
-			configSvc:            configSvc,
-			containerSvc:         container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
-			internalRegUser:      "gordon",
-			internalRegPass:      "secret",
-			reloadCoordinator:    newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, publicTLS, zerowrap.Default()),
-			publicTLSSvc:         publicTLS,
-			standaloneServiceSvc: &standaloneServiceRecorder{err: reconcileErr},
-		},
+		svc: newTestServices(&services{
+			configSvc:         configSvc,
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
+			internalRegUser:   "gordon",
+			internalRegPass:   "secret",
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, publicTLS, nil, zerowrap.Default()),
+			publicTLSSvc:      publicTLS,
+		}),
 	}
-	si.registerReloadCoordinatorHooks()
 
 	reloadCfg := Config{}
 	reloadCfg.Server.GordonDomain = "new.example.com"
 	reloadCfg.Server.RegistryPort = 5000
-	reloadCfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
 
-	err := si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg)
-	require.ErrorIs(t, err, reconcileErr)
+	require.NoError(t, (&reloadRuntime{v: si.v, svc: si.svc, log: si.log}).Apply(ctx, reloadCfg))
 }
 
-func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(t *testing.T) {
+func TestReloadRuntime_AppliesContainerConfig(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
 	v.Set("server.gordon_domain", "reload.example.com")
@@ -387,55 +391,24 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_WiresContainerConfigApplier(
 		v:   v,
 		cfg: Config{},
 		log: zerowrap.Default(),
-		svc: &services{
+		svc: newTestServices(&services{
 			configSvc:         configSvc,
-			containerSvc:      container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
 			internalRegUser:   "gordon",
 			internalRegPass:   "secret",
-			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
-		},
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, nil, zerowrap.Default()),
+		}),
 	}
-
-	si.registerReloadCoordinatorHooks()
-	require.NotNil(t, si.svc.reloadCoordinator.applyContainerConfig)
 
 	reloadCfg := Config{}
 	reloadCfg.Server.GordonDomain = "reload.example.com"
 	reloadCfg.Server.RegistryPort = 5000
 	reloadCfg.Images.AllowedRegistries = []string{"docker.io"}
 
-	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
-}
-func TestStandaloneServiceSecretProviderUnsafeBackendReconcilesServiceSecrets(t *testing.T) {
-	ctx := context.Background()
-	dataDir := t.TempDir()
-	secretPath := "service/game/rcon"
-	require.NoError(t, os.MkdirAll(filepath.Join(dataDir, "secrets", "service", "game"), 0700))
-	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "secrets", secretPath), []byte("test-secret-value"), 0600))
-
-	rt := outmocks.NewMockContainerRuntime(t)
-	var sawSecretEnv bool
-	rt.On("ListContainers", mock.Anything, true).Return([]*domain.Container{}, nil).Once()
-	rt.On("InspectImageVolumes", mock.Anything, "game:latest").Return([]string(nil), nil).Once()
-	rt.On("CreateContainer", mock.Anything, mock.AnythingOfType("*domain.ContainerConfig")).Run(func(args mock.Arguments) {
-		config := args.Get(1).(*domain.ContainerConfig)
-		for _, entry := range config.Env {
-			if strings.HasPrefix(entry, "RCON_PASSWORD=") {
-				sawSecretEnv = true
-			}
-		}
-	}).Return(&domain.Container{ID: "created-1"}, nil).Once()
-	rt.On("StartContainer", mock.Anything, "created-1").Return(nil).Once()
-
-	provider := createStandaloneServiceSecretProvider(domain.SecretsBackendUnsafe, dataDir, zerowrap.Default())
-	reconciler := servicecfg.NewServiceWithSecretProvider(rt, provider)
-	err := reconciler.Reconcile(ctx, []domain.StandaloneService{{Name: "game", Image: "game:latest", Enabled: true, Secrets: []domain.StandaloneServiceSecretRef{{Name: "rcon", Key: "RCON_PASSWORD"}}}})
-
-	require.NoError(t, err)
-	assert.True(t, sawSecretEnv)
+	require.NoError(t, (&reloadRuntime{v: si.v, svc: si.svc, log: si.log}).Apply(ctx, reloadCfg))
 }
 
-func TestServiceInit_RegisterReloadCoordinatorHooks_AppliesTrafficBeforeStandaloneServices(t *testing.T) {
+func TestReloadRuntime_AppliesTraffic(t *testing.T) {
 	ctx := context.Background()
 	v := viper.New()
 	v.Set("server.gordon_domain", "reload.example.com")
@@ -446,72 +419,123 @@ func TestServiceInit_RegisterReloadCoordinatorHooks_AppliesTrafficBeforeStandalo
 	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
 
-	reconciler := &standaloneServiceRecorder{onReconcile: func() {
-		assert.NotEmpty(t, manager.Status().EntryPoints, "traffic graph should apply before standalone services reconcile")
-	}}
 	si := &serviceInit{
 		ctx: ctx,
 		v:   v,
 		cfg: Config{},
 		log: zerowrap.Default(),
-		svc: &services{
-			configSvc:            configSvc,
-			containerSvc:         container.NewService(nil, nil, nil, nil, container.Config{}, configSvc),
-			internalRegUser:      "gordon",
-			internalRegPass:      "secret",
-			reloadCoordinator:    newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, zerowrap.Default()),
-			trafficManager:       manager,
-			standaloneServiceSvc: reconciler,
-		},
+		svc: newTestServices(&services{
+			configSvc:         configSvc,
+			containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
+			internalRegUser:   "gordon",
+			internalRegPass:   "secret",
+			reloadCoordinator: newReloadCoordinator(v, &reloadRecorder{}, &proxyRecorder{}, nil, nil, nil, nil, zerowrap.Default()),
+			trafficManager:    manager,
+		}),
 	}
-	si.registerReloadCoordinatorHooks()
 
 	reloadCfg := Config{}
 	reloadCfg.Server.GordonDomain = "reload.example.com"
 	reloadCfg.Server.RegistryPort = 5000
-	reloadCfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
 	reloadCfg.EntryPoints = map[string]traffic.EntryPointConfig{"game": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTCP}}
 	reloadCfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "game", Ports: []traffic.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolTCP}}}}
 	reloadCfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "game", EntryPoint: "game", Service: "network_service:game:game"}}
 
-	require.NoError(t, si.svc.reloadCoordinator.applyContainerConfig(ctx, reloadCfg))
-	require.Equal(t, 1, reconciler.Calls())
-	require.Len(t, reconciler.services, 1)
-	assert.Equal(t, "game", reconciler.services[0].Name)
+	require.NoError(t, (&reloadRuntime{v: si.v, svc: si.svc, log: si.log}).Apply(ctx, reloadCfg))
 	assert.NotEmpty(t, manager.Status().EntryPoints)
 }
 
-func TestWaitForCoreProxyReadyAndApplyTraffic_AppliesTrafficBeforeStandaloneServices(t *testing.T) {
-	ctx := context.Background()
+// TestReloadRuntime_InvalidPolicyAppliesNothing proves the runtime step
+// prepares every derived value first: an invalid app mount fails the reload
+// before management hosts, traffic, or container config change.
+func TestReloadRuntime_InvalidPolicyAppliesNothing(t *testing.T) {
+	ctx := t.Context()
 	v := viper.New()
-	configSvc := cfgusecase.NewService(v, nil)
-	require.NoError(t, configSvc.Load(ctx))
+	publicTLS := inmocks.NewMockPublicTLSService(t) // no expectations: any call fails
+	store := outmocks.NewMockAppState(t)
+
+	svc := newTestServices(&services{
+		containerSvc: container.NewService(nil, nil, nil, container.Config{}),
+		publicTLSSvc: publicTLS,
+		appSvcImpl:   apps.NewAppServiceImpl(store, nil, nil, zerowrap.Default()),
+	})
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "new.example.com"
+	reloadCfg.AppMounts = map[string]AppMountPolicy{"config": {Source: "relative"}}
+
+	err := (&reloadRuntime{v: v, svc: svc, log: zerowrap.Default()}).Apply(ctx, reloadCfg)
+	require.ErrorIs(t, err, domain.ErrBindPolicy)
+}
+
+// TestReloadRuntime_TLSLoadFailureAppliesNothing proves an unreadable static
+// TLS keypair fails the reload before management hosts change.
+func TestReloadRuntime_TLSLoadFailureAppliesNothing(t *testing.T) {
+	ctx := t.Context()
+	publicTLS := inmocks.NewMockPublicTLSService(t) // no expectations: any call fails
+
+	svc := newTestServices(&services{
+		containerSvc:      container.NewService(nil, nil, nil, container.Config{}),
+		publicTLSSvc:      publicTLS,
+		httpsProxyHandler: http.NotFoundHandler(),
+	})
+	reloadCfg := Config{}
+	reloadCfg.Server.GordonDomain = "new.example.com"
+	reloadCfg.Server.TLSCertFile = filepath.Join(t.TempDir(), "missing.crt")
+	reloadCfg.Server.TLSKeyFile = filepath.Join(t.TempDir(), "missing.key")
+	reloadCfg.EntryPoints = map[string]traffic.EntryPointConfig{
+		"secure": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTLSMux},
+	}
+
+	err := (&reloadRuntime{v: viper.New(), svc: svc, log: zerowrap.Default()}).Apply(ctx, reloadCfg)
+	require.ErrorContains(t, err, "load TLS keypair")
+}
+
+func TestWaitForCoreProxyReady_WaitsWithoutPublishingEmptyTraffic(t *testing.T) {
+	ctx := context.Background()
 	manager := trafficadapter.NewManager()
 	defer func() { require.NoError(t, manager.Shutdown(ctx)) }()
 
-	reconciler := &standaloneServiceRecorder{onReconcile: func() {
-		assert.NotEmpty(t, manager.Status().EntryPoints, "traffic graph should apply before standalone services reconcile")
-	}}
-	cfg := Config{}
-	cfg.Services = []servicecfg.Config{{Name: "game", Image: "game:latest", Enabled: true}}
-	cfg.EntryPoints = map[string]traffic.EntryPointConfig{"game": {Address: freeTCPAddress(t), Protocol: domain.EntryPointProtocolTCP}}
-	cfg.NetworkServices = []traffic.NetworkServiceConfig{{Name: "game", Ports: []traffic.PortConfig{{Name: "game", Container: 28015, Protocol: domain.NetworkProtocolTCP}}}}
-	cfg.Traffic.TCP.Routers = []traffic.RouterConfig{{Name: "game", EntryPoint: "game", Service: "network_service:game:game"}}
-
 	ready := make(chan struct{})
 	close(ready)
-	svc := &services{configSvc: configSvc, trafficManager: manager, standaloneServiceSvc: reconciler}
-	require.NoError(t, waitForCoreProxyReadyAndApplyTraffic(ctx, cfg, svc, ready, ready, nil))
-	require.Equal(t, 1, reconciler.Calls())
-	assert.NotEmpty(t, manager.Status().EntryPoints)
+	require.NoError(t, waitForCoreProxyReady(ctx, ready, ready, nil))
+	assert.Empty(t, manager.Status().EntryPoints)
 }
 
-func TestReconcileStandaloneServices_ConfigConversionErrorIsClear(t *testing.T) {
-	reconciler := &standaloneServiceRecorder{}
-	err := reconcileStandaloneServices(context.Background(), reconciler, Config{Services: []servicecfg.Config{{Name: "broken", Image: "", Enabled: true}}})
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "convert standalone service config")
-	assert.Equal(t, 0, reconciler.Calls())
+func TestWaitForCoreProxyReady_ObservesContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Neither readiness channel ever closes: the canceled startup context must
+	// unblock the wait rather than hang on a listener that will never bind.
+	err := waitForCoreProxyReady(ctx, make(chan struct{}), make(chan struct{}), make(chan error))
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestReloadCoordinator_StopCancelsOwnedTrailingReloadLifecycle(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "lifecycle.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	// Keep the trailing timer pending so Stop is the only thing that can tear
+	// the coordinator-owned lifecycle down.
+	coord.debounce = time.Hour
+
+	require.NoError(t, coord.Trigger(ctx)) // immediate apply records lastRun
+	require.NoError(t, coord.Trigger(ctx)) // coalesced into the trailing timer
+
+	coord.mu.Lock()
+	lifecycleCtx := coord.lifecycleCtx
+	coord.mu.Unlock()
+	require.NotNil(t, lifecycleCtx, "trailing reload must own a lifecycle context")
+	require.NoError(t, lifecycleCtx.Err())
+
+	coord.Stop()
+	require.ErrorIs(t, lifecycleCtx.Err(), context.Canceled)
+	require.Equal(t, 1, proxySvc.Calls(), "stopped coordinator must not apply the trailing reload")
 }
 
 func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
@@ -530,24 +554,116 @@ func TestReloadCoordinator_DebouncesRepeatedWatchCallbacks(t *testing.T) {
 	events := &eventBusRecorder{}
 
 	registryLimits := &registryLimitsRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, registryLimits, events, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 	require.NoError(t, coord.Trigger(ctx))
 
-	require.Equal(t, 1, reloadSvc.Calls())
-	require.Equal(t, 1, proxySvc.calls)
-	require.Equal(t, 1, events.Calls())
-	require.Equal(t, 1, registryLimits.calls)
-	require.Equal(t, int64(6<<20), registryLimits.maxBlobChunkSize)
-	require.Equal(t, int64(8<<20), registryLimits.maxBlobSize)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	// Observe the trailing reload through the recorders' own locks instead of
+	// locking the coordinator: the reload event is published last, so waiting
+	// for all recorders proves the trailing reload finished applying.
+	require.Eventually(t, func() bool {
+		return reloadSvc.Calls() == 2 && proxySvc.Calls() == 2 &&
+			events.Calls() == 2 && registryLimits.Calls() == 2
+	}, time.Second, 5*time.Millisecond)
+	// No further reload may fire: the debounce window is over.
+	require.Never(t, func() bool {
+		return proxySvc.Calls() > 2 || events.Calls() > 2
+	}, 50*time.Millisecond, 5*time.Millisecond)
+	require.Equal(t, 2, proxySvc.Calls())
+	require.Equal(t, 2, events.Calls())
+	require.Equal(t, 2, registryLimits.Calls())
+	rlChunk, rlSize := registryLimits.Limits()
+	require.Equal(t, int64(6<<20), rlChunk)
+	require.Equal(t, int64(8<<20), rlSize)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 	require.Equal(t, proxy.Config{
 		RegistryDomain:     "new.example.com",
 		RegistryPort:       5000,
 		MaxBodySize:        5 << 20,
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
-	}, proxySvc.config)
+	}, proxySvc.Config())
+}
+
+func TestSetupConfigHotReload_CoalescesRepeatedWatcherCallbacks(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "watch.example.com")
+	v.Set("server.registry_port", 5000)
+
+	configSvc := &watchRecorder{}
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+	defer coord.Stop()
+
+	require.NoError(t, setupConfigHotReload(ctx, configSvc, coord))
+	require.NotNil(t, configSvc.onChange)
+
+	// fsnotify delivers a burst of events for a single edit; each callback
+	// must not apply the config on its own.
+	configSvc.onChange()
+	configSvc.onChange()
+	configSvc.onChange()
+
+	require.Eventually(t, func() bool { return proxySvc.Calls() == 2 }, time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return proxySvc.Calls() > 2 }, 50*time.Millisecond, 5*time.Millisecond)
+	// ApplyLoadedConfig applies what the watcher already loaded: the trailing
+	// apply must not read the config again.
+	require.Zero(t, reloadSvc.Calls())
+	require.Equal(t, "watch.example.com", proxySvc.Config().RegistryDomain)
+}
+
+func TestReloadCoordinator_TrailingReloadAppliesFinalState(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "initial.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
+
+	require.NoError(t, coord.Trigger(ctx))
+	v.Set("server.gordon_domain", "intermediate.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+	v.Set("server.gordon_domain", "final.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+
+	// The trailing reload is the only writer of the final state: wait for
+	// the observable outcome instead of locking the coordinator.
+	require.Eventually(t, func() bool {
+		return proxySvc.Config().RegistryDomain == "final.example.com"
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestReloadCoordinator_InvalidReloadKeepsActiveConfigThenAcceptsValidChange(t *testing.T) {
+	ctx := context.Background()
+	v := viper.New()
+	v.Set("server.gordon_domain", "active.example.com")
+	v.Set("server.registry_port", 5000)
+
+	reloadSvc := &reloadRecorder{}
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 10 * time.Millisecond
+
+	require.NoError(t, coord.Trigger(ctx))
+	require.Equal(t, "active.example.com", proxySvc.Config().RegistryDomain)
+
+	time.Sleep(coord.debounce)
+	v.Set("server.max_proxy_body_size", "invalid")
+	require.Error(t, coord.Trigger(ctx))
+	require.Equal(t, "active.example.com", proxySvc.Config().RegistryDomain)
+
+	v.Set("server.max_proxy_body_size", "5MB")
+	v.Set("server.gordon_domain", "recovered.example.com")
+	require.NoError(t, coord.Trigger(ctx))
+	require.Equal(t, "recovered.example.com", proxySvc.Config().RegistryDomain)
 }
 
 func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
@@ -563,7 +679,7 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 	reloadErr := errors.New("reload failed")
 	reloadSvc := &reloadRecorder{err: reloadErr}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, reloadErr)
@@ -574,7 +690,7 @@ func TestReloadCoordinator_RetriesImmediatelyAfterFailedReload(t *testing.T) {
 
 	require.NoError(t, coord.Trigger(ctx))
 	require.Equal(t, 2, reloadSvc.Calls())
-	assert.Equal(t, 1, proxySvc.calls)
+	assert.Equal(t, 1, proxySvc.Calls())
 }
 
 func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T) {
@@ -593,7 +709,7 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	events := &eventBusRecorder{err: publishErr}
 	publicTLS := &publicTLSReconcileRecorder{}
 
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, publicTLS, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, events, publicTLS, nil, zerowrap.Default())
 
 	err := coord.Trigger(ctx)
 	require.ErrorIs(t, err, publishErr)
@@ -602,10 +718,10 @@ func TestReloadCoordinator_PublishErrorDoesNotAdvanceDebounceState(t *testing.T)
 	require.ErrorIs(t, err, publishErr)
 
 	require.Equal(t, 2, reloadSvc.Calls())
-	require.Equal(t, 2, proxySvc.calls)
+	require.Equal(t, 2, proxySvc.Calls())
 	require.Equal(t, 2, events.Calls())
 	require.Equal(t, 2, publicTLS.calls)
-	require.Equal(t, domain.EventConfigReload, events.eventType)
+	require.Equal(t, domain.EventConfigReload, events.Type())
 }
 
 func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
@@ -626,7 +742,8 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 		<-release
 	}}
 	proxySvc := &proxyRecorder{}
-	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, zerowrap.Default())
+	coord := newReloadCoordinator(v, reloadSvc, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	coord.debounce = 20 * time.Millisecond
 
 	firstDone := make(chan struct{})
 	go func() {
@@ -667,6 +784,7 @@ func TestReloadCoordinator_SerializesOverlappingReloadRequests(t *testing.T) {
 		t.Fatal("second reload did not finish")
 	}
 
-	require.Equal(t, 1, reloadSvc.Calls())
-	assert.Equal(t, 1, proxySvc.calls)
+	require.Eventually(t, func() bool { return proxySvc.Calls() == 2 }, time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return proxySvc.Calls() > 2 }, 50*time.Millisecond, 5*time.Millisecond)
+	assert.Equal(t, 2, proxySvc.Calls())
 }

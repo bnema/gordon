@@ -19,12 +19,11 @@ gordon_domain = "gordon.mydomain.com"
 [entrypoints.edge]
 address = ":443"
 protocol = "smart_tcp"
-
-[routes]
-"app.mydomain.com" = "myapp:latest"
 ```
 
-> **Note:** `gordon_domain` is the canonical key. Migrate older `registry_domain` values before restarting.
+Application workloads live in standalone app files, not in `gordon.toml` — see [App Manifest](./apps.md). Retired workload keys such as `[routes]`, `[attachments]`, `[network_groups]`, `[service_routes]`, `[auto_route]`, and `[previews]` are rejected at startup. Installation-level `[[services]]` for standalone L4 workloads remains valid.
+
+> **Note:** `gordon_domain` is the canonical registry and Admin API host.
 >
 > For a staged registry host rename, set the new `server.gordon_domain` and keep old Gordon registry hosts in `server.legacy_registry_domains` until clients move. See [Server](./server.md#gordon-domain) and [Upgrading](../upgrading.md#staged-registry-host-rename).
 
@@ -61,16 +60,6 @@ per_ip_rps = 50                          # Max requests/second per IP
 burst = 100                              # Burst size
 trusted_proxies = []                     # IPs/CIDRs trusted for X-Forwarded-For
 
-# Deploy behavior
-[deploy]
-pull_policy = "if-tag-changed"           # always, if-not-present, if-tag-changed
-readiness_mode = "auto"                  # auto, docker-health, delay
-health_timeout = "90s"                   # Max wait for health-based readiness
-readiness_delay = "5s"                   # Wait after running before ready
-drain_mode = "auto"                      # auto, inflight, delay
-drain_timeout = "30s"                    # Max wait for in-flight drain
-drain_delay = "2s"                       # Wait after proxy invalidation before stopping the old container
-
 # Container runtime profile
 [containers]
 security_profile = "compat"              # compat or strict
@@ -87,12 +76,8 @@ max_size = 100                           # MB before rotation
 max_backups = 3                          # Old files to keep
 max_age = 28                             # Days to keep
 
-[logging.container_logs]
-enabled = true
-dir = "~/.gordon/logs/containers"        # Default location
-max_size = 100
-max_backups = 3
-max_age = 28
+# Workload logs are streamed directly from the container runtime with
+# `gordon apps logs APP --service SERVICE`.
 
 # Telemetry (OpenTelemetry)
 [telemetry]
@@ -101,12 +86,8 @@ endpoint = "http://localhost:5080/api/default"  # OTLP HTTP endpoint
 auth_token = ""                          # Base64 user:password for Basic auth
 traces = true                            # Export traces
 metrics = true                           # Export metrics
-logs = true                              # Bridge zerolog to OTLP logs
+logs = true                              # Export Gordon, access, and app logs
 trace_sample_rate = 1.0                  # 0.0 = none, 1.0 = all
-
-# Environment variables
-[env]
-dir = "~/.gordon/env"                    # Default location
 
 # Volume settings
 [volumes]
@@ -114,29 +95,15 @@ auto_create = true                       # Auto-create from Dockerfile VOLUME
 prefix = "gordon"                        # Volume name prefix
 preserve = true                          # Keep volumes on container removal
 
-# Network isolation
+# Installation network policy (prefix filter for `gordon daemon networks`)
 [network_isolation]
-enabled = true                           # Per-app isolated networks
+enabled = true                           # Gordon-managed network policy
 network_prefix = "gordon"                # Network name prefix
 internal = false                          # Set true to block direct egress from isolated networks
 
-# Auto-route
-[auto_route]
-enabled = false                          # Auto-create routes from image names
-
-# Routes (required)
-[routes]
-"app.mydomain.com" = "myapp:latest"
-"api.mydomain.com" = "myapi:v2.1.0"
-
-# Network groups
-[network_groups]
-"backend" = ["app.mydomain.com", "api.mydomain.com"]
-
-# Attachments
-[attachments]
-"app.mydomain.com" = ["postgres:latest", "redis:latest"]
-"backend" = ["rabbitmq:latest"]
+# REMOVED in v3 (declare apps in standalone files, see ./apps.md):
+# [routes], [attachments], [network_groups],
+# [service_routes], [auto_route], [previews]
 
 # Backups
 [backups]
@@ -152,14 +119,16 @@ monthly = 12
 
 # Images
 [images]
-allowed_registries = []                   # Explicit external registries allowed for deploy/attachments
-require_digest = false                    # Require digests for allowlisted external registries
+allowed_registries = []                   # Additional exact registry hostname+port entries
+require_digest = false                    # Require SHA-256 digests for every image registry
 
 [images.prune]
 enabled = false
 schedule = "daily"
 keep_last = 3
 ```
+
+Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's registry are allowed by default. Add private or other registries with exact hostname+port entries. This hostname policy does not enforce resolved IP destinations or runtime egress; see [Images](./images.md).
 
 ## Configuration Sections
 
@@ -168,19 +137,14 @@ keep_last = 3
 | `[server]` | Core server settings | [Server](./server.md) |
 | `[auth]` | Authentication and secrets backend | [Auth](./auth.md) |
 | `[api.rate_limit]` | Rate limiting configuration | [Rate Limiting](./rate-limiting.md) |
-| `[deploy]` | Deployment behavior | [Deploy](./deploy.md) |
 | `[logging]` | Logging configuration | [Logging](./logging.md) |
 | `[telemetry]` | OpenTelemetry observability export | [Telemetry](./telemetry.md) |
-| `[env]` | Environment variable settings | [Environment](./env.md) |
 | `[volumes]` | Volume management | [Volumes](./volumes.md) |
-| `[network_isolation]` | Network isolation settings | [Network Isolation](./network-isolation.md) |
-| `[auto_route]` | Automatic route creation | [Auto Route](./auto-route.md) |
-| `[routes]` | Domain to image mapping | [Routes](./routes.md) |
+| `[network_isolation]` | Installation network policy | [Network Isolation](./network-isolation.md) |
 | `[external_routes]` | Non-containerized service proxying | [External Routes](./external-routes.md) |
 | `[entrypoints]`, `[traffic]`, `[[network_services]]`, `[[services]]` | L4 and TLS passthrough traffic plane | [Traffic](./traffic.md) |
-| `[network_groups]` | Shared service networks | [Network Groups](./network-groups.md) |
-| `[attachments]` | Service dependencies | [Attachments](./attachments.md) |
-| `[backups]` | Database backups | [Backups](./backups.md) |
+| App files (`<app>.toml`) | Declarative apps: services, hosts, secrets, volumes, backup targets | [App Manifest](./apps.md) |
+| `[backups]` | Database backup storage, scheduling, and retention | [Backups](./backups.md) |
 | `[images.prune]` | Scheduled image cleanup | [Images](./images.md) |
 | Security hardening | Security controls and recommended knobs | [Security Hardening](./security-hardening.md) |
 
@@ -200,13 +164,6 @@ keep_last = 3
 | `api.rate_limit.per_ip_rps` | `50` |
 | `api.rate_limit.burst` | `100` |
 | `api.rate_limit.trusted_proxies` | `[]` |
-| `deploy.pull_policy` | `"if-tag-changed"` |
-| `deploy.readiness_mode` | `"auto"` |
-| `deploy.health_timeout` | `"90s"` |
-| `deploy.readiness_delay` | `"5s"` |
-| `deploy.drain_mode` | `"auto"` |
-| `deploy.drain_timeout` | `"30s"` |
-| `deploy.drain_delay` | `"2s"` |
 | `containers.security_profile` | `"compat"` |
 | `logging.level` | `"info"` |
 | `logging.format` | `"console"` |
@@ -214,13 +171,11 @@ keep_last = 3
 | `logging.file.max_size` | `100` |
 | `logging.file.max_backups` | `3` |
 | `logging.file.max_age` | `28` |
-| `logging.container_logs.enabled` | `true` |
 | `volumes.auto_create` | `true` |
 | `volumes.prefix` | `"gordon"` |
 | `volumes.preserve` | `true` |
 | `network_isolation.enabled` | `true` |
 | `network_isolation.internal` | `false` |
-| `auto_route.enabled` | `false` |
 | `backups.enabled` | `false` |
 | `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
 | `images.allowed_registries` | `[]` |
@@ -236,14 +191,14 @@ keep_last = 3
 | `telemetry.logs` | `true` |
 | `telemetry.trace_sample_rate` | `1.0` |
 
-When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is disabled and `/v2/*` is loopback-only.
+When `auth.enabled=false`, Gordon runs in local-only mode: `/admin/*` is not registered on the TCP listener and `/v2/*` is loopback-only. Local `gordon apps` commands discover the daemon's owner-only admin socket in `$XDG_RUNTIME_DIR/gordon`, `/run/user/<uid>/gordon`, or `~/.gordon/run`; the daemon itself uses the XDG location when configured and otherwise the home fallback. See [Authentication](./auth.md#local-only-mode).
 
 ## Hot Reload
 
 Gordon watches the configuration file and reloads automatically when changes are detected. You can also trigger a manual reload:
 
 ```bash
-gordon reload
+gordon daemon reload
 ```
 
 ### Hot-reloaded (no restart needed)
@@ -256,7 +211,6 @@ gordon reload
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
 
-> **Note:** Routes are hot-reloaded from the config file. You can still use the API or CLI (`gordon routes add/update/remove`) for live route changes.
 
 ### Requires restart
 
@@ -267,11 +221,6 @@ gordon reload
 | `server.max_blob_chunk_size` |
 | `server.max_blob_size` |
 | `auth.*` |
-| `deploy.readiness_mode` |
-| `deploy.readiness_delay` |
-| `deploy.health_timeout` |
-| `deploy.drain_mode` |
-| `deploy.drain_timeout` |
 
 ## Environment Variable Override
 
@@ -286,7 +235,7 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 ## Related
 
 - [Server Configuration](./server.md)
-- [Routes Configuration](./routes.md)
+- [App Manifest](./apps.md)
 - [External Routes](./external-routes.md)
 - [Standalone Services](./services.md)
 - [Traffic Plane](./traffic.md)

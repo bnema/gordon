@@ -1,0 +1,1204 @@
+package domain
+
+import (
+	"fmt"
+	"net"
+	"path"
+	"reflect"
+	"regexp"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// App manifest validation is owned by the domain.
+// The parser adapter (internal/adapters/in/appmanifest) decodes TOML
+// into these types; all semantic rules live here, not in the parser.
+
+var (
+	appNamePattern     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	serviceNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9_.\-]{0,61}[a-z0-9])?$`)
+	dnsLabelPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+)
+
+// Reserved app names that collide with installation identity.
+var reservedAppNames = map[string]struct{}{
+	"gordon":    {},
+	"registry":  {},
+	"admin":     {},
+	"localhost": {},
+}
+
+// App readiness types. HTTP is new in v3.
+const (
+	AppReadinessNone = "none"
+	AppReadinessTCP  = "tcp"
+	AppReadinessHTTP = "http"
+	AppReadinessLog  = "log"
+)
+
+// App TLS modes for HTTP interfaces.
+const (
+	AppTLSAuto   = "auto"
+	AppTLSAlways = "always"
+	AppTLSNever  = "never"
+)
+
+// App visibility modes for HTTP interfaces. public keeps the historical
+// host/TLS plane; internal is reachable only from the app private network.
+const (
+	AppVisibilityPublic   = "public"
+	AppVisibilityInternal = "internal"
+)
+
+// App database engines. Only postgres in v3.
+const (
+	AppDBPostgres = "postgres"
+)
+
+// Backup schedules reuse the BackupSchedule vocabulary.
+var appBackupSchedules = map[string]struct{}{
+	"hourly":  {},
+	"daily":   {},
+	"weekly":  {},
+	"monthly": {},
+}
+
+// App size/time bounds frozen by the contract.
+const (
+	// MaxAppEnvValueLen caps a single [env] value.
+	MaxAppEnvValueLen = 64 * 1024
+	// AppDefaultReadinessTimeout applies when timeout is unset.
+	AppDefaultReadinessTimeout = 30 * time.Second
+	// AppMinReadinessTimeout bounds readiness timeout below.
+	AppMinReadinessTimeout = time.Second
+	// AppMaxReadinessTimeout bounds readiness timeout above.
+	AppMaxReadinessTimeout = 10 * time.Minute
+	// AppDefaultStopGrace applies when stop_grace is unset.
+	AppDefaultStopGrace = 30 * time.Second
+	// AppMaxStopGrace caps stop_grace.
+	AppMaxStopGrace = 5 * time.Minute
+)
+
+// AppSpec is the normalized form of one app manifest file.
+type AppSpec struct {
+	Name     string
+	Env      map[string]string
+	Services []AppService
+	Networks []AppSharedNetwork
+}
+
+// AppService is one explicitly named image-backed service.
+// v3 runs exactly one container per service: no replicas field.
+// RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
+type AppService struct {
+	Name      string
+	Image     string
+	Command   []string
+	StopGrace time.Duration
+	Readiness AppReadiness
+	HTTP      []AppHTTPInterface
+	TCP       []AppTCPInterface
+	UDP       []AppUDPInterface
+	Secrets   map[string]string
+	Volumes   []AppVolume
+	Binds     []AppBind
+	// Devices lists logical device names granted by administrative
+	// [app_devices] policy. Names resolve to CDI device IDs at activation
+	// time; the logical names (not host resolution) persist in revisions.
+	Devices   []string
+	Databases []AppDatabase
+	Backup    AppBackup
+	// LogExportDisabled opts the service out of OTLP log export. The
+	// manifest resolves it from [services.<name>.telemetry] logs, then
+	// the app-level [telemetry] logs, then the default (export on). The
+	// zero value keeps export enabled for states persisted before the
+	// field existed.
+	LogExportDisabled bool
+}
+
+// AppReadiness is the explicit readiness check for a service.
+type AppReadiness struct {
+	Type     string
+	Path     string
+	Contains string
+	Port     int
+	Timeout  time.Duration
+}
+
+// AppHTTPInterface is one HTTP service interface. Visibility is explicit
+// interface state: public HTTP keeps the historical host/TLS behavior,
+// internal HTTP declares neither host nor tls and is reachable only from
+// the app private network.
+type AppHTTPInterface struct {
+	Host string
+	Port int
+	TLS  string
+	// Visibility is public or internal. The zero value normalizes to
+	// public when read or projected, so manifests and stored state
+	// written before visibility existed keep their meaning.
+	Visibility string
+}
+
+// EffectiveVisibility normalizes absent visibility to public.
+func (h AppHTTPInterface) EffectiveVisibility() string {
+	if h.Visibility == "" {
+		return AppVisibilityPublic
+	}
+	return h.Visibility
+}
+
+// IsPublic reports whether the interface is served on the public plane.
+func (h AppHTTPInterface) IsPublic() bool {
+	return h.EffectiveVisibility() == AppVisibilityPublic
+}
+
+// IsInternal reports whether the interface is reachable only from the
+// app private network.
+func (h AppHTTPInterface) IsInternal() bool {
+	return h.EffectiveVisibility() == AppVisibilityInternal
+}
+
+// IsPublicHTTP reports whether a service declares at least one
+// effective-public HTTP interface.
+func (s AppService) IsPublicHTTP() bool {
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			return true
+		}
+	}
+	return false
+}
+
+// InternallyOnlyPort reports whether port is declared by internal HTTP
+// interfaces and by no externally backed HTTP/TCP interface. Such a port
+// is reached over the private network only and must never gain a host
+// publication, including through readiness metadata.
+func (s AppService) InternallyOnlyPort(port int) bool {
+	internal := false
+	for _, h := range s.HTTP {
+		if h.Port != port {
+			continue
+		}
+		if !h.IsInternal() {
+			return false
+		}
+		internal = true
+	}
+	for _, t := range s.TCP {
+		if t.Port == port {
+			return false
+		}
+	}
+	return internal
+}
+
+// AppTCPInterface is one TCP service interface.
+type AppTCPInterface struct {
+	Entrypoint string
+	Port       int
+	Publish    string
+}
+
+// AppUDPInterface is one UDP service interface.
+type AppUDPInterface struct {
+	Entrypoint string
+	Port       int
+	Publish    string
+}
+
+// AppVolume is one named volume mount.
+type AppVolume struct {
+	Name     string
+	Path     string
+	ReadOnly bool
+}
+
+// AppBind is one named read-only host bind mount.
+// Name is the stable identity reused across deploys; Path is the
+// container destination.
+type AppBind struct {
+	Name     string
+	Path     string
+	ReadOnly bool
+}
+
+// AppDatabase is one explicit database declaration.
+type AppDatabase struct {
+	Name     string
+	Type     string
+	Schedule string
+}
+
+// AppBackup declares backup targets by reference.
+type AppBackup struct {
+	Postgres []string
+	Volume   []string
+}
+
+// AppSharedNetwork is one shared-network membership declaration.
+type AppSharedNetwork struct {
+	Network  string
+	Services []string
+	Aliases  []string
+}
+
+// ValidateAppName checks the app identity rules.
+func ValidateAppName(name string) error {
+	if !appNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: app name %q must be a DNS label (lowercase alphanumerics and hyphens, max 63)", ErrInvalidAppSpec, name)
+	}
+	if strings.Contains(name, "--") {
+		return fmt.Errorf("%w: app name %q must not contain -- (reserved separator)", ErrInvalidAppSpec, name)
+	}
+	if _, reserved := reservedAppNames[strings.ToLower(name)]; reserved {
+		return fmt.Errorf("%w: app name %q is reserved", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// ValidateServiceName checks the service identity rules.
+func ValidateServiceName(name string) error {
+	if !serviceNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: service name %q must match [a-z0-9_.-], max 63", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// ValidateVolumeName checks volume names (service charset plus -- ban).
+func ValidateVolumeName(name string) error {
+	if err := ValidateServiceName(name); err != nil {
+		return err
+	}
+	if strings.Contains(name, "--") {
+		return fmt.Errorf("%w: volume name %q must not contain -- (reserved separator)", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// ValidateSecretName checks service-local secret names.
+func ValidateSecretName(name string) error {
+	return ValidateServiceName(name)
+}
+
+// ValidateBindName checks the stable bind identity (service charset plus -- ban).
+func ValidateBindName(name string) error {
+	if !serviceNamePattern.MatchString(name) {
+		return fmt.Errorf("%w: bind name %q must match [a-z0-9_.-], max 63", ErrInvalidAppSpec, name)
+	}
+	if strings.Contains(name, "--") {
+		return fmt.Errorf("%w: bind name %q must not contain -- (reserved separator)", ErrInvalidAppSpec, name)
+	}
+	return nil
+}
+
+// sensitiveBindDestinations lists container paths a manifest bind must never
+// shadow. Server policy may refuse more, but these are always sensitive.
+var sensitiveBindDestinations = map[string]struct{}{
+	"/":     {},
+	"/proc": {},
+	"/sys":  {},
+	"/dev":  {},
+	"/boot": {},
+}
+
+// IsSensitiveBindDestination reports whether dest is a reserved container path
+// or lies below one. Mounting a child such as /proc/self is as dangerous as
+// shadowing the reserved root itself.
+func IsSensitiveBindDestination(dest string) bool {
+	if dest == "/" {
+		return true
+	}
+	for reserved := range sensitiveBindDestinations {
+		if reserved != "/" && (dest == reserved || strings.HasPrefix(dest, reserved+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateBindDestination checks one bind destination: absolute, clean,
+// normalized, and never a sensitive container path. It is pure and reusable
+// by manifest validation and by server-side source policy.
+func ValidateBindDestination(dest string) error {
+	if dest == "" {
+		return fmt.Errorf("%w: bind destination must not be empty", ErrInvalidAppSpec)
+	}
+	if !path.IsAbs(dest) {
+		return fmt.Errorf("%w: bind destination %q must be absolute", ErrInvalidAppSpec, dest)
+	}
+	if path.Clean(dest) != dest {
+		return fmt.Errorf("%w: bind destination %q must be a normalized clean path", ErrInvalidAppSpec, dest)
+	}
+	if IsSensitiveBindDestination(dest) {
+		return fmt.Errorf("%w: bind destination %q is a sensitive container path", ErrInvalidAppSpec, dest)
+	}
+	return nil
+}
+
+// NormalizeServiceName applies the runtime-identifier normalization.
+func NormalizeServiceName(name string) string {
+	return strings.NewReplacer(".", "-", "_", "-", "/", "-").Replace(name)
+}
+
+// LogicalServiceIdentity returns the stable gordon-<app>--<service> identity.
+func LogicalServiceIdentity(app, service string) string {
+	return "gordon-" + app + "--" + NormalizeServiceName(service)
+}
+
+// RuntimeVolumeName returns the generated gordon-<app>--<service>--vol--<name>.
+func RuntimeVolumeName(app, service, volume string) string {
+	return LogicalServiceIdentity(app, service) + "--vol--" + volume
+}
+
+// AppSecretPath returns the pass path gordon/apps/<app>/<service>/<name>.
+// Prefer AppSecretPathForID when the stable internal UUID is known:
+// the UUID-keyed path survives name reuse without implicit adoption.
+func AppSecretPath(app, service, name string) string {
+	return AppSecretPathForID(app, app, service, name)
+}
+
+// AppSecretPathForID returns the pass path for one secret. id is the
+// stable internal UUID; app is the public name used as a fallback when
+// id is empty (legacy records written before UUID assignment). New
+// writes must always pass the record ID so a removed app's secrets are
+// never implicitly adopted by a new app reusing the name.
+func AppSecretPathForID(id, app, service, name string) string {
+	key := id
+	if key == "" {
+		key = app
+	}
+	return "gordon/apps/" + key + "/" + NormalizeServiceName(service) + "/" + name
+}
+
+// CanonicalHTTPHost lowercases and strips a trailing dot.
+func CanonicalHTTPHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	return strings.TrimSuffix(host, ".")
+}
+
+// ParsePublish splits a publish bind into host and port.
+// Acceptable forms: "IP:port" or "port". Hostnames are rejected.
+func ParsePublish(publish string) (string, int, error) {
+	publish = strings.TrimSpace(publish)
+	if publish == "" {
+		return "", 0, fmt.Errorf("%w: publish must not be empty", ErrInvalidAppSpec)
+	}
+	host := ""
+	portText := publish
+	if h, p, err := net.SplitHostPort(publish); err == nil {
+		host = h
+		portText = p
+	}
+	if host != "" && net.ParseIP(host) == nil {
+		return "", 0, fmt.Errorf("%w: publish host %q must be a literal IP, not a hostname", ErrInvalidAppSpec, host)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("%w: publish port %q must be 1-65535", ErrInvalidAppSpec, portText)
+	}
+	return host, port, nil
+}
+
+// Validate checks the full normalized spec.
+func (s AppSpec) Validate() error {
+	return s.validateFull()
+}
+
+// CheckEnvSecretCollisions re-validates [env]/secret key disjointness on a
+// stored spec. Deployment preflight calls it defensively before any
+// workload mutation; overlapping keys are invalid with no precedence.
+func (s AppSpec) CheckEnvSecretCollisions() error {
+	return checkEnvSecretKeyDisjoint(s)
+}
+
+// validateFull runs the full normalized validation.
+func (s AppSpec) validateFull() error {
+	if err := ValidateAppName(s.Name); err != nil {
+		return err
+	}
+	if len(s.Services) == 0 {
+		return fmt.Errorf("%w: app %q must declare at least one service", ErrInvalidAppSpec, s.Name)
+	}
+	if err := s.validateEnv(); err != nil {
+		return err
+	}
+	if err := s.validateServices(); err != nil {
+		return err
+	}
+	if err := checkEnvSecretKeyDisjoint(s); err != nil {
+		return err
+	}
+	if err := checkVolumeOwnership(s); err != nil {
+		return err
+	}
+	for i := range s.Networks {
+		if err := s.Networks[i].validate(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateEnv checks app-wide public environment values.
+func (s AppSpec) validateEnv() error {
+	for key, value := range s.Env {
+		if err := ValidateEnvKey(key); err != nil {
+			return fmt.Errorf("%w: env key %q: %v", ErrInvalidAppSpec, key, err)
+		}
+		if strings.Contains(value, "\n") {
+			return fmt.Errorf("%w: env value for %q must not contain newlines", ErrInvalidAppSpec, key)
+		}
+		if len(value) == 0 || len(value) > MaxAppEnvValueLen {
+			return fmt.Errorf("%w: env value for %q must be 1-%d bytes", ErrInvalidAppSpec, key, MaxAppEnvValueLen)
+		}
+		if ContainsSecretReference(value) {
+			return fmt.Errorf("%w: env value for %q must not contain secret references", ErrInvalidAppSpec, key)
+		}
+	}
+	return nil
+}
+
+// validateServices checks service identity uniqueness and delegates per-service rules.
+func (s AppSpec) validateServices() error {
+	seenServices := map[string]struct{}{}
+	seenNormalized := map[string]string{}
+	for i := range s.Services {
+		svc := &s.Services[i]
+		if err := ValidateServiceName(svc.Name); err != nil {
+			return err
+		}
+		if _, ok := seenServices[svc.Name]; ok {
+			return fmt.Errorf("%w: duplicate service name %q", ErrInvalidAppSpec, svc.Name)
+		}
+		seenServices[svc.Name] = struct{}{}
+		normalized := NormalizeServiceName(svc.Name)
+		if prev, ok := seenNormalized[normalized]; ok {
+			return fmt.Errorf("%w: service name %q normalizes to the same runtime identifier as %q", ErrInvalidAppSpec, svc.Name, prev)
+		}
+		seenNormalized[normalized] = svc.Name
+		if err := svc.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkEnvSecretKeyDisjoint enforces [env] keys disjoint from secret map keys.
+func checkEnvSecretKeyDisjoint(s AppSpec) error {
+	for key := range s.Env {
+		for _, svc := range s.Services {
+			if _, ok := svc.Secrets[key]; ok {
+				return fmt.Errorf("%w: env key %q collides with a secret key in service %q", ErrInvalidAppSpec, key, svc.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// checkVolumeOwnership enforces one claimant per volume name.
+func checkVolumeOwnership(s AppSpec) error {
+	claimants := map[string]string{}
+	for _, svc := range s.Services {
+		for _, vol := range svc.Volumes {
+			if prev, ok := claimants[vol.Name]; ok {
+				return fmt.Errorf("%w: volume %q claimed by both %q and %q", ErrInvalidAppSpec, vol.Name, prev, svc.Name)
+			}
+			claimants[vol.Name] = svc.Name
+		}
+	}
+	return nil
+}
+
+// validate checks one service.
+func (s *AppService) validate() error {
+	if strings.TrimSpace(s.Image) == "" {
+		return fmt.Errorf("%w: service %q requires an image", ErrInvalidAppSpec, s.Name)
+	}
+	if s.StopGrace <= 0 || s.StopGrace > AppMaxStopGrace {
+		return fmt.Errorf("%w: service %q stop_grace must be within (0, 5m]", ErrInvalidAppSpec, s.Name)
+	}
+	if err := s.Readiness.validate(s); err != nil {
+		return err
+	}
+	if err := s.validateInterfaces(); err != nil {
+		return err
+	}
+	if err := s.validateSecrets(); err != nil {
+		return err
+	}
+	volumes, err := s.validateVolumes()
+	if err != nil {
+		return err
+	}
+	if err := s.validateBinds(); err != nil {
+		return err
+	}
+	if err := s.validateDevices(); err != nil {
+		return err
+	}
+	if err := s.validateDatabases(volumes); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateInterfaces checks HTTP/TCP/UDP entries and their port ownership.
+func (s *AppService) validateInterfaces() error {
+	for i := range s.HTTP {
+		if err := s.HTTP[i].validate(s.Name); err != nil {
+			return err
+		}
+	}
+	for i := range s.TCP {
+		if err := s.TCP[i].validate(s.Name); err != nil {
+			return err
+		}
+	}
+	for i := range s.UDP {
+		if err := s.UDP[i].validate(s.Name); err != nil {
+			return err
+		}
+	}
+	return s.validateInterfacePorts()
+}
+
+// validateInterfacePorts rejects one container port claimed by both an
+// internal HTTP interface and an externally backed HTTP/TCP interface:
+// publication is socket-level, so publishing the port would expose the
+// internal listener beyond the private network. Internal ports must also
+// be declared at most once, since they carry no host to tell them apart.
+func (s *AppService) validateInterfacePorts() error {
+	external := map[int]string{}
+	for _, h := range s.HTTP {
+		if h.IsPublic() {
+			external[h.Port] = "http"
+		}
+	}
+	for _, t := range s.TCP {
+		external[t.Port] = "tcp"
+	}
+	seenInternal := map[int]struct{}{}
+	for _, h := range s.HTTP {
+		if !h.IsInternal() {
+			continue
+		}
+		if kind, ok := external[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is also declared by an externally backed %s interface", ErrInvalidAppSpec, s.Name, h.Port, kind)
+		}
+		if _, ok := seenInternal[h.Port]; ok {
+			return fmt.Errorf("%w: service %q internal http port %d is declared more than once", ErrInvalidAppSpec, s.Name, h.Port)
+		}
+		seenInternal[h.Port] = struct{}{}
+	}
+	return nil
+}
+
+// validateSecrets checks the ENV-key to secret-name map.
+func (s *AppService) validateSecrets() error {
+	for envKey, secretName := range s.Secrets {
+		if err := ValidateEnvKey(envKey); err != nil {
+			return fmt.Errorf("%w: service %q secret env key %q: %v", ErrInvalidAppSpec, s.Name, envKey, err)
+		}
+		if err := ValidateSecretName(secretName); err != nil {
+			return fmt.Errorf("%w: service %q secret name %q: %v", ErrInvalidAppSpec, s.Name, secretName, err)
+		}
+	}
+	return nil
+}
+
+// validateVolumes checks volume declarations and returns known names.
+func (s *AppService) validateVolumes() (map[string]struct{}, error) {
+	seenVolumes := map[string]struct{}{}
+	for i := range s.Volumes {
+		vol := &s.Volumes[i]
+		if err := ValidateVolumeName(vol.Name); err != nil {
+			return nil, fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seenVolumes[vol.Name]; ok {
+			return nil, fmt.Errorf("%w: service %q duplicate volume %q", ErrInvalidAppSpec, s.Name, vol.Name)
+		}
+		seenVolumes[vol.Name] = struct{}{}
+		if !path.IsAbs(vol.Path) || path.Clean(vol.Path) != vol.Path {
+			return nil, fmt.Errorf("%w: service %q volume %q path must be absolute and normalized", ErrInvalidAppSpec, s.Name, vol.Name)
+		}
+	}
+	return seenVolumes, nil
+}
+
+// validateBinds checks bind names, destinations, duplicates, and volume collisions.
+func (s *AppService) validateBinds() error {
+	volumePaths := make(map[string]struct{}, len(s.Volumes))
+	for _, vol := range s.Volumes {
+		volumePaths[vol.Path] = struct{}{}
+	}
+	seenNames := map[string]struct{}{}
+	seenDests := map[string]struct{}{}
+	for i := range s.Binds {
+		bind := &s.Binds[i]
+		if err := ValidateBindName(bind.Name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seenNames[bind.Name]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind name %q", ErrInvalidAppSpec, s.Name, bind.Name)
+		}
+		seenNames[bind.Name] = struct{}{}
+		if err := ValidateBindDestination(bind.Path); err != nil {
+			return fmt.Errorf("%w: service %q bind %q: %v", ErrInvalidAppSpec, s.Name, bind.Name, err)
+		}
+		if _, ok := seenDests[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q duplicate bind destination %q", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+		seenDests[bind.Path] = struct{}{}
+		if _, ok := volumePaths[bind.Path]; ok {
+			return fmt.Errorf("%w: service %q bind destination %q collides with a declared volume", ErrInvalidAppSpec, s.Name, bind.Path)
+		}
+	}
+	return nil
+}
+
+// validateDevices checks logical device names and duplicates. Authorization
+// against administrative policy happens at apply/deploy time, not here:
+// the manifest shape stays valid while policy may refuse to serve it.
+func (s *AppService) validateDevices() error {
+	seen := map[string]struct{}{}
+	for _, name := range s.Devices {
+		if err := ValidateDeviceName(name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("%w: service %q duplicate device %q", ErrInvalidAppSpec, s.Name, name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// validateDatabases checks database declarations and backup references.
+func (s *AppService) validateDatabases(seenVolumes map[string]struct{}) error {
+	seenDBs := map[string]struct{}{}
+	for i := range s.Databases {
+		db := &s.Databases[i]
+		if strings.TrimSpace(db.Name) == "" {
+			return fmt.Errorf("%w: service %q database name must not be empty", ErrInvalidAppSpec, s.Name)
+		}
+		if _, ok := seenDBs[db.Name]; ok {
+			return fmt.Errorf("%w: service %q duplicate database %q", ErrInvalidAppSpec, s.Name, db.Name)
+		}
+		seenDBs[db.Name] = struct{}{}
+		if db.Type != AppDBPostgres {
+			return fmt.Errorf("%w: service %q database %q type must be postgres", ErrInvalidAppSpec, s.Name, db.Name)
+		}
+		if _, ok := appBackupSchedules[db.Schedule]; !ok {
+			return fmt.Errorf("%w: service %q database %q schedule must be hourly|daily|weekly|monthly", ErrInvalidAppSpec, s.Name, db.Name)
+		}
+	}
+	for _, ref := range s.Backup.Postgres {
+		if _, ok := seenDBs[ref]; !ok {
+			return fmt.Errorf("%w: service %q backup references unknown database %q", ErrInvalidAppSpec, s.Name, ref)
+		}
+	}
+	for _, ref := range s.Backup.Volume {
+		if _, ok := seenVolumes[ref]; !ok {
+			return fmt.Errorf("%w: service %q backup references unknown volume %q", ErrInvalidAppSpec, s.Name, ref)
+		}
+	}
+	return nil
+}
+
+// validate checks readiness rules including UDP restrictions and port selection.
+func (r AppReadiness) validate(svc *AppService) error {
+	if err := r.validateType(svc); err != nil {
+		return err
+	}
+	if r.Timeout < AppMinReadinessTimeout || r.Timeout > AppMaxReadinessTimeout {
+		return fmt.Errorf("%w: service %q readiness timeout must be within [1s, 10m]", ErrInvalidAppSpec, svc.Name)
+	}
+	return nil
+}
+
+// validateType checks the type-specific readiness constraints.
+func (r AppReadiness) validateType(svc *AppService) error {
+	switch r.Type {
+	case "", AppReadinessNone:
+		if r.Path != "" || r.Contains != "" || r.Port != 0 {
+			return fmt.Errorf("%w: service %q readiness none takes no path/contains/port", ErrInvalidAppSpec, svc.Name)
+		}
+		return nil
+	case AppReadinessTCP, AppReadinessHTTP:
+		return r.validateL4(svc)
+	case AppReadinessLog:
+		if strings.TrimSpace(r.Path) == "" || strings.TrimSpace(r.Contains) == "" {
+			return fmt.Errorf("%w: service %q log readiness requires path and contains", ErrInvalidAppSpec, svc.Name)
+		}
+		return nil
+	default:
+		return fmt.Errorf("%w: service %q readiness type must be none|tcp|http|log", ErrInvalidAppSpec, svc.Name)
+	}
+}
+
+// validateL4 checks TCP/HTTP readiness including UDP exclusion and port selection.
+func (r AppReadiness) validateL4(svc *AppService) error {
+	if hasUDPOnly(svc) {
+		return fmt.Errorf("%w: service %q with UDP-only interfaces must use none or log readiness", ErrInvalidAppSpec, svc.Name)
+	}
+	if r.Port == 0 && readinessPortRequired(svc) {
+		return fmt.Errorf("%w: service %q interfaces do not select one readiness port, readiness.port is required", ErrInvalidAppSpec, svc.Name)
+	}
+	if r.Port != 0 && !hasTCPContainerPort(svc, r.Port) {
+		return fmt.Errorf("%w: service %q readiness.port %d matches no declared container port", ErrInvalidAppSpec, svc.Name, r.Port)
+	}
+	if r.Type == AppReadinessHTTP {
+		if err := ValidateReadinessPath(r.Path); err != nil {
+			return fmt.Errorf("%w: service %q: %s", ErrInvalidAppSpec, svc.Name, err)
+		}
+	}
+	return nil
+}
+
+// ValidateReadinessPath requires an origin-form request path: a single
+// leading slash, no scheme or authority, and no control characters. The
+// path is appended to an immutable loopback URL, so rejecting everything
+// that could be read as a different authority keeps the probe on the
+// declared backend. Surrounding whitespace is rejected rather than
+// trimmed: the stored path is used verbatim, and a silently trimmed probe
+// would target a different path than the manifest declares.
+func ValidateReadinessPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("http readiness requires path")
+	}
+	if path != strings.TrimSpace(path) {
+		return fmt.Errorf("http readiness path must not have leading or trailing whitespace")
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		return fmt.Errorf("http readiness path must be an origin-form path beginning with one slash")
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("http readiness path must not contain control characters")
+		}
+	}
+	return nil
+}
+
+// hasUDPOnly reports services with UDP interfaces and no TCP/HTTP interface.
+func hasUDPOnly(svc *AppService) bool {
+	if len(svc.UDP) == 0 {
+		return false
+	}
+	return len(svc.HTTP) == 0 && len(svc.TCP) == 0
+}
+
+// readinessPortRequired reports whether an omitted readiness.port leaves
+// the probe target ambiguous. One effective-public HTTP port stays
+// selectable even when internal HTTP interfaces are also declared, and a
+// lone TCP-capable interface selects itself. Several public HTTP ports, any
+// mix of TCP and HTTP, or several TCP interfaces must name it explicitly.
+func readinessPortRequired(svc *AppService) bool {
+	if _, ok := singleEffectivePublicHTTPPort(svc); ok {
+		return false
+	}
+	return countTCPInterfaces(svc) > 1
+}
+
+// singleEffectivePublicHTTPPort returns the only distinct effective-public
+// HTTP container port when the service declares at least one and no TCP
+// interface. Internal HTTP interfaces never contribute: they are not
+// reachable through a host publication, so they cannot make the public
+// backend ambiguous.
+func singleEffectivePublicHTTPPort(svc *AppService) (int, bool) {
+	if len(svc.TCP) > 0 {
+		return 0, false
+	}
+	port := 0
+	for _, h := range svc.HTTP {
+		if !h.IsPublic() {
+			continue
+		}
+		if port != 0 && port != h.Port {
+			return 0, false
+		}
+		port = h.Port
+	}
+	if port == 0 {
+		return 0, false
+	}
+	return port, true
+}
+
+// countTCPInterfaces counts http/tcp container ports.
+func countTCPInterfaces(svc *AppService) int {
+	return len(svc.HTTP) + len(svc.TCP)
+}
+
+// hasTCPContainerPort checks readiness.port against declared ports.
+func hasTCPContainerPort(svc *AppService, port int) bool {
+	for _, h := range svc.HTTP {
+		if h.Port == port {
+			return true
+		}
+	}
+	for _, t := range svc.TCP {
+		if t.Port == port {
+			return true
+		}
+	}
+	return false
+}
+
+// validate checks one HTTP interface against its visibility. Public
+// interfaces keep the historical host/TLS rules; internal interfaces are
+// private-network only and must not claim a host or a TLS mode.
+func (h AppHTTPInterface) validate(service string) error {
+	switch h.EffectiveVisibility() {
+	case AppVisibilityPublic:
+		if h.Host == "" {
+			return fmt.Errorf("%w: service %q http host is required", ErrInvalidAppSpec, service)
+		}
+		if _, ok := CanonicalRouteDomain(h.Host); !ok {
+			return fmt.Errorf("%w: service %q http host %q is not a valid public hostname", ErrInvalidAppSpec, service, h.Host)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
+		switch h.TLS {
+		case AppTLSAuto, AppTLSAlways, AppTLSNever:
+		default:
+			return fmt.Errorf("%w: service %q http tls must be auto|always|never", ErrInvalidAppSpec, service)
+		}
+	case AppVisibilityInternal:
+		if h.Host != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare host", ErrInvalidAppSpec, service)
+		}
+		if h.TLS != "" {
+			return fmt.Errorf("%w: service %q internal http interface must not declare tls", ErrInvalidAppSpec, service)
+		}
+		if h.Port < 1 || h.Port > 65535 {
+			return fmt.Errorf("%w: service %q http port must be 1-65535", ErrInvalidAppSpec, service)
+		}
+	default:
+		return fmt.Errorf("%w: service %q http visibility must be public|internal", ErrInvalidAppSpec, service)
+	}
+	return nil
+}
+
+// validate checks one TCP interface.
+func (t AppTCPInterface) validate(service string) error {
+	if strings.TrimSpace(t.Entrypoint) == "" {
+		return fmt.Errorf("%w: service %q tcp entrypoint is required", ErrInvalidAppSpec, service)
+	}
+	if t.Port < 1 || t.Port > 65535 {
+		return fmt.Errorf("%w: service %q tcp port must be 1-65535", ErrInvalidAppSpec, service)
+	}
+	if _, _, err := ParsePublish(t.Publish); err != nil {
+		return fmt.Errorf("%w: service %q tcp: %v", ErrInvalidAppSpec, service, err)
+	}
+	return nil
+}
+
+// validate checks one UDP interface.
+func (u AppUDPInterface) validate(service string) error {
+	if strings.TrimSpace(u.Entrypoint) == "" {
+		return fmt.Errorf("%w: service %q udp entrypoint is required", ErrInvalidAppSpec, service)
+	}
+	if u.Port < 1 || u.Port > 65535 {
+		return fmt.Errorf("%w: service %q udp port must be 1-65535", ErrInvalidAppSpec, service)
+	}
+	if _, _, err := ParsePublish(u.Publish); err != nil {
+		return fmt.Errorf("%w: service %q udp: %v", ErrInvalidAppSpec, service, err)
+	}
+	return nil
+}
+
+// validate checks one shared-network declaration.
+func (n AppSharedNetwork) validate(s AppSpec) error {
+	if strings.TrimSpace(n.Network) == "" {
+		return fmt.Errorf("%w: shared network name must not be empty", ErrInvalidAppSpec)
+	}
+	if len(n.Services) == 0 {
+		return fmt.Errorf("%w: shared network %q must list at least one service", ErrInvalidAppSpec, n.Network)
+	}
+	seen := map[string]struct{}{}
+	for _, name := range n.Services {
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("%w: shared network %q duplicate service %q", ErrInvalidAppSpec, n.Network, name)
+		}
+		seen[name] = struct{}{}
+		found := false
+		for _, svc := range s.Services {
+			if svc.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("%w: shared network %q references unknown service %q", ErrInvalidAppSpec, n.Network, name)
+		}
+	}
+	for _, alias := range n.Aliases {
+		if !dnsLabelPattern.MatchString(alias) {
+			return fmt.Errorf("%w: shared network %q alias %q must be a DNS label", ErrInvalidAppSpec, n.Network, alias)
+		}
+	}
+	return nil
+}
+
+// AppDiff describes normalized differences between desired and effective specs.
+type AppDiff struct {
+	Added   []string
+	Removed []string
+	Changed []string
+}
+
+// DiffAppSpec returns a deterministic, stably sorted diff.
+// It carries no secret values: only secret PATHS appear.
+func DiffAppSpec(desired, effective AppSpec) AppDiff {
+	diff := AppDiff{}
+	desiredServices := map[string]AppService{}
+	for _, svc := range desired.Services {
+		desiredServices[svc.Name] = svc
+	}
+	effectiveServices := map[string]AppService{}
+	for _, svc := range effective.Services {
+		effectiveServices[svc.Name] = svc
+	}
+	for name := range desiredServices {
+		if _, ok := effectiveServices[name]; !ok {
+			diff.Added = append(diff.Added, "service/"+name)
+		}
+	}
+	for name := range effectiveServices {
+		if _, ok := desiredServices[name]; !ok {
+			diff.Removed = append(diff.Removed, "service/"+name)
+		}
+	}
+	for name, desiredSvc := range desiredServices {
+		effectiveSvc, ok := effectiveServices[name]
+		if !ok {
+			continue
+		}
+		diff.Changed = append(diff.Changed, diffService(name, desiredSvc, effectiveSvc)...)
+	}
+	if !equalStringMaps(desired.Env, effective.Env) {
+		diff.Changed = append(diff.Changed, "env")
+	}
+	diff.Changed = append(diff.Changed, diffNetworks(desired.Networks, effective.Networks)...)
+	sort.Strings(diff.Added)
+	sort.Strings(diff.Removed)
+	sort.Strings(diff.Changed)
+	return diff
+}
+
+func diffNetworks(desired, effective []AppSharedNetwork) []string {
+	desiredByName := make(map[string]AppSharedNetwork, len(desired))
+	for _, network := range desired {
+		desiredByName[network.Network] = network
+	}
+	effectiveByName := make(map[string]AppSharedNetwork, len(effective))
+	for _, network := range effective {
+		effectiveByName[network.Network] = network
+	}
+
+	var changed []string
+	for name, network := range desiredByName {
+		previous, ok := effectiveByName[name]
+		switch {
+		case !ok:
+			changed = append(changed, "network/"+name+"/added")
+		case !equalStringSets(network.Services, previous.Services):
+			changed = append(changed, "network/"+name+"/services")
+		case !equalStringSets(network.Aliases, previous.Aliases):
+			changed = append(changed, "network/"+name+"/aliases")
+		}
+	}
+	for name := range effectiveByName {
+		if _, ok := desiredByName[name]; !ok {
+			changed = append(changed, "network/"+name+"/removed")
+		}
+	}
+	return changed
+}
+
+func equalStringSets(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, value := range a {
+		counts[value]++
+	}
+	for _, value := range b {
+		counts[value]--
+		if counts[value] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// SameAppService reports whether two service specs are equal under the
+// same normalized comparison DiffAppSpec uses.
+func SameAppService(a, b AppService) bool {
+	return len(diffService(a.Name, a, b)) == 0
+}
+
+// diffService compares two services field by field.
+func diffService(name string, desired, effective AppService) []string {
+	var changed []string
+	if desired.Image != effective.Image {
+		changed = append(changed, "service/"+name+"/image")
+	}
+	if strings.Join(desired.Command, "\x00") != strings.Join(effective.Command, "\x00") {
+		changed = append(changed, "service/"+name+"/command")
+	}
+	if desired.StopGrace != effective.StopGrace {
+		changed = append(changed, "service/"+name+"/stop_grace")
+	}
+	if desired.Readiness != effective.Readiness {
+		changed = append(changed, "service/"+name+"/readiness")
+	}
+	if len(desired.HTTP) != len(effective.HTTP) || len(desired.TCP) != len(effective.TCP) ||
+		len(desired.UDP) != len(effective.UDP) {
+		changed = append(changed, "service/"+name+"/interfaces")
+	} else if interfacesChanged(desired, effective) {
+		changed = append(changed, "service/"+name+"/interfaces")
+	}
+	if !equalStringMaps(desired.Secrets, effective.Secrets) {
+		for path := range secretPathChanges(desired, effective) {
+			changed = append(changed, path)
+		}
+	}
+	if !equalVolumes(desired.Volumes, effective.Volumes) {
+		changed = append(changed, "service/"+name+"/volumes")
+	}
+	if !equalBinds(desired.Binds, effective.Binds) {
+		changed = append(changed, "service/"+name+"/binds")
+	}
+	changed = appendDeviceChanges(changed, name, desired.Devices, effective.Devices)
+	return appendOperationChanges(changed, name, desired, effective)
+}
+
+// appendOperationChanges compares the operational (non-runtime) service
+// settings: databases, backups, and telemetry.
+func appendOperationChanges(changed []string, name string, desired, effective AppService) []string {
+	if !reflect.DeepEqual(desired.Databases, effective.Databases) {
+		changed = append(changed, "service/"+name+"/databases")
+	}
+	if !reflect.DeepEqual(desired.Backup, effective.Backup) {
+		changed = append(changed, "service/"+name+"/backup")
+	}
+	if desired.LogExportDisabled != effective.LogExportDisabled {
+		changed = append(changed, "service/"+name+"/telemetry")
+	}
+	return changed
+}
+
+// secretPathChanges lists secret PATH changes (never values).
+func secretPathChanges(desired, effective AppService) map[string]struct{} {
+	paths := map[string]struct{}{}
+	for envKey, secretName := range desired.Secrets {
+		if effective.Secrets[envKey] != secretName {
+			paths["service/"+desired.Name+"/secret/"+secretName] = struct{}{}
+		}
+	}
+	for envKey, secretName := range effective.Secrets {
+		if desired.Secrets[envKey] != secretName {
+			paths["service/"+effective.Name+"/secret/"+secretName] = struct{}{}
+		}
+	}
+	return paths
+}
+
+// interfacesChanged compares interface slices.
+func interfacesChanged(desired, effective AppService) bool {
+	for i := range desired.HTTP {
+		if !httpInterfacesEqual(desired.HTTP[i], effective.HTTP[i]) {
+			return true
+		}
+	}
+	for i := range desired.TCP {
+		if desired.TCP[i] != effective.TCP[i] {
+			return true
+		}
+	}
+	for i := range desired.UDP {
+		if desired.UDP[i] != effective.UDP[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// httpInterfacesEqual compares two HTTP interfaces with visibility
+// normalized. State written before the field existed reads as the zero
+// value and must equal an explicit public, while a real public/internal
+// flip is still a change.
+func httpInterfacesEqual(a, b AppHTTPInterface) bool {
+	if a.EffectiveVisibility() != b.EffectiveVisibility() {
+		return false
+	}
+	a.Visibility, b.Visibility = "", ""
+	return a == b
+}
+
+// equalStringMaps compares string maps.
+func equalStringMaps(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// equalVolumes compares volume slices by value.
+func equalVolumes(a, b []AppVolume) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalBinds compares bind slices by value.
+func equalBinds(a, b []AppBind) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// equalDevices compares device slices as sets: reorder-only input is a
+// no-op, while add/remove reshuffles the sorted comparison.
+func equalDevices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	sortedA := slices.Sorted(slices.Values(a))
+	sortedB := slices.Sorted(slices.Values(b))
+	return slices.Equal(sortedA, sortedB)
+}
+
+// appendDeviceChanges appends the service devices diff entry when the
+// device sets differ. Split from diffService to keep its complexity
+// within budget.
+func appendDeviceChanges(changed []string, name string, desired, effective []string) []string {
+	if !equalDevices(desired, effective) {
+		changed = append(changed, "service/"+name+"/devices")
+	}
+	return changed
+}

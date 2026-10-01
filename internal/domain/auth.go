@@ -77,12 +77,13 @@ const (
 // Admin scope resource constants.
 const (
 	AdminResourceRoutes  = "routes"
-	AdminResourceSecrets = "secrets"
 	AdminResourceConfig  = "config"
 	AdminResourceStatus  = "status"
 	AdminResourceLogs    = "logs"
 	AdminResourceVolumes = "volumes"
-	AdminResourceAll     = "*"
+	// AdminResourceApps gates the declarative app admin surface.
+	AdminResourceApps = "apps"
+	AdminResourceAll  = "*"
 )
 
 // Admin scope action constants.
@@ -285,11 +286,6 @@ func AdminScopeRoutes(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceRoutes, strings.Join(actions, ","))
 }
 
-// AdminScopeSecrets creates an admin scope for secrets with the given actions.
-func AdminScopeSecrets(actions ...string) string {
-	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceSecrets, strings.Join(actions, ","))
-}
-
 // AdminScopeConfig creates an admin scope for config with the given actions.
 func AdminScopeConfig(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceConfig, strings.Join(actions, ","))
@@ -308,6 +304,11 @@ func AdminScopeLogs(actions ...string) string {
 // AdminScopeVolumes creates an admin scope for volumes with the given actions.
 func AdminScopeVolumes(actions ...string) string {
 	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceVolumes, strings.Join(actions, ","))
+}
+
+// AdminScopeApps creates an admin scope for apps with the given actions.
+func AdminScopeApps(actions ...string) string {
+	return fmt.Sprintf("%s:%s:%s", ScopeTypeAdmin, AdminResourceApps, strings.Join(actions, ","))
 }
 
 // AuthStatus represents status of an authentication session.

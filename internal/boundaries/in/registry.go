@@ -23,8 +23,8 @@ type RegistryService interface {
 	// Upload operations
 	StartUpload(ctx context.Context, name string) (string, error)
 	AppendBlobChunk(ctx context.Context, name, uuid string, data io.Reader, contentLength, maxBlobSize int64) (int64, error)
-	FinishUpload(ctx context.Context, uuid, digest string) error
-	CancelUpload(ctx context.Context, uuid string) error
+	FinishUpload(ctx context.Context, name, uuid, digest string) error
+	CancelUpload(ctx context.Context, name, uuid string) error
 
 	// Tag operations
 	ListTags(ctx context.Context, name string) ([]string, error)

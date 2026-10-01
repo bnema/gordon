@@ -1,6 +1,8 @@
 package filesystem
 
 import (
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,6 +51,24 @@ func TestManifestStorage_PutAndGetManifest(t *testing.T) {
 	data, ct, err := storage.GetManifest("myapp", "latest")
 	require.NoError(t, err)
 
+	assert.Equal(t, manifestData, data)
+	assert.Equal(t, contentType, ct)
+}
+
+func TestManifestStorage_PutMirrorsDigest(t *testing.T) {
+	tmpDir := t.TempDir()
+	log := testLogger()
+
+	storage, err := NewManifestStorage(tmpDir, log)
+	require.NoError(t, err)
+
+	manifestData := []byte(`{"schemaVersion": 2}`)
+	contentType := "application/vnd.docker.distribution.manifest.v2+json"
+	require.NoError(t, storage.PutManifest("myapp", "v1", contentType, manifestData))
+
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(manifestData))
+	data, ct, err := storage.GetManifest("myapp", digest)
+	require.NoError(t, err)
 	assert.Equal(t, manifestData, data)
 	assert.Equal(t, contentType, ct)
 }

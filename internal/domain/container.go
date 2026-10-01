@@ -16,6 +16,14 @@ type Container struct {
 	Labels       map[string]string
 	VolumeMounts []ContainerVolumeMount
 	Created      time.Time
+	// StartedAt is the start timestamp of the current execution. Zero
+	// when the container never started or the runtime reports none.
+	// Readiness scoping uses it so log markers from a previous
+	// execution of the same container ID cannot satisfy a probe.
+	StartedAt time.Time
+	// Env is the container's KEY=value environment as created. It may hold
+	// secret values: compare it in memory only, never persist or log it.
+	Env []string
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.
@@ -71,6 +79,30 @@ type ContainerPortPublish struct {
 	Protocol      NetworkProtocol
 }
 
+// ContainerBackendPort identifies one protocol-specific container port
+// for grouped backend-bind inspection.
+type ContainerBackendPort struct {
+	ContainerPort int
+	Protocol      NetworkProtocol
+}
+
+// ContainerBackendBind is an observed protocol-specific host binding.
+type ContainerBackendBind struct {
+	ContainerPort int
+	HostPort      int
+	Protocol      NetworkProtocol
+}
+
+// ContainerBind is one ephemeral host bind mount for a container. Source is a
+// resolved host path produced by administrative policy: it is never persisted
+// and never logged by the runtime adapter. Destination is the container path.
+type ContainerBind struct {
+	Name        string
+	Source      string
+	Destination string
+	ReadOnly    bool
+}
+
 // ContainerConfig holds configuration for creating a container.
 type ContainerConfig struct {
 	Image           string
@@ -81,20 +113,26 @@ type ContainerConfig struct {
 	Labels          map[string]string
 	WorkingDir      string
 	Cmd             []string
+	Entrypoint      []string
 	AutoRemove      bool
 	RestartPolicy   string
 	Volumes         map[string]string // map[containerPath]volumeName
 	ReadOnlyVolumes map[string]string // containerPath -> volumeName (mounted read-only)
-	NetworkMode     string            // Network to join
-	Hostname        string            // Container hostname for DNS
-	Aliases         []string          // Additional network aliases
-	MemoryLimit     int64             // Memory limit in bytes (0 = no limit)
-	NanoCPUs        int64             // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
-	PidsLimit       int64             // Max number of PIDs (0 = no limit)
-	ReadOnlyRootFS  bool              // Mount container root filesystem read-only
-	User            string            // User to run as
-	CapDrop         []string          // Linux capabilities to drop; nil uses runtime compat defaults
-	CapAdd          []string          // Linux capabilities to add; nil uses runtime compat defaults
+	Binds           []ContainerBind   // ephemeral resolved host binds, keyed by destination
+	// CDIDevices holds explicit CDI device IDs resolved from administrative
+	// device policy at activation time. It is ephemeral like Binds: never
+	// persisted, never logged by the runtime adapter.
+	CDIDevices     []string // ephemeral resolved CDI IDs, encoded as one native CDI DeviceRequest
+	NetworkMode    string   // Network to join
+	Hostname       string   // Container hostname for DNS
+	Aliases        []string // Additional network aliases
+	MemoryLimit    int64    // Memory limit in bytes (0 = no limit)
+	NanoCPUs       int64    // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit      int64    // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS bool     // Mount container root filesystem read-only
+	User           string   // User to run as
+	CapDrop        []string // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd         []string // Linux capabilities to add; nil uses runtime compat defaults
 }
 
 // ContainerStatus represents the current state of a container.

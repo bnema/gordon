@@ -4,8 +4,8 @@ Automated deployment with GitLab CI/CD using Gordon's push command.
 
 ## Prerequisites
 
-1. Gordon server running with registry authentication enabled
-2. Generated deployment token
+1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
+2. A least-privilege token: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the pipeline applies or deploys apps
 3. GitLab CI/CD variables configured
 
 ## Quick Setup
@@ -17,7 +17,7 @@ On your Gordon server:
 ```bash
 gordon auth token generate \
   --subject gitlab-ci \
-  --scopes "push,pull,admin:routes:read,admin:config:write" \
+  --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 0
 ```
 
@@ -45,10 +45,10 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   only:
     - tags
 ```
@@ -73,10 +73,10 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_TAG
 ```
@@ -96,10 +96,10 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 ```
@@ -117,10 +117,10 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
-        --no-confirm
+
   when: manual
 ```
 
@@ -137,12 +137,12 @@ deploy:
     - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
-    - gordon push --build
+    - gordon images push --build
         --remote "$GORDON_REMOTE"
         --token "$GORDON_TOKEN"
         --build-arg NODE_ENV=production
         --build-arg API_URL=https://api.example.com
-        --no-confirm
+
   rules:
     - if: $CI_COMMIT_TAG
 ```
@@ -166,7 +166,7 @@ deploy:
 ```
 
 This requires additional CI/CD variables: `GORDON_REGISTRY` and `GORDON_USERNAME`.
-Gordon auto-deploys when it receives the image.
+Pushing only stores the image; deploy explicitly with `gordon apps deploy` afterwards.
 
 ## Version Detection
 
@@ -208,4 +208,4 @@ GitLab CI clones your repository automatically. The build context defaults to th
 - [Generic CI](./generic-ci.md)
 - [Deployment Overview](./index.md)
 - [Authentication](../config/auth.md)
-- [Push Command](../cli/push.md)
+- [Images Commands](../cli/images.md#gordon-images-push)
