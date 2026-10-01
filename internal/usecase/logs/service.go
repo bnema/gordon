@@ -456,10 +456,16 @@ func (s *Service) FollowContainerLogs(ctx context.Context, domain string, initia
 	return ch, nil
 }
 
+// maxTailLines bounds the ring buffer allocated by tailLines.
+const maxTailLines = 10000
+
 // tailLines reads the last N lines from a file using a ring buffer.
 func tailLines(file *os.File, n int) ([]string, error) {
 	if n <= 0 {
 		return []string{}, nil
+	}
+	if n > maxTailLines {
+		n = maxTailLines
 	}
 
 	// Seek to beginning

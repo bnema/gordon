@@ -272,6 +272,9 @@ func (s *Service) validateManifestBlobs(name string, data []byte) error {
 		if descriptor.Digest == "" {
 			continue
 		}
+		if err := validation.ValidateDigest(descriptor.Digest); err != nil {
+			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, err)
+		}
 		if _, _, err := s.manifestStorage.GetManifest(name, descriptor.Digest); err != nil {
 			return fmt.Errorf("%w: %s", domain.ErrManifestBlobUnknown, descriptor.Digest)
 		}

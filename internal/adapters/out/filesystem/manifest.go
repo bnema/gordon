@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -263,6 +264,9 @@ func (s *ManifestStorage) GetManifestModTime(name, reference string) (time.Time,
 
 func (s *ManifestStorage) getManifestPath(name, reference string) (string, error) {
 	// Validate name to prevent path traversal (defense in depth)
+	if strings.Contains(name, "..") || strings.Contains(reference, "..") {
+		return "", fmt.Errorf("path traversal not allowed")
+	}
 	if _, err := validation.ValidatePath(name); err != nil {
 		return "", fmt.Errorf("invalid repository name: %w", err)
 	}

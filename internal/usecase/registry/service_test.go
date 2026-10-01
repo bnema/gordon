@@ -149,6 +149,24 @@ func TestService_PutManifest_RejectsUnknownChildManifest(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
 }
 
+func TestService_PutManifest_RejectsMalformedChildDigest(t *testing.T) {
+	blobStorage := mocks.NewMockBlobStorage(t)
+	manifestStorage := mocks.NewMockManifestStorage(t)
+	svc := NewService(blobStorage, manifestStorage, nil)
+
+	manifest := &domain.Manifest{
+		Name:        "index",
+		Reference:   "latest",
+		ContentType: "application/vnd.oci.image.index.v1+json",
+		Data:        []byte(`{"schemaVersion":2,"manifests":[{"digest":"../../tags.json"}]}`),
+	}
+
+	_, err := svc.PutManifest(testContext(), manifest)
+
+	require.ErrorIs(t, err, domain.ErrManifestBlobUnknown)
+	manifestStorage.AssertNotCalled(t, "GetManifest", mock.Anything, mock.Anything)
+}
+
 func TestService_PutManifest_SHA512DigestDoesNotPublishEvent(t *testing.T) {
 	blobStorage := mocks.NewMockBlobStorage(t)
 	manifestStorage := mocks.NewMockManifestStorage(t)
