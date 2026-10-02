@@ -97,7 +97,8 @@ gordon apps show APP [--json]
 ```
 
 Shows desired revision and acceptance status, pending state, per-service
-effective revision, container, digest, and restart safety, the resources the
+effective revision, container, digest, and `single-writer` mark (see
+[apps status](#gordon-apps-status)), the resources the
 app owns (volumes, secret paths, image references — never secret values),
 stopped intent, and the last operation with its outcome.
 
@@ -351,6 +352,14 @@ gordon apps status APP [--json]
 ```
 
 Shows effective vs observed state per service.
+
+A service line ends with `single-writer` when the service has volumes or binds
+(`restart_unsafe: true` in `--json`), and a legend line follows the list. The
+mark is informational and needs no action. When such a service is replaced,
+Gordon durably blocks boot and periodic recovery from restarting the old
+container, so it can never write to the same data as its replacement. Every
+service is replaced stop-before-start; see [Updates](../concepts.md#updates).
+`apps show` uses the same mark.
 
 ---
 

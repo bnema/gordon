@@ -450,6 +450,11 @@ func runAppsShow(ctx context.Context, plane ControlPlane, app string, out io.Wri
 	return nil
 }
 
+// singleWriterLegend explains the single-writer mark (restart_unsafe in
+// JSON) once per listing: recovery never restarts a replaced generation of
+// a volume- or bind-owning service on top of its replacement.
+const singleWriterLegend = "single-writer: has volumes or binds; recovery never restarts a replaced container over its successor (informational, no action needed)"
+
 // renderActiveServices renders per-service effective state, sorted by name.
 // Only ids and digests appear — never secret values.
 func renderActiveServices(active dto.AppActiveDTO) []string {
@@ -458,12 +463,13 @@ func renderActiveServices(active dto.AppActiveDTO) []string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	lines := make([]string, 0, len(names)+1)
+	lines := make([]string, 0, len(names)+2)
 	converged := "converged"
 	if !active.Converged {
 		converged = "diverged"
 	}
 	lines = append(lines, cliRenderMeta("active:", converged))
+	singleWriter := false
 	for _, name := range names {
 		svc := active.Services[name]
 		detail := svc.EffectiveRevision
@@ -471,9 +477,13 @@ func renderActiveServices(active dto.AppActiveDTO) []string {
 			detail += " container=" + svc.Container
 		}
 		if svc.RestartUnsafe {
-			detail += " restart_unsafe"
+			detail += " single-writer"
+			singleWriter = true
 		}
 		lines = append(lines, cliRenderMeta("  "+name+":", detail))
+	}
+	if singleWriter {
+		lines = append(lines, cliRenderMuted("  "+singleWriterLegend))
 	}
 	return lines
 }
@@ -1003,9 +1013,6 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 		detail := strings.TrimSpace(svc.Result + " " + svc.EffectiveRevision)
 		if svc.Result == domain.AppServiceUnchanged {
 			detail += " (already running this image, config, and secrets)"
-		}
-		if svc.RestartUnsafe {
-			detail += " restart_unsafe"
 		}
 		if svc.Error != "" {
 			detail += ": " + svc.Error

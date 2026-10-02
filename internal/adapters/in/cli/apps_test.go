@@ -128,6 +128,35 @@ func TestRunAppsList_EmptyJSONIsArray(t *testing.T) {
 	assert.JSONEq(t, `[]`, strings.TrimSpace(out.String()))
 }
 
+func TestRenderActiveServices_SingleWriterLegend(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		flagged []string
+	}{
+		{"none", nil},
+		{"one", []string{"db"}},
+		{"two", []string{"db", "web"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			active := dto.AppActiveDTO{Converged: true, Services: map[string]dto.AppActiveServiceDTO{
+				"db": {EffectiveRevision: "rev-1"}, "web": {EffectiveRevision: "rev-1"}, "worker": {EffectiveRevision: "rev-1"},
+			}}
+			for _, name := range tc.flagged {
+				svc := active.Services[name]
+				svc.RestartUnsafe = true
+				active.Services[name] = svc
+			}
+			text := strings.Join(renderActiveServices(active), "\n")
+			assert.Equal(t, len(tc.flagged), strings.Count(text, "rev-1 single-writer"))
+			legends := 0
+			if len(tc.flagged) > 0 {
+				legends = 1
+			}
+			assert.Equal(t, legends, strings.Count(text, singleWriterLegend))
+		})
+	}
+}
+
 func TestRunAppsShow_JSONParity(t *testing.T) {
 	want := &dto.AppShowResponse{
 		App:     "blog",
@@ -148,7 +177,8 @@ func TestRunAppsShow_JSONParity(t *testing.T) {
 
 	out.Reset()
 	require.NoError(t, runAppsShow(context.Background(), plane, "blog", &out, false))
-	assert.Contains(t, out.String(), "restart_unsafe", "text shows WHY recovery is blocked")
+	assert.Contains(t, out.String(), "single-writer: has volumes or binds", "text explains the single-writer mark")
+	assert.NotContains(t, out.String(), "restart_unsafe", "text does not print the bare JSON token")
 }
 
 func TestRunAppsSecretsSet_NeverEchoesValues(t *testing.T) {
@@ -290,7 +320,6 @@ func TestRenderAppDeployResponse_SortedServices(t *testing.T) {
 	require.NoError(t, renderAppDeployResponse(&out, resp))
 	text := out.String()
 	assert.Less(t, strings.Index(text, "db:"), strings.Index(text, "web:"))
-	assert.Contains(t, text, "restart_unsafe")
 	assert.Contains(t, text, "runner: removed\n")
 	assert.Contains(t, text, "cleanup:")
 	assert.Contains(t, text, "blog-db")
