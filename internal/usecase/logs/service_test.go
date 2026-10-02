@@ -40,6 +40,15 @@ func TestService_GetProcessLogs(t *testing.T) {
 	})
 
 	t.Run("returns empty slice for non-existent file", func(t *testing.T) {
+		// The journalctl fallback must not depend on the host: CI containers have none.
+		origExec := execCommandContext
+		execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "true") // #nosec G204
+		}
+		defer func() {
+			execCommandContext = origExec
+		}()
+
 		runtime := mocks.NewMockContainerRuntime(t)
 
 		svc := NewService("/nonexistent/file.log", true, runtime, log)

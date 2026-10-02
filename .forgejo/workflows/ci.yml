@@ -1,0 +1,48 @@
+# CI for the Forgejo runner. Forgejo reads this directory instead of .github/workflows,
+# so GitHub keeps its own CI and CodeQL. Actions that do not exist on
+# data.forgejo.org (dorny/paths-filter, github/codeql-action) are not used here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache: true
+      - run: go test -race ./...
+
+  installer:
+    name: Installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install shellcheck
+        run: |
+          v=v0.10.0
+          curl -sSfL "https://github.com/koalaman/shellcheck/releases/download/${v}/shellcheck-${v}.linux.x86_64.tar.xz" | tar -xJ -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-${v}" >> "$GITHUB_PATH"
+      - run: |
+          shellcheck -s sh install.sh tests/install_next_test.sh
+          sh tests/install_next_test.sh
