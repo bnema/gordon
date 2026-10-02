@@ -16,7 +16,7 @@ Commands are organized by where they run:
 |---------|-------------|---------------|
 | `gordon serve` | Start the Gordon server | [serve](./serve.md) |
 | `gordon auth` | Manage Gordon server authentication | [auth](./auth.md) |
-| `gordon ca` | Manage the internal Certificate Authority | [ca](./ca.md) |
+| `gordon ca install` | Install/uninstall the internal CA in the host trust stores | [ca](./ca.md#gordon-ca-install) |
 
 ## Management Commands (local or remote)
 
@@ -26,6 +26,7 @@ Management commands use the authenticated daemon API. By default they connect th
 |---------|-------------|---------------|
 | `gordon apps` | Manage applications, operations, and app secrets | [apps](./apps.md) |
 | `gordon backups` | Manage declared app database and volume backups | [backup](./backup.md) |
+| `gordon ca export`, `gordon ca info` | Export or inspect the internal CA (read from the local config, or fetched with `--remote`) | [ca](./ca.md) |
 | `gordon daemon` | Daemon status, logs, reload, config, TLS, traffic, and networks | [daemon](./daemon.md) |
 | `gordon images` | Push, list, and prune images | [images](./images.md) |
 | `gordon volumes` | Manage volumes | [volumes](./volumes.md) |

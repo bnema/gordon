@@ -54,6 +54,7 @@ packages:
       VolumeService:
       PublicTLSService:
       TrafficStatusService:
+      CAInfoService:
       AppService:
       AppReconciler:
   # Exception: pushImageOps is a CLI-local interface, not a boundary port.

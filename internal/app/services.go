@@ -438,7 +438,17 @@ func (si *serviceInit) initHandlers() {
 		PublicTLSSvc:    si.svc.publicTLSSvc,
 		TrafficSvc:      si.svc.trafficManager,
 		AppSvc:          si.svc.appSvc,
+		CASvc:           si.caInfoProvider(),
 	})
+}
+
+// caInfoProvider returns the internal CA as a CAInfoService, or an untyped nil
+// when internal TLS is disabled so the admin handler sees a nil interface.
+func (si *serviceInit) caInfoProvider() in.CAInfoService {
+	if si.svc.caAdapter == nil {
+		return nil
+	}
+	return si.svc.caAdapter
 }
 
 // injectTelemetryMetrics creates and injects OTel metrics into services when

@@ -47,6 +47,7 @@ type Handler struct {
 	reloadTrigger   reloadTrigger
 	publicTLSSvc    in.PublicTLSService
 	trafficSvc      in.TrafficStatusService
+	caSvc           in.CAInfoService
 	appSvc          in.AppService
 	log             zerowrap.Logger
 }
@@ -124,6 +125,7 @@ type HandlerDeps struct {
 	ReloadTrigger   reloadTrigger
 	PublicTLSSvc    in.PublicTLSService
 	TrafficSvc      in.TrafficStatusService
+	CASvc           in.CAInfoService
 	AppSvc          in.AppService
 }
 
@@ -143,6 +145,7 @@ func NewHandler(deps HandlerDeps) *Handler {
 		reloadTrigger:   deps.ReloadTrigger,
 		publicTLSSvc:    deps.PublicTLSSvc,
 		trafficSvc:      deps.TrafficSvc,
+		caSvc:           deps.CASvc,
 		appSvc:          deps.AppSvc,
 		log:             deps.Log,
 	}
@@ -199,6 +202,7 @@ func (h *Handler) matchRoute(path string) (routeHandler, bool) {
 		"/volumes/prune":  func(w http.ResponseWriter, r *http.Request, _ string) { h.handlePruneVolumes(w, r) },
 		"/tls/status":     func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTLSStatus(w, r) },
 		"/traffic/status": func(w http.ResponseWriter, r *http.Request, _ string) { h.handleTrafficStatus(w, r) },
+		"/ca":             func(w http.ResponseWriter, r *http.Request, _ string) { h.handleCA(w, r) },
 	}
 	if handler, ok := exactRoutes[path]; ok {
 		return handler, true

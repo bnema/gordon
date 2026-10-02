@@ -337,8 +337,8 @@ token_env = "GORDON_TOKEN"
 A common Tailscale setup is to point your domain's DNS at the machine's Tailscale IP (Cloudflare DNS-only / grey cloud). Since the server isn't publicly reachable, there is no external CA to issue a trusted certificate — Gordon's internal CA handles TLS automatically. Clients need to trust the internal CA:
 
 - `insecure_tls = true` on the remote — skips certificate verification entirely
-- `sudo gordon ca install` — installs the root CA into system, Firefox, and Java trust stores
-- `gordon ca export --out gordon-ca.crt` — exports the root CA PEM for manual installation
+- `sudo gordon ca install` — on the Gordon host only: installs the root CA into system, Firefox, and Java trust stores
+- `gordon ca export --remote <name> --out gordon-ca.crt` — fetches the root CA PEM from the remote for manual installation
 - Visit `https://<gordon-host>/.well-known/gordon/ca` (or your mapped edge address) in a browser — onboarding page with downloads for macOS, Linux, Windows, iOS, and Android
 
 If you have your own certificate for the domain (e.g. from a corporate CA), you can provide it via `tls_cert_file`/`tls_key_file` — see [Server Configuration](../config/server.md#custom-certificates). The static cert is served for SNI-matching domains; everything else falls through to the internal CA.

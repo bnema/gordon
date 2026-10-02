@@ -175,6 +175,36 @@ func TestClientGetTrafficStatus(t *testing.T) {
 	assert.Equal(t, int64(1), status.Counters.ActiveTCPConnections)
 }
 
+func TestClientGetCA(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/admin/ca", r.URL.Path)
+		require.Equal(t, http.MethodGet, r.Method)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"root_cn":"Gordon Root","fingerprint":"AB:CD","intermediate_expiry":"2027-01-02T03:04:05Z","root_pem":"PEM"}`))
+	}))
+	defer srv.Close()
+
+	ca, err := NewClient(srv.URL).GetCA(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "Gordon Root", ca.RootCN)
+	assert.Equal(t, "AB:CD", ca.Fingerprint)
+	assert.Equal(t, "PEM", ca.RootPEM)
+	assert.Equal(t, 2027, ca.IntermediateExpiry.Year())
+}
+
+func TestClientGetCADisabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"internal TLS is disabled on this server"}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL).GetCA(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal TLS is disabled")
+}
+
 func TestClientGetTLSStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "/admin/tls/status", r.URL.Path)

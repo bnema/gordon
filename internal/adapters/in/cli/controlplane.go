@@ -31,6 +31,7 @@ type ControlPlane interface {
 	GetStatus(ctx context.Context) (*remote.Status, error)
 	GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error)
 	GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error)
+	GetCA(ctx context.Context) (*dto.CAResponse, error)
 	Reload(ctx context.Context) error
 	ListNetworks(ctx context.Context) ([]*domain.NetworkInfo, error)
 	GetConfig(ctx context.Context) (*remote.Config, error)

@@ -58,7 +58,7 @@ Applications are declared in standalone TOML files and managed with
 gordon apps; gordon images push transfers OCI content only and never deploys.
 
 Commands are organized by where they run:
-  Server-only:  Run on the machine hosting Gordon (serve, auth, ca)
+  Server-only:  Run on the machine hosting Gordon (serve, auth, ca install; ca export/info also accept --remote)
   Management:   Work locally or remotely via --remote flag (apps, daemon, images, etc.)
   Client-only:  CLI utilities that don't require a running Gordon server`,
 	}

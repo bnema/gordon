@@ -522,6 +522,21 @@ func (c *Client) GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusRespon
 	return &status, nil
 }
 
+// GetCA returns the server's internal root CA certificate and status.
+func (c *Client) GetCA(ctx context.Context) (*dto.CAResponse, error) {
+	resp, err := c.requestWithRetry(ctx, http.MethodGet, "/ca", nil)
+	if err != nil {
+		return nil, fmt.Errorf("request CA: %w", err)
+	}
+
+	var ca dto.CAResponse
+	if err := parseResponse(resp, &ca); err != nil {
+		return nil, fmt.Errorf("parse CA response: %w", err)
+	}
+
+	return &ca, nil
+}
+
 // GetStatus returns the Gordon server status.
 func (c *Client) GetStatus(ctx context.Context) (*Status, error) {
 	resp, err := c.requestWithRetry(ctx, http.MethodGet, "/status", nil)

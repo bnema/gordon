@@ -18,6 +18,7 @@ type LocalServices struct {
 	configSvc  in.ConfigService
 	dataDir    string
 	tlsEnabled bool
+	configFile string
 }
 
 // GetConfigService returns the config service.
@@ -28,6 +29,11 @@ func (l *LocalServices) GetConfigService() in.ConfigService {
 // GetDataDir returns the data directory.
 func (l *LocalServices) GetDataDir() string {
 	return l.dataDir
+}
+
+// GetConfigFile returns the config file that was read, or "" when none was found.
+func (l *LocalServices) GetConfigFile() string {
+	return l.configFile
 }
 
 // HasInternalTLS reports whether a TLS-capable entrypoint enables the internal CA.
@@ -71,6 +77,7 @@ func GetLocalServices(cliConfigPath string) (*LocalServices, error) {
 		configSvc:  configSvc,
 		dataDir:    dataDir,
 		tlsEnabled: hasLocalTLSCapableEntrypoint(v),
+		configFile: v.ConfigFileUsed(),
 	}, nil
 }
 

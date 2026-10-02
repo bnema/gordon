@@ -93,7 +93,13 @@ func (ca *CA) RootCertificateDER() []byte { return ca.rootCert.Raw }
 // RootFingerprint returns the SHA-256 fingerprint of the root CA cert
 // formatted as colon-separated hex.
 func (ca *CA) RootFingerprint() string {
-	sum := sha256.Sum256(ca.rootCert.Raw)
+	return CertFingerprint(ca.rootCert)
+}
+
+// CertFingerprint returns the SHA-256 fingerprint of cert formatted as
+// colon-separated uppercase hex (the format used by RootFingerprint).
+func CertFingerprint(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
 	parts := make([]string, 0, sha256.Size)
 	for _, b := range sum {
 		parts = append(parts, fmt.Sprintf("%02X", b))
