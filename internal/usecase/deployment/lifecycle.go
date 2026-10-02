@@ -505,9 +505,9 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 			if !retired.Gone {
 				return nil, fmt.Errorf("deployment: remove %q/%q: container %s not confirmed gone: %s", app, name, container, cleanupDetail(retired))
 			}
-			result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: "", CleanupWarnings: retired.Warnings}
+			result.Services[name] = ServiceResult{Result: domain.AppServiceRemoved, Before: container, After: "", CleanupWarnings: retired.Warnings}
 		} else {
-			result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: ""}
+			result.Services[name] = ServiceResult{Result: domain.AppServiceRemoved, Before: container, After: ""}
 		}
 		step.State = domain.AppStepSucceeded
 		steps = append(steps, step)

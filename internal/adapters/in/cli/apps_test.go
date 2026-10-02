@@ -24,6 +24,7 @@ import (
 	"github.com/bnema/gordon/internal/adapters/dto"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // appPlane returns the generated control plane mock for one test.
@@ -277,8 +278,9 @@ func TestRenderAppDeployResponse_SortedServices(t *testing.T) {
 	resp := &dto.AppDeployResponse{
 		Op: "op-1", App: "blog", Outcome: "partial",
 		Services: map[string]dto.AppServiceResultDTO{
-			"web": {Result: "deployed", EffectiveRevision: "rev-b"},
-			"db":  {Result: "failed", EffectiveRevision: "rev-a", Error: "nope", RestartUnsafe: true},
+			"web":    {Result: "deployed", EffectiveRevision: "rev-b"},
+			"db":     {Result: "failed", EffectiveRevision: "rev-a", Error: "nope", RestartUnsafe: true},
+			"runner": {Result: domain.AppServiceRemoved},
 		},
 		CleanupWarnings: []dto.AppCleanupWarningDTO{{Service: "web", Leftover: "ctr-old", Detail: "retire failed"}},
 		Effective:       &dto.AppEffectiveDTO{Services: map[string]string{"web": "rev-b", "db": "rev-a"}},
@@ -289,6 +291,7 @@ func TestRenderAppDeployResponse_SortedServices(t *testing.T) {
 	text := out.String()
 	assert.Less(t, strings.Index(text, "db:"), strings.Index(text, "web:"))
 	assert.Contains(t, text, "restart_unsafe")
+	assert.Contains(t, text, "runner: removed\n")
 	assert.Contains(t, text, "cleanup:")
 	assert.Contains(t, text, "blog-db")
 }

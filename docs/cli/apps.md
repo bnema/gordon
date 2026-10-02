@@ -272,6 +272,8 @@ new image behind the same tag (for example `latest`) has a new digest and is
 deployed. A service already running with all of these unchanged keeps its
 container and is reported `unchanged`. Services with host binds or devices
 are always replaced, so bind and device policy changes apply on deploy.
+A service the revision no longer declares is retired during deploy and
+reported `removed`; its volumes and secrets are retained.
 
 Fail-fast across services:
 the first failure stops the deploy, successful services are preserved,
@@ -331,7 +333,8 @@ gordon apps remove APP [--json]
 
 Withdraws workloads. Volumes and secrets are retained as owned orphans
 under the old internal UUID; removing frees the name but never implicitly
-attaches retained resources to a new app reusing the name.
+attaches retained resources to a new app reusing the name. Each withdrawn
+service is reported `removed`.
 
 There is deliberately no `purge`: destructive volume deletion requires a
 separately accepted destructive-action contract.

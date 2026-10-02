@@ -225,6 +225,7 @@ func TestRemove_InhibitsBeforeRuntimeWithdrawal(t *testing.T) {
 	result, err := svc.Remove(ctx, "blog", "")
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	assert.Equal(t, domain.AppServiceRemoved, result.Services["web"].Result)
 	assert.Equal(t, []string{"intent-stopped", "inhibited", "stopped", "removed", "retired"}, order)
 	runtime.AssertNotCalled(t, "RemoveVolume", mock.Anything, mock.Anything, mock.Anything)
 }

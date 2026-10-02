@@ -602,11 +602,14 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		if !ok {
 			continue
 		}
-		service, _, _ = strings.Cut(service, ".")
+		service, action, _ := strings.Cut(service, ".")
 		entry := resp.Services[service]
 		switch step.State {
 		case domain.AppStepSucceeded:
 			entry.Result = "deployed"
+			if action == "remove" {
+				entry.Result = domain.AppServiceRemoved
+			}
 			if strings.HasPrefix(step.Detail, domain.AppServiceUnchanged+":") {
 				entry.Result = domain.AppServiceUnchanged
 			}
@@ -618,7 +621,9 @@ func toAppDeployResponse(app string, op *domain.AppOperation, includeDiagnostics
 		}
 		entry.Before = step.Before
 		entry.After = step.After
-		if entry.EffectiveRevision == "" {
+		// A removed service has no effective revision: the input revision
+		// no longer declares it.
+		if entry.EffectiveRevision == "" && entry.Result != domain.AppServiceRemoved {
 			entry.EffectiveRevision = op.InputRevision
 		}
 		resp.Services[service] = entry

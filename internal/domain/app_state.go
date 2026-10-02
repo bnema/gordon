@@ -35,6 +35,10 @@ const (
 // A succeeded step whose Detail starts with it reports this result.
 const AppServiceUnchanged = "unchanged"
 
+// AppServiceRemoved is the result of a step that retired a service and its
+// container. A succeeded "service.<name>.remove" step reports this result.
+const AppServiceRemoved = "removed"
+
 // App operation outcomes over terminal per-service results.
 const (
 	AppOutcomeSuccess = "success"

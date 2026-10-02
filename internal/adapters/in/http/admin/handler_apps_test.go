@@ -128,6 +128,7 @@ func TestHandler_AppDeploy_MapsOp(t *testing.T) {
 		Steps: []domain.AppOperationStep{
 			{ID: "preflight", State: domain.AppStepSucceeded},
 			{ID: "service.web.replace", State: domain.AppStepSucceeded, Before: "c-old", After: "c-new"},
+			{ID: "service.runner.remove", State: domain.AppStepSucceeded, Before: "c-runner"},
 		},
 	}
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(op, nil).Once()
@@ -147,6 +148,9 @@ func TestHandler_AppDeploy_MapsOp(t *testing.T) {
 	require.Contains(t, resp.Services, "web")
 	assert.Equal(t, "deployed", resp.Services["web"].Result)
 	assert.Equal(t, "c-new", resp.Services["web"].After)
+	require.Contains(t, resp.Services, "runner")
+	assert.Equal(t, domain.AppServiceRemoved, resp.Services["runner"].Result)
+	assert.Empty(t, resp.Services["runner"].EffectiveRevision, "a removed service has no effective revision")
 	// Effective and retained state comes from the app read model, never
 	// from the journal outcome.
 	require.NotNil(t, resp.Effective)

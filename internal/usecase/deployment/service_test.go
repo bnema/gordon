@@ -63,6 +63,9 @@ func preflightService(
 func TestComputeOutcome_TerminalResults(t *testing.T) {
 	deployed := deployment.ServiceResult{Result: "deployed"}
 	failed := deployment.ServiceResult{Result: "failed", Error: "boom"}
+	removed := deployment.ServiceResult{Result: domain.AppServiceRemoved}
+	assert.Equal(t, "success", deployment.ComputeOutcome(map[string]deployment.ServiceResult{"a": removed}))
+	assert.Equal(t, "partial", deployment.ComputeOutcome(map[string]deployment.ServiceResult{"a": removed, "b": failed}))
 	assert.Equal(t, "success", deployment.ComputeOutcome(map[string]deployment.ServiceResult{"a": deployed}))
 	assert.Equal(t, "failed", deployment.ComputeOutcome(map[string]deployment.ServiceResult{"a": failed}))
 	assert.Equal(t, "partial", deployment.ComputeOutcome(map[string]deployment.ServiceResult{"a": deployed, "b": failed}))

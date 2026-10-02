@@ -936,7 +936,7 @@ func ComputeOutcome(results map[string]ServiceResult) string {
 	failed := 0
 	for _, result := range results {
 		switch result.Result {
-		case "deployed", ServiceResultUnchanged:
+		case "deployed", ServiceResultUnchanged, domain.AppServiceRemoved:
 			deployed++
 		case "failed":
 			failed++

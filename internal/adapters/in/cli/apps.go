@@ -1000,7 +1000,7 @@ func renderDeployServices(out io.Writer, resp *dto.AppDeployResponse) error {
 	sort.Strings(names)
 	for _, name := range names {
 		svc := resp.Services[name]
-		detail := svc.Result + " " + svc.EffectiveRevision
+		detail := strings.TrimSpace(svc.Result + " " + svc.EffectiveRevision)
 		if svc.Result == domain.AppServiceUnchanged {
 			detail += " (already running this image, config, and secrets)"
 		}
