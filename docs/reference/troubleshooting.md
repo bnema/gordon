@@ -178,7 +178,7 @@ gordon apps deploy app
 
 **Solutions:**
 
-1. Declare public values under `[env]` and service values under `[services.<name>.secrets]` in the app file, then apply it:
+1. Declare app-wide public values under `[env]`, per-service public values under `[services.<name>.env]`, and sensitive values under `[services.<name>.secrets]` in the app file, then apply it:
    ```bash
    gordon apps apply --file ./blog.toml
    ```

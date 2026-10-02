@@ -2,7 +2,7 @@
 
 Application workloads are declared in standalone TOML files — one file per app — not in `gordon.toml`. Apply with `gordon apps apply --file <app>.toml`, activate with `gordon apps deploy <app>`.
 
-The file is intended for Git: it must never contain secret values. Service-specific values use `secrets` even when non-confidential; values stay in pass.
+The file is intended for Git: it must never contain secret values. Confidential values use `secrets`, whose values stay in pass; public values use `[env]` or `[services.<name>.env]`.
 
 ## Minimal Example
 
@@ -47,6 +47,9 @@ tls = "auto"                     # auto | always | never
 [[services.web.http]]            # optional private interface
 visibility = "internal"          # public (default) | internal
 port = 8080                      # required; no host or tls
+
+[services.web.env]               # optional, non-secret env for this service only
+LOG_LEVEL = "debug"              # overrides an app-wide [env] key of the same name
 
 [services.web.secrets]           # ENV name -> secret name (values in pass)
 DATABASE_URL = "database-url"
@@ -108,8 +111,8 @@ Image registry names and digest syntax are validated during manifest apply, reso
 ## Environment and Secrets
 
 - `[env]` is app-wide public env injected into all services. Each key must be disjoint from every `[services.<name>.secrets]` key in the app.
+- `[services.<name>.env]` is public env for that service only. A key here overrides the same key in `[env]` for this service. Each key must be disjoint from the same service's `[services.<name>.secrets]` keys. Values follow the `[env]` rules: no newlines, 1 byte to 64 KiB, no secret references. Values are stored in revisions and shown in plain text, so use secrets for anything sensitive. A change shows as `service/<name>/env` in diffs and applies on the next deploy.
 - `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Running containers keep the values they were created with; `gordon apps deploy` applies new values. `restart` does not.
-- There is no `[services.<name>.env]` key — service-specific values must use secrets.
 
 ## Volumes and Databases
 
@@ -179,7 +182,7 @@ Changing either setting is a service change: it applies on the next deploy.
 
 ## Strictness
 
-Unknown fields, duplicate service names, unresolved service/entrypoint/backup refs, secret/env collisions, unsafe identities, and forbidden mounts are hard errors at apply time. Canonical host conflicts (including system domains and external routes) fail before persistence.
+Unknown fields, duplicate service names, unresolved service/entrypoint/backup refs, secret/env collisions (app-wide or per-service), unsafe identities, and forbidden mounts are hard errors at apply time. Canonical host conflicts (including system domains and external routes) fail before persistence.
 
 The keyed `[services.<name>]` form is the only accepted app schema: manifests written for an earlier v3 alpha using `[[service]]` with a `name` key and `[service.*]` tables are rejected with a keyed-schema diagnostic, not converted. See [Migrating a v3 alpha app manifest](../upgrading.md#migrating-a-v3-alpha-app-manifest).
 

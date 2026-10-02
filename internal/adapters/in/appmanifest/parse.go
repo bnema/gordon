@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -321,6 +320,7 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 			Publish:    u.Publish,
 		})
 	}
+	svc.Env = maps.Clone(raw.Env)
 	for key, value := range raw.Secrets {
 		svc.Secrets[key] = value
 	}
@@ -348,9 +348,6 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 			Schedule: db.Schedule,
 		})
 	}
-	if len(raw.Env) > 0 {
-		return domain.AppService{}, fmt.Errorf("%w: service %q [services.%s.env] is not allowed, use secrets", domain.ErrInvalidAppSpec, serviceName, tomlKey(serviceName))
-	}
 	return svc, nil
 }
 
@@ -374,30 +371,6 @@ func toDomainReadiness(service string, raw rawReadiness) (domain.AppReadiness, e
 		readiness.Timeout = parsed
 	}
 	return readiness, nil
-}
-
-// tomlKey renders a service name as a TOML key, quoting it when it is
-// not a bare key (service names may contain dots, e.g. web.api).
-func tomlKey(name string) string {
-	if isBareTOMLKey(name) {
-		return name
-	}
-	return strconv.Quote(name)
-}
-
-// isBareTOMLKey reports whether name is a TOML bare key (A-Za-z0-9_-).
-func isBareTOMLKey(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // normalizeImage records a missing tag as explicit :latest.

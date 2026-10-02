@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -267,16 +268,16 @@ func shortOp(opID string) string {
 }
 
 // serviceEnv resolves the service environment: the captured revision's
-// app-wide public env on every service, plus that service's own secret
+// app-wide public env on every service, overlaid by that service's own
+// public env (the service value wins for the same key), plus its secret
 // values (memory only, UUID-keyed paths). Keys are emitted sorted and
 // deterministic. Overlapping public/secret keys are invalid with no
 // precedence; preflight rejects them before any mutation.
 func (s *Service) serviceEnv(ctx context.Context, app string, p pinnedService) ([]string, error) {
 	spec := p.spec
-	envMap := make(map[string]string, len(p.appEnv)+len(spec.Secrets))
-	for key, value := range p.appEnv {
-		envMap[key] = value
-	}
+	envMap := make(map[string]string, len(p.appEnv)+len(spec.Env)+len(spec.Secrets))
+	maps.Copy(envMap, p.appEnv)
+	maps.Copy(envMap, spec.Env)
 	keys := make([]string, 0, len(spec.Secrets))
 	for envKey := range spec.Secrets {
 		keys = append(keys, envKey)

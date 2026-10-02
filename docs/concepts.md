@@ -55,6 +55,9 @@ image = "gordon.mydomain.com/blog:1.4.2"
 host = "blog.mydomain.com"
 port = 3000
 
+[services.web.env]            # public env for this service only
+LOG_LEVEL = "info"
+
 [services.web.secrets]        # ENV name -> secret name (values stay in pass)
 DATABASE_URL = "database-url"
 ```
@@ -63,7 +66,7 @@ DATABASE_URL = "database-url"
 - `deploy APP` activates it. `apply --deploy` chains both using exactly the revision accepted by apply.
 - `--dry-run` validates and previews without persistence or runtime effects.
 - Version tags are recommended, not constrained to SemVer. `latest` remains valid; explicit deploy re-resolves mutable tags while restart uses the active pinned content.
-- The file is intended for Git: it must never contain secret values. Service-specific values use `secrets` even when non-confidential.
+- The file is intended for Git: it must never contain secret values. Confidential values use `secrets`; public values use `[env]` or `[services.<name>.env]`.
 - Staging is an ordinary app in another TOML file. There is no pin, no preview environments, and no historical rollback command.
 
 ## Updates
@@ -150,9 +153,12 @@ App-wide public env is declared in the manifest:
 APP_ENV = "production"
 ```
 
-Service-specific values use `secrets` even when non-confidential:
+Public values for one service use `[services.<name>.env]` and override `[env]` keys for that service. Confidential values use `secrets`:
 
 ```toml
+[services.web.env]
+LOG_LEVEL = "info"
+
 [services.web.secrets]
 DATABASE_URL = "database-url"
 ```

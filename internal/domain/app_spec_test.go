@@ -42,6 +42,13 @@ func TestAppSpec_ValidateErrors(t *testing.T) {
 		{"no services", func(s *domain.AppSpec) { s.Services = nil }, "at least one service"},
 		{"no image", func(s *domain.AppSpec) { s.Services[0].Image = "" }, "requires an image"},
 		{"env newline", func(s *domain.AppSpec) { s.Env["X"] = "a\nb" }, "newlines"},
+		{"service env newline", func(s *domain.AppSpec) { s.Services[0].Env = map[string]string{"X": "a\nb"} }, "newlines"},
+		{"service env secret ref", func(s *domain.AppSpec) { s.Services[0].Env = map[string]string{"X": "${sops:y}"} }, "secret references"},
+		{"service env empty value", func(s *domain.AppSpec) { s.Services[0].Env = map[string]string{"X": ""} }, "1-"},
+		{"service env bad key", func(s *domain.AppSpec) { s.Services[0].Env = map[string]string{"1bad": "v"} }, "env key"},
+		{"service env secret collision", func(s *domain.AppSpec) {
+			s.Services[0].Env = map[string]string{"DATABASE_URL": "x"}
+		}, "collides with a secret key"},
 		{"env secret ref", func(s *domain.AppSpec) { s.Env["X"] = "${sops:y}" }, "secret references"},
 		{"http bad tls", func(s *domain.AppSpec) { s.Services[0].HTTP[0].TLS = "sometimes" }, "auto|always|never"},
 		{"http readiness authority", func(s *domain.AppSpec) { s.Services[0].Readiness.Path = "@127.0.0.1:9000/private" }, "origin-form path"},
@@ -176,4 +183,26 @@ func TestDiffAppSpec_NetworkDetailsAndOrderNormalization(t *testing.T) {
 
 func TestDiffAppSpec_ErrorsWrapped(t *testing.T) {
 	assert.True(t, errors.Is(domain.AppSpec{}.Validate(), domain.ErrInvalidAppSpec))
+}
+
+func TestAppSpec_ServiceEnvOverridesAppEnvAllowed(t *testing.T) {
+	spec := validSpec()
+	spec.Services[0].Env = map[string]string{"APP_ENV": "staging"}
+	require.NoError(t, spec.Validate())
+}
+
+func TestDiffAppSpec_ServiceEnv(t *testing.T) {
+	base := validSpec()
+	changed := validSpec()
+	changed.Services[0].Env = map[string]string{"LOG": "debug"}
+
+	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(changed, base).Changed)
+	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(base, changed).Changed)
+	assert.Empty(t, domain.DiffAppSpec(changed, changed).Changed)
+	assert.False(t, domain.SameAppService(changed.Services[0], base.Services[0]))
+
+	changed.Services[0].Env["LOG"] = "info"
+	other := validSpec()
+	other.Services[0].Env = map[string]string{"LOG": "debug"}
+	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(changed, other).Changed)
 }

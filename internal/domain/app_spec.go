@@ -102,9 +102,12 @@ type AppService struct {
 	HTTP      []AppHTTPInterface
 	TCP       []AppTCPInterface
 	UDP       []AppUDPInterface
-	Secrets   map[string]string
-	Volumes   []AppVolume
-	Binds     []AppBind
+	// Env is non-secret per-service environment. It overrides app-wide
+	// [env] for the same key; its keys must be disjoint from Secrets.
+	Env     map[string]string
+	Secrets map[string]string
+	Volumes []AppVolume
+	Binds   []AppBind
 	// Devices lists logical device names granted by administrative
 	// [app_devices] policy. Names resolve to CDI device IDs at activation
 	// time; the logical names (not host resolution) persist in revisions.
@@ -407,7 +410,8 @@ func (s AppSpec) Validate() error {
 	return s.validateFull()
 }
 
-// CheckEnvSecretCollisions re-validates [env]/secret key disjointness on a
+// CheckEnvSecretCollisions re-validates [env] and [services.<name>.env]
+// key disjointness from secrets on a
 // stored spec. Deployment preflight calls it defensively before any
 // workload mutation; overlapping keys are invalid with no precedence.
 func (s AppSpec) CheckEnvSecretCollisions() error {
@@ -444,18 +448,25 @@ func (s AppSpec) validateFull() error {
 
 // validateEnv checks app-wide public environment values.
 func (s AppSpec) validateEnv() error {
-	for key, value := range s.Env {
+	return validatePublicEnv("", s.Env)
+}
+
+// validatePublicEnv checks non-secret environment values. scope prefixes
+// error messages ("" for app-wide env, a service label otherwise). Shared
+// by app-wide [env] and [services.<name>.env].
+func validatePublicEnv(scope string, env map[string]string) error {
+	for key, value := range env {
 		if err := ValidateEnvKey(key); err != nil {
-			return fmt.Errorf("%w: env key %q: %v", ErrInvalidAppSpec, key, err)
+			return fmt.Errorf("%w: %senv key %q: %v", ErrInvalidAppSpec, scope, key, err)
 		}
 		if strings.Contains(value, "\n") {
-			return fmt.Errorf("%w: env value for %q must not contain newlines", ErrInvalidAppSpec, key)
+			return fmt.Errorf("%w: %senv value for %q must not contain newlines", ErrInvalidAppSpec, scope, key)
 		}
 		if len(value) == 0 || len(value) > MaxAppEnvValueLen {
-			return fmt.Errorf("%w: env value for %q must be 1-%d bytes", ErrInvalidAppSpec, key, MaxAppEnvValueLen)
+			return fmt.Errorf("%w: %senv value for %q must be 1-%d bytes", ErrInvalidAppSpec, scope, key, MaxAppEnvValueLen)
 		}
 		if ContainsSecretReference(value) {
-			return fmt.Errorf("%w: env value for %q must not contain secret references", ErrInvalidAppSpec, key)
+			return fmt.Errorf("%w: %senv value for %q must not contain secret references", ErrInvalidAppSpec, scope, key)
 		}
 	}
 	return nil
@@ -486,12 +497,16 @@ func (s AppSpec) validateServices() error {
 	return nil
 }
 
-// checkEnvSecretKeyDisjoint enforces [env] keys disjoint from secret map keys.
+// checkEnvSecretKeyDisjoint enforces [env] and [services.<name>.env] keys
+// disjoint from the secret map keys of the services they reach.
 func checkEnvSecretKeyDisjoint(s AppSpec) error {
-	for key := range s.Env {
-		for _, svc := range s.Services {
-			if _, ok := svc.Secrets[key]; ok {
+	for _, svc := range s.Services {
+		for key := range svc.Secrets {
+			if _, ok := s.Env[key]; ok {
 				return fmt.Errorf("%w: env key %q collides with a secret key in service %q", ErrInvalidAppSpec, key, svc.Name)
+			}
+			if _, ok := svc.Env[key]; ok {
+				return fmt.Errorf("%w: service %q env key %q collides with a secret key", ErrInvalidAppSpec, svc.Name, key)
 			}
 		}
 	}
@@ -524,6 +539,9 @@ func (s *AppService) validate() error {
 		return err
 	}
 	if err := s.validateInterfaces(); err != nil {
+		return err
+	}
+	if err := validatePublicEnv(fmt.Sprintf("service %q ", s.Name), s.Env); err != nil {
 		return err
 	}
 	if err := s.validateSecrets(); err != nil {
@@ -1064,6 +1082,9 @@ func diffService(name string, desired, effective AppService) []string {
 		changed = append(changed, "service/"+name+"/interfaces")
 	} else if interfacesChanged(desired, effective) {
 		changed = append(changed, "service/"+name+"/interfaces")
+	}
+	if !equalStringMaps(desired.Env, effective.Env) {
+		changed = append(changed, "service/"+name+"/env")
 	}
 	if !equalStringMaps(desired.Secrets, effective.Secrets) {
 		for path := range secretPathChanges(desired, effective) {

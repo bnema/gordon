@@ -302,21 +302,38 @@ image = "img:3"
 	}
 }
 
-func TestParse_ServiceEnvRejected(t *testing.T) {
+func TestParse_ServiceEnv(t *testing.T) {
+	doc := "name = \"blog\"\n[env]\nLOG = \"info\"\n[services.web]\nimage = \"img:1\"\n" +
+		"[services.web.env]\nLOG = \"debug\"\nPORT = \"3000\"\n[services.web.secrets]\nDB = \"db\"\n" +
+		"[services.worker]\nimage = \"img:1\"\n"
+	spec, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+	require.NoError(t, err)
+	require.Len(t, spec.Services, 2)
+	assert.Equal(t, map[string]string{"LOG": "info"}, spec.Env)
+	assert.Equal(t, map[string]string{"LOG": "debug", "PORT": "3000"}, spec.Services[0].Env)
+	assert.Empty(t, spec.Services[1].Env)
+}
+
+func TestParse_ServiceEnvInvalid(t *testing.T) {
 	cases := []struct {
 		name    string
 		doc     string
 		wantErr string
 	}{
 		{
-			"bare service name",
-			"name = \"blog\"\n[services.web]\nimage = \"img:1\"\n[services.web.env]\nFOO = \"bar\"\n",
-			"[services.web.env]",
+			"secret reference",
+			"name = \"blog\"\n[services.web]\nimage = \"img:1\"\n[services.web.env]\nFOO = \"${pass:x}\"\n",
+			"secret references",
 		},
 		{
-			"dotted service name is quoted",
-			"name = \"blog\"\n[services.\"web.api\"]\nimage = \"img:1\"\n[services.\"web.api\".env]\nFOO = \"bar\"\n",
-			`[services."web.api".env]`,
+			"secret key collision",
+			"name = \"blog\"\n[services.web]\nimage = \"img:1\"\n[services.web.env]\nDB = \"x\"\n[services.web.secrets]\nDB = \"db\"\n",
+			"collides with a secret key",
+		},
+		{
+			"newline",
+			"name = \"blog\"\n[services.web]\nimage = \"img:1\"\n[services.web.env]\nFOO = \"a\\nb\"\n",
+			"newlines",
 		},
 	}
 	for _, tc := range cases {
