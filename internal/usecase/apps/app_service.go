@@ -655,14 +655,14 @@ func (s *AppServiceImpl) SetSecrets(ctx context.Context, app, service string, va
 	if service == "" {
 		return fmt.Errorf("apps: service is required: %w", domain.ErrInvalidAppSpec)
 	}
-	registered, err := s.secretNames(ctx, app, service)
+	registered, err := s.secretNames(ctx, app, service, "; run `gordon apps apply` first")
 	if err != nil {
 		return err
 	}
 	for key, value := range values {
 		name, ok := registered[key]
 		if !ok {
-			return fmt.Errorf("apps: secret %q not registered for %s/%s: %w", key, app, service, domain.ErrAppSecretMissing)
+			return fmt.Errorf("apps: secret %q is not declared for service %q of app %q; add it under [services.%s.secrets] in the manifest and run `gordon apps apply`: %w", key, service, app, service, domain.ErrAppSecretMissing)
 		}
 		path, err := s.secretPath(ctx, app, service, name)
 		if err != nil {
@@ -680,13 +680,13 @@ func (s *AppServiceImpl) DeleteSecret(ctx context.Context, app, service, key str
 	if service == "" || key == "" {
 		return fmt.Errorf("apps: service and key are required: %w", domain.ErrInvalidAppSpec)
 	}
-	registered, err := s.secretNames(ctx, app, service)
+	registered, err := s.secretNames(ctx, app, service, "")
 	if err != nil {
 		return err
 	}
 	name, ok := registered[key]
 	if !ok {
-		return fmt.Errorf("apps: secret %q not registered for %s/%s: %w", key, app, service, domain.ErrAppSecretMissing)
+		return fmt.Errorf("apps: secret %q is not declared for service %q of app %q: %w", key, service, app, domain.ErrAppSecretMissing)
 	}
 	// Refused while the name is still referenced by desired or active.
 	if referenced, err := s.secretReferenced(ctx, app, service, name); err != nil {
@@ -711,37 +711,45 @@ func (s *AppServiceImpl) secretPath(ctx context.Context, app, service, name stri
 	return domain.AppSecretPathForID(ownership.ID, app, service, name), nil
 }
 
-// secretNames returns env-key → secret-name registrations.
-func (s *AppServiceImpl) secretNames(ctx context.Context, app, service string) (map[string]string, error) {
+// secretNames returns env-key → secret-name registrations. An app with no
+// applied state, or a service absent from it, fails; hint is appended to
+// that message so each caller can suggest its own next step.
+func (s *AppServiceImpl) secretNames(ctx context.Context, app, service, hint string) (map[string]string, error) {
 	merged := map[string]string{}
-	desired, ok, err := s.store.LoadDesired(ctx, app)
+	found := false
+	desired, hasDesired, err := s.store.LoadDesired(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	if ok {
+	if hasDesired {
 		for _, svc := range desired.Spec.Services {
 			if svc.Name == service {
+				found = true
 				for envKey, name := range svc.Secrets {
 					merged[envKey] = name
 				}
 			}
 		}
 	}
-	active, ok, err := s.store.LoadActive(ctx, app)
+	active, hasActive, err := s.store.LoadActive(ctx, app)
 	if err != nil {
 		return nil, err
 	}
-	if ok {
+	if hasActive {
 		for name, svc := range active.Services {
 			if name == service {
+				found = true
 				for envKey, secretName := range svc.Spec.Secrets {
 					merged[envKey] = secretName
 				}
 			}
 		}
 	}
-	if len(merged) == 0 {
-		return nil, fmt.Errorf("apps: service %q has no registered secrets: %w", service, domain.ErrAppSecretMissing)
+	if !hasDesired && !hasActive {
+		return nil, fmt.Errorf("apps: app %q has no applied manifest%s: %w", app, hint, domain.ErrAppSecretMissing)
+	}
+	if !found {
+		return nil, fmt.Errorf("apps: service %q is not in the applied manifest of app %q%s: %w", service, app, hint, domain.ErrAppSecretMissing)
 	}
 	return merged, nil
 }

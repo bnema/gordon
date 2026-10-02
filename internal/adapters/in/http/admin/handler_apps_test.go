@@ -441,6 +441,19 @@ func TestHandler_AppSecretsSet_Forwards(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestHandler_AppSecretsSet_MissingRegistrationHasNoDeployHint(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	appSvc.EXPECT().SetSecrets(mock.Anything, "blog", "runner", map[string]string{"K": "v"}).
+		Return(fmt.Errorf("apps: service not applied: %w", domain.ErrAppSecretMissing)).Once()
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/secrets/set",
+		dto.AppSecretSetRequest{Service: "runner", Secrets: map[string]string{"K": "v"}}, "admin:apps:write")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "secret-missing")
+	assert.NotContains(t, rec.Body.String(), "redeploy")
+}
+
 // TestHandler_AppLifecycle_UnknownAppIsNotFound proves a lifecycle
 // mutation of a name with no app identity is a 404, not a 500 or a silent
 // success.

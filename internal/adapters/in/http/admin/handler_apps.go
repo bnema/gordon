@@ -468,7 +468,7 @@ func (h *Handler) handleAppSecretsSet(w http.ResponseWriter, r *http.Request, ap
 		return
 	}
 	if err := svc.SetSecrets(ctx, app, req.Service, req.Secrets); err != nil {
-		h.sendAppOpError(w, err)
+		h.sendAppSecretWriteError(w, err)
 		return
 	}
 	h.sendJSON(w, http.StatusOK, map[string]string{"status": "updated"})
@@ -492,10 +492,21 @@ func (h *Handler) handleAppSecretsDelete(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if err := svc.DeleteSecret(ctx, app, req.Service, req.Key); err != nil {
-		h.sendAppOpError(w, err)
+		h.sendAppSecretWriteError(w, err)
 		return
 	}
 	h.sendJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// sendAppSecretWriteError maps secret set/delete errors. A missing
+// registration is not fixed by setting the secret, so the deploy-oriented
+// hint of sendAppOpError is omitted; the message carries the next step.
+func (h *Handler) sendAppSecretWriteError(w http.ResponseWriter, err error) {
+	if errors.Is(err, domain.ErrAppSecretMissing) {
+		h.sendAppError(w, http.StatusBadRequest, "secret-missing", err.Error(), "", "")
+		return
+	}
+	h.sendAppOpError(w, err)
 }
 
 // sendAppError writes the v3 error envelope (never carries logs).

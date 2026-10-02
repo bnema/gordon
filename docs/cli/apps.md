@@ -211,6 +211,9 @@ Reads values in one of three ways:
 `--key` requires `--stdin` and cannot be combined with `KEY=VALUE` arguments.
 An empty value is rejected, so `KEY=` is invalid.
 
+The service and its secret keys must be declared in the manifest and applied
+first: `gordon apps apply` → `gordon apps secrets set` → `gordon apps deploy`.
+
 Running containers keep the values they were created with. Apply new values
 with `gordon apps deploy APP --service SVC`: deploy sees the changed secret and
 recreates the service. `restart` does not apply new values.

@@ -69,6 +69,69 @@ func TestAppServiceImpl_SecretsRoundTrip(t *testing.T) {
 	require.ErrorIs(t, svc.SetSecrets(ctx, "blog", "web", map[string]string{"NOPE": "v"}), domain.ErrAppSecretMissing)
 }
 
+func TestAppServiceImpl_SetSecrets_UnappliedServiceHint(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	// App never applied: neither desired nor active exists.
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
+	err := svc.SetSecrets(ctx, "blog", "runner", map[string]string{"K": "v"})
+	require.ErrorIs(t, err, domain.ErrAppSecretMissing)
+	assert.Contains(t, err.Error(), `app "blog" has no applied manifest; run `+"`gordon apps apply`"+` first`)
+
+	// App applied, but this service is not in the applied spec.
+	desired := domain.AppDesiredRevision{App: "blog", Revision: "rev-1", Spec: secretSpec()}
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(desired, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
+	err = svc.SetSecrets(ctx, "blog", "runner", map[string]string{"K": "v"})
+	require.ErrorIs(t, err, domain.ErrAppSecretMissing)
+	assert.Contains(t, err.Error(), `service "runner" is not in the applied manifest of app "blog"; run `+"`gordon apps apply`"+` first`)
+}
+
+func TestAppServiceImpl_DeleteSecret_NoApplyHint(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	// Deleting never suggests applying or re-declaring the secret.
+	desired := domain.AppDesiredRevision{App: "blog", Revision: "rev-1", Spec: secretSpec()}
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(desired, true, nil).Twice()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Twice()
+	for _, tc := range []struct{ service, key string }{{"runner", "K"}, {"web", "NOPE"}} {
+		err := svc.DeleteSecret(ctx, "blog", tc.service, tc.key)
+		require.ErrorIs(t, err, domain.ErrAppSecretMissing)
+		assert.NotContains(t, err.Error(), "apply")
+	}
+}
+
+func TestAppServiceImpl_SetSecrets_UndeclaredSecretHint(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+
+	// Service applied but declares no secrets.
+	spec := secretSpec()
+	spec.Services[0].Secrets = nil
+	noSecrets := domain.AppDesiredRevision{App: "blog", Revision: "rev-1", Spec: spec}
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(noSecrets, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
+	err := svc.SetSecrets(ctx, "blog", "web", map[string]string{"K": "v"})
+	require.ErrorIs(t, err, domain.ErrAppSecretMissing)
+	assert.Contains(t, err.Error(), "[services.web.secrets]")
+	assert.NotContains(t, err.Error(), "not in the applied manifest")
+
+	// Service declares other secrets but not this key.
+	desired := domain.AppDesiredRevision{App: "blog", Revision: "rev-1", Spec: secretSpec()}
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(desired, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
+	err = svc.SetSecrets(ctx, "blog", "web", map[string]string{"NOPE": "v"})
+	require.ErrorIs(t, err, domain.ErrAppSecretMissing)
+	assert.Contains(t, err.Error(), `secret "NOPE" is not declared`)
+	assert.Contains(t, err.Error(), "[services.web.secrets]")
+}
+
 func TestAppServiceImpl_OperationByKey(t *testing.T) {
 	ctx := context.Background()
 	store := newMockAppState(t)
