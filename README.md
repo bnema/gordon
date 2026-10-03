@@ -25,16 +25,13 @@ curl -fsSL https://bnema.dev/gordon/install | sh
 # Start the server (restart your shell first if the installer updated PATH)
 gordon serve
 ```
-
-The installer uses `~/.local/bin` without `sudo` and can add the effective install directory to Fish, Bash, or Zsh PATH configuration. Set `GORDON_UPDATE_PATH=1` to update PATH without prompting or `GORDON_UPDATE_PATH=0` to leave configuration unchanged. Override the destination with an absolute path such as `GORDON_INSTALL_DIR="$HOME/bin"`, `GORDON_INSTALL_DIR="$HOME/.local/bin"`, or `GORDON_INSTALL_DIR=/usr/local/bin`.
-
-To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://bnema.dev/gordon/docs/installation#choosing-an-install-channel).
+See the [installation guide](https://bnema.dev/gordon/docs/installation#choosing-an-install-channel) for more.
 
 Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://bnema.dev/gordon/docs/getting-started) for full setup.
 
 ## Deploy with the CLI
 
-Build locally, push to your Gordon server, declare the app, deploy:
+Example of the flow :
 
 ```bash
 # Push the image (OCI transfer only, never deploys)
