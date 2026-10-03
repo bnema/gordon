@@ -12,9 +12,9 @@ Self-hosted container deployment. Push an image, declare an app, deploy it.
 
 ## What is Gordon?
 
-Gordon is a private container registry, an app runtime, and a reverse proxy for your VPS.
+Gordon is a private image container registry, an app runtime, and a reverse proxy for your VPS.
 
-The flow is explicit: build and push an image, declare the app in a standalone TOML file, apply it, then deploy. Push transfers OCI content only — it never deploys.
+The flow is explicit: you build an image locally, push it to your registry then declare the app in a standalone TOML file, apply it, deploy and it's live.
 
 ## Quick Start
 
