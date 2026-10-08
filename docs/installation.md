@@ -266,6 +266,8 @@ sudo loginctl enable-linger $USER
 systemctl --user status gordon
 ```
 
+See [Hardened systemd user unit](./config/security-hardening.md#hardened-systemd-user-unit) for the recommended sandboxing directives.
+
 ### System Service (Root Mode)
 
 ```bash

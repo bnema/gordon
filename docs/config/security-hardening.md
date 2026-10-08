@@ -172,9 +172,79 @@ security_profile = "compat" # or "strict"
 
 Use `strict` for images designed to write only to mounted volumes and run without extra Linux capabilities.
 
+## Runtime guard
+
+Every app container config passes a final guard right before the runtime creates the container. A refused config creates no container and fails with error code `runtime-guard-violation` (HTTP 400). The guard refuses:
+
+- network mode `host`, `container:<id>`, or `ns:<path>`;
+- a volume name containing `/` or `\`, which the runtime would read as a host path;
+- a bind whose host source is equal to, under, or a parent of a protected path, compared both as written and after resolving symlinks.
+
+Protected paths:
+
+- the data directory and the loaded config file;
+- runtime sockets: `/var/run/docker.sock`, `/run/docker.sock`, `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/docker.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, the `unix://` path of `DOCKER_HOST`, and the `server.runtime` socket;
+- Gordon runtime credentials: `$XDG_RUNTIME_DIR/gordon` and `~/.gordon/run`;
+- key stores: `$GNUPGHOME`, `~/.gnupg`, `$PASSWORD_STORE_DIR`, `~/.password-store`, `$SOPS_AGE_KEY_FILE`, and `${XDG_CONFIG_HOME:-~/.config}/sops/age`.
+
+The only exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy is reported at deploy preflight, before the running generation is replaced. Point the policy `source` outside every protected path.
+
+## Process memory protection
+
+On Linux, `gordon serve` marks itself non-dumpable (`PR_SET_DUMPABLE=0`) before loading any configuration or secret. Other processes of the same user can no longer read its `/proc/<pid>/environ`, `mem`, or file descriptors, attach with ptrace, or get a core dump. Startup fails if the flag cannot be set.
+
+This does not stop root, nor a process of the same user that can replace the Gordon binary or its systemd unit.
+
+## Hardened systemd user unit
+
+Add these directives to the `[Service]` section of the [user unit](../installation.md#user-service-recommended-for-rootless):
+
+```ini
+[Service]
+NoNewPrivileges=yes
+UMask=0077
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+```
+
+Apply and check:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart gordon
+systemctl --user status gordon
+systemd-analyze --user security gordon.service
+```
+
+## Credential scoping
+
+- **Cloudflare DNS-01 token**: grant only `Zone:Read` and `DNS:Edit`, limited to the zones Gordon serves. A leaked token can issue certificates for, and take over, every hostname in those zones. See [Server](./server.md).
+- **Registry push tokens**: issue one token per repository and pipeline instead of a global one:
+
+  ```bash
+  gordon auth token generate --subject ci-blog --scopes push --repo blog
+  ```
+
+## Protection boundary
+
+Gordon v3 protects against:
+
+- file-delivered secret values showing up in container env, `docker inspect`, or `/proc/1/environ`;
+- app configs that mount the runtime socket, Gordon data, config, credentials, or key stores, or that join the host or another container's namespaces;
+- same-user processes reading Gordon's memory or environment through `/proc`.
+
+Gordon v3 does not protect against:
+
+- a compromised Gordon process, proxy, or registry: they run as the same user that owns the runtime socket and `pass`;
+- a malicious image deployed for an app: it receives that app's secrets;
+- root on the host.
+
 ## Related
 
 - [Auth](./auth.md)
+- [Secrets](./secrets.md)
 - [Images](./images.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)
