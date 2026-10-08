@@ -102,11 +102,12 @@ func homePath(home string, elems ...string) string {
 }
 
 // configuredGordonPaths returns the config file, the runtime socket in use,
-// and every file or directory the config points Gordon at.
+// and every private file or directory the config points Gordon at. The
+// public TLS certificate is left out so its directory (often a shared CA
+// bundle) stays bindable.
 func configuredGordonPaths(si *serviceInit) []string {
 	cfg := si.cfg
 	paths := []string{
-		cfg.Server.TLSCertFile,
 		cfg.Server.TLSKeyFile,
 		resolveLogFilePath(cfg),
 		cfg.Logging.ContainerLogs.Dir,

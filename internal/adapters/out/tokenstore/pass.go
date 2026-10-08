@@ -14,8 +14,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/adapters/out/childenv"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/childenv"
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from pass output.

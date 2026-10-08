@@ -18,6 +18,7 @@ import (
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/childenv"
 )
 
 // appStateProvider resolves app services from the durable ACTIVE record.
@@ -35,7 +36,13 @@ type Service struct {
 	appState appStateProvider
 }
 
-var execCommandContext = exec.CommandContext
+// execCommandContext starts journalctl without Gordon's GORDON_* variables:
+// the child is dumpable again after exec, so it must not carry secrets.
+var execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass "journalctl" with internal args only
+	cmd.Env = childenv.Env()
+	return cmd
+}
 
 // NewService creates a new log service. App state is wired after the store opens.
 func NewService(

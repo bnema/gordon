@@ -13,8 +13,8 @@ import (
 
 	"github.com/bnema/zerowrap"
 
-	"github.com/bnema/gordon/internal/adapters/out/childenv"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/childenv"
 )
 
 // Store writes app secret values through the pass CLI.

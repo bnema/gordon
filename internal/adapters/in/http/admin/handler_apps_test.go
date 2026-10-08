@@ -682,24 +682,15 @@ func TestHandler_AppApply_MapsDevicePolicyViolation(t *testing.T) {
 	assert.Equal(t, "device-policy-violation", envelope.Error)
 }
 
-// TestHandler_AppDeploy_MapsRuntimeGuardPreflightReplay proves a terminal
-// replay whose preflight failed on the runtime guard maps to the stable
-// runtime-guard-violation envelope.
-func TestHandler_AppDeploy_MapsRuntimeGuardPreflightReplay(t *testing.T) {
-	appSvc := inmocks.NewMockAppService(t)
-	handler := appsTestHandler(t, appSvc)
+// TestSendAppOpError_MapsRuntimeGuard proves a runtime guard error returned
+// synchronously maps to the stable runtime-guard-violation envelope. Async
+// deploys report the guard in their operation journal instead.
+func TestSendAppOpError_MapsRuntimeGuard(t *testing.T) {
+	handler := appsTestHandler(t, inmocks.NewMockAppService(t))
+	rec := httptest.NewRecorder()
 
-	op := &domain.AppOperation{
-		Op: "op-g", Kind: "deploy", App: "blog", Outcome: domain.AppOutcomeFailed,
-		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepFailed, Error: "runtime guard violation"}},
-	}
-	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(
-		op,
-		fmt.Errorf("deployment: app %q service %q: %w: bind %q overlaps a protected Gordon path", "blog", "web", domain.ErrRuntimeGuard, "conf"),
-	).Once()
+	handler.sendAppOpError(rec, fmt.Errorf("deployment: app %q service %q: %w: bind %q overlaps a protected Gordon path", "blog", "web", domain.ErrRuntimeGuard, "conf"))
 
-	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
-		dto.AppDeployRequest{}, "admin:apps:write")
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	var envelope dto.AppError
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
