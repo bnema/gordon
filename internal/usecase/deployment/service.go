@@ -47,6 +47,10 @@ type Deps struct {
 	// fail-closed before touching a workload. Nil in tests that assert
 	// state effects only. Failures are reported to the caller.
 	Traffic out.AppTrafficRefresher
+	// SecretFiles stores file-delivered secrets on the host. Optional:
+	// nil is valid only while no service delivers secrets as files;
+	// preflight refuses such services otherwise.
+	SecretFiles out.SecretFileStore
 }
 
 // RegistryConfig carries the installation registry identity for pulls.
@@ -796,6 +800,9 @@ func devicesEngineChecked(pinned []pinnedService) bool {
 // Paths are UUID-keyed so a removed app's secrets are never adopted
 // by a new app reusing the name.
 func (s *Service) checkSecrets(ctx context.Context, app, appID string, svc domain.AppService) error {
+	if len(svc.SecretFiles) > 0 && s.deps.SecretFiles == nil {
+		return fmt.Errorf("deployment: service %q delivers secrets as files but no secret file store is configured", svc.Name)
+	}
 	if s.deps.Secrets == nil {
 		return fmt.Errorf("deployment: secret provider unavailable: %w", domain.ErrAppSecretMissing)
 	}

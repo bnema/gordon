@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/bnema/zerowrap"
+
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -90,6 +92,15 @@ func (s *Service) retireContainer(ctx context.Context, app string, opts retireOp
 	if err := s.deps.State.ReleaseBackendBinds(ctx, app, containerID); err != nil {
 		result.Warnings = append(result.Warnings, CleanupWarning{
 			Service: opts.Service, Leftover: containerID, Detail: "release backend claims: " + err.Error(),
+		})
+	}
+	if err := s.sweepAppSecretFiles(ctx, app); err != nil {
+		// Fixed detail: the error may name host paths, which must stay
+		// out of journals and API responses.
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Str("app", app).Str("service", opts.Service).Msg("deployment: secret files cleanup failed")
+		result.Warnings = append(result.Warnings, CleanupWarning{
+			Service: opts.Service, Leftover: containerID, Detail: "secret files cleanup failed",
 		})
 	}
 	if opts.ClearInhibition {

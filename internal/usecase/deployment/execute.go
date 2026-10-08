@@ -445,7 +445,7 @@ func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedServ
 	if err != nil || container.Status != string(domain.ContainerStatusRunning) {
 		return "container not running"
 	}
-	if !s.envCurrent(ctx, app, p, container.Env) {
+	if !s.envCurrent(ctx, app, p, container) {
 		return "environment or secrets changed"
 	}
 	return ""
@@ -455,18 +455,37 @@ func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedServ
 // environment p would get now, including current secret values. The
 // runtime env also holds image-declared keys, so every desired entry must
 // be present; removed keys are caught by the spec and app env comparisons.
+// File-delivered secrets are compared against the container's host files.
 // Values are compared in memory only and never logged.
-func (s *Service) envCurrent(ctx context.Context, app string, p pinnedService, running []string) bool {
-	desired, err := s.serviceEnv(ctx, app, p)
+func (s *Service) envCurrent(ctx context.Context, app string, p pinnedService, container *domain.Container) bool {
+	desired, files, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
 		return false
 	}
-	have := make(map[string]struct{}, len(running))
-	for _, entry := range running {
+	have := make(map[string]struct{}, len(container.Env))
+	for _, entry := range container.Env {
 		have[entry] = struct{}{}
 	}
 	for _, entry := range desired {
 		if _, ok := have[entry]; !ok {
+			return false
+		}
+	}
+	return s.secretFilesCurrent(ctx, app, container.Name, files)
+}
+
+// secretFilesCurrent reports whether every host secret file of the
+// container holds the current value. Values are compared in memory only.
+func (s *Service) secretFilesCurrent(ctx context.Context, app, container string, files map[string]string) bool {
+	if len(files) == 0 {
+		return true
+	}
+	if s.deps.SecretFiles == nil {
+		return false
+	}
+	for key, want := range files {
+		got, err := s.deps.SecretFiles.Read(ctx, app, container, key)
+		if err != nil || got != want {
 			return false
 		}
 	}

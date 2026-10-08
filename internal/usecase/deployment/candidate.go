@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -41,7 +44,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return startedCandidate{}, err
 	}
-	env, err := s.serviceEnv(ctx, app, p)
+	env, files, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
 		return startedCandidate{}, err
 	}
@@ -102,7 +105,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		NanoCPUs:        s.deps.Limits.NanoCPUs,
 		PidsLimit:       s.deps.Limits.PidsLimit,
 	}
-	created, err := s.createContainer(ctx, p.name, config)
+	created, err := s.createWithSecretFiles(ctx, app, p.name, config, files)
 	if err != nil {
 		return startedCandidate{}, err
 	}
@@ -156,6 +159,43 @@ func (s *Service) recordCandidate(ctx context.Context, app, service, containerID
 		return err
 	}
 	return nil
+}
+
+// createWithSecretFiles writes file-delivered secrets to the host, mounts
+// each one read-only at /run/secrets/<KEY>, and creates the container.
+// The files are removed again when the create fails. Values stay in
+// memory and on the 0444 host files only; nothing is logged.
+func (s *Service) createWithSecretFiles(ctx context.Context, app, service string, config *domain.ContainerConfig, files map[string]string) (*domain.Container, error) {
+	if len(files) == 0 {
+		return s.createContainer(ctx, service, config)
+	}
+	if s.deps.SecretFiles == nil {
+		return nil, fmt.Errorf("deployment: service %q delivers secrets as files but no secret file store is configured", service)
+	}
+	paths, err := s.deps.SecretFiles.Write(ctx, app, config.Name, files)
+	if err != nil {
+		return nil, fmt.Errorf("deployment: write secret files for service %q: %w", service, err)
+	}
+	withFiles := *config
+	withFiles.Binds = append([]domain.ContainerBind(nil), config.Binds...)
+	for _, key := range slices.Sorted(maps.Keys(files)) {
+		withFiles.Binds = append(withFiles.Binds, domain.ContainerBind{
+			Name:        "secret-file-" + key,
+			Source:      paths[key],
+			Destination: domain.SecretFilePath(key),
+			ReadOnly:    true,
+		})
+	}
+	created, err := s.createContainer(ctx, service, &withFiles)
+	if err != nil {
+		if rmErr := s.deps.SecretFiles.Remove(ctx, app, config.Name); rmErr != nil {
+			log := zerowrap.FromCtx(ctx)
+			log.Warn().Str("app", app).Str("service", service).
+				Msg("deployment: secret files cleanup after failed create failed")
+		}
+		return nil, err
+	}
+	return created, nil
 }
 
 func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {
@@ -273,7 +313,10 @@ func shortOp(opID string) string {
 // values (memory only, UUID-keyed paths). Keys are emitted sorted and
 // deterministic. Overlapping public/secret keys are invalid with no
 // precedence; preflight rejects them before any mutation.
-func (s *Service) serviceEnv(ctx context.Context, app string, p pinnedService) ([]string, error) {
+//
+// File-delivered secrets are returned in files (env key -> value, nil
+// when none) and the env gets <KEY>_FILE=/run/secrets/<KEY> instead.
+func (s *Service) serviceEnv(ctx context.Context, app string, p pinnedService) ([]string, map[string]string, error) {
 	spec := p.spec
 	envMap := make(map[string]string, len(p.appEnv)+len(spec.Env)+len(spec.Secrets))
 	maps.Copy(envMap, p.appEnv)
@@ -284,24 +327,52 @@ func (s *Service) serviceEnv(ctx context.Context, app string, p pinnedService) (
 	}
 	sort.Strings(keys)
 	if len(keys) == 0 {
-		return sortedEnv(envMap), nil
+		return sortedEnv(envMap), nil, nil
 	}
 	id, err := s.appSecretID(ctx, app)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	var files map[string]string
 	for _, envKey := range keys {
-		if _, overlap := envMap[envKey]; overlap {
-			return nil, fmt.Errorf("deployment: env key %q collides with a secret key in service %q: %w", envKey, spec.Name, domain.ErrInvalidAppSpec)
+		if err := checkSecretEnvOverlap(envMap, spec, envKey); err != nil {
+			return nil, nil, err
 		}
 		path := domain.AppSecretPathForID(id, app, spec.Name, spec.Secrets[envKey])
 		value, err := s.deps.Secrets.GetSecret(ctx, path)
 		if err != nil {
-			return nil, fmt.Errorf("deployment: secret %s (env %s) missing: %w", path, envKey, domain.ErrAppSecretMissing)
+			return nil, nil, fmt.Errorf("deployment: secret %s (env %s) missing: %w", path, envKey, domain.ErrAppSecretMissing)
 		}
-		envMap[envKey] = value
+		if !spec.SecretAsFile(envKey) {
+			envMap[envKey] = value
+			continue
+		}
+		if files == nil {
+			files = make(map[string]string, len(spec.SecretFiles))
+		}
+		files[envKey] = value
+		envMap[domain.SecretFileEnvKey(envKey)] = domain.SecretFilePath(envKey)
 	}
-	return sortedEnv(envMap), nil
+	return sortedEnv(envMap), files, nil
+}
+
+// checkSecretEnvOverlap refuses a secret key (and, for file delivery, its
+// <KEY>_FILE key) that is already set by public env or another secret.
+func checkSecretEnvOverlap(envMap map[string]string, spec domain.AppService, envKey string) error {
+	if _, overlap := envMap[envKey]; overlap {
+		return fmt.Errorf("deployment: env key %q collides with a secret key in service %q: %w", envKey, spec.Name, domain.ErrInvalidAppSpec)
+	}
+	if !spec.SecretAsFile(envKey) {
+		return nil
+	}
+	fileKey := domain.SecretFileEnvKey(envKey)
+	if _, overlap := envMap[fileKey]; overlap {
+		return fmt.Errorf("deployment: env key %q collides with a secret file key in service %q: %w", fileKey, spec.Name, domain.ErrInvalidAppSpec)
+	}
+	if _, overlap := spec.Secrets[fileKey]; overlap {
+		return fmt.Errorf("deployment: secret key %q collides with a secret file key in service %q: %w", fileKey, spec.Name, domain.ErrInvalidAppSpec)
+	}
+	return nil
 }
 
 // sortedEnv renders a KEY=value list in sorted key order. Values stay in
