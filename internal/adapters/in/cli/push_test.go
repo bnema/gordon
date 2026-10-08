@@ -55,6 +55,10 @@ func TestParseImageRef(t *testing.T) {
 		{"no tag", "reg.example.com/myapp", "reg.example.com", "myapp", "latest"},
 		{"latest tag", "reg.example.com/myapp:latest", "reg.example.com", "myapp", "latest"},
 		{"no slash", "myapp:v1.0.0", "", "", ""},
+		{"namespace without registry host", "team/myapp:v1", "", "", ""},
+		{"localhost", "localhost/myapp:v1", "localhost", "myapp", "v1"},
+		{"registry with port", "localhost:5000/myapp:v1", "localhost:5000", "myapp", "v1"},
+		{"registry with namespace", "reg.example.com/team/myapp", "reg.example.com", "team/myapp", "latest"},
 	}
 
 	for _, tt := range tests {

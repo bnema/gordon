@@ -7,4 +7,6 @@ type AuthVerifyResponse struct {
 	Scopes    []string `json:"scopes,omitempty"`
 	ExpiresAt int64    `json:"expires_at,omitempty"`
 	IssuedAt  int64    `json:"issued_at,omitempty"`
+	// RegistryDomain is the Gordon registry host that push clients target.
+	RegistryDomain string `json:"registry_domain,omitempty"`
 }

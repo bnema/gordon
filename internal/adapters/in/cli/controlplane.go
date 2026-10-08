@@ -29,6 +29,7 @@ type ControlPlane interface {
 	DeleteAppSecret(ctx context.Context, app string, req dto.AppSecretDeleteRequest) error
 
 	GetStatus(ctx context.Context) (*remote.Status, error)
+	VerifyAuth(ctx context.Context) (*dto.AuthVerifyResponse, error)
 	GetTLSStatus(ctx context.Context) (*dto.TLSStatusResponse, error)
 	GetTrafficStatus(ctx context.Context) (*dto.TrafficStatusResponse, error)
 	GetCA(ctx context.Context) (*dto.CAResponse, error)

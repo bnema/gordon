@@ -2092,6 +2092,68 @@ func (_c *MockControlPlane_StreamProcessLogs_Call) RunAndReturn(run func(ctx con
 	return _c
 }
 
+// VerifyAuth provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) VerifyAuth(ctx context.Context) (*dto.AuthVerifyResponse, error) {
+	ret := _mock.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for VerifyAuth")
+	}
+
+	var r0 *dto.AuthVerifyResponse
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context) (*dto.AuthVerifyResponse, error)); ok {
+		return returnFunc(ctx)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context) *dto.AuthVerifyResponse); ok {
+		r0 = returnFunc(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AuthVerifyResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = returnFunc(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockControlPlane_VerifyAuth_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'VerifyAuth'
+type MockControlPlane_VerifyAuth_Call struct {
+	*mock.Call
+}
+
+// VerifyAuth is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *MockControlPlane_Expecter) VerifyAuth(ctx any) *MockControlPlane_VerifyAuth_Call {
+	return &MockControlPlane_VerifyAuth_Call{Call: _e.mock.On("VerifyAuth", ctx)}
+}
+
+func (_c *MockControlPlane_VerifyAuth_Call) Run(run func(ctx context.Context)) *MockControlPlane_VerifyAuth_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_VerifyAuth_Call) Return(authVerifyResponse *dto.AuthVerifyResponse, err error) *MockControlPlane_VerifyAuth_Call {
+	_c.Call.Return(authVerifyResponse, err)
+	return _c
+}
+
+func (_c *MockControlPlane_VerifyAuth_Call) RunAndReturn(run func(ctx context.Context) (*dto.AuthVerifyResponse, error)) *MockControlPlane_VerifyAuth_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // VolumeBackupStatus provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) VolumeBackupStatus(ctx context.Context) ([]dto.VolumeBackupJob, error) {
 	ret := _mock.Called(ctx)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -147,10 +148,13 @@ func looksLikeLegacyDomain(arg string) bool {
 }
 
 // resolveImageTarget determines the registry and image name from the input.
+// A bare image name (no registry host) is pushed to the target Gordon's
+// registry domain. A fully qualified reference must name that same
+// registry, so the Gordon registry credentials never leave the target.
 // Push transfers OCI content only and never triggers deploys or route
 // lookups. The deploy target comes from the app manifest applied
 // separately via `gordon apps apply`.
-func resolveImageTarget(out io.Writer, imageArg, dockerfile string) (registry, imageName, sourceRef string, err error) {
+func resolveImageTarget(ctx context.Context, out io.Writer, handle *controlPlaneHandle, imageArg, dockerfile string) (registry, imageName, sourceRef string, err error) {
 	if imageArg == "" {
 		imageArg, err = detectImageName(dockerfile)
 		if err != nil {
@@ -164,11 +168,78 @@ func resolveImageTarget(out io.Writer, imageArg, dockerfile string) (registry, i
 		return "", "", "", fmt.Errorf("domain-style push targets are retired: push an image name, then `gordon apps apply` (got %q)", imageArg)
 	}
 	classified := classifyPushArgument(imageArg)
+	if classified.repository == "" {
+		return "", "", "", fmt.Errorf("cannot parse image name from %q", imageArg)
+	}
+
+	targetRegistry, err := targetRegistryDomain(ctx, handle)
+	if err != nil {
+		return "", "", "", err
+	}
+
 	registry, imageName, _ = parseImageRef(classified.sourceRef)
-	if registry == "" || imageName == "" {
-		return "", "", "", fmt.Errorf("cannot parse registry/image from %q", imageArg)
+	if registry == "" {
+		if err := cliWritef(out, "Registry: %s %s\n", styles.Theme.Bold.Render(targetRegistry), styles.Theme.Muted.Render("(from target)")); err != nil {
+			return "", "", "", err
+		}
+		return targetRegistry, classified.repository, classified.sourceRef, nil
+	}
+	if !sameRegistryHost(registry, targetRegistry) {
+		return "", "", "", fmt.Errorf("image registry %q does not match the target Gordon registry %q; retag the image as %s/%s or select the matching remote", registry, targetRegistry, targetRegistry, imageName)
 	}
 	return registry, imageName, classified.sourceRef, nil
+}
+
+// targetRegistryDomain asks the target Gordon instance for its registry domain.
+// Remote targets publish it on /admin/auth/verify, which any admin-scoped
+// token can read, so push needs no admin:status:read scope. The local admin
+// socket and servers that predate that field are asked through /admin/status.
+func targetRegistryDomain(ctx context.Context, handle *controlPlaneHandle) (string, error) {
+	if handle.isRemote {
+		verify, err := handle.plane.VerifyAuth(ctx)
+		if isForbidden(err) {
+			return "", fmt.Errorf("failed to read target registry domain: token needs an admin scope (e.g. admin:apps:read): %w", err)
+		}
+		if err != nil {
+			return "", fmt.Errorf("failed to read target registry domain: %w", err)
+		}
+		if !verify.Valid {
+			return "", errors.New("failed to read target registry domain: token is not valid")
+		}
+		if registryDomain := strings.TrimSpace(verify.RegistryDomain); registryDomain != "" {
+			return registryDomain, nil
+		}
+	}
+
+	status, err := handle.plane.GetStatus(ctx)
+	if isForbidden(err) && handle.isRemote {
+		return "", fmt.Errorf("failed to read target registry domain: the server did not report it on /admin/auth/verify (older server or server.registry_domain unset); upgrade or configure the server, or grant the token admin:status:read: %w", err)
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read target registry domain: %w", err)
+	}
+	registryDomain := strings.TrimSpace(status.RegistryDomain)
+	if registryDomain == "" {
+		return "", errors.New("target Gordon instance does not report a registry domain; set server.registry_domain")
+	}
+	return registryDomain, nil
+}
+
+func isForbidden(err error) bool {
+	httpErr, ok := errors.AsType[*remote.HTTPError](err)
+	return ok && httpErr.StatusCode == http.StatusForbidden
+}
+
+func sameRegistryHost(a, b string) bool {
+	normalize := func(s string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".") }
+	return normalize(a) == normalize(b)
+}
+
+// isRegistryHost applies Docker's rule for the first path component of an
+// image reference: it names a registry only if it contains a dot or a port,
+// or is "localhost".
+func isRegistryHost(component string) bool {
+	return strings.ContainsAny(component, ".:") || component == "localhost"
 }
 
 // resolveVersion determines and validates the version tag.
@@ -189,16 +260,16 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 	}
 	defer handle.close()
 
-	registry, imageName, sourceRef, err := resolveImageTarget(out, req.ImageArg, dockerfile)
-	if err != nil {
-		return err
-	}
-
 	version, err := resolveVersion(ctx, req.Tag)
 	if err != nil {
 		return err
 	}
 	if err := validateBuildArgsList(req.Build.BuildArgs); err != nil {
+		return err
+	}
+
+	registry, imageName, sourceRef, err := resolveImageTarget(ctx, out, handle, req.ImageArg, dockerfile)
+	if err != nil {
 		return err
 	}
 
@@ -574,11 +645,12 @@ func isInteractiveTerminal() bool {
 	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
-// parseImageRef splits "registry/name:tag" into components.
+// parseImageRef splits "registry/name:tag" into components. It returns empty
+// values when the reference does not start with a registry host.
 func parseImageRef(image string) (registry, name, tag string) {
-	// Handle "reg.bnema.dev/jp-bot:latest" or "reg.bnema.dev/jp-bot"
+	// Handle "reg.example.com/app:latest" or "reg.example.com/app"
 	parts := strings.SplitN(image, "/", 2)
-	if len(parts) != 2 {
+	if len(parts) != 2 || !isRegistryHost(parts[0]) {
 		return "", "", ""
 	}
 	registry = parts[0]

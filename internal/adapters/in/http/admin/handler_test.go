@@ -208,6 +208,41 @@ func TestHandler_Status_RequiresReadScope(t *testing.T) {
 	}
 }
 
+func TestHandler_AuthVerify_PublishesRegistryDomainForValidTokens(t *testing.T) {
+	tests := []struct {
+		name       string
+		valid      bool
+		wantDomain string
+	}{
+		{name: "valid token without status scope", valid: true, wantDomain: "registry.example.com"},
+		{name: "invalid token", valid: false, wantDomain: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configSvc := inmocks.NewMockConfigService(t)
+			authSvc := inmocks.NewMockAuthService(t)
+			handler := newTestHandler(t, func(d *HandlerDeps) {
+				d.ConfigSvc = configSvc
+				d.AuthSvc = authSvc
+			})
+			authSvc.EXPECT().GetAuthStatus(mock.Anything).Return(&domain.AuthStatus{Valid: tt.valid, Subject: "ci"}, nil).Once()
+			if tt.valid {
+				configSvc.EXPECT().GetRegistryDomain().Return("registry.example.com").Once()
+			}
+
+			req := httptest.NewRequest(http.MethodGet, "/admin/auth/verify", nil)
+			req = req.WithContext(ctxWithScopes("push", "pull", "admin:apps:read", "admin:apps:write"))
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusOK, rec.Code)
+			var resp dto.AuthVerifyResponse
+			require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+			assert.Equal(t, tt.wantDomain, resp.RegistryDomain)
+		})
+	}
+}
+
 // Config endpoint tests
 
 func TestHandler_Config_HidesSensitiveInventoryByDefault(t *testing.T) {

@@ -57,6 +57,15 @@ It auto-selects only when exactly one remote matches. If multiple remotes match,
 or a saved remote cannot be probed safely, the command stops and asks you to use
 `--remote` explicitly.
 
+The registry comes from the target Gordon instance. A bare image name such as
+`myapp` or `myapp:v1` is pushed to the target's `server.registry_domain`, read
+from `/admin/auth/verify` (any admin-scoped token, no `admin:status:read`
+needed). A fully qualified
+reference such as `registry.example.com/myapp` must name that same registry;
+otherwise the push is rejected so Gordon credentials are never sent to another
+registry. Hosts listed in `server.legacy_registry_domains` are rejected too: use
+the canonical registry or a bare name.
+
 Domain-style push targets are retired: push an image name, then
 `gordon apps apply` the manifest that references the pushed tag.
 

@@ -932,6 +932,11 @@ func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: status.ExpiresAt,
 		IssuedAt:  status.IssuedAt,
 	}
+	if status.Valid && h.configSvc != nil {
+		// Push clients need the registry host but not admin:status:read,
+		// so it is published to every admin-scoped token here.
+		response.RegistryDomain = h.configSvc.GetRegistryDomain()
+	}
 
 	h.sendJSON(w, http.StatusOK, response)
 }
