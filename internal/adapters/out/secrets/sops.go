@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/bnema/zerowrap"
+
+	"github.com/bnema/gordon/internal/adapters/out/childenv"
 )
 
 // sopsKeyPathRegex validates sops key paths (alphanumeric, dots, underscores, hyphens, brackets).
@@ -109,6 +111,7 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 	// Use sops -d --extract to get specific key
 	// #nosec G204 - filePath and keyPath are validated above
 	cmd := exec.CommandContext(ctx, "sops", "-d", "--extract", extractPath, cleanPath)
+	cmd.Env = childenv.Env()
 	output, err := cmd.Output()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {

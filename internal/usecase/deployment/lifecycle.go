@@ -301,7 +301,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	}
 	// Fail closed before any runtime mutation if a bind's policy was
 	// revoked or became invalid since ACTIVE was published.
-	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+	if _, err := s.resolveGuardedBinds(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
 	// A device grant revoked since ACTIVE was published must fail
@@ -608,7 +608,7 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 	if eff.Container != "" {
 		// Fail closed before any runtime mutation if a bind's policy was
 		// revoked or became invalid since ACTIVE was published.
-		if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+		if _, err := s.resolveGuardedBinds(app, eff.Spec); err != nil {
 			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 			return
 		}
@@ -668,7 +668,7 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 	if err != nil {
 		return failedServiceResult(eff.Container, err), err
 	}
-	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+	if _, err := s.resolveGuardedBinds(app, eff.Spec); err != nil {
 		return failedServiceResult(eff.Container, err), err
 	}
 	// Revoked device grants fail before any runtime mutation.

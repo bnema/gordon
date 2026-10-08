@@ -635,7 +635,7 @@ func (s *Service) publishRecoveredService(ctx context.Context, app, name string,
 func (s *Service) startRecovered(serviceCtx context.Context, app, name string, eff domain.AppEffectiveService, key recoveryKey) (bool, error) {
 	// Fail closed before mutating the runtime if a bind's policy was
 	// revoked or became invalid since ACTIVE was published.
-	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+	if _, err := s.resolveGuardedBinds(app, eff.Spec); err != nil {
 		return false, err
 	}
 	// Revoked device grants fail before any runtime mutation.
@@ -691,7 +691,7 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	}
 	// Fail closed before mutating the runtime if a bind's policy was
 	// revoked or became invalid since ACTIVE was published.
-	if _, err := s.resolveServiceBinds(app, eff.Spec); err != nil {
+	if _, err := s.resolveGuardedBinds(app, eff.Spec); err != nil {
 		return false, false, err
 	}
 	// Revoked device grants fail before any runtime mutation.

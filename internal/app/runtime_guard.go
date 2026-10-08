@@ -12,10 +12,11 @@ import (
 )
 
 // protectedRuntimePaths lists the host paths no app bind may equal, lie
-// under, or contain: Gordon's data and config, runtime sockets, Gordon's
-// runtime credentials, and key stores. Empty entries are skipped; each
-// entry is cleaned and its symlink-resolved form is added when it differs.
-func protectedRuntimePaths(dataDir, configFile, runtimeSocket string, getenv func(string) string, home string) []string {
+// under, or contain: Gordon's data, config, and configured files, runtime
+// sockets and storage, Gordon's runtime credentials, and key stores.
+// Empty entries are skipped; each entry is made absolute and its
+// symlink-resolved form is added when it differs.
+func protectedRuntimePaths(dataDir string, gordonPaths []string, getenv func(string) string, home string) []string {
 	runtimeDir := getenv("XDG_RUNTIME_DIR")
 	configHome := getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
@@ -25,9 +26,8 @@ func protectedRuntimePaths(dataDir, configFile, runtimeSocket string, getenv fun
 	if strings.Contains(dockerHost, "://") {
 		dockerHost = ""
 	}
-	raw := []string{
+	raw := append([]string{
 		dataDir,
-		configFile,
 		"/var/run/docker.sock",
 		"/run/docker.sock",
 		"/run/podman/podman.sock",
@@ -36,14 +36,19 @@ func protectedRuntimePaths(dataDir, configFile, runtimeSocket string, getenv fun
 		subPath(runtimeDir, "gordon"),
 		homePath(home, ".gordon", "run"),
 		dockerHost,
-		runtimeSocket,
+		homePath(home, ".local", "share", "containers"),
+		homePath(home, ".local", "share", "docker"),
+		subPath(configHome, "containers"),
+		homePath(home, ".docker"),
+		subPath(configHome, "systemd", "user"),
+		getenv("GORDON_CLOUDFLARE_API_TOKEN_FILE"),
 		getenv("GNUPGHOME"),
 		homePath(home, ".gnupg"),
 		getenv("PASSWORD_STORE_DIR"),
 		homePath(home, ".password-store"),
 		getenv("SOPS_AGE_KEY_FILE"),
 		subPath(configHome, "sops", "age"),
-	}
+	}, gordonPaths...)
 	var paths []string
 	for _, p := range raw {
 		if p == "" {
@@ -56,12 +61,30 @@ func protectedRuntimePaths(dataDir, configFile, runtimeSocket string, getenv fun
 			continue
 		}
 		paths = append(paths, clean)
-		if resolved, err := filepath.EvalSymlinks(clean); err == nil && resolved != clean {
+		if resolved := resolveExisting(clean); resolved != clean {
 			paths = append(paths, resolved)
 		}
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths)
+}
+
+// resolveExisting resolves symlinks in the longest existing ancestor of p
+// and re-appends the missing tail, so a path created after startup under
+// a symlinked parent (for example /home -> /var/home) is still protected
+// in its resolved form.
+func resolveExisting(p string) string {
+	tail := ""
+	for dir := p; ; dir = filepath.Dir(dir) {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, tail)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return p
+		}
+		tail = filepath.Join(filepath.Base(dir), tail)
+	}
 }
 
 // subPath joins elems under base, or returns "" when base is empty.
@@ -78,19 +101,34 @@ func homePath(home string, elems ...string) string {
 	return subPath(home, elems...)
 }
 
+// configuredGordonPaths returns the config file, the runtime socket in use,
+// and every file or directory the config points Gordon at.
+func configuredGordonPaths(si *serviceInit) []string {
+	cfg := si.cfg
+	paths := []string{
+		cfg.Server.TLSCertFile,
+		cfg.Server.TLSKeyFile,
+		resolveLogFilePath(cfg),
+		cfg.Logging.ContainerLogs.Dir,
+		cfg.Logging.AccessLog.FilePath,
+		cfg.Backups.StorageDir,
+		cfg.Backups.Databases.StorageDir,
+	}
+	if si.v != nil {
+		paths = append(paths, si.v.ConfigFileUsed(), resolveRuntimeConfig(si.v.GetString("server.runtime")))
+	}
+	return paths
+}
+
 // buildAppRuntimeSafety opens the host secret file store and builds the
-// runtime guard applied to every app container create.
+// runtime guard applied to every app container create. The store keeps one
+// directory handle open for the daemon's lifetime.
 func buildAppRuntimeSafety(si *serviceInit, dataDir string) (out.SecretFileStore, domain.RuntimeGuard, error) {
 	store, err := secretfiles.NewStore(dataDir)
 	if err != nil {
 		return nil, domain.RuntimeGuard{}, err
 	}
 	home, _ := os.UserHomeDir()
-	var configFile, runtimeSocket string
-	if si.v != nil {
-		configFile = si.v.ConfigFileUsed()
-		runtimeSocket = resolveRuntimeConfig(si.v.GetString("server.runtime"))
-	}
-	paths := protectedRuntimePaths(dataDir, configFile, runtimeSocket, os.Getenv, home)
+	paths := protectedRuntimePaths(dataDir, configuredGordonPaths(si), os.Getenv, home)
 	return store, domain.RuntimeGuard{ProtectedPaths: paths, SecretFilesDir: store.Dir()}, nil
 }

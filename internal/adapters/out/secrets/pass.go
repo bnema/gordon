@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/out/childenv"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -81,6 +82,7 @@ func (p *PassProvider) GetSecret(ctx context.Context, path string) (string, erro
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); arguments are validated secret paths
+	cmd.Env = childenv.Env()
 	output, err := cmd.Output()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
@@ -110,5 +112,6 @@ func (p *PassProvider) IsAvailable() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "pass", "version") //nolint:gosec // binary is a constant ("pass"), no user input
+	cmd.Env = childenv.Env()
 	return cmd.Run() == nil
 }

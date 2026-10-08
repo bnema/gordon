@@ -174,7 +174,7 @@ Use `strict` for images designed to write only to mounted volumes and run withou
 
 ## Runtime guard
 
-Every app container config passes a final guard right before the runtime creates the container. A refused config creates no container and fails with error code `runtime-guard-violation` (HTTP 400). The guard refuses:
+Every app container config passes a final guard right before the runtime creates the container. Bind checks also run at deploy preflight and before every restart or recovery of an existing container. A refused config creates or starts no container: the operation fails and its preflight or service step error contains `runtime guard violation`. A replayed deploy whose preflight failed this way returns error code `runtime-guard-violation` (HTTP 400). The guard refuses:
 
 - network mode `host`, `container:<id>`, or `ns:<path>`;
 - a volume name containing `/` or `\`, which the runtime would read as a host path;
@@ -183,17 +183,26 @@ Every app container config passes a final guard right before the runtime creates
 Protected paths:
 
 - the data directory and the loaded config file;
+- files and directories set in the config: `server.tls_cert_file`, `server.tls_key_file`, the Gordon log file, `logging.container_logs.dir`, `logging.access_log.file_path`, and the backup `storage_dir` values;
 - runtime sockets: `/var/run/docker.sock`, `/run/docker.sock`, `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/docker.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, the `unix://` path of `DOCKER_HOST`, and the `server.runtime` socket;
-- Gordon runtime credentials: `$XDG_RUNTIME_DIR/gordon` and `~/.gordon/run`;
+- rootless runtime storage and config: `~/.local/share/containers`, `~/.local/share/docker`, `${XDG_CONFIG_HOME:-~/.config}/containers`, and `~/.docker`;
+- the systemd user units: `${XDG_CONFIG_HOME:-~/.config}/systemd/user`;
+- Gordon runtime credentials: `$XDG_RUNTIME_DIR/gordon`, `~/.gordon/run`, and `$GORDON_CLOUDFLARE_API_TOKEN_FILE`;
 - key stores: `$GNUPGHOME`, `~/.gnupg`, `$PASSWORD_STORE_DIR`, `~/.password-store`, `$SOPS_AGE_KEY_FILE`, and `${XDG_CONFIG_HOME:-~/.config}/sops/age`.
 
-The only exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy is reported at deploy preflight, before the running generation is replaced. Point the policy `source` outside every protected path.
+A protected path that does not exist yet is also protected in its symlink-resolved form, based on its closest existing parent.
+
+The only exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy fails before the running generation is replaced or restarted. Point the policy `source` outside every protected path.
 
 ## Process memory protection
 
-On Linux, `gordon serve` marks itself non-dumpable (`PR_SET_DUMPABLE=0`) before loading any configuration or secret. Other processes of the same user can no longer read its `/proc/<pid>/environ`, `mem`, or file descriptors, attach with ptrace, or get a core dump. Startup fails if the flag cannot be set.
+On Linux, `gordon serve` marks itself non-dumpable (`PR_SET_DUMPABLE=0`) as its first step, before loading its config file or any backend secret. Other processes of the same user can no longer read its `/proc/<pid>/environ`, `mem`, or file descriptors, attach with ptrace, or get a core dump. Startup fails if the flag cannot be set.
 
-This does not stop root, nor a process of the same user that can replace the Gordon binary or its systemd unit.
+Limits:
+
+- Secrets passed as environment variables, such as `GORDON_AUTH_TOKEN_SECRET`, are readable for the short time between process start and that first step. Prefer a secrets backend.
+- Helper processes (`pass`, `gpg`, `sops`) are dumpable again after `exec` and hold the values they decrypt while they run. Gordon starts them without its `GORDON_*` variables.
+- Root, or a process of the same user that can replace the Gordon binary or its systemd unit, is not stopped.
 
 ## Hardened systemd user unit
 
@@ -233,7 +242,7 @@ Gordon v3 protects against:
 
 - file-delivered secret values showing up in container env, `docker inspect`, or `/proc/1/environ`;
 - app configs that mount the runtime socket, Gordon data, config, credentials, or key stores, or that join the host or another container's namespaces;
-- same-user processes reading Gordon's memory or environment through `/proc`.
+- same-user processes reading the Gordon process's memory or environment through `/proc`, within the limits above.
 
 Gordon v3 does not protect against:
 

@@ -682,13 +682,20 @@ func TestHandler_AppApply_MapsDevicePolicyViolation(t *testing.T) {
 	assert.Equal(t, "device-policy-violation", envelope.Error)
 }
 
-func TestHandler_AppDeploy_MapsRuntimeGuardViolation(t *testing.T) {
+// TestHandler_AppDeploy_MapsRuntimeGuardPreflightReplay proves a terminal
+// replay whose preflight failed on the runtime guard maps to the stable
+// runtime-guard-violation envelope.
+func TestHandler_AppDeploy_MapsRuntimeGuardPreflightReplay(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
+	op := &domain.AppOperation{
+		Op: "op-g", Kind: "deploy", App: "blog", Outcome: domain.AppOutcomeFailed,
+		Steps: []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepFailed, Error: "runtime guard violation"}},
+	}
 	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(
-		nil,
-		fmt.Errorf("deployment: create container for service %q: %w: bind %q overlaps a protected Gordon path", "web", domain.ErrRuntimeGuard, "conf"),
+		op,
+		fmt.Errorf("deployment: app %q service %q: %w: bind %q overlaps a protected Gordon path", "blog", "web", domain.ErrRuntimeGuard, "conf"),
 	).Once()
 
 	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",

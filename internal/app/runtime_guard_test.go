@@ -24,8 +24,10 @@ func TestProtectedRuntimePaths_AllSources(t *testing.T) {
 		"PASSWORD_STORE_DIR": "/keys/pass",
 		"SOPS_AGE_KEY_FILE":  "/keys/age.txt",
 		"XDG_CONFIG_HOME":    "/cfg",
+
+		"GORDON_CLOUDFLARE_API_TOKEN_FILE": "/keys/cf-token",
 	})
-	got := protectedRuntimePaths("/data/gordon", "/etc/gordon/gordon.toml", "/custom/podman.sock", env, home)
+	got := protectedRuntimePaths("/data/gordon", []string{"/etc/gordon/gordon.toml", "/custom/podman.sock", ""}, env, home)
 
 	for _, want := range []string{
 		"/data/gordon",
@@ -45,6 +47,12 @@ func TestProtectedRuntimePaths_AllSources(t *testing.T) {
 		filepath.Join(home, ".password-store"),
 		"/keys/age.txt",
 		"/cfg/sops/age",
+		"/keys/cf-token",
+		filepath.Join(home, ".local", "share", "containers"),
+		filepath.Join(home, ".local", "share", "docker"),
+		"/cfg/containers",
+		filepath.Join(home, ".docker"),
+		"/cfg/systemd/user",
 	} {
 		assert.Contains(t, got, want)
 	}
@@ -52,7 +60,7 @@ func TestProtectedRuntimePaths_AllSources(t *testing.T) {
 }
 
 func TestProtectedRuntimePaths_SkipsEmptyAndTCP(t *testing.T) {
-	got := protectedRuntimePaths("/data", "", "", fakeEnv(map[string]string{"DOCKER_HOST": "tcp://h:2375"}), "")
+	got := protectedRuntimePaths("/data", nil, fakeEnv(map[string]string{"DOCKER_HOST": "tcp://h:2375"}), "")
 	assert.Equal(t, []string{"/data", "/run/docker.sock", "/run/podman/podman.sock", "/var/run/docker.sock"}, got)
 }
 
@@ -65,9 +73,30 @@ func TestProtectedRuntimePaths_SymlinkAddsBothForms(t *testing.T) {
 	realResolved, err := filepath.EvalSymlinks(real)
 	require.NoError(t, err)
 
-	got := protectedRuntimePaths(link, "", "", fakeEnv(nil), "")
+	got := protectedRuntimePaths(link, nil, fakeEnv(nil), "")
 	assert.Contains(t, got, link)
 	assert.Contains(t, got, realResolved)
+
+	// A protected path that does not exist yet under a symlinked parent
+	// is protected in its resolved form too.
+	missing := filepath.Join(link, "later", "store")
+	got = protectedRuntimePaths("/data", []string{missing}, fakeEnv(nil), "")
+	assert.Contains(t, got, missing)
+	assert.Contains(t, got, filepath.Join(realResolved, "later", "store"))
+}
+
+func TestConfiguredGordonPaths(t *testing.T) {
+	si := &serviceInit{}
+	si.cfg.Server.TLSKeyFile = "/tls/key.pem"
+	si.cfg.Server.DataDir = "/data"
+	si.cfg.Logging.AccessLog.FilePath = "/logs/access.log"
+	si.cfg.Backups.Databases.StorageDir = "/backups"
+
+	got := configuredGordonPaths(si)
+	assert.Contains(t, got, "/tls/key.pem")
+	assert.Contains(t, got, "/data/logs/gordon.log")
+	assert.Contains(t, got, "/logs/access.log")
+	assert.Contains(t, got, "/backups")
 }
 
 func TestBuildAppRuntimeSafety(t *testing.T) {

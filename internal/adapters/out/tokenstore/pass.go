@@ -14,6 +14,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/out/childenv"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -338,6 +339,7 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 	// List all entries under the token path
 	cmd := exec.CommandContext(ctx, "pass", "ls", passTokenPath) //nolint:gosec // passTokenPath is a fixed constant
+	cmd.Env = childenv.Env()
 	output, err := cmd.Output()
 	if err != nil {
 		// If the path doesn't exist, return empty list
@@ -484,6 +486,7 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	// Remove JWT
 	// #nosec G204 -- command and args are fixed; subject is treated as data only.
 	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", jwtPath)
+	cmd.Env = childenv.Env()
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete token: %w", err)
 	}
@@ -491,6 +494,7 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	// Remove metadata
 	// #nosec G204 -- command and args are fixed; subject is treated as data only.
 	cmd = exec.CommandContext(ctx, "pass", "rm", "-f", metaPath)
+	cmd.Env = childenv.Env()
 	if err := cmd.Run(); err != nil {
 		s.log.Warn().Err(err).Msg("failed to delete token metadata")
 	}
@@ -512,6 +516,7 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 // passInsert inserts a value into pass.
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
+	cmd.Env = childenv.Env()
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -523,6 +528,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 // passShow retrieves a value from pass.
 func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
 	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
+	cmd.Env = childenv.Env()
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("pass show failed: %w", err)
