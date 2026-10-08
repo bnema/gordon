@@ -106,8 +106,12 @@ type AppService struct {
 	// [env] for the same key; its keys must be disjoint from Secrets.
 	Env     map[string]string
 	Secrets map[string]string
-	Volumes []AppVolume
-	Binds   []AppBind
+	// SecretFiles lists the Secrets env keys delivered as read-only files
+	// under /run/secrets instead of env values. Sorted, nil when empty;
+	// keys absent from it are delivered as env.
+	SecretFiles []string
+	Volumes     []AppVolume
+	Binds       []AppBind
 	// Devices lists logical device names granted by administrative
 	// [app_devices] policy. Names resolve to CDI device IDs at activation
 	// time; the logical names (not host resolution) persist in revisions.
@@ -509,6 +513,15 @@ func checkEnvSecretKeyDisjoint(s AppSpec) error {
 				return fmt.Errorf("%w: service %q env key %q collides with a secret key", ErrInvalidAppSpec, svc.Name, key)
 			}
 		}
+		for _, key := range svc.SecretFiles {
+			fileKey := SecretFileEnvKey(key)
+			if _, ok := s.Env[fileKey]; ok {
+				return fmt.Errorf("%w: env key %q collides with a secret file key in service %q", ErrInvalidAppSpec, fileKey, svc.Name)
+			}
+			if _, ok := svc.Env[fileKey]; ok {
+				return fmt.Errorf("%w: service %q env key %q collides with a secret file key", ErrInvalidAppSpec, svc.Name, fileKey)
+			}
+		}
 	}
 	return nil
 }
@@ -624,7 +637,7 @@ func (s *AppService) validateSecrets() error {
 			return fmt.Errorf("%w: service %q secret name %q: %v", ErrInvalidAppSpec, s.Name, secretName, err)
 		}
 	}
-	return nil
+	return s.validateSecretFiles()
 }
 
 // validateVolumes checks volume declarations and returns known names.
@@ -1086,11 +1099,7 @@ func diffService(name string, desired, effective AppService) []string {
 	if !equalStringMaps(desired.Env, effective.Env) {
 		changed = append(changed, "service/"+name+"/env")
 	}
-	if !equalStringMaps(desired.Secrets, effective.Secrets) {
-		for path := range secretPathChanges(desired, effective) {
-			changed = append(changed, path)
-		}
-	}
+	changed = appendSecretChanges(changed, desired, effective)
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
 	}
@@ -1116,16 +1125,31 @@ func appendOperationChanges(changed []string, name string, desired, effective Ap
 	return changed
 }
 
-// secretPathChanges lists secret PATH changes (never values).
+// appendSecretChanges appends sorted secret path changes when the secret
+// names or their delivery modes differ.
+func appendSecretChanges(changed []string, desired, effective AppService) []string {
+	if equalStringMaps(desired.Secrets, effective.Secrets) && slices.Equal(desired.SecretFiles, effective.SecretFiles) {
+		return changed
+	}
+	paths := make([]string, 0)
+	for path := range secretPathChanges(desired, effective) {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return append(changed, paths...)
+}
+
+// secretPathChanges lists secret PATH changes (never values). A key whose
+// delivery mode (env or file) changed counts as changed.
 func secretPathChanges(desired, effective AppService) map[string]struct{} {
 	paths := map[string]struct{}{}
 	for envKey, secretName := range desired.Secrets {
-		if effective.Secrets[envKey] != secretName {
+		if effective.Secrets[envKey] != secretName || desired.SecretAsFile(envKey) != effective.SecretAsFile(envKey) {
 			paths["service/"+desired.Name+"/secret/"+secretName] = struct{}{}
 		}
 	}
 	for envKey, secretName := range effective.Secrets {
-		if desired.Secrets[envKey] != secretName {
+		if desired.Secrets[envKey] != secretName || desired.SecretAsFile(envKey) != effective.SecretAsFile(envKey) {
 			paths["service/"+effective.Name+"/secret/"+secretName] = struct{}{}
 		}
 	}
