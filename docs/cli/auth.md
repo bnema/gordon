@@ -294,8 +294,8 @@ Usage:
 ### CI/CD Setup
 
 ```bash
-# Generate token for CI
-gordon auth token generate --subject ci-bot --scopes push,pull --expiry 0
+# Generate token for CI (gordon images push needs one admin scope)
+gordon auth token generate --subject ci-bot --scopes push,pull,admin:apps:read --expiry 0
 
 # Save token as CI secret
 # GitHub: Settings > Secrets > New repository secret

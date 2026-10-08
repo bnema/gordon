@@ -166,7 +166,8 @@ Use the minimum scopes for the steps the pipeline performs. A repository restric
 | Workflow | Required Scopes |
 |----------|----------------|
 | Build + push, then apply + deploy | `push,pull,admin:apps:read,admin:apps:write` |
-| Push only (no deploy) | `push,pull` |
+| `gordon images push` only (no deploy) | `push,pull,admin:apps:read` |
+| `docker push` only (no deploy) | `push,pull` |
 | docker push, then apply + deploy | `push,pull` + `admin:apps:read,admin:apps:write` for the CLI step |
 
 ## Troubleshooting

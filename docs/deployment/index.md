@@ -77,10 +77,16 @@ Clients use the main Gordon domain over HTTPS, normally on port 443. Gordon bind
 See the examples below for the right scopes for each workflow.
 
 ```bash
-# Push only — registry scopes
+# docker push only — registry scopes
 gordon auth token generate \
   --subject ci-bot \
   --scopes "push,pull" \
+  --expiry 90d
+
+# gordon images push only — the CLI also needs one admin scope
+gordon auth token generate \
+  --subject ci-bot \
+  --scopes "push,pull,admin:apps:read" \
   --expiry 90d
 
 # Push + apply/deploy — adds app mutation scopes
@@ -89,7 +95,7 @@ gordon auth token generate \
   --scopes "push,pull,admin:apps:read,admin:apps:write" \
   --expiry 90d
 
-# Repository-scoped registry token for push only
+# Repository-scoped registry token for docker push only
 gordon auth token generate \
   --subject ci-bot \
   --repo myapp \
@@ -97,7 +103,7 @@ gordon auth token generate \
   --expiry 90d
 ```
 
-Set the generated token as `GORDON_TOKEN` in your CI environment. `--repo` limits registry push/pull to that repository; it does not constrain `admin:*` scopes. Use a separate least-privilege token for app administration when repository and deployment duties must be isolated.
+Set the generated token as `GORDON_TOKEN` in your CI environment. `gordon images push` calls the admin API before it exchanges the token for registry access, so its token needs at least one `admin:*` scope; `admin:apps:read` is the smallest. `--repo` limits registry push/pull to that repository; it does not constrain `admin:*` scopes. Use a separate least-privilege token for app administration when repository and deployment duties must be isolated.
 
 ## Version Strategies
 

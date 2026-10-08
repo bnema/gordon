@@ -87,7 +87,10 @@ When used with `--remote`, gordon images push authenticates in two ways:
 - **Admin API** (tag listing for inference): uses `--token` or `$GORDON_TOKEN` as Bearer token
 - **Registry push**: automatically exchanges the token for a short-lived (5 min) registry access token via `/auth/token` -- no `docker login` required
 
-This means CI/CD pipelines only need a single secret (`GORDON_TOKEN`).
+This means CI/CD pipelines only need a single secret (`GORDON_TOKEN`). The token
+needs `push` plus at least one `admin:*` scope, because the admin API rejects
+tokens without one; `push,pull,admin:apps:read` is the minimum. A `push,pull`
+token only works with `docker login` and `docker push`.
 
 ### Version Auto-Detection
 
