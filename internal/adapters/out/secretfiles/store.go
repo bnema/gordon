@@ -69,7 +69,10 @@ func (s *Store) Dir() string { return s.dir }
 // Close releases the base directory handle.
 func (s *Store) Close() error { return s.root.Close() }
 
-// Write replaces the container's directory with one 0444 file per key.
+// Write creates the container's directory with one 0444 file per key. The
+// directory must not exist yet: container names are unique per create, so
+// an existing directory belongs to another container and is never touched.
+// Crash leftovers are removed by the sweeps, not here.
 func (s *Store) Write(_ context.Context, app, container string, values map[string]string) (map[string]string, error) {
 	if err := validateSet(app, container); err != nil {
 		return nil, err
@@ -86,8 +89,8 @@ func (s *Store) Write(_ context.Context, app, container string, values map[strin
 		return nil, fmt.Errorf("secret files: chmod app directory: %w", err)
 	}
 	rel := filepath.Join(app, container)
-	if err := s.root.RemoveAll(rel); err != nil {
-		return nil, fmt.Errorf("secret files: clear container directory: %w", err)
+	if err := s.root.Mkdir(rel, dirMode); err != nil {
+		return nil, fmt.Errorf("secret files: create container directory: %w", err)
 	}
 	paths, err := s.writeFiles(rel, values)
 	if err != nil {
@@ -98,9 +101,6 @@ func (s *Store) Write(_ context.Context, app, container string, values map[strin
 }
 
 func (s *Store) writeFiles(rel string, values map[string]string) (map[string]string, error) {
-	if err := s.root.Mkdir(rel, dirMode); err != nil {
-		return nil, fmt.Errorf("secret files: create container directory: %w", err)
-	}
 	if err := s.root.Chmod(rel, dirMode); err != nil {
 		return nil, fmt.Errorf("secret files: chmod container directory: %w", err)
 	}

@@ -30,6 +30,10 @@ func TestAppSpec_ValidateSecretFilesErrors(t *testing.T) {
 		wantErr string
 	}{
 		{"not a secret", func(s *domain.AppSpec) { s.Services[0].SecretFiles = []string{"OTHER"} }, "not a declared secret"},
+		{"unsorted", func(s *domain.AppSpec) {
+			s.Services[0].Secrets["API"] = "api"
+			s.Services[0].SecretFiles = []string{"DATABASE_URL", "API"}
+		}, "must be sorted"},
 		{"duplicate", func(s *domain.AppSpec) {
 			s.Services[0].SecretFiles = []string{"DATABASE_URL", "DATABASE_URL"}
 		}, "duplicated"},

@@ -49,19 +49,19 @@ func TestStore_WriteModesAndRead(t *testing.T) {
 	assert.Equal(t, "s3cr3t", got)
 }
 
-func TestStore_WriteReplacesStaleKeys(t *testing.T) {
+func TestStore_WriteNeverReplacesExistingContainer(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := context.Background()
-	_, err := store.Write(ctx, "blog", "c1", map[string]string{"OLD": "x"})
-	require.NoError(t, err)
-	_, err = store.Write(ctx, "blog", "c1", map[string]string{"NEW": "y"})
+	_, err := store.Write(ctx, "blog", "c1", map[string]string{"K": "live"})
 	require.NoError(t, err)
 
-	_, err = store.Read(ctx, "blog", "c1", "OLD")
+	_, err = store.Write(ctx, "blog", "c1", map[string]string{"K": "other"})
 	require.Error(t, err)
-	got, err := store.Read(ctx, "blog", "c1", "NEW")
+	assert.NotContains(t, err.Error(), store.Dir())
+
+	got, err := store.Read(ctx, "blog", "c1", "K")
 	require.NoError(t, err)
-	assert.Equal(t, "y", got)
+	assert.Equal(t, "live", got, "a live container's files stay intact")
 }
 
 func TestStore_RemoveAndList(t *testing.T) {

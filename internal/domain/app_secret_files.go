@@ -22,7 +22,12 @@ func (s AppService) SecretAsFile(key string) bool {
 }
 
 // validateSecretFiles checks the file-delivered secret keys of one service.
+// <KEY>_FILE collisions with public env are checked by
+// checkEnvSecretKeyDisjoint, which sees both app and service env.
 func (s *AppService) validateSecretFiles() error {
+	if !slices.IsSorted(s.SecretFiles) {
+		return fmt.Errorf("%w: service %q secret file keys must be sorted", ErrInvalidAppSpec, s.Name)
+	}
 	seen := make(map[string]struct{}, len(s.SecretFiles))
 	for _, key := range s.SecretFiles {
 		if _, ok := s.Secrets[key]; !ok {
@@ -35,9 +40,6 @@ func (s *AppService) validateSecretFiles() error {
 		fileKey := SecretFileEnvKey(key)
 		if _, ok := s.Secrets[fileKey]; ok {
 			return fmt.Errorf("%w: service %q secret key %q collides with a secret file key", ErrInvalidAppSpec, s.Name, fileKey)
-		}
-		if _, ok := s.Env[fileKey]; ok {
-			return fmt.Errorf("%w: service %q env key %q collides with a secret file key", ErrInvalidAppSpec, s.Name, fileKey)
 		}
 	}
 	if len(s.SecretFiles) == 0 {

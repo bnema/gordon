@@ -102,6 +102,34 @@ func TestCreateWithSecretFiles_CreateFailureRemovesFiles(t *testing.T) {
 	assert.NotContains(t, err.Error(), path)
 }
 
+func TestCreateWithSecretFiles_WriteFailureSkipsCreate(t *testing.T) {
+	store := outmocks.NewMockSecretFileStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
+
+	store.EXPECT().Write(mock.Anything, "blog", "c", mock.Anything).Return(nil, errors.New("disk full")).Once()
+
+	_, err := svc.createWithSecretFiles(context.Background(), "blog", "web", &domain.ContainerConfig{Name: "c"}, map[string]string{"B": testFileSecretValue})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), testFileSecretValue)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+}
+
+func TestCreateWithSecretFiles_CleanupFailureKeepsCreateError(t *testing.T) {
+	store := outmocks.NewMockSecretFileStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
+
+	store.EXPECT().Write(mock.Anything, "blog", "c", mock.Anything).
+		Return(map[string]string{"B": testSecretFileBase + "/blog/c/B"}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(nil, errors.New("create failed")).Once()
+	store.EXPECT().Remove(mock.Anything, "blog", "c").Return(errors.New("busy")).Once()
+
+	_, err := svc.createWithSecretFiles(context.Background(), "blog", "web", &domain.ContainerConfig{Name: "c"}, map[string]string{"B": "v"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "runtime error redacted")
+}
+
 func TestCreateWithSecretFiles_NilStoreRefuses(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	svc := NewService(Deps{Runtime: runtime}, zerowrap.Default())
@@ -208,6 +236,29 @@ func TestSweepSecretFiles(t *testing.T) {
 	t.Run("nil store", func(t *testing.T) {
 		svc := NewService(Deps{}, zerowrap.Default())
 		require.NoError(t, svc.SweepSecretFiles(context.Background()))
+	})
+
+	t.Run("runtime list error removes nothing", func(t *testing.T) {
+		store := outmocks.NewMockSecretFileStore(t)
+		runtime := outmocks.NewMockContainerRuntime(t)
+		store.EXPECT().List(mock.Anything).Return(sets, nil).Once()
+		runtime.EXPECT().ListContainers(mock.Anything, true).Return(nil, errors.New("daemon down")).Once()
+
+		svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
+		require.Error(t, svc.SweepSecretFiles(context.Background()))
+		store.AssertNotCalled(t, "Remove", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("partial remove failure continues", func(t *testing.T) {
+		store := outmocks.NewMockSecretFileStore(t)
+		runtime := outmocks.NewMockContainerRuntime(t)
+		store.EXPECT().List(mock.Anything).Return(sets, nil).Once()
+		runtime.EXPECT().ListContainers(mock.Anything, true).Return(live, nil).Once()
+		store.EXPECT().Remove(mock.Anything, "blog", "gordon-blog--web--a").Return(errors.New("busy")).Once()
+		store.EXPECT().Remove(mock.Anything, "other", "gordon-other--x--c").Return(nil).Once()
+
+		svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
+		require.Error(t, svc.SweepSecretFiles(context.Background()))
 	})
 }
 

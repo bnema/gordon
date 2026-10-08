@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
 // sweepAppSecretFiles removes the secret file directories of app whose
@@ -33,7 +35,7 @@ func (s *Service) sweepSecretFiles(ctx context.Context, filter string) error {
 		return fmt.Errorf("deployment: list secret files: %w", err)
 	}
 	if filter != "" {
-		kept := sets[:0]
+		kept := make([]out.SecretFileSet, 0, len(sets))
 		for _, set := range sets {
 			if set.App == filter {
 				kept = append(kept, set)
