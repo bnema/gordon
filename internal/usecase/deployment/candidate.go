@@ -199,6 +199,9 @@ func (s *Service) createWithSecretFiles(ctx context.Context, app, service string
 }
 
 func (s *Service) createContainer(ctx context.Context, service string, config *domain.ContainerConfig) (*domain.Container, error) {
+	if err := s.deps.Guard.Check(config); err != nil {
+		return nil, fmt.Errorf("deployment: create container for service %q: %w", service, err)
+	}
 	created, err := s.deps.Runtime.CreateContainer(ctx, config)
 	if err == nil {
 		return created, nil

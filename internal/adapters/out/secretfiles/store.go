@@ -38,7 +38,11 @@ var _ out.SecretFileStore = (*Store)(nil)
 
 // NewStore opens (creating if needed) <dataDir>/secrets-run.
 func NewStore(dataDir string) (*Store, error) {
-	dir := filepath.Join(dataDir, "secrets-run")
+	// Bind sources must be absolute: resolve a relative data dir once.
+	dir, err := filepath.Abs(filepath.Join(dataDir, "secrets-run"))
+	if err != nil {
+		return nil, fmt.Errorf("secret files: resolve base directory: %w", err)
+	}
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, fmt.Errorf("secret files: create base directory: %w", err)
 	}

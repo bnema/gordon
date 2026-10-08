@@ -559,6 +559,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "bind-policy-violation", err.Error(), "", "check the administrative mount authorization")
 	case errors.Is(err, domain.ErrDevicePolicy):
 		h.sendAppError(w, http.StatusBadRequest, "device-policy-violation", err.Error(), "", "check the administrative device authorization")
+	case errors.Is(err, domain.ErrRuntimeGuard):
+		h.sendAppError(w, http.StatusBadRequest, "runtime-guard-violation", err.Error(), "", "check administrative mounts and network settings")
 	case errors.Is(err, domain.ErrRuntimeUnsupported):
 		h.sendAppError(w, http.StatusBadRequest, "runtime-unsupported", err.Error(), "", "use an engine with native CDI support")
 	case errors.Is(err, domain.ErrAppReservationConflict):

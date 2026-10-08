@@ -88,6 +88,10 @@ func (si *serviceInit) initApps() error {
 	if err != nil {
 		return err
 	}
+	secretFiles, guard, err := buildAppRuntimeSafety(si, dataDir)
+	if err != nil {
+		return si.log.WrapErr(err, "failed to prepare app runtime safety")
+	}
 	si.svc.appDeploySvc = deployment.NewService(deployment.Deps{
 		State:   store,
 		Runtime: si.svc.runtime,
@@ -106,7 +110,14 @@ func (si *serviceInit) initApps() error {
 		Limits:      limits,
 		ImagePolicy: imagePolicy,
 		Traffic:     si.svc.appTrafficPublisher,
+		SecretFiles: secretFiles,
+		Guard:       guard,
 	}, si.log).WithGCBarrier(si.svc.gcBarrier)
+	// createServices runs before any listener starts, so no deploy can
+	// race this sweep of secret files left by crashes or downgrades.
+	if err := si.svc.appDeploySvc.SweepSecretFiles(si.ctx); err != nil {
+		si.log.Warn().Err(err).Msg("failed to sweep orphan secret files")
+	}
 	si.svc.appActivator = apptraffic.NewActivator(si.log)
 	mountPolicies, err := buildAppMountPolicies(si.cfg)
 	if err != nil {

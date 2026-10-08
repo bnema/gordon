@@ -682,6 +682,23 @@ func TestHandler_AppApply_MapsDevicePolicyViolation(t *testing.T) {
 	assert.Equal(t, "device-policy-violation", envelope.Error)
 }
 
+func TestHandler_AppDeploy_MapsRuntimeGuardViolation(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	appSvc.EXPECT().Deploy(mock.Anything, "blog", "", "", false, "test-operation-key").Return(
+		nil,
+		fmt.Errorf("deployment: create container for service %q: %w: bind %q overlaps a protected Gordon path", "web", domain.ErrRuntimeGuard, "conf"),
+	).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/blog/deploy",
+		dto.AppDeployRequest{}, "admin:apps:write")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var envelope dto.AppError
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "runtime-guard-violation", envelope.Error)
+}
+
 func TestHandler_AppApply_MapsRuntimeUnsupported(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
