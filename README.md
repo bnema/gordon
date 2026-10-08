@@ -12,9 +12,9 @@ Self-hosted container deployment. Push an image, declare an app, deploy it.
 
 ## What is Gordon?
 
-Gordon is a private container registry, an app runtime, and a reverse proxy for your VPS.
+Gordon is a private image container registry, an app runtime, and a reverse proxy for your VPS.
 
-The flow is explicit: build and push an image, declare the app in a standalone TOML file, apply it, then deploy. Push transfers OCI content only — it never deploys.
+The flow is explicit: you build an image locally, push it to your registry then declare the app in a standalone TOML file, apply it, deploy and it's live.
 
 ## Quick Start
 
@@ -25,16 +25,13 @@ curl -fsSL https://bnema.dev/gordon/install | sh
 # Start the server (restart your shell first if the installer updated PATH)
 gordon serve
 ```
-
-The installer uses `~/.local/bin` without `sudo` and can add the effective install directory to Fish, Bash, or Zsh PATH configuration. Set `GORDON_UPDATE_PATH=1` to update PATH without prompting or `GORDON_UPDATE_PATH=0` to leave configuration unchanged. Override the destination with an absolute path such as `GORDON_INSTALL_DIR="$HOME/bin"`, `GORDON_INSTALL_DIR="$HOME/.local/bin"`, or `GORDON_INSTALL_DIR=/usr/local/bin`.
-
-To build the current `next` branch commit locally, use `GORDON_CHANNEL=next`. This is an unverified development source build, not a checksum-verified release, and requires a compatible Go toolchain. See the [installation guide](https://bnema.dev/gordon/docs/installation#choosing-an-install-channel).
+See the [installation guide](https://bnema.dev/gordon/docs/installation#choosing-an-install-channel) for more.
 
 Config is created at `~/.config/gordon/gordon.toml`. See the [Getting Started guide](https://bnema.dev/gordon/docs/getting-started) for full setup.
 
 ## Deploy with the CLI
 
-Build locally, push to your Gordon server, declare the app, deploy:
+Example of the flow :
 
 ```bash
 # Push the image (OCI transfer only, never deploys)
