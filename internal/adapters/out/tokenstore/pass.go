@@ -482,14 +482,12 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	metaPath := fmt.Sprintf("%s/%s.meta", passTokenPath, subject)
 
 	// Remove JWT
-	// #nosec G204 -- command and args are fixed; subject is treated as data only.
 	cmd := childenv.CommandContext(ctx, "pass", "rm", "-f", jwtPath)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete token: %w", err)
 	}
 
 	// Remove metadata
-	// #nosec G204 -- command and args are fixed; subject is treated as data only.
 	cmd = childenv.CommandContext(ctx, "pass", "rm", "-f", metaPath)
 	if err := cmd.Run(); err != nil {
 		s.log.Warn().Err(err).Msg("failed to delete token metadata")
@@ -548,6 +546,8 @@ func (s *PassStore) getRevokedList(ctx context.Context) ([]string, error) {
 
 // IsAvailable checks if pass is available in the system.
 func (s *PassStore) IsAvailable() bool {
-	cmd := childenv.CommandContext(context.Background(), "pass", "version")
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	cmd := childenv.CommandContext(ctx, "pass", "version")
 	return cmd.Run() == nil
 }

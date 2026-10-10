@@ -118,6 +118,10 @@ func TestRuntimeGuard_ReadOnlyLogDirs(t *testing.T) {
 	logs := filepath.Join(dataDir, "logs")
 	require.NoError(t, os.MkdirAll(filepath.Join(logs, "containers"), 0o700))
 	keys := filepath.Join(dataDir, "logs", "keys")
+	secrets := filepath.Join(dataDir, "secrets-run")
+	require.NoError(t, os.MkdirAll(secrets, 0o700))
+	escape := filepath.Join(logs, "escape")
+	require.NoError(t, os.Symlink(secrets, escape))
 	guard := domain.RuntimeGuard{ProtectedPaths: []string{dataDir}, LogDirs: []string{logs}}
 	bind := func(source string, readOnly bool) *domain.ContainerConfig {
 		return guardConfig(domain.ContainerBind{Name: "logs", Source: source, Destination: "/var/log/gordon", ReadOnly: readOnly})
@@ -135,6 +139,7 @@ func TestRuntimeGuard_ReadOnlyLogDirs(t *testing.T) {
 		"writable log subdir":    {guard, bind(filepath.Join(logs, "containers"), false)},
 		"data dir read-only":     {guard, bind(dataDir, true)},
 		"sibling of logs":        {guard, bind(filepath.Join(dataDir, "registry"), true)},
+		"symlink out of logs":    {guard, bind(escape, true)},
 		"log dir with protected": {withProtected, bind(logs, true)},
 	}
 	for name, tc := range refused {

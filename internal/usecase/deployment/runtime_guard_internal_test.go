@@ -56,7 +56,7 @@ func TestCreateWithSecretFiles_GuardAllowsOwnSecretBind(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestResolveGuardedBinds_RefusesProtectedSource(t *testing.T) {
+func TestResolveServiceBinds_GuardRefusesProtectedSource(t *testing.T) {
 	protected := t.TempDir()
 	svc := NewService(Deps{Guard: domain.RuntimeGuard{ProtectedPaths: []string{protected}}}, zerowrap.Default()).
 		WithBindPolicies(map[string]domain.AppBindPolicy{
@@ -69,4 +69,25 @@ func TestResolveGuardedBinds_RefusesProtectedSource(t *testing.T) {
 	})
 	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
 	assert.NotContains(t, err.Error(), protected)
+}
+
+// TestCreateAndStart_GuardRefusesBeforeRuntimeMutation proves the guard in
+// resolveServiceBinds stops a protected bind before secrets, volumes, or
+// container create.
+func TestCreateAndStart_GuardRefusesBeforeRuntimeMutation(t *testing.T) {
+	protected := t.TempDir()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{Runtime: runtime, Guard: domain.RuntimeGuard{ProtectedPaths: []string{protected}}}, zerowrap.Default()).
+		WithBindPolicies(map[string]domain.AppBindPolicy{
+			"config": bindPolicyFor(protected, protected, true, []string{"blog"}, []string{"web"}),
+		})
+	p := pinnedService{name: "web", spec: domain.AppService{
+		Name:  "web",
+		Binds: []domain.AppBind{{Name: "config", Path: "/etc/app", ReadOnly: true}},
+	}}
+
+	_, err := svc.createAndStart(context.Background(), "blog", "rev-1", p, "op-1", nil)
+	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "CreateVolume", mock.Anything, mock.Anything)
 }

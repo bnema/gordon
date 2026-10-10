@@ -192,7 +192,7 @@ Protected paths:
 
 A protected path that does not exist yet is also protected in its symlink-resolved form, based on its closest existing parent. Backup directories are protected: a backup app cannot bind them, even read-only.
 
-Gordon's log directories (the Gordon log file's directory, the access log's directory, and `logging.container_logs.dir`) can be bound read-only, even under the data directory, so a log shipper can read them. A writable bind on them is refused, as is a log directory that is or contains another protected path.
+Gordon's enabled file logs (the Gordon log file's directory, the access log's directory, and `logging.container_logs.dir`) can be bound read-only so a log shipper can read them. Under the data directory this applies only at or under `<data_dir>/logs`; outside it, only when the directory neither is, contains, nor lies under another protected path. A writable bind on them is refused. When a log directory does not qualify, for example a log file directly in `$HOME`, the log file itself stays protected and no read-only exception applies.
 
 The only other exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy fails before the running generation is replaced or restarted. Point the policy `source` outside every protected path.
 

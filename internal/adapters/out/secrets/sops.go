@@ -108,8 +108,8 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 	// Convert dot notation to sops --extract Python dictionary syntax
 	extractPath := convertToSopsExtractPath(keyPath)
 
-	// Use sops -d --extract to get specific key
-	// #nosec G204 - filePath and keyPath are validated above
+	// Use sops -d --extract to get specific key; filePath and keyPath are
+	// validated above.
 	cmd := childenv.CommandContext(ctx, "sops", "-d", "--extract", extractPath, cleanPath)
 	output, err := cmd.Output()
 	if err != nil {
@@ -136,7 +136,9 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 
 // IsAvailable checks if sops is available in the system.
 func (s *SopsProvider) IsAvailable() bool {
-	cmd := childenv.CommandContext(context.Background(), "sops", "--version")
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	cmd := childenv.CommandContext(ctx, "sops", "--version")
 	err := cmd.Run()
 	return err == nil
 }

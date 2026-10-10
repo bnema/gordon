@@ -103,19 +103,73 @@ func TestConfiguredGordonPaths(t *testing.T) {
 	assert.Contains(t, got, "/tls/key.pem")
 	assert.Contains(t, got, "/backups")
 	assert.NotContains(t, got, "/logs/access.log")
+}
 
-	assert.ElementsMatch(t, []string{"/data/logs", "/data/logs/containers", "/logs"}, gordonLogDirs(si.cfg, "/data"))
+func TestGordonLogLocations(t *testing.T) {
+	var cfg Config
+	cfg.Server.DataDir = "/data"
+	cfg.Logging.AccessLog.FilePath = "/logs/access.log"
+	assert.Empty(t, gordonLogLocations(cfg, "/data"), "disabled logs grant nothing")
+
+	cfg.Logging.File.Enabled = true
+	cfg.Logging.AccessLog.Enabled = true
+	cfg.Logging.AccessLog.Output = "file"
+	cfg.Logging.ContainerLogs.Enabled = true
+	assert.ElementsMatch(t, []logLocation{
+		{dir: "/data/logs", path: "/data/logs/gordon.log"},
+		{dir: "/logs", path: "/logs/access.log"},
+		{dir: "/data/logs/containers", path: "/data/logs/containers"},
+	}, gordonLogLocations(cfg, "/data"))
+
+	cfg.Logging.AccessLog.Output = "stdout"
+	assert.Len(t, gordonLogLocations(cfg, "/data"), 2, "non-file access log grants nothing")
 }
 
 func TestReadableLogDirs(t *testing.T) {
-	protected := []string{"/data", "/home/u/.gnupg", "/srv/logs/keys"}
-	got := readableLogDirs([]string{"/data/logs", "/home/u/.gnupg/logs", "/srv/logs", "/var/log/gordon"}, protected, "/data")
-	assert.Equal(t, []string{"/data/logs", "/var/log/gordon"}, got)
+	protected := []string{"/data", "/home/u", "/home/u/.gnupg", "/srv/logs/keys"}
+	loc := func(dir string) logLocation { return logLocation{dir: dir, path: dir + "/x.log"} }
+	readable, keep := readableLogDirs([]logLocation{
+		loc("/data/logs"),
+		loc("/data/logs/containers"),
+		loc("/data"),              // data dir root
+		loc("/data/secrets-run"),  // data child outside logs
+		loc("/data/secrets"),      // data child outside logs
+		loc("/home/u"),            // protected itself
+		loc("/home/u/.gnupg/log"), // under a key store
+		loc("/srv/logs"),          // contains a protected path
+		loc("/srv"),               // ancestor of a protected path
+		loc("/var/log/gordon"),
+	}, protected, "/data")
+	assert.Equal(t, []string{"/data/logs", "/data/logs/containers", "/var/log/gordon"}, readable)
+	assert.Equal(t, []string{
+		"/data/x.log", "/data/secrets-run/x.log", "/data/secrets/x.log", "/home/u/x.log",
+		"/home/u/.gnupg/log/x.log", "/srv/logs/x.log", "/srv/x.log",
+	}, keep)
+}
+
+func TestBuildAppRuntimeSafety_DroppedLogStaysProtected(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	si := &serviceInit{}
+	si.cfg.Logging.File.Enabled = true
+	si.cfg.Logging.File.Path = filepath.Join(home, "gordon.log")
+	store, guard, err := buildAppRuntimeSafety(si, t.TempDir())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.(*secretfiles.Store).Close() })
+
+	// $HOME contains key stores, so it is no readable log dir, and the
+	// log file itself stays protected even against a writable bind.
+	assert.NotContains(t, guard.LogDirs, home)
+	err = guard.Check(&domain.ContainerConfig{Binds: []domain.ContainerBind{{Name: "log", Source: filepath.Join(home, "gordon.log"), Destination: "/log"}}})
+	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
 }
 
 func TestBuildAppRuntimeSafety(t *testing.T) {
 	dataDir := t.TempDir()
-	store, guard, err := buildAppRuntimeSafety(&serviceInit{}, dataDir)
+	si := &serviceInit{}
+	si.cfg.Logging.ContainerLogs.Enabled = true
+	si.cfg.Logging.File.Enabled = true
+	store, guard, err := buildAppRuntimeSafety(si, dataDir)
 	require.NoError(t, err)
 	require.NotNil(t, store)
 	t.Cleanup(func() { _ = store.(*secretfiles.Store).Close() })
