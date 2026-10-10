@@ -19,8 +19,6 @@ func TestAppSpec_ValidateSecretFilesOK(t *testing.T) {
 	require.NoError(t, fileSecretSpec().Validate())
 	assert.True(t, fileSecretSpec().Services[0].SecretAsFile("DATABASE_URL"))
 	assert.False(t, validSpec().Services[0].SecretAsFile("DATABASE_URL"))
-	assert.Equal(t, "DATABASE_URL_FILE", domain.SecretFileEnvKey("DATABASE_URL"))
-	assert.Equal(t, "/run/secrets/DATABASE_URL", domain.SecretFilePath("DATABASE_URL"))
 }
 
 func TestAppSpec_ValidateSecretFilesErrors(t *testing.T) {

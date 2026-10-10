@@ -15,29 +15,28 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestCreateContainer_GuardRefusesHostNetwork(t *testing.T) {
-	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := NewService(Deps{Runtime: runtime}, zerowrap.Default())
-
-	_, err := svc.createContainer(context.Background(), "web", &domain.ContainerConfig{Name: "c", NetworkMode: "host"})
-	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
-	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
-}
-
-func TestCreateContainer_GuardRefusesProtectedBind(t *testing.T) {
+func TestCreateContainer_GuardRefuses(t *testing.T) {
 	protected := t.TempDir()
 	child := filepath.Join(protected, "registry")
 	require.NoError(t, os.MkdirAll(child, 0o700))
-	runtime := outmocks.NewMockContainerRuntime(t)
-	svc := NewService(Deps{Runtime: runtime, Guard: domain.RuntimeGuard{ProtectedPaths: []string{protected}}}, zerowrap.Default())
+	cases := map[string]*domain.ContainerConfig{
+		"host network": {Name: "c", NetworkMode: "host"},
+		"protected bind": {
+			Name:  "c",
+			Binds: []domain.ContainerBind{{Name: "conf", Source: child, Destination: "/etc/app", ReadOnly: true}},
+		},
+	}
+	for name, config := range cases {
+		t.Run(name, func(t *testing.T) {
+			runtime := outmocks.NewMockContainerRuntime(t)
+			svc := NewService(Deps{Runtime: runtime, Guard: domain.RuntimeGuard{ProtectedPaths: []string{protected}}}, zerowrap.Default())
 
-	_, err := svc.createContainer(context.Background(), "web", &domain.ContainerConfig{
-		Name:  "c",
-		Binds: []domain.ContainerBind{{Name: "conf", Source: child, Destination: "/etc/app", ReadOnly: true}},
-	})
-	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
-	assert.NotContains(t, err.Error(), protected)
-	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+			_, err := svc.createContainer(context.Background(), "web", config)
+			require.ErrorIs(t, err, domain.ErrRuntimeGuard)
+			assert.NotContains(t, err.Error(), protected)
+			runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+		})
+	}
 }
 
 func TestCreateWithSecretFiles_GuardAllowsOwnSecretBind(t *testing.T) {
@@ -64,7 +63,7 @@ func TestResolveGuardedBinds_RefusesProtectedSource(t *testing.T) {
 			"config": bindPolicyFor(protected, protected, true, []string{"blog"}, []string{"web"}),
 		})
 
-	_, err := svc.resolveGuardedBinds("blog", domain.AppService{
+	_, err := svc.resolveServiceBinds("blog", domain.AppService{
 		Name:  "web",
 		Binds: []domain.AppBind{{Name: "config", Path: "/etc/app", ReadOnly: true}},
 	})

@@ -591,7 +591,7 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	// Revalidate the current authorization and source before withdrawing or
 	// retiring the serving generation. A reload between preflight and this
 	// service step must fail without mutating the existing workload.
-	if _, err := s.resolveGuardedBinds(app, p.spec); err != nil {
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
 		return s.failResult(revision, before, "", err)
 	}
 	if _, err := s.resolveServiceDevices(app, p.spec); err != nil {

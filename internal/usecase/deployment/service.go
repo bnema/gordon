@@ -279,22 +279,14 @@ func (s *Service) resolveServiceBinds(app string, svc domain.AppService) ([]doma
 		}
 		resolved = append(resolved, domain.ContainerBind(r))
 	}
-	return resolved, nil
-}
-
-// resolveGuardedBinds resolves the service binds and applies the runtime
-// guard to them, so a bind overlapping a protected Gordon path fails at
-// preflight and before the serving generation is retired, not only at
-// create time. createContainer keeps the full guard as the final check.
-func (s *Service) resolveGuardedBinds(app string, svc domain.AppService) ([]domain.ContainerBind, error) {
-	binds, err := s.resolveServiceBinds(app, svc)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.deps.Guard.Check(&domain.ContainerConfig{Binds: binds}); err != nil {
+	// Apply the runtime guard here so a bind overlapping a protected
+	// Gordon path fails at preflight and before the serving generation is
+	// retired, not only at create time. createContainer keeps the full
+	// guard as the final check.
+	if err := s.deps.Guard.Check(&domain.ContainerConfig{Binds: resolved}); err != nil {
 		return nil, fmt.Errorf("deployment: app %q service %q: %w", app, svc.Name, err)
 	}
-	return binds, nil
+	return resolved, nil
 }
 
 // acquireAppContext takes the GC shared lease first and the per-app
@@ -738,7 +730,7 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		// must fail before any workload mutation. The successful values
 		// are discarded because createAndStart re-resolves against the
 		// current policy immediately before the runtime mutation.
-		if _, err := s.resolveGuardedBinds(app, svc); err != nil {
+		if _, err := s.resolveServiceBinds(app, svc); err != nil {
 			return nil, err
 		}
 		if err := s.preflightServiceDevices(ctx, app, svc, pinned); err != nil {

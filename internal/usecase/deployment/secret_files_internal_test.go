@@ -127,7 +127,10 @@ func TestCreateWithSecretFiles_CleanupFailureKeepsCreateError(t *testing.T) {
 
 	_, err := svc.createWithSecretFiles(context.Background(), "blog", "web", &domain.ContainerConfig{Name: "c"}, map[string]string{"B": "v"})
 	require.Error(t, err)
+	// The create error is returned; the cleanup error is only logged.
+	assert.Contains(t, err.Error(), `"web"`)
 	assert.Contains(t, err.Error(), "runtime error redacted")
+	assert.NotContains(t, err.Error(), "busy")
 }
 
 func TestCreateWithSecretFiles_NilStoreRefuses(t *testing.T) {
@@ -208,7 +211,7 @@ func TestSweepSecretFiles(t *testing.T) {
 		store.EXPECT().Remove(mock.Anything, "blog", "gordon-blog--web--a").Return(nil).Once()
 
 		svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
-		require.NoError(t, svc.sweepAppSecretFiles(context.Background(), "blog"))
+		require.NoError(t, svc.sweepSecretFiles(context.Background(), "blog"))
 	})
 
 	t.Run("all apps", func(t *testing.T) {
@@ -229,7 +232,7 @@ func TestSweepSecretFiles(t *testing.T) {
 		store.EXPECT().List(mock.Anything).Return(sets, nil).Once()
 
 		svc := NewService(Deps{Runtime: runtime, SecretFiles: store}, zerowrap.Default())
-		require.NoError(t, svc.sweepAppSecretFiles(context.Background(), "ghost"))
+		require.NoError(t, svc.sweepSecretFiles(context.Background(), "ghost"))
 		runtime.AssertNotCalled(t, "ListContainers", mock.Anything, mock.Anything)
 	})
 

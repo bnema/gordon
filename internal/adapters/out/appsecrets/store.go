@@ -7,7 +7,6 @@ package appsecrets
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -41,8 +40,7 @@ func (s *Store) SetSecret(ctx context.Context, path, value string) error {
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(timeoutCtx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path validated below
-	cmd.Env = childenv.Env()
+	cmd := childenv.CommandContext(timeoutCtx, "pass", "insert", "-m", "-f", path)
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -59,8 +57,7 @@ func (s *Store) DeleteSecret(ctx context.Context, path string) error {
 	}
 	timeoutCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	cmd := exec.CommandContext(timeoutCtx, "pass", "rm", "-f", path) //nolint:gosec // binary is constant ("pass"); path validated below
-	cmd.Env = childenv.Env()
+	cmd := childenv.CommandContext(timeoutCtx, "pass", "rm", "-f", path)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("appsecrets: pass rm failed: %s: %w", strings.TrimSpace(string(output)), err)

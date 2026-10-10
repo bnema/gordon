@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -38,11 +37,7 @@ type Service struct {
 
 // execCommandContext starts journalctl without Gordon's GORDON_* variables:
 // the child is dumpable again after exec, so it must not carry secrets.
-var execCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass "journalctl" with internal args only
-	cmd.Env = childenv.Env()
-	return cmd
-}
+var execCommandContext = childenv.CommandContext
 
 // NewService creates a new log service. App state is wired after the store opens.
 func NewService(

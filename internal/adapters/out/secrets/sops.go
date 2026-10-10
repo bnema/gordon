@@ -110,8 +110,7 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 
 	// Use sops -d --extract to get specific key
 	// #nosec G204 - filePath and keyPath are validated above
-	cmd := exec.CommandContext(ctx, "sops", "-d", "--extract", extractPath, cleanPath)
-	cmd.Env = childenv.Env()
+	cmd := childenv.CommandContext(ctx, "sops", "-d", "--extract", extractPath, cleanPath)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitError, ok := err.(*exec.ExitError); ok {
@@ -137,7 +136,7 @@ func (s *SopsProvider) GetSecret(ctx context.Context, path string) (string, erro
 
 // IsAvailable checks if sops is available in the system.
 func (s *SopsProvider) IsAvailable() bool {
-	cmd := exec.Command("sops", "--version")
+	cmd := childenv.CommandContext(context.Background(), "sops", "--version")
 	err := cmd.Run()
 	return err == nil
 }

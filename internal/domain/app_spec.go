@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"path"
 	"reflect"
@@ -1128,15 +1129,7 @@ func appendOperationChanges(changed []string, name string, desired, effective Ap
 // appendSecretChanges appends sorted secret path changes when the secret
 // names or their delivery modes differ.
 func appendSecretChanges(changed []string, desired, effective AppService) []string {
-	if equalStringMaps(desired.Secrets, effective.Secrets) && slices.Equal(desired.SecretFiles, effective.SecretFiles) {
-		return changed
-	}
-	paths := make([]string, 0)
-	for path := range secretPathChanges(desired, effective) {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-	return append(changed, paths...)
+	return append(changed, slices.Sorted(maps.Keys(secretPathChanges(desired, effective)))...)
 }
 
 // secretPathChanges lists secret PATH changes (never values). A key whose

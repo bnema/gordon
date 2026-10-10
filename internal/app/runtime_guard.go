@@ -20,7 +20,7 @@ func protectedRuntimePaths(dataDir string, gordonPaths []string, getenv func(str
 	runtimeDir := getenv("XDG_RUNTIME_DIR")
 	configHome := getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
-		configHome = homePath(home, ".config")
+		configHome = subPath(home, ".config")
 	}
 	dockerHost, _ := strings.CutPrefix(getenv("DOCKER_HOST"), "unix://")
 	if strings.Contains(dockerHost, "://") {
@@ -34,18 +34,18 @@ func protectedRuntimePaths(dataDir string, gordonPaths []string, getenv func(str
 		subPath(runtimeDir, "docker.sock"),
 		subPath(runtimeDir, "podman", "podman.sock"),
 		subPath(runtimeDir, "gordon"),
-		homePath(home, ".gordon", "run"),
+		subPath(home, ".gordon", "run"),
 		dockerHost,
-		homePath(home, ".local", "share", "containers"),
-		homePath(home, ".local", "share", "docker"),
+		subPath(home, ".local", "share", "containers"),
+		subPath(home, ".local", "share", "docker"),
 		subPath(configHome, "containers"),
-		homePath(home, ".docker"),
+		subPath(home, ".docker"),
 		subPath(configHome, "systemd", "user"),
 		getenv("GORDON_CLOUDFLARE_API_TOKEN_FILE"),
 		getenv("GNUPGHOME"),
-		homePath(home, ".gnupg"),
+		subPath(home, ".gnupg"),
 		getenv("PASSWORD_STORE_DIR"),
-		homePath(home, ".password-store"),
+		subPath(home, ".password-store"),
 		getenv("SOPS_AGE_KEY_FILE"),
 		subPath(configHome, "sops", "age"),
 	}, gordonPaths...)
@@ -99,12 +99,6 @@ func subPath(base string, elems ...string) string {
 		return ""
 	}
 	return filepath.Join(append([]string{base}, elems...)...)
-}
-
-// homePath joins elems under the home directory, or returns "" when the
-// home directory is unknown.
-func homePath(home string, elems ...string) string {
-	return subPath(home, elems...)
 }
 
 // configuredGordonPaths returns the config file, the runtime socket in use,

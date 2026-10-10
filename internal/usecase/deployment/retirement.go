@@ -94,7 +94,9 @@ func (s *Service) retireContainer(ctx context.Context, app string, opts retireOp
 			Service: opts.Service, Leftover: containerID, Detail: "release backend claims: " + err.Error(),
 		})
 	}
-	if err := s.sweepAppSecretFiles(ctx, app); err != nil {
+	// The app lock is held, so no candidate of this app can be between
+	// secret file write and container create.
+	if err := s.sweepSecretFiles(ctx, app); err != nil {
 		// Fixed detail: the error may name host paths, which must stay
 		// out of journals and API responses.
 		log := zerowrap.FromCtx(ctx)

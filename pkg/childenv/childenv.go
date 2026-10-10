@@ -5,9 +5,19 @@
 package childenv
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"strings"
 )
+
+// CommandContext is exec.CommandContext with Env set to Env(). Use it for
+// every child process the daemon starts.
+func CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...) // #nosec G204 -- callers pass constant binaries with validated args
+	cmd.Env = Env()
+	return cmd
+}
 
 // Env returns the current environment without GORDON_* variables.
 func Env() []string {

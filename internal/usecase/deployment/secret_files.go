@@ -8,13 +8,6 @@ import (
 	"github.com/bnema/gordon/internal/boundaries/out"
 )
 
-// sweepAppSecretFiles removes the secret file directories of app whose
-// container no longer exists in the runtime. Callers hold the app lock,
-// so no candidate of this app can be between file write and create.
-func (s *Service) sweepAppSecretFiles(ctx context.Context, app string) error {
-	return s.sweepSecretFiles(ctx, app)
-}
-
 // SweepSecretFiles removes every secret file directory whose container no
 // longer exists, across all apps. It takes no locks: it runs once at
 // startup, before any listener (and so any deploy) exists.

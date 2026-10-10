@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/adapters/out/secretfiles"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -60,8 +61,14 @@ func TestProtectedRuntimePaths_AllSources(t *testing.T) {
 }
 
 func TestProtectedRuntimePaths_SkipsEmptyAndTCP(t *testing.T) {
+	// Subset, not Equal: on hosts where a fixed path crosses a symlink
+	// (for example /var -> /private/var) its resolved form is added too.
 	got := protectedRuntimePaths("/data", nil, fakeEnv(map[string]string{"DOCKER_HOST": "tcp://h:2375"}), "")
-	assert.Equal(t, []string{"/data", "/run/docker.sock", "/run/podman/podman.sock", "/var/run/docker.sock"}, got)
+	assert.Subset(t, got, []string{"/data", "/run/docker.sock", "/run/podman/podman.sock", "/var/run/docker.sock"})
+	for _, p := range got {
+		assert.NotContains(t, p, "tcp:")
+		assert.NotContains(t, p, "h:2375")
+	}
 }
 
 func TestProtectedRuntimePaths_SymlinkAddsBothForms(t *testing.T) {
@@ -111,6 +118,7 @@ func TestBuildAppRuntimeSafety(t *testing.T) {
 	store, guard, err := buildAppRuntimeSafety(&serviceInit{}, dataDir)
 	require.NoError(t, err)
 	require.NotNil(t, store)
+	t.Cleanup(func() { _ = store.(*secretfiles.Store).Close() })
 	assert.Equal(t, filepath.Join(dataDir, "secrets-run"), guard.SecretFilesDir)
 	assert.Contains(t, guard.ProtectedPaths, dataDir)
 
