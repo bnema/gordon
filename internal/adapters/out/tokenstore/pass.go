@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/pkg/childenv"
 )
 
 // ansiRegex matches ANSI escape sequences for stripping from pass output.
@@ -337,7 +337,7 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 	defer cancel()
 
 	// List all entries under the token path
-	cmd := exec.CommandContext(ctx, "pass", "ls", passTokenPath) //nolint:gosec // passTokenPath is a fixed constant
+	cmd := childenv.CommandContext(ctx, "pass", "ls", passTokenPath)
 	output, err := cmd.Output()
 	if err != nil {
 		// If the path doesn't exist, return empty list
@@ -482,15 +482,13 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 	metaPath := fmt.Sprintf("%s/%s.meta", passTokenPath, subject)
 
 	// Remove JWT
-	// #nosec G204 -- command and args are fixed; subject is treated as data only.
-	cmd := exec.CommandContext(ctx, "pass", "rm", "-f", jwtPath)
+	cmd := childenv.CommandContext(ctx, "pass", "rm", "-f", jwtPath)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to delete token: %w", err)
 	}
 
 	// Remove metadata
-	// #nosec G204 -- command and args are fixed; subject is treated as data only.
-	cmd = exec.CommandContext(ctx, "pass", "rm", "-f", metaPath)
+	cmd = childenv.CommandContext(ctx, "pass", "rm", "-f", metaPath)
 	if err := cmd.Run(); err != nil {
 		s.log.Warn().Err(err).Msg("failed to delete token metadata")
 	}
@@ -511,7 +509,7 @@ func (s *PassStore) DeleteToken(ctx context.Context, subject string) error {
 
 // passInsert inserts a value into pass.
 func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
-	cmd := exec.CommandContext(ctx, "pass", "insert", "-m", "-f", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
+	cmd := childenv.CommandContext(ctx, "pass", "insert", "-m", "-f", path)
 	cmd.Stdin = strings.NewReader(value)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -522,7 +520,7 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 
 // passShow retrieves a value from pass.
 func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
-	cmd := exec.CommandContext(ctx, "pass", "show", path) //nolint:gosec // binary is constant ("pass"); path arguments are sanitized token subjects
+	cmd := childenv.CommandContext(ctx, "pass", "show", path)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("pass show failed: %w", err)
@@ -548,6 +546,8 @@ func (s *PassStore) getRevokedList(ctx context.Context) ([]string, error) {
 
 // IsAvailable checks if pass is available in the system.
 func (s *PassStore) IsAvailable() bool {
-	cmd := exec.Command("pass", "version")
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeout)
+	defer cancel()
+	cmd := childenv.CommandContext(ctx, "pass", "version")
 	return cmd.Run() == nil
 }

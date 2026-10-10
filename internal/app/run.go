@@ -32,6 +32,12 @@ import (
 
 // Run initializes and starts the Gordon application.
 func Run(ctx context.Context, configPath string) error {
+	// Before any secret is loaded: keep same-UID processes out of this
+	// process's /proc entries (environ, mem, fds) and disable core dumps.
+	if err := disableDumpable(); err != nil {
+		return fmt.Errorf("failed to disable process dumping: %w", err)
+	}
+
 	// Load configuration
 	v, cfg, err := initConfig(configPath)
 	if err != nil {

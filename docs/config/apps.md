@@ -52,7 +52,9 @@ port = 8080                      # required; no host or tls
 LOG_LEVEL = "debug"              # overrides an app-wide [env] key of the same name
 
 [services.web.secrets]           # ENV name -> secret name (values in pass)
-DATABASE_URL = "database-url"
+API_KEY = "api-key"                                     # env delivery
+DATABASE_URL = { name = "database-url", as = "file" }   # /run/secrets/DATABASE_URL
+DB_PASS = { name = "db-pass", as = "env" }              # explicit env delivery
 
 [[services.web.volume]]          # 0..n named volumes only
 name = "web-data"
@@ -113,6 +115,10 @@ Image registry names and digest syntax are validated during manifest apply, reso
 - `[env]` is app-wide public env injected into all services. Each key must be disjoint from every `[services.<name>.secrets]` key in the app.
 - `[services.<name>.env]` is public env for that service only. A key here overrides the same key in `[env]` for this service. Each key must be disjoint from the same service's `[services.<name>.secrets]` keys. Values follow the `[env]` rules: no newlines, 1 byte to 64 KiB, no secret references. Values are stored in revisions and shown in plain text, so use secrets for anything sensitive. A change shows as `service/<name>/env` in diffs and applies on the next deploy.
 - `[services.<name>.secrets]` maps ENV var name to service-local secret name. Values are written with `gordon apps secrets set` and stay in pass under `gordon/apps/<uuid>/<service>/<name>`. Running containers keep the values they were created with; `gordon apps deploy` applies new values. `restart` does not.
+- A secret entry is either a secret name string (env delivery) or a table `{ name = "...", as = "env" | "file" }`. `as` defaults to `env`; any other key or value is rejected.
+- `as = "file"` delivers the value as a read-only file (mode `0444`) at `/run/secrets/<ENV>` and sets `<ENV>_FILE=/run/secrets/<ENV>` instead of `<ENV>`. The value never appears in the container environment, `docker inspect`, or `/proc/1/environ`. Use it for images that support the `*_FILE` convention.
+- With file delivery, `<ENV>_FILE` must not be another secret key or a key in `[env]` or `[services.<name>.env]`, and no bind or volume of the service may mount at or under `/run/secrets`.
+- Switching a secret between `env` and `file` shows as `service/<name>/secret/<secret>` in diffs and applies on the next deploy. See [Secrets](./secrets.md#secret-files).
 
 ## Volumes and Databases
 

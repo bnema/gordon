@@ -47,6 +47,14 @@ type Deps struct {
 	// fail-closed before touching a workload. Nil in tests that assert
 	// state effects only. Failures are reported to the caller.
 	Traffic out.AppTrafficRefresher
+	// SecretFiles stores file-delivered secrets on the host. Optional:
+	// nil is valid only while no service delivers secrets as files;
+	// preflight refuses such services otherwise.
+	SecretFiles out.SecretFileStore
+	// Guard is checked on every app container config right before the
+	// runtime create. The zero value still refuses host/shared network
+	// namespaces and host paths passed as volume names.
+	Guard domain.RuntimeGuard
 }
 
 // RegistryConfig carries the installation registry identity for pulls.
@@ -270,6 +278,13 @@ func (s *Service) resolveServiceBinds(app string, svc domain.AppService) ([]doma
 			return nil, fmt.Errorf("deployment: app %q service %q mount %q: refused by administrative mount policy: %w", app, svc.Name, bind.Name, domain.ErrBindPolicy)
 		}
 		resolved = append(resolved, domain.ContainerBind(r))
+	}
+	// Apply the runtime guard here so a bind overlapping a protected
+	// Gordon path fails at preflight and before the serving generation is
+	// retired, not only at create time. createContainer keeps the full
+	// guard as the final check.
+	if err := s.deps.Guard.Check(&domain.ContainerConfig{Binds: resolved}); err != nil {
+		return nil, fmt.Errorf("deployment: app %q service %q: %w", app, svc.Name, err)
 	}
 	return resolved, nil
 }
@@ -796,6 +811,9 @@ func devicesEngineChecked(pinned []pinnedService) bool {
 // Paths are UUID-keyed so a removed app's secrets are never adopted
 // by a new app reusing the name.
 func (s *Service) checkSecrets(ctx context.Context, app, appID string, svc domain.AppService) error {
+	if len(svc.SecretFiles) > 0 && s.deps.SecretFiles == nil {
+		return fmt.Errorf("deployment: service %q delivers secrets as files but no secret file store is configured", svc.Name)
+	}
 	if s.deps.Secrets == nil {
 		return fmt.Errorf("deployment: secret provider unavailable: %w", domain.ErrAppSecretMissing)
 	}

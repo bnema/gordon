@@ -52,9 +52,11 @@ type rawService struct {
 	HTTP      []rawHTTP         `toml:"http"`
 	TCP       []rawTCP          `toml:"tcp"`
 	UDP       []rawUDP          `toml:"udp"`
-	Secrets   map[string]string `toml:"secrets"`
-	Volumes   []rawVolume       `toml:"volume"`
-	Binds     []rawBind         `toml:"bind"`
+	// Secrets maps env keys to a secret name string or to a table
+	// { name = "...", as = "env"|"file" }; see toDomainSecrets.
+	Secrets map[string]any `toml:"secrets"`
+	Volumes []rawVolume    `toml:"volume"`
+	Binds   []rawBind      `toml:"bind"`
 	// Devices lists logical device names from `devices = [...]`.
 	Devices   []string      `toml:"devices"`
 	Databases []rawDatabase `toml:"database"`
@@ -321,9 +323,12 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 		})
 	}
 	svc.Env = maps.Clone(raw.Env)
-	for key, value := range raw.Secrets {
-		svc.Secrets[key] = value
+	secrets, secretFiles, err := toDomainSecrets(serviceName, raw.Secrets)
+	if err != nil {
+		return domain.AppService{}, err
 	}
+	svc.Secrets = secrets
+	svc.SecretFiles = secretFiles
 	for _, v := range raw.Volumes {
 		svc.Volumes = append(svc.Volumes, domain.AppVolume{
 			Name:     v.Name,
@@ -349,6 +354,67 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 		})
 	}
 	return svc, nil
+}
+
+// Secret delivery modes accepted in a secret table's `as` key.
+const (
+	secretAsEnv  = "env"
+	secretAsFile = "file"
+)
+
+// toDomainSecrets maps [services.<name>.secrets]. Each value is either a
+// secret name string (env delivery) or a table with a required `name`
+// and an optional `as` ("env" or "file", default "env"). It returns the
+// env key -> secret name map and the sorted file-delivered keys (nil
+// when none).
+func toDomainSecrets(service string, raw map[string]any) (map[string]string, []string, error) {
+	secrets := make(map[string]string, len(raw))
+	var files []string
+	for _, key := range slices.Sorted(maps.Keys(raw)) {
+		name, asFile, err := toDomainSecret(raw[key])
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: service %q secret %q: %s", domain.ErrInvalidAppSpec, service, key, err)
+		}
+		secrets[key] = name
+		if asFile {
+			files = append(files, key)
+		}
+	}
+	return secrets, files, nil
+}
+
+// toDomainSecret decodes one secret value and reports whether it is
+// delivered as a file.
+func toDomainSecret(value any) (string, bool, error) {
+	switch v := value.(type) {
+	case string:
+		return v, false, nil
+	case map[string]any:
+		return toDomainSecretTable(v)
+	default:
+		return "", false, errors.New("value must be a secret name string or a { name, as } table")
+	}
+}
+
+func toDomainSecretTable(table map[string]any) (string, bool, error) {
+	for _, key := range slices.Sorted(maps.Keys(table)) {
+		if key != "name" && key != "as" {
+			return "", false, fmt.Errorf("unknown key %q (allowed: name, as)", key)
+		}
+	}
+	name, ok := table["name"].(string)
+	if !ok || name == "" {
+		return "", false, errors.New("name must be a non-empty string")
+	}
+	rawAs, present := table["as"]
+	if !present {
+		return name, false, nil
+	}
+	as, ok := rawAs.(string)
+	if !ok || (as != secretAsEnv && as != secretAsFile) {
+		return "", false, fmt.Errorf("as must be %q or %q", secretAsEnv, secretAsFile)
+	}
+	return name, as == secretAsFile, nil
 }
 
 // toDomainReadiness maps readiness with defaults.

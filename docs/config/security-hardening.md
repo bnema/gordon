@@ -172,9 +172,90 @@ security_profile = "compat" # or "strict"
 
 Use `strict` for images designed to write only to mounted volumes and run without extra Linux capabilities.
 
+## Runtime guard
+
+Every app container config passes a final guard right before the runtime creates the container. Bind checks also run at deploy preflight and before every restart or recovery of an existing container. A refused config creates or starts no container: the operation fails and its preflight or service step error contains `runtime guard violation`. The guard refuses:
+
+- network mode `host`, `container:<id>`, or `ns:<path>`;
+- a volume name containing `/` or `\`, which the runtime would read as a host path;
+- a bind whose host source is equal to, under, or a parent of a protected path, compared both as written and after resolving symlinks.
+
+Protected paths:
+
+- the data directory and the loaded config file;
+- files and directories set in the config: `server.tls_key_file` and the backup `storage_dir` values;
+- runtime sockets: `/var/run/docker.sock`, `/run/docker.sock`, `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/docker.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, the `unix://` path of `DOCKER_HOST`, and the `server.runtime` socket;
+- rootless runtime storage and config: `~/.local/share/containers`, `~/.local/share/docker`, `${XDG_CONFIG_HOME:-~/.config}/containers`, and `~/.docker`;
+- the systemd user units: `${XDG_CONFIG_HOME:-~/.config}/systemd/user`;
+- Gordon runtime credentials: `$XDG_RUNTIME_DIR/gordon`, `~/.gordon/run`, and `$GORDON_CLOUDFLARE_API_TOKEN_FILE`;
+- key stores: `$GNUPGHOME`, `~/.gnupg`, `$PASSWORD_STORE_DIR`, `~/.password-store`, `$SOPS_AGE_KEY_FILE`, and `${XDG_CONFIG_HOME:-~/.config}/sops/age`.
+
+A protected path that does not exist yet is also protected in its symlink-resolved form, based on its closest existing parent. Backup directories are protected: a backup app cannot bind them, even read-only.
+
+Gordon's enabled file logs (the Gordon log file's directory, the access log's directory, and `logging.container_logs.dir`) can be bound read-only so a log shipper can read them. Under the data directory this applies only at or under `<data_dir>/logs`; outside it, only when the directory neither is, contains, nor lies under another protected path. A writable bind on them is refused. When a log directory does not qualify, for example a log file directly in `$HOME`, the log file itself stays protected and no read-only exception applies.
+
+The only other exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy fails before the running generation is replaced or restarted. Point the policy `source` outside every protected path.
+
+## Process memory protection
+
+On Linux, `gordon serve` marks itself non-dumpable (`PR_SET_DUMPABLE=0`) as its first step, before loading its config file or any backend secret. Other processes of the same user can no longer read its `/proc/<pid>/environ`, `mem`, or file descriptors, attach with ptrace, or get a core dump. Startup fails if the flag cannot be set.
+
+Limits:
+
+- Secrets passed as environment variables, such as `GORDON_AUTH_TOKEN_SECRET`, are readable for the short time between process start and that first step. Prefer a secrets backend.
+- Helper processes (`pass`, `gpg`, `sops`, `journalctl`) are dumpable again after `exec`; secret tools hold the values they decrypt while they run. Gordon starts them without its `GORDON_*` variables.
+- Root, or a process of the same user that can replace the Gordon binary or its systemd unit, is not stopped.
+
+## Hardened systemd user unit
+
+Add these directives to the `[Service]` section of the [user unit](../installation.md#user-service-recommended-for-rootless):
+
+```ini
+[Service]
+NoNewPrivileges=yes
+UMask=0077
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+```
+
+Apply and check:
+
+```bash
+systemctl --user daemon-reload
+systemctl --user restart gordon
+systemctl --user status gordon
+systemd-analyze --user security gordon.service
+```
+
+## Credential scoping
+
+- **Cloudflare DNS-01 token**: grant only `Zone:Read` and `DNS:Edit`, limited to the zones Gordon serves. A leaked token can issue certificates for, and take over, every hostname in those zones. See [Server](./server.md).
+- **Registry push tokens**: issue one token per repository and pipeline instead of a global one:
+
+  ```bash
+  gordon auth token generate --subject ci-blog --scopes push --repo blog
+  ```
+
+## Protection boundary
+
+Gordon v3 protects against:
+
+- file-delivered secret values showing up in container env, `docker inspect`, or `/proc/1/environ`;
+- app configs that mount the runtime socket, Gordon data, config, credentials, or key stores, or that join the host or another container's namespaces;
+- same-user processes reading the Gordon process's memory or environment through `/proc`, within the limits above.
+
+Gordon v3 does not protect against:
+
+- a compromised Gordon process, proxy, or registry: they run as the same user that owns the runtime socket and `pass`;
+- a malicious image deployed for an app: it receives that app's secrets;
+- root on the host.
+
 ## Related
 
 - [Auth](./auth.md)
+- [Secrets](./secrets.md)
 - [Images](./images.md)
 - [Network Isolation](./network-isolation.md)
 - [Volumes](./volumes.md)

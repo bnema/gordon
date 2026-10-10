@@ -17,6 +17,7 @@ packages:
       EventSubscriber:
       EventHandler:
       SecretProvider:
+      SecretFileStore:
       ContainerLogWriter:
       Metrics:
       LogExporter:
