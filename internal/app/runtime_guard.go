@@ -49,6 +49,12 @@ func protectedRuntimePaths(dataDir string, gordonPaths []string, getenv func(str
 		getenv("SOPS_AGE_KEY_FILE"),
 		subPath(configHome, "sops", "age"),
 	}, gordonPaths...)
+	return absWithResolved(raw)
+}
+
+// absWithResolved makes each non-empty path absolute, adds its
+// symlink-resolved form when it differs, and returns the sorted set.
+func absWithResolved(raw []string) []string {
 	var paths []string
 	for _, p := range raw {
 		if p == "" {
@@ -102,16 +108,13 @@ func homePath(home string, elems ...string) string {
 }
 
 // configuredGordonPaths returns the config file, the runtime socket in use,
-// and every private file or directory the config points Gordon at. The
-// public TLS certificate is left out so its directory (often a shared CA
-// bundle) stays bindable.
+// and every private file or directory the config points Gordon at. Log
+// paths are left to gordonLogDirs. The public TLS certificate is left out
+// so its directory (often a shared CA bundle) stays bindable.
 func configuredGordonPaths(si *serviceInit) []string {
 	cfg := si.cfg
 	paths := []string{
 		cfg.Server.TLSKeyFile,
-		resolveLogFilePath(cfg),
-		cfg.Logging.ContainerLogs.Dir,
-		cfg.Logging.AccessLog.FilePath,
 		cfg.Backups.StorageDir,
 		cfg.Backups.Databases.StorageDir,
 	}
@@ -119,6 +122,54 @@ func configuredGordonPaths(si *serviceInit) []string {
 		paths = append(paths, si.v.ConfigFileUsed(), resolveRuntimeConfig(si.v.GetString("server.runtime")))
 	}
 	return paths
+}
+
+// readableLogDirs keeps the log dirs that lie under the data dir or
+// outside every protected path, so a log dir misconfigured inside a key
+// store or runtime dir never opens a read-only exception there.
+func readableLogDirs(logDirs, protected []string, dataDir string) []string {
+	dataDirs := absWithResolved([]string{dataDir})
+	var kept []string
+	for _, logDir := range logDirs {
+		ok := true
+		for _, p := range protected {
+			if slices.Contains(dataDirs, p) {
+				continue
+			}
+			if pathWithin(p, logDir) || pathWithin(logDir, p) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			kept = append(kept, logDir)
+		}
+	}
+	return kept
+}
+
+// pathWithin reports whether target is root or lies under it.
+func pathWithin(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// gordonLogDirs returns the directories of Gordon's process log, access
+// log, and container logs. App binds may read them but never write them.
+func gordonLogDirs(cfg Config, dataDir string) []string {
+	containerLogs := cfg.Logging.ContainerLogs.Dir
+	if containerLogs == "" {
+		containerLogs = filepath.Join(dataDir, "logs", "containers")
+	}
+	accessLog := cfg.Logging.AccessLog.FilePath
+	if accessLog == "" {
+		accessLog = filepath.Join(dataDir, "logs", "access.log")
+	}
+	return absWithResolved([]string{
+		filepath.Dir(resolveLogFilePath(cfg)),
+		filepath.Dir(accessLog),
+		containerLogs,
+	})
 }
 
 // buildAppRuntimeSafety opens the host secret file store and builds the
@@ -131,5 +182,9 @@ func buildAppRuntimeSafety(si *serviceInit, dataDir string) (out.SecretFileStore
 	}
 	home, _ := os.UserHomeDir()
 	paths := protectedRuntimePaths(dataDir, configuredGordonPaths(si), os.Getenv, home)
-	return store, domain.RuntimeGuard{ProtectedPaths: paths, SecretFilesDir: store.Dir()}, nil
+	return store, domain.RuntimeGuard{
+		ProtectedPaths: paths,
+		SecretFilesDir: store.Dir(),
+		LogDirs:        readableLogDirs(gordonLogDirs(si.cfg, dataDir), paths, dataDir),
+	}, nil
 }

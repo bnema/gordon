@@ -94,9 +94,16 @@ func TestConfiguredGordonPaths(t *testing.T) {
 
 	got := configuredGordonPaths(si)
 	assert.Contains(t, got, "/tls/key.pem")
-	assert.Contains(t, got, "/data/logs/gordon.log")
-	assert.Contains(t, got, "/logs/access.log")
 	assert.Contains(t, got, "/backups")
+	assert.NotContains(t, got, "/logs/access.log")
+
+	assert.ElementsMatch(t, []string{"/data/logs", "/data/logs/containers", "/logs"}, gordonLogDirs(si.cfg, "/data"))
+}
+
+func TestReadableLogDirs(t *testing.T) {
+	protected := []string{"/data", "/home/u/.gnupg", "/srv/logs/keys"}
+	got := readableLogDirs([]string{"/data/logs", "/home/u/.gnupg/logs", "/srv/logs", "/var/log/gordon"}, protected, "/data")
+	assert.Equal(t, []string{"/data/logs", "/var/log/gordon"}, got)
 }
 
 func TestBuildAppRuntimeSafety(t *testing.T) {
@@ -109,5 +116,11 @@ func TestBuildAppRuntimeSafety(t *testing.T) {
 
 	// The data dir itself cannot be bound into an app.
 	err = guard.Check(&domain.ContainerConfig{Binds: []domain.ContainerBind{{Name: "all", Source: dataDir, Destination: "/data"}}})
+	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
+
+	// The default log dir under the data dir is readable, never writable.
+	logs := filepath.Join(dataDir, "logs")
+	require.NoError(t, guard.Check(&domain.ContainerConfig{Binds: []domain.ContainerBind{{Name: "logs", Source: logs, Destination: "/var/log/gordon", ReadOnly: true}}}))
+	err = guard.Check(&domain.ContainerConfig{Binds: []domain.ContainerBind{{Name: "logs", Source: logs, Destination: "/var/log/gordon"}}})
 	require.ErrorIs(t, err, domain.ErrRuntimeGuard)
 }

@@ -20,6 +20,12 @@ type RuntimeGuard struct {
 	// (<data_dir>/secrets-run). Gordon's own read-only secret binds under
 	// it are the only allowed exception.
 	SecretFilesDir string
+	// LogDirs are Gordon's log directories. Binds overlapping them are
+	// refused unless read-only; a read-only bind at or under one is
+	// allowed even when a protected path (the data dir) contains it, so
+	// a log shipper can read them. A log dir that is or contains a
+	// protected path grants no exception.
+	LogDirs []string
 }
 
 // Check refuses a config that breaks the guard. Errors wrap
@@ -39,7 +45,7 @@ func (g RuntimeGuard) Check(config *ContainerConfig) error {
 		if g.isOwnSecretBind(config, bind) {
 			continue
 		}
-		if g.overlapsProtected(bind.Source) {
+		if g.overlapsProtected(bind) {
 			return fmt.Errorf("%w: bind %q overlaps a protected Gordon path", ErrRuntimeGuard, bind.Name)
 		}
 	}
@@ -91,14 +97,48 @@ func (g RuntimeGuard) isOwnSecretBind(config *ContainerConfig, bind ContainerBin
 		bind.Destination == SecretFilePath(key)
 }
 
-// overlapsProtected reports whether source, raw or symlink-resolved, is
-// equal to, under, or an ancestor of a protected path.
-func (g RuntimeGuard) overlapsProtected(source string) bool {
-	for _, candidate := range guardCandidates(source) {
+// overlapsProtected reports whether the bind source, raw or
+// symlink-resolved, is equal to, under, or an ancestor of a protected
+// path, or of a log dir when the bind is writable. A read-only source at
+// or under a usable log dir only fails when it contains a protected path.
+func (g RuntimeGuard) overlapsProtected(bind ContainerBind) bool {
+	for _, candidate := range guardCandidates(bind.Source) {
+		readableLog := bind.ReadOnly && g.underUsableLogDir(candidate)
 		for _, protected := range g.ProtectedPaths {
-			if resolvedUnderRoot(protected, candidate) || resolvedUnderRoot(candidate, protected) {
+			if resolvedUnderRoot(candidate, protected) {
 				return true
 			}
+			if !readableLog && resolvedUnderRoot(protected, candidate) {
+				return true
+			}
+		}
+		if bind.ReadOnly {
+			continue
+		}
+		for _, logDir := range g.LogDirs {
+			if resolvedUnderRoot(logDir, candidate) || resolvedUnderRoot(candidate, logDir) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// underUsableLogDir reports whether path is at or under a log dir that
+// neither is nor contains a protected path.
+func (g RuntimeGuard) underUsableLogDir(path string) bool {
+	for _, logDir := range g.LogDirs {
+		if resolvedUnderRoot(logDir, path) && !g.containsProtected(logDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g RuntimeGuard) containsProtected(dir string) bool {
+	for _, protected := range g.ProtectedPaths {
+		if resolvedUnderRoot(dir, protected) {
+			return true
 		}
 	}
 	return false

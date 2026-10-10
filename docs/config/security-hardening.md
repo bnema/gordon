@@ -183,16 +183,18 @@ Every app container config passes a final guard right before the runtime creates
 Protected paths:
 
 - the data directory and the loaded config file;
-- files and directories set in the config: `server.tls_key_file`, the Gordon log file, `logging.container_logs.dir`, `logging.access_log.file_path`, and the backup `storage_dir` values;
+- files and directories set in the config: `server.tls_key_file` and the backup `storage_dir` values;
 - runtime sockets: `/var/run/docker.sock`, `/run/docker.sock`, `/run/podman/podman.sock`, `$XDG_RUNTIME_DIR/docker.sock`, `$XDG_RUNTIME_DIR/podman/podman.sock`, the `unix://` path of `DOCKER_HOST`, and the `server.runtime` socket;
 - rootless runtime storage and config: `~/.local/share/containers`, `~/.local/share/docker`, `${XDG_CONFIG_HOME:-~/.config}/containers`, and `~/.docker`;
 - the systemd user units: `${XDG_CONFIG_HOME:-~/.config}/systemd/user`;
 - Gordon runtime credentials: `$XDG_RUNTIME_DIR/gordon`, `~/.gordon/run`, and `$GORDON_CLOUDFLARE_API_TOKEN_FILE`;
 - key stores: `$GNUPGHOME`, `~/.gnupg`, `$PASSWORD_STORE_DIR`, `~/.password-store`, `$SOPS_AGE_KEY_FILE`, and `${XDG_CONFIG_HOME:-~/.config}/sops/age`.
 
-A protected path that does not exist yet is also protected in its symlink-resolved form, based on its closest existing parent. Container log and backup directories are protected too: a log-shipper or backup app cannot bind them, even read-only.
+A protected path that does not exist yet is also protected in its symlink-resolved form, based on its closest existing parent. Backup directories are protected: a backup app cannot bind them, even read-only.
 
-The only exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy fails before the running generation is replaced or restarted. Point the policy `source` outside every protected path.
+Gordon's log directories (the Gordon log file's directory, the access log's directory, and `logging.container_logs.dir`) can be bound read-only, even under the data directory, so a log shipper can read them. A writable bind on them is refused, as is a log directory that is or contains another protected path.
+
+The only other exception is Gordon's own read-only secret file mount: `<data_dir>/secrets-run/<app>/<container>/<KEY>` at `/run/secrets/<KEY>`. A refused `[app_mounts]` policy fails before the running generation is replaced or restarted. Point the policy `source` outside every protected path.
 
 ## Process memory protection
 

@@ -112,3 +112,34 @@ func TestRuntimeGuard_OwnSecretBindException(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeGuard_ReadOnlyLogDirs(t *testing.T) {
+	dataDir := t.TempDir()
+	logs := filepath.Join(dataDir, "logs")
+	require.NoError(t, os.MkdirAll(filepath.Join(logs, "containers"), 0o700))
+	keys := filepath.Join(dataDir, "logs", "keys")
+	guard := domain.RuntimeGuard{ProtectedPaths: []string{dataDir}, LogDirs: []string{logs}}
+	bind := func(source string, readOnly bool) *domain.ContainerConfig {
+		return guardConfig(domain.ContainerBind{Name: "logs", Source: source, Destination: "/var/log/gordon", ReadOnly: readOnly})
+	}
+
+	require.NoError(t, guard.Check(bind(logs, true)))
+	require.NoError(t, guard.Check(bind(filepath.Join(logs, "containers"), true)))
+
+	withProtected := domain.RuntimeGuard{ProtectedPaths: []string{dataDir, keys}, LogDirs: []string{logs}}
+	refused := map[string]struct {
+		guard domain.RuntimeGuard
+		cfg   *domain.ContainerConfig
+	}{
+		"writable log dir":       {guard, bind(logs, false)},
+		"writable log subdir":    {guard, bind(filepath.Join(logs, "containers"), false)},
+		"data dir read-only":     {guard, bind(dataDir, true)},
+		"sibling of logs":        {guard, bind(filepath.Join(dataDir, "registry"), true)},
+		"log dir with protected": {withProtected, bind(logs, true)},
+	}
+	for name, tc := range refused {
+		t.Run(name, func(t *testing.T) {
+			require.ErrorIs(t, tc.guard.Check(tc.cfg), domain.ErrRuntimeGuard)
+		})
+	}
+}
