@@ -11,7 +11,7 @@ ARG BUILD_DATE=unknown
 # build-arg reports "unknown" rather than falsely claiming a clean checkout.
 ARG DIRTY=unknown
 
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine3.22 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine3.23 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
