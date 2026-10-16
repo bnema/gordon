@@ -2,11 +2,16 @@ package middleware
 
 import (
 	"bufio"
+	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -226,4 +231,276 @@ func TestTransferIdleTimeout_HTTP2(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Len(t, body, chunks)
+}
+
+// pipeListener serves connections created with dial over net.Pipe, which has no
+// kernel buffering: a write completes only when the peer reads it.
+type pipeListener struct {
+	conns chan net.Conn
+	done  chan struct{}
+}
+
+func newPipeListener() *pipeListener {
+	return &pipeListener{conns: make(chan net.Conn), done: make(chan struct{})}
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *pipeListener) Close() error {
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return pipeAddr{} }
+
+func (l *pipeListener) dial() net.Conn {
+	client, server := net.Pipe()
+	l.conns <- server
+	return client
+}
+
+type pipeAddr struct{}
+
+func (pipeAddr) Network() string { return "pipe" }
+func (pipeAddr) String() string  { return "pipe" }
+
+// slowReadConn reads at most 4 KiB every pause, like a congested client.
+type slowReadConn struct {
+	net.Conn
+	pause time.Duration
+}
+
+func (c *slowReadConn) Read(p []byte) (int, error) {
+	time.Sleep(c.pause)
+	return c.Conn.Read(p[:min(len(p), 4096)])
+}
+
+func servePipe(t *testing.T, handler http.Handler) *pipeListener {
+	t.Helper()
+	ln := newPipeListener()
+	srv := &http.Server{Handler: TransferIdleTimeout(testIdle)(handler), ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln
+}
+
+func TestTransferIdleTimeout_BackpressuredButReadingClientIsNotCut(t *testing.T) {
+	const size = 64 * 1024
+	ln := servePipe(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("d", size)))
+	}))
+	client := &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			return &slowReadConn{Conn: ln.dial(), pause: 25 * time.Millisecond}, nil
+		},
+	}}
+
+	start := time.Now()
+	resp, err := client.Get("http://pipe/")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err, "a client that keeps reading must not be cut")
+	assert.Len(t, body, size)
+	assert.Greater(t, time.Since(start), testIdle, "the transfer must outlast the idle timeout")
+}
+
+func TestTransferIdleTimeout_NonReadingClientUnblocksWrite(t *testing.T) {
+	writeErr := make(chan error, 1)
+	ln := servePipe(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, err := w.Write([]byte(strings.Repeat("d", 1<<20)))
+		writeErr <- err
+	}))
+	conn := ln.dial()
+	defer conn.Close()
+	_, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	require.NoError(t, err)
+
+	select {
+	case err := <-writeErr:
+		require.Error(t, err, "write to a client that never reads must fail")
+	case <-time.After(10 * testIdle):
+		t.Fatal("blocked write was not unblocked by the inactivity timeout")
+	}
+}
+
+func TestTransferIdleTimeout_SilentHandlerContextCanceledAndConnectionClosed(t *testing.T) {
+	ctxDone := make(chan struct{})
+	srv := newIdleServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("start"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done() // a ReverseProxy would abort its upstream request here
+		close(ctxDone)
+	}))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	begin := time.Now()
+	resp, err := client.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.Error(t, err, "the client connection must be closed, not completed cleanly")
+	assert.Equal(t, "start", string(body))
+	assert.Less(t, time.Since(begin), 5*time.Second)
+
+	select {
+	case <-ctxDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request context was not canceled")
+	}
+}
+
+func TestTransferIdleTimeout_ProgressKeepsContextAlive(t *testing.T) {
+	var canceled atomic.Bool
+	srv := newIdleServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		for range 12 {
+			_, _ = w.Write([]byte("x"))
+			w.(http.Flusher).Flush()
+			select {
+			case <-r.Context().Done():
+				canceled.Store(true)
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	}))
+	resp, err := http.Get(srv.URL)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Len(t, body, 12)
+	assert.False(t, canceled.Load())
+}
+
+func TestTransferIdleTimeout_BodyUseAfterHandlerReturnedIsSafe(t *testing.T) {
+	var body io.ReadCloser
+	h := TransferIdleTimeout(time.Second)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		body = r.Body
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("payload"))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	// Like http.Transport closing the outbound body after the handler returned.
+	require.NoError(t, body.Close())
+	require.NoError(t, body.Close(), "Close must be idempotent")
+	_, _ = body.Read(make([]byte, 4))
+}
+
+// TestTransferIdleTimeout_HTTP2ReverseProxyEarlyResponseDuringUpload covers the
+// transport closing the outbound request body after the handler returned, when
+// the upstream answers early (413) while the client is still uploading. Run
+// with -race.
+func TestTransferIdleTimeout_HTTP2ReverseProxyEarlyResponseDuringUpload(t *testing.T) {
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+	}))
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	defer upstream.Close()
+
+	target, err := url.Parse(upstream.URL)
+	require.NoError(t, err)
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = &http.Transport{
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test upstream
+		ForceAttemptHTTP2: true,
+	}
+	front := httptest.NewUnstartedServer(TransferIdleTimeout(testIdle)(proxy))
+	front.EnableHTTP2 = true
+	front.StartTLS()
+	defer front.Close()
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				uploadUntilEarlyResponse(t, front)
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func uploadUntilEarlyResponse(t *testing.T, front *httptest.Server) {
+	t.Helper()
+	pr, pw := io.Pipe()
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		chunk := []byte(strings.Repeat("u", 4096))
+		for range 200 {
+			if _, err := pw.Write(chunk); err != nil {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		_ = pw.Close()
+	}()
+
+	req, err := http.NewRequest(http.MethodPost, front.URL, pr)
+	if !assert.NoError(t, err) {
+		return
+	}
+	resp, err := front.Client().Do(req)
+	if err == nil {
+		assert.Equal(t, 2, resp.ProtoMajor)
+		assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}
+	_ = pr.CloseWithError(io.ErrClosedPipe)
+	<-writerDone
+}
+
+// TestTransferIdleTimeout_HTTP2BodyUsedAfterHandlerReturned uses the request
+// body after net/http's HTTP/2 server finished the handler (it drops its
+// response writer state then), as http.Transport does when it closes an
+// outbound body asynchronously. It must neither panic nor race.
+func TestTransferIdleTimeout_HTTP2BodyUsedAfterHandlerReturned(t *testing.T) {
+	bodyCh := make(chan io.ReadCloser, 1)
+	returned := make(chan struct{})
+	inner := TransferIdleTimeout(testIdle)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bodyCh <- r.Body
+		_, _ = w.Write([]byte("early"))
+	}))
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inner.ServeHTTP(w, r)
+		close(returned)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	req, err := http.NewRequest(http.MethodPost, srv.URL, pr)
+	require.NoError(t, err)
+	go func() { _, _ = pw.Write([]byte("partial")) }()
+	resp, err := srv.Client().Do(req)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	body := <-bodyCh
+	<-returned
+	time.Sleep(100 * time.Millisecond) // let the server loop process handlerDone
+
+	_, _ = body.Read(make([]byte, 8))
+	require.NoError(t, body.Close())
+	require.NoError(t, body.Close())
 }

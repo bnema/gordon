@@ -148,11 +148,12 @@ Values are Go duration strings; malformed, zero, or negative values are rejected
 
 ### Inactivity timeout
 
-Gordon renews the response write deadline before every write and flush, and the request read deadline before every request body read. The deadline is also armed when a request starts, so the wait for the first response byte from a slow backend is bounded by `transfer_idle_timeout` too. Consequences:
+Each request has an inactivity timer, armed when the request starts. Progress resets it: a response chunk accepted by the client connection (8 KiB granularity), a flush, or request body bytes read. If `transfer_idle_timeout` passes without progress, Gordon cancels the request context, which aborts the upstream request of a reverse-proxied app, and closes the client connection. Consequences:
 
-- a response that streams data at least once per `transfer_idle_timeout` can last arbitrarily long;
+- a response that streams data at least once per `transfer_idle_timeout` can last arbitrarily long, and a client that keeps reading is never cut (it must accept 8 KiB per period at minimum);
 - an upload whose body arrives at least once per `transfer_idle_timeout` can last arbitrarily long;
 - a backend that stays silent longer than `transfer_idle_timeout` before or between response chunks has its connection cut, so set it above the slowest expected backend response time;
+- the timer also fires when a handler or backend is silent and no write is pending;
 - WebSocket and other upgraded connections are not subject to it, and HTTP/2 streams are handled the same way as HTTP/1.
 
 `transfer_idle_timeout` does not apply to `[traffic.tcp]` or `[traffic.udp]` routers; those use their own `idle_timeout` (see below).

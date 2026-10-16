@@ -84,12 +84,19 @@ func TestSmartTCPStreamingResponseOutlivesTransferIdleTimeout(t *testing.T) {
 	manager.SetSmartTCPHTTPServer("edge", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		silent := r.URL.Path == "/silent"
 		for i := 0; i < 12; i++ {
-			_, _ = w.Write([]byte("x"))
+			if _, err := w.Write([]byte("x")); err != nil {
+				return
+			}
 			w.(http.Flusher).Flush()
 			if silent {
-				time.Sleep(3 * idle)
-			} else {
-				time.Sleep(50 * time.Millisecond)
+				// Stay silent until the inactivity timeout cancels the request.
+				<-r.Context().Done()
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(50 * time.Millisecond):
 			}
 		}
 	}), nil)
