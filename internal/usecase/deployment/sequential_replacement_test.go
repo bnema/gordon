@@ -112,6 +112,9 @@ func expectSequentialCreate(
 			recordEvent(events, "start-new")
 			return nil
 		}).Once()
+	// Deploy observes the execution start right after the start.
+	runtime.EXPECT().InspectContainer(mock.Anything, containerID).Return(
+		&domain.Container{ID: containerID, Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, containerID, mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: hostPort, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
@@ -646,6 +649,7 @@ func TestDeploy_MultiServiceStopsAtFirstFailure(t *testing.T) {
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-beta", Name: "beta"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-beta").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-beta").Return(&domain.Container{ID: "c-beta", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-beta", false).Return(nil, assert.AnError).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-beta", true).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-beta").Return(nil).Once()
@@ -771,6 +775,7 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 			recordEvent(&order, "start-new")
 			return nil
 		}).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(nil, assert.AnError).Once()

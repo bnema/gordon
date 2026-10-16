@@ -59,6 +59,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 		runtime.EXPECT().RestartContainer(mock.Anything, "c-1", grace).Return(nil).Once()
+		runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 		state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
 		svc := deployment.NewService(deployment.Deps{State: state, Runtime: runtime}, zerowrap.Default())

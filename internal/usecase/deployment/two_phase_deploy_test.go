@@ -144,6 +144,7 @@ func expectHeadlessDeploy(
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil)
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil)
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
 	return rev, saved
@@ -352,6 +353,7 @@ func TestStartDeploy_LiveClaimSurvivesForegroundReconciliation(t *testing.T) {
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 

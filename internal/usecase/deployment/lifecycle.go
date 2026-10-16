@@ -212,6 +212,10 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
+	// Routing accepted the verified generations: record their executions.
+	for name, svcResult := range result.Services {
+		s.recordVerifiedExecution(app, name, svcResult)
+	}
 	return result, nil
 }
 
@@ -287,6 +291,11 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
+	// Routing accepted the restarted generations: their executions are
+	// verified. The app lock is held, so no periodic pass ran in between.
+	for name, svcResult := range result.Services {
+		s.recordVerifiedExecution(app, name, svcResult)
+	}
 	if len(failures) > 0 {
 		return result, fmt.Errorf("deployment: restart failed for %s: %w", strings.Join(failures, ", "), domain.ErrAppStateConflict)
 	}
@@ -361,6 +370,8 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
+	// The restarted execution is observed before readiness runs.
+	startedAt := s.executionStart(ctx, eff.Container)
 	// Ephemeral loopback binds are not guaranteed stable across a runtime
 	// restart: re-inspect before probing so the proxy never dials a stale
 	// bind.
@@ -375,7 +386,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	}
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
-	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
+	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds, VerifiedStartedAt: startedAt}
 }
 
 // Remove withdraws workloads by exact container ID; volumes, secrets, and
@@ -771,6 +782,9 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 		svcResult.Error = err.Error()
 		return svcResult, err
 	}
+	// The rebuilt generation passed readiness and is published; the caller
+	// applies the graph under the same app lock, before any periodic pass.
+	s.recordVerifiedExecution(app, name, svcResult)
 	return svcResult, nil
 }
 
@@ -789,6 +803,7 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return
 	}
+	startedAt := s.executionStart(ctx, eff.Container)
 	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
@@ -803,7 +818,7 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 	// follows once, after the loop.
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
-	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
+	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds, VerifiedStartedAt: startedAt}
 }
 
 // refreshBackendBinds re-inspects the loopback publishes of a restarted

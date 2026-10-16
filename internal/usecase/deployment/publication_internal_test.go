@@ -39,6 +39,7 @@ func TestVerifyRunningService_NotReadyWithdrawsAndClearsBinds(t *testing.T) {
 		Spec:              readySpec(),
 		BackendBinds:      map[int]int{8080: 32771},
 	}
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-1", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
@@ -71,6 +72,7 @@ func TestVerifyRunningService_ReadyPublishesBinds(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	traffic := &stubTraffic{}
 	eff := domain.AppEffectiveService{Container: "c-1", EffectiveRevision: "rev-1", Spec: readySpec()}
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-1", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()

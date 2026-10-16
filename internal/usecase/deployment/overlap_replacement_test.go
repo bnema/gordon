@@ -150,12 +150,14 @@ type storeTraffic struct {
 	store        *appstate.Store
 	failWithdraw int
 	failRebuild  int
+	withdrawn    []string
 	routed       []map[string]map[int]int
 }
 
 func (t *storeTraffic) WithdrawService(ctx context.Context, app, service string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.withdrawn = append(t.withdrawn, app+"/"+service)
 	active, ok, err := t.store.LoadActive(ctx, app)
 	if err != nil || !ok {
 		return err
@@ -218,6 +220,13 @@ func (t *storeTraffic) allRoutes(service string) []map[int]int {
 	return routes
 }
 
+// withdrawals returns the services withdrawn so far, in order.
+func (t *storeTraffic) withdrawals() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]string(nil), t.withdrawn...)
+}
+
 func (t *storeTraffic) rebuildCount() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -259,6 +268,7 @@ func overlapDeployMocks(runtime *outmocks.MockContainerRuntime, images *outmocks
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 }
@@ -469,6 +479,7 @@ func TestBootRecovery_DoesNotRepublishUnverifiedBindsOfAPublishedCandidate(t *te
 
 	// The candidate restarted and now publishes a different port.
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-new").Return(true, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18090, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	require.NoError(t, svc.ReconcileBoot(ctx))
@@ -842,4 +853,118 @@ func TestStop_PendingRetirementLoadFailureIsAJournaledFailure(t *testing.T) {
 	assert.ErrorIs(t, replayErr, domain.ErrAppStateConflict)
 	assert.Contains(t, replayErr.Error(), domain.AppOutcomeFailed)
 	runtime.AssertNumberOfCalls(t, "StopContainer", 1)
+}
+
+// executionStartedAt is the start time the fakes report for a freshly started
+// container: deploy and restart observe it right after the start.
+var executionStartedAt = time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+
+// dropInspectExpectations removes the InspectContainer expectations so a test
+// can report a different execution after a deploy.
+func dropInspectExpectations(runtime *outmocks.MockContainerRuntime) {
+	kept := runtime.ExpectedCalls[:0]
+	for _, call := range runtime.ExpectedCalls {
+		if call.Method != "InspectContainer" {
+			kept = append(kept, call)
+		}
+	}
+	runtime.ExpectedCalls = kept
+}
+
+// TestReconcileRunning_DoesNotWithdrawAFreshlyDeployedGeneration is the
+// regression for a deployed generation being withdrawn by the first periodic
+// pass: the deploy verified and routed that execution, so the pass must treat
+// it as already seen. The traffic fake mutates ACTIVE like the real publisher,
+// so a withdrawal would drop the service's routed binds.
+func TestReconcileRunning_DoesNotWithdrawAFreshlyDeployedGeneration(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedServingApp(t, ctx, store, overlapWebSpec(0))
+	traffic := &storeTraffic{store: store}
+	svc := overlapService(store, runtime, images, secrets, traffic)
+
+	overlapDeployMocks(runtime, images)
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+	require.NoError(t, err)
+	require.Equal(t, map[int]int{8080: 18081}, traffic.lastRoute("web"))
+
+	// The first periodic pass sees the same execution the deploy verified.
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-new").Return("", false, nil)
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil)
+	require.NoError(t, svc.ReconcileRunning(ctx))
+
+	assert.Empty(t, traffic.withdrawals(), "the verified generation is never withdrawn")
+	for i, routed := range traffic.allRoutes("web") {
+		assert.Equal(t, map[int]int{8080: 18081}, routed, "graph %d kept routing the service", i)
+	}
+	active, _, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	assert.Equal(t, map[int]int{8080: 18081}, active.Services["web"].BackendBinds)
+}
+
+// TestReconcileRunning_TreatsARestartedExecutionAfterDeployAsFresh proves the
+// recorded execution is the one observed before readiness: if the container
+// restarted natively afterwards, its start time differs and the pass withdraws
+// and verifies it again.
+func TestReconcileRunning_TreatsARestartedExecutionAfterDeployAsFresh(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedServingApp(t, ctx, store, overlapWebSpec(0))
+	traffic := &storeTraffic{store: store}
+	svc := overlapService(store, runtime, images, secrets, traffic)
+
+	overlapDeployMocks(runtime, images)
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+	require.NoError(t, err)
+
+	dropInspectExpectations(runtime)
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(
+		&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt.Add(time.Minute)}, nil)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-new").Return("", false, nil)
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18090, Protocol: domain.NetworkProtocolTCP}}, nil)
+	require.NoError(t, svc.ReconcileRunning(ctx))
+
+	assert.Equal(t, []string{"blog/web"}, traffic.withdrawals(), "a different execution is withdrawn before it is verified")
+	assert.Equal(t, map[int]int{8080: 18090}, traffic.lastRoute("web"), "and routed again on its verified binds")
+}
+
+// TestReconcileRunning_DoesNotWithdrawARestartedGeneration covers the restart
+// path: an in-place restart verified and routed the new execution, so the
+// first periodic pass keeps it.
+func TestReconcileRunning_DoesNotWithdrawARestartedGeneration(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedServingApp(t, ctx, store, overlapWebSpec(0))
+	traffic := &storeTraffic{store: store}
+	svc := overlapService(store, runtime, images, secrets, traffic)
+
+	restartedAt := executionStartedAt.Add(time.Hour)
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(
+		&domain.Container{ID: "c-old", Status: "running", StartedAt: restartedAt}, nil)
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 17002, Protocol: domain.NetworkProtocolTCP}}, nil)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-old").Return("", false, nil)
+	_, err := svc.Restart(ctx, "blog", "web", "")
+	require.NoError(t, err)
+	withdrawnByRestart := len(traffic.withdrawals())
+
+	require.NoError(t, svc.ReconcileRunning(ctx))
+	assert.Len(t, traffic.withdrawals(), withdrawnByRestart, "the periodic pass withdraws nothing more")
+	assert.Equal(t, map[int]int{8080: 17002}, traffic.lastRoute("web"))
 }

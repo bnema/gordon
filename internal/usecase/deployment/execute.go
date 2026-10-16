@@ -407,6 +407,9 @@ func (s *Service) runServiceStep(
 		result.Services[p.name] = svcResult
 		return fail(err)
 	}
+	// The generation is verified and routed: the periodic pass must not
+	// mistake its first observation for an unseen execution and withdraw it.
+	s.recordVerifiedExecution(app, p.name, svcResult)
 	if overlap {
 		svcResult = s.retireSuperseded(ctx, app, p.name, before, beforeGrace, svcResult)
 	}
@@ -796,6 +799,7 @@ func (s *Service) startCandidate(ctx context.Context, app, revision string, p pi
 		RestartUnsafe:     singleWriterRequired(p.spec),
 		BackendBinds:      candidate.TCPBinds,
 		UDPBackendBinds:   candidate.UDPBinds,
+		VerifiedStartedAt: candidate.StartedAt,
 	}
 }
 

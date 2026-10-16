@@ -295,6 +295,32 @@ func (t *executionTracker) forget(key recoveryKey) {
 	delete(t.seen, key)
 }
 
+// executionStart returns the start time of the container's current
+// execution, or the zero time when it cannot be read: an unknown execution is
+// simply never recorded as verified, so the periodic pass verifies it.
+func (s *Service) executionStart(ctx context.Context, containerID string) time.Time {
+	if s.deps.Runtime == nil || containerID == "" {
+		return time.Time{}
+	}
+	container, err := s.deps.Runtime.InspectContainer(ctx, containerID)
+	if err != nil || container == nil {
+		return time.Time{}
+	}
+	return container.StartedAt
+}
+
+// recordVerifiedExecution records the execution a deploy or restart verified
+// and routed, so the first periodic pass after it does not treat the new
+// generation as an unseen execution, withdraw it, and verify it again. Only a
+// successful, non-zero observation is recorded; failure paths never are, and
+// a later native restart still differs from the recorded start time.
+func (s *Service) recordVerifiedExecution(app, service string, result ServiceResult) {
+	if result.Result == "failed" || result.After == "" || result.VerifiedStartedAt.IsZero() {
+		return
+	}
+	s.executions.record(recoveryKey{app: app, service: service, container: result.After}, result.VerifiedStartedAt)
+}
+
 // ReconcileRunning is the daemon-owned periodic recovery pass. It never
 // consults DESIRED to select content, never changes intent, never
 // pulls, creates, or removes a container, and never starts a

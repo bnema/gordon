@@ -271,6 +271,7 @@ func TestDeploy_HoldsSharedGCBarrierAcrossResourceSelection(t *testing.T) {
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
