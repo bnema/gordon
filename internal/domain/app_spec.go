@@ -1013,9 +1013,7 @@ func DiffAppSpec(desired, effective AppSpec) AppDiff {
 		}
 		diff.Changed = append(diff.Changed, diffService(name, desiredSvc, effectiveSvc)...)
 	}
-	if !equalStringMaps(desired.Env, effective.Env) {
-		diff.Changed = append(diff.Changed, "env")
-	}
+	diff.Changed = append(diff.Changed, diffEnvKeys("env/", desired.Env, effective.Env)...)
 	diff.Changed = append(diff.Changed, diffNetworks(desired.Networks, effective.Networks)...)
 	sort.Strings(diff.Added)
 	sort.Strings(diff.Removed)
@@ -1097,9 +1095,7 @@ func diffService(name string, desired, effective AppService) []string {
 	} else if interfacesChanged(desired, effective) {
 		changed = append(changed, "service/"+name+"/interfaces")
 	}
-	if !equalStringMaps(desired.Env, effective.Env) {
-		changed = append(changed, "service/"+name+"/env")
-	}
+	changed = append(changed, diffEnvKeys("service/"+name+"/env/", desired.Env, effective.Env)...)
 	changed = appendSecretChanges(changed, desired, effective)
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
@@ -1179,6 +1175,67 @@ func httpInterfacesEqual(a, b AppHTTPInterface) bool {
 	}
 	a.Visibility, b.Visibility = "", ""
 	return a == b
+}
+
+// diffEnvKeys returns prefix+KEY for every key added, removed, or changed
+// between two env maps. Only key names appear, never values.
+func diffEnvKeys(prefix string, desired, effective map[string]string) []string {
+	var changed []string
+	for key, value := range desired {
+		if previous, ok := effective[key]; !ok || previous != value {
+			changed = append(changed, prefix+key)
+		}
+	}
+	for key := range effective {
+		if _, ok := desired[key]; !ok {
+			changed = append(changed, prefix+key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// ActiveAppSpec rebuilds the effective AppSpec view of ACTIVE for diffing.
+// ACTIVE stores per-service specs but not the app-level [env], so
+// revisionEnv returns the app env of the revision a service was activated
+// from (nil when that revision is gone). When services disagree, the first
+// one (by name) whose env differs from desiredEnv wins, so a diff never
+// hides a service still running a stale app env.
+func ActiveAppSpec(
+	active AppActive,
+	desiredEnv map[string]string,
+	revisionEnv func(revision string) (map[string]string, error),
+) (AppSpec, error) {
+	spec := AppSpec{Name: active.App, Env: map[string]string{}, Networks: append([]AppSharedNetwork(nil), active.Networks...)}
+	names := slices.Sorted(maps.Keys(active.Services))
+	for _, name := range names {
+		svc := active.Services[name].Spec
+		svc.Name = name
+		spec.Services = append(spec.Services, svc)
+	}
+	checked := map[string]struct{}{}
+	for _, name := range names {
+		revision := active.Services[name].EffectiveRevision
+		if _, done := checked[revision]; done {
+			continue
+		}
+		checked[revision] = struct{}{}
+		var env map[string]string
+		if revision != "" {
+			var err error
+			if env, err = revisionEnv(revision); err != nil {
+				return AppSpec{}, err
+			}
+		}
+		spec.Env = maps.Clone(env)
+		if spec.Env == nil {
+			spec.Env = map[string]string{}
+		}
+		if !equalStringMaps(env, desiredEnv) {
+			break
+		}
+	}
+	return spec, nil
 }
 
 // equalStringMaps compares string maps.

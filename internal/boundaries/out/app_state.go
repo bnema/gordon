@@ -151,6 +151,9 @@ type AppApplyStore interface {
 	LoadCheckpoint(ctx context.Context) (domain.AppStoreCheckpoint, error)
 	LoadDesired(ctx context.Context, app string) (domain.AppDesiredRevision, bool, error)
 	LoadActive(ctx context.Context, app string) (domain.AppActive, bool, error)
+	// LoadRevision reads the app env of the revisions ACTIVE services were
+	// activated from, so diffs compare against what actually runs.
+	LoadRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error)
 	AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error
 }
 
