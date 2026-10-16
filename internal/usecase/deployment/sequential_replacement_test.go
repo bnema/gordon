@@ -117,6 +117,14 @@ func expectSequentialCreate(
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
 }
 
+// expectRetirementMarker wires the durable retirement-pending marker an
+// overlap replacement records for the superseded container before the switch.
+func expectRetirementMarker(state *outmocks.MockAppState, containerID string) {
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(i domain.AppRecoveryInhibition) bool {
+		return i.ContainerID == containerID && i.Reason == domain.AppInhibitRetirementPending
+	})).Return(nil).Once()
+}
+
 // expectRetireOld wires the confirmed retirement of the superseded container.
 func expectRetireOld(
 	state *outmocks.MockAppState,
@@ -164,6 +172,8 @@ func TestDeploy_StatelessReplacementOverlapsAndSwitchesBeforeRetiring(t *testing
 			return nil
 		}).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+	expectRetirementMarker(state, "c-old")
+	// Confirmed retirement drops the marker.
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
 	expectRetireOld(state, runtime, &order, "c-old")
 
@@ -189,7 +199,6 @@ func TestDeploy_StatelessReplacementOverlapsAndSwitchesBeforeRetiring(t *testing
 		[]string{"create-new", "start-new", "ready", "publish-active", "traffic", "stop-old", "remove-old"},
 		order, "the old container serves until the new one is published and routed; it is never withdrawn")
 	assert.Empty(t, result.CleanupWarnings)
-	state.AssertNotCalled(t, "SaveRecoveryInhibition", mock.Anything, mock.Anything)
 }
 
 // TestDeploy_OverlapRetiresOldGenerationWithItsOwnStopGrace proves the
@@ -212,6 +221,7 @@ func TestDeploy_OverlapRetiresOldGenerationWithItsOwnStopGrace(t *testing.T) {
 	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+	expectRetirementMarker(state, "c-old")
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", 45*time.Second).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
@@ -244,7 +254,7 @@ func TestDeploy_OverlapOldRetirementFailureIsACleanupWarning(t *testing.T) {
 	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
-	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	expectRetirementMarker(state, "c-old")
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
 
@@ -263,6 +273,7 @@ func TestDeploy_OverlapOldRetirementFailureIsACleanupWarning(t *testing.T) {
 	assert.Equal(t, "web", result.CleanupWarnings[0].Service)
 	assert.Contains(t, result.CleanupWarnings[0].Detail, "remove")
 	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, "blog", "c-old")
+	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestDeploy_PreflightFailureLeavesTheWorkloadUntouched proves preflight runs

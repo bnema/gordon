@@ -385,6 +385,10 @@ type ServiceResult struct {
 	After             string
 	RestartUnsafe     bool
 	Error             string
+	// SupersededRunning is set by an overlap replacement: the container in
+	// Before still runs beside After and carries a retirement-pending marker
+	// until it is retired.
+	SupersededRunning bool
 	// BackendBinds carries the created container's TCP loopback publishes
 	// (container port -> 127.0.0.1 host port) for the active record.
 	BackendBinds map[int]int

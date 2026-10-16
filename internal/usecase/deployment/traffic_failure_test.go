@@ -57,7 +57,11 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
-	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	// The durable retirement marker is the cleanup owner of the superseded
+	// container; it is recorded before the switch and never cleared here.
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.MatchedBy(func(i domain.AppRecoveryInhibition) bool {
+		return i.ContainerID == "c-old" && i.Reason == domain.AppInhibitRetirementPending
+	})).Return(nil).Once()
 
 	var saved []domain.AppOperation
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).RunAndReturn(
@@ -94,8 +98,6 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, mock.Anything, mock.Anything)
 	assert.Equal(t, "c-old", step.Before)
 	assert.Equal(t, "c-new", step.After)
-	assert.True(t, step.Overlap)
-	assert.False(t, step.BeforeRetired, "the superseded container was not retired")
 	require.Len(t, result.Services["web"].CleanupWarnings, 1)
 	assert.Equal(t, "c-old", result.Services["web"].CleanupWarnings[0].Leftover)
 	require.Len(t, last.Warnings, 1)

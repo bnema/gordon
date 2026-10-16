@@ -512,7 +512,32 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 		step.State = domain.AppStepSucceeded
 		steps = append(steps, step)
 	}
+	if err := s.retireAllPending(ctx, app); err != nil {
+		return nil, err
+	}
 	return steps, nil
+}
+
+// retireAllPending retires every superseded container an overlap replacement
+// left running beside its successor. Ending the incarnation deletes the
+// retirement markers with the rest of the app state, so a container that is
+// not confirmed gone here would be orphaned and untracked: a failure keeps the
+// markers and fails the caller.
+func (s *Service) retireAllPending(ctx context.Context, app string) error {
+	inhibitions, err := s.deps.State.LoadRecoveryInhibitions(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load recovery inhibitions: %w", err)
+	}
+	_, pending := splitRecoveryInhibitions(app, inhibitions)
+	for _, marker := range pending {
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true,
+		}, marker.ContainerID)
+		if !retired.Gone {
+			return fmt.Errorf("deployment: remove %q/%q: superseded container %s not confirmed gone: %s", app, marker.Service, marker.ContainerID, cleanupDetail(retired))
+		}
+	}
+	return nil
 }
 
 // ReconcileBoot reconciles apps intended to run after a daemon boot:

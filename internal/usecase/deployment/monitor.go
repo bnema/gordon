@@ -288,6 +288,14 @@ func (t *executionTracker) record(key recoveryKey, startedAt time.Time) {
 	t.seen[key] = startedAt
 }
 
+// verified reports whether a verified execution of the generation is recorded.
+func (t *executionTracker) verified(key recoveryKey) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.seen[key]
+	return ok
+}
+
 // forget drops one generation's observation.
 func (t *executionTracker) forget(key recoveryKey) {
 	t.mu.Lock()
@@ -358,7 +366,9 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 	if err != nil {
 		return fmt.Errorf("deployment: reconcile %q: load recovery inhibitions: %w", app, err)
 	}
-	inhibited, failures := s.processRecoveryInhibitions(ctx, app, inhibitions)
+	inhibited, pending := splitRecoveryInhibitions(app, inhibitions)
+	var failures []error
+	failed := map[string]struct{}{}
 	for _, name := range sortedServiceNames(active) {
 		eff := active.Services[name]
 		if intent.Stopped {
@@ -369,6 +379,7 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 		}
 		if err := s.reconcileRunningService(ctx, app, name, eff, inhibited); err != nil {
 			failures = append(failures, err)
+			failed[name] = struct{}{}
 		}
 	}
 	if intent.Stopped {
@@ -381,24 +392,77 @@ func (s *Service) reconcileAppRunning(ctx context.Context, app string) error {
 		}
 		cancel()
 	}
+	// Superseded containers are retired last: only after their successors
+	// were verified and routed in this pass.
+	failures = append(failures, s.retirePendingContainers(ctx, app, intent.Stopped, active, pending, failed)...)
 	s.pruneRecoveryHistory(app, active)
 	return errors.Join(failures...)
 }
 
-func (s *Service) processRecoveryInhibitions(ctx context.Context, app string, inhibitions []domain.AppRecoveryInhibition) (map[recoveryKey]struct{}, []error) {
+// splitRecoveryInhibitions separates the generations recovery must never
+// start from the superseded containers waiting to be retired.
+func splitRecoveryInhibitions(app string, inhibitions []domain.AppRecoveryInhibition) (map[recoveryKey]struct{}, []domain.AppRecoveryInhibition) {
 	inhibited := map[recoveryKey]struct{}{}
-	var failures []error
+	var pending []domain.AppRecoveryInhibition
 	for _, inhibition := range inhibitions {
-		if inhibition.Reason != domain.AppInhibitRetirementPending {
-			inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
+		if inhibition.Reason == domain.AppInhibitRetirementPending {
+			pending = append(pending, inhibition)
 			continue
 		}
-		retired := s.retireContainer(ctx, app, retireOptions{Service: inhibition.Service}, inhibition.ContainerID)
+		inhibited[recoveryKey{app: app, service: inhibition.Service, container: inhibition.ContainerID}] = struct{}{}
+	}
+	return inhibited, pending
+}
+
+// retirePendingContainers retires the superseded containers an overlap
+// replacement left running, with the stop grace recorded at the marker
+// (the app default for a record that has none). A container is retired only
+// when it can no longer be the serving one:
+//   - ACTIVE names it (the replacement never took over): it is the serving
+//     generation, so the marker is dropped and the container is kept;
+//   - its successor was not verified and routed in this pass, or its
+//     reconciliation failed: the superseded container is retried later, so a
+//     successor that is not serving never costs the working generation.
+//
+// A stopped app has no successor to wait for: nothing may run.
+func (s *Service) retirePendingContainers(ctx context.Context, app string, stopped bool, active domain.AppActive, pending []domain.AppRecoveryInhibition, failed map[string]struct{}) []error {
+	var failures []error
+	for _, marker := range pending {
+		if publishedContainer(active, marker.ContainerID) {
+			if err := s.clearRecoveryInhibition(ctx, app, marker.Service, marker.ContainerID); err != nil {
+				failures = append(failures, err)
+			}
+			continue
+		}
+		if !stopped && !s.successorVerified(ctx, app, marker.Service, active, failed) {
+			continue
+		}
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true,
+		}, marker.ContainerID)
 		if !retired.Gone {
-			failures = append(failures, fmt.Errorf("deployment: retirement pending for %s/%s", app, inhibition.ContainerID))
+			failures = append(failures, fmt.Errorf("deployment: retirement pending for %s/%s: %s", app, marker.ContainerID, cleanupDetail(retired)))
 		}
 	}
-	return inhibited, failures
+	return failures
+}
+
+// successorVerified reports whether the container ACTIVE names for the
+// service was verified and routed by this daemon, did not fail this pass, and
+// still runs.
+func (s *Service) successorVerified(ctx context.Context, app, service string, active domain.AppActive, failed map[string]struct{}) bool {
+	if _, bad := failed[service]; bad {
+		return false
+	}
+	successor, ok := active.Services[service]
+	if !ok || successor.Container == "" {
+		return true
+	}
+	if !s.executions.verified(recoveryKey{app: app, service: service, container: successor.Container}) {
+		return false
+	}
+	container, err := s.deps.Runtime.InspectContainer(ctx, successor.Container)
+	return err == nil && container.Status == string(domain.ContainerStatusRunning)
 }
 
 // convergeStoppedService enforces durable stopped intent: it never
@@ -762,7 +826,10 @@ func (s *Service) withdrawForRecovery(ctx context.Context, app, service string) 
 }
 
 // recoveryInhibited reports whether one exact generation is durably
-// inhibited for recovery.
+// inhibited for recovery. A retirement-pending marker does not count: it
+// names a superseded container that is being retired, not a generation
+// recovery must keep stopped, and when ACTIVE still names that container
+// (the replacement never took over) it must stay startable.
 func (s *Service) recoveryInhibited(ctx context.Context, app, service, containerID string) (bool, error) {
 	if containerID == "" {
 		return false, nil
@@ -772,7 +839,8 @@ func (s *Service) recoveryInhibited(ctx context.Context, app, service, container
 		return false, fmt.Errorf("deployment: load recovery inhibitions: %w", err)
 	}
 	for _, inhibition := range inhibitions {
-		if inhibition.Service == service && inhibition.ContainerID == containerID {
+		if inhibition.Service == service && inhibition.ContainerID == containerID &&
+			inhibition.Reason != domain.AppInhibitRetirementPending {
 			return true, nil
 		}
 	}
@@ -795,6 +863,28 @@ func (s *Service) inhibitRecovery(ctx context.Context, app, service, containerID
 	}
 	if err := s.deps.State.SaveRecoveryInhibition(ctx, inhibition); err != nil {
 		return fmt.Errorf("deployment: record recovery inhibition for %s/%s: %w", app, containerID, err)
+	}
+	return nil
+}
+
+// inhibitRetirement durably marks a superseded container that an overlap
+// replacement left running beside its successor. The periodic reconciliation
+// retires it with grace, once the successor is verified and routed.
+func (s *Service) inhibitRetirement(ctx context.Context, app, service, containerID, operation string, grace time.Duration) error {
+	if containerID == "" {
+		return nil
+	}
+	inhibition := domain.AppRecoveryInhibition{
+		App:         app,
+		Service:     service,
+		ContainerID: containerID,
+		Reason:      domain.AppInhibitRetirementPending,
+		Operation:   operation,
+		CreatedAt:   time.Now().UTC(),
+		StopGrace:   grace,
+	}
+	if err := s.deps.State.SaveRecoveryInhibition(ctx, inhibition); err != nil {
+		return fmt.Errorf("deployment: record retirement of %s/%s: %w", app, containerID, err)
 	}
 	return nil
 }

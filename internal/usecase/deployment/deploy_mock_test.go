@@ -287,6 +287,7 @@ func TestDeploy_Mockery_HTTPOverlapPublishesBeforeRetiringOldGeneration(t *testi
 		return nil
 	}).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+	expectRetirementMarker(state, "c-old")
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(func(context.Context, string, time.Duration) error {
 		step++

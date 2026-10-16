@@ -20,7 +20,7 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. A service without volumes, binds, or devices is
+// sorted name order. A service without volumes, binds, devices, or UDP interfaces is
 // replaced with a short overlap: its replacement starts and becomes ready
 // while the superseded container keeps serving, traffic switches to it, and
 // only then is the superseded container stopped, so the service is not
@@ -311,21 +311,22 @@ func (s *Service) claimRevision(ctx context.Context, claim DeployClaim, op domai
 // is never ahead of what is routed.
 //
 // An overlap-eligible service (see overlapEligible) is replaced without
-// withdrawing the superseded container: it keeps serving, and is retired
-// only after the new generation is published and routed. The step records
-// Overlap before any effect, so an interrupted deploy leaves enough trace
-// for reconciliation to retire the superseded container.
+// withdrawing the superseded container: it keeps serving and is retired only
+// after the new generation is published and routed. Before the switch the
+// superseded container gets a durable retirement-pending marker carrying its
+// stop grace. That marker, not the operation journal, owns the cleanup: it
+// survives newer operations, and the periodic reconciliation retires the
+// container once its successor is verified and routed.
 //
 // If the publication or the traffic apply of an overlap step fails, the
 // superseded container is deliberately left running: the proxy may still
-// route to it, and ACTIVE may already name the new container, so stopping
-// it could create an outage the failed deploy cannot repair. The step is
-// journaled as failed with the new container as After, the superseded one as
-// Before and BeforeRetired unset, and a cleanup warning names it. The next
-// reconciliation of the app finds the published new container, re-applies
-// traffic and only then retires the superseded one; if ACTIVE was never
-// updated the unpublished candidate is removed instead and the superseded
-// container simply keeps serving.
+// route to it, and ACTIVE may already name the new container, so stopping it
+// could create an outage the failed deploy cannot repair. The step is
+// journaled as failed with the new container as After and a cleanup warning
+// names the superseded one. If ACTIVE names the new container, the periodic
+// reconciliation verifies and republishes it and then retires the superseded
+// one through its marker; if ACTIVE never changed, it still names the
+// superseded container, which keeps serving, and the marker is dropped.
 func (s *Service) runServiceStep(
 	ctx context.Context,
 	app, revision string,
@@ -368,8 +369,7 @@ func (s *Service) runServiceStep(
 		step.Detail = domain.AppServiceUnchanged + ": already running " + p.spec.Image + " (" + p.digest + ")"
 	} else if before != "" && overlapEligible(p.spec) {
 		overlap = true
-		step.Overlap = true
-		svcResult = s.deployOverlap(ctx, app, revision, p, op.Op, before, s.journalCandidate(op, index+1))
+		svcResult = s.deployOverlap(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	} else {
 		svcResult = s.deployService(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	}
@@ -408,7 +408,7 @@ func (s *Service) runServiceStep(
 		return fail(err)
 	}
 	if overlap {
-		svcResult, step.BeforeRetired = s.retireSuperseded(ctx, app, p.name, before, beforeGrace, svcResult)
+		svcResult = s.retireSuperseded(ctx, app, p.name, before, beforeGrace, svcResult)
 	}
 	result.Services[p.name] = svcResult
 	step.State = domain.AppStepSucceeded
@@ -442,19 +442,20 @@ func (s *Service) publishAndRoute(ctx context.Context, app, revision string, p p
 // retireSuperseded stops the container an overlap replacement superseded,
 // once the new generation is published and routed. It uses the stop grace of
 // the generation being stopped: the runtime sends SIGTERM, then kills after
-// the grace. Backend claims are released by retireContainer. A retirement
-// that fails is not a deploy failure — the new generation already serves —
-// but a cleanup warning on the service, and the step stays unretired so
-// reconciliation retries it. It reports whether the container is gone.
-func (s *Service) retireSuperseded(ctx context.Context, app, service, before string, grace time.Duration, result ServiceResult) (ServiceResult, bool) {
-	retired := s.retireContainer(ctx, app, retireOptions{Service: service, Grace: grace}, before)
+// the grace. Backend claims are released and the retirement-pending marker is
+// cleared by retireContainer once the container is confirmed gone. A
+// retirement that fails is not a deploy failure — the new generation already
+// serves — but a cleanup warning on the service; the marker stays, so the
+// periodic reconciliation retries it.
+func (s *Service) retireSuperseded(ctx context.Context, app, service, before string, grace time.Duration, result ServiceResult) ServiceResult {
+	retired := s.retireContainer(ctx, app, retireOptions{Service: service, Grace: grace, ClearInhibition: true}, before)
 	result.CleanupWarnings = append(result.CleanupWarnings, retired.Warnings...)
 	if !retired.Gone && len(retired.Warnings) == 0 {
 		result.CleanupWarnings = append(result.CleanupWarnings, CleanupWarning{
 			Service: service, Leftover: before, Detail: "superseded container not confirmed gone",
 		})
 	}
-	return result, retired.Gone
+	return result
 }
 
 // unchangedService reports whether the service already runs exactly what p
@@ -697,18 +698,46 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 }
 
 // deployOverlap creates the replacement of an overlap-eligible service while
-// the superseded container keeps running and stays routed: no withdrawal, no
-// inhibition, no retirement. Container names carry the operation, so the two
-// generations never collide, and their loopback binds are ephemeral. It
-// returns the ready candidate with its binds; on any failure the candidate is
-// removed and the superseded container is left exactly as it was. Retiring
-// the superseded container is the caller's job, once the candidate is
+// the superseded container keeps running and stays routed: no inhibition and
+// no retirement. Container names carry the operation, so the two generations
+// never collide, and their loopback binds are ephemeral.
+//
+// The only withdrawal it can perform is the retry of one already pending for
+// this service: an earlier withdrawal that could not be proven leaves the
+// service marked, and a marked service would be withdrawn again by the
+// traffic refresh that follows the switch, erasing the binds the switch just
+// published. The retry runs before the candidate exists, so a failure aborts
+// the deploy untouched.
+//
+// It returns the ready candidate with its binds, after durably recording the
+// retirement-pending marker of the superseded container; on any failure the
+// candidate is removed and the superseded container is left exactly as it was.
+// Retiring the superseded container is the caller's job, once the candidate is
 // published and routed (retireSuperseded).
-func (s *Service) deployOverlap(ctx context.Context, app, revision string, p pinnedService, opID, before string, journal candidateJournal) ServiceResult {
+func (s *Service) deployOverlap(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration, journal candidateJournal) ServiceResult {
 	if failed, ok := s.revalidateService(app, revision, p, before); !ok {
 		return failed
 	}
-	return s.startCandidate(ctx, app, revision, p, opID, before, journal)
+	if s.publication.inhibited(app, p.name) {
+		if err := s.withdrawForRecovery(ctx, app, p.name); err != nil {
+			return s.failResult(revision, before, "", err)
+		}
+	}
+	result := s.startCandidate(ctx, app, revision, p, opID, before, journal)
+	if result.Result != "deployed" {
+		return result
+	}
+	// The marker is durable before anything is published: whatever happens
+	// next, the superseded container is retired by the periodic
+	// reconciliation instead of being forgotten, and recovery never revives it.
+	if err := s.inhibitRetirement(ctx, app, p.name, before, opID, beforeGrace); err != nil {
+		result.Result = "failed"
+		result.Error = err.Error()
+		result.CleanupWarnings = append(result.CleanupWarnings, s.retireCandidate(ctx, app, p.name, result.After)...)
+		return result
+	}
+	result.SupersededRunning = true
+	return result
 }
 
 // revalidateService re-resolves the binds and devices of a service against
@@ -773,19 +802,23 @@ func (s *Service) startCandidate(ctx context.Context, app, revision string, p pi
 // singleWriterRequired reports services that must never have two generations
 // running concurrently. Persistent volumes and any bind (especially a
 // writable one) may be written by both, so they are treated identically.
-// Device grants are exclusive host resources and are treated the same way by
-// overlapEligible.
+// Devices and UDP interfaces are also excluded from the overlap (see
+// overlapEligible).
 func singleWriterRequired(spec domain.AppService) bool {
 	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
 }
 
 // overlapEligible reports whether a service may be replaced with a short
-// overlap of the old and the new generation: it has no volume, bind, or
-// device, so nothing stateful or exclusive is shared between the two. Every
-// other service keeps the sequential replacement, so two generations of a
-// single-writer service never run together.
+// overlap of the old and the new generation: it has no volume, bind, device,
+// or UDP interface. Volumes, binds, and devices are stateful or exclusive
+// resources two generations must not share. UDP sessions are pinned by the
+// relay to the backend they started on and outlive the switch for the
+// configured drain timeout, so they would keep reaching a backend that is
+// about to be stopped and whose loopback port may be recycled. TCP is fine:
+// established relays do not redial. Every other service keeps the sequential
+// replacement, so two generations of such a service never run together.
 func overlapEligible(spec domain.AppService) bool {
-	return len(spec.Volumes) == 0 && len(spec.Binds) == 0 && len(spec.Devices) == 0
+	return len(spec.Volumes) == 0 && len(spec.Binds) == 0 && len(spec.Devices) == 0 && len(spec.UDP) == 0
 }
 
 // refreshTraffic rebuilds the proxy host index and applies the full
@@ -859,15 +892,19 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 	if err := s.recordOwnership(ctx, app, p); err != nil {
 		return err
 	}
-	// The superseded generation is now safely replaced: clearing its
-	// inhibition is what makes this generation authoritative. A failed
-	// publication leaves the marker in place.
-	if result.Before != "" && result.Before != result.After {
-		if err := s.clearRecoveryInhibition(ctx, app, p.name, result.Before); err != nil {
-			return err
-		}
+	return s.clearSupersededMarker(ctx, app, p.name, result)
+}
+
+// clearSupersededMarker clears the recovery inhibition of the generation a
+// sequential replacement superseded: that clearing is what makes the new
+// generation authoritative, and a failed publication leaves the marker in
+// place. An overlap replacement is the exception: its superseded container
+// still runs, and its retirement-pending marker is what gets it retired.
+func (s *Service) clearSupersededMarker(ctx context.Context, app, service string, result ServiceResult) error {
+	if result.Before == "" || result.Before == result.After || result.SupersededRunning {
+		return nil
 	}
-	return nil
+	return s.clearRecoveryInhibition(ctx, app, service, result.Before)
 }
 
 // recordOwnership stamps volume/secret/network ownership after publication.

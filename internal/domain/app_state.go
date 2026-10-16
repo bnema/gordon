@@ -192,14 +192,6 @@ type AppOperationStep struct {
 	Image string `json:"image,omitempty"`
 	// Service names the app service this step applies to.
 	Service string `json:"service,omitempty"`
-	// Overlap marks a replacement that started the new generation while the
-	// superseded container (Before) kept serving. It is journaled before any
-	// effect, so reconciliation knows Before may still run beside After.
-	Overlap bool `json:"overlap,omitempty"`
-	// BeforeRetired is set once the superseded container of an Overlap step
-	// was confirmed gone (or no longer needs retiring). While it is unset,
-	// reconciliation retires Before once After is the published container.
-	BeforeRetired bool `json:"before_retired,omitempty"`
 	// Diagnostics is bounded, redacted failure output kept separate from
 	// the stable Error. Retrieval requires the logs read scope.
 	Diagnostics []string `json:"diagnostics,omitempty"`
@@ -313,6 +305,10 @@ type AppRecoveryInhibition struct {
 	Reason      string    `json:"reason"`
 	Operation   string    `json:"operation,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	// StopGrace is the effective stop grace of the generation to retire
+	// (retirement-pending only). Zero, as in records written before it
+	// existed, means the app default.
+	StopGrace time.Duration `json:"stop_grace,omitempty"`
 }
 
 // AppRecoveryInhibition reasons.
@@ -320,8 +316,11 @@ const (
 	// AppInhibitReplacementPending marks the generation being replaced
 	// while a volume-owning candidate may already be writing.
 	AppInhibitReplacementPending = "replacement-pending"
-	// AppInhibitRetirementPending marks a published predecessor that must
-	// remain stopped and be retired by a later reconciliation pass.
+	// AppInhibitRetirementPending marks a superseded generation that an
+	// overlap replacement left running beside its published successor. The
+	// periodic reconciliation retires it, with StopGrace, once the
+	// successor is verified and routed; it is never retired, and the
+	// marker is dropped, while ACTIVE names it.
 	AppInhibitRetirementPending = "retirement-pending"
 )
 
