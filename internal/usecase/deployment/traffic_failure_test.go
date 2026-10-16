@@ -50,11 +50,8 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil)
 
 	expectNetworkProvision(runtime, "app-blog", 1)
-	// The superseded generation is confirmed gone before the replacement is
-	// created: a deploy never overlaps two generations of one service.
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
-	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
+	// The superseded container serves beside the candidate and must survive
+	// the failed switch: no stop, no removal, no claim release.
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
@@ -88,10 +85,21 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	step, ok := opStep(last, "service.web.replace")
 	require.True(t, ok)
 	assert.Equal(t, domain.AppStepFailed, step.State, "the service step must not claim success before traffic applied")
-	// The superseded container is gone: a rejected graph is reported as a
-	// failure of the new generation, never as a return to the old one.
-	runtime.AssertCalled(t, "RemoveContainer", mock.Anything, "c-old", false)
-	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-new", mock.Anything)
+	// ACTIVE already names c-new while the proxy graph was refused, so the
+	// superseded container may still be the one a stale graph reaches: it is
+	// kept running. Both generations stay traceable in the journal for
+	// reconciliation, and the leftover is reported.
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, mock.Anything, mock.Anything)
+	assert.Equal(t, "c-old", step.Before)
+	assert.Equal(t, "c-new", step.After)
+	assert.True(t, step.Overlap)
+	assert.False(t, step.BeforeRetired, "the superseded container was not retired")
+	require.Len(t, result.Services["web"].CleanupWarnings, 1)
+	assert.Equal(t, "c-old", result.Services["web"].CleanupWarnings[0].Leftover)
+	require.Len(t, last.Warnings, 1)
+	assert.Equal(t, "c-old", last.Warnings[0].Leftover)
 }
 
 // TestStop_TrafficFailureRecordsTerminalFailure proves a rejected graph

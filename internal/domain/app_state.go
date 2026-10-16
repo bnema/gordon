@@ -192,6 +192,14 @@ type AppOperationStep struct {
 	Image string `json:"image,omitempty"`
 	// Service names the app service this step applies to.
 	Service string `json:"service,omitempty"`
+	// Overlap marks a replacement that started the new generation while the
+	// superseded container (Before) kept serving. It is journaled before any
+	// effect, so reconciliation knows Before may still run beside After.
+	Overlap bool `json:"overlap,omitempty"`
+	// BeforeRetired is set once the superseded container of an Overlap step
+	// was confirmed gone (or no longer needs retiring). While it is unset,
+	// reconciliation retires Before once After is the published container.
+	BeforeRetired bool `json:"before_retired,omitempty"`
 	// Diagnostics is bounded, redacted failure output kept separate from
 	// the stable Error. Retrieval requires the logs read scope.
 	Diagnostics []string `json:"diagnostics,omitempty"`

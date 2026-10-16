@@ -140,7 +140,7 @@ func TestRemove_FailedRetirementKeepsClaimsAndActiveState(t *testing.T) {
 func TestDeploy_RetirementFailureBlocksReplacement(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
-	rev := mockRevision()
+	rev := statefulMockRevision()
 
 	oldActive := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
 		"web": {EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old", Spec: graceSpec(time.Second)},
@@ -156,6 +156,8 @@ func TestDeploy_RetirementFailureBlocksReplacement(t *testing.T) {
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(oldActive, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, mock.Anything).Return(false, nil)
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
 	// The superseded container is retired with its own effective grace, and
 	// its removal fails: the replacement must not start.
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", time.Second).Return(nil).Once()

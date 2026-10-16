@@ -20,12 +20,16 @@ const failLogTailLines = 50
 const failLogTailTimeout = 10 * time.Second
 
 // Deploy executes a preflighted revision: fail-fast across services in
-// sorted name order. Every service is replaced sequentially — withdraw
+// sorted name order. A service without volumes, binds, or devices is
+// replaced with a short overlap: its replacement starts and becomes ready
+// while the superseded container keeps serving, traffic switches to it, and
+// only then is the superseded container stopped, so the service is not
+// interrupted. Every other service is replaced sequentially — withdraw
 // traffic, retire the superseded container, start the replacement and wait
-// for its readiness probe — so a deployment may briefly interrupt the
-// service, and two Gordon-managed generations of one service never run at
-// the same time. Volumes are never deleted: no RemoveVolume call, no
-// volume-deletion flags on container removal.
+// for its readiness probe — so a deployment may briefly interrupt it and two
+// Gordon-managed generations of a single-writer service never run at the same
+// time. Volumes are never deleted: no RemoveVolume call, no volume-deletion
+// flags on container removal.
 //
 // It is the synchronous composition of the two engine phases: StartDeploy
 // claims the key and journals the operation, then ExecuteDeploy runs the
@@ -147,7 +151,7 @@ func (s *Service) startDeployLocked(ctx context.Context, input DeployInput) (*St
 
 // ExecuteDeploy performs the second phase of a deploy: it reacquires the app
 // lock, loads and verifies the claimed journal by app/op identity, runs the
-// image pull/pin and the sequential replacement, and records the terminal
+// image pull/pin and the per-service replacement, and records the terminal
 // outcome. A claim that is already terminal, or that does not match its
 // identity, is never executed: it replays its stored outcome instead. An
 // operation that stops mid-execution (shutdown or cancellation) leaves its
@@ -305,6 +309,23 @@ func (s *Service) claimRevision(ctx context.Context, claim DeployClaim, op domai
 // step is recorded as succeeded only after the runtime effect, the ACTIVE
 // publication, and the traffic apply all succeeded, so a journaled success
 // is never ahead of what is routed.
+//
+// An overlap-eligible service (see overlapEligible) is replaced without
+// withdrawing the superseded container: it keeps serving, and is retired
+// only after the new generation is published and routed. The step records
+// Overlap before any effect, so an interrupted deploy leaves enough trace
+// for reconciliation to retire the superseded container.
+//
+// If the publication or the traffic apply of an overlap step fails, the
+// superseded container is deliberately left running: the proxy may still
+// route to it, and ACTIVE may already name the new container, so stopping
+// it could create an outage the failed deploy cannot repair. The step is
+// journaled as failed with the new container as After, the superseded one as
+// Before and BeforeRetired unset, and a cleanup warning names it. The next
+// reconciliation of the app finds the published new container, re-applies
+// traffic and only then retires the superseded one; if ACTIVE was never
+// updated the unpublished candidate is removed instead and the superseded
+// container simply keeps serving.
 func (s *Service) runServiceStep(
 	ctx context.Context,
 	app, revision string,
@@ -331,6 +352,10 @@ func (s *Service) runServiceStep(
 		Before: before, State: domain.AppStepPending,
 	}
 	var svcResult ServiceResult
+	overlap := false
+	// The grace of the generation being superseded, read before anything
+	// publishes a record of its replacement.
+	beforeGrace := activeStopGrace(active, p.name)
 	if current, ok := s.unchangedService(ctx, app, p, active); ok {
 		// Same image, spec, environment, and secret values already running:
 		// keep the container.
@@ -341,8 +366,12 @@ func (s *Service) runServiceStep(
 			RestartUnsafe: singleWriterRequired(p.spec),
 		}
 		step.Detail = domain.AppServiceUnchanged + ": already running " + p.spec.Image + " (" + p.digest + ")"
+	} else if before != "" && overlapEligible(p.spec) {
+		overlap = true
+		step.Overlap = true
+		svcResult = s.deployOverlap(ctx, app, revision, p, op.Op, before, s.journalCandidate(op, index+1))
 	} else {
-		svcResult = s.deployService(ctx, app, revision, p, op.Op, before, activeStopGrace(active, p.name), s.journalCandidate(op, index+1))
+		svcResult = s.deployService(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	}
 	result.Services[p.name] = svcResult
 	// A recorded candidate is authoritative while the step is unresolved: a
@@ -367,22 +396,19 @@ func (s *Service) runServiceStep(
 		return fail(fmt.Errorf("deployment: service %q failed at %s: %s: %w",
 			p.name, stepID, svcResult.Error, domain.ErrAppStateConflict))
 	}
-	// Publish the per-service effective state: the new binds become the
-	// service's recorded backend before the proxy is repointed at them.
-	if err := s.publishService(ctx, app, revision, p, svcResult, op.Op); err != nil {
-		svcResult.Result = "failed"
-		svcResult.Error = err.Error()
+	svcResult, err := s.publishAndRoute(ctx, app, revision, p, svcResult, op.Op)
+	if err != nil {
+		if overlap {
+			svcResult.CleanupWarnings = append(svcResult.CleanupWarnings, CleanupWarning{
+				Service: p.name, Leftover: before,
+				Detail: "superseded container kept running: the new generation was not confirmed published and routed",
+			})
+		}
 		result.Services[p.name] = svcResult
 		return fail(err)
 	}
-	// Rebuild and publish the traffic graph. ACTIVE already names the new
-	// container, but the operation is a failure until routing accepted it,
-	// so a rejected graph must never be journaled as success.
-	if err := s.refreshTraffic(ctx, app); err != nil {
-		svcResult.Result = "failed"
-		svcResult.Error = err.Error()
-		result.Services[p.name] = svcResult
-		return fail(err)
+	if overlap {
+		svcResult, step.BeforeRetired = s.retireSuperseded(ctx, app, p.name, before, beforeGrace, svcResult)
 	}
 	result.Services[p.name] = svcResult
 	step.State = domain.AppStepSucceeded
@@ -391,6 +417,44 @@ func (s *Service) runServiceStep(
 		log.Warn().Err(saveErr).Msg("deployment: failed to checkpoint service progress")
 	}
 	return nil
+}
+
+// publishAndRoute publishes the per-service effective state, so the new
+// binds become the service's recorded backend, then rebuilds the traffic
+// graph so the proxy is repointed at them. ACTIVE already names the new
+// container when the graph is applied, but the operation is a failure until
+// routing accepted it, so a rejected graph is returned as a failed result and
+// never journaled as success.
+func (s *Service) publishAndRoute(ctx context.Context, app, revision string, p pinnedService, svcResult ServiceResult, opID string) (ServiceResult, error) {
+	if err := s.publishService(ctx, app, revision, p, svcResult, opID); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		return svcResult, err
+	}
+	if err := s.refreshTraffic(ctx, app); err != nil {
+		svcResult.Result = "failed"
+		svcResult.Error = err.Error()
+		return svcResult, err
+	}
+	return svcResult, nil
+}
+
+// retireSuperseded stops the container an overlap replacement superseded,
+// once the new generation is published and routed. It uses the stop grace of
+// the generation being stopped: the runtime sends SIGTERM, then kills after
+// the grace. Backend claims are released by retireContainer. A retirement
+// that fails is not a deploy failure — the new generation already serves —
+// but a cleanup warning on the service, and the step stays unretired so
+// reconciliation retries it. It reports whether the container is gone.
+func (s *Service) retireSuperseded(ctx context.Context, app, service, before string, grace time.Duration, result ServiceResult) (ServiceResult, bool) {
+	retired := s.retireContainer(ctx, app, retireOptions{Service: service, Grace: grace}, before)
+	result.CleanupWarnings = append(result.CleanupWarnings, retired.Warnings...)
+	if !retired.Gone && len(retired.Warnings) == 0 {
+		result.CleanupWarnings = append(result.CleanupWarnings, CleanupWarning{
+			Service: service, Leftover: before, Detail: "superseded container not confirmed gone",
+		})
+	}
+	return result, retired.Gone
 }
 
 // unchangedService reports whether the service already runs exactly what p
@@ -579,7 +643,10 @@ func (s *Service) journalCandidate(op *domain.AppOperation, index int) candidate
 
 // deployService replaces one service sequentially and returns its terminal
 // result. before is the ACTIVE container being superseded (empty on a first
-// deployment); beforeGrace is its effective stop grace.
+// deployment); beforeGrace is its effective stop grace. It serves every
+// service that is not overlap-eligible, a first deployment, and the
+// rebuild of a missing generation by start and restart; deployOverlap is the
+// overlapping alternative used by a deploy.
 //
 // The order is fixed: withdraw from traffic and confirm it, durably inhibit
 // a single-writer generation, retire the superseded container and confirm
@@ -591,11 +658,8 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	// Revalidate the current authorization and source before withdrawing or
 	// retiring the serving generation. A reload between preflight and this
 	// service step must fail without mutating the existing workload.
-	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
-		return s.failResult(revision, before, "", err)
-	}
-	if _, err := s.resolveServiceDevices(app, p.spec); err != nil {
-		return s.failResult(revision, before, "", err)
+	if failed, ok := s.revalidateService(app, revision, p, before); !ok {
+		return failed
 	}
 	// Withdraw the service from traffic first and confirm it: a withdrawal
 	// that cannot be applied must block every container mutation, so no
@@ -629,6 +693,42 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 			return s.failResult(revision, before, "", fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired)))
 		}
 	}
+	return s.startCandidate(ctx, app, revision, p, opID, before, journal)
+}
+
+// deployOverlap creates the replacement of an overlap-eligible service while
+// the superseded container keeps running and stays routed: no withdrawal, no
+// inhibition, no retirement. Container names carry the operation, so the two
+// generations never collide, and their loopback binds are ephemeral. It
+// returns the ready candidate with its binds; on any failure the candidate is
+// removed and the superseded container is left exactly as it was. Retiring
+// the superseded container is the caller's job, once the candidate is
+// published and routed (retireSuperseded).
+func (s *Service) deployOverlap(ctx context.Context, app, revision string, p pinnedService, opID, before string, journal candidateJournal) ServiceResult {
+	if failed, ok := s.revalidateService(app, revision, p, before); !ok {
+		return failed
+	}
+	return s.startCandidate(ctx, app, revision, p, opID, before, journal)
+}
+
+// revalidateService re-resolves the binds and devices of a service against
+// the current policy before any workload mutation. It returns the failed
+// result and false when either was revoked since preflight.
+func (s *Service) revalidateService(app, revision string, p pinnedService, before string) (ServiceResult, bool) {
+	if _, err := s.resolveServiceBinds(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err), false
+	}
+	if _, err := s.resolveServiceDevices(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err), false
+	}
+	return ServiceResult{}, true
+}
+
+// startCandidate creates and starts the replacement generation and waits for
+// its readiness probe. A candidate that fails readiness is removed after its
+// redacted diagnostics were captured; whatever generation it supersedes is
+// not touched here.
+func (s *Service) startCandidate(ctx context.Context, app, revision string, p pinnedService, opID, before string, journal candidateJournal) ServiceResult {
 	candidate, err := s.createAndStart(ctx, app, revision, p, opID, journal)
 	if err != nil {
 		result := s.failResult(revision, before, "", err)
@@ -642,10 +742,10 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 	created := candidate.Container
 	if err := s.waitServiceReady(ctx, app, created.ID, deploymentReadiness(p.spec), candidate.TCPBinds); err != nil {
 		// Capture redacted diagnostics while the failed replacement still
-		// exists, then remove only that candidate. The superseded container
-		// is already gone and is never recreated. Cleanup is best effort: a
-		// canceled context can leave the candidate behind, which is then
-		// reported as a leftover warning instead of a false success.
+		// exists, then remove only that candidate. A superseded container
+		// that was already retired is never recreated. Cleanup is best
+		// effort: a canceled context can leave the candidate behind, which is
+		// then reported as a leftover warning instead of a false success.
 		tail := s.redactDiagnostics(ctx, app, p, s.logTail(ctx, created.ID))
 		cleanup := s.retireCandidate(ctx, app, p.name, created.ID)
 		return ServiceResult{
@@ -673,8 +773,19 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 // singleWriterRequired reports services that must never have two generations
 // running concurrently. Persistent volumes and any bind (especially a
 // writable one) may be written by both, so they are treated identically.
+// Device grants are exclusive host resources and are treated the same way by
+// overlapEligible.
 func singleWriterRequired(spec domain.AppService) bool {
 	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
+}
+
+// overlapEligible reports whether a service may be replaced with a short
+// overlap of the old and the new generation: it has no volume, bind, or
+// device, so nothing stateful or exclusive is shared between the two. Every
+// other service keeps the sequential replacement, so two generations of a
+// single-writer service never run together.
+func overlapEligible(spec domain.AppService) bool {
+	return len(spec.Volumes) == 0 && len(spec.Binds) == 0 && len(spec.Devices) == 0
 }
 
 // refreshTraffic rebuilds the proxy host index and applies the full

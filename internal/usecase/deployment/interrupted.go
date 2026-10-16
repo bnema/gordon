@@ -3,6 +3,8 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"slices"
 
 	"github.com/bnema/zerowrap"
 
@@ -88,16 +90,25 @@ func (s *Service) reconcileInterruptedDeploy(ctx context.Context, app string) er
 
 // reconcileNeedsContainer reports whether one step still needs container
 // work: a step that recorded a candidate. A terminal operation only retries
-// the step that recorded a failed candidate; a pending step exists only in an
-// interrupted operation.
+// the step that recorded a failed candidate, or an overlap step whose
+// superseded container was not confirmed retired; a pending step exists only
+// in an interrupted operation.
 func reconcileNeedsContainer(step domain.AppOperationStep, terminal bool) bool {
 	if step.After == "" {
 		return false
 	}
 	if terminal {
-		return step.State == domain.AppStepFailed
+		return step.State == domain.AppStepFailed || supersededPending(step)
 	}
 	return true
+}
+
+// supersededPending reports whether an overlap step may still have its
+// superseded container running beside the candidate: the replacement started
+// the new generation while the old one kept serving, and the old one was not
+// yet confirmed gone.
+func supersededPending(step domain.AppOperationStep) bool {
+	return step.Overlap && !step.BeforeRetired && step.Before != ""
 }
 
 // convergeInterruptedSteps retries the recorded candidate of every step that
@@ -111,18 +122,19 @@ func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *
 		if !reconcileNeedsContainer(*step, terminal) {
 			continue
 		}
+		recorded := *step
 		warnings, convErr := s.convergeCandidate(ctx, app, active, step, terminal, log)
-		if step.After == "" {
-			// Converging the candidate clears its recorded After, so the
+		if !reflect.DeepEqual(recorded, *step) {
+			// Converging the candidate changes the recorded step (it clears
+			// After, or marks the superseded container retired), so the
 			// journal changed even when nothing was left over to report: the
 			// converged step must be persisted, or every later pass reconciles
 			// it again.
 			changed = true
 		}
-		if len(warnings) > 0 {
+		if appendNewWarnings(op, warnings) {
 			// A candidate that will not go away is operator-visible instead of
 			// staying untracked.
-			op.Warnings = append(op.Warnings, journalWarnings(warnings)...)
 			changed = true
 		}
 		if convErr != nil {
@@ -144,10 +156,18 @@ func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *
 // rebuild the generation recorded in ACTIVE without two generations running
 // at once. An interrupted operation's step is marked failed.
 //
+// An overlap step differs in one way: its superseded container (Before) may
+// still run beside the candidate, because it is only retired after the
+// candidate was published and routed. When the candidate is the published
+// container, the superseded one is retired here (see convergeSuperseded);
+// when it was never published, the candidate is removed and the superseded
+// container, which still serves, is left alone.
+//
 // A candidate that cannot be removed is returned as an error, not a
 // recoverable warning: the orphan may still run, so every later mutation must
 // fail closed instead of proceeding. The returned warnings are the leftovers
-// of that removal.
+// of that removal. A superseded container that cannot be retired is only a
+// warning (see convergeSuperseded).
 //
 // Success clears the step's recorded After and keeps the removed (or kept)
 // container id in Detail, so the audit trail survives while the converged step
@@ -156,52 +176,146 @@ func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *
 //
 // Once the candidate is converged, the inhibition the replacement wrote for
 // the superseded container is cleared. A step carrying both Before and After
-// records that the superseded container was confirmed gone before the
-// candidate was created (deployService retires it first), so the marker
-// protects nothing and would otherwise refuse the boot/start/restart rebuild
-// from ACTIVE.
+// of a sequential replacement records that the superseded container was
+// confirmed gone before the candidate was created (deployService retires it
+// first), so the marker protects nothing and would otherwise refuse the
+// boot/start/restart rebuild from ACTIVE. An overlap step wrote no
+// inhibition.
 func (s *Service) convergeCandidate(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) ([]CleanupWarning, error) {
 	candidate := step.After
-	if publishedContainer(active, candidate) {
-		// The published generation: keep it. A step that already succeeded is
-		// left as recorded; a routing apply that never ran is republished by
-		// the periodic recovery pass.
-		if !terminal && step.State != domain.AppStepSucceeded {
-			step.State = domain.AppStepFailed
-			step.Error = "interrupted before traffic publication; the published container is kept and routing is republished"
+	var warnings []CleanupWarning
+	// retry keeps the step eligible for a later pass: the candidate is kept
+	// and its superseded container is not gone yet.
+	retry := false
+	switch {
+	case publishedContainer(active, candidate):
+		warnings = s.convergePublished(ctx, app, active, step, terminal, log)
+		retry = supersededPending(*step)
+	case terminal && step.State == domain.AppStepSucceeded:
+		// A succeeded overlap step whose candidate is no longer published
+		// (ACTIVE moved on): only its superseded container is left to settle.
+		step.Detail = "converged: container " + candidate + " is no longer published"
+		warnings = s.convergeSuperseded(ctx, app, active, step, false, log)
+		retry = supersededPending(*step)
+	default:
+		var err error
+		if warnings, err = s.removeUnpublished(ctx, app, step, terminal, log); err != nil {
+			return warnings, err
 		}
-		step.Detail = "converged: published container " + candidate + " kept"
-	} else {
-		retired := s.retireContainer(ctx, app, retireOptions{Service: step.Service, Force: true}, candidate)
-		if !retired.Gone {
-			if !terminal {
-				step.State = domain.AppStepFailed
-				step.Error = "interrupted before publication; the unpublished candidate could not be removed: " + cleanupDetail(retired)
-				log.Warn().Str("app", app).Str("container", candidate).Msg("deployment: unpublished candidate could not be removed")
-			}
-			return retired.Warnings, fmt.Errorf("deployment: candidate %s of service %q could not be removed: %s", candidate, step.Service, cleanupDetail(retired))
-		}
-		if !terminal {
-			step.State = domain.AppStepFailed
-			step.Error = "interrupted before publication; the unpublished candidate was removed"
-		}
-		step.Detail = "converged: removed unpublished candidate " + candidate
 	}
 	// The candidate is gone (or published): the replacement-pending
 	// inhibition of the superseded container is stale. Dropping it lets
 	// boot/start/restart rebuild that generation from ACTIVE; the single
 	// writer is preserved because the superseded container was proven gone
-	// before the candidate existed.
-	if step.Service != "" && step.Before != "" && step.Before != candidate {
+	// before the candidate existed. An overlap step wrote no inhibition.
+	if !step.Overlap && step.Service != "" && step.Before != "" && step.Before != candidate {
 		if err := s.clearRecoveryInhibition(ctx, app, step.Service, step.Before); err != nil {
 			log.Warn().Err(err).Str("app", app).Str("container", step.Before).Msg("deployment: clear stale replacement inhibition")
-			return []CleanupWarning{{Service: step.Service, Leftover: step.Before, Detail: "clear recovery inhibition: " + err.Error()}}, nil
+			return append(warnings, CleanupWarning{Service: step.Service, Leftover: step.Before, Detail: "clear recovery inhibition: " + err.Error()}), nil
 		}
 	}
-	// Only reconciliation removes a recorded candidate: clearing After here is
-	// what marks the step converged.
-	step.After = ""
-	return nil, nil
+	if !retry && (!terminal || step.State != domain.AppStepSucceeded) {
+		// Only reconciliation removes a recorded candidate: clearing After
+		// here is what marks the step converged. The After of a succeeded
+		// step is the container that serves, and stays reported.
+		step.After = ""
+	}
+	return warnings, nil
+}
+
+// appendNewWarnings adds the leftovers that the journal does not already
+// carry, so a leftover retried on every pass is reported once. It reports
+// whether the journal changed.
+func appendNewWarnings(op *domain.AppOperation, warnings []CleanupWarning) bool {
+	changed := false
+	for _, warning := range journalWarnings(warnings) {
+		if slices.Contains(op.Warnings, warning) {
+			continue
+		}
+		op.Warnings = append(op.Warnings, warning)
+		changed = true
+	}
+	return changed
+}
+
+// convergePublished keeps the published candidate of a step. A step that
+// already succeeded is left as recorded; a routing apply that never ran is
+// republished. An overlap step also retires its superseded container.
+func (s *Service) convergePublished(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) []CleanupWarning {
+	if !terminal && step.State != domain.AppStepSucceeded {
+		step.State = domain.AppStepFailed
+		step.Error = "interrupted before traffic publication; the published container is kept and routing is republished"
+		if step.Overlap {
+			step.Error = "interrupted before the switch completed; the published container is kept and routing is republished"
+		}
+	}
+	step.Detail = "converged: published container " + step.After + " kept"
+	return s.convergeSuperseded(ctx, app, active, step, true, log)
+}
+
+// convergeSuperseded retires the superseded container of an overlap step. For
+// a published candidate (republish) routing is re-applied first: the
+// superseded container is what a stale graph could still reach, so it is
+// stopped only once the graph is known to point at the published container.
+// It stops the container gracefully with the app default grace: the grace of
+// the generation being stopped is no longer recorded once ACTIVE names its
+// replacement.
+//
+// A superseded container that cannot be retired right now is a leftover
+// warning, not an error: the published container already serves, so a
+// redundant old generation must not block every later mutation of the app.
+// The step keeps its After and stays unretired, so a later pass retries. A
+// step without a pending superseded container, or whose superseded container
+// ACTIVE names again (a rollback to it), is a no-op: that container is the
+// serving generation and is never retired here.
+func (s *Service) convergeSuperseded(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, republish bool, log zerowrap.Logger) []CleanupWarning {
+	if !supersededPending(*step) {
+		return nil
+	}
+	if publishedContainer(active, step.Before) {
+		step.BeforeRetired = true
+		return nil
+	}
+	kept := func(detail string, err error) []CleanupWarning {
+		log.Warn().Err(err).Str("app", app).Str("container", step.Before).Msg("deployment: superseded container not retired")
+		return []CleanupWarning{{Service: step.Service, Leftover: step.Before, Detail: detail}}
+	}
+	if republish {
+		if err := s.refreshTraffic(ctx, app); err != nil {
+			return kept("superseded container kept: routing could not be republished", err)
+		}
+	}
+	retired := s.retireContainer(ctx, app, retireOptions{Service: step.Service}, step.Before)
+	if !retired.Gone {
+		if len(retired.Warnings) == 0 {
+			return kept("superseded container not confirmed gone", nil)
+		}
+		return retired.Warnings
+	}
+	step.BeforeRetired = true
+	step.Detail += "; retired superseded container " + step.Before
+	return retired.Warnings
+}
+
+// removeUnpublished force-removes a candidate that was never published. An
+// overlap step keeps its superseded container, which still serves.
+func (s *Service) removeUnpublished(ctx context.Context, app string, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) ([]CleanupWarning, error) {
+	candidate := step.After
+	retired := s.retireContainer(ctx, app, retireOptions{Service: step.Service, Force: true}, candidate)
+	if !retired.Gone {
+		if !terminal {
+			step.State = domain.AppStepFailed
+			step.Error = "interrupted before publication; the unpublished candidate could not be removed: " + cleanupDetail(retired)
+			log.Warn().Str("app", app).Str("container", candidate).Msg("deployment: unpublished candidate could not be removed")
+		}
+		return retired.Warnings, fmt.Errorf("deployment: candidate %s of service %q could not be removed: %s", candidate, step.Service, cleanupDetail(retired))
+	}
+	if !terminal {
+		step.State = domain.AppStepFailed
+		step.Error = "interrupted before publication; the unpublished candidate was removed"
+	}
+	step.Detail = "converged: removed unpublished candidate " + candidate
+	return retired.Warnings, nil
 }
 
 // interruptedOutcome classifies an interrupted operation: a failure, unless

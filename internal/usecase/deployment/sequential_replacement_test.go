@@ -137,12 +137,13 @@ func expectRetireOld(
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", containerID).Return(nil).Once()
 }
 
-// TestDeploy_SequentialReplacementNeverOverlapsGenerations proves the
-// replacement order for a public HTTP service without volumes: withdrawal is
-// confirmed first, the superseded container is stopped and removed before the
-// replacement is created, readiness runs before ACTIVE is published, and the
-// graph is applied last.
-func TestDeploy_SequentialReplacementNeverOverlapsGenerations(t *testing.T) {
+// TestDeploy_StatelessReplacementOverlapsAndSwitchesBeforeRetiring proves the
+// replacement order for a public HTTP service without volumes, binds, or
+// devices: the candidate is created and ready while the superseded container
+// keeps serving, ACTIVE and the proxy graph are switched to it, and only then
+// is the superseded container stopped and removed. The old container is never
+// withdrawn from traffic and never inhibited.
+func TestDeploy_StatelessReplacementOverlapsAndSwitchesBeforeRetiring(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
 	rev := mockRevision()
@@ -153,16 +154,18 @@ func TestDeploy_SequentialReplacementNeverOverlapsGenerations(t *testing.T) {
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
 	var order []string
-	expectRetireOld(state, runtime, &order, "c-old")
 	expectSequentialCreate(state, runtime, &order, "c-new", 18080)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(replaceableActive(), true, nil)
-	state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(
+	state.EXPECT().SaveActive(mock.Anything, mock.MatchedBy(func(active domain.AppActive) bool {
+		return active.Services["web"].Container == "c-new" && active.Services["web"].BackendBinds[8080] == 18080
+	})).RunAndReturn(
 		func(context.Context, domain.AppActive) error {
 			recordEvent(&order, "publish-active")
 			return nil
 		}).Once()
 	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	expectRetireOld(state, runtime, &order, "c-old")
 
 	var probedURL string
 	traffic := &orderedTraffic{events: &order}
@@ -183,8 +186,83 @@ func TestDeploy_SequentialReplacementNeverOverlapsGenerations(t *testing.T) {
 	assert.Equal(t, "deployed", result.Services["web"].Result)
 	assert.Contains(t, probedURL, "127.0.0.1:18080", "readiness dials the replacement's fresh loopback bind")
 	assert.Equal(t,
-		[]string{"withdraw", "stop-old", "remove-old", "create-new", "start-new", "ready", "publish-active", "traffic"},
-		order)
+		[]string{"create-new", "start-new", "ready", "publish-active", "traffic", "stop-old", "remove-old"},
+		order, "the old container serves until the new one is published and routed; it is never withdrawn")
+	assert.Empty(t, result.CleanupWarnings)
+	state.AssertNotCalled(t, "SaveRecoveryInhibition", mock.Anything, mock.Anything)
+}
+
+// TestDeploy_OverlapRetiresOldGenerationWithItsOwnStopGrace proves the
+// superseded container is stopped with the grace of the generation being
+// stopped (stop_grace from ACTIVE), not the grace of its replacement.
+func TestDeploy_OverlapRetiresOldGenerationWithItsOwnStopGrace(t *testing.T) {
+	ctx := context.Background()
+	state, runtime, images, secrets := mockDeps(t)
+	rev := mockRevision()
+	rev.Spec.Services[0].StopGrace = 3 * time.Second
+
+	oldActive := replaceableActive()
+	oldActive.Services["web"] = domain.AppEffectiveService{
+		EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old", Spec: graceSpec(45 * time.Second),
+	}
+	expectDeployPreflight(state, runtime, images, secrets, rev)
+	expectNetworkProvision(runtime, "app-blog", 1)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(oldActive, true, nil)
+	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", 45*time.Second).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-old").Return(nil).Once()
+
+	svc := deployment.NewService(deployment.Deps{
+		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: &orderedTraffic{},
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+
+	_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+	require.NoError(t, err)
+}
+
+// TestDeploy_OverlapOldRetirementFailureIsACleanupWarning proves a superseded
+// container that cannot be removed does not fail a deploy whose new generation
+// already serves: the leftover is a cleanup warning on the service and the
+// journal, and the step stays eligible for reconciliation.
+func TestDeploy_OverlapOldRetirementFailureIsACleanupWarning(t *testing.T) {
+	ctx := context.Background()
+	state, runtime, images, secrets := mockDeps(t)
+	rev := mockRevision()
+
+	expectDeployPreflight(state, runtime, images, secrets, rev)
+	expectNetworkProvision(runtime, "app-blog", 1)
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(replaceableActive(), true, nil)
+	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
+	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
+
+	svc := deployment.NewService(deployment.Deps{
+		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: &orderedTraffic{},
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+	require.NoError(t, err, "the new generation serves: a retirement leftover is not a deploy failure")
+	assert.Equal(t, "deployed", result.Services["web"].Result)
+	require.Len(t, result.CleanupWarnings, 1)
+	assert.Equal(t, "c-old", result.CleanupWarnings[0].Leftover)
+	assert.Equal(t, "web", result.CleanupWarnings[0].Service)
+	assert.Contains(t, result.CleanupWarnings[0].Detail, "remove")
+	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, "blog", "c-old")
 }
 
 // TestDeploy_PreflightFailureLeavesTheWorkloadUntouched proves preflight runs
@@ -219,15 +297,25 @@ func TestDeploy_PreflightFailureLeavesTheWorkloadUntouched(t *testing.T) {
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 }
 
+// statefulMockRevision is mockRevision with a persistent volume, so the
+// service keeps the sequential replacement.
+func statefulMockRevision() domain.AppDesiredRevision {
+	rev := mockRevision()
+	rev.Spec.Services[0].Volumes = []domain.AppVolume{{Name: "data", Path: "/data"}}
+	return rev
+}
+
 // TestDeploy_WithdrawalFailureBlocksMutation proves a traffic withdrawal that
-// cannot be applied leaves the running generation untouched: no container is
-// stopped, removed, created, or started, and no ACTIVE state is published.
+// cannot be applied leaves the running generation of a single-writer service
+// untouched: no container is stopped, removed, created, or started, and no
+// ACTIVE state is published.
 func TestDeploy_WithdrawalFailureBlocksMutation(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
-	rev := mockRevision()
+	rev := statefulMockRevision()
 
 	expectDeployPreflight(state, runtime, images, secrets, rev)
+	runtime.EXPECT().VolumeExists(mock.Anything, mock.Anything).Return(false, nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(replaceableActive(), true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
@@ -304,7 +392,8 @@ func TestDeploy_FirstDeploymentRetiresNothing(t *testing.T) {
 // TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate proves a
 // replacement that is not ready is journaled as failed, that ACTIVE is never
 // published for it, and that the unready candidate is removed. The superseded
-// container is already gone and is never recreated.
+// container keeps serving: it is never withdrawn, stopped, removed, or
+// inhibited.
 func TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
@@ -317,7 +406,6 @@ func TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate(t *testing.T)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
 	var order []string
-	expectRetireOld(state, runtime, &order, "c-old")
 	expectSequentialCreate(state, runtime, &order, "c-new", 18080)
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(nil, assert.AnError).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).RunAndReturn(
@@ -350,10 +438,10 @@ func TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate(t *testing.T)
 	assert.NotContains(t, result.Services["web"].Error, "logs:", "raw logs must never be embedded in the public error")
 	assert.Equal(t, "c-new", result.Services["web"].After)
 
-	// ACTIVE was never repointed and the replaced generation's inhibition was
-	// never cleared: nothing claims the old workload is available again.
+	// ACTIVE was never repointed and the old container was never touched.
 	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 	state.AssertNotCalled(t, "ClearRecoveryInhibition", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	state.AssertNotCalled(t, "SaveRecoveryInhibition", mock.Anything, mock.Anything)
 
 	require.NotEmpty(t, saved)
 	last := saved[len(saved)-1]
@@ -362,9 +450,11 @@ func TestDeploy_ReadinessFailureJournalsFailureAndRemovesCandidate(t *testing.T)
 	require.True(t, ok)
 	assert.Equal(t, domain.AppStepFailed, step.State)
 
-	assert.Equal(t, "remove-candidate", order[len(order)-1], "the unready candidate is the last thing removed")
-	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-new", mock.Anything)
-	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-old", true)
+	assert.Equal(t, []string{"create-new", "start-new", "remove-candidate"}, order,
+		"the old generation is never withdrawn: no withdraw or traffic event, the unready candidate is removed")
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-old", mock.Anything)
+	state.AssertNotCalled(t, "ReleaseBackendBinds", mock.Anything, "blog", "c-old")
 }
 
 // TestDeploy_CandidateCleanupFailureStaysVisible proves a candidate that
@@ -381,7 +471,6 @@ func TestDeploy_CandidateCleanupFailureStaysVisible(t *testing.T) {
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(replaceableActive(), true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	expectRetireOld(state, runtime, nil, "c-old")
 	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-new", false).Return(nil, assert.AnError).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(assert.AnError).Once()
@@ -424,7 +513,6 @@ func TestDeploy_CancellationDuringReadinessIsNotReportedAsSuccess(t *testing.T) 
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(replaceableActive(), true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
-	expectRetireOld(state, runtime, nil, "c-old")
 	expectSequentialCreate(state, runtime, nil, "c-new", 18080)
 	// The runtime refuses to remove the candidate with a canceled context.
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", true).Return(context.Canceled).Once()
