@@ -166,6 +166,8 @@ A container port declared by both an internal HTTP interface and an externally b
 
 `type = "http"` requires an origin-form `path` beginning with a single `/`. Absolute URLs, authority forms such as `@host:port`, scheme-relative paths, and control characters are rejected at apply time. The probe always dials the declared loopback backend, never follows redirects, ignores environment proxy settings, and is bounded per request and for the whole operation. A public or otherwise published interface keeps this loopback probe. An internal HTTP port is instead probed over the app private network by one bounded, short-lived helper, using HTTP or TCP according to the interface's `[services.<name>.readiness]` type; the internal port is never temporarily published to the host to probe it.
 
+`type = "tcp"` on a published port is ready when a connection to the loopback backend is accepted and then either receives data or stays open for 300ms. A connection closed right after accept counts as not ready: the host port relay of rootless Docker accepts on behalf of a container that does not listen yet. A workload that accepts and closes immediately by design should use `log` readiness instead.
+
 ## TLS
 
 TLS applies to public interfaces only; an internal interface never declares `tls`.
