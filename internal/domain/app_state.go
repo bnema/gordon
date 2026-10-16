@@ -305,6 +305,10 @@ type AppRecoveryInhibition struct {
 	Reason      string    `json:"reason"`
 	Operation   string    `json:"operation,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+	// StopGrace is the effective stop grace of the generation to retire
+	// (retirement-pending only). Zero, as in records written before it
+	// existed, means the app default.
+	StopGrace time.Duration `json:"stop_grace,omitempty"`
 }
 
 // AppRecoveryInhibition reasons.
@@ -312,8 +316,11 @@ const (
 	// AppInhibitReplacementPending marks the generation being replaced
 	// while a volume-owning candidate may already be writing.
 	AppInhibitReplacementPending = "replacement-pending"
-	// AppInhibitRetirementPending marks a published predecessor that must
-	// remain stopped and be retired by a later reconciliation pass.
+	// AppInhibitRetirementPending marks a superseded generation that an
+	// overlap replacement left running beside its published successor. The
+	// periodic reconciliation retires it, with StopGrace, once the
+	// successor is verified and routed; it is never retired, and the
+	// marker is dropped, while ACTIVE names it.
 	AppInhibitRetirementPending = "retirement-pending"
 )
 

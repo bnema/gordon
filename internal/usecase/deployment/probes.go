@@ -3,6 +3,7 @@ package deployment
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,15 +43,53 @@ func httpGetOnce(ctx context.Context, probeURL, hostAuthority string) (int, erro
 	return resp.StatusCode, nil
 }
 
-// tcpDialOnce attempts one TCP connection.
+// tcpSettleWindow is how long an accepted TCP probe connection must stay open
+// (or deliver data) before the target counts as ready.
+const tcpSettleWindow = 300 * time.Millisecond
+
+// errTCPProbeClosed reports a connection that was accepted and then closed
+// within the settle window.
+var errTCPProbeClosed = errors.New("connection closed right after accept")
+
+// tcpDialOnce attempts one TCP readiness check against a published loopback
+// bind. A successful connect alone proves nothing: the host-side port relay
+// (rootless Docker, docker-proxy) accepts on behalf of the container and then
+// closes at once while the workload is not listening yet. So the connection
+// must also survive tcpSettleWindow: data from the workload (a banner) or a
+// connection still open at the end of the window means ready; EOF or a reset
+// means not ready.
 func tcpDialOnce(ctx context.Context, addr string) error {
+	return tcpProbeOnce(ctx, addr, tcpSettleWindow)
+}
+
+func tcpProbeOnce(ctx context.Context, addr string, settle time.Duration) error {
 	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
-	_ = conn.Close()
-	return nil
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(settle)); err != nil {
+		return fmt.Errorf("set probe read deadline: %w", err)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetReadDeadline(time.Now()) })
+	defer stop()
+	var buf [1]byte
+	n, err := conn.Read(buf[:])
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	if n > 0 {
+		return nil
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return nil
+	}
+	if err == nil || errors.Is(err, io.EOF) {
+		return errTCPProbeClosed
+	}
+	return err
 }
 
 // scanForMarker reports whether the stream contains the marker.

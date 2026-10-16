@@ -48,6 +48,7 @@ func TestCreateAndStart_UsesIncarnationPrivateNetworkAndLimits(t *testing.T) {
 			assert.Equal(t, "web", cfg.Hostname)
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
 	svc := networkTestService(t, state, runtime,
 		NetworkConfig{Prefix: "gordon", Internal: true},
@@ -77,6 +78,7 @@ func TestCreateAndStart_ReusesOwnedNetwork(t *testing.T) {
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).
 		Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
 	_, err := svc.createAndStart(ctx, "blog", "rev-1",
@@ -124,6 +126,7 @@ func TestCreateAndStart_JoinsDeclaredSharedNetworks(t *testing.T) {
 		Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, "c-1", shared).Return(nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
 	_, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{
@@ -155,6 +158,7 @@ func TestCreateAndStart_RoutesDeclaredReadOnlyVolumeToReadOnlyMount(t *testing.T
 		return readOnly && !writable && cfg.ReadOnlyVolumes["/config"] == runtimeName
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
 	svc := networkTestService(t, state, runtime, NetworkConfig{Prefix: "gordon"}, ResourceLimits{})
 	_, err := svc.createAndStart(ctx, "blog", "rev-1", pinnedService{

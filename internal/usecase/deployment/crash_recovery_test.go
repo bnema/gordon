@@ -81,6 +81,7 @@ func TestDeploy_CandidateIsJournaledBeforeItStarts(t *testing.T) {
 		journaledBeforeStart = found && step.After == "c-new" && step.State == domain.AppStepPending
 		return nil
 	}).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 
@@ -109,8 +110,8 @@ func TestDeploy_CandidateIsJournaledBeforeItStarts(t *testing.T) {
 
 // crashDuringReplacement runs one replacement deploy and interrupts it
 // between creating the candidate and publishing it. The candidate is left
-// running, ACTIVE still names the superseded generation, and the operation
-// journal stays in flight: the state a process crash or a failed cleanup
+// running, ACTIVE still names the superseded generation (which keeps running,
+// as an overlap replacement leaves it), and the operation journal stays in flight: the state a process crash or a failed cleanup
 // leaves behind.
 func crashDuringReplacement(t *testing.T, store *appstate.Store, opKey string) {
 	t.Helper()
@@ -123,10 +124,10 @@ func crashDuringReplacement(t *testing.T, store *appstate.Store, opKey string) {
 	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return(restartTestDigest, nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	// The overlap replacement leaves the superseded container untouched.
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-orphan", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-orphan").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-orphan").Return(&domain.Container{ID: "c-orphan", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-orphan", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	// The canceled context also refuses the candidate cleanup, so the
@@ -165,12 +166,12 @@ func crashDuringReplacement(t *testing.T, store *appstate.Store, opKey string) {
 	require.Error(t, <-done)
 }
 
-// TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished
-// proves the crash window between creating a replacement and publishing it is
-// recoverable: an interruption leaves the candidate journaled but unpublished,
-// and boot recovery removes that candidate before it rebuilds the generation
-// recorded in ACTIVE, so two generations of one service never run together.
-func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *testing.T) {
+// TestBootRecovery_RemovesUnpublishedCandidateAndKeepsServingGeneration
+// proves the crash window between creating an overlap replacement and
+// publishing it is recoverable: an interruption leaves the candidate
+// journaled but unpublished, and boot recovery removes that candidate and
+// keeps the generation recorded in ACTIVE, which was never stopped.
+func TestBootRecovery_RemovesUnpublishedCandidateAndKeepsServingGeneration(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	images := outmocks.NewMockImageResolver(t)
@@ -192,8 +193,8 @@ func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *te
 	require.True(t, ok)
 	assert.Equal(t, "c-old", active.Services["web"].Container)
 
-	// Boot recovery: the orphan is removed before the published generation is
-	// rebuilt from its pinned revision.
+	// Boot recovery: the orphan is removed; the published generation is
+	// still running, so it is verified and kept, never rebuilt or stopped.
 	var order []string
 	runtime2 := outmocks.NewMockContainerRuntime(t)
 	runtime2.EXPECT().RemoveContainer(mock.Anything, "c-orphan", true).RunAndReturn(
@@ -201,19 +202,14 @@ func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *te
 			order = append(order, "remove-orphan")
 			return nil
 		}).Once()
-	runtime2.EXPECT().IsContainerRunning(mock.Anything, "c-old").Return(false, nil).Once()
-	runtime2.EXPECT().StartContainer(mock.Anything, "c-old").Return(domain.ErrContainerNotFound).Once()
-	runtime2.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
-	runtime2.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
-	expectNetworkProvision(runtime2, "app-blog", 1)
-	runtime2.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(
-		func(context.Context, *domain.ContainerConfig) (*domain.Container, error) {
-			order = append(order, "rebuild-published-generation")
-			return &domain.Container{ID: "c-rebuilt", Name: "web"}, nil
+	runtime2.EXPECT().IsContainerRunning(mock.Anything, "c-old").RunAndReturn(
+		func(context.Context, string) (bool, error) {
+			order = append(order, "verify-published-generation")
+			return true, nil
 		}).Once()
-	runtime2.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
-	runtime2.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuilt", mock.Anything).Return(
-		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
+	runtime2.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
+	runtime2.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 
 	rebooted := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime2, Images: images, Secrets: secrets,
@@ -225,8 +221,11 @@ func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *te
 	// context is gone with it.
 	require.NoError(t, rebooted.ReconcileBoot(ctx))
 
-	assert.Equal(t, []string{"remove-orphan", "rebuild-published-generation"}, order,
-		"the unpublished candidate is gone before the published generation is rebuilt")
+	assert.Equal(t, []string{"remove-orphan", "verify-published-generation"}, order,
+		"the unpublished candidate is gone and the serving generation is kept")
+	runtime2.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
+	runtime2.AssertNotCalled(t, "RemoveContainer", mock.Anything, "c-old", mock.Anything)
+	runtime2.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 	runtime2.AssertNotCalled(t, "StartContainer", mock.Anything, "c-orphan")
 	runtime2.AssertNotCalled(t, "RestartContainer", mock.Anything, "c-orphan", mock.Anything)
 
@@ -241,12 +240,11 @@ func TestBootRecovery_RemovesUnpublishedCandidateBeforeRebuildingPublished(t *te
 	assert.Equal(t, domain.AppStepFailed, finalStep.State)
 	assert.Contains(t, finalStep.Error, "unpublished candidate was removed")
 
-	// ACTIVE now names the rebuilt generation: recovery converged the app
-	// instead of leaving it pointing at a container that no longer exists.
+	// ACTIVE still names the generation that kept serving.
 	converged, ok, err := store.LoadActive(context.Background(), "blog")
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Equal(t, "c-rebuilt", converged.Services["web"].Container)
+	assert.Equal(t, "c-old", converged.Services["web"].Container)
 	assert.Equal(t, "rev-0", converged.Services["web"].EffectiveRevision)
 }
 
@@ -272,15 +270,22 @@ func TestDeploy_ReconcilesInterruptedPredecessorBeforeCreatingAReplacement(t *te
 		}).Once()
 	images.EXPECT().ResolveDigest(mock.Anything, "docker.io/example/web:1.4.2").Return(restartTestDigest, nil).Once()
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
-	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
-	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(
 		func(context.Context, *domain.ContainerConfig) (*domain.Container, error) {
 			order = append(order, "create-new-generation")
 			return &domain.Container{ID: "c-next", Name: "web"}, nil
 		}).Once()
+	// The overlap replacement retires the superseded container only after
+	// the new generation is published.
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).RunAndReturn(
+		func(context.Context, string, time.Duration) error {
+			order = append(order, "retire-superseded")
+			return nil
+		}).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-next").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-next").Return(&domain.Container{ID: "c-next", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-next", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 
@@ -295,7 +300,7 @@ func TestDeploy_ReconcilesInterruptedPredecessorBeforeCreatingAReplacement(t *te
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "deployed", result.Services["web"].Result)
-	assert.Equal(t, []string{"remove-leftover-candidate", "create-new-generation"}, order)
+	assert.Equal(t, []string{"remove-leftover-candidate", "create-new-generation", "retire-superseded"}, order)
 
 	active, ok, err := store.LoadActive(ctx, "blog")
 	require.NoError(t, err)
@@ -378,12 +383,14 @@ func TestRestart_FailedRebuildClearsTheInhibitionOfTheMissingContainer(t *testin
 	seedRevision(t, ctx, store, "intent-0", "", rev)
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateVolume(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuild", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuild").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuild").Return(&domain.Container{ID: "c-rebuild", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuild", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-rebuild", false).Return(nil, assert.AnError).Once()
@@ -580,12 +587,14 @@ func TestBootRecovery_ClearsReplacementInhibitionAndRebuildsFromActive(t *testin
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-orphan", true).Return(nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "c-old").Return(false, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-old").Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateVolume(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuilt").Return(&domain.Container{ID: "c-rebuilt", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuilt", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 
@@ -625,11 +634,13 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 	seedReplaceableApp(t, ctx, store)
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuilt").Return(&domain.Container{ID: "c-rebuilt", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuilt", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 

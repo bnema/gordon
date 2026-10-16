@@ -227,7 +227,47 @@ func TestSingleWriterRequiredAndImplicitHTTPReadiness(t *testing.T) {
 			TCP:  []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 5432, Publish: "5432"}},
 		}
 		assert.False(t, implicitHTTPProbe(l4Only), "an HTTP GET proves nothing about an L4 workload")
-		assert.Empty(t, deploymentReadiness(l4Only).Readiness.Type)
+	})
+
+	t.Run("undeclared probe on a stateless single TCP service is the implicit TCP probe", func(t *testing.T) {
+		for _, readiness := range []string{"", domain.AppReadinessNone} {
+			spec := domain.AppService{
+				Name:      "relay",
+				TCP:       []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 9000, Publish: "9000"}},
+				Readiness: domain.AppReadiness{Type: readiness},
+			}
+			assert.True(t, implicitTCPProbe(spec))
+			assert.Equal(t, domain.AppReadinessTCP, deploymentReadiness(spec).Readiness.Type)
+		}
+	})
+
+	t.Run("no implicit TCP probe on stateful, multi-port, mixed, or UDP services", func(t *testing.T) {
+		tcp := func() domain.AppService {
+			return domain.AppService{
+				Name: "db",
+				TCP:  []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 5432, Publish: "5432"}},
+			}
+		}
+		withVolume := tcp()
+		withVolume.Volumes = []domain.AppVolume{{Name: "data", Path: "/var/lib/postgresql/data"}}
+		withBind := tcp()
+		withBind.Binds = []domain.AppBind{{Name: "config", Path: "/etc/app.conf"}}
+		twoPorts := tcp()
+		twoPorts.TCP = append(twoPorts.TCP, domain.AppTCPInterface{Entrypoint: "tcp2", Port: 5433, Publish: "5433"})
+		withUDP := tcp()
+		withUDP.UDP = []domain.AppUDPInterface{{Entrypoint: "udp", Port: 5432}}
+		mixed := tcp()
+		mixed.HTTP = []domain.AppHTTPInterface{{Port: 8080, Visibility: domain.AppVisibilityInternal}}
+		declaredLog := tcp()
+		declaredLog.Readiness = domain.AppReadiness{Type: domain.AppReadinessLog}
+
+		for name, spec := range map[string]domain.AppService{
+			"volume": withVolume, "bind": withBind, "two TCP ports": twoPorts,
+			"UDP": withUDP, "HTTP interface": mixed, "declared log": declaredLog,
+		} {
+			assert.False(t, implicitTCPProbe(spec), name)
+			assert.Equal(t, spec.Readiness.Type, deploymentReadiness(spec).Readiness.Type, name)
+		}
 	})
 
 	t.Run("declared probes are never replaced by the implicit HTTP probe", func(t *testing.T) {
@@ -245,10 +285,11 @@ func TestSingleWriterRequiredAndImplicitHTTPReadiness(t *testing.T) {
 		assert.Equal(t, domain.AppReadinessHTTP, deploymentReadiness(spec).Readiness.Type)
 	})
 
-	t.Run("an explicit none on an L4 service stays unchecked", func(t *testing.T) {
+	t.Run("an explicit none on a stateful L4 service stays unchecked", func(t *testing.T) {
 		spec := domain.AppService{
 			Name:      "db",
 			TCP:       []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 5432, Publish: "5432"}},
+			Volumes:   []domain.AppVolume{{Name: "data", Path: "/var/lib/postgresql/data"}},
 			Readiness: domain.AppReadiness{Type: domain.AppReadinessNone},
 		}
 		assert.Equal(t, domain.AppReadinessNone, deploymentReadiness(spec).Readiness.Type)

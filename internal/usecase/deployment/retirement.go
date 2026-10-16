@@ -50,6 +50,14 @@ type retireOptions struct {
 	// published, because recovery must not recreate the replaced writer
 	// from the still-active old revision.
 	ClearInhibition bool
+	// RetryOnLeak keeps the inhibition when the container is gone but its
+	// backend claims could not be released, so a durable retirement marker is
+	// retried (retiring a gone container is idempotent: not-found counts as
+	// gone) instead of leaking the claims untracked. Callers that clear an
+	// inhibition for a container that must simply never be revived (stop,
+	// remove) leave it unset: a lingering marker there would refuse the
+	// next start.
+	RetryOnLeak bool
 }
 
 // containerRetirement is the outcome of one exact-container retirement.
@@ -59,6 +67,10 @@ type containerRetirement struct {
 	// Gone is true only when the runtime confirmed the container no
 	// longer exists. Not-found counts as confirmation.
 	Gone bool
+	// Settled is true when the container is gone AND its backend claims were
+	// released. Only a settled retirement may drop a durable marker; a gone
+	// container whose claims leaked is retried, which is idempotent.
+	Settled bool
 	// Warnings are bounded, log-free leftovers for operator action.
 	Warnings []CleanupWarning
 }
@@ -74,6 +86,7 @@ func (s *Service) retireContainer(ctx context.Context, app string, opts retireOp
 	result := containerRetirement{ContainerID: containerID}
 	if containerID == "" {
 		result.Gone = true
+		result.Settled = true
 		return result
 	}
 	if err := s.stopForRetirement(ctx, opts, containerID); err != nil {
@@ -89,7 +102,9 @@ func (s *Service) retireContainer(ctx context.Context, app string, opts retireOp
 		return result
 	}
 	result.Gone = true
+	released := true
 	if err := s.deps.State.ReleaseBackendBinds(ctx, app, containerID); err != nil {
+		released = false
 		result.Warnings = append(result.Warnings, CleanupWarning{
 			Service: opts.Service, Leftover: containerID, Detail: "release backend claims: " + err.Error(),
 		})
@@ -105,9 +120,11 @@ func (s *Service) retireContainer(ctx context.Context, app string, opts retireOp
 			Service: opts.Service, Leftover: containerID, Detail: "secret files cleanup failed",
 		})
 	}
-	if opts.ClearInhibition {
+	result.Settled = released
+	if opts.ClearInhibition && (released || !opts.RetryOnLeak) {
 		// Confirmed gone: the marker has nothing left to protect, and a
-		// stale record would only confuse the next recreation.
+		// stale record would only confuse the next recreation. With
+		// RetryOnLeak it also waits for the claims to be released.
 		if err := s.clearRecoveryInhibition(ctx, app, opts.Service, containerID); err != nil {
 			result.Warnings = append(result.Warnings, CleanupWarning{
 				Service: opts.Service, Leftover: containerID, Detail: "clear recovery inhibition: " + err.Error(),

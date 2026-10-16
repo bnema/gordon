@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -20,6 +21,9 @@ type startedCandidate struct {
 	Container *domain.Container
 	TCPBinds  map[int]int
 	UDPBinds  map[int]int
+	// StartedAt is the execution start observed right after the container
+	// was started, before readiness ran. Zero when it could not be read.
+	StartedAt time.Time
 }
 
 // createAndStart builds the runtime config and starts the replacement.
@@ -123,12 +127,16 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return startedCandidate{Container: created}, fmt.Errorf("deployment: start container: %w", err)
 	}
+	// The execution is observed before readiness runs: a native restart
+	// between readiness and the verified-execution record then shows up as a
+	// different start time, so it is still treated as a fresh execution.
+	startedAt := s.executionStart(ctx, created.ID)
 	binds, udpBinds, err := s.readBackendBinds(ctx, app, p.spec.Name, created.ID, backendPorts(p.spec))
 	if err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return startedCandidate{Container: created}, err
 	}
-	return startedCandidate{Container: created, TCPBinds: binds, UDPBinds: udpBinds}, nil
+	return startedCandidate{Container: created, TCPBinds: binds, UDPBinds: udpBinds, StartedAt: startedAt}, nil
 }
 
 // runtimeImageRef resolves the exact runtime image reference of one pinned

@@ -211,6 +211,7 @@ func TestRemove_InhibitsBeforeRuntimeWithdrawal(t *testing.T) {
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
 	// Ownership is read while it is still live; the name-only record owns
 	// no network, so nothing is reclaimed.
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 	// The incarnation is retired atomically after the workload is gone.
 	state.EXPECT().RetireApp(mock.Anything, "blog").RunAndReturn(func(context.Context, string) error {
@@ -417,6 +418,7 @@ func TestRemovalOfMissingContainerIsIdempotent(t *testing.T) {
 	// the disappeared container are released.
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
 	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 	state.EXPECT().RetireApp(mock.Anything, "blog").Return(nil).Once()
 

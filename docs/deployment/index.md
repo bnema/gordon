@@ -146,15 +146,27 @@ docker push gordon.example.com/myapp:$VERSION
 
 ## Updates
 
-Gordon deploys an app's services one at a time in sorted order. A deploy may cause a short service interruption; there is no zero-downtime promise for app services, and Gordon never runs two Gordon-managed generations of the same service at the same time.
+Gordon deploys an app's services one at a time in sorted order. A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime; a service that owns a volume, bind, or device is replaced sequentially and may be briefly interrupted, because Gordon never runs two Gordon-managed generations of such a service at the same time. A UDP service is also replaced sequentially: UDP sessions stay pinned to the backend they started on, so they could not follow the switch.
+
+Stateless service (no volume, bind, device, or UDP interface):
+
+```
+Preflight ─► start new ─► readiness ─► publish ACTIVE ─► route traffic ─► SIGTERM old ─► stop_grace ─► kill + remove old
+```
+
+Service with a volume, bind, device, or UDP interface:
 
 ```
 Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► route traffic
 ```
 
-Preflight (image resolution and pull, secrets, volumes, networks, bind policy, reservations) completes before anything is disrupted, so a preflight failure leaves the running service untouched. If replacement fails after the old container was removed, the failure is explicit: Gordon does not recreate the old container during that operation and does not promise automatic data rollback. A stateful service's recovery inhibition stays in place until its never-published candidate is confirmed removed; a later boot/start/restart then clears it and rebuilds the generation `ACTIVE` records from its pinned digest, while a candidate that cannot be removed fails recovery closed. Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back.
+Preflight (image resolution and pull, secrets, volumes, networks, bind policy, reservations) completes before anything is disrupted, so a preflight failure leaves the running service untouched.
 
-If a deploy is interrupted between creating the replacement container and publishing it, that candidate is recorded durably and Gordon removes it before creating or rebuilding any generation of that app — at boot and before every mutation — so two generations of one service never run together. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. If the recorded candidate cannot be removed, reconciliation fails closed: the operation is not finalized, stays the latest journal, and every later mutation is refused so a newer operation can never mask the orphan. A failed final traffic publication is republished by the next recovery pass, within 15 seconds by default.
+For a stateless service the old container serves until the new one is ready and routed, then receives SIGTERM and is killed after its `stop_grace` (default 30s). During the overlap both containers share the service's network alias, so other services of the app may reach either one. Database migrations must stay backward compatible with the previous version of the service. A new container that fails readiness is removed and the old one is not touched. An old container that cannot be removed is reported as a cleanup warning without failing the deploy; it stays durably marked for retirement, and the periodic recovery pass retries it with its own `stop_grace` once that pass has verified the new container, even after later deploys. A retirement is only complete once the old container's loopback port claims are released; until then it is retried. `gordon apps stop` and `gordon apps remove` also stop such an old container, and fail, keeping the mark, if they cannot.
+
+For a sequential replacement, a failure after the old container was removed is explicit: Gordon does not recreate the old container during that operation and does not promise automatic data rollback. A stateful service's recovery inhibition stays in place until its never-published candidate is confirmed removed; a later boot/start/restart then clears it and rebuilds the generation `ACTIVE` records from its pinned digest, while a candidate that cannot be removed fails recovery closed. Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back.
+
+If a deploy is interrupted between creating the replacement container and publishing it, that candidate is recorded durably and Gordon removes it before creating or rebuilding any generation of that app — at boot and before every mutation; a stateless service's old container keeps serving. If it is interrupted after the switch but before the old container was stopped, the periodic recovery pass verifies and routes the published container and then stops the old one. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. If a recorded candidate cannot be removed, reconciliation fails closed: the operation is not finalized, stays the latest journal, and every later mutation is refused so a newer operation can never mask the orphan. A failed final traffic publication is republished by the next recovery pass, within 15 seconds by default.
 
 ## Related
 

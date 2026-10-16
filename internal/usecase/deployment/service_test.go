@@ -105,6 +105,7 @@ func TestReconcileBoot_ContinuesAfterAppFailure(t *testing.T) {
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil)
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "bad").Return(nil, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "ctr-bad").Return(true, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "ctr-bad").Return(&domain.Container{ID: "ctr-bad", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "ctr-bad", mock.Anything).Return(nil, assert.AnError).Once()
 	// No traffic boundary is wired here, so the fail-closed bind
 	// withdrawal is a no-op and deployment writes no ACTIVE binds itself.
@@ -115,6 +116,7 @@ func TestReconcileBoot_ContinuesAfterAppFailure(t *testing.T) {
 	state.EXPECT().LoadLatestOperation(mock.Anything, "good").Return(domain.AppOperation{}, false, nil).Maybe()
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "good").Return(nil, nil).Once()
 	runtime.EXPECT().IsContainerRunning(mock.Anything, "ctr-good").Return(true, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "ctr-good").Return(&domain.Container{ID: "ctr-good", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "ctr-good", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32777, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
 	// Bind refresh persists the new bind (differs from recorded nil).

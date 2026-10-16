@@ -155,11 +155,19 @@ func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *
 // in place, keeping a failed convergence eligible for retry.
 //
 // Once the candidate is converged, the inhibition the replacement wrote for
-// the superseded container is cleared. A step carrying both Before and After
-// records that the superseded container was confirmed gone before the
-// candidate was created (deployService retires it first), so the marker
-// protects nothing and would otherwise refuse the boot/start/restart rebuild
-// from ACTIVE.
+// the superseded container is cleared. A sequential replacement confirmed the
+// superseded container gone before the candidate was created (deployService
+// retires it first), so its marker protects nothing and would otherwise
+// refuse the boot/start/restart rebuild from ACTIVE. An overlap replacement
+// leaves its superseded container running: when the candidate is published,
+// its retirement-pending marker stays, and the periodic reconciliation
+// retires that container once the candidate is verified and routed. When the
+// candidate was never published the superseded container still serves, so
+// the marker is dropped and the container is kept.
+//
+// Reconciliation never touches traffic: the persisted binds of a published
+// candidate are unverified here, and the verified start/recovery path
+// publishes them.
 func (s *Service) convergeCandidate(ctx context.Context, app string, active domain.AppActive, step *domain.AppOperationStep, terminal bool, log zerowrap.Logger) ([]CleanupWarning, error) {
 	candidate := step.After
 	if publishedContainer(active, candidate) {
@@ -193,7 +201,7 @@ func (s *Service) convergeCandidate(ctx context.Context, app string, active doma
 	// writer is preserved because the superseded container was proven gone
 	// before the candidate existed.
 	if step.Service != "" && step.Before != "" && step.Before != candidate {
-		if err := s.clearRecoveryInhibition(ctx, app, step.Service, step.Before); err != nil {
+		if err := s.clearSupersededInhibition(ctx, app, step.Service, step.Before, publishedContainer(active, candidate)); err != nil {
 			log.Warn().Err(err).Str("app", app).Str("container", step.Before).Msg("deployment: clear stale replacement inhibition")
 			return []CleanupWarning{{Service: step.Service, Leftover: step.Before, Detail: "clear recovery inhibition: " + err.Error()}}, nil
 		}
@@ -202,6 +210,26 @@ func (s *Service) convergeCandidate(ctx context.Context, app string, active doma
 	// what marks the step converged.
 	step.After = ""
 	return nil, nil
+}
+
+// clearSupersededInhibition drops the inhibition the interrupted replacement
+// recorded for the superseded container. A retirement-pending marker of a
+// published candidate is kept: the superseded container of an overlap
+// replacement may still be running, and that marker is what makes the
+// periodic reconciliation retire it. Every other marker is stale.
+func (s *Service) clearSupersededInhibition(ctx context.Context, app, service, before string, published bool) error {
+	if published {
+		inhibitions, err := s.deps.State.LoadRecoveryInhibitions(ctx, app)
+		if err != nil {
+			return fmt.Errorf("deployment: load recovery inhibitions: %w", err)
+		}
+		for _, inhibition := range inhibitions {
+			if inhibition.Service == service && inhibition.ContainerID == before && inhibition.Reason == domain.AppInhibitRetirementPending {
+				return nil
+			}
+		}
+	}
+	return s.clearRecoveryInhibition(ctx, app, service, before)
 }
 
 // interruptedOutcome classifies an interrupted operation: a failure, unless

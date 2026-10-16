@@ -127,6 +127,7 @@ func TestCreateAndStart_PassesResolvedCDIIDsToRuntime(t *testing.T) {
 		return assert.Equal(t, []string{"example.com/gpu=GPU-test-uuid"}, cfg.CDIDevices)
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
 	svc := NewService(Deps{State: state, Runtime: runtime, Networks: NetworkConfig{Prefix: "gordon"}}, zerowrap.Default()).
 		WithDevicePolicies(map[string]domain.AppDevicePolicy{

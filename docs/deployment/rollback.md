@@ -12,7 +12,7 @@ gordon apps apply --file blog.toml --remote prod
 gordon apps deploy blog --remote prod
 ```
 
-A rollback deploy replaces services one at a time like any other deploy: a short service interruption is possible, and Gordon never runs two generations of the same service at the same time. If the replacement fails after the old container was removed, Gordon does not recreate it and does not promise automatic data rollback.
+A rollback deploy replaces services one at a time like any other deploy: a stateless TCP or HTTP service is replaced without downtime, while a service with a volume, bind, device, or UDP interface is replaced sequentially, may be briefly interrupted, and never has two generations running at once. If a sequential replacement fails after the old container was removed, Gordon does not recreate it and does not promise automatic data rollback.
 
 ## Re-push the Previous Image as latest
 

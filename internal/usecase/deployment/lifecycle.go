@@ -86,8 +86,22 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 		}
 		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: "", CleanupWarnings: warnings}
 	}
+	// A superseded predecessor an overlap replacement left running is not in
+	// ACTIVE, so the loop above never saw it: a stopped app must not keep it
+	// running. One that cannot be retired keeps its marker and fails the stop.
+	pendingFailed, pendingErr := s.retirePendingForStop(ctx, app, result)
+	failures = append(failures, pendingFailed...)
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
+	if pendingErr != nil {
+		// An app-level cleanup failure belongs to no service, so the
+		// per-service results alone would journal a success and a replay of
+		// this key would read it. It is a failed step and a failed outcome.
+		op.Steps = append(op.Steps, domain.AppOperationStep{
+			ID: "pending.retire", State: domain.AppStepFailed, Error: pendingErr.Error(),
+		})
+		op.Outcome = domain.AppOutcomeFailed
+	}
+	op.Warnings = journalWarnings(append(collectCleanupWarnings(result.Services), result.Warnings...))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record stop outcome")
 	}
@@ -198,6 +212,10 @@ func (s *Service) startLocked(ctx context.Context, app, opID string) (*Lifecycle
 		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
+	// Routing accepted the verified generations: record their executions.
+	for name, svcResult := range result.Services {
+		s.recordVerifiedExecution(app, name, svcResult)
+	}
 	return result, nil
 }
 
@@ -273,6 +291,11 @@ func (s *Service) restartLocked(ctx context.Context, app, service, opID string) 
 		s.failTrafficPublication(ctx, &op, err)
 		return result, err
 	}
+	// Routing accepted the restarted generations: their executions are
+	// verified. The app lock is held, so no periodic pass ran in between.
+	for name, svcResult := range result.Services {
+		s.recordVerifiedExecution(app, name, svcResult)
+	}
 	if len(failures) > 0 {
 		return result, fmt.Errorf("deployment: restart failed for %s: %w", strings.Join(failures, ", "), domain.ErrAppStateConflict)
 	}
@@ -347,6 +370,8 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		s.clearServiceBinds(ctx, app, name)
 		return fail(err.Error())
 	}
+	// The restarted execution is observed before readiness runs.
+	startedAt := s.executionStart(ctx, eff.Container)
 	// Ephemeral loopback binds are not guaranteed stable across a runtime
 	// restart: re-inspect before probing so the proxy never dials a stale
 	// bind.
@@ -361,7 +386,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	}
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
-	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
+	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds, VerifiedStartedAt: startedAt}
 }
 
 // Remove withdraws workloads by exact container ID; volumes, secrets, and
@@ -512,7 +537,73 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 		step.State = domain.AppStepSucceeded
 		steps = append(steps, step)
 	}
+	if err := s.retireAllPending(ctx, app); err != nil {
+		return nil, err
+	}
 	return steps, nil
+}
+
+// retireAllPending retires every superseded container an overlap replacement
+// left running beside its successor. Ending the incarnation deletes the
+// retirement markers with the rest of the app state, so a container that is
+// not confirmed gone here would be orphaned and untracked: a failure keeps the
+// markers and fails the caller. Every marker is attempted, and a marker whose
+// claims could not be released is a failure too, so it is retried instead of
+// leaking its claims.
+func (s *Service) retireAllPending(ctx context.Context, app string) error {
+	pending, err := s.pendingRetirements(ctx, app)
+	if err != nil {
+		return err
+	}
+	var failures []error
+	for _, marker := range pending {
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true, RetryOnLeak: true,
+		}, marker.ContainerID)
+		if !retired.Settled {
+			failures = append(failures, fmt.Errorf("deployment: remove %q/%q: superseded container %s not retired: %s", app, marker.Service, marker.ContainerID, cleanupDetail(retired)))
+		}
+	}
+	return errors.Join(failures...)
+}
+
+// pendingRetirements loads the retirement-pending markers of one app.
+func (s *Service) pendingRetirements(ctx context.Context, app string) ([]domain.AppRecoveryInhibition, error) {
+	inhibitions, err := s.deps.State.LoadRecoveryInhibitions(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("deployment: load recovery inhibitions: %w", err)
+	}
+	_, pending := splitRecoveryInhibitions(app, inhibitions)
+	return pending, nil
+}
+
+// retirePendingForStop retires the pending superseded containers of a stopped
+// app, recording a leftover or a failure on the service they belong to. It
+// returns the services whose predecessor is not confirmed retired, and an
+// app-level error when the markers themselves could not be loaded: nothing
+// can then be said about any predecessor, which the caller must journal as a
+// failed operation.
+func (s *Service) retirePendingForStop(ctx context.Context, app string, result *LifecycleResult) ([]string, error) {
+	pending, err := s.pendingRetirements(ctx, app)
+	if err != nil {
+		result.Warnings = append(result.Warnings, CleanupWarning{Detail: "pending retirements unknown: " + err.Error()})
+		return []string{"pending retirements"}, err
+	}
+	var failed []string
+	for _, marker := range pending {
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true, RetryOnLeak: true,
+		}, marker.ContainerID)
+		svc := result.Services[marker.Service]
+		svc.CleanupWarnings = append(svc.CleanupWarnings, retired.Warnings...)
+		if !retired.Settled {
+			svc.Result = "failed"
+			svc.Error = "superseded container " + marker.ContainerID + " not retired: " + cleanupDetail(retired)
+			failed = append(failed, marker.Service)
+		}
+		result.Services[marker.Service] = svc
+	}
+	return failed, nil
 }
 
 // ReconcileBoot reconciles apps intended to run after a daemon boot:
@@ -691,6 +782,10 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 		svcResult.Error = err.Error()
 		return svcResult, err
 	}
+	// The execution is deliberately not recorded here: the graph is not
+	// applied yet. Recording it before routing was accepted would let the next
+	// periodic pass see a verified, unrouted generation and skip the
+	// publication. Each caller records after its own refreshTraffic succeeded.
 	return svcResult, nil
 }
 
@@ -709,6 +804,7 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 		return
 	}
+	startedAt := s.executionStart(ctx, eff.Container)
 	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
 		s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
@@ -723,7 +819,7 @@ func (s *Service) verifyRunningService(ctx context.Context, app, name string, ef
 	// follows once, after the loop.
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
-	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds}
+	result.Services[name] = ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds, VerifiedStartedAt: startedAt}
 }
 
 // refreshBackendBinds re-inspects the loopback publishes of a restarted

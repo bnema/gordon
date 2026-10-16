@@ -344,20 +344,26 @@ func waitTCPReadyWithDeps(ctx context.Context, deps ProbeDeps, spec domain.AppSe
 		return err
 	}
 	addr := net.JoinHostPort("127.0.0.1", itoa(port))
-	deadline := time.Now().Add(timeout)
-	for {
+	// Every attempt and retry wait runs under the readiness budget, so a
+	// connection that only settles after the budget expired is never accepted.
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	timedOut := func() error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := deps.tcpDial(ctx, addr); err == nil {
+		return fmt.Errorf("deployment: TCP readiness timeout after %s: %s not reachable", timeout, addr)
+	}
+	for {
+		if attemptCtx.Err() != nil {
+			return timedOut()
+		}
+		if err := deps.tcpDial(attemptCtx, addr); err == nil && attemptCtx.Err() == nil {
 			return nil
 		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("deployment: TCP readiness timeout after %s: %s not reachable", timeout, addr)
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-attemptCtx.Done():
+			return timedOut()
 		case <-time.After(500 * time.Millisecond):
 		}
 	}

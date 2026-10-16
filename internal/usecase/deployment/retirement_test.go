@@ -39,6 +39,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		state.EXPECT().Recover(mock.Anything).Return(nil)
 		state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 		state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil).Once()
+		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 		runtime.EXPECT().StopContainer(mock.Anything, "c-1", grace).Return(nil).Once()
 		runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 		state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
@@ -58,6 +59,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 		runtime.EXPECT().RestartContainer(mock.Anything, "c-1", grace).Return(nil).Once()
+		runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 		state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
 		svc := deployment.NewService(deployment.Deps{State: state, Runtime: runtime}, zerowrap.Default())
@@ -77,6 +79,7 @@ func TestLifecycleVerbsPassTheEffectiveStopGrace(t *testing.T) {
 		runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 		state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
 		state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-1").Return(nil).Once()
+		state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 		state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog"}, nil).Once()
 		state.EXPECT().RetireApp(mock.Anything, "blog").Return(nil).Once()
 		state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
@@ -97,6 +100,7 @@ func TestStopWithoutDeclaredGraceUsesTheAppDefault(t *testing.T) {
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-1", domain.AppDefaultStopGrace).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()
@@ -140,7 +144,7 @@ func TestRemove_FailedRetirementKeepsClaimsAndActiveState(t *testing.T) {
 func TestDeploy_RetirementFailureBlocksReplacement(t *testing.T) {
 	ctx := context.Background()
 	state, runtime, images, secrets := mockDeps(t)
-	rev := mockRevision()
+	rev := statefulMockRevision()
 
 	oldActive := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
 		"web": {EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old", Spec: graceSpec(time.Second)},
@@ -156,6 +160,8 @@ func TestDeploy_RetirementFailureBlocksReplacement(t *testing.T) {
 	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-blog"}, nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(oldActive, true, nil)
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+	runtime.EXPECT().VolumeExists(mock.Anything, mock.Anything).Return(false, nil)
+	state.EXPECT().SaveRecoveryInhibition(mock.Anything, mock.Anything).Return(nil).Once()
 	// The superseded container is retired with its own effective grace, and
 	// its removal fails: the replacement must not start.
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", time.Second).Return(nil).Once()
