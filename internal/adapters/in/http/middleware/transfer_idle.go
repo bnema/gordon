@@ -52,8 +52,11 @@ const idleWriteChunk = 8 * 1024
 // into the next request. The timer never touches the controller after return.
 //
 // Limits: a handler that ignores the canceled context and never touches the
-// connection again keeps its HTTP/1 connection until it returns. A non-positive
-// idle disables the middleware.
+// connection again keeps its HTTP/1 connection until it returns. A handler that
+// enables HTTP/1 full-duplex mode (ResponseController.EnableFullDuplex) is not
+// covered for the unread-body drain: net/http clears the read deadline before
+// that drain, so such a handler must consume or bound its request body itself.
+// A non-positive idle disables the middleware.
 func TransferIdleTimeout(idle time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if idle <= 0 {
