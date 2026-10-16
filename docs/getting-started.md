@@ -197,7 +197,7 @@ gordon images push myapp --build --remote prod
 gordon apps deploy blog --remote prod
 ```
 
-Gordon deploys services one at a time in sorted order. A service with no volume, bind, or device is replaced without downtime: the new container starts and becomes ready while the old one keeps serving, then traffic switches and the old one is stopped. A service that owns a volume, bind, or device is replaced sequentially, may be briefly interrupted, and never has two generations running at once. If preflight fails, the running service is left untouched.
+Gordon deploys services one at a time in sorted order. A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime: the new container starts and becomes ready while the old one keeps serving, then traffic switches and the old one is stopped. A service that owns a volume, bind, device, or UDP interface is replaced sequentially, may be briefly interrupted, and never has two generations running at once. If preflight fails, the running service is left untouched.
 
 ## Next Steps
 

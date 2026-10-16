@@ -71,19 +71,19 @@ DATABASE_URL = "database-url"
 
 ## Updates
 
-Gordon deploys an app's services one at a time in sorted order. A service with no volume, bind, or device is replaced without downtime; every other service is replaced sequentially and may be briefly interrupted, because Gordon never runs two Gordon-managed generations of a service that owns a volume, a bind, or a device.
+Gordon deploys an app's services one at a time in sorted order. A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime; every other service is replaced sequentially and may be briefly interrupted. Gordon never runs two Gordon-managed generations of a service that owns a volume, a bind, or a device, and a UDP service is excluded because UDP sessions stay pinned to the backend they started on.
 
 Preflight completes before anything is disrupted (image resolution and pull, secrets, volumes, networks, bind policy, reservations). If preflight fails, the running service is left untouched.
 
-A stateless service (no volume, bind, or device) is replaced with a short overlap:
+A stateless service (no volume, bind, device, or UDP interface) is replaced with a short overlap:
 
 ```
 Preflight ─► start new ─► readiness ─► publish ACTIVE ─► route traffic ─► SIGTERM old ─► stop_grace ─► kill + remove old
 ```
 
-The old container keeps serving and stays routed until the new one is ready and traffic points at it. Only then does the old container receive SIGTERM, with its own `stop_grace` (default 30s) before it is killed. While both run, they share the service's network alias, so a request from another service of the app may reach either generation. A database migration must therefore stay backward compatible with the previous version of the service. If the new container never becomes ready, it is removed and the old one is not touched. If the old container cannot be removed after the switch, the deploy still succeeds and reports a cleanup warning, and the next reconciliation retries it.
+The old container keeps serving and stays routed until the new one is ready and traffic points at it. Only then does the old container receive SIGTERM, with its own `stop_grace` (default 30s) before it is killed. While both run, they share the service's network alias, so a request from another service of the app may reach either generation. A database migration must therefore stay backward compatible with the previous version of the service. If the new container never becomes ready, it is removed and the old one is not touched. If the old container cannot be removed after the switch, the deploy still succeeds and reports a cleanup warning. Before the switch Gordon durably marks the old container for retirement, so the periodic recovery pass keeps retrying it, with the old container's `stop_grace`, once the new container is verified; later deploys do not lose the cleanup.
 
-A service with a volume, a bind, or a device is replaced sequentially:
+A service with a volume, a bind, a device, or a UDP interface is replaced sequentially:
 
 ```
 Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► route traffic
@@ -93,7 +93,7 @@ If replacement fails after the old container was removed, the failure is explici
 
 Deployment stops at the first service failure: services already deployed in that run are kept and are not rolled back. This covers TCP, UDP, mixed, and volume-owning services. An open UDP socket is not application readiness, and Gordon never restarts an old volume-owning image automatically after a replacement may have written data.
 
-A deploy interrupted after the replacement container was created but before it was published leaves the failure explicit: the candidate is recorded in the deployment journal, and Gordon removes it before it creates or rebuilds any generation of that app — at boot and before every mutation. For a stateless service the old container keeps serving and is kept. A deploy interrupted after the switch but before the old container was stopped leaves two containers running; Gordon stops the old one at the next reconciliation, after re-applying routing to the published container. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. If a recorded candidate cannot be removed, reconciliation fails closed: the operation is not finalized, stays the latest journal, and every later mutation is refused so a newer operation can never mask the orphan. The next recovery pass republishes routing within its 15-second cadence if the final traffic publication was the step that failed.
+A deploy interrupted after the replacement container was created but before it was published leaves the failure explicit: the candidate is recorded in the deployment journal, and Gordon removes it before it creates or rebuilds any generation of that app — at boot and before every mutation. For a stateless service the old container keeps serving and is kept. A deploy interrupted after the switch but before the old container was stopped leaves two containers running; the retirement mark makes the periodic recovery pass stop the old one after it has verified and routed the published container. Boot recovery never routes a persisted port it has not verified. An interrupted operation is finalized instead of staying in flight: as a failure, or as the success it was when every step had already completed. If a recorded candidate cannot be removed, reconciliation fails closed: the operation is not finalized, stays the latest journal, and every later mutation is refused so a newer operation can never mask the orphan. The next recovery pass republishes routing within its 15-second cadence if the final traffic publication was the step that failed.
 
 Deploy is the only command that applies changes: it recreates a service whose image digest, spec, app environment, or secret values changed, and keeps an unchanged one, reported `unchanged`.
 

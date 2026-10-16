@@ -10,7 +10,7 @@ Gordon runs on your VPS and provides:
 - **Declarative Apps** - One TOML file per app, explicit apply then deploy
 - **HTTP Reverse Proxy** - Routes app hosts to containers
 - **Push, Apply, Deploy** - Push stores images; deploy is always explicit
-- **Zero-Downtime Stateless Deploys** - Stateless services start the new generation, verify readiness, switch traffic, then stop the old one; services with volumes, binds, or devices are replaced sequentially
+- **Zero-Downtime Stateless Deploys** - Stateless services start the new generation, verify readiness, switch traffic, then stop the old one; services with volumes, binds, devices, or UDP interfaces are replaced sequentially
 - **Single Binary** - ~15MB RAM footprint
 
 ## How It Works

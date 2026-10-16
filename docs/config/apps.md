@@ -114,9 +114,9 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 A deploy recreates a service whose image digest, spec, environment, or secret values changed and keeps an unchanged one.
 
-- A service with no volume, bind, or device (stateless) is replaced without downtime. The new container starts and passes its readiness probe while the old one keeps serving; traffic then switches to the new container; only afterwards does the old container receive SIGTERM, and it is killed once its `stop_grace` (default `30s`) runs out. If the new container is not ready, it is removed and the old one is left untouched.
+- A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime. The new container starts and passes its readiness probe while the old one keeps serving; traffic then switches to the new container; only afterwards does the old container receive SIGTERM, and it is killed once its `stop_grace` (default `30s`) runs out. If the new container is not ready, it is removed and the old one is left untouched.
 - During the overlap both containers answer to the same network alias, so other services of the app may reach either generation for a short time. Database migrations must be backward compatible with the previous version of the service.
-- A service with a volume, bind, or device is replaced sequentially: traffic is withdrawn, the old container is stopped and removed, then the new one starts. It may be briefly interrupted, and two generations of it never run at once.
+- A service with a volume, bind, device, or UDP interface is replaced sequentially: traffic is withdrawn, the old container is stopped and removed, then the new one starts. It may be briefly interrupted, and two generations of it never run at once. UDP services are excluded from the overlap because UDP sessions stay pinned to the backend they started on.
 
 ## Environment and Secrets
 
