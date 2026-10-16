@@ -362,6 +362,25 @@ proxy_allowed_ips = [
 
 **Important:** Cloudflare publishes their IP ranges at [cloudflare.com/ips](https://www.cloudflare.com/ips/). Keep your allowlist updated when Cloudflare adds new ranges.
 
+## Client IP Headers
+
+Gordon sets the client IP on every request it proxies to a container. Apps can trust these headers without any extra proxy in front, as long as the container is only reachable through Gordon (no published host ports):
+
+| Header | Value sent to the container |
+|--------|-----------------------------|
+| `X-Real-IP` | The resolved client IP. Any value sent by the client is replaced, including `X_Real_IP`-style spellings. |
+| `X-Forwarded-For` | The same single resolved client IP. |
+| `Cf-Connecting-Ip` | Kept only when the peer is a trusted Cloudflare address and the value is the resolved client IP, otherwise removed. |
+| `X-Forwarded-Proto` / `X-Forwarded-Host` | Request scheme and route host. A trusted proxy's `X-Forwarded-Proto` is kept. |
+
+The client IP is resolved with the same rules as Gordon's logs and rate limiter, using [`api.rate_limit.trusted_proxies`](./rate-limiting.md#trusted_proxies):
+
+- **Untrusted peer:** the peer address.
+- **Trusted Cloudflare peer:** a valid `Cf-Connecting-Ip`, otherwise the trusted proxy rules below.
+- **Other trusted proxy:** the right-most untrusted `X-Forwarded-For` hop (the left-most hop if all are trusted), then a single `X-Real-IP`, then the peer address.
+
+IPv4-mapped IPv6 addresses are sent as plain IPv4. For apps that read the client IP from a header (for example `ADDRESS_HEADER=x-real-ip` in SvelteKit's adapter-node), use `X-Real-IP`.
+
 ## Registry Listen Address
 
 The `registry_listen_address` controls which interface the registry server binds to. By default it binds to all interfaces. Set to `127.0.0.1` to restrict registry access to localhost only, preventing containers from reaching the registry via the Docker bridge gateway.

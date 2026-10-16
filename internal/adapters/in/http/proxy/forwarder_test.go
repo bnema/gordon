@@ -370,3 +370,187 @@ func TestNewReverseProxy_XForwardedProto(t *testing.T) {
 		})
 	}
 }
+
+func TestNewReverseProxy_ClientIPHeaders(t *testing.T) {
+	trustedNets := gordonhttp.ParseTrustedProxies([]string{"10.0.0.0/8", "fd00::/8", "173.245.48.0/20"})
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		headers    http.Header
+		nets       []*net.IPNet
+		wantIP     string // expected X-Real-IP and X-Forwarded-For, empty = absent
+		wantCF     string // expected Cf-Connecting-Ip, empty = absent
+	}{
+		{
+			name:       "untrusted IPv4 peer forged headers replaced",
+			remoteAddr: "203.0.113.7:4321",
+			headers: http.Header{
+				"X-Real-IP":        {"1.2.3.4"},
+				"X-Forwarded-For":  {"1.2.3.4"},
+				"Cf-Connecting-Ip": {"1.2.3.4"}},
+			nets:   trustedNets,
+			wantIP: "203.0.113.7",
+		},
+		{
+			name:       "untrusted IPv6 peer forged X-Real-IP replaced",
+			remoteAddr: "[2001:db8::7]:4321",
+			headers:    http.Header{"X-Real-IP": {"1.2.3.4"}},
+			nets:       trustedNets,
+			wantIP:     "2001:db8::7",
+		},
+		{
+			name:       "untrusted IPv4-mapped IPv6 peer normalized to IPv4",
+			remoteAddr: "[::ffff:203.0.113.7]:4321",
+			headers:    http.Header{"X-Real-IP": {"1.2.3.4"}},
+			nets:       trustedNets,
+			wantIP:     "203.0.113.7",
+		},
+		{
+			name:       "no trusted nets ignores proxy headers",
+			remoteAddr: "10.0.0.1:4321",
+			headers:    http.Header{"X-Forwarded-For": {"198.51.100.9"}},
+			nets:       nil,
+			wantIP:     "10.0.0.1",
+		},
+		{
+			name:       "trusted Cloudflare peer uses Cf-Connecting-Ip",
+			remoteAddr: "173.245.48.10:4321",
+			headers: http.Header{
+				"Cf-Connecting-Ip": {"198.51.100.9"},
+				"X-Real-IP":        {"1.2.3.4"},
+				"X-Forwarded-For":  {"1.2.3.4"}},
+			nets:   trustedNets,
+			wantIP: "198.51.100.9",
+			wantCF: "198.51.100.9",
+		},
+		{
+			name:       "trusted Cloudflare peer with IPv6 client",
+			remoteAddr: "173.245.48.10:4321",
+			headers:    http.Header{"Cf-Connecting-Ip": {"2001:db8::9"}},
+			nets:       trustedNets,
+			wantIP:     "2001:db8::9",
+			wantCF:     "2001:db8::9",
+		},
+		{
+			name:       "trusted non-Cloudflare proxy uses right-most untrusted XFF hop",
+			remoteAddr: "10.0.0.1:4321",
+			headers: http.Header{
+				"X-Forwarded-For":  {"1.2.3.4, 198.51.100.9, 10.0.0.2"},
+				"Cf-Connecting-Ip": {"1.2.3.4"}},
+			nets:   trustedNets,
+			wantIP: "198.51.100.9",
+		},
+		{
+			name:       "trusted IPv6 proxy with IPv4-mapped XFF hop",
+			remoteAddr: "[fd00::1]:4321",
+			headers:    http.Header{"X-Forwarded-For": {"::ffff:198.51.100.9"}},
+			nets:       trustedNets,
+			wantIP:     "198.51.100.9",
+		},
+		{
+			name:       "trusted proxy X-Real-IP honored without XFF",
+			remoteAddr: "10.0.0.1:4321",
+			headers:    http.Header{"X-Real-IP": {"2001:db8::9"}},
+			nets:       trustedNets,
+			wantIP:     "2001:db8::9",
+		},
+		{
+			name:       "trusted proxy adding a new XFF line uses that line",
+			remoteAddr: "10.0.0.1:4321",
+			headers:    http.Header{"X-Forwarded-For": {"1.2.3.4", "198.51.100.9"}},
+			nets:       trustedNets,
+			wantIP:     "198.51.100.9",
+		},
+		{
+			name:       "trusted proxy repeated X-Real-IP ignored",
+			remoteAddr: "10.0.0.1:4321",
+			headers:    http.Header{"X-Real-IP": {"1.2.3.4", "198.51.100.9"}},
+			nets:       trustedNets,
+			wantIP:     "10.0.0.1",
+		},
+		{
+			name:       "underscore header variants removed",
+			remoteAddr: "203.0.113.7:4321",
+			headers: http.Header{
+				"X_Real_IP":        {"1.2.3.4"},
+				"X_Forwarded_For":  {"1.2.3.4"},
+				"Cf_Connecting_Ip": {"1.2.3.4"},
+			},
+			nets:   trustedNets,
+			wantIP: "203.0.113.7",
+		},
+		{
+			name:       "Cloudflare peer not in trusted proxies strips Cf-Connecting-Ip",
+			remoteAddr: "173.245.48.10:4321",
+			headers:    http.Header{"Cf-Connecting-Ip": {"198.51.100.9"}},
+			nets:       gordonhttp.ParseTrustedProxies([]string{"10.0.0.0/8"}),
+			wantIP:     "173.245.48.10",
+		},
+		{
+			name:       "IPv4-mapped trusted Cloudflare peer uses Cf-Connecting-Ip",
+			remoteAddr: "[::ffff:173.245.48.10]:4321",
+			headers:    http.Header{"Cf-Connecting-Ip": {"198.51.100.9"}},
+			nets:       trustedNets,
+			wantIP:     "198.51.100.9",
+			wantCF:     "198.51.100.9",
+		},
+		{
+			name:       "trusted Cloudflare peer with invalid Cf-Connecting-Ip falls back",
+			remoteAddr: "173.245.48.10:4321",
+			headers: http.Header{
+				"Cf-Connecting-Ip": {"not-an-ip"},
+				"X-Forwarded-For":  {"198.51.100.9"},
+			},
+			nets:   trustedNets,
+			wantIP: "198.51.100.9",
+		},
+		{
+			name:       "unparsable peer sends no client IP",
+			remoteAddr: "@",
+			headers:    http.Header{"X-Real-IP": {"1.2.3.4"}, "X-Forwarded-For": {"1.2.3.4"}},
+			nets:       trustedNets,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got http.Header
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Clone()
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer backend.Close()
+
+			backendURL, err := url.Parse(backend.URL)
+			require.NoError(t, err)
+
+			incomingReq := httptest.NewRequest(http.MethodGet, "http://example.com/", nil)
+			incomingReq.RemoteAddr = tt.remoteAddr
+			for k, v := range tt.headers {
+				incomingReq.Header[http.CanonicalHeaderKey(k)] = v
+			}
+
+			proxy := newReverseProxy(reverseProxyOptions{
+				targetURL:   backendURL,
+				transport:   http.DefaultTransport,
+				incomingReq: incomingReq,
+				trustedNets: tt.nets,
+				errorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+				},
+			})
+
+			rec := httptest.NewRecorder()
+			proxy.ServeHTTP(rec, incomingReq)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			assert.Equal(t, tt.wantIP, got.Get("X-Real-IP"))
+			assert.Equal(t, tt.wantIP, got.Get("X-Forwarded-For"))
+			assert.Equal(t, tt.wantCF, got.Get("Cf-Connecting-Ip"))
+			for key := range got {
+				assert.NotContains(t, key, "_", "underscore header %q forwarded", key)
+			}
+		})
+	}
+}

@@ -84,38 +84,62 @@ func GetClientIP(r *http.Request, trustedNets []*net.IPNet) string {
 			}
 		}
 
-		// Check X-Forwarded-For for proxied requests.
-		// SECURITY: Parse from right to left and return the first untrusted IP.
-		// This prevents spoofing when a trusted proxy appends to an attacker-
-		// supplied XFF chain.
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			parts := strings.Split(xff, ",")
-			validChain := make([]string, 0, len(parts))
-			for _, part := range parts {
-				if ip := normalizeIP(part); ip != "" {
-					validChain = append(validChain, ip)
-				}
-			}
-
-			for i := len(validChain) - 1; i >= 0; i-- {
-				if !httphelper.IsTrustedProxy(validChain[i], trustedNets) {
-					return validChain[i]
-				}
-			}
-
-			if len(validChain) > 0 {
-				return validChain[0]
-			}
+		if ip := forwardedForClientIP(r, trustedNets); ip != "" {
+			return ip
 		}
 
-		// Check X-Real-IP
-		if xri := r.Header.Get("X-Real-IP"); xri != "" {
-			if ip := normalizeIP(xri); ip != "" {
-				return ip
-			}
+		if ip := realIPHeader(r); ip != "" {
+			return ip
 		}
 	}
 
 	// Fall back to RemoteAddr (direct connection IP)
 	return remoteIP
+}
+
+// forwardedForClientIP returns the right-most untrusted X-Forwarded-For hop.
+// SECURITY: Parse from right to left so a trusted proxy appending to an
+// attacker-supplied chain cannot be spoofed. All header lines are joined, since
+// some proxies add a new X-Forwarded-For line instead of appending to the last.
+func forwardedForClientIP(r *http.Request, trustedNets []*net.IPNet) string {
+	values := r.Header.Values("X-Forwarded-For")
+	if len(values) == 0 {
+		return ""
+	}
+
+	parts := strings.Split(strings.Join(values, ","), ",")
+	validChain := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if ip := normalizeIP(part); ip != "" {
+			validChain = append(validChain, ip)
+		}
+	}
+
+	for i := len(validChain) - 1; i >= 0; i-- {
+		if !httphelper.IsTrustedProxy(validChain[i], trustedNets) {
+			return validChain[i]
+		}
+	}
+
+	if len(validChain) > 0 {
+		return validChain[0]
+	}
+	return ""
+}
+
+// realIPHeader returns X-Real-IP only when it is set exactly once, since a
+// repeated header means one of the values may come from the client.
+func realIPHeader(r *http.Request) string {
+	values := r.Header.Values("X-Real-IP")
+	if len(values) != 1 {
+		return ""
+	}
+	return normalizeIP(values[0])
+}
+
+// IsTrustedCloudflarePeer reports whether the request's immediate peer is both
+// a trusted proxy and a published Cloudflare address. Only then does
+// Cf-Connecting-Ip carry a client IP set by Cloudflare rather than by the client.
+func IsTrustedCloudflarePeer(r *http.Request, trustedNets []*net.IPNet) bool {
+	return httphelper.IsTrustedSource(r, trustedNets) && httphelper.IsTrustedSource(r, cloudflareNets)
 }
