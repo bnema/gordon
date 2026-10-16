@@ -127,6 +127,36 @@ allow_public_raw_fallback = true
 
 `trusted_cidrs` and `raw_fallback_trusted_cidrs` both use the peer socket IP. They do not use `X-Forwarded-For`.
 
+## HTTP Timeouts
+
+The HTTP servers behind `smart_tcp` and `tls_mux` entrypoints serve apps and the admin API. They do not use a fixed read or write timeout, so a download or upload that keeps moving data is never cut for taking too long. A connection is cut only after `transfer_idle_timeout` passes with no data in the direction being waited on.
+
+```toml
+[traffic.http]
+read_header_timeout = "5s"
+idle_timeout = "30s"
+transfer_idle_timeout = "2m"
+```
+
+| Option | Env | Default | Description |
+|--------|-----|---------|-------------|
+| `traffic.http.read_header_timeout` | `GORDON_TRAFFIC_HTTP_READ_HEADER_TIMEOUT` | `"5s"` | Maximum time to read request headers |
+| `traffic.http.idle_timeout` | `GORDON_TRAFFIC_HTTP_IDLE_TIMEOUT` | `"30s"` | Maximum keep-alive idle time between requests |
+| `traffic.http.transfer_idle_timeout` | `GORDON_TRAFFIC_HTTP_TRANSFER_IDLE_TIMEOUT` | `"2m"` | Inactivity timeout for request bodies and responses |
+
+Values are Go duration strings; malformed, zero, or negative values are rejected when the configuration loads. Servers pick up changes when the traffic graph is next applied (reload); connections already in flight keep their previous timeout.
+
+### Inactivity timeout
+
+Gordon renews the response write deadline before every write and flush, and the request read deadline before every request body read. The deadline is also armed when a request starts, so the wait for the first response byte from a slow backend is bounded by `transfer_idle_timeout` too. Consequences:
+
+- a response that streams data at least once per `transfer_idle_timeout` can last arbitrarily long;
+- an upload whose body arrives at least once per `transfer_idle_timeout` can last arbitrarily long;
+- a backend that stays silent longer than `transfer_idle_timeout` before or between response chunks has its connection cut, so set it above the slowest expected backend response time;
+- WebSocket and other upgraded connections are not subject to it, and HTTP/2 streams are handled the same way as HTTP/1.
+
+`transfer_idle_timeout` does not apply to `[traffic.tcp]` or `[traffic.udp]` routers; those use their own `idle_timeout` (see below).
+
 ## TCP Routers
 
 Plain TCP entrypoints support one TCP router per entrypoint. TCP routers on a `smart_tcp` entrypoint are valid only when referenced by that entrypoint's `raw_fallback`.

@@ -151,7 +151,8 @@ func (r *entryPointRuntime) replaceSmartTCPHTTPServer(entryPoint domain.EntryPoi
 		return
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
-	server := &http.Server{Handler: config.Handler, Protocols: config.Protocols, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	server.Protocols = config.Protocols
 	done := make(chan struct{})
 	r.mu.Lock()
 	oldListener := r.smartHTTPListener
@@ -182,7 +183,8 @@ func (r *entryPointRuntime) replaceSmartTCPTLSServer(entryPoint domain.EntryPoin
 		return
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
-	server := &http.Server{Handler: config.Handler, TLSConfig: config.TLSConfig.Clone(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	server.TLSConfig = config.TLSConfig.Clone()
 	done := make(chan struct{})
 	r.mu.Lock()
 	oldListener := r.smartTLSListener

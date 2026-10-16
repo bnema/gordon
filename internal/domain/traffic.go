@@ -42,8 +42,9 @@ type TrafficGraph struct {
 }
 
 type TrafficOptions struct {
-	TCP TCPOptions
-	UDP UDPOptions
+	TCP  TCPOptions
+	UDP  UDPOptions
+	HTTP HTTPOptions
 }
 
 type TCPOptions struct {
@@ -230,6 +231,9 @@ func (g TrafficGraph) Validate() error {
 }
 
 func validateTrafficOptions(options TrafficOptions) error {
+	if err := options.HTTP.Validate(); err != nil {
+		return err
+	}
 	if err := validateOptionalPositiveDuration(options.TCP.DialTimeout, "traffic.tcp.dial_timeout"); err != nil {
 		return err
 	}

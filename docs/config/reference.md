@@ -21,6 +21,12 @@ registry_allowed_ips = []                    # IPs or CIDR ranges allowed to acc
 proxy_allowed_ips = []                       # IPs or CIDR ranges allowed to reach HTTP proxy paths (empty = allow all, e.g. Cloudflare IPs)
 registry_listen_address = ""                 # Bind address for registry (empty = all interfaces, "127.0.0.1" = loopback only)
 
+[server.http]                                # Registry HTTP server timeouts (Go durations)
+read_header_timeout = "10s"                  # Max time to read request headers
+read_timeout = "5m"                          # Max time to read a whole request
+write_timeout = "5m"                         # Max time to write a whole response
+idle_timeout = "120s"                        # Keep-alive idle timeout
+
 # =============================================================================
 # ENTRYPOINTS
 # =============================================================================
@@ -31,6 +37,11 @@ trusted_cidrs = []                            # Peer socket IP allowlist for all
 # raw_fallback = "ssh-fallback"              # Optional TCP router for unknown non-HTTP/non-TLS bytes
 # raw_fallback_trusted_cidrs = ["100.64.0.0/10"]
 # allow_public_raw_fallback = false
+
+[traffic.http]                               # HTTP servers behind entrypoints (apps + admin API)
+read_header_timeout = "5s"                   # Max time to read request headers
+idle_timeout = "30s"                         # Keep-alive idle timeout
+transfer_idle_timeout = "2m"                 # Cut a transfer only after this long without data (no fixed read/write timeout)
 
 # =============================================================================
 # DNS
@@ -241,6 +252,13 @@ keep_last = 3                                # Keep N newest tags per repository
 | `server.registry_allowed_ips` | `[]` | IPs or CIDR ranges allowed to access the registry (empty = allow all) |
 | `server.proxy_allowed_ips` | `[]` | IPs or CIDR ranges allowed to reach the proxy (empty = allow all) |
 | `server.registry_listen_address` | `""` | Bind address for registry (empty = all interfaces) |
+| `server.http.read_header_timeout` | `"10s"` | Registry servers: max time to read request headers (env `GORDON_SERVER_HTTP_READ_HEADER_TIMEOUT`) |
+| `server.http.read_timeout` | `"5m"` | Registry servers: max time to read a whole request (env `GORDON_SERVER_HTTP_READ_TIMEOUT`) |
+| `server.http.write_timeout` | `"5m"` | Registry servers: max time to write a whole response (env `GORDON_SERVER_HTTP_WRITE_TIMEOUT`) |
+| `server.http.idle_timeout` | `"120s"` | Registry servers: keep-alive idle timeout (env `GORDON_SERVER_HTTP_IDLE_TIMEOUT`) |
+| `traffic.http.read_header_timeout` | `"5s"` | Entrypoint HTTP servers: max time to read request headers (env `GORDON_TRAFFIC_HTTP_READ_HEADER_TIMEOUT`) |
+| `traffic.http.idle_timeout` | `"30s"` | Entrypoint HTTP servers: keep-alive idle timeout (env `GORDON_TRAFFIC_HTTP_IDLE_TIMEOUT`) |
+| `traffic.http.transfer_idle_timeout` | `"2m"` | Entrypoint HTTP servers: inactivity timeout for request bodies and responses (env `GORDON_TRAFFIC_HTTP_TRANSFER_IDLE_TIMEOUT`) |
 | `entrypoints.<name>.address` | none | Deployment-selected listen address; `edge` is conventional for route-capable entrypoints but is not required when exactly one `smart_tcp` or `tls_mux` entrypoint exists |
 | `entrypoints.<name>.protocol` | none | Entrypoint protocol: `smart_tcp`, `tls_mux`, `tcp`, or `udp` |
 | `entrypoints.<name>.trusted_cidrs` | `[]` | Peer socket IP allowlist for all traffic on the entrypoint |

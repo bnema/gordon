@@ -169,14 +169,8 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 		return
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
-	server := &http.Server{
-		Handler:           config.Handler,
-		TLSConfig:         config.TLSConfig.Clone(),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       30 * time.Second,
-	}
+	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	server.TLSConfig = config.TLSConfig.Clone()
 	done := make(chan struct{})
 
 	r.mu.Lock()

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
@@ -37,6 +38,14 @@ type Config struct {
 		RegistryAllowedIPs    []string `mapstructure:"registry_allowed_ips"`
 		ProxyAllowedIPs       []string `mapstructure:"proxy_allowed_ips"`
 		RegistryListenAddr    string   `mapstructure:"registry_listen_address"`
+
+		// HTTP holds the registry HTTP server timeouts (Go duration strings).
+		HTTP struct {
+			ReadHeaderTimeout string `mapstructure:"read_header_timeout"`
+			ReadTimeout       string `mapstructure:"read_timeout"`
+			WriteTimeout      string `mapstructure:"write_timeout"`
+			IdleTimeout       string `mapstructure:"idle_timeout"`
+		} `mapstructure:"http"`
 	} `mapstructure:"server"`
 
 	Apps struct {
@@ -223,6 +232,9 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 		return nil, Config{}, err
 	}
 	if err := validateRetiredAppConfig(v); err != nil {
+		return nil, Config{}, err
+	}
+	if err := validateHTTPTimeouts(cfg); err != nil {
 		return nil, Config{}, err
 	}
 	if _, err := buildAppMountPolicies(cfg); err != nil {
@@ -439,6 +451,22 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.proxy_allowed_ips", []string{})
 	v.SetDefault("server.registry_listen_address", "")
 
+	// HTTP timeouts. Every key needs a default so GORDON_* env overrides apply.
+	v.SetDefault("server.http.read_header_timeout", domain.DefaultRegistryReadHeaderTimeout.String())
+	v.SetDefault("server.http.read_timeout", domain.DefaultRegistryReadTimeout.String())
+	v.SetDefault("server.http.write_timeout", domain.DefaultRegistryWriteTimeout.String())
+	v.SetDefault("server.http.idle_timeout", domain.DefaultRegistryIdleTimeout.String())
+	v.SetDefault("traffic.http.read_header_timeout", domain.DefaultEntryPointReadHeaderTimeout.String())
+	v.SetDefault("traffic.http.idle_timeout", domain.DefaultEntryPointIdleTimeout.String())
+	v.SetDefault("traffic.http.transfer_idle_timeout", domain.DefaultEntryPointTransferIdleTimeout.String())
+	v.SetDefault("traffic.tcp.dial_timeout", "10s")
+	v.SetDefault("traffic.tcp.idle_timeout", "5m")
+	v.SetDefault("traffic.tcp.drain_timeout", "30s")
+	v.SetDefault("traffic.udp.idle_timeout", "30s")
+	v.SetDefault("traffic.udp.drain_timeout", "30s")
+	v.SetDefault("traffic.tcp.max_connections", 0) // 0 = runtime default
+	v.SetDefault("traffic.udp.max_sessions", 0)    // 0 = runtime default
+
 	ConfigureViper(v, configPath)
 
 	if err := v.ReadInConfig(); err != nil {
@@ -452,4 +480,55 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.AutomaticEnv()
 
 	return nil
+}
+
+// validateHTTPTimeouts rejects malformed, zero, or negative HTTP timeouts at
+// config load, before any listener is started.
+func validateHTTPTimeouts(cfg Config) error {
+	if _, err := buildRegistryHTTPTimeouts(cfg); err != nil {
+		return err
+	}
+	if _, err := traffic.ParseHTTPOptions(cfg.Traffic.HTTP); err != nil {
+		return err
+	}
+	return nil
+}
+
+// buildRegistryHTTPTimeouts parses server.http into validated registry server
+// timeouts. Empty values select the defaults; malformed, zero, or negative
+// values are rejected.
+func buildRegistryHTTPTimeouts(cfg Config) (domain.RegistryHTTPTimeouts, error) {
+	defaults := domain.DefaultRegistryHTTPTimeouts()
+	var (
+		t   domain.RegistryHTTPTimeouts
+		err error
+	)
+	if t.ReadHeaderTimeout, err = parsePositiveDuration(cfg.Server.HTTP.ReadHeaderTimeout, defaults.ReadHeaderTimeout, "server.http.read_header_timeout"); err != nil {
+		return t, err
+	}
+	if t.ReadTimeout, err = parsePositiveDuration(cfg.Server.HTTP.ReadTimeout, defaults.ReadTimeout, "server.http.read_timeout"); err != nil {
+		return t, err
+	}
+	if t.WriteTimeout, err = parsePositiveDuration(cfg.Server.HTTP.WriteTimeout, defaults.WriteTimeout, "server.http.write_timeout"); err != nil {
+		return t, err
+	}
+	if t.IdleTimeout, err = parsePositiveDuration(cfg.Server.HTTP.IdleTimeout, defaults.IdleTimeout, "server.http.idle_timeout"); err != nil {
+		return t, err
+	}
+	return t, t.Validate()
+}
+
+func parsePositiveDuration(value string, fallback time.Duration, key string) (time.Duration, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", key, err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid %s: must be positive", key)
+	}
+	return d, nil
 }

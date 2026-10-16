@@ -38,6 +38,15 @@ type Config struct {
 	TCP TCPConfig `mapstructure:"tcp"`
 	UDP UDPConfig `mapstructure:"udp"`
 	TLS TLSConfig `mapstructure:"tls"`
+	// HTTP configures the HTTP servers behind traffic entrypoints.
+	HTTP HTTPConfig `mapstructure:"http"`
+}
+
+// HTTPConfig holds traffic.http duration strings (Go duration syntax).
+type HTTPConfig struct {
+	ReadHeaderTimeout   string `mapstructure:"read_header_timeout"`
+	IdleTimeout         string `mapstructure:"idle_timeout"`
+	TransferIdleTimeout string `mapstructure:"transfer_idle_timeout"`
 }
 
 type TCPConfig struct {
@@ -476,7 +485,31 @@ func buildOptions(cfg Config) (domain.TrafficOptions, error) {
 	if err != nil {
 		return domain.TrafficOptions{}, err
 	}
-	return domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: tcpDial, IdleTimeout: tcpIdle, DrainTimeout: tcpDrain, MaxConnections: cfg.TCP.MaxConnections}, UDP: domain.UDPOptions{IdleTimeout: udpIdle, DrainTimeout: udpDrain, MaxSessions: cfg.UDP.MaxSessions}}, nil
+	httpOptions, err := ParseHTTPOptions(cfg.HTTP)
+	if err != nil {
+		return domain.TrafficOptions{}, err
+	}
+	return domain.TrafficOptions{TCP: domain.TCPOptions{DialTimeout: tcpDial, IdleTimeout: tcpIdle, DrainTimeout: tcpDrain, MaxConnections: cfg.TCP.MaxConnections}, UDP: domain.UDPOptions{IdleTimeout: udpIdle, DrainTimeout: udpDrain, MaxSessions: cfg.UDP.MaxSessions}, HTTP: httpOptions}, nil
+}
+
+// ParseHTTPOptions converts traffic.http duration strings into validated
+// options. Empty values select the defaults; non-positive or malformed values
+// are rejected.
+func ParseHTTPOptions(cfg HTTPConfig) (domain.HTTPOptions, error) {
+	defaults := domain.DefaultHTTPOptions()
+	readHeader, err := parsePositiveDurationDefault(cfg.ReadHeaderTimeout, defaults.ReadHeaderTimeout, "traffic.http.read_header_timeout")
+	if err != nil {
+		return domain.HTTPOptions{}, err
+	}
+	idle, err := parsePositiveDurationDefault(cfg.IdleTimeout, defaults.IdleTimeout, "traffic.http.idle_timeout")
+	if err != nil {
+		return domain.HTTPOptions{}, err
+	}
+	transferIdle, err := parsePositiveDurationDefault(cfg.TransferIdleTimeout, defaults.TransferIdleTimeout, "traffic.http.transfer_idle_timeout")
+	if err != nil {
+		return domain.HTTPOptions{}, err
+	}
+	return domain.HTTPOptions{ReadHeaderTimeout: readHeader, IdleTimeout: idle, TransferIdleTimeout: transferIdle}, nil
 }
 
 func parsePositiveDurationDefault(value string, fallback time.Duration, field string) (time.Duration, error) {
