@@ -173,6 +173,21 @@ func TestBuildOptionsParsing(t *testing.T) {
 	require.ErrorContains(t, err, "traffic.tcp.dial_timeout")
 }
 
+func TestBuildHTTPOptions(t *testing.T) {
+	defaults, err := Build(Input{})
+	require.NoError(t, err)
+	require.Equal(t, domain.DefaultHTTPOptions(), defaults.Options.HTTP)
+
+	graph, err := Build(Input{Traffic: Config{HTTP: HTTPConfig{ReadHeaderTimeout: "1s", IdleTimeout: "2s", TransferIdleTimeout: "3m"}}})
+	require.NoError(t, err)
+	require.Equal(t, domain.HTTPOptions{ReadHeaderTimeout: time.Second, IdleTimeout: 2 * time.Second, TransferIdleTimeout: 3 * time.Minute}, graph.Options.HTTP)
+
+	for _, value := range []string{"bogus", "-1s", "0s"} {
+		_, err = Build(Input{Traffic: Config{HTTP: HTTPConfig{TransferIdleTimeout: value}}})
+		require.ErrorContains(t, err, "traffic.http.transfer_idle_timeout", value)
+	}
+}
+
 func TestBuildRejectsAmbiguousNetworkServices(t *testing.T) {
 	t.Run("duplicate service name", func(t *testing.T) {
 		_, err := Build(Input{NetworkServices: []NetworkServiceConfig{

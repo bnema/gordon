@@ -50,6 +50,27 @@ protocol = "smart_tcp"
 
 `entrypoints.edge.address` is not an HTTP or HTTPS port. It is the TCP address Gordon sniffs for cleartext HTTP, h2c, TLS passthrough, normal HTTPS fallback, or explicit raw TCP fallback. Gordon does not provide a built-in default public port; choose `:443`, a high port such as `:9000`, or container/firewall mappings to match your deployment.
 
+## Registry HTTP Timeouts
+
+The registry listeners (`registry_port`, plus the loopback listener used for the internal registry) apply fixed per-connection timeouts. Values are Go duration strings; malformed, zero, or negative values are rejected when the configuration loads.
+
+```toml
+[server.http]
+read_header_timeout = "10s"
+read_timeout = "5m"
+write_timeout = "5m"
+idle_timeout = "120s"
+```
+
+| Option | Env | Default | Description |
+|--------|-----|---------|-------------|
+| `server.http.read_header_timeout` | `GORDON_SERVER_HTTP_READ_HEADER_TIMEOUT` | `"10s"` | Maximum time to read request headers |
+| `server.http.read_timeout` | `GORDON_SERVER_HTTP_READ_TIMEOUT` | `"5m"` | Maximum time to read the whole request, body included |
+| `server.http.write_timeout` | `GORDON_SERVER_HTTP_WRITE_TIMEOUT` | `"5m"` | Maximum time to write the whole response |
+| `server.http.idle_timeout` | `GORDON_SERVER_HTTP_IDLE_TIMEOUT` | `"120s"` | Maximum keep-alive idle time between requests |
+
+`read_timeout` and `write_timeout` bound a whole registry request or response, so a layer transfer longer than these values is cut even while data flows. Raise them for very large layers over slow links. Traffic behind entrypoints (apps and the admin API) uses an inactivity timeout instead; see [Traffic HTTP Timeouts](./traffic.md#http-timeouts). The owner-only local admin socket has no write timeout so log streaming stays open. Changes require a restart.
+
 ## Internal CA and TLS
 
 Gordon includes an internal certificate authority that issues on-demand TLS certificates for proxied domains served through HTTPS fallback on a TLS-capable entrypoint such as `smart_tcp`.

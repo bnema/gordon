@@ -156,6 +156,13 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `server.data_dir` | `~/.gordon` |
 | `server.max_blob_chunk_size` | `"95MB"` |
 | `server.max_blob_size` | `"1GB"` |
+| `server.http.read_header_timeout` | `"10s"` |
+| `server.http.read_timeout` | `"5m"` |
+| `server.http.write_timeout` | `"5m"` |
+| `server.http.idle_timeout` | `"120s"` |
+| `traffic.http.read_header_timeout` | `"5s"` |
+| `traffic.http.idle_timeout` | `"30s"` |
+| `traffic.http.transfer_idle_timeout` | `"2m"` |
 | `auth.enabled` | `true` |
 | `auth.secrets_backend` | `"unsafe"` |
 | `auth.token_expiry` | `"30d"` |
@@ -210,6 +217,7 @@ gordon daemon reload
 | `server.max_proxy_body_size` |
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
+| `traffic.http.*` (new connections after the traffic graph is applied) |
 
 
 ### Requires restart
@@ -220,6 +228,7 @@ gordon daemon reload
 | `server.data_dir` |
 | `server.max_blob_chunk_size` |
 | `server.max_blob_size` |
+| `server.http.*` |
 | `auth.*` |
 
 ## Environment Variable Override

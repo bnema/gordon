@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -353,17 +352,21 @@ func tlsMuxHTTPServerNames(cfg Config) map[string]struct{} {
 	return names
 }
 
-func startRegistryServers(cfg Config, handler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}) {
+func startRegistryServers(cfg Config, handler http.Handler, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}, *http.Server, <-chan struct{}, error) {
+	timeouts, err := buildRegistryHTTPTimeouts(cfg)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 	port := strconv.Itoa(cfg.Server.RegistryPort)
 	externalAddr := net.JoinHostPort(cfg.Server.RegistryListenAddr, port)
-	externalSrv, externalReady := startServer(externalAddr, handler, "registry", nil, errChan, log)
+	externalSrv, externalReady := startServer(externalAddr, handler, "registry", nil, timeouts, errChan, log)
 	internalReady := closedReadyChannel()
 	if !needsInternalRegistryListener(cfg.Server.RegistryListenAddr) {
-		return externalSrv, externalReady, nil, internalReady
+		return externalSrv, externalReady, nil, internalReady, nil
 	}
 	internalAddr := net.JoinHostPort("127.0.0.1", port)
-	internalSrv, internalReady := startServer(internalAddr, handler, "internal registry", nil, errChan, log)
-	return externalSrv, externalReady, internalSrv, internalReady
+	internalSrv, internalReady := startServer(internalAddr, handler, "internal registry", nil, timeouts, errChan, log)
+	return externalSrv, externalReady, internalSrv, internalReady, nil
 }
 
 func closedReadyChannel() <-chan struct{} {
@@ -384,18 +387,19 @@ func needsInternalRegistryListener(listenAddr string) bool {
 // that closes once the listening socket is bound. This lets callers wait for the
 // port to be ready before taking actions that depend on it (e.g. auto-start
 // pulling from the local registry). The returned *http.Server can be used for
-// graceful shutdown.
-func startServer(addr string, handler http.Handler, name string, protocols *http.Protocols, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
+// graceful shutdown. Timeouts are the configured server.http values.
+func startServer(addr string, handler http.Handler, name string, protocols *http.Protocols, timeouts domain.RegistryHTTPTimeouts, errChan chan<- error, log zerowrap.Logger) (*http.Server, <-chan struct{}) {
+	timeouts = timeouts.WithDefaults()
 	ready := make(chan struct{})
 
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           handler,
 		Protocols:         protocols,
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      5 * time.Minute,
-		IdleTimeout:       120 * time.Second,
+		ReadHeaderTimeout: timeouts.ReadHeaderTimeout,
+		ReadTimeout:       timeouts.ReadTimeout,
+		WriteTimeout:      timeouts.WriteTimeout,
+		IdleTimeout:       timeouts.IdleTimeout,
 		MaxHeaderBytes:    1 << 20,
 	}
 

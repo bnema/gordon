@@ -195,22 +195,11 @@ func initAccessLog(cfg Config, log zerowrap.Logger) (*accesslog.Writer, error) {
 // The deferred signal.Stop calls ensure signal handlers are properly
 // cleaned up before program exit, preventing signal handler leaks.
 func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, reload reloadTrigger, cleanupHandlers func(), log zerowrap.Logger) error {
-	// Initialize access log writer. Kept here (not in Run) to keep Run's cyclomatic
-	// complexity within the project limit of 15.
-	accessWriterConcrete, err := initAccessLog(cfg, log)
+	accessWriter, closeAccessLog, err := openAccessLog(svc, cfg, log)
 	if err != nil {
 		return err
 	}
-	if accessWriterConcrete != nil {
-		defer accessWriterConcrete.Close()
-	}
-	// Convert to interface only when non-nil to avoid the Go nil-interface pitfall
-	// where a typed nil pointer becomes a non-nil interface value.
-	var accessWriter out.AccessLogWriter
-	if accessWriterConcrete != nil {
-		accessWriter = accessWriterConcrete
-	}
-	accessWriter = withAccessLogExport(svc, accessWriter)
+	defer closeAccessLog()
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -227,7 +216,10 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	svc.httpProxyHandler = httpProxyHandler
 	svc.httpsProxyHandler = httpsProxyHandler
 
-	registrySrv, registryReady, internalRegistrySrv, internalRegistryReady := startRegistryServers(cfg, registryHandler, errChan, log)
+	registrySrv, registryReady, internalRegistrySrv, internalRegistryReady, err := startRegistryServers(cfg, registryHandler, errChan, log)
+	if err != nil {
+		return err
+	}
 
 	// closeStarted shuts down any servers that were started before an error occurred,
 	// preventing leaked listeners during partial startup failures.
@@ -382,4 +374,23 @@ func waitForServerReady(ctx context.Context, ready <-chan struct{}, errChan <-ch
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// openAccessLog initializes the access log writer and returns the writer to use
+// (nil when disabled) with its close function. Kept out of runServers to keep
+// its cyclomatic complexity within the project limit of 15.
+func openAccessLog(svc *services, cfg Config, log zerowrap.Logger) (out.AccessLogWriter, func(), error) {
+	accessWriterConcrete, err := initAccessLog(cfg, log)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	closeFn := func() {}
+	// Convert to interface only when non-nil to avoid the Go nil-interface pitfall
+	// where a typed nil pointer becomes a non-nil interface value.
+	var accessWriter out.AccessLogWriter
+	if accessWriterConcrete != nil {
+		accessWriter = accessWriterConcrete
+		closeFn = func() { accessWriterConcrete.Close() }
+	}
+	return withAccessLogExport(svc, accessWriter), closeFn, nil
 }
