@@ -1021,12 +1021,29 @@ func (s *Service) failResult(revision, before, after string, err error) ServiceR
 // HTTP interface, no L4 interface, no volume, and no bind. An undeclared
 // probe on a stateful or L4 workload stays unchecked instead: an HTTP GET on
 // the published port proves nothing there, so Gordon never guesses one.
+//
+// A stateless raw TCP service (see implicitTCPProbe) that declares no check
+// receives the implicit TCP probe, so the overlap switch never routes to a
+// container whose port does not accept yet.
 func deploymentReadiness(spec domain.AppService) domain.AppService {
-	if !implicitHTTPProbe(spec) {
-		return spec
+	switch {
+	case implicitHTTPProbe(spec):
+		spec.Readiness.Type = domain.AppReadinessHTTP
+	case implicitTCPProbe(spec):
+		spec.Readiness.Type = domain.AppReadinessTCP
 	}
-	spec.Readiness.Type = domain.AppReadinessHTTP
 	return spec
+}
+
+// implicitTCPProbe reports whether a service that declares no readiness check
+// receives the implicit TCP probe: exactly one TCP interface, no HTTP or UDP
+// interface, no volume, bind, or device. Such a service is replaced with an
+// overlap, and its single published loopback bind is the probe target.
+func implicitTCPProbe(spec domain.AppService) bool {
+	if spec.Readiness.Type != "" && spec.Readiness.Type != domain.AppReadinessNone {
+		return false
+	}
+	return len(spec.TCP) == 1 && len(spec.HTTP) == 0 && overlapEligible(spec)
 }
 
 // implicitHTTPProbe reports whether a service that declares no readiness

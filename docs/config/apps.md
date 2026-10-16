@@ -168,6 +168,8 @@ A container port declared by both an internal HTTP interface and an externally b
 
 `type = "tcp"` on a published port is ready when a connection to the loopback backend is accepted and then either receives data or stays open for 300ms. A connection closed right after accept counts as not ready: the host port relay of rootless Docker accepts on behalf of a container that does not listen yet. A workload that accepts and closes immediately by design should use `log` readiness instead.
 
+When a service declares no readiness (or `none`), deploy and restart still probe it in two cases: a stateless service whose interfaces are all public HTTP gets an `http` probe on `/`, and a stateless service with exactly one TCP interface and no HTTP or UDP interface gets a `tcp` probe on that port. Other services without a declared probe are not checked.
+
 ## TLS
 
 TLS applies to public interfaces only; an internal interface never declares `tls`.
