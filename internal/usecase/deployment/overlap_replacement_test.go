@@ -793,3 +793,53 @@ func TestRemove_FailsAndKeepsStateWhenAPendingPredecessorCannotBeRetired(t *test
 	require.NoError(t, loadErr)
 	assert.True(t, ok, "the incarnation is not ended")
 }
+
+// inhibitionsFailingState wraps the real store and fails the load of the
+// recovery inhibitions, which is how Stop learns about pending predecessors.
+type inhibitionsFailingState struct {
+	*appstate.Store
+}
+
+func (s *inhibitionsFailingState) LoadRecoveryInhibitions(context.Context, string) ([]domain.AppRecoveryInhibition, error) {
+	return nil, assert.AnError
+}
+
+// TestStop_PendingRetirementLoadFailureIsAJournaledFailure proves an app-level
+// cleanup failure (the pending predecessors cannot even be listed) is not lost
+// in the per-service results: the operation is journaled as failed, so Stop
+// errors and a replay of the same key reads the same failure instead of a
+// success.
+func TestStop_PendingRetirementLoadFailureIsAJournaledFailure(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	// The ACTIVE container is retired successfully before the load fails.
+	runtime.EXPECT().StopContainer(mock.Anything, "c-new", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", false).Return(nil).Once()
+	svc := deployment.NewService(deployment.Deps{
+		State: &inhibitionsFailingState{Store: store}, Runtime: runtime, Traffic: &storeTraffic{store: store},
+	}, zerowrap.Default())
+
+	result, err := svc.Stop(ctx, "blog", "key-stop")
+	require.Error(t, err)
+	assert.Equal(t, "deployed", result.Services["web"].Result, "the ACTIVE container really was stopped")
+	require.NotEmpty(t, result.Warnings, "the app-level failure is surfaced on the result")
+
+	op, loadErr := store.LoadOperation(ctx, "blog", "key-stop")
+	require.NoError(t, loadErr)
+	assert.Equal(t, domain.AppOutcomeFailed, op.Outcome, "the journal records the failure, not the per-service success")
+	step, found := opStep(op, "pending.retire")
+	require.True(t, found)
+	assert.Equal(t, domain.AppStepFailed, step.State)
+	assert.NotEmpty(t, step.Error)
+	require.NotEmpty(t, op.Warnings)
+	assert.Contains(t, op.Warnings[0].Detail, "pending retirements unknown")
+
+	// Replaying the same key returns the same failure and runs nothing again.
+	_, replayErr := svc.Stop(ctx, "blog", "key-stop")
+	require.Error(t, replayErr)
+	assert.ErrorIs(t, replayErr, domain.ErrAppStateConflict)
+	assert.Contains(t, replayErr.Error(), domain.AppOutcomeFailed)
+	runtime.AssertNumberOfCalls(t, "StopContainer", 1)
+}

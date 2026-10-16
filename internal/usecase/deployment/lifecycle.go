@@ -89,9 +89,19 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 	// A superseded predecessor an overlap replacement left running is not in
 	// ACTIVE, so the loop above never saw it: a stopped app must not keep it
 	// running. One that cannot be retired keeps its marker and fails the stop.
-	failures = append(failures, s.retirePendingForStop(ctx, app, result)...)
+	pendingFailed, pendingErr := s.retirePendingForStop(ctx, app, result)
+	failures = append(failures, pendingFailed...)
 	op.Outcome = ComputeOutcome(result.Services)
-	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
+	if pendingErr != nil {
+		// An app-level cleanup failure belongs to no service, so the
+		// per-service results alone would journal a success and a replay of
+		// this key would read it. It is a failed step and a failed outcome.
+		op.Steps = append(op.Steps, domain.AppOperationStep{
+			ID: "pending.retire", State: domain.AppStepFailed, Error: pendingErr.Error(),
+		})
+		op.Outcome = domain.AppOutcomeFailed
+	}
+	op.Warnings = journalWarnings(append(collectCleanupWarnings(result.Services), result.Warnings...))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
 		log.Warn().Err(err).Msg("deployment: failed to record stop outcome")
 	}
@@ -558,12 +568,15 @@ func (s *Service) pendingRetirements(ctx context.Context, app string) ([]domain.
 
 // retirePendingForStop retires the pending superseded containers of a stopped
 // app, recording a leftover or a failure on the service they belong to. It
-// returns the services whose predecessor is not confirmed retired.
-func (s *Service) retirePendingForStop(ctx context.Context, app string, result *LifecycleResult) []string {
+// returns the services whose predecessor is not confirmed retired, and an
+// app-level error when the markers themselves could not be loaded: nothing
+// can then be said about any predecessor, which the caller must journal as a
+// failed operation.
+func (s *Service) retirePendingForStop(ctx context.Context, app string, result *LifecycleResult) ([]string, error) {
 	pending, err := s.pendingRetirements(ctx, app)
 	if err != nil {
-		result.Warnings = append(result.Warnings, CleanupWarning{Detail: err.Error()})
-		return []string{"pending retirements"}
+		result.Warnings = append(result.Warnings, CleanupWarning{Detail: "pending retirements unknown: " + err.Error()})
+		return []string{"pending retirements"}, err
 	}
 	var failed []string
 	for _, marker := range pending {
@@ -579,7 +592,7 @@ func (s *Service) retirePendingForStop(ctx context.Context, app string, result *
 		}
 		result.Services[marker.Service] = svc
 	}
-	return failed
+	return failed, nil
 }
 
 // ReconcileBoot reconciles apps intended to run after a daemon boot:
