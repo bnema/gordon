@@ -968,3 +968,49 @@ func TestReconcileRunning_DoesNotWithdrawARestartedGeneration(t *testing.T) {
 	assert.Len(t, traffic.withdrawals(), withdrawnByRestart, "the periodic pass withdraws nothing more")
 	assert.Equal(t, map[int]int{8080: 17002}, traffic.lastRoute("web"))
 }
+
+// TestReconcileRunning_RestoresARebuiltGenerationWhoseTrafficWasRejected is the
+// regression for a missing-container rebuild whose graph apply was rejected:
+// the rebuilt execution must not be recorded as verified, or the next periodic
+// pass sees an already verified generation whose binds match ACTIVE, skips the
+// publication, and leaves the service unrouted indefinitely.
+func TestReconcileRunning_RestoresARebuiltGenerationWhoseTrafficWasRejected(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedReplaceableApp(t, ctx, store)
+	traffic := &storeTraffic{store: store, failRebuild: 1}
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+
+	// The recorded container is gone: restart rebuilds it from the pinned
+	// ACTIVE digest, and the graph apply that follows is rejected.
+	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
+	expectNetworkProvision(runtime, "app-blog", 1)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
+	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuilt").Return(
+		&domain.Container{ID: "c-rebuilt", Status: "running", StartedAt: executionStartedAt}, nil)
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-rebuilt", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18082, Protocol: domain.NetworkProtocolTCP}}, nil)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-rebuilt").Return("", false, nil)
+
+	_, err := svc.Restart(ctx, "blog", "web", "op-restart")
+	require.Error(t, err, "a rejected graph is a failed restart")
+	require.Zero(t, traffic.rebuildCount(), "no graph was accepted")
+	active, _, loadErr := store.LoadActive(ctx, "blog")
+	require.NoError(t, loadErr)
+	require.Equal(t, "c-rebuilt", active.Services["web"].Container)
+
+	// The next periodic pass must verify and route the generation itself.
+	require.NoError(t, svc.ReconcileRunning(ctx))
+	assert.Equal(t, map[int]int{8080: 18082}, traffic.lastRoute("web"), "the rebuilt generation is routed again")
+}

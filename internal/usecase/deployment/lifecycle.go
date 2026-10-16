@@ -782,9 +782,10 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 		svcResult.Error = err.Error()
 		return svcResult, err
 	}
-	// The rebuilt generation passed readiness and is published; the caller
-	// applies the graph under the same app lock, before any periodic pass.
-	s.recordVerifiedExecution(app, name, svcResult)
+	// The execution is deliberately not recorded here: the graph is not
+	// applied yet. Recording it before routing was accepted would let the next
+	// periodic pass see a verified, unrouted generation and skip the
+	// publication. Each caller records after its own refreshTraffic succeeded.
 	return svcResult, nil
 }
 
