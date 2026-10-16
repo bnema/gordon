@@ -197,7 +197,7 @@ gordon images push myapp --build --remote prod
 gordon apps deploy blog --remote prod
 ```
 
-Gordon deploys services one at a time in sorted order. A deploy may cause a short service interruption, and Gordon never runs two Gordon-managed generations of the same service at the same time. If preflight fails, the running service is left untouched. This applies to every service, including TCP, UDP, and volume-owning services.
+Gordon deploys services one at a time in sorted order. A service with no volume, bind, or device is replaced without downtime: the new container starts and becomes ready while the old one keeps serving, then traffic switches and the old one is stopped. A service that owns a volume, bind, or device is replaced sequentially, may be briefly interrupted, and never has two generations running at once. If preflight fails, the running service is left untouched.
 
 ## Next Steps
 
