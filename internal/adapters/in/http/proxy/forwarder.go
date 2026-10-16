@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/bnema/zerowrap"
 
 	gordonhttp "github.com/bnema/gordon/internal/adapters/in/http/httphelper"
+	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -235,13 +237,15 @@ func targetHostHeader(target *domain.ProxyTarget, targetURL *url.URL) string {
 // headers after hop-by-hop removal, ensuring headers like Authorization are preserved.
 //
 // incomingReq and trustedNets are used to preserve X-Forwarded-Proto when the
-// request originates from a trusted upstream proxy.
+// request originates from a trusted upstream proxy, and to resolve the client IP
+// sent upstream in X-Real-IP and X-Forwarded-For.
 func newReverseProxy(opts reverseProxyOptions) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			existingProto := pr.In.Header.Get("X-Forwarded-Proto")
 			pr.SetURL(opts.targetURL)
 			pr.SetXForwarded()
+			setClientIPHeaders(pr, opts.trustedNets)
 			if opts.hostHeader != "" {
 				pr.Out.Host = opts.hostHeader
 			}
@@ -259,6 +263,45 @@ func newReverseProxy(opts reverseProxyOptions) *httputil.ReverseProxy {
 		Transport:      opts.transport,
 		ErrorHandler:   opts.errorHandler,
 		ModifyResponse: opts.modifyResponse,
+	}
+}
+
+// clientIPHeaders are the headers carrying a client IP that Gordon rewrites
+// before proxying to a container, in canonical form.
+var clientIPHeaders = []string{"X-Real-Ip", "X-Forwarded-For", "Cf-Connecting-Ip"}
+
+// setClientIPHeaders replaces client-supplied IP headers with the client IP
+// resolved by the same trusted-proxy rules Gordon uses for its own logs and
+// rate limits, so upstream apps can always trust X-Real-IP and X-Forwarded-For.
+// Cf-Connecting-Ip is only kept when it is the IP resolved from a trusted
+// Cloudflare peer.
+func setClientIPHeaders(pr *httputil.ProxyRequest, trustedNets []*net.IPNet) {
+	cfIP := pr.Out.Header.Get("Cf-Connecting-Ip")
+	deleteClientIPHeaders(pr.Out.Header)
+
+	clientIP := middleware.GetClientIP(pr.In, trustedNets)
+	parsed := net.ParseIP(clientIP)
+	if parsed == nil {
+		// No usable peer address (e.g. a Unix socket): send no client IP at all.
+		return
+	}
+	pr.Out.Header.Set("X-Real-IP", clientIP)
+	pr.Out.Header.Set("X-Forwarded-For", clientIP)
+	if middleware.IsTrustedCloudflarePeer(pr.In, trustedNets) && parsed.Equal(net.ParseIP(strings.TrimSpace(cfIP))) {
+		pr.Out.Header.Set("Cf-Connecting-Ip", clientIP)
+	}
+}
+
+// deleteClientIPHeaders removes every client IP header, including spellings
+// with underscores (X_Real_IP). Go keeps those under a separate key, but
+// CGI-style servers map both "-" and "_" to the same HTTP_X_REAL_IP variable,
+// so a client could otherwise override the value set by Gordon.
+func deleteClientIPHeaders(h http.Header) {
+	for key := range h {
+		normalized := http.CanonicalHeaderKey(strings.ReplaceAll(key, "_", "-"))
+		if slices.Contains(clientIPHeaders, normalized) {
+			delete(h, key)
+		}
 	}
 }
 
