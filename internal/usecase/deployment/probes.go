@@ -76,11 +76,11 @@ func tcpProbeOnce(ctx context.Context, addr string, settle time.Duration) error 
 	defer stop()
 	var buf [1]byte
 	n, err := conn.Read(buf[:])
-	if n > 0 {
-		return nil
-	}
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
+	}
+	if n > 0 {
+		return nil
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
