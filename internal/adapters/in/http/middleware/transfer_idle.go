@@ -20,7 +20,7 @@ var errTransferFinished = errors.New("transfer idle: request already finished")
 // accepted, so a client that keeps consuming data is never cut while a client
 // that stops reading is cut after the idle timeout. The residual granularity is
 // one chunk: a client must accept idleWriteChunk bytes within one idle period,
-// which is a floor of idleWriteChunk/idle bytes per second (about 27 B/s for
+// which is a floor of idleWriteChunk/idle bytes per second (about 68 B/s for
 // the 2 minute default).
 const idleWriteChunk = 8 * 1024
 
@@ -42,6 +42,15 @@ const idleWriteChunk = 8 * 1024
 // Deadlines go through http.ResponseController, so HTTP/1.x and HTTP/2 both
 // work; Flush, Hijack and Unwrap are preserved.
 //
+// net/http does work after the handler returns that can block on a stalled
+// client: the final response flush and the drain of an unread request body.
+// With no server Read/WriteTimeout those would hang forever, so finish arms
+// one last bounded read and write deadline (idle from now) before the handler
+// returns and leaves it in place. net/http clears the write deadline itself
+// after the response is finished and replaces the read deadline with the
+// keep-alive idle / header deadline before the next request, so nothing leaks
+// into the next request. The timer never touches the controller after return.
+//
 // Limits: a handler that ignores the canceled context and never touches the
 // connection again keeps its HTTP/1 connection until it returns. A non-positive
 // idle disables the middleware.
@@ -52,13 +61,14 @@ func TransferIdleTimeout(idle time.Duration) func(http.Handler) http.Handler {
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx, cancel := context.WithCancel(r.Context())
-			state := newIdleState(idle, http.NewResponseController(w), cancel)
+			hasBody := r.Body != nil && r.Body != http.NoBody
+			state := newIdleState(idle, http.NewResponseController(w), cancel, hasBody)
 			// finish marks the state done under the mutex before this
 			// function returns, so nothing touches the controller afterwards.
 			defer state.finish()
 
 			req := r.WithContext(ctx)
-			if r.Body != nil && r.Body != http.NoBody {
+			if hasBody {
 				req.Body = &idleBody{ReadCloser: r.Body, state: state}
 			}
 			next.ServeHTTP(&idleResponseWriter{ResponseWriter: w, state: state}, req)
@@ -73,14 +83,18 @@ type idleState struct {
 	rc     *http.ResponseController
 	cancel context.CancelFunc
 
-	mu    sync.Mutex
-	timer *time.Timer
-	last  time.Time
-	done  bool // handler returned or connection hijacked
+	hasBody bool // request has a body that net/http may still have to drain
+
+	mu       sync.Mutex
+	timer    *time.Timer
+	last     time.Time
+	done     bool // handler returned or connection hijacked
+	expired  bool // the timer fired and expired the connection deadlines
+	hijacked bool
 }
 
-func newIdleState(idle time.Duration, rc *http.ResponseController, cancel context.CancelFunc) *idleState {
-	s := &idleState{idle: idle, rc: rc, cancel: cancel, last: time.Now()}
+func newIdleState(idle time.Duration, rc *http.ResponseController, cancel context.CancelFunc, hasBody bool) *idleState {
+	s := &idleState{idle: idle, rc: rc, cancel: cancel, last: time.Now(), hasBody: hasBody}
 	s.mu.Lock()
 	s.timer = time.AfterFunc(idle, s.onTimer)
 	s.mu.Unlock()
@@ -116,6 +130,7 @@ func (s *idleState) onTimer() {
 		s.timer.Reset(remaining)
 		return
 	}
+	s.expired = true
 	s.cancel()
 	// Held under mu so finish() cannot complete while these run.
 	now := time.Now()
@@ -124,11 +139,21 @@ func (s *idleState) onTimer() {
 }
 
 // finish ends the request lifetime. After it returns, no code path calls the
-// controller. It is safe to call more than once.
+// controller. It is safe to call more than once. Unless the connection was
+// hijacked or already expired, it first arms bounded deadlines so net/http's
+// post-handler work (final flush, unread body drain) cannot block forever.
 func (s *idleState) finish() {
 	s.mu.Lock()
+	wasDone := s.done
 	s.done = true
 	s.timer.Stop()
+	if !wasDone && !s.expired && !s.hijacked {
+		deadline := time.Now().Add(s.idle)
+		_ = s.rc.SetWriteDeadline(deadline)
+		if s.hasBody {
+			_ = s.rc.SetReadDeadline(deadline)
+		}
+	}
 	s.mu.Unlock()
 	s.cancel()
 }
@@ -146,18 +171,30 @@ func (s *idleState) flush() error {
 	return s.rc.Flush()
 }
 
+// hijack hijacks the connection without holding the mutex: HTTP/1 Hijack may
+// flush pending headers and block on a client that does not read, and the timer
+// needs the mutex to expire the deadlines that unblock it. Enforcement stays
+// active until the hijack succeeds; only then is the timer stopped. If the
+// timer fired meanwhile, the deadlines it set on the connection are cleared so
+// the upgraded stream is not cut.
 func (s *idleState) hijack() (net.Conn, *bufio.ReadWriter, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.done {
+	if !s.live() {
 		return nil, nil, errTransferFinished
 	}
 	conn, rw, err := s.rc.Hijack()
-	if err == nil {
-		s.done = true
-		s.timer.Stop()
+	if err != nil {
+		return conn, rw, err
 	}
-	return conn, rw, err
+	s.mu.Lock()
+	s.done = true
+	s.hijacked = true
+	s.timer.Stop()
+	expired := s.expired
+	s.mu.Unlock()
+	if expired {
+		_ = conn.SetDeadline(time.Time{})
+	}
+	return conn, rw, nil
 }
 
 // idleResponseWriter reports response progress.

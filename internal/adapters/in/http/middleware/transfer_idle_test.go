@@ -452,19 +452,23 @@ func uploadUntilEarlyResponse(t *testing.T, front *httptest.Server) {
 		_ = pw.Close()
 	}()
 
+	defer func() {
+		_ = pr.CloseWithError(io.ErrClosedPipe)
+		<-writerDone
+	}()
+
 	req, err := http.NewRequest(http.MethodPost, front.URL, pr)
 	if !assert.NoError(t, err) {
 		return
 	}
 	resp, err := front.Client().Do(req)
-	if err == nil {
-		assert.Equal(t, 2, resp.ProtoMajor)
-		assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
+	if !assert.NoError(t, err, "the early 413 must reach the client") {
+		return
 	}
-	_ = pr.CloseWithError(io.ErrClosedPipe)
-	<-writerDone
+	defer resp.Body.Close()
+	assert.Equal(t, 2, resp.ProtoMajor)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
 // TestTransferIdleTimeout_HTTP2BodyUsedAfterHandlerReturned uses the request
@@ -503,4 +507,132 @@ func TestTransferIdleTimeout_HTTP2BodyUsedAfterHandlerReturned(t *testing.T) {
 	_, _ = body.Read(make([]byte, 8))
 	require.NoError(t, body.Close())
 	require.NoError(t, body.Close())
+}
+
+// trackedPipeServer serves net.Pipe connections and reports when the server
+// side closes one, so tests can assert a stalled connection is released.
+func trackedPipeServer(t *testing.T, handler http.Handler) (*pipeListener, <-chan struct{}) {
+	t.Helper()
+	closed := make(chan struct{})
+	var once sync.Once
+	ln := newPipeListener()
+	srv := &http.Server{
+		Handler:           TransferIdleTimeout(testIdle)(handler),
+		ReadHeaderTimeout: 5 * time.Second,
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			if state == http.StateClosed {
+				once.Do(func() { close(closed) })
+			}
+		},
+	}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+	return ln, closed
+}
+
+func requireClosed(t *testing.T, closed <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-closed:
+	case <-time.After(20 * testIdle):
+		t.Fatalf("server connection still held: %s", what)
+	}
+}
+
+// The handler returns with a small unflushed response; net/http's final flush
+// then blocks on a client that never reads (net.Pipe has no buffering).
+func TestTransferIdleTimeout_FinalFlushToNonReadingClientIsBounded(t *testing.T) {
+	ln, closed := trackedPipeServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("small"))
+	}))
+	conn := ln.dial()
+	defer conn.Close()
+	_, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	require.NoError(t, err)
+
+	requireClosed(t, closed, "final response flush to a non-reading client")
+}
+
+// The client declares a body it never sends and the handler answers without
+// reading it; net/http then tries to drain the unread body.
+func TestTransferIdleTimeout_UnreadDeclaredBodyDrainIsBounded(t *testing.T) {
+	ln, closed := trackedPipeServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	conn := ln.dial()
+	defer conn.Close()
+	go func() { _, _ = io.Copy(io.Discard, conn) }() // read the response, then stay silent
+	_, err := conn.Write([]byte("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n"))
+	require.NoError(t, err)
+
+	requireClosed(t, closed, "drain of an unread declared request body")
+}
+
+func TestTransferIdleTimeout_UnreadDeclaredBodyDrainIsBoundedOverTCP(t *testing.T) {
+	closed := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewUnstartedServer(TransferIdleTimeout(testIdle)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})))
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateClosed {
+			once.Do(func() { close(closed) })
+		}
+	}
+	srv.Start()
+	defer srv.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.Write([]byte("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\n"))
+	require.NoError(t, err)
+
+	requireClosed(t, closed, "drain of an unread declared request body over TCP")
+}
+
+// Leftover deadlines armed at handler return must not leak into the next
+// keep-alive request on the same connection.
+func TestTransferIdleTimeout_KeepAliveNextRequestNotAffectedByLeftoverDeadlines(t *testing.T) {
+	srv := httptest.NewUnstartedServer(TransferIdleTimeout(testIdle)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_, _ = w.Write([]byte("ok"))
+	})))
+	srv.Config.IdleTimeout = 10 * time.Second
+	srv.Start()
+	defer srv.Close()
+
+	client := &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1}}
+	for i := range 3 {
+		resp, err := client.Post(srv.URL, "text/plain", strings.NewReader("body"))
+		require.NoError(t, err, "request %d", i)
+		_, err = io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+		time.Sleep(2 * testIdle) // outlive the leftover deadline while the connection idles
+	}
+}
+
+// Hijack flushes pending headers; it must not hold the timer's mutex while it
+// blocks on a client that does not read.
+func TestTransferIdleTimeout_HijackBlockedOnNonReadingClientIsBounded(t *testing.T) {
+	hijackErr := make(chan error, 1)
+	ln := servePipe(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if conn != nil {
+			_ = conn.Close()
+		}
+		hijackErr <- err
+	}))
+	conn := ln.dial()
+	defer conn.Close()
+	_, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	require.NoError(t, err)
+
+	select {
+	case <-hijackErr:
+	case <-time.After(20 * testIdle):
+		t.Fatal("Hijack blocked on a non-reading client was not bounded")
+	}
 }

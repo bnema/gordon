@@ -148,9 +148,9 @@ Values are Go duration strings; malformed, zero, or negative values are rejected
 
 ### Inactivity timeout
 
-Each request has an inactivity timer, armed when the request starts. Progress resets it: a response chunk accepted by the client connection (8 KiB granularity), a flush, or request body bytes read. If `transfer_idle_timeout` passes without progress, Gordon cancels the request context, which aborts the upstream request of a reverse-proxied app, and closes the client connection. Consequences:
+Each request has an inactivity timer, armed when the request starts. Progress resets it: a response chunk accepted by the client connection (8 KiB granularity), a flush, or request body bytes read. If `transfer_idle_timeout` passes without progress, Gordon cancels the request context, which aborts the upstream request of a reverse-proxied app, and closes the client connection. When the handler returns, the final response flush and the drain of an unread request body are bounded by the same duration. Consequences:
 
-- a response that streams data at least once per `transfer_idle_timeout` can last arbitrarily long, and a client that keeps reading is never cut (it must accept 8 KiB per period at minimum);
+- a response that streams data at least once per `transfer_idle_timeout` can last arbitrarily long, and a client that keeps reading is never cut (it must accept 8 KiB per `transfer_idle_timeout`, about 68 B/s at the 2 minute default);
 - an upload whose body arrives at least once per `transfer_idle_timeout` can last arbitrarily long;
 - a backend that stays silent longer than `transfer_idle_timeout` before or between response chunks has its connection cut, so set it above the slowest expected backend response time;
 - the timer also fires when a handler or backend is silent and no write is pending;
