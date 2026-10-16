@@ -117,6 +117,7 @@ func TestStop_TrafficFailureRecordsTerminalFailure(t *testing.T) {
 	state.EXPECT().Recover(mock.Anything).Return(nil)
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
 	state.EXPECT().SaveIntent(mock.Anything, mock.Anything).Return(nil).Once()
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-1", mock.Anything).Return(nil).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-1", false).Return(nil).Once()
 	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "c-1").Return(nil).Once()

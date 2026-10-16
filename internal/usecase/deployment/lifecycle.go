@@ -86,6 +86,10 @@ func (s *Service) stopLocked(ctx context.Context, app, opID string) (*LifecycleR
 		}
 		result.Services[name] = ServiceResult{Result: "deployed", Before: container, After: "", CleanupWarnings: warnings}
 	}
+	// A superseded predecessor an overlap replacement left running is not in
+	// ACTIVE, so the loop above never saw it: a stopped app must not keep it
+	// running. One that cannot be retired keeps its marker and fails the stop.
+	failures = append(failures, s.retirePendingForStop(ctx, app, result)...)
 	op.Outcome = ComputeOutcome(result.Services)
 	op.Warnings = journalWarnings(collectCleanupWarnings(result.Services))
 	if err := s.deps.State.SaveOperation(ctx, op); err != nil {
@@ -522,22 +526,60 @@ func (s *Service) removeServiceContainers(ctx context.Context, app, opID string,
 // left running beside its successor. Ending the incarnation deletes the
 // retirement markers with the rest of the app state, so a container that is
 // not confirmed gone here would be orphaned and untracked: a failure keeps the
-// markers and fails the caller.
+// markers and fails the caller. Every marker is attempted, and a marker whose
+// claims could not be released is a failure too, so it is retried instead of
+// leaking its claims.
 func (s *Service) retireAllPending(ctx context.Context, app string) error {
-	inhibitions, err := s.deps.State.LoadRecoveryInhibitions(ctx, app)
+	pending, err := s.pendingRetirements(ctx, app)
 	if err != nil {
-		return fmt.Errorf("deployment: load recovery inhibitions: %w", err)
+		return err
 	}
-	_, pending := splitRecoveryInhibitions(app, inhibitions)
+	var failures []error
 	for _, marker := range pending {
 		retired := s.retireContainer(ctx, app, retireOptions{
-			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true,
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true, RetryOnLeak: true,
 		}, marker.ContainerID)
-		if !retired.Gone {
-			return fmt.Errorf("deployment: remove %q/%q: superseded container %s not confirmed gone: %s", app, marker.Service, marker.ContainerID, cleanupDetail(retired))
+		if !retired.Settled {
+			failures = append(failures, fmt.Errorf("deployment: remove %q/%q: superseded container %s not retired: %s", app, marker.Service, marker.ContainerID, cleanupDetail(retired)))
 		}
 	}
-	return nil
+	return errors.Join(failures...)
+}
+
+// pendingRetirements loads the retirement-pending markers of one app.
+func (s *Service) pendingRetirements(ctx context.Context, app string) ([]domain.AppRecoveryInhibition, error) {
+	inhibitions, err := s.deps.State.LoadRecoveryInhibitions(ctx, app)
+	if err != nil {
+		return nil, fmt.Errorf("deployment: load recovery inhibitions: %w", err)
+	}
+	_, pending := splitRecoveryInhibitions(app, inhibitions)
+	return pending, nil
+}
+
+// retirePendingForStop retires the pending superseded containers of a stopped
+// app, recording a leftover or a failure on the service they belong to. It
+// returns the services whose predecessor is not confirmed retired.
+func (s *Service) retirePendingForStop(ctx context.Context, app string, result *LifecycleResult) []string {
+	pending, err := s.pendingRetirements(ctx, app)
+	if err != nil {
+		result.Warnings = append(result.Warnings, CleanupWarning{Detail: err.Error()})
+		return []string{"pending retirements"}
+	}
+	var failed []string
+	for _, marker := range pending {
+		retired := s.retireContainer(ctx, app, retireOptions{
+			Service: marker.Service, Grace: marker.StopGrace, ClearInhibition: true, RetryOnLeak: true,
+		}, marker.ContainerID)
+		svc := result.Services[marker.Service]
+		svc.CleanupWarnings = append(svc.CleanupWarnings, retired.Warnings...)
+		if !retired.Settled {
+			svc.Result = "failed"
+			svc.Error = "superseded container " + marker.ContainerID + " not retired: " + cleanupDetail(retired)
+			failed = append(failed, marker.Service)
+		}
+		result.Services[marker.Service] = svc
+	}
+	return failed
 }
 
 // ReconcileBoot reconciles apps intended to run after a daemon boot:

@@ -535,3 +535,261 @@ func TestDeploy_OverlapTrafficFailureIsRecoveredByThePeriodicPass(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, markers)
 }
+
+// TestDeploy_PredecessorWithOwnedResourcesNeverOverlaps proves eligibility
+// looks at the predecessor's effective spec too: a replacement that drops the
+// UDP interface or the volume of the generation it supersedes still replaces
+// it sequentially, because the old generation's UDP sessions or writes
+// outlive the switch.
+func TestDeploy_PredecessorWithOwnedResourcesNeverOverlaps(t *testing.T) {
+	cases := map[string]func(*domain.AppService){
+		"udp": func(s *domain.AppService) {
+			s.UDP = []domain.AppUDPInterface{{Entrypoint: "game", Port: 28015, Publish: "0.0.0.0:28015"}}
+		},
+		"volume": func(s *domain.AppService) { s.Volumes = []domain.AppVolume{{Name: "data", Path: "/data"}} },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			state, runtime, images, secrets := mockDeps(t)
+			rev := mockRevision() // HTTP-only, no volume: eligible on its own
+			previous := rev.Spec.Services[0]
+			mutate(&previous)
+			active := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+				"web": {EffectiveRevision: "rev-0", Image: "img:0", Container: "c-old", Spec: previous},
+			}}
+
+			expectDeployPreflight(state, runtime, images, secrets, rev)
+			expectNetworkProvision(runtime, "app-blog", 1)
+			state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
+			state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
+			var order []string
+			expectRetireOld(state, runtime, &order, "c-old")
+			expectSequentialCreate(state, runtime, &order, "c-new", 18080)
+			state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
+			state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil)
+			state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "c-old").Return(nil).Once()
+
+			svc := deployment.NewService(deployment.Deps{
+				State: state, Runtime: runtime, Images: images, Secrets: secrets,
+				Traffic: &orderedTraffic{events: &order},
+			}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+				func(context.Context, string, string) (int, error) { return 200, nil },
+				func(context.Context, string) error { return nil },
+			))
+			_, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog"})
+			require.NoError(t, err)
+			assert.Equal(t, []string{"withdraw", "stop-old", "remove-old", "create-new", "start-new", "traffic"}, order[:6],
+				"the predecessor is gone before the replacement is created")
+			state.AssertNotCalled(t, "SaveRecoveryInhibition", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// seedPendingRetirement seeds ACTIVE naming c-new and one retirement-pending
+// marker per given superseded container.
+func seedPendingRetirement(t *testing.T, ctx context.Context, store *appstate.Store, superseded ...string) {
+	t.Helper()
+	require.NoError(t, store.SaveIntent(ctx, domain.AppStopIntent{App: "blog"}))
+	require.NoError(t, store.SaveActive(ctx, domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+		"web": {Container: "c-new", EffectiveRevision: "rev-1", Spec: overlapWebSpec(0), BackendBinds: map[int]int{8080: 18081}},
+	}}))
+	for _, id := range superseded {
+		require.NoError(t, store.SaveRecoveryInhibition(ctx, domain.AppRecoveryInhibition{
+			App: "blog", Service: "web", ContainerID: id, Reason: domain.AppInhibitRetirementPending,
+		}))
+	}
+}
+
+func markerIDs(t *testing.T, ctx context.Context, store *appstate.Store) []string {
+	t.Helper()
+	markers, err := store.LoadRecoveryInhibitions(ctx, "blog")
+	require.NoError(t, err)
+	ids := make([]string, 0, len(markers))
+	for _, marker := range markers {
+		ids = append(ids, marker.ContainerID)
+	}
+	return ids
+}
+
+// TestReconcileRunning_DoesNotRetireWhenSuccessorIsNotVerifiedByThisPass is the
+// regression for a successor that was verified by an earlier pass but is
+// restarting in this one: it is withdrawn, not verified, and a final
+// inspection that happens to see it running must not retire the predecessor.
+func TestReconcileRunning_DoesNotRetireWhenSuccessorIsNotVerifiedByThisPass(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	traffic := &storeTraffic{store: store}
+	svc := overlapService(store, runtime, images, secrets, traffic)
+
+	// Earlier pass: the successor is verified and routed, retirement fails.
+	expectVerifiedRunning(runtime, "c-new", 18081)
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
+	require.Error(t, svc.ReconcileRunning(ctx))
+
+	// This pass: the successor is restarting, so it is withdrawn and not
+	// verified. Any later inspection would see it running.
+	runtime.ExpectedCalls, runtime.Calls = nil, nil
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").
+		Return(&domain.Container{ID: "c-new", Status: "restarting"}, nil).Once()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").
+		Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: time.Now()}, nil).Maybe()
+	require.NoError(t, svc.ReconcileRunning(ctx))
+
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
+	assert.Equal(t, []string{"c-old"}, markerIDs(t, ctx, store), "the predecessor stays until a pass verifies the successor")
+}
+
+// TestReconcileRunning_DoesNotRetireWhenSuccessorRestartedAfterVerification
+// covers the other half: a successor verified at one start time and seen with
+// another by the final inspection is a different execution, so unverified.
+func TestReconcileRunning_DoesNotRetireWhenSuccessorRestartedAfterVerification(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	svc := overlapService(store, runtime, images, secrets, &storeTraffic{store: store})
+
+	first := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
+	restarted := first.Add(time.Minute)
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: first}, nil).Twice()
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: restarted}, nil).Once()
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-new").Return("", false, nil)
+	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
+		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil)
+	require.NoError(t, svc.ReconcileRunning(ctx))
+
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, "c-old", mock.Anything)
+	assert.Equal(t, []string{"c-old"}, markerIDs(t, ctx, store))
+}
+
+// TestReconcileRunning_RetiresStackedPredecessors proves several superseded
+// containers of one service (deploys that each left one behind) are all
+// retired once the successor is verified.
+func TestReconcileRunning_RetiresStackedPredecessors(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old-1", "c-old-2")
+	svc := overlapService(store, runtime, images, secrets, &storeTraffic{store: store})
+
+	expectVerifiedRunning(runtime, "c-new", 18081)
+	for _, id := range []string{"c-old-1", "c-old-2"} {
+		runtime.EXPECT().StopContainer(mock.Anything, id, domain.AppDefaultStopGrace).Return(nil).Once()
+		runtime.EXPECT().RemoveContainer(mock.Anything, id, false).Return(nil).Once()
+	}
+	require.NoError(t, svc.ReconcileRunning(ctx))
+	assert.Empty(t, markerIDs(t, ctx, store))
+}
+
+// releaseFailingState wraps the real store and fails the first backend claim
+// releases, like a store write error would.
+type releaseFailingState struct {
+	*appstate.Store
+	failures int
+}
+
+func (s *releaseFailingState) ReleaseBackendBinds(ctx context.Context, app, containerID string) error {
+	if s.failures > 0 {
+		s.failures--
+		return assert.AnError
+	}
+	return s.Store.ReleaseBackendBinds(ctx, app, containerID)
+}
+
+// TestReconcileRunning_KeepsMarkerUntilBackendClaimsAreReleased proves a
+// retirement whose claim release failed does not drop the durable marker: the
+// leak is reported by the pass and retried (retiring a gone container is
+// idempotent) until the claims are released.
+func TestReconcileRunning_KeepsMarkerUntilBackendClaimsAreReleased(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	state := &releaseFailingState{Store: store, failures: 1}
+	traffic := &storeTraffic{store: store}
+	svc := deployment.NewService(deployment.Deps{
+		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
+		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
+	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
+		func(context.Context, string, string) (int, error) { return 200, nil },
+		func(context.Context, string) error { return nil },
+	))
+
+	expectVerifiedRunning(runtime, "c-new", 18081)
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Twice()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
+
+	err := svc.ReconcileRunning(ctx)
+	require.Error(t, err, "the leaked claims are reported, not discarded")
+	assert.Contains(t, err.Error(), "release backend claims")
+	assert.Equal(t, []string{"c-old"}, markerIDs(t, ctx, store), "the marker stays until the claims are released")
+
+	require.NoError(t, svc.ReconcileRunning(ctx), "not-found counts as gone, so the retry settles it")
+	assert.Empty(t, markerIDs(t, ctx, store))
+}
+
+// TestStop_RetiresPendingSupersededContainers proves a stopped app does not
+// keep a superseded predecessor running, and that one which cannot be retired
+// fails the stop and keeps its marker.
+func TestStop_RetiresPendingSupersededContainers(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	svc := overlapService(store, runtime, images, secrets, &storeTraffic{store: store})
+
+	runtime.EXPECT().StopContainer(mock.Anything, "c-new", mock.Anything).Return(nil).Twice()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", false).Return(nil).Twice()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Twice()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
+
+	result, err := svc.Stop(ctx, "blog", "")
+	require.Error(t, err, "a predecessor that is still running fails the stop")
+	assert.Equal(t, "failed", result.Services["web"].Result)
+	assert.Equal(t, []string{"c-old"}, markerIDs(t, ctx, store), "its marker stays for the next attempt")
+
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(nil).Once()
+	_, err = svc.Stop(ctx, "blog", "")
+	require.NoError(t, err)
+	assert.Empty(t, markerIDs(t, ctx, store))
+}
+
+// TestRemove_FailsAndKeepsStateWhenAPendingPredecessorCannotBeRetired proves
+// Remove does not end the incarnation (which deletes the markers) while a
+// superseded container is still running.
+func TestRemove_FailsAndKeepsStateWhenAPendingPredecessorCannotBeRetired(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	images := outmocks.NewMockImageResolver(t)
+	secrets := outmocks.NewMockSecretProvider(t)
+	seedPendingRetirement(t, ctx, store, "c-old")
+	svc := overlapService(store, runtime, images, secrets, &storeTraffic{store: store})
+
+	runtime.EXPECT().StopContainer(mock.Anything, "c-new", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-new", false).Return(nil).Once()
+	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(nil).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(assert.AnError).Once()
+
+	_, err := svc.Remove(ctx, "blog", "")
+	require.Error(t, err)
+	assert.Equal(t, []string{"c-old"}, markerIDs(t, ctx, store), "the marker survives so the container stays tracked")
+	_, ok, loadErr := store.LoadActive(ctx, "blog")
+	require.NoError(t, loadErr)
+	assert.True(t, ok, "the incarnation is not ended")
+}

@@ -367,7 +367,7 @@ func (s *Service) runServiceStep(
 			RestartUnsafe: singleWriterRequired(p.spec),
 		}
 		step.Detail = domain.AppServiceUnchanged + ": already running " + p.spec.Image + " (" + p.digest + ")"
-	} else if before != "" && overlapEligible(p.spec) {
+	} else if before != "" && canOverlap(p.spec, active.Services[p.name].Spec) {
 		overlap = true
 		svcResult = s.deployOverlap(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	} else {
@@ -448,7 +448,7 @@ func (s *Service) publishAndRoute(ctx context.Context, app, revision string, p p
 // serves — but a cleanup warning on the service; the marker stays, so the
 // periodic reconciliation retries it.
 func (s *Service) retireSuperseded(ctx context.Context, app, service, before string, grace time.Duration, result ServiceResult) ServiceResult {
-	retired := s.retireContainer(ctx, app, retireOptions{Service: service, Grace: grace, ClearInhibition: true}, before)
+	retired := s.retireContainer(ctx, app, retireOptions{Service: service, Grace: grace, ClearInhibition: true, RetryOnLeak: true}, before)
 	result.CleanupWarnings = append(result.CleanupWarnings, retired.Warnings...)
 	if !retired.Gone && len(retired.Warnings) == 0 {
 		result.CleanupWarnings = append(result.CleanupWarnings, CleanupWarning{
@@ -806,6 +806,16 @@ func (s *Service) startCandidate(ctx context.Context, app, revision string, p pi
 // overlapEligible).
 func singleWriterRequired(spec domain.AppService) bool {
 	return len(spec.Volumes) > 0 || len(spec.Binds) > 0
+}
+
+// canOverlap reports whether a replacement may run beside its predecessor: both
+// the new spec and the predecessor's effective spec (as recorded in ACTIVE)
+// must be overlap-eligible. A predecessor that owned a volume, bind, device,
+// or UDP interface is a single writer or has pinned UDP sessions whatever the
+// replacement declares, so removing the resource from the spec does not make
+// the transition safe.
+func canOverlap(next, previous domain.AppService) bool {
+	return overlapEligible(next) && overlapEligible(previous)
 }
 
 // overlapEligible reports whether a service may be replaced with a short
