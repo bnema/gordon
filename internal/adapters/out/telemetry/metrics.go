@@ -33,6 +33,11 @@ type Metrics struct {
 	// Events
 	EventsProcessed metric.Int64Counter
 	EventsDropped   metric.Int64Counter
+
+	// Backups
+	BackupRuns     metric.Int64Counter
+	BackupDuration metric.Float64Histogram
+	backups        *backupState
 }
 
 // NewMetrics creates and registers all Gordon metric instruments.
@@ -40,7 +45,7 @@ type Metrics struct {
 // (OTel returns noop instruments when no MeterProvider is set).
 func NewMetrics() (*Metrics, error) {
 	meter := otel.Meter("gordon")
-	m := &Metrics{meter: meter}
+	m := &Metrics{meter: meter, backups: newBackupState()}
 	var err error
 
 	if m.DeployTotal, err = meter.Int64Counter("gordon.deploy.total",
@@ -80,6 +85,9 @@ func NewMetrics() (*Metrics, error) {
 	}
 	if m.EventsDropped, err = meter.Int64Counter("gordon.events.dropped",
 		metric.WithDescription("Total events dropped")); err != nil {
+		return nil, err
+	}
+	if err := m.registerBackupInstruments(); err != nil {
 		return nil, err
 	}
 

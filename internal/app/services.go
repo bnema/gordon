@@ -483,6 +483,7 @@ func injectTelemetryMetrics(cfg Config, svc *services, log zerowrap.Logger) {
 	svc.registrySvc.SetMetrics(gordonMetrics)
 	svc.eventBus.SetMetrics(gordonMetrics)
 	svc.metrics = gordonMetrics
+	wireBackupMetrics(svc)
 }
 
 // observeManagedContainers exports the managed-container gauge from app

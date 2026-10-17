@@ -85,6 +85,28 @@ type BackupResult struct {
 	Duration time.Duration
 }
 
+// BackupKind tells database dumps and volume archives apart in metrics.
+type BackupKind string
+
+const (
+	BackupKindDatabase BackupKind = "database"
+	BackupKindVolume   BackupKind = "volume"
+)
+
+// BackupRunRecord is the outcome of one backup, as reported to metrics.
+// Target is the database name for a dump and the declared volume name for
+// an archive.
+type BackupRunRecord struct {
+	Kind       BackupKind
+	App        string
+	Service    string
+	Target     string
+	Succeeded  bool
+	Duration   time.Duration
+	SizeBytes  int64
+	FinishedAt time.Time
+}
+
 // DatabaseBackupJob represents a logical database backup operation.
 type DatabaseBackupJob = BackupJob
 

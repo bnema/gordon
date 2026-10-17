@@ -28,6 +28,7 @@ type Service struct {
 	config  domain.BackupConfig
 	log     zerowrap.Logger
 	state   out.AppStateReader
+	metrics out.BackupMetrics
 }
 
 // NewService creates a backup service.
@@ -50,6 +51,32 @@ func NewService(
 func (s *Service) WithAppState(state out.AppStateReader) *Service {
 	s.state = state
 	return s
+}
+
+// WithMetrics wires the backup metrics recorder. Without it no metric is
+// recorded.
+func (s *Service) WithMetrics(metrics out.BackupMetrics) *Service {
+	s.metrics = metrics
+	return s
+}
+
+// SeedMetrics reports the newest stored dump of every target as its last
+// success, so the metric survives a restart. It counts no run.
+func (s *Service) SeedMetrics(ctx context.Context) error {
+	if s.metrics == nil {
+		return nil
+	}
+	jobs, err := s.ListBackups(ctx, "")
+	if err != nil {
+		return fmt.Errorf("seed backup metrics: %w", err)
+	}
+	for _, job := range jobs {
+		s.metrics.ObserveStoredBackup(domain.BackupRunRecord{
+			Kind: domain.BackupKindDatabase, App: job.App, Service: job.Service, Target: job.DBName,
+			Succeeded: true, SizeBytes: job.SizeBytes, FinishedAt: job.StartedAt,
+		})
+	}
+	return nil
 }
 
 // Targets returns every declared database target of one app, ordered by
@@ -212,7 +239,24 @@ func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
 
 // runTarget runs one declared database backup through the service
 // container that hosts it.
+// runTarget dumps one target and records the outcome in metrics.
 func (s *Service) runTarget(ctx context.Context, target domain.DatabaseTarget, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
+	started := time.Now()
+	result, err := s.dumpTarget(ctx, target, schedule)
+	if s.metrics != nil {
+		run := domain.BackupRunRecord{
+			Kind: domain.BackupKindDatabase, App: target.App, Service: target.Service, Target: target.Database,
+			Succeeded: err == nil, Duration: time.Since(started), FinishedAt: time.Now().UTC(),
+		}
+		if result != nil {
+			run.SizeBytes = result.Job.SizeBytes
+		}
+		s.metrics.RecordBackupRun(ctx, run)
+	}
+	return result, err
+}
+
+func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
 	if target.ContainerID == "" {
 		return nil, fmt.Errorf("backup: app %q service %q has no active container", target.App, target.Service)
 	}

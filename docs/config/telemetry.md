@@ -25,7 +25,7 @@ trace_sample_rate = 1.0
 | `endpoint` | string | `""` | OTLP HTTP endpoint URL (e.g. `http://localhost:4318/api/default`) |
 | `auth_token` | string | `""` | Base64-encoded `user:password` for Basic auth |
 | `traces` | bool | `true` | Export distributed traces |
-| `metrics` | bool | `true` | Export metrics (deploy counters, container lifecycle, registry, events) |
+| `metrics` | bool | `true` | Export metrics (deploy counters, container lifecycle, registry, events, backups) |
 | `logs` | bool | `true` | Export Gordon, proxy access, and app container logs to OTLP |
 | `trace_sample_rate` | float | `1.0` | Fraction of traces to sample (`0.0` = none, `1.0` = all) |
 
@@ -159,6 +159,30 @@ Attributes: `source` (restarts only: `monitor` or `api`). `gordon.container.mana
 | `gordon.registry.push.bytes` | Counter | By | Total manifest bytes pushed |
 
 Attributes: `name`, `reference`
+
+### Backups
+
+| Metric | Type | Unit | Description |
+|--------|------|------|-------------|
+| `gordon.backup.runs` | Counter | - | Finished backup runs (scheduled and manual) |
+| `gordon.backup.duration_seconds` | Histogram | s | Duration of each backup run |
+| `gordon.backup.last_success_timestamp_seconds` | Gauge | s | Unix time of the last successful backup per target |
+| `gordon.backup.last_size_bytes` | Gauge | By | Size of the last successful backup per target |
+| `gordon.backup.next_run_timestamp_seconds` | Gauge | s | Unix time of the next scheduled run |
+
+Attributes: `kind` (`database` or `volume`), `app`, `service`, `target` (database name or declared volume name), and `result` (`success` or `failure`, runs only). `next_run_timestamp_seconds` only carries `kind`.
+
+At startup Gordon reads the stored dumps and S3 archives to restore each target's last success, so the gauges stay correct across restarts. A run missed while Gordon is down never appears as a failure: alert on the age of the last success instead.
+
+With the OpenTelemetry Collector Prometheus exporter, names become `gordon_backup_runs_total`, `gordon_backup_last_success_timestamp_seconds`, and so on. Example alerts:
+
+```promql
+# No successful backup of a target for more than 26 hours
+time() - gordon_backup_last_success_timestamp_seconds > 26 * 3600
+
+# Gordon stopped exporting backup metrics
+absent_over_time(gordon_backup_next_run_timestamp_seconds[15m])
+```
 
 ### Event Bus
 
