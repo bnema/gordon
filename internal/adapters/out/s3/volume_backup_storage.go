@@ -150,6 +150,42 @@ func (s *VolumeBackupStorage) GetVolumeArchive(ctx context.Context, artifactRef 
 
 // ListVolumeArchives lists completed volume archive backups for a domain.
 func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, app string) ([]domain.VolumeBackupJob, error) {
+	jobs, err := s.listArchiveObjects(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	for i := range jobs {
+		s.hydrateVolumeBackupJobMetadata(ctx, &jobs[i], s.keyOf(jobs[i]))
+	}
+	sortVolumeBackupJobs(jobs)
+	return jobs, nil
+}
+
+// LatestVolumeArchives returns the newest archive of every app volume from
+// the object listing alone, without one metadata request per object.
+func (s *VolumeBackupStorage) LatestVolumeArchives(ctx context.Context) ([]domain.VolumeBackupJob, error) {
+	jobs, err := s.listArchiveObjects(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	latest := make(map[string]domain.VolumeBackupJob)
+	for _, job := range jobs {
+		key := job.App + "/" + job.VolumeName
+		if prev, ok := latest[key]; !ok || job.StartedAt.After(prev.StartedAt) {
+			latest[key] = job
+		}
+	}
+	out := make([]domain.VolumeBackupJob, 0, len(latest))
+	for _, job := range latest {
+		out = append(out, job)
+	}
+	sortVolumeBackupJobs(out)
+	return out, nil
+}
+
+// listArchiveObjects lists the archives of one app, or of every app when
+// app is empty, from object keys and sizes only.
+func (s *VolumeBackupStorage) listArchiveObjects(ctx context.Context, app string) ([]domain.VolumeBackupJob, error) {
 	listPrefix := s.appPrefix(app)
 	jobs := make([]domain.VolumeBackupJob, 0)
 	var token *string
@@ -173,7 +209,6 @@ func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, app string
 			if obj.Size != nil {
 				job.SizeBytes = *obj.Size
 			}
-			s.hydrateVolumeBackupJobMetadata(ctx, &job, *obj.Key)
 			jobs = append(jobs, job)
 		}
 		if out.IsTruncated == nil || !*out.IsTruncated {
@@ -181,9 +216,12 @@ func (s *VolumeBackupStorage) ListVolumeArchives(ctx context.Context, app string
 		}
 		token = out.NextContinuationToken
 	}
-
-	sortVolumeBackupJobs(jobs)
 	return jobs, nil
+}
+
+// keyOf returns the object key of a listed job.
+func (s *VolumeBackupStorage) keyOf(job domain.VolumeBackupJob) string {
+	return strings.TrimPrefix(job.ArtifactRef, "s3://"+s.bucket+"/")
 }
 
 // DeleteVolumeArchive deletes a volume archive by artifact reference.

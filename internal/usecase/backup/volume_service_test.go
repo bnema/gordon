@@ -90,6 +90,15 @@ func (f *fakeVolumeBackupStorage) ListVolumeArchives(context.Context, string) ([
 	return f.jobs, nil
 }
 
+// LatestVolumeArchives returns the configured jobs as-is; the S3 adapter
+// owns the newest-per-volume selection.
+func (f *fakeVolumeBackupStorage) LatestVolumeArchives(context.Context) ([]domain.VolumeBackupJob, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.jobs, nil
+}
+
 func (f *fakeVolumeBackupStorage) DeleteVolumeArchive(context.Context, string) error { return nil }
 
 func (f *fakeVolumeBackupStorage) ApplyVolumeRetention(_ context.Context, app string, _ domain.VolumeBackupRetentionPolicy) (int, error) {

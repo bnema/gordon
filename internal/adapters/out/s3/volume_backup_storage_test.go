@@ -22,6 +22,7 @@ type fakeVolumeS3Client struct {
 	objects  map[string][]byte
 	metadata map[string]map[string]string
 	deleted  []string
+	heads    int
 }
 
 func newFakeVolumeS3Client() *fakeVolumeS3Client {
@@ -34,6 +35,7 @@ func (f *fakeVolumeS3Client) GetObject(_ context.Context, params *awss3.GetObjec
 }
 
 func (f *fakeVolumeS3Client) HeadObject(_ context.Context, params *awss3.HeadObjectInput, _ ...func(*awss3.Options)) (*awss3.HeadObjectOutput, error) {
+	f.heads++
 	return &awss3.HeadObjectOutput{Metadata: f.metadata[aws.ToString(params.Key)]}, nil
 }
 
@@ -164,6 +166,38 @@ func TestVolumeBackupStorageRetentionMixesLongAndShortIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
 	assert.Equal(t, []string{longID}, client.deleted)
+}
+
+// TestVolumeBackupStorageLatestVolumeArchives proves the newest archive of
+// each app volume is selected from the listing alone, with no per-object
+// metadata request.
+func TestVolumeBackupStorageLatestVolumeArchives(t *testing.T) {
+	client := newFakeVolumeS3Client()
+	storage := NewVolumeBackupStorageWithClients(domain.VolumeBackupConfig{S3Bucket: "bucket", S3Prefix: "gordon"}, client, nil)
+	for key, data := range map[string]string{
+		"gordon/apps/forgejo/volumes/forgejo-data/20261017T013000Z-1a2b3c4d.tar.gz":  "old",
+		"gordon/apps/forgejo/volumes/forgejo-data/20261018T013000Z-5e6f7a8b.tar.gz":  "newest",
+		"gordon/apps/forgejo/volumes/postgres-data/20261016T013000Z-0a0b0c0d.tar.gz": "pg",
+		"gordon/apps/ermite/volumes/forgejo-data/20261015T013000Z-9a9b9c9d.tar.gz":   "other-app",
+	} {
+		client.objects[key] = []byte(data)
+	}
+
+	jobs, err := storage.LatestVolumeArchives(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 0, client.heads)
+
+	got := map[string]domain.VolumeBackupJob{}
+	for _, job := range jobs {
+		got[job.App+"/"+job.VolumeName] = job
+	}
+	require.Len(t, got, 3)
+	newest := got["forgejo/forgejo-data"]
+	assert.Equal(t, "5e6f7a8b", newest.ID)
+	assert.Equal(t, int64(len("newest")), newest.SizeBytes)
+	assert.Equal(t, time.Date(2026, 10, 18, 1, 30, 0, 0, time.UTC), newest.StartedAt)
+	assert.Contains(t, got, "forgejo/postgres-data")
+	assert.Contains(t, got, "ermite/forgejo-data")
 }
 
 func TestVolumeBackupStorageRetentionUsesParsedKeyTimestamp(t *testing.T) {

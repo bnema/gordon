@@ -26,6 +26,7 @@ type VolumeService struct {
 	config   domain.VolumeBackupConfig
 	log      zerowrap.Logger
 	state    out.AppStateReader
+	metrics  out.BackupMetrics
 
 	mu     sync.Mutex
 	recent map[string]domain.VolumeBackupJob
@@ -46,6 +47,55 @@ func NewVolumeService(exporter out.VolumeArchiveExporter, storage out.VolumeBack
 func (s *VolumeService) WithAppState(state out.AppStateReader) *VolumeService {
 	s.state = state
 	return s
+}
+
+// WithMetrics wires the backup metrics recorder. Without it no metric is
+// recorded.
+func (s *VolumeService) WithMetrics(metrics out.BackupMetrics) *VolumeService {
+	s.metrics = metrics
+	return s
+}
+
+// SeedMetrics reconciles backup metrics with the declared volume targets:
+// it forgets targets that are no longer declared and reports the newest
+// stored archive of each declared one as its last success, so the metric
+// survives a restart. It counts no run.
+func (s *VolumeService) SeedMetrics(ctx context.Context) error {
+	if s.metrics == nil {
+		return nil
+	}
+	asOf := time.Now()
+	targets, err := s.allVolumeTargets(ctx)
+	if err != nil {
+		return fmt.Errorf("seed volume backup metrics: %w", err)
+	}
+	refs := make([]domain.BackupTargetRef, 0, len(targets))
+	byVolume := make(map[string]domain.BackupTargetRef, len(targets))
+	for _, target := range targets {
+		ref := volumeTargetRef(target)
+		refs = append(refs, ref)
+		byVolume[target.App+"/"+target.VolumeName] = ref
+	}
+	s.metrics.RetainBackupTargets(domain.BackupKindVolume, refs, asOf)
+
+	archives, err := s.storage.LatestVolumeArchives(ctx)
+	if err != nil {
+		return fmt.Errorf("seed volume backup metrics: %w", err)
+	}
+	for _, archive := range archives {
+		ref, declared := byVolume[archive.App+"/"+archive.VolumeName]
+		if !declared {
+			continue
+		}
+		s.metrics.ObserveStoredBackup(domain.BackupRunRecord{
+			BackupTargetRef: ref, Succeeded: true, SizeBytes: archive.SizeBytes, StartedAt: archive.StartedAt,
+		})
+	}
+	return nil
+}
+
+func volumeTargetRef(target domain.VolumeBackupTarget) domain.BackupTargetRef {
+	return domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: target.App, Service: target.Service, Target: target.VolumeName}
 }
 
 // VolumeTargets returns every declared volume target of one app.
@@ -214,7 +264,22 @@ func (s *VolumeService) runVolumeBackupsConcurrently(ctx context.Context, target
 	return jobs
 }
 
+// runVolumeBackup archives one target and records the outcome in metrics.
 func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.VolumeBackupTarget) domain.VolumeBackupJob {
+	job := s.archiveVolume(ctx, target)
+	if s.metrics != nil {
+		s.metrics.RecordBackupRun(ctx, domain.BackupRunRecord{
+			BackupTargetRef: volumeTargetRef(target),
+			Succeeded:       job.Status == domain.BackupStatusCompleted,
+			Duration:        job.CompletedAt.Sub(job.StartedAt),
+			SizeBytes:       job.SizeBytes,
+			StartedAt:       job.StartedAt,
+		})
+	}
+	return job
+}
+
+func (s *VolumeService) archiveVolume(ctx context.Context, target domain.VolumeBackupTarget) domain.VolumeBackupJob {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		"app":            target.App,
 		"service":        target.Service,

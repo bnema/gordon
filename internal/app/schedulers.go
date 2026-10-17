@@ -27,6 +27,7 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 	}
 	if backupScheduler != nil {
 		schedulers = append(schedulers, backupScheduler)
+		observeSchedulerNextRun(nextRunObserverPort(svc.metrics), domain.BackupKindDatabase, backupScheduler, "backup-scheduler")
 	}
 
 	volumeBackupScheduler, err := startVolumeBackupScheduler(ctx, cfg, svc, log)
@@ -36,6 +37,7 @@ func startOptionalSchedulers(ctx context.Context, cfg Config, svc *services, log
 	}
 	if volumeBackupScheduler != nil {
 		schedulers = append(schedulers, volumeBackupScheduler)
+		observeSchedulerNextRun(nextRunObserverPort(svc.metrics), domain.BackupKindVolume, volumeBackupScheduler, "volume-backup-scheduler")
 	}
 
 	imageScheduler, err := startImagePruneScheduler(ctx, cfg, svc, log, func() int {

@@ -296,6 +296,9 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 
 	startPublicTLSRuntimeWithWarning(ctx, svc.publicTLSRuntime, log)
 
+	// Seeding lists stored backups (S3 for volumes); never delay startup.
+	go seedBackupMetrics(ctx, svc, log)
+
 	schedulerCleanup, err := startOptionalSchedulers(ctx, cfg, svc, log, v)
 	if err != nil {
 		cleanupAfterLocalAdmin(registrySrv, internalRegistrySrv, proxySrv, tlsSrv)

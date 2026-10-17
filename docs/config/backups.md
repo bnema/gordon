@@ -105,6 +105,10 @@ Objects written by earlier versions under a domain prefix are not read or
 migrated: back them up and re-run the app's volume backups if you need them in
 the current layout.
 
+## Monitoring
+
+With [telemetry](./telemetry.md) metrics enabled, Gordon exports the result, duration, and size of every backup run, the last success of each target, and the next scheduled run. See [Backups metrics](./telemetry.md#backups) for the metric names and example alerts.
+
 ## Notes
 
 - Volume backups archive the app's declared volumes that its backup declaration references.
@@ -122,3 +126,4 @@ the current layout.
 - [App Manifest](./apps.md)
 - [CLI Backup Command](../cli/backup.md)
 - [Configuration Reference](./reference.md)
+- [Telemetry](./telemetry.md)
