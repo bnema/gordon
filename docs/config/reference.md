@@ -353,6 +353,8 @@ keep_last = 3                                # Keep N newest tags per repository
 
 Note: for all `backups.retention.*` keys, `0` means keep no backups for that retention tier.
 
+Database (`backups.databases.*`) and S3 volume backup (`backups.volumes.*`) keys, including `backups.volumes.s3.storage_class`, are listed in [Backups](./backups.md).
+
 ## App Manifest HTTP Interfaces
 
 `[[services.<name>.http]]` declares HTTP interfaces in a standalone app manifest (see [App Manifest](./apps.md)).
