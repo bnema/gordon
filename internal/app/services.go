@@ -431,8 +431,8 @@ func (si *serviceInit) initHandlers() {
 		RegistrySvc:     si.svc.registrySvc,
 		ReloadTrigger:   si.svc.reloadCoordinator,
 		Log:             si.log,
-		BackupSvc:       si.svc.backupSvc,
-		VolumeBackupSvc: si.svc.volumeBackupSvc,
+		BackupSvc:       backupServicePort(si.svc.backupSvc),
+		VolumeBackupSvc: volumeBackupServicePort(si.svc.volumeBackupSvc),
 		ImageSvc:        si.svc.imageSvc,
 		VolumeSvc:       si.svc.volumeSvc,
 		PublicTLSSvc:    si.svc.publicTLSSvc,
@@ -440,6 +440,24 @@ func (si *serviceInit) initHandlers() {
 		AppSvc:          si.svc.appSvc,
 		CASvc:           si.caInfoProvider(),
 	})
+}
+
+// backupServicePort returns the database backup service as a port, or an
+// untyped nil when backups are disabled. Storing a nil *backup.Service in
+// the interface would make it non-nil and handlers would call into it.
+func backupServicePort(svc *backup.Service) in.BackupService {
+	if svc == nil {
+		return nil
+	}
+	return svc
+}
+
+// volumeBackupServicePort is backupServicePort for volume backups.
+func volumeBackupServicePort(svc *backup.VolumeService) in.VolumeBackupService {
+	if svc == nil {
+		return nil
+	}
+	return svc
 }
 
 // caInfoProvider returns the internal CA as a CAInfoService, or an untyped nil

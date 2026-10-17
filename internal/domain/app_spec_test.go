@@ -296,3 +296,20 @@ func TestActiveAppSpec_EmptyActiveHasEmptyEnv(t *testing.T) {
 	assert.Empty(t, spec.Env)
 	assert.NotNil(t, spec.Env)
 }
+
+func TestAppService_BackupOnlyChange(t *testing.T) {
+	base := validSpec()
+	changed := validSpec()
+	changed.Services[0].Backup = domain.AppBackup{Volume: []string{"web-data"}}
+
+	// The user-facing diff keeps reporting the backup change.
+	assert.Equal(t, []string{"service/web/backup"}, domain.DiffAppSpec(changed, base).Changed)
+	assert.False(t, domain.SameAppService(changed.Services[0], base.Services[0]))
+
+	// The runtime comparison ignores it.
+	assert.True(t, domain.SameAppServiceRuntime(changed.Services[0], base.Services[0]))
+
+	// A real runtime change is still detected alongside a backup change.
+	changed.Services[0].Command = []string{"serve"}
+	assert.False(t, domain.SameAppServiceRuntime(changed.Services[0], base.Services[0]))
+}

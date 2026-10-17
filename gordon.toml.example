@@ -151,9 +151,15 @@ metrics = true
 logs = true
 trace_sample_rate = 1.0
 
+# Backup schedules: hourly | daily | weekly (Sunday) | monthly (day 1).
+# time is HH:MM in the server's local timezone (TZ or /etc/localtime);
+# hourly uses only the minutes. Empty time keeps the preset default
+# (daily 02:00, weekly 03:00, monthly 04:00). A run missed while Gordon
+# is down is skipped, not caught up.
 [backups.databases]
 enabled = false
 schedule = "daily"
+# time = "03:00"
 storage_dir = ""
 
 [backups.databases.retention]
@@ -164,7 +170,8 @@ monthly = 0
 
 [backups.volumes]
 enabled = false
-interval = "24h"
+schedule = "daily"
+# time = "03:30"
 compression = "gzip"
 timeout = "2h"
 max_concurrency = 2

@@ -127,7 +127,7 @@ type DatabaseBackupConfig = BackupConfig
 // VolumeBackupConfig is the volume backup configuration.
 type VolumeBackupConfig struct {
 	Enabled        bool
-	Interval       time.Duration
+	Schedule       CronSchedule
 	Compression    VolumeBackupCompression
 	Retention      VolumeBackupRetentionPolicy
 	Timeout        time.Duration

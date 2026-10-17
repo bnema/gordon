@@ -9,12 +9,29 @@ Backups are identified by app, service, and the declared database or volume
 (see [Apps](../config/apps.md)). Domains are routing addresses and are never a
 backup identity.
 
+## Schedule
+
+Each backup flow runs on one installation-wide schedule. Apps only declare
+*what* to back up; the installation decides *when*.
+
+| `schedule` | Runs | Default `time` |
+|---|---|---|
+| `hourly` | every hour at the `time` minutes | `00:00` (on the hour) |
+| `daily` | every day | `02:00` |
+| `weekly` | every Sunday | `03:00` |
+| `monthly` | the first day of each month | `04:00` |
+
+- `time` is `HH:MM` (24-hour) in the **server's local timezone** (`TZ`, or `/etc/localtime`). The run keeps the same wall-clock time across daylight-saving changes.
+- The next run is computed from the current time when Gordon starts. A run that falls while Gordon is down is skipped, not caught up: no workload runs then, so there is nothing new to back up.
+- Gordon logs the schedule and `next_run` at startup (`backup scheduler enabled`, `volume backup scheduler enabled`).
+
 ## Database backups
 
 ```toml
 [backups.databases]
 enabled = true
 schedule = "daily"
+time = "03:00"
 storage_dir = "~/.gordon/backups"
 
 [backups.databases.retention]
@@ -27,7 +44,8 @@ monthly = 12
 | Key | Default | Description |
 |---|---:|---|
 | `backups.databases.enabled` | `false` | Enables PostgreSQL backup service wiring |
-| `backups.databases.schedule` | `"daily"` | Scheduler preset: `hourly`, `daily`, `weekly`, `monthly` |
+| `backups.databases.schedule` | `"daily"` | Run frequency: `hourly`, `daily`, `weekly`, `monthly`; databases run when their declared `schedule` matches |
+| `backups.databases.time` | `""` | `HH:MM` server local time; empty uses the preset default |
 | `backups.databases.storage_dir` | `""` | Root backup directory; defaults to `{server.data_dir}/backups` |
 | `backups.databases.retention.*` | `0` | Number of backups to keep per DB and schedule tier |
 
@@ -36,7 +54,8 @@ monthly = 12
 ```toml
 [backups.volumes]
 enabled = true
-interval = "24h"
+schedule = "daily"
+time = "03:30"
 compression = "gzip"
 timeout = "2h"
 max_concurrency = 2
@@ -59,10 +78,11 @@ keep = 14
 | Key | Default | Description |
 |---|---:|---|
 | `backups.volumes.enabled` | `false` | Enables automatic volume archives |
-| `backups.volumes.interval` | `"24h"` | Interval between scheduled runs |
+| `backups.volumes.schedule` | `"daily"` | Run frequency: `hourly`, `daily`, `weekly`, `monthly` |
+| `backups.volumes.time` | `""` | `HH:MM` server local time; empty uses the preset default |
 | `backups.volumes.compression` | `"gzip"` | `gzip` or `zstd`; helper image must provide the tool |
 | `backups.volumes.timeout` | `"2h"` | Per-volume archive/upload timeout |
-| `backups.volumes.max_concurrency` | `2` | Maximum concurrent volume backups |
+| `backups.volumes.max_concurrency` | `2` | Volumes archived in parallel during a scheduled run |
 | `backups.volumes.helper_image` | `"alpine:3.20"` | Helper container image used for tar/compression |
 | `backups.volumes.s3.bucket` | `""` | Required when volume backups are enabled |
 | `backups.volumes.s3.region` | `""` | Required when volume backups are enabled |

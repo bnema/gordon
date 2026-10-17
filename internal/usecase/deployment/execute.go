@@ -489,7 +489,9 @@ func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedServ
 	switch {
 	case len(p.spec.Binds) > 0 || len(p.spec.Devices) > 0:
 		return "host binds or devices"
-	case !domain.SameAppService(p.spec, eff.Spec):
+	case !domain.SameAppServiceRuntime(p.spec, eff.Spec):
+		// Backup declarations never reach the container, so a backup-only
+		// change keeps it; publishService still records the new spec in ACTIVE.
 		return "spec changed"
 	case !bindsCover(eff, backendPorts(p.spec)):
 		return "backend binds missing"

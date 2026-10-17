@@ -22,6 +22,8 @@ type unchangedSeed struct {
 	binds       map[int]int
 	desiredEnv  map[string]string
 	inhibitedBy string
+	// mutateDesired alters the desired service after the ACTIVE one is seeded.
+	mutateDesired func(*domain.AppService)
 }
 
 // seedUnchangedApp seeds an app whose ACTIVE service runs exactly what the
@@ -49,6 +51,9 @@ func seedUnchangedApp(t *testing.T, ctx context.Context, store *appstate.Store, 
 	desired := testRevision("blog", spec)
 	if seed.desiredEnv != nil {
 		desired.Spec.Env = seed.desiredEnv
+	}
+	if seed.mutateDesired != nil {
+		seed.mutateDesired(&desired.Spec.Services[0])
 	}
 	seedRevision(t, ctx, store, "intent-1", "rev-0", desired)
 	if seed.inhibitedBy != "" {
@@ -121,6 +126,60 @@ func TestDeploy_SkipsServiceAlreadyRunningTheSameImage(t *testing.T) {
 	assert.Equal(t, map[int]int{8080: 18080}, active.Services["web"].BackendBinds, "the kept container stays routable")
 	assert.Equal(t, "op-created", active.Services["web"].ActivatedBy, "a kept container keeps its original activation")
 	assert.True(t, active.Converged, "an unchanged deploy still converges ACTIVE on the deployed revision")
+}
+
+// TestDeploy_KeepsContainerOnBackupOnlyChange proves a change limited to the
+// service backup declaration keeps the running container, and that ACTIVE
+// records the new declaration and revision so backup target resolution sees it.
+func TestDeploy_KeepsContainerOnBackupOnlyChange(t *testing.T) {
+	svc, runtime, _, ctx, store := unchangedDeployService(t, unchangedSeed{
+		binds: map[int]int{8080: 18080},
+		mutateDesired: func(s *domain.AppService) {
+			s.Backup = domain.AppBackup{Volume: []string{"web-data"}}
+		},
+	})
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").
+		Return(&domain.Container{ID: "c-old", Status: string(domain.ContainerStatusRunning)}, nil).Once()
+
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-backup"})
+	require.NoError(t, err)
+	assert.Equal(t, deployment.ServiceResultUnchanged, result.Services["web"].Result)
+	assert.Equal(t, "c-old", result.Services["web"].After)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+
+	active, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	web := active.Services["web"]
+	assert.Equal(t, "c-old", web.Container)
+	assert.Equal(t, "op-created", web.ActivatedBy)
+	assert.Equal(t, []string{"web-data"}, web.Spec.Backup.Volume, "ACTIVE records the new backup declaration")
+	assert.NotEqual(t, "rev-0", web.EffectiveRevision, "ACTIVE records the new effective revision")
+	assert.Equal(t, active.ConvergedRevision, web.EffectiveRevision)
+}
+
+// TestDeploy_ReplacesWhenRuntimeSettingsChangeAlongsideBackup proves a real
+// runtime change still replaces the container even when backup also changed.
+func TestDeploy_ReplacesWhenRuntimeSettingsChangeAlongsideBackup(t *testing.T) {
+	svc, runtime, _, ctx, store := unchangedDeployService(t, unchangedSeed{
+		binds: map[int]int{8080: 18080},
+		mutateDesired: func(s *domain.AppService) {
+			s.Backup = domain.AppBackup{Volume: []string{"web-data"}}
+			s.Command = []string{"serve", "--fast"}
+		},
+	})
+	expectReplacement(runtime)
+
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-backup-cmd"})
+	require.NoError(t, err)
+	assert.Equal(t, "deployed", result.Services["web"].Result)
+	assert.Equal(t, "c-new", result.Services["web"].After)
+
+	active, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, []string{"web-data"}, active.Services["web"].Spec.Backup.Volume)
 }
 
 // TestDeploy_ReplacesSameDigestWhenTheServiceIsNotServing proves the skip

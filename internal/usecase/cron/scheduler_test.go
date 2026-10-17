@@ -51,20 +51,61 @@ func TestCalculateNextRunPresets(t *testing.T) {
 	}
 }
 
-func TestCalculateNextRunInterval(t *testing.T) {
-	now := time.Date(2026, 2, 7, 12, 34, 20, 0, time.UTC)
-
-	next, err := calculateNextRun(now, domain.CronSchedule{Interval: 6 * time.Hour})
-
+func TestCalculateNextRunAtLocalTime(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
 	require.NoError(t, err)
-	assert.Equal(t, now.Add(6*time.Hour), next)
+	at := &domain.TimeOfDay{Hour: 3, Minute: 30}
+
+	tests := []struct {
+		name     string
+		preset   domain.BackupSchedule
+		now      time.Time
+		expected time.Time
+	}{
+		{"daily later today", domain.ScheduleDaily,
+			time.Date(2026, 10, 17, 1, 0, 0, 0, paris), time.Date(2026, 10, 17, 3, 30, 0, 0, paris)},
+		{"daily already passed", domain.ScheduleDaily,
+			time.Date(2026, 10, 17, 7, 24, 0, 0, paris), time.Date(2026, 10, 18, 3, 30, 0, 0, paris)},
+		{"daily exactly now runs tomorrow", domain.ScheduleDaily,
+			time.Date(2026, 10, 17, 3, 30, 0, 0, paris), time.Date(2026, 10, 18, 3, 30, 0, 0, paris)},
+		// 2026-10-25: Paris leaves summer time at 03:00, so 03:30 is CET.
+		{"daily across DST end keeps wall clock", domain.ScheduleDaily,
+			time.Date(2026, 10, 24, 12, 0, 0, 0, paris), time.Date(2026, 10, 25, 3, 30, 0, 0, paris)},
+		{"weekly next sunday", domain.ScheduleWeekly,
+			time.Date(2026, 10, 17, 12, 0, 0, 0, paris), time.Date(2026, 10, 18, 3, 30, 0, 0, paris)},
+		{"monthly next first day", domain.ScheduleMonthly,
+			time.Date(2026, 10, 17, 12, 0, 0, 0, paris), time.Date(2026, 11, 1, 3, 30, 0, 0, paris)},
+		{"hourly uses minute only", domain.ScheduleHourly,
+			time.Date(2026, 10, 17, 12, 40, 0, 0, paris), time.Date(2026, 10, 17, 13, 30, 0, 0, paris)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			next, err := calculateNextRun(tt.now, domain.CronSchedule{Preset: tt.preset, At: at, Location: paris})
+			require.NoError(t, err)
+			assert.True(t, tt.expected.Equal(next), "want %s, got %s", tt.expected, next.In(paris))
+		})
+	}
 }
 
-func TestCalculateNextRunRejectsIntervalAndPreset(t *testing.T) {
-	_, err := calculateNextRun(time.Now(), domain.CronSchedule{Preset: domain.ScheduleDaily, Interval: time.Hour})
+func TestCalculateNextRunDSTGapSkipsForward(t *testing.T) {
+	paris, err := time.LoadLocation("Europe/Paris")
+	require.NoError(t, err)
+	// 2026-03-29: Paris skips 02:00-03:00. A 02:30 schedule runs once, at
+	// the first valid instant after the gap, never twice or never.
+	now := time.Date(2026, 3, 28, 12, 0, 0, 0, paris)
+	next, err := calculateNextRun(now, domain.CronSchedule{
+		Preset: domain.ScheduleDaily, At: &domain.TimeOfDay{Hour: 2, Minute: 30}, Location: paris,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 2026, next.Year())
+	assert.Equal(t, time.March, next.In(paris).Month())
+	assert.Equal(t, 29, next.In(paris).Day())
+	assert.True(t, next.After(now))
+}
 
+func TestCalculateNextRunRejectsMissingPreset(t *testing.T) {
+	_, err := calculateNextRun(time.Now(), domain.CronSchedule{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "both interval and preset")
 }
 
 func TestSchedulerAddListAndRunNow(t *testing.T) {

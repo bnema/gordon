@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,12 +24,33 @@ func testLogger() zerowrap.Logger {
 }
 
 type fakeVolumeArchiveExporter struct {
+	mu        sync.Mutex
 	err       error
 	requested []domain.VolumeArchiveRequest
+	// hold, when set, keeps each export open until released so tests can
+	// observe how many run at once.
+	hold     chan struct{}
+	inFlight int
+	peak     int
 }
 
 func (f *fakeVolumeArchiveExporter) ExportVolumeArchive(_ context.Context, request domain.VolumeArchiveRequest) (*domain.VolumeArchiveResult, error) {
+	f.mu.Lock()
 	f.requested = append(f.requested, request)
+	f.inFlight++
+	if f.inFlight > f.peak {
+		f.peak = f.inFlight
+	}
+	hold := f.hold
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+	}()
+	if hold != nil {
+		<-hold
+	}
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -35,6 +58,7 @@ func (f *fakeVolumeArchiveExporter) ExportVolumeArchive(_ context.Context, reque
 }
 
 type fakeVolumeBackupStorage struct {
+	mu        sync.Mutex
 	stored    []domain.VolumeBackupJob
 	retention []string
 	jobs      []domain.VolumeBackupJob
@@ -49,7 +73,9 @@ func (f *fakeVolumeBackupStorage) StoreVolumeArchive(_ context.Context, job doma
 	if f.storeErr != nil {
 		return "", f.storeErr
 	}
+	f.mu.Lock()
 	f.stored = append(f.stored, job)
+	f.mu.Unlock()
 	return "s3://bucket/" + job.App + "/" + job.VolumeName, nil
 }
 
@@ -192,6 +218,54 @@ func TestVolumeService_RunVolumeBackupsForSchedule_RunsEveryDeclaredTarget(t *te
 	require.Len(t, storage.stored, 1)
 	assert.Equal(t, "data", storage.stored[0].VolumeName)
 	assert.Equal(t, []string{"shop"}, storage.retention)
+}
+
+// TestVolumeService_RunVolumeBackupsForSchedule_HonorsMaxConcurrency proves
+// the scheduled pass runs targets in parallel, never more than
+// MaxConcurrency at once, and still backs up every target.
+func TestVolumeService_RunVolumeBackupsForSchedule_HonorsMaxConcurrency(t *testing.T) {
+	for _, limit := range []int{1, 2} {
+		t.Run(fmt.Sprintf("max_concurrency=%d", limit), func(t *testing.T) {
+			ctx := context.Background()
+			state := outmocks.NewMockAppStateReader(t)
+			state.EXPECT().ListApps(mock.Anything).Return([]string{"shop"}, nil).Once()
+			state.EXPECT().LoadIntent(mock.Anything, "shop").Return(domain.AppStopIntent{App: "shop"}, nil).Once()
+			state.EXPECT().LoadActive(mock.Anything, "shop").Return(activeWith("shop", map[string]domain.AppService{
+				"a": volumeSpec("a", "data-a", "/a"),
+				"b": volumeSpec("b", "data-b", "/b"),
+				"c": volumeSpec("c", "data-c", "/c"),
+			}, "ctr"), true, nil).Once()
+
+			hold := make(chan struct{})
+			exporter := &fakeVolumeArchiveExporter{hold: hold}
+			storage := &fakeVolumeBackupStorage{}
+			svc := NewVolumeService(exporter, storage, domain.VolumeBackupConfig{
+				Enabled:        true,
+				Compression:    domain.VolumeBackupCompressionGzip,
+				Retention:      domain.VolumeBackupRetentionPolicy{Keep: 2},
+				Timeout:        time.Minute,
+				MaxConcurrency: limit,
+				HelperImage:    "helper:latest",
+			}, testLogger()).WithAppState(state)
+
+			done := make(chan error, 1)
+			go func() { done <- svc.RunVolumeBackupsForSchedule(ctx, domain.ScheduleDaily) }()
+
+			// Wait until the limit is reached, then confirm it is never exceeded.
+			require.Eventually(t, func() bool {
+				exporter.mu.Lock()
+				defer exporter.mu.Unlock()
+				return exporter.inFlight == limit
+			}, 2*time.Second, time.Millisecond)
+			time.Sleep(20 * time.Millisecond)
+			close(hold)
+
+			require.NoError(t, <-done)
+			assert.Equal(t, limit, exporter.peak)
+			assert.Len(t, storage.stored, 3)
+			assert.Equal(t, []string{"shop"}, storage.retention)
+		})
+	}
 }
 
 // TestVolumeService_DisabledDoesNothing proves a disabled backup

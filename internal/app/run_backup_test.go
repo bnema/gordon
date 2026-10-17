@@ -2,6 +2,7 @@ package app
 
 import (
 	"testing"
+	"time"
 
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
@@ -144,7 +145,8 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 	t.Run("enabled accepts s3 config", func(t *testing.T) {
 		var cfg Config
 		cfg.Backups.Volumes.Enabled = true
-		cfg.Backups.Volumes.Interval = "6h"
+		cfg.Backups.Volumes.Schedule = "weekly"
+		cfg.Backups.Volumes.Time = "03:30"
 		cfg.Backups.Volumes.Timeout = "30m"
 		cfg.Backups.Volumes.Compression = "gzip"
 		cfg.Backups.Volumes.MaxConcurrency = 3
@@ -158,11 +160,44 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 		volumeCfg, err := validateVolumeBackupConfig(cfg)
 		require.NoError(t, err)
 		assert.True(t, volumeCfg.Enabled)
+		assert.Equal(t, domain.ScheduleWeekly, volumeCfg.Schedule.Preset)
+		require.NotNil(t, volumeCfg.Schedule.At)
+		assert.Equal(t, domain.TimeOfDay{Hour: 3, Minute: 30}, *volumeCfg.Schedule.At)
+		assert.Equal(t, time.Local, volumeCfg.Schedule.Location)
 		assert.Equal(t, domain.VolumeBackupCompressionGzip, volumeCfg.Compression)
 		assert.Equal(t, 7, volumeCfg.Retention.Keep)
 		assert.Equal(t, 3, volumeCfg.MaxConcurrency)
 		assert.Equal(t, "acme", volumeCfg.VolumePrefix)
 		assert.Equal(t, "prod/gordon", volumeCfg.S3Prefix)
+	})
+
+	t.Run("schedule defaults to daily at the preset time", func(t *testing.T) {
+		var cfg Config
+
+		volumeCfg, err := validateVolumeBackupConfig(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, domain.ScheduleDaily, volumeCfg.Schedule.Preset)
+		assert.Nil(t, volumeCfg.Schedule.At)
+	})
+
+	t.Run("schedule rejects invalid time", func(t *testing.T) {
+		for _, raw := range []string{"3h30", "24:00", "03:60", "3:5", "night"} {
+			var cfg Config
+			cfg.Backups.Volumes.Time = raw
+
+			_, err := validateVolumeBackupConfig(cfg)
+			require.Error(t, err, raw)
+			assert.Contains(t, err.Error(), "backups.volumes.time")
+		}
+	})
+
+	t.Run("schedule rejects unknown preset", func(t *testing.T) {
+		var cfg Config
+		cfg.Backups.Volumes.Schedule = "nightly"
+
+		_, err := validateVolumeBackupConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backups.volumes.schedule")
 	})
 
 	t.Run("storage class is normalized and passed through", func(t *testing.T) {
@@ -220,7 +255,9 @@ func TestLoadConfigSetsBackupDefaults(t *testing.T) {
 	require.NoError(t, loadConfig(v, ""))
 
 	assert.Equal(t, string(domain.ScheduleDaily), v.GetString("backups.databases.schedule"))
-	assert.Equal(t, "24h", v.GetString("backups.volumes.interval"))
+	assert.Equal(t, string(domain.ScheduleDaily), v.GetString("backups.volumes.schedule"))
+	assert.Empty(t, v.GetString("backups.volumes.time"))
+	assert.Empty(t, v.GetString("backups.databases.time"))
 	assert.Equal(t, string(domain.VolumeBackupCompressionGzip), v.GetString("backups.volumes.compression"))
 	assert.Equal(t, 14, v.GetInt("backups.volumes.retention.keep"))
 }
@@ -240,16 +277,30 @@ func TestResolveBackupSchedule(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.input, func(t *testing.T) {
-				got, err := resolveBackupSchedule(tt.input)
+				got, err := resolveCronSchedule(tt.input, "", "backups.databases")
 				require.NoError(t, err)
-				assert.Equal(t, tt.want, got)
+				assert.Equal(t, tt.want, got.Preset)
 			})
 		}
 	})
 
 	t.Run("invalid value", func(t *testing.T) {
-		_, err := resolveBackupSchedule("every-minute")
+		_, err := resolveCronSchedule("every-minute", "", "backups.databases")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "backups.databases.schedule")
+	})
+
+	t.Run("time is read in server local time", func(t *testing.T) {
+		got, err := resolveCronSchedule("daily", "04:15", "backups.databases")
+		require.NoError(t, err)
+		require.NotNil(t, got.At)
+		assert.Equal(t, domain.TimeOfDay{Hour: 4, Minute: 15}, *got.At)
+		assert.Equal(t, time.Local, got.Location)
+	})
+
+	t.Run("invalid time names the database key", func(t *testing.T) {
+		_, err := resolveCronSchedule("daily", "25:00", "backups.databases")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backups.databases.time")
 	})
 }

@@ -19,6 +19,7 @@ import (
 type databaseBackupSettingsConfig struct {
 	Enabled    bool
 	Schedule   string
+	Time       string
 	StorageDir string
 	Retention  struct {
 		Hourly  int
@@ -32,6 +33,7 @@ func databaseBackupSettings(cfg Config) databaseBackupSettingsConfig {
 	out := databaseBackupSettingsConfig{
 		Enabled:    cfg.Backups.Databases.Enabled,
 		Schedule:   cfg.Backups.Databases.Schedule,
+		Time:       cfg.Backups.Databases.Time,
 		StorageDir: cfg.Backups.Databases.StorageDir,
 	}
 	out.Retention.Hourly = cfg.Backups.Databases.Retention.Hourly
@@ -157,7 +159,7 @@ func validateBackupRetention(cfg Config) (domain.RetentionPolicy, error) {
 
 func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 	volumeCfg := cfg.Backups.Volumes
-	interval, err := parsePositiveDurationDefault(volumeCfg.Interval, "24h", "backups.volumes.interval")
+	schedule, err := resolveCronSchedule(volumeCfg.Schedule, volumeCfg.Time, "backups.volumes")
 	if err != nil {
 		return domain.VolumeBackupConfig{}, err
 	}
@@ -193,7 +195,7 @@ func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 	}
 	return domain.VolumeBackupConfig{
 		Enabled:        volumeCfg.Enabled,
-		Interval:       interval,
+		Schedule:       schedule,
 		Compression:    compression,
 		Retention:      domain.VolumeBackupRetentionPolicy{Keep: volumeCfg.Retention.Keep},
 		Timeout:        timeout,

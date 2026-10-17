@@ -1074,6 +1074,16 @@ func SameAppService(a, b AppService) bool {
 	return len(diffService(a.Name, a, b)) == 0
 }
 
+// SameAppServiceRuntime reports whether two service specs describe the same
+// running container. It is SameAppService minus the settings that never reach
+// the container: backup declarations only select backup targets, so a
+// backup-only change must not force a replacement. DiffAppSpec keeps
+// reporting those changes.
+func SameAppServiceRuntime(a, b AppService) bool {
+	a.Backup, b.Backup = AppBackup{}, AppBackup{}
+	return SameAppService(a, b)
+}
+
 // diffService compares two services field by field.
 func diffService(name string, desired, effective AppService) []string {
 	var changed []string

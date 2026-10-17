@@ -12,7 +12,8 @@ import (
 	"github.com/bnema/zerowrap"
 )
 
-// Scheduler runs recurring jobs based on backup schedules.
+// Scheduler runs recurring jobs on preset schedules. Times are wall-clock
+// times in each schedule's Location; nowFn returns an absolute instant.
 type Scheduler struct {
 	entries map[string]*entry
 	mu      sync.RWMutex
@@ -275,55 +276,65 @@ func (s *Scheduler) dueEntries(now time.Time) []*entry {
 	return entries
 }
 
-// calculateNextRun computes the next execution time using UTC-only preset rules.
-//
-// Current MVP behavior is intentionally fixed to UTC because domain.CronSchedule
-// has no timezone field yet:
-//   - daily:   02:00 UTC
-//   - weekly:  Sunday 03:00 UTC
-//   - monthly: first day of month 04:00 UTC
-//
-// This means users in non-UTC timezones should account for UTC offsets.
-//
-// TODO: add timezone support on domain.CronSchedule once timezone-aware
-// scheduling is introduced. Default timezone should be the host system timezone
-// when no explicit timezone is configured.
-func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, error) {
-	now = now.UTC()
-	if schedule.Interval > 0 && schedule.Preset != "" {
-		return time.Time{}, fmt.Errorf("cron schedule cannot set both interval and preset")
-	}
-	if schedule.Interval > 0 {
-		return now.Add(schedule.Interval), nil
-	}
+// presetDefaultTimes are the built-in times of day used when a schedule
+// sets no explicit time.
+var presetDefaultTimes = map[domain.BackupSchedule]domain.TimeOfDay{
+	domain.ScheduleHourly:  {Hour: 0, Minute: 0},
+	domain.ScheduleDaily:   {Hour: 2, Minute: 0},
+	domain.ScheduleWeekly:  {Hour: 3, Minute: 0},
+	domain.ScheduleMonthly: {Hour: 4, Minute: 0},
+}
 
+// calculateNextRun returns the first scheduled instant strictly after now.
+//
+// Times are wall-clock times in schedule.Location (UTC when nil), so a
+// daily 03:30 stays 03:30 across daylight-saving changes. A wall time that
+// does not exist on a given day (spring-forward gap) is normalized forward
+// by time.Date, so the run still happens exactly once that day.
+//
+// The result only ever depends on now: a run missed while the process was
+// down is skipped, never caught up.
+//   - hourly:  every hour at At.Minute
+//   - daily:   every day at At
+//   - weekly:  every Sunday at At
+//   - monthly: the first day of every month at At
+func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, error) {
+	at, ok := presetDefaultTimes[schedule.Preset]
+	if !ok {
+		return time.Time{}, fmt.Errorf("unsupported schedule preset: %q", schedule.Preset)
+	}
+	if schedule.At != nil {
+		at = *schedule.At
+	}
+	loc := schedule.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := now.In(loc)
+
+	var next time.Time
 	switch schedule.Preset {
 	case domain.ScheduleHourly:
-		next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.UTC)
+		next = time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), at.Minute, 0, 0, loc)
 		if !next.After(now) {
 			next = next.Add(time.Hour)
 		}
-		return next, nil
 	case domain.ScheduleDaily:
-		next := time.Date(now.Year(), now.Month(), now.Day(), 2, 0, 0, 0, time.UTC)
+		next = time.Date(local.Year(), local.Month(), local.Day(), at.Hour, at.Minute, 0, 0, loc)
 		if !next.After(now) {
-			next = next.AddDate(0, 0, 1)
+			next = time.Date(local.Year(), local.Month(), local.Day()+1, at.Hour, at.Minute, 0, 0, loc)
 		}
-		return next, nil
 	case domain.ScheduleWeekly:
-		daysUntilSunday := (7 - int(now.Weekday())) % 7
-		next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.UTC).AddDate(0, 0, daysUntilSunday)
+		daysUntilSunday := (7 - int(local.Weekday())) % 7
+		next = time.Date(local.Year(), local.Month(), local.Day()+daysUntilSunday, at.Hour, at.Minute, 0, 0, loc)
 		if !next.After(now) {
-			next = next.AddDate(0, 0, 7)
+			next = time.Date(local.Year(), local.Month(), local.Day()+daysUntilSunday+7, at.Hour, at.Minute, 0, 0, loc)
 		}
-		return next, nil
 	case domain.ScheduleMonthly:
-		next := time.Date(now.Year(), now.Month(), 1, 4, 0, 0, 0, time.UTC)
+		next = time.Date(local.Year(), local.Month(), 1, at.Hour, at.Minute, 0, 0, loc)
 		if !next.After(now) {
-			next = next.AddDate(0, 1, 0)
+			next = time.Date(local.Year(), local.Month()+1, 1, at.Hour, at.Minute, 0, 0, loc)
 		}
-		return next, nil
-	default:
-		return time.Time{}, fmt.Errorf("unsupported schedule preset: %q", schedule.Preset)
 	}
+	return next, nil
 }

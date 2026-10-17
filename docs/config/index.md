@@ -183,8 +183,12 @@ Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and G
 | `volumes.preserve` | `true` |
 | `network_isolation.enabled` | `true` |
 | `network_isolation.internal` | `false` |
-| `backups.enabled` | `false` |
-| `backups.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
+| `backups.databases.enabled` | `false` |
+| `backups.databases.schedule` | `"daily"` (`"hourly"`, `"daily"`, `"weekly"`, `"monthly"`) |
+| `backups.databases.time` | `""` (preset default, server local time) |
+| `backups.volumes.enabled` | `false` |
+| `backups.volumes.schedule` | `"daily"` |
+| `backups.volumes.time` | `""` (preset default, server local time) |
 | `images.allowed_registries` | `[]` |
 | `images.require_digest` | `false` |
 | `images.prune.enabled` | `false` |
