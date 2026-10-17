@@ -180,7 +180,8 @@ With the OpenTelemetry Collector Prometheus exporter, names become `gordon_backu
 # No successful backup of a target for more than 26 hours
 time() - gordon_backup_last_success_timestamp_seconds > 26 * 3600
 
-# A host stopped exporting its volume backup schedule (one rule per expected host and kind)
+# A host stopped exporting its volume backup schedule (one rule per expected host and kind).
+# host_name requires resource_to_telemetry_conversion on the Collector Prometheus exporter.
 absent_over_time(gordon_backup_next_run_timestamp_seconds{host_name="my-host", kind="volume"}[15m])
 ```
 
