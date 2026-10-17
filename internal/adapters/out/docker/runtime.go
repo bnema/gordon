@@ -57,6 +57,20 @@ type pipeReadCloser struct {
 	once     sync.Once
 }
 
+// hijackedReadCloser exposes a hijacked attach connection as an io.ReadCloser.
+type hijackedReadCloser struct {
+	resp client.HijackedResponse
+}
+
+func (h hijackedReadCloser) Read(b []byte) (int, error) {
+	return h.resp.Reader.Read(b)
+}
+
+func (h hijackedReadCloser) Close() error {
+	h.resp.Close()
+	return nil
+}
+
 type removeOnCloseFile struct {
 	*os.File
 	path string
@@ -1630,11 +1644,6 @@ func (r *Runtime) ExportVolumeArchive(ctx context.Context, req domain.VolumeArch
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.client.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
-		_ = cleanup()
-		return nil, log.WrapErr(err, "failed to start volume archive helper container")
-	}
-
 	stream, err := r.attachVolumeArchiveStream(ctx, created.ID, cleanup, log)
 	if err != nil {
 		_ = cleanup()
@@ -1715,16 +1724,35 @@ func volumeArchiveHostConfig(volumeName string) *container.HostConfig {
 	}
 }
 
+// attachVolumeArchiveStream attaches to the helper's stdout/stderr, then
+// starts it. The archive is read from the attach stream, never from
+// container logs: log drivers store output as text and corrupt binary
+// data (json-file replaces invalid UTF-8), and some drivers cannot be
+// read back at all. Attaching before start guarantees no output byte is
+// missed; waiting for not-running after start reports the exit status
+// even when the helper has already exited.
 func (r *Runtime) attachVolumeArchiveStream(ctx context.Context, containerID string, cleanup func() error, log zerowrap.Logger) (io.ReadCloser, error) {
-	logs, err := r.client.ContainerLogs(ctx, containerID, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Follow: true})
+	attached, err := r.client.ContainerAttach(ctx, containerID, client.ContainerAttachOptions{Stream: true, Stdout: true, Stderr: true})
 	if err != nil {
 		return nil, log.WrapErr(err, "failed to attach volume archive stream")
 	}
+	if _, err := r.client.ContainerStart(ctx, containerID, client.ContainerStartOptions{}); err != nil {
+		attached.Close()
+		return nil, log.WrapErr(err, "failed to start volume archive helper container")
+	}
 	waitResult := r.client.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	logs := hijackedReadCloser{resp: attached.HijackedResponse}
 	statusCh, errCh := waitResult.Result, waitResult.Error
 	pr, pw := io.Pipe()
-	go streamVolumeArchiveLogs(logs, pw, statusCh, errCh, cleanup, log)
-	return &pipeReadCloser{pr: pr, pw: pw, original: logs, cleanup: cleanup}, nil
+	stream := &pipeReadCloser{pr: pr, pw: pw, original: logs, cleanup: cleanup}
+	// A hijacked connection ignores ctx, so cancellation must close the
+	// stream explicitly to unblock the copy and remove the helper.
+	stopCancelWatch := context.AfterFunc(ctx, func() { _ = stream.Close() })
+	go func() {
+		defer stopCancelWatch()
+		streamVolumeArchiveLogs(logs, pw, statusCh, errCh, cleanup, log)
+	}()
+	return stream, nil
 }
 
 func streamVolumeArchiveLogs(logs io.ReadCloser, pw *io.PipeWriter, statusCh <-chan container.WaitResponse, errCh <-chan error, cleanup func() error, log zerowrap.Logger) {
