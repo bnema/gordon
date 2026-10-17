@@ -402,7 +402,11 @@ func (s *AppServiceImpl) Diff(ctx context.Context, app string) (domain.AppDiff, 
 	if err != nil {
 		return domain.AppDiff{}, err
 	}
-	return domain.DiffAppSpec(desired.Spec, activeSpec(active)), nil
+	effective, err := activeSpec(ctx, s.store, active, desired.Spec.Env)
+	if err != nil {
+		return domain.AppDiff{}, err
+	}
+	return domain.DiffAppSpec(desired.Spec, effective), nil
 }
 
 // Deploy implements in.AppService. It enrolls the request hand-off with the

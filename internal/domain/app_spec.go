@@ -1013,9 +1013,7 @@ func DiffAppSpec(desired, effective AppSpec) AppDiff {
 		}
 		diff.Changed = append(diff.Changed, diffService(name, desiredSvc, effectiveSvc)...)
 	}
-	if !equalStringMaps(desired.Env, effective.Env) {
-		diff.Changed = append(diff.Changed, "env")
-	}
+	diff.Changed = append(diff.Changed, diffEnvKeys("env/", desired.Env, effective.Env)...)
 	diff.Changed = append(diff.Changed, diffNetworks(desired.Networks, effective.Networks)...)
 	sort.Strings(diff.Added)
 	sort.Strings(diff.Removed)
@@ -1097,9 +1095,7 @@ func diffService(name string, desired, effective AppService) []string {
 	} else if interfacesChanged(desired, effective) {
 		changed = append(changed, "service/"+name+"/interfaces")
 	}
-	if !equalStringMaps(desired.Env, effective.Env) {
-		changed = append(changed, "service/"+name+"/env")
-	}
+	changed = append(changed, diffEnvKeys("service/"+name+"/env/", desired.Env, effective.Env)...)
 	changed = appendSecretChanges(changed, desired, effective)
 	if !equalVolumes(desired.Volumes, effective.Volumes) {
 		changed = append(changed, "service/"+name+"/volumes")
@@ -1181,17 +1177,85 @@ func httpInterfacesEqual(a, b AppHTTPInterface) bool {
 	return a == b
 }
 
-// equalStringMaps compares string maps.
-func equalStringMaps(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
+// diffEnvKeys returns prefix+KEY for every key added, removed, or changed
+// between two env maps. Only key names appear, never values.
+func diffEnvKeys(prefix string, desired, effective map[string]string) []string {
+	var changed []string
+	for key, value := range desired {
+		if previous, ok := effective[key]; !ok || previous != value {
+			changed = append(changed, prefix+key)
 		}
 	}
-	return true
+	for key := range effective {
+		if _, ok := desired[key]; !ok {
+			changed = append(changed, prefix+key)
+		}
+	}
+	sort.Strings(changed)
+	return changed
+}
+
+// ActiveAppSpec rebuilds the effective AppSpec view of ACTIVE for diffing.
+// ACTIVE stores per-service specs but not the app-level [env], so
+// revisionEnv returns the app env of the revision a service was activated
+// from (nil when that revision is gone). When services run from different
+// revisions, every key that is stale in any of them is reported, so a diff
+// never hides a service still running a stale app env.
+func ActiveAppSpec(
+	active AppActive,
+	desiredEnv map[string]string,
+	revisionEnv func(revision string) (map[string]string, error),
+) (AppSpec, error) {
+	spec := AppSpec{Name: active.App, Env: map[string]string{}, Networks: append([]AppSharedNetwork(nil), active.Networks...)}
+	names := slices.Sorted(maps.Keys(active.Services))
+	for _, name := range names {
+		svc := active.Services[name].Spec
+		svc.Name = name
+		spec.Services = append(spec.Services, svc)
+	}
+	if len(names) == 0 {
+		return spec, nil
+	}
+	spec.Env = maps.Clone(desiredEnv)
+	if spec.Env == nil {
+		spec.Env = map[string]string{}
+	}
+	checked := map[string]struct{}{}
+	for _, name := range names {
+		revision := active.Services[name].EffectiveRevision
+		if _, done := checked[revision]; done {
+			continue
+		}
+		checked[revision] = struct{}{}
+		var env map[string]string
+		if revision != "" {
+			var err error
+			if env, err = revisionEnv(revision); err != nil {
+				return AppSpec{}, err
+			}
+		}
+		mergeStaleEnv(spec.Env, desiredEnv, env)
+	}
+	return spec, nil
+}
+
+// mergeStaleEnv folds one running env into effective, which starts as a
+// copy of desired. Every key whose running value differs from desired is
+// overwritten (or deleted when not running), so it stays different from
+// desired once any revision marks it stale; matching keys are untouched.
+func mergeStaleEnv(effective, desired, running map[string]string) {
+	for key, value := range desired {
+		if runningValue, ok := running[key]; !ok {
+			delete(effective, key)
+		} else if runningValue != value {
+			effective[key] = runningValue
+		}
+	}
+	for key, value := range running {
+		if _, ok := desired[key]; !ok {
+			effective[key] = value
+		}
+	}
 }
 
 // equalVolumes compares volume slices by value.

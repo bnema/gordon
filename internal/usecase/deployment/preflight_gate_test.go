@@ -2,6 +2,7 @@ package deployment_test
 
 import (
 	"context"
+	"maps"
 	"testing"
 	"time"
 
@@ -339,4 +340,34 @@ func TestDeploy_UnsupportedEngineFailsBeforeMutation(t *testing.T) {
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 	assertNoDeployMutation(t, runtime, state)
 	assertPreflightGateJournal(t, *saved)
+}
+
+// TestStartDeploy_TargetedImageChangeWithUnchangedAppEnv reproduces issue
+// 22: an app with a non-empty [env] whose only change is one service image
+// must accept a service-targeted deploy.
+func TestStartDeploy_TargetedImageChangeWithUnchangedAppEnv(t *testing.T) {
+	ctx := context.Background()
+	state, runtime, images, secrets := mockDeps(t)
+	web := webService()
+	env := map[string]string{"MODE": "prod"}
+	active := domain.AppActive{
+		App: "blog", ConvergedRevision: "rev-1", Converged: true,
+		Services: map[string]domain.AppEffectiveService{"web": {EffectiveRevision: "rev-1", Spec: web}},
+	}
+	next := web
+	next.Image = "img:2"
+	rev := domain.AppDesiredRevision{App: "blog", Revision: "rev-2", Spec: domain.AppSpec{Name: "blog", Env: env, Services: []domain.AppService{next}}}
+
+	state.EXPECT().Recover(mock.Anything).Return(nil)
+	state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-2").Return(rev, nil).Once()
+	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil).Once()
+	state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{
+		App: "blog", Revision: "rev-1", Spec: domain.AppSpec{Name: "blog", Env: maps.Clone(env), Services: []domain.AppService{web}},
+	}, nil).Once()
+	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil).Once()
+
+	svc := keyedService(t, state, runtime, images, secrets)
+	started, err := svc.StartDeploy(ctx, deployment.DeployInput{App: "blog", Revision: "rev-2", Service: "web"})
+	require.NoError(t, err)
+	require.True(t, started.Owned)
 }

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -359,7 +360,11 @@ func (s *Service) prepareApply(ctx context.Context, spec domain.AppSpec) (*apply
 	if err := domain.CheckReservations(checkpoint.Reservations, reservations, spec.Name); err != nil {
 		return nil, err
 	}
-	diff := domain.DiffAppSpec(spec, activeSpec(active))
+	effective, err := activeSpec(ctx, s.store, active, spec.Env)
+	if err != nil {
+		return nil, err
+	}
+	diff := domain.DiffAppSpec(spec, effective)
 	if hasDesired && specsEqual(desired.Spec, spec) {
 		return &applyPrepared{desired: desired, diff: diff, reservations: reservations, noop: true}, nil
 	}
@@ -395,15 +400,28 @@ func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source 
 	}, nil, nil
 }
 
-// activeSpec rebuilds an AppSpec view from effective definitions for diffing.
-func activeSpec(active domain.AppActive) domain.AppSpec {
-	spec := domain.AppSpec{Name: active.App, Env: map[string]string{}, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
-	for name, svc := range active.Services {
-		svcSpec := svc.Spec
-		svcSpec.Name = name
-		spec.Services = append(spec.Services, svcSpec)
+// revisionLoader is the store subset activeSpec needs.
+type revisionLoader interface {
+	LoadRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error)
+}
+
+// activeSpec rebuilds an AppSpec view from effective definitions for
+// diffing, including the app env of the revisions services run from.
+func activeSpec(ctx context.Context, store revisionLoader, active domain.AppActive, desiredEnv map[string]string) (domain.AppSpec, error) {
+	spec, err := domain.ActiveAppSpec(active, desiredEnv, func(revision string) (map[string]string, error) {
+		rev, err := store.LoadRevision(ctx, active.App, revision)
+		if errors.Is(err, domain.ErrAppRevisionNotFound) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return rev.Spec.Env, nil
+	})
+	if err != nil {
+		return domain.AppSpec{}, fmt.Errorf("apps: rebuild active spec: %w", err)
 	}
-	return spec
+	return spec, nil
 }
 
 // specsEqual compares normalized specs for no-op detection.

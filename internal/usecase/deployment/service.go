@@ -653,7 +653,13 @@ func (s *Service) checkConverged(ctx context.Context, app, service string, rev d
 	if active.Converged && active.ConvergedRevision == rev.Revision {
 		return nil
 	}
-	diff := domain.DiffAppSpec(rev.Spec, effectiveAppSpec(active))
+	effective, err := domain.ActiveAppSpec(active, rev.Spec.Env, func(revision string) (map[string]string, error) {
+		return s.revisionEnv(ctx, app, revision)
+	})
+	if err != nil {
+		return fmt.Errorf("deployment: rebuild effective spec: %w", err)
+	}
+	diff := domain.DiffAppSpec(rev.Spec, effective)
 	prefix := "service/" + service + "/"
 	if len(diff.Added) > 0 {
 		return targetedDivergenceError(rev.Revision, diff.Added[0]+" (added)")
@@ -669,14 +675,17 @@ func (s *Service) checkConverged(ctx context.Context, app, service string, rev d
 	return nil
 }
 
-func effectiveAppSpec(active domain.AppActive) domain.AppSpec {
-	spec := domain.AppSpec{Name: active.App, Networks: append([]domain.AppSharedNetwork(nil), active.Networks...)}
-	for name, service := range active.Services {
-		effective := service.Spec
-		effective.Name = name
-		spec.Services = append(spec.Services, effective)
+// revisionEnv returns the app env of a stored revision, or nil when the
+// revision was garbage-collected.
+func (s *Service) revisionEnv(ctx context.Context, app, revision string) (map[string]string, error) {
+	rev, err := s.deps.State.LoadRevision(ctx, app, revision)
+	if errors.Is(err, domain.ErrAppRevisionNotFound) {
+		return nil, nil
 	}
-	return spec
+	if err != nil {
+		return nil, err
+	}
+	return rev.Spec.Env, nil
 }
 
 func targetedDivergenceError(revision, path string) error {

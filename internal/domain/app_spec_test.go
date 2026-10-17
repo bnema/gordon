@@ -141,7 +141,7 @@ func TestDiffAppSpec_DeterministicAndRedacted(t *testing.T) {
 	assert.Contains(t, diff.Changed, "network/shared/added")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url-v2")
 	assert.Contains(t, diff.Changed, "service/web/secret/database-url")
-	assert.Contains(t, diff.Changed, "env")
+	assert.Contains(t, diff.Changed, "env/NEW_KEY")
 	// Sorted output.
 	assert.IsIncreasing(t, diff.Changed)
 	// No secret values leak: only names/paths.
@@ -196,13 +196,103 @@ func TestDiffAppSpec_ServiceEnv(t *testing.T) {
 	changed := validSpec()
 	changed.Services[0].Env = map[string]string{"LOG": "debug"}
 
-	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(changed, base).Changed)
-	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(base, changed).Changed)
+	assert.Equal(t, []string{"service/web/env/LOG"}, domain.DiffAppSpec(changed, base).Changed)
+	assert.Equal(t, []string{"service/web/env/LOG"}, domain.DiffAppSpec(base, changed).Changed)
 	assert.Empty(t, domain.DiffAppSpec(changed, changed).Changed)
 	assert.False(t, domain.SameAppService(changed.Services[0], base.Services[0]))
 
 	changed.Services[0].Env["LOG"] = "info"
 	other := validSpec()
 	other.Services[0].Env = map[string]string{"LOG": "debug"}
-	assert.Equal(t, []string{"service/web/env"}, domain.DiffAppSpec(changed, other).Changed)
+	assert.Equal(t, []string{"service/web/env/LOG"}, domain.DiffAppSpec(changed, other).Changed)
+}
+
+func TestDiffAppSpec_EnvListsChangedKeyNamesOnly(t *testing.T) {
+	before := validSpec()
+	before.Env = map[string]string{"KEEP": "1", "EDIT": "old-value", "DROP": "x"}
+	after := validSpec()
+	after.Env = map[string]string{"KEEP": "1", "EDIT": "new-value", "ADD": "y"}
+
+	diff := domain.DiffAppSpec(after, before)
+	assert.Equal(t, []string{"env/ADD", "env/DROP", "env/EDIT"}, diff.Changed)
+	for _, entry := range diff.Changed {
+		assert.NotContains(t, entry, "value")
+	}
+}
+
+func TestActiveAppSpec_UsesActivatedRevisionEnv(t *testing.T) {
+	web := validSpec().Services[0]
+	worker := web
+	worker.Name = "worker"
+	active := domain.AppActive{
+		App: "blog",
+		Services: map[string]domain.AppEffectiveService{
+			"web":    {EffectiveRevision: "rev-1", Spec: web},
+			"worker": {EffectiveRevision: "rev-2", Spec: worker},
+		},
+	}
+	envs := map[string]map[string]string{
+		"rev-1": {"MODE": "prod"},
+		"rev-2": {"MODE": "old"},
+	}
+	load := func(revision string) (map[string]string, error) { return envs[revision], nil }
+
+	// Image-only change: desired env equals what every service runs.
+	envs["rev-2"] = map[string]string{"MODE": "prod"}
+	spec, err := domain.ActiveAppSpec(active, map[string]string{"MODE": "prod"}, load)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"MODE": "prod"}, spec.Env)
+	assert.Equal(t, []string{"web", "worker"}, []string{spec.Services[0].Name, spec.Services[1].Name})
+
+	// One service still runs a stale env: the diff must not hide it.
+	envs["rev-2"] = map[string]string{"MODE": "old"}
+	spec, err = domain.ActiveAppSpec(active, map[string]string{"MODE": "prod"}, load)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"MODE": "old"}, spec.Env)
+
+	// A garbage-collected revision counts as an empty env.
+	spec, err = domain.ActiveAppSpec(active, map[string]string{"MODE": "prod"}, func(string) (map[string]string, error) { return nil, nil })
+	require.NoError(t, err)
+	assert.Empty(t, spec.Env)
+
+	_, err = domain.ActiveAppSpec(active, nil, func(string) (map[string]string, error) { return nil, errors.New("boom") })
+	require.Error(t, err)
+}
+
+func TestActiveAppSpec_ReportsStaleKeysFromEveryRevision(t *testing.T) {
+	web := validSpec().Services[0]
+	worker := web
+	worker.Name = "worker"
+	active := domain.AppActive{
+		App: "blog",
+		Services: map[string]domain.AppEffectiveService{
+			"web":    {EffectiveRevision: "rev-1", Spec: web},
+			"worker": {EffectiveRevision: "rev-2", Spec: worker},
+		},
+	}
+	envs := map[string]map[string]string{
+		"rev-1": {"A": "old", "B": "new", "C": "same"},
+		"rev-2": {"A": "new", "C": "same", "D": "gone"},
+	}
+	desired := domain.AppSpec{Name: "blog", Env: map[string]string{"A": "new", "B": "new", "C": "same"}}
+	desired.Services = []domain.AppService{web, worker}
+
+	effective, err := domain.ActiveAppSpec(active, desired.Env, func(revision string) (map[string]string, error) {
+		return envs[revision], nil
+	})
+	require.NoError(t, err)
+
+	diff := domain.DiffAppSpec(desired, effective)
+	assert.Equal(t, []string{"env/A", "env/B", "env/D"}, diff.Changed)
+	assert.Equal(t, map[string]string{"A": "new", "B": "new", "C": "same"}, desired.Env, "desired env must not be mutated")
+}
+
+func TestActiveAppSpec_EmptyActiveHasEmptyEnv(t *testing.T) {
+	spec, err := domain.ActiveAppSpec(domain.AppActive{App: "blog"}, map[string]string{"A": "x"}, func(string) (map[string]string, error) {
+		t.Fatal("no revision should be loaded")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	assert.Empty(t, spec.Env)
+	assert.NotNil(t, spec.Env)
 }

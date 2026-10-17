@@ -373,3 +373,30 @@ func TestReservationsFor_DelegatesToDomain(t *testing.T) {
 	assert.Equal(t, "tcp", reservations[1].Proto)
 	assert.Equal(t, "dual", reservations[1].IP)
 }
+
+// TestApply_ImageOnlyDiffWithAppEnv reproduces issue 22: with a non-empty
+// [env], an image-only change must not report the app env as changed.
+func TestApply_ImageOnlyDiffWithAppEnv(t *testing.T) {
+	ctx := context.Background()
+	store := outmocks.NewMockAppState(t)
+	svc := apps.NewService(store, zerowrap.Default())
+	spec := testSpec("blog")
+	spec.Env = map[string]string{"MODE": "prod"}
+	previous := testSpec("blog")
+	previous.Env = map[string]string{"MODE": "prod"}
+	spec.Services[0].Image = "img:2"
+
+	store.EXPECT().Recover(mock.Anything).Return(nil).Once()
+	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{Revision: "rev-1", App: "blog", Spec: previous}, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
+		App:      "blog",
+		Services: map[string]domain.AppEffectiveService{"web": {EffectiveRevision: "rev-1", Spec: previous.Services[0]}},
+	}, true, nil).Once()
+	store.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{Revision: "rev-1", App: "blog", Spec: previous}, nil).Once()
+
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.NoError(t, err)
+	require.NotNil(t, dry)
+	assert.Equal(t, []string{"service/web/image"}, dry.Diff.Changed)
+}
