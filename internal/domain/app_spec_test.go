@@ -258,3 +258,41 @@ func TestActiveAppSpec_UsesActivatedRevisionEnv(t *testing.T) {
 	_, err = domain.ActiveAppSpec(active, nil, func(string) (map[string]string, error) { return nil, errors.New("boom") })
 	require.Error(t, err)
 }
+
+func TestActiveAppSpec_ReportsStaleKeysFromEveryRevision(t *testing.T) {
+	web := validSpec().Services[0]
+	worker := web
+	worker.Name = "worker"
+	active := domain.AppActive{
+		App: "blog",
+		Services: map[string]domain.AppEffectiveService{
+			"web":    {EffectiveRevision: "rev-1", Spec: web},
+			"worker": {EffectiveRevision: "rev-2", Spec: worker},
+		},
+	}
+	envs := map[string]map[string]string{
+		"rev-1": {"A": "old", "B": "new", "C": "same"},
+		"rev-2": {"A": "new", "C": "same", "D": "gone"},
+	}
+	desired := domain.AppSpec{Name: "blog", Env: map[string]string{"A": "new", "B": "new", "C": "same"}}
+	desired.Services = []domain.AppService{web, worker}
+
+	effective, err := domain.ActiveAppSpec(active, desired.Env, func(revision string) (map[string]string, error) {
+		return envs[revision], nil
+	})
+	require.NoError(t, err)
+
+	diff := domain.DiffAppSpec(desired, effective)
+	assert.Equal(t, []string{"env/A", "env/B", "env/D"}, diff.Changed)
+	assert.Equal(t, map[string]string{"A": "new", "B": "new", "C": "same"}, desired.Env, "desired env must not be mutated")
+}
+
+func TestActiveAppSpec_EmptyActiveHasEmptyEnv(t *testing.T) {
+	spec, err := domain.ActiveAppSpec(domain.AppActive{App: "blog"}, map[string]string{"A": "x"}, func(string) (map[string]string, error) {
+		t.Fatal("no revision should be loaded")
+		return nil, nil
+	})
+	require.NoError(t, err)
+	assert.Empty(t, spec.Env)
+	assert.NotNil(t, spec.Env)
+}

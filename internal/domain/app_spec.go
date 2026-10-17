@@ -1198,9 +1198,9 @@ func diffEnvKeys(prefix string, desired, effective map[string]string) []string {
 // ActiveAppSpec rebuilds the effective AppSpec view of ACTIVE for diffing.
 // ACTIVE stores per-service specs but not the app-level [env], so
 // revisionEnv returns the app env of the revision a service was activated
-// from (nil when that revision is gone). When services disagree, the first
-// one (by name) whose env differs from desiredEnv wins, so a diff never
-// hides a service still running a stale app env.
+// from (nil when that revision is gone). When services run from different
+// revisions, every key that is stale in any of them is reported, so a diff
+// never hides a service still running a stale app env.
 func ActiveAppSpec(
 	active AppActive,
 	desiredEnv map[string]string,
@@ -1212,6 +1212,13 @@ func ActiveAppSpec(
 		svc := active.Services[name].Spec
 		svc.Name = name
 		spec.Services = append(spec.Services, svc)
+	}
+	if len(names) == 0 {
+		return spec, nil
+	}
+	spec.Env = maps.Clone(desiredEnv)
+	if spec.Env == nil {
+		spec.Env = map[string]string{}
 	}
 	checked := map[string]struct{}{}
 	for _, name := range names {
@@ -1227,28 +1234,28 @@ func ActiveAppSpec(
 				return AppSpec{}, err
 			}
 		}
-		spec.Env = maps.Clone(env)
-		if spec.Env == nil {
-			spec.Env = map[string]string{}
-		}
-		if !equalStringMaps(env, desiredEnv) {
-			break
-		}
+		mergeStaleEnv(spec.Env, desiredEnv, env)
 	}
 	return spec, nil
 }
 
-// equalStringMaps compares string maps.
-func equalStringMaps(a, b map[string]string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
+// mergeStaleEnv folds one running env into effective, which starts as a
+// copy of desired. Every key whose running value differs from desired is
+// overwritten (or deleted when not running), so it stays different from
+// desired once any revision marks it stale; matching keys are untouched.
+func mergeStaleEnv(effective, desired, running map[string]string) {
+	for key, value := range desired {
+		if runningValue, ok := running[key]; !ok {
+			delete(effective, key)
+		} else if runningValue != value {
+			effective[key] = runningValue
 		}
 	}
-	return true
+	for key, value := range running {
+		if _, ok := desired[key]; !ok {
+			effective[key] = value
+		}
+	}
 }
 
 // equalVolumes compares volume slices by value.
