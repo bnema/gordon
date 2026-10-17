@@ -359,15 +359,17 @@ if [ "$VERSION" = "latest" ] && [ -n "$GORDON_PRERELEASE" ]; then
     echo "Using pre-release version: ${VERSION}"
 elif [ "$VERSION" = "latest" ]; then
     echo "Using latest stable release"
-    # Resolve "latest" to actual tag name since GitHub download URLs require exact tags
-    RELEASE_DATA=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null || echo "")
-    if [ -z "$RELEASE_DATA" ]; then
-        echo "Error: Failed to fetch latest release information from GitHub API"
-        exit 1
-    fi
-    VERSION=$(echo "$RELEASE_DATA" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+    # Resolve "latest" to an exact tag by following the web redirect
+    # (releases/latest -> releases/tag/<tag>). Unlike the REST API, this is
+    # not rate-limited per IP for anonymous clients.
+    LATEST_URL=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || echo "")
+    VERSION=${LATEST_URL#"https://github.com/${REPO}/releases/tag/"}
+    case "$VERSION" in
+        "$LATEST_URL"|''|*[!0-9A-Za-z._+-]*) VERSION="" ;;
+    esac
     if [ -z "$VERSION" ]; then
-        echo "Error: Could not determine latest stable version"
+        echo "Error: Could not determine latest stable version from https://github.com/${REPO}/releases/latest"
+        echo "Set GORDON_VERSION (e.g. GORDON_VERSION=v3.4.0) to install a specific release."
         exit 1
     fi
     echo "Resolved version: ${VERSION}"

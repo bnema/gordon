@@ -343,7 +343,7 @@ Without this setting, Cloudflare traffic receives `403 Forbidden: Only certifica
 
 ```bash
 # Install an exact release
-curl -fsSL https://bnema.dev/gordon/install | GORDON_VERSION=v2.30.1 sh
+curl -fsSL https://bnema.dev/gordon/install | GORDON_VERSION=v3.4.0 sh
 
 # Install the latest pre-release
 curl -fsSL https://bnema.dev/gordon/install | GORDON_PRERELEASE=1 sh
@@ -352,7 +352,7 @@ curl -fsSL https://bnema.dev/gordon/install | GORDON_PRERELEASE=1 sh
 curl -fsSL https://bnema.dev/gordon/install | GORDON_CHANNEL=next sh
 ```
 
-Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
+Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The default stable install resolves the latest tag from the `github.com/bnema/gordon/releases/latest` redirect, so it does not use the rate-limited GitHub API; exact-version installs make no lookup at all. Pre-release lookups still use the GitHub API. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
 
 ## Verify Installation
 
