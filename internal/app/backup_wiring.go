@@ -187,6 +187,10 @@ func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 	if err := validateVolumeBackupS3Settings(volumeCfg.Enabled, volumeCfg.Retention.Keep, maxConcurrency, volumeCfg.S3.Bucket, volumeCfg.S3.Region); err != nil {
 		return domain.VolumeBackupConfig{}, err
 	}
+	storageClass, err := parseS3StorageClass(volumeCfg.S3.StorageClass)
+	if err != nil {
+		return domain.VolumeBackupConfig{}, err
+	}
 	return domain.VolumeBackupConfig{
 		Enabled:        volumeCfg.Enabled,
 		Interval:       interval,
@@ -203,7 +207,21 @@ func validateVolumeBackupConfig(cfg Config) (domain.VolumeBackupConfig, error) {
 		S3PathStyle:    volumeCfg.S3.PathStyle,
 		S3SSEAlgorithm: strings.TrimSpace(volumeCfg.S3.SSEAlgorithm),
 		S3SSEKMSKeyID:  strings.TrimSpace(volumeCfg.S3.SSEKMSKeyID),
+		S3StorageClass: storageClass,
 	}, nil
+}
+
+// parseS3StorageClass normalizes a storage class name. Providers define
+// their own classes (AWS GLACIER_IR, Scaleway ONEZONE_IA, ...), so any
+// S3-style token is accepted and the provider validates it on upload.
+func parseS3StorageClass(raw string) (string, error) {
+	class := strings.ToUpper(strings.TrimSpace(raw))
+	for _, r := range class {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' {
+			return "", fmt.Errorf("backups.volumes.s3.storage_class must contain only letters, digits, and underscores")
+		}
+	}
+	return class, nil
 }
 
 func parsePositiveDurationDefault(raw, defaultValue, field string) (time.Duration, error) {

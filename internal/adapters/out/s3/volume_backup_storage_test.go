@@ -101,6 +101,7 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 
 	assert.Equal(t, "s3://gordon-backups/prod/gordon/apps/app.example.com/volumes/gordon-app-data/20260619T020000Z-job_1.tar.zst", artifact)
 	assert.Equal(t, "application/zstd", aws.ToString(uploader.last.ContentType))
+	assert.Empty(t, uploader.last.StorageClass, "no storage class keeps the bucket default")
 
 	jobs, err := storage.ListVolumeArchives(context.Background(), "app.example.com")
 	require.NoError(t, err)
@@ -119,6 +120,25 @@ func TestVolumeBackupStorageStoreListGet(t *testing.T) {
 	data, err := io.ReadAll(rc)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("archive"), data)
+}
+
+func TestVolumeBackupStorageSendsConfiguredStorageClass(t *testing.T) {
+	client := newFakeVolumeS3Client()
+	uploader := &fakeVolumeUploader{client: client}
+	storage := NewVolumeBackupStorageWithClients(domain.VolumeBackupConfig{
+		S3Bucket:       "bucket",
+		S3StorageClass: "ONEZONE_IA",
+	}, client, uploader)
+
+	_, err := storage.StoreVolumeArchive(context.Background(), domain.VolumeBackupJob{
+		ID:         "job",
+		App:        "app",
+		VolumeName: "data",
+		StartedAt:  time.Date(2026, 6, 19, 2, 0, 0, 0, time.UTC),
+	}, bytes.NewReader([]byte("archive")))
+	require.NoError(t, err)
+
+	assert.Equal(t, "ONEZONE_IA", string(uploader.last.StorageClass))
 }
 
 func TestVolumeBackupStorageRetentionUsesParsedKeyTimestamp(t *testing.T) {

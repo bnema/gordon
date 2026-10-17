@@ -141,6 +141,8 @@ type VolumeBackupConfig struct {
 	S3PathStyle    bool
 	S3SSEAlgorithm string
 	S3SSEKMSKeyID  string
+	// S3StorageClass is sent with every upload; empty keeps the bucket default.
+	S3StorageClass string
 }
 
 // VolumeBackupJob represents a filesystem archive backup of a named volume.

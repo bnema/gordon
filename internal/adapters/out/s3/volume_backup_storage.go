@@ -40,6 +40,7 @@ type VolumeBackupStorage struct {
 	prefix       string
 	sseAlgorithm string
 	sseKMSKeyID  string
+	storageClass string
 	client       volumeS3Client
 	uploader     volumeUploader
 }
@@ -74,6 +75,7 @@ func NewVolumeBackupStorageWithClients(cfg domain.VolumeBackupConfig, client vol
 		prefix:       normalizeS3Prefix(cfg.S3Prefix),
 		sseAlgorithm: strings.TrimSpace(cfg.S3SSEAlgorithm),
 		sseKMSKeyID:  strings.TrimSpace(cfg.S3SSEKMSKeyID),
+		storageClass: strings.TrimSpace(cfg.S3StorageClass),
 		client:       client,
 		uploader:     uploader,
 	}
@@ -118,6 +120,9 @@ func (s *VolumeBackupStorage) StoreVolumeArchive(ctx context.Context, job domain
 	}
 	if s.sseKMSKeyID != "" {
 		input.SSEKMSKeyID = aws.String(s.sseKMSKeyID)
+	}
+	if s.storageClass != "" {
+		input.StorageClass = tmtypes.StorageClass(s.storageClass)
 	}
 
 	if _, err := s.uploader.UploadObject(ctx, input); err != nil {
