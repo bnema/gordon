@@ -68,6 +68,7 @@ func (s *Service) SeedMetrics(ctx context.Context) error {
 	if s.metrics == nil {
 		return nil
 	}
+	asOf := time.Now()
 	targets, err := s.allTargets(ctx)
 	if err != nil {
 		return fmt.Errorf("seed backup metrics: %w", err)
@@ -79,7 +80,7 @@ func (s *Service) SeedMetrics(ctx context.Context) error {
 		refs = append(refs, ref)
 		declared[ref] = struct{}{}
 	}
-	s.metrics.RetainBackupTargets(domain.BackupKindDatabase, refs)
+	s.metrics.RetainBackupTargets(domain.BackupKindDatabase, refs, asOf)
 
 	jobs, err := s.ListBackups(ctx, "")
 	if err != nil {

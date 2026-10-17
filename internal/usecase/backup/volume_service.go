@@ -64,6 +64,7 @@ func (s *VolumeService) SeedMetrics(ctx context.Context) error {
 	if s.metrics == nil {
 		return nil
 	}
+	asOf := time.Now()
 	targets, err := s.allVolumeTargets(ctx)
 	if err != nil {
 		return fmt.Errorf("seed volume backup metrics: %w", err)
@@ -75,7 +76,7 @@ func (s *VolumeService) SeedMetrics(ctx context.Context) error {
 		refs = append(refs, ref)
 		byVolume[target.App+"/"+target.VolumeName] = ref
 	}
-	s.metrics.RetainBackupTargets(domain.BackupKindVolume, refs)
+	s.metrics.RetainBackupTargets(domain.BackupKindVolume, refs, asOf)
 
 	archives, err := s.storage.LatestVolumeArchives(ctx)
 	if err != nil {

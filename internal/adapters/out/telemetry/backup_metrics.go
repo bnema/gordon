@@ -24,13 +24,15 @@ func targetAttrs(ref domain.BackupTargetRef) []attribute.KeyValue {
 }
 
 type backupLastSuccess struct {
-	at   time.Time
-	size int64
+	at      time.Time
+	size    int64
+	updated time.Time // when this entry was written, for retain
 }
 
 // backupState holds the last success per target, exported by observable
 // gauges at each collection.
 type backupState struct {
+	now     func() time.Time
 	mu      sync.Mutex
 	last    map[domain.BackupTargetRef]backupLastSuccess
 	nextRun map[domain.BackupKind]func() time.Time
@@ -38,6 +40,7 @@ type backupState struct {
 
 func newBackupState() *backupState {
 	return &backupState{
+		now:     time.Now,
 		last:    map[domain.BackupTargetRef]backupLastSuccess{},
 		nextRun: map[domain.BackupKind]func() time.Time{},
 	}
@@ -54,21 +57,23 @@ func (s *backupState) remember(run domain.BackupRunRecord) {
 	if prev, ok := s.last[key]; ok && !run.StartedAt.After(prev.at) {
 		return
 	}
-	s.last[key] = backupLastSuccess{at: run.StartedAt, size: run.SizeBytes}
+	s.last[key] = backupLastSuccess{at: run.StartedAt, size: run.SizeBytes, updated: s.now()}
 }
 
-// retain drops the last success of every target of kind not in targets.
-func (s *backupState) retain(kind domain.BackupKind, targets []domain.BackupTargetRef) {
+// retain drops the last success of every target of kind not in targets,
+// unless it was updated after asOf.
+func (s *backupState) retain(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time) {
 	keep := make(map[domain.BackupTargetRef]struct{}, len(targets))
 	for _, ref := range targets {
 		keep[ref] = struct{}{}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key := range s.last {
-		if _, ok := keep[key]; key.Kind == kind && !ok {
-			delete(s.last, key)
+	for key, last := range s.last {
+		if _, ok := keep[key]; key.Kind != kind || ok || last.updated.After(asOf) {
+			continue
 		}
+		delete(s.last, key)
 	}
 }
 
@@ -140,8 +145,8 @@ func (m *Metrics) ObserveStoredBackup(run domain.BackupRunRecord) {
 }
 
 // RetainBackupTargets implements out.BackupMetrics.
-func (m *Metrics) RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef) {
-	m.backups.retain(kind, targets)
+func (m *Metrics) RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time) {
+	m.backups.retain(kind, targets, asOf)
 }
 
 // ObserveBackupNextRun exports the next planned run of one backup kind.

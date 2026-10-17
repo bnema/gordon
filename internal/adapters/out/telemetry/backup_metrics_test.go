@@ -131,9 +131,26 @@ func TestRetainBackupTargets_ForgetsUndeclaredTargetsOfThatKindOnly(t *testing.T
 		m.ObserveStoredBackup(domain.BackupRunRecord{BackupTargetRef: ref, Succeeded: true, StartedAt: at})
 	}
 
-	m.RetainBackupTargets(domain.BackupKindVolume, []domain.BackupTargetRef{keep})
+	m.RetainBackupTargets(domain.BackupKindVolume, []domain.BackupTargetRef{keep}, time.Now())
 
 	assert.Equal(t, map[string]float64{"data": float64(at.Unix()), "orders": float64(at.Unix())},
+		gaugeByTarget(t, collect(t, reader)["gordon.backup.last_success_timestamp_seconds"]))
+}
+
+// TestRetainBackupTargets_KeepsSuccessRecordedAfterTheSnapshot covers a
+// target declared and backed up while seeding read an older declaration.
+func TestRetainBackupTargets_KeepsSuccessRecordedAfterTheSnapshot(t *testing.T) {
+	m, reader := newTestMetrics(t)
+	clock := time.Date(2026, 10, 17, 8, 0, 0, 0, time.UTC)
+	m.backups.now = func() time.Time { return clock }
+	snapshot := clock
+	clock = clock.Add(time.Second)
+	fresh := domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: "new", Service: "api", Target: "data"}
+	m.RecordBackupRun(context.Background(), domain.BackupRunRecord{BackupTargetRef: fresh, Succeeded: true, StartedAt: clock})
+
+	m.RetainBackupTargets(domain.BackupKindVolume, nil, snapshot)
+
+	assert.Equal(t, map[string]float64{"data": float64(clock.Unix())},
 		gaugeByTarget(t, collect(t, reader)["gordon.backup.last_success_timestamp_seconds"]))
 }
 

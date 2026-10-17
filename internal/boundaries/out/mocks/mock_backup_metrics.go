@@ -6,6 +6,7 @@ package mocks
 
 import (
 	"context"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 	mock "github.com/stretchr/testify/mock"
@@ -134,8 +135,8 @@ func (_c *MockBackupMetrics_RecordBackupRun_Call) RunAndReturn(run func(ctx cont
 }
 
 // RetainBackupTargets provides a mock function for the type MockBackupMetrics
-func (_mock *MockBackupMetrics) RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef) {
-	_mock.Called(kind, targets)
+func (_mock *MockBackupMetrics) RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time) {
+	_mock.Called(kind, targets, asOf)
 	return
 }
 
@@ -147,11 +148,12 @@ type MockBackupMetrics_RetainBackupTargets_Call struct {
 // RetainBackupTargets is a helper method to define mock.On call
 //   - kind domain.BackupKind
 //   - targets []domain.BackupTargetRef
-func (_e *MockBackupMetrics_Expecter) RetainBackupTargets(kind any, targets any) *MockBackupMetrics_RetainBackupTargets_Call {
-	return &MockBackupMetrics_RetainBackupTargets_Call{Call: _e.mock.On("RetainBackupTargets", kind, targets)}
+//   - asOf time.Time
+func (_e *MockBackupMetrics_Expecter) RetainBackupTargets(kind any, targets any, asOf any) *MockBackupMetrics_RetainBackupTargets_Call {
+	return &MockBackupMetrics_RetainBackupTargets_Call{Call: _e.mock.On("RetainBackupTargets", kind, targets, asOf)}
 }
 
-func (_c *MockBackupMetrics_RetainBackupTargets_Call) Run(run func(kind domain.BackupKind, targets []domain.BackupTargetRef)) *MockBackupMetrics_RetainBackupTargets_Call {
+func (_c *MockBackupMetrics_RetainBackupTargets_Call) Run(run func(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time)) *MockBackupMetrics_RetainBackupTargets_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 domain.BackupKind
 		if args[0] != nil {
@@ -161,9 +163,14 @@ func (_c *MockBackupMetrics_RetainBackupTargets_Call) Run(run func(kind domain.B
 		if args[1] != nil {
 			arg1 = args[1].([]domain.BackupTargetRef)
 		}
+		var arg2 time.Time
+		if args[2] != nil {
+			arg2 = args[2].(time.Time)
+		}
 		run(
 			arg0,
 			arg1,
+			arg2,
 		)
 	})
 	return _c
@@ -174,7 +181,7 @@ func (_c *MockBackupMetrics_RetainBackupTargets_Call) Return() *MockBackupMetric
 	return _c
 }
 
-func (_c *MockBackupMetrics_RetainBackupTargets_Call) RunAndReturn(run func(kind domain.BackupKind, targets []domain.BackupTargetRef)) *MockBackupMetrics_RetainBackupTargets_Call {
+func (_c *MockBackupMetrics_RetainBackupTargets_Call) RunAndReturn(run func(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time)) *MockBackupMetrics_RetainBackupTargets_Call {
 	_c.Run(run)
 	return _c
 }

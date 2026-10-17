@@ -87,7 +87,7 @@ func TestVolumeService_SeedMetrics(t *testing.T) {
 		{App: "gone", VolumeName: "old", StartedAt: started, SizeBytes: 1},
 	}}
 	metrics := outmocks.NewMockBackupMetrics(t)
-	metrics.EXPECT().RetainBackupTargets(domain.BackupKindVolume, []domain.BackupTargetRef{shopData}).Once()
+	metrics.EXPECT().RetainBackupTargets(domain.BackupKindVolume, []domain.BackupTargetRef{shopData}, mock.Anything).Once()
 	metrics.EXPECT().ObserveStoredBackup(domain.BackupRunRecord{
 		BackupTargetRef: shopData, Succeeded: true, SizeBytes: 42, StartedAt: started,
 	}).Once()
@@ -166,7 +166,7 @@ func TestService_SeedMetrics(t *testing.T) {
 		{App: "shop", Service: "api", DBName: "orders", StartedAt: started, SizeBytes: 7},
 		{App: "shop", Service: "api", DBName: "dropped", StartedAt: started, SizeBytes: 1},
 	}, nil).Once()
-	metrics.EXPECT().RetainBackupTargets(domain.BackupKindDatabase, []domain.BackupTargetRef{shopOrders}).Once()
+	metrics.EXPECT().RetainBackupTargets(domain.BackupKindDatabase, []domain.BackupTargetRef{shopOrders}, mock.Anything).Once()
 	metrics.EXPECT().ObserveStoredBackup(domain.BackupRunRecord{
 		BackupTargetRef: shopOrders, Succeeded: true, SizeBytes: 7, StartedAt: started,
 	}).Once()

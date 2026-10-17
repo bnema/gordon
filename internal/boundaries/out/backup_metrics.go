@@ -2,6 +2,7 @@ package out
 
 import (
 	"context"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -18,6 +19,7 @@ type BackupMetrics interface {
 	ObserveStoredBackup(run domain.BackupRunRecord)
 	// RetainBackupTargets forgets the last success of every target of kind
 	// that is not in targets, so a removed app or backup declaration stops
-	// being reported.
-	RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef)
+	// being reported. targets is the declaration read at asOf: a target
+	// updated after asOf is kept, since it may have been declared since.
+	RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef, asOf time.Time)
 }
