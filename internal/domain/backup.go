@@ -93,18 +93,25 @@ const (
 	BackupKindVolume   BackupKind = "volume"
 )
 
+// BackupTargetRef identifies one backed-up resource in metrics. Target is
+// the database name for a dump and the declared volume name for an archive.
+type BackupTargetRef struct {
+	Kind    BackupKind
+	App     string
+	Service string
+	Target  string
+}
+
 // BackupRunRecord is the outcome of one backup, as reported to metrics.
-// Target is the database name for a dump and the declared volume name for
-// an archive.
+// StartedAt is the start of the run: stored backups are named after it, so
+// a live run and the same backup read back from storage after a restart
+// report the same time.
 type BackupRunRecord struct {
-	Kind       BackupKind
-	App        string
-	Service    string
-	Target     string
-	Succeeded  bool
-	Duration   time.Duration
-	SizeBytes  int64
-	FinishedAt time.Time
+	BackupTargetRef
+	Succeeded bool
+	Duration  time.Duration
+	SizeBytes int64
+	StartedAt time.Time
 }
 
 // DatabaseBackupJob represents a logical database backup operation.

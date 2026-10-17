@@ -14,20 +14,12 @@ import (
 
 var _ out.BackupMetrics = (*Metrics)(nil)
 
-// backupTargetKey identifies one backed-up resource.
-type backupTargetKey struct {
-	kind    domain.BackupKind
-	app     string
-	service string
-	target  string
-}
-
-func (k backupTargetKey) attrs() []attribute.KeyValue {
+func targetAttrs(ref domain.BackupTargetRef) []attribute.KeyValue {
 	return []attribute.KeyValue{
-		attribute.String("kind", string(k.kind)),
-		attribute.String("app", k.app),
-		attribute.String("service", k.service),
-		attribute.String("target", k.target),
+		attribute.String("kind", string(ref.Kind)),
+		attribute.String("app", ref.App),
+		attribute.String("service", ref.Service),
+		attribute.String("target", ref.Target),
 	}
 }
 
@@ -40,33 +32,44 @@ type backupLastSuccess struct {
 // gauges at each collection.
 type backupState struct {
 	mu      sync.Mutex
-	last    map[backupTargetKey]backupLastSuccess
+	last    map[domain.BackupTargetRef]backupLastSuccess
 	nextRun map[domain.BackupKind]func() time.Time
 }
 
 func newBackupState() *backupState {
 	return &backupState{
-		last:    map[backupTargetKey]backupLastSuccess{},
+		last:    map[domain.BackupTargetRef]backupLastSuccess{},
 		nextRun: map[domain.BackupKind]func() time.Time{},
 	}
 }
 
-func keyOf(run domain.BackupRunRecord) backupTargetKey {
-	return backupTargetKey{kind: run.Kind, app: run.App, service: run.Service, target: run.Target}
-}
-
 // remember stores a success unless a newer one is already known.
 func (s *backupState) remember(run domain.BackupRunRecord) {
-	if !run.Succeeded || run.FinishedAt.IsZero() {
+	if !run.Succeeded || run.StartedAt.IsZero() {
 		return
 	}
-	key := keyOf(run)
+	key := run.BackupTargetRef
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if prev, ok := s.last[key]; ok && !run.FinishedAt.After(prev.at) {
+	if prev, ok := s.last[key]; ok && !run.StartedAt.After(prev.at) {
 		return
 	}
-	s.last[key] = backupLastSuccess{at: run.FinishedAt, size: run.SizeBytes}
+	s.last[key] = backupLastSuccess{at: run.StartedAt, size: run.SizeBytes}
+}
+
+// retain drops the last success of every target of kind not in targets.
+func (s *backupState) retain(kind domain.BackupKind, targets []domain.BackupTargetRef) {
+	keep := make(map[domain.BackupTargetRef]struct{}, len(targets))
+	for _, ref := range targets {
+		keep[ref] = struct{}{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for key := range s.last {
+		if _, ok := keep[key]; key.Kind == kind && !ok {
+			delete(s.last, key)
+		}
+	}
 }
 
 // registerBackupInstruments creates the backup counters, histogram, and
@@ -84,7 +87,7 @@ func (m *Metrics) registerBackupInstruments() error {
 		return err
 	}
 	lastSuccess, err := m.meter.Float64ObservableGauge("gordon.backup.last_success_timestamp_seconds",
-		metric.WithDescription("Unix time of the last successful backup per target"),
+		metric.WithDescription("Start time (Unix) of the last successful backup per target"),
 		metric.WithUnit("s"))
 	if err != nil {
 		return err
@@ -105,7 +108,7 @@ func (m *Metrics) registerBackupInstruments() error {
 		m.backups.mu.Lock()
 		defer m.backups.mu.Unlock()
 		for key, last := range m.backups.last {
-			attrs := metric.WithAttributes(key.attrs()...)
+			attrs := metric.WithAttributes(targetAttrs(key)...)
 			o.ObserveFloat64(lastSuccess, float64(last.at.Unix()), attrs)
 			o.ObserveFloat64(lastSize, float64(last.size), attrs)
 		}
@@ -125,7 +128,7 @@ func (m *Metrics) RecordBackupRun(ctx context.Context, run domain.BackupRunRecor
 	if run.Succeeded {
 		result = "success"
 	}
-	attrs := keyOf(run).attrs()
+	attrs := targetAttrs(run.BackupTargetRef)
 	m.BackupRuns.Add(ctx, 1, metric.WithAttributes(append(attrs, attribute.String("result", result))...))
 	m.BackupDuration.Record(ctx, run.Duration.Seconds(), metric.WithAttributes(attrs...))
 	m.backups.remember(run)
@@ -134,6 +137,11 @@ func (m *Metrics) RecordBackupRun(ctx context.Context, run domain.BackupRunRecor
 // ObserveStoredBackup implements out.BackupMetrics.
 func (m *Metrics) ObserveStoredBackup(run domain.BackupRunRecord) {
 	m.backups.remember(run)
+}
+
+// RetainBackupTargets implements out.BackupMetrics.
+func (m *Metrics) RetainBackupTargets(kind domain.BackupKind, targets []domain.BackupTargetRef) {
+	m.backups.retain(kind, targets)
 }
 
 // ObserveBackupNextRun exports the next planned run of one backup kind.

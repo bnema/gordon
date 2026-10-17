@@ -56,23 +56,45 @@ func (s *VolumeService) WithMetrics(metrics out.BackupMetrics) *VolumeService {
 	return s
 }
 
-// SeedMetrics reports the newest stored archive of every target as its
-// last success, so the metric survives a restart. It counts no run.
+// SeedMetrics reconciles backup metrics with the declared volume targets:
+// it forgets targets that are no longer declared and reports the newest
+// stored archive of each declared one as its last success, so the metric
+// survives a restart. It counts no run.
 func (s *VolumeService) SeedMetrics(ctx context.Context) error {
 	if s.metrics == nil {
 		return nil
 	}
-	jobs, err := s.storage.ListVolumeArchives(ctx, "")
+	targets, err := s.allVolumeTargets(ctx)
 	if err != nil {
 		return fmt.Errorf("seed volume backup metrics: %w", err)
 	}
-	for _, job := range jobs {
+	refs := make([]domain.BackupTargetRef, 0, len(targets))
+	byVolume := make(map[string]domain.BackupTargetRef, len(targets))
+	for _, target := range targets {
+		ref := volumeTargetRef(target)
+		refs = append(refs, ref)
+		byVolume[target.App+"/"+target.VolumeName] = ref
+	}
+	s.metrics.RetainBackupTargets(domain.BackupKindVolume, refs)
+
+	archives, err := s.storage.LatestVolumeArchives(ctx)
+	if err != nil {
+		return fmt.Errorf("seed volume backup metrics: %w", err)
+	}
+	for _, archive := range archives {
+		ref, declared := byVolume[archive.App+"/"+archive.VolumeName]
+		if !declared {
+			continue
+		}
 		s.metrics.ObserveStoredBackup(domain.BackupRunRecord{
-			Kind: domain.BackupKindVolume, App: job.App, Service: job.Service, Target: job.VolumeName,
-			Succeeded: true, SizeBytes: job.SizeBytes, FinishedAt: job.StartedAt,
+			BackupTargetRef: ref, Succeeded: true, SizeBytes: archive.SizeBytes, StartedAt: archive.StartedAt,
 		})
 	}
 	return nil
+}
+
+func volumeTargetRef(target domain.VolumeBackupTarget) domain.BackupTargetRef {
+	return domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: target.App, Service: target.Service, Target: target.VolumeName}
 }
 
 // VolumeTargets returns every declared volume target of one app.
@@ -246,9 +268,11 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 	job := s.archiveVolume(ctx, target)
 	if s.metrics != nil {
 		s.metrics.RecordBackupRun(ctx, domain.BackupRunRecord{
-			Kind: domain.BackupKindVolume, App: target.App, Service: target.Service, Target: target.VolumeName,
-			Succeeded: job.Status == domain.BackupStatusCompleted, Duration: job.CompletedAt.Sub(job.StartedAt),
-			SizeBytes: job.SizeBytes, FinishedAt: job.CompletedAt,
+			BackupTargetRef: volumeTargetRef(target),
+			Succeeded:       job.Status == domain.BackupStatusCompleted,
+			Duration:        job.CompletedAt.Sub(job.StartedAt),
+			SizeBytes:       job.SizeBytes,
+			StartedAt:       job.StartedAt,
 		})
 	}
 	return job

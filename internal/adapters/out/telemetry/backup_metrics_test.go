@@ -61,13 +61,12 @@ func TestRecordBackupRun_CountsResultAndTracksLastSuccess(t *testing.T) {
 	ctx := context.Background()
 	done := time.Date(2026, 10, 18, 1, 30, 0, 0, time.UTC)
 
+	ref := domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: "forgejo", Service: "forgejo", Target: "forgejo-data"}
 	m.RecordBackupRun(ctx, domain.BackupRunRecord{
-		Kind: domain.BackupKindVolume, App: "forgejo", Service: "forgejo", Target: "forgejo-data",
-		Succeeded: true, Duration: 40 * time.Second, SizeBytes: 1024, FinishedAt: done,
+		BackupTargetRef: ref, Succeeded: true, Duration: 40 * time.Second, SizeBytes: 1024, StartedAt: done,
 	})
 	m.RecordBackupRun(ctx, domain.BackupRunRecord{
-		Kind: domain.BackupKindVolume, App: "forgejo", Service: "forgejo", Target: "forgejo-data",
-		Succeeded: false, Duration: time.Second, FinishedAt: done.Add(time.Hour),
+		BackupTargetRef: ref, Succeeded: false, Duration: time.Second, StartedAt: done.Add(time.Hour),
 	})
 
 	data := collect(t, reader)
@@ -86,11 +85,9 @@ func TestRecordBackupRun_CountsResultAndTracksLastSuccess(t *testing.T) {
 
 	hist, ok := data["gordon.backup.duration_seconds"].(metricdata.Histogram[float64])
 	require.True(t, ok)
-	var count uint64
-	for _, dp := range hist.DataPoints {
-		count += dp.Count
-	}
-	assert.Equal(t, uint64(2), count)
+	require.Len(t, hist.DataPoints, 1)
+	assert.Equal(t, uint64(2), hist.DataPoints[0].Count)
+	assert.InDelta(t, 41.0, hist.DataPoints[0].Sum, 0.001)
 
 	// A failure never moves the last-success timestamp or size.
 	assert.Equal(t, map[string]float64{"forgejo-data": float64(done.Unix())},
@@ -103,11 +100,14 @@ func TestObserveStoredBackup_KeepsTheNewestSuccess(t *testing.T) {
 	m, reader := newTestMetrics(t)
 	newer := time.Date(2026, 10, 17, 1, 30, 0, 0, time.UTC)
 	older := newer.Add(-24 * time.Hour)
-	rec := domain.BackupRunRecord{Kind: domain.BackupKindDatabase, App: "shop", Service: "db", Target: "orders", Succeeded: true}
+	rec := domain.BackupRunRecord{
+		BackupTargetRef: domain.BackupTargetRef{Kind: domain.BackupKindDatabase, App: "shop", Service: "db", Target: "orders"},
+		Succeeded:       true,
+	}
 
-	rec.FinishedAt, rec.SizeBytes = newer, 200
+	rec.StartedAt, rec.SizeBytes = newer, 200
 	m.ObserveStoredBackup(rec)
-	rec.FinishedAt, rec.SizeBytes = older, 100
+	rec.StartedAt, rec.SizeBytes = older, 100
 	m.ObserveStoredBackup(rec)
 
 	data := collect(t, reader)
@@ -119,6 +119,22 @@ func TestObserveStoredBackup_KeepsTheNewestSuccess(t *testing.T) {
 	// Seeding never counts a run.
 	_, counted := data["gordon.backup.runs"]
 	assert.False(t, counted)
+}
+
+func TestRetainBackupTargets_ForgetsUndeclaredTargetsOfThatKindOnly(t *testing.T) {
+	m, reader := newTestMetrics(t)
+	at := time.Date(2026, 10, 17, 1, 30, 0, 0, time.UTC)
+	keep := domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: "shop", Service: "api", Target: "data"}
+	gone := domain.BackupTargetRef{Kind: domain.BackupKindVolume, App: "old", Service: "api", Target: "cache"}
+	db := domain.BackupTargetRef{Kind: domain.BackupKindDatabase, App: "old", Service: "db", Target: "orders"}
+	for _, ref := range []domain.BackupTargetRef{keep, gone, db} {
+		m.ObserveStoredBackup(domain.BackupRunRecord{BackupTargetRef: ref, Succeeded: true, StartedAt: at})
+	}
+
+	m.RetainBackupTargets(domain.BackupKindVolume, []domain.BackupTargetRef{keep})
+
+	assert.Equal(t, map[string]float64{"data": float64(at.Unix()), "orders": float64(at.Unix())},
+		gaugeByTarget(t, collect(t, reader)["gordon.backup.last_success_timestamp_seconds"]))
 }
 
 func TestObserveBackupNextRun(t *testing.T) {

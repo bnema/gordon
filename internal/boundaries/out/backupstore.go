@@ -30,6 +30,10 @@ type VolumeBackupStorage interface {
 	StoreVolumeArchive(ctx context.Context, job domain.VolumeBackupJob, data io.Reader) (string, error)
 	GetVolumeArchive(ctx context.Context, artifactRef string) (io.ReadCloser, error)
 	ListVolumeArchives(ctx context.Context, domainName string) ([]domain.VolumeBackupJob, error)
+	// LatestVolumeArchives returns the newest archive of every app volume
+	// from the object listing alone: Service and other per-object metadata
+	// are left empty.
+	LatestVolumeArchives(ctx context.Context) ([]domain.VolumeBackupJob, error)
 	DeleteVolumeArchive(ctx context.Context, artifactRef string) error
 	ApplyVolumeRetention(ctx context.Context, domainName string, policy domain.VolumeBackupRetentionPolicy) (int, error)
 }

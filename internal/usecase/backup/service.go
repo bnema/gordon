@@ -60,23 +60,45 @@ func (s *Service) WithMetrics(metrics out.BackupMetrics) *Service {
 	return s
 }
 
-// SeedMetrics reports the newest stored dump of every target as its last
-// success, so the metric survives a restart. It counts no run.
+// SeedMetrics reconciles backup metrics with the declared database
+// targets: it forgets targets that are no longer declared and reports the
+// newest stored dump of each declared one as its last success, so the
+// metric survives a restart. It counts no run.
 func (s *Service) SeedMetrics(ctx context.Context) error {
 	if s.metrics == nil {
 		return nil
 	}
+	targets, err := s.allTargets(ctx)
+	if err != nil {
+		return fmt.Errorf("seed backup metrics: %w", err)
+	}
+	refs := make([]domain.BackupTargetRef, 0, len(targets))
+	declared := make(map[domain.BackupTargetRef]struct{}, len(targets))
+	for _, target := range targets {
+		ref := databaseTargetRef(target)
+		refs = append(refs, ref)
+		declared[ref] = struct{}{}
+	}
+	s.metrics.RetainBackupTargets(domain.BackupKindDatabase, refs)
+
 	jobs, err := s.ListBackups(ctx, "")
 	if err != nil {
 		return fmt.Errorf("seed backup metrics: %w", err)
 	}
 	for _, job := range jobs {
+		ref := domain.BackupTargetRef{Kind: domain.BackupKindDatabase, App: job.App, Service: job.Service, Target: job.DBName}
+		if _, ok := declared[ref]; !ok {
+			continue
+		}
 		s.metrics.ObserveStoredBackup(domain.BackupRunRecord{
-			Kind: domain.BackupKindDatabase, App: job.App, Service: job.Service, Target: job.DBName,
-			Succeeded: true, SizeBytes: job.SizeBytes, FinishedAt: job.StartedAt,
+			BackupTargetRef: ref, Succeeded: true, SizeBytes: job.SizeBytes, StartedAt: job.StartedAt,
 		})
 	}
 	return nil
+}
+
+func databaseTargetRef(target domain.DatabaseTarget) domain.BackupTargetRef {
+	return domain.BackupTargetRef{Kind: domain.BackupKindDatabase, App: target.App, Service: target.Service, Target: target.Database}
 }
 
 // Targets returns every declared database target of one app, ordered by
@@ -238,15 +260,16 @@ func (s *Service) Status(ctx context.Context) ([]domain.BackupJob, error) {
 }
 
 // runTarget runs one declared database backup through the service
-// container that hosts it.
-// runTarget dumps one target and records the outcome in metrics.
+// container that hosts it and records the outcome in metrics.
 func (s *Service) runTarget(ctx context.Context, target domain.DatabaseTarget, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
-	started := time.Now()
-	result, err := s.dumpTarget(ctx, target, schedule)
+	started := time.Now().UTC()
+	result, err := s.dumpTarget(ctx, target, schedule, started)
 	if s.metrics != nil {
 		run := domain.BackupRunRecord{
-			Kind: domain.BackupKindDatabase, App: target.App, Service: target.Service, Target: target.Database,
-			Succeeded: err == nil, Duration: time.Since(started), FinishedAt: time.Now().UTC(),
+			BackupTargetRef: databaseTargetRef(target),
+			Succeeded:       err == nil,
+			Duration:        time.Since(started),
+			StartedAt:       started,
 		}
 		if result != nil {
 			run.SizeBytes = result.Job.SizeBytes
@@ -256,11 +279,10 @@ func (s *Service) runTarget(ctx context.Context, target domain.DatabaseTarget, s
 	return result, err
 }
 
-func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, schedule domain.BackupSchedule) (*domain.BackupResult, error) {
+func (s *Service) dumpTarget(ctx context.Context, target domain.DatabaseTarget, schedule domain.BackupSchedule, started time.Time) (*domain.BackupResult, error) {
 	if target.ContainerID == "" {
 		return nil, fmt.Errorf("backup: app %q service %q has no active container", target.App, target.Service)
 	}
-	started := time.Now().UTC()
 
 	execCtx, cancelExec := context.WithTimeout(ctx, backupExecTimeout)
 	defer cancelExec()
