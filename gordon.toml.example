@@ -179,6 +179,8 @@ prefix = ""
 # path_style = false
 # sse_algorithm = "AES256"
 # sse_kms_key_id = ""
+# Storage class sent with each upload; empty uses the bucket default.
+# storage_class = "ONEZONE_IA"
 
 [backups.volumes.retention]
 keep = 14

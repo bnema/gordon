@@ -165,6 +165,32 @@ func TestValidateVolumeBackupConfig(t *testing.T) {
 		assert.Equal(t, "prod/gordon", volumeCfg.S3Prefix)
 	})
 
+	t.Run("storage class is normalized and passed through", func(t *testing.T) {
+		var cfg Config
+		cfg.Backups.Volumes.S3.StorageClass = " onezone_ia "
+
+		volumeCfg, err := validateVolumeBackupConfig(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, "ONEZONE_IA", volumeCfg.S3StorageClass)
+	})
+
+	t.Run("empty storage class keeps the bucket default", func(t *testing.T) {
+		var cfg Config
+
+		volumeCfg, err := validateVolumeBackupConfig(cfg)
+		require.NoError(t, err)
+		assert.Empty(t, volumeCfg.S3StorageClass)
+	})
+
+	t.Run("storage class rejects unsafe values", func(t *testing.T) {
+		var cfg Config
+		cfg.Backups.Volumes.S3.StorageClass = "one zone"
+
+		_, err := validateVolumeBackupConfig(cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "backups.volumes.s3.storage_class")
+	})
+
 	t.Run("zstd requires helper image with zstd", func(t *testing.T) {
 		var cfg Config
 		cfg.Backups.Volumes.Compression = "zstd"

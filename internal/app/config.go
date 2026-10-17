@@ -161,6 +161,7 @@ type Config struct {
 				PathStyle    bool   `mapstructure:"path_style"`
 				SSEAlgorithm string `mapstructure:"sse_algorithm"`
 				SSEKMSKeyID  string `mapstructure:"sse_kms_key_id"`
+				StorageClass string `mapstructure:"storage_class"`
 			} `mapstructure:"s3"`
 			Retention struct {
 				Keep int `mapstructure:"keep"`
@@ -431,6 +432,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("backups.volumes.s3.path_style", false)
 	v.SetDefault("backups.volumes.s3.sse_algorithm", "")
 	v.SetDefault("backups.volumes.s3.sse_kms_key_id", "")
+	v.SetDefault("backups.volumes.s3.storage_class", "")
 	v.SetDefault("backups.volumes.retention.keep", 14)
 	v.SetDefault("images.allowed_registries", []string{})
 	v.SetDefault("images.require_digest", false)

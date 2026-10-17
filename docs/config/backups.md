@@ -50,6 +50,7 @@ prefix = "prod/gordon"
 # path_style = false
 # sse_algorithm = "AES256"
 # sse_kms_key_id = ""
+# storage_class = "ONEZONE_IA"
 
 [backups.volumes.retention]
 keep = 14
@@ -68,6 +69,9 @@ keep = 14
 | `backups.volumes.s3.prefix` | `""` | Object key prefix |
 | `backups.volumes.s3.endpoint` | `""` | Optional S3-compatible endpoint |
 | `backups.volumes.s3.path_style` | `false` | Use path-style addressing for S3-compatible storage |
+| `backups.volumes.s3.sse_algorithm` | `""` | Server-side encryption sent with each upload, such as `AES256` |
+| `backups.volumes.s3.sse_kms_key_id` | `""` | KMS key ID for `aws:kms` encryption |
+| `backups.volumes.s3.storage_class` | `""` | Storage class sent with each upload, such as `STANDARD_IA` (AWS) or `ONEZONE_IA` (Scaleway One Zone); empty uses the bucket default |
 | `backups.volumes.retention.keep` | `14` | Completed archives to keep per app + volume |
 
 Volume backup objects are stored under the canonical app name:
@@ -86,6 +90,8 @@ the current layout.
 - Volume backups archive the app's declared volumes that its backup declaration references.
 - Bind mounts, tmpfs mounts, anonymous volumes, and undeclared volumes are never backed up.
 - Database backups archive the app's declared PostgreSQL databases that its backup declaration references.
+- Only volumes listed in a service's `backup.volume` are archived. Leave caches and rebuildable data (CI runner state, build caches) out of that list.
+- Stored size is roughly `retention.keep` × the compressed size of each backed-up volume.
 - Live volume archives are best-effort; consistency requires application quiesce, pause, or stop.
 - Automated volume restore is not part of the MVP.
 - Snapshots are not generic across Docker/Podman volumes and require backend-specific support such as ZFS, Btrfs, LVM, EBS, or a snapshot-capable volume driver.
