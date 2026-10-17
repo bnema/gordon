@@ -138,6 +138,7 @@ type Config struct {
 		Databases struct {
 			Enabled    bool   `mapstructure:"enabled"`
 			Schedule   string `mapstructure:"schedule"`
+			Time       string `mapstructure:"time"`
 			StorageDir string `mapstructure:"storage_dir"`
 			Retention  struct {
 				Hourly  int `mapstructure:"hourly"`
@@ -148,7 +149,8 @@ type Config struct {
 		} `mapstructure:"databases"`
 		Volumes struct {
 			Enabled        bool   `mapstructure:"enabled"`
-			Interval       string `mapstructure:"interval"`
+			Schedule       string `mapstructure:"schedule"`
+			Time           string `mapstructure:"time"`
 			Compression    string `mapstructure:"compression"`
 			Timeout        string `mapstructure:"timeout"`
 			MaxConcurrency int    `mapstructure:"max_concurrency"`
@@ -267,6 +269,7 @@ var retiredAppConfigKeys = []struct {
 	{"auto_route_allowed_domains", "feature removed; declare explicit interfaces"},
 	{"previews", "staging is an ordinary app file"},
 	{"env", "remove the [env] section; declare [env] and [services.<name>.secrets] in app files"},
+	{"backups.volumes.interval", "use backups.volumes.schedule and backups.volumes.time (server local time)"},
 }
 
 // validateRetiredAppConfig rejects obsolete application configuration
@@ -414,13 +417,15 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("volumes.preserve", true)
 	v.SetDefault("backups.databases.enabled", false)
 	v.SetDefault("backups.databases.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("backups.databases.time", "")
 	v.SetDefault("backups.databases.storage_dir", "")
 	v.SetDefault("backups.databases.retention.hourly", 0)
 	v.SetDefault("backups.databases.retention.daily", 0)
 	v.SetDefault("backups.databases.retention.weekly", 0)
 	v.SetDefault("backups.databases.retention.monthly", 0)
 	v.SetDefault("backups.volumes.enabled", false)
-	v.SetDefault("backups.volumes.interval", "24h")
+	v.SetDefault("backups.volumes.schedule", string(domain.ScheduleDaily))
+	v.SetDefault("backups.volumes.time", "")
 	v.SetDefault("backups.volumes.compression", string(domain.VolumeBackupCompressionGzip))
 	v.SetDefault("backups.volumes.timeout", "2h")
 	v.SetDefault("backups.volumes.max_concurrency", 2)

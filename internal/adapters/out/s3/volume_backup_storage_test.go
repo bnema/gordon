@@ -141,6 +141,31 @@ func TestVolumeBackupStorageSendsConfiguredStorageClass(t *testing.T) {
 	assert.Equal(t, "ONEZONE_IA", string(uploader.last.StorageClass))
 }
 
+// TestVolumeBackupStorageRetentionMixesLongAndShortIDs proves archives
+// written with the former timestamped job IDs stay listed and age out
+// under retention next to archives with short IDs.
+func TestVolumeBackupStorageRetentionMixesLongAndShortIDs(t *testing.T) {
+	client := newFakeVolumeS3Client()
+	storage := NewVolumeBackupStorageWithClients(domain.VolumeBackupConfig{S3Bucket: "bucket", S3Prefix: "gordon"}, client, &fakeVolumeUploader{client: client})
+	longID := "gordon/apps/forgejo/volumes/forgejo-data/20261017T052537Z-2026-10-17T05_25_37.725487298Z-7cddcd8f.tar.gz"
+	short1 := "gordon/apps/forgejo/volumes/forgejo-data/20261018T013000Z-1a2b3c4d.tar.gz"
+	short2 := "gordon/apps/forgejo/volumes/forgejo-data/20261019T013000Z-5e6f7a8b.tar.gz"
+	for _, key := range []string{longID, short1, short2} {
+		client.objects[key] = []byte("x")
+	}
+
+	jobs, err := storage.ListVolumeArchives(context.Background(), "forgejo")
+	require.NoError(t, err)
+	require.Len(t, jobs, 3)
+	assert.Equal(t, "5e6f7a8b", jobs[0].ID)
+	assert.Equal(t, "2026-10-17T05_25_37.725487298Z-7cddcd8f", jobs[2].ID)
+
+	deleted, err := storage.ApplyVolumeRetention(context.Background(), "forgejo", domain.VolumeBackupRetentionPolicy{Keep: 2})
+	require.NoError(t, err)
+	assert.Equal(t, 1, deleted)
+	assert.Equal(t, []string{longID}, client.deleted)
+}
+
 func TestVolumeBackupStorageRetentionUsesParsedKeyTimestamp(t *testing.T) {
 	client := newFakeVolumeS3Client()
 	storage := NewVolumeBackupStorageWithClients(domain.VolumeBackupConfig{S3Bucket: "bucket"}, client, &fakeVolumeUploader{client: client})

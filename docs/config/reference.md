@@ -208,16 +208,23 @@ preserve = true                              # Keep volumes when containers are 
 # =============================================================================
 # BACKUPS
 # =============================================================================
-[backups]
-enabled = false                              # Enable backup service
+[backups.databases]
+enabled = false                              # Enable PostgreSQL backups
 schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
+time = ""                                   # "HH:MM" server local time (empty: preset default)
 storage_dir = ""                            # Backup root (default: {data_dir}/backups)
 
-[backups.retention]
+[backups.databases.retention]
 hourly = 0                                   # Keep N hourly backups per DB
 daily = 0                                    # Keep N daily backups per DB
 weekly = 0                                   # Keep N weekly backups per DB
 monthly = 0                                  # Keep N monthly backups per DB
+
+[backups.volumes]
+enabled = false                              # Enable S3 volume archives (see backups.md)
+schedule = "daily"                          # "hourly", "daily", "weekly", "monthly"
+time = ""                                   # "HH:MM" server local time (empty: preset default)
+max_concurrency = 2                          # Volumes archived in parallel
 
 # =============================================================================
 # IMAGES
@@ -338,22 +345,28 @@ keep_last = 3                                # Keep N newest tags per repository
 | `services[].readiness.timeout` | default wait | Positive readiness timeout when set |
 | `services[].cleanup.preserve_volumes` | `true` | Preserve managed image-discovered volumes on cleanup |
 | `services[].cleanup.remove_container` | `true` | Remove old, disabled, or removed service containers |
-| `backups.enabled` | `false` | Backup service disabled |
-| `backups.schedule` | `"daily"` | Backup scheduler preset |
-| `backups.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
-| `backups.retention.hourly` | `0` | Keep no hourly backups by default |
-| `backups.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
-| `backups.retention.weekly` | `0` | Keep no weekly backups by default |
-| `backups.retention.monthly` | `0` | Keep no monthly backups by default |
+| `backups.databases.enabled` | `false` | PostgreSQL backups disabled |
+| `backups.databases.schedule` | `"daily"` | `hourly`, `daily`, `weekly`, or `monthly` |
+| `backups.databases.time` | `""` | `HH:MM` server local time; empty uses the preset default |
+| `backups.databases.storage_dir` | `""` | Uses `{server.data_dir}/backups` when empty |
+| `backups.databases.retention.hourly` | `0` | Keep no hourly backups by default |
+| `backups.databases.retention.daily` | `0` | Keep no daily backups by default (recommend `7`) |
+| `backups.databases.retention.weekly` | `0` | Keep no weekly backups by default |
+| `backups.databases.retention.monthly` | `0` | Keep no monthly backups by default |
+| `backups.volumes.enabled` | `false` | S3 volume archives disabled |
+| `backups.volumes.schedule` | `"daily"` | `hourly`, `daily`, `weekly`, or `monthly` |
+| `backups.volumes.time` | `""` | `HH:MM` server local time; empty uses the preset default |
+| `backups.volumes.max_concurrency` | `2` | Volumes archived in parallel |
+| `backups.volumes.retention.keep` | `14` | Archives kept per app + volume |
 | `images.allowed_registries` | `[]` | Additional exact hostname+port entries. Defaults allow Docker Hub (`docker.io` and `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's registry. This allowlist does not configure registry credentials and is not DNS/IP or runtime egress enforcement. |
 | `images.require_digest` | `false` | Require valid SHA-256 digest-pinned references for every registry, including Gordon |
 | `images.prune.enabled` | `false` | Scheduled image cleanup disabled |
 | `images.prune.schedule` | `"daily"` | Cleanup schedule preset |
 | `images.prune.keep_last` | `3` | Number of recent tags kept per repository |
 
-Note: for all `backups.retention.*` keys, `0` means keep no backups for that retention tier.
+Note: for all `backups.databases.retention.*` keys, `0` means keep no backups for that retention tier. The top-level `backups.enabled`, `backups.schedule`, `backups.storage_dir`, and `backups.retention.*` keys are aliases of the `backups.databases.*` keys.
 
-Database (`backups.databases.*`) and S3 volume backup (`backups.volumes.*`) keys, including `backups.volumes.s3.storage_class`, are listed in [Backups](./backups.md).
+Every volume backup key, including compression, the helper image, and the `backups.volumes.s3.*` settings, is listed in [Backups](./backups.md).
 
 ## App Manifest HTTP Interfaces
 

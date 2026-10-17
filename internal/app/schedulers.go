@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/spf13/viper"
@@ -61,22 +62,23 @@ func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log ze
 		return nil, nil
 	}
 
-	preset, err := resolveBackupSchedule(dbCfg.Schedule)
+	schedule, err := resolveCronSchedule(dbCfg.Schedule, dbCfg.Time, "backups.databases")
 	if err != nil {
 		return nil, err
 	}
+	preset := schedule.Preset
 
 	scheduler := cronSvc.NewScheduler(log)
 	err = scheduler.Add(
 		"backup-scheduler",
 		"Backups",
-		domain.CronSchedule{Preset: preset},
+		schedule,
 		func(jobCtx context.Context) error {
 			if err := svc.backupSvc.RunForSchedule(jobCtx, preset); err != nil {
 				return err
 			}
 			log.Info().
-				Str("schedule", string(preset)).
+				Str("schedule", describeSchedule(schedule)).
 				Msg("scheduled backup run complete")
 			return nil
 		},
@@ -87,14 +89,21 @@ func startBackupScheduler(ctx context.Context, cfg Config, svc *services, log ze
 
 	scheduler.Start(ctx)
 	log.Info().
-		Str("schedule", string(preset)).
+		Str("schedule", describeSchedule(schedule)).
+		Time("next_run", nextRunOf(scheduler, "backup-scheduler")).
 		Msg("backup scheduler enabled")
 
 	return scheduler, nil
 }
 
-func resolveBackupSchedule(raw string) (domain.BackupSchedule, error) {
-	return resolveSchedulePreset(raw, "backups.databases.schedule", domain.ScheduleDaily)
+// nextRunOf returns the next planned run of one registered job.
+func nextRunOf(scheduler *cronSvc.Scheduler, id string) time.Time {
+	for _, entry := range scheduler.List() {
+		if entry.ID == id {
+			return entry.NextRun
+		}
+	}
+	return time.Time{}
 }
 
 func startVolumeBackupScheduler(ctx context.Context, cfg Config, svc *services, log zerowrap.Logger) (*cronSvc.Scheduler, error) {
@@ -111,13 +120,13 @@ func startVolumeBackupScheduler(ctx context.Context, cfg Config, svc *services, 
 	err = scheduler.Add(
 		"volume-backup-scheduler",
 		"Volume Backups",
-		domain.CronSchedule{Interval: volumeCfg.Interval},
+		volumeCfg.Schedule,
 		func(jobCtx context.Context) error {
-			if err := svc.volumeBackupSvc.RunVolumeBackupsForSchedule(jobCtx, ""); err != nil {
+			if err := svc.volumeBackupSvc.RunVolumeBackupsForSchedule(jobCtx, volumeCfg.Schedule.Preset); err != nil {
 				return err
 			}
 			log.Info().
-				Dur("interval", volumeCfg.Interval).
+				Str("schedule", describeSchedule(volumeCfg.Schedule)).
 				Msg("scheduled volume backup run complete")
 			return nil
 		},
@@ -128,7 +137,8 @@ func startVolumeBackupScheduler(ctx context.Context, cfg Config, svc *services, 
 
 	scheduler.Start(ctx)
 	log.Info().
-		Dur("interval", volumeCfg.Interval).
+		Str("schedule", describeSchedule(volumeCfg.Schedule)).
+		Time("next_run", nextRunOf(scheduler, "volume-backup-scheduler")).
 		Msg("volume backup scheduler enabled")
 
 	return scheduler, nil
@@ -207,6 +217,41 @@ func startImagePruneScheduler(ctx context.Context, cfg Config, svc *services, lo
 
 func resolveImagePruneSchedule(raw string) (domain.BackupSchedule, error) {
 	return resolveSchedulePreset(raw, "images.prune.schedule", domain.ScheduleDaily)
+}
+
+// resolveCronSchedule builds a backup schedule from a preset and an
+// optional HH:MM time read in the server's local timezone. prefix names
+// the config section (e.g. "backups.volumes") for error messages.
+func resolveCronSchedule(rawSchedule, rawTime, prefix string) (domain.CronSchedule, error) {
+	preset, err := resolveSchedulePreset(rawSchedule, prefix+".schedule", domain.ScheduleDaily)
+	if err != nil {
+		return domain.CronSchedule{}, err
+	}
+	schedule := domain.CronSchedule{Preset: preset, Location: time.Local}
+	if strings.TrimSpace(rawTime) == "" {
+		return schedule, nil
+	}
+	at, err := domain.ParseTimeOfDay(rawTime)
+	if err != nil {
+		return domain.CronSchedule{}, fmt.Errorf("%s.time: %w", prefix, err)
+	}
+	schedule.At = &at
+	return schedule, nil
+}
+
+// describeSchedule renders a schedule for logs, e.g. "daily at 03:30 Europe/Paris".
+func describeSchedule(s domain.CronSchedule) string {
+	at := "default time"
+	if s.At != nil {
+		at = s.At.String()
+	}
+	loc := "UTC"
+	if s.Location != nil {
+		// time.Local reports "Local"; the current zone abbreviation is
+		// what an operator can read (e.g. CEST).
+		loc, _ = time.Now().In(s.Location).Zone()
+	}
+	return fmt.Sprintf("%s at %s %s", s.Preset, at, loc)
 }
 
 func resolveSchedulePreset(raw, name string, defaultVal domain.BackupSchedule) (domain.BackupSchedule, error) {

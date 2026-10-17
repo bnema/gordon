@@ -99,10 +99,12 @@ gordon backups volume status
 
 ## Scheduling
 
-The installation backup schedule runs every declared database whose own
-`schedule` matches the firing tier, and applies retention under the app name.
-Volume declarations carry no schedule of their own: the installation volume
-backup interval runs the declared volume targets.
+Backups run on the installation schedule (`backups.databases.schedule` and
+`backups.volumes.schedule`, each with an optional `time` in server local time;
+see [Backups](../config/backups.md#schedule)). The database schedule runs every
+declared database whose own `schedule` matches the firing tier. Volume
+declarations carry no schedule of their own: every declared volume target runs,
+up to `max_concurrency` at once. Retention is applied per app after the run.
 
 ## JSON Output
 

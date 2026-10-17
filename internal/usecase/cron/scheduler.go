@@ -12,7 +12,8 @@ import (
 	"github.com/bnema/zerowrap"
 )
 
-// Scheduler runs recurring jobs based on backup schedules.
+// Scheduler runs recurring jobs on preset schedules. Times are wall-clock
+// times in each schedule's Location; nowFn returns an absolute instant.
 type Scheduler struct {
 	entries map[string]*entry
 	mu      sync.RWMutex
@@ -275,55 +276,89 @@ func (s *Scheduler) dueEntries(now time.Time) []*entry {
 	return entries
 }
 
-// calculateNextRun computes the next execution time using UTC-only preset rules.
+// presetDefaultTimes are the built-in times of day used when a schedule
+// sets no explicit time.
+var presetDefaultTimes = map[domain.BackupSchedule]domain.TimeOfDay{
+	domain.ScheduleHourly:  {Hour: 0, Minute: 0},
+	domain.ScheduleDaily:   {Hour: 2, Minute: 0},
+	domain.ScheduleWeekly:  {Hour: 3, Minute: 0},
+	domain.ScheduleMonthly: {Hour: 4, Minute: 0},
+}
+
+// calculateNextRun returns the first scheduled instant strictly after now.
 //
-// Current MVP behavior is intentionally fixed to UTC because domain.CronSchedule
-// has no timezone field yet:
-//   - daily:   02:00 UTC
-//   - weekly:  Sunday 03:00 UTC
-//   - monthly: first day of month 04:00 UTC
+// Times are wall-clock times in schedule.Location (UTC when nil), so a
+// daily 03:30 stays 03:30 across daylight-saving changes. A wall time that
+// does not exist on a given day (spring-forward gap) runs at the end of the
+// gap. A wall time that happens twice (fall-back) runs once, at its first
+// occurrence; hourly schedules follow real elapsed hours.
 //
-// This means users in non-UTC timezones should account for UTC offsets.
-//
-// TODO: add timezone support on domain.CronSchedule once timezone-aware
-// scheduling is introduced. Default timezone should be the host system timezone
-// when no explicit timezone is configured.
+// The result only ever depends on now: a run missed while the process was
+// down is skipped, never caught up.
+//   - hourly:  every hour at At.Minute
+//   - daily:   every day at At
+//   - weekly:  every Sunday at At
+//   - monthly: the first day of every month at At
 func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, error) {
-	now = now.UTC()
-	if schedule.Interval > 0 && schedule.Preset != "" {
-		return time.Time{}, fmt.Errorf("cron schedule cannot set both interval and preset")
+	at, ok := presetDefaultTimes[schedule.Preset]
+	if !ok {
+		return time.Time{}, fmt.Errorf("unsupported schedule preset: %q", schedule.Preset)
 	}
-	if schedule.Interval > 0 {
-		return now.Add(schedule.Interval), nil
+	if schedule.At != nil {
+		at = *schedule.At
 	}
+	loc := schedule.Location
+	if loc == nil {
+		loc = time.UTC
+	}
+	local := now.In(loc)
+	y, m, d := local.Date()
 
 	switch schedule.Preset {
 	case domain.ScheduleHourly:
-		next := time.Date(now.Year(), now.Month(), now.Day(), now.Hour(), 0, 0, 0, time.UTC)
-		if !next.After(now) {
-			next = next.Add(time.Hour)
-		}
-		return next, nil
+		return nextMinuteOfHour(now, at.Minute, loc), nil
 	case domain.ScheduleDaily:
-		next := time.Date(now.Year(), now.Month(), now.Day(), 2, 0, 0, 0, time.UTC)
-		if !next.After(now) {
-			next = next.AddDate(0, 0, 1)
-		}
-		return next, nil
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m, d+i, at, loc) }), nil
 	case domain.ScheduleWeekly:
-		daysUntilSunday := (7 - int(now.Weekday())) % 7
-		next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.UTC).AddDate(0, 0, daysUntilSunday)
-		if !next.After(now) {
-			next = next.AddDate(0, 0, 7)
-		}
-		return next, nil
-	case domain.ScheduleMonthly:
-		next := time.Date(now.Year(), now.Month(), 1, 4, 0, 0, 0, time.UTC)
-		if !next.After(now) {
-			next = next.AddDate(0, 1, 0)
-		}
-		return next, nil
-	default:
-		return time.Time{}, fmt.Errorf("unsupported schedule preset: %q", schedule.Preset)
+		sunday := d + (7-int(local.Weekday()))%7
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m, sunday+7*i, at, loc) }), nil
+	default: // domain.ScheduleMonthly
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m+time.Month(i), 1, at, loc) }), nil
 	}
+}
+
+// firstAfter returns candidate(0) or candidate(1), whichever is the first
+// strictly after now.
+func firstAfter(now time.Time, candidate func(i int) time.Time) time.Time {
+	if next := candidate(0); next.After(now) {
+		return next
+	}
+	return candidate(1)
+}
+
+// nextMinuteOfHour returns the first whole minute strictly after now whose
+// wall-clock minute in loc equals minute. Walking real minutes keeps hourly
+// runs one hour apart across DST changes.
+func nextMinuteOfHour(now time.Time, minute int, loc *time.Location) time.Time {
+	t := now.Truncate(time.Minute).Add(time.Minute)
+	for i := 0; i < 120 && t.In(loc).Minute() != minute; i++ {
+		t = t.Add(time.Minute)
+	}
+	return t
+}
+
+// wallTime returns the instant of the given wall-clock time in loc. Day and
+// month overflow are normalized like time.Date. When the wall time falls in
+// a spring-forward gap, the end of the gap is returned.
+func wallTime(year int, month time.Month, day int, at domain.TimeOfDay, loc *time.Location) time.Time {
+	t := time.Date(year, month, day, at.Hour, at.Minute, 0, 0, loc)
+	if t.Hour() == at.Hour && t.Minute() == at.Minute {
+		return t
+	}
+	// Nonexistent wall time: interpret it with the offset in force before
+	// the gap, which lands after the transition, then snap back to it.
+	naive := time.Date(year, month, day, at.Hour, at.Minute, 0, 0, time.UTC)
+	_, offsetBefore := naive.Add(-12 * time.Hour).In(loc).Zone()
+	start, _ := naive.Add(-time.Duration(offsetBefore) * time.Second).In(loc).ZoneBounds()
+	return start.In(loc)
 }

@@ -2,6 +2,8 @@ package backup
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"sort"
@@ -165,10 +167,10 @@ func (s *VolumeService) RunVolumeBackupsForSchedule(ctx context.Context, schedul
 	if err != nil {
 		return err
 	}
+	jobs := s.runVolumeBackupsConcurrently(ctx, targets)
 	var firstErr error
 	apps := map[string]struct{}{}
-	for _, target := range targets {
-		job := s.runVolumeBackup(ctx, target)
+	for _, job := range jobs {
 		if job.Status != domain.BackupStatusCompleted {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("volume backup %s/%s: %s", job.App, job.VolumeName, job.Error)
@@ -177,6 +179,8 @@ func (s *VolumeService) RunVolumeBackupsForSchedule(ctx context.Context, schedul
 		}
 		apps[job.App] = struct{}{}
 	}
+	// Retention runs only after every archive finished, so a pass never
+	// deletes an app's older archive while its replacement is uploading.
 	for _, app := range sortedSet(apps) {
 		if _, err := s.storage.ApplyVolumeRetention(ctx, app, s.config.Retention); err != nil {
 			if firstErr == nil {
@@ -185,6 +189,29 @@ func (s *VolumeService) RunVolumeBackupsForSchedule(ctx context.Context, schedul
 		}
 	}
 	return firstErr
+}
+
+// runVolumeBackupsConcurrently runs every target with at most
+// MaxConcurrency exports in flight and returns the jobs in target order.
+func (s *VolumeService) runVolumeBackupsConcurrently(ctx context.Context, targets []domain.VolumeBackupTarget) []domain.VolumeBackupJob {
+	limit := s.config.MaxConcurrency
+	if limit < 1 {
+		limit = 1
+	}
+	jobs := make([]domain.VolumeBackupJob, len(targets))
+	sem := make(chan struct{}, limit)
+	var wg sync.WaitGroup
+	for i, target := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, target domain.VolumeBackupTarget) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			jobs[i] = s.runVolumeBackup(ctx, target)
+		}(i, target)
+	}
+	wg.Wait()
+	return jobs
 }
 
 func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.VolumeBackupTarget) domain.VolumeBackupJob {
@@ -198,7 +225,7 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 	log := zerowrap.FromCtx(ctx)
 	started := time.Now().UTC()
 	job := domain.VolumeBackupJob{
-		ID:                newBackupJobID(started),
+		ID:                newVolumeBackupJobID(),
 		App:               target.App,
 		Service:           target.Service,
 		VolumeName:        target.VolumeName,
@@ -249,6 +276,16 @@ func (s *VolumeService) runVolumeBackup(ctx context.Context, target domain.Volum
 		Msg("volume backup completed")
 	s.forget(job)
 	return job
+}
+
+// newVolumeBackupJobID returns a short random job ID. Storage keys already
+// carry the start timestamp, so the ID only has to make each run unique.
+func newVolumeBackupJobID() string {
+	random := make([]byte, 4)
+	if _, err := rand.Read(random); err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(random)
 }
 
 // volumeTargetKey reports the (service, volume) identity of one target.
