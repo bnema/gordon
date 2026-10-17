@@ -247,7 +247,9 @@ func describeSchedule(s domain.CronSchedule) string {
 	}
 	loc := "UTC"
 	if s.Location != nil {
-		loc = s.Location.String()
+		// time.Local reports "Local"; the current zone abbreviation is
+		// what an operator can read (e.g. CEST).
+		loc, _ = time.Now().In(s.Location).Zone()
 	}
 	return fmt.Sprintf("%s at %s %s", s.Preset, at, loc)
 }

@@ -289,8 +289,9 @@ var presetDefaultTimes = map[domain.BackupSchedule]domain.TimeOfDay{
 //
 // Times are wall-clock times in schedule.Location (UTC when nil), so a
 // daily 03:30 stays 03:30 across daylight-saving changes. A wall time that
-// does not exist on a given day (spring-forward gap) is normalized forward
-// by time.Date, so the run still happens exactly once that day.
+// does not exist on a given day (spring-forward gap) runs at the end of the
+// gap. A wall time that happens twice (fall-back) runs once, at its first
+// occurrence; hourly schedules follow real elapsed hours.
 //
 // The result only ever depends on now: a run missed while the process was
 // down is skipped, never caught up.
@@ -311,30 +312,53 @@ func calculateNextRun(now time.Time, schedule domain.CronSchedule) (time.Time, e
 		loc = time.UTC
 	}
 	local := now.In(loc)
+	y, m, d := local.Date()
 
-	var next time.Time
 	switch schedule.Preset {
 	case domain.ScheduleHourly:
-		next = time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), at.Minute, 0, 0, loc)
-		if !next.After(now) {
-			next = next.Add(time.Hour)
-		}
+		return nextMinuteOfHour(now, at.Minute, loc), nil
 	case domain.ScheduleDaily:
-		next = time.Date(local.Year(), local.Month(), local.Day(), at.Hour, at.Minute, 0, 0, loc)
-		if !next.After(now) {
-			next = time.Date(local.Year(), local.Month(), local.Day()+1, at.Hour, at.Minute, 0, 0, loc)
-		}
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m, d+i, at, loc) }), nil
 	case domain.ScheduleWeekly:
-		daysUntilSunday := (7 - int(local.Weekday())) % 7
-		next = time.Date(local.Year(), local.Month(), local.Day()+daysUntilSunday, at.Hour, at.Minute, 0, 0, loc)
-		if !next.After(now) {
-			next = time.Date(local.Year(), local.Month(), local.Day()+daysUntilSunday+7, at.Hour, at.Minute, 0, 0, loc)
-		}
-	case domain.ScheduleMonthly:
-		next = time.Date(local.Year(), local.Month(), 1, at.Hour, at.Minute, 0, 0, loc)
-		if !next.After(now) {
-			next = time.Date(local.Year(), local.Month()+1, 1, at.Hour, at.Minute, 0, 0, loc)
-		}
+		sunday := d + (7-int(local.Weekday()))%7
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m, sunday+7*i, at, loc) }), nil
+	default: // domain.ScheduleMonthly
+		return firstAfter(now, func(i int) time.Time { return wallTime(y, m+time.Month(i), 1, at, loc) }), nil
 	}
-	return next, nil
+}
+
+// firstAfter returns candidate(0) or candidate(1), whichever is the first
+// strictly after now.
+func firstAfter(now time.Time, candidate func(i int) time.Time) time.Time {
+	if next := candidate(0); next.After(now) {
+		return next
+	}
+	return candidate(1)
+}
+
+// nextMinuteOfHour returns the first whole minute strictly after now whose
+// wall-clock minute in loc equals minute. Walking real minutes keeps hourly
+// runs one hour apart across DST changes.
+func nextMinuteOfHour(now time.Time, minute int, loc *time.Location) time.Time {
+	t := now.Truncate(time.Minute).Add(time.Minute)
+	for i := 0; i < 120 && t.In(loc).Minute() != minute; i++ {
+		t = t.Add(time.Minute)
+	}
+	return t
+}
+
+// wallTime returns the instant of the given wall-clock time in loc. Day and
+// month overflow are normalized like time.Date. When the wall time falls in
+// a spring-forward gap, the end of the gap is returned.
+func wallTime(year int, month time.Month, day int, at domain.TimeOfDay, loc *time.Location) time.Time {
+	t := time.Date(year, month, day, at.Hour, at.Minute, 0, 0, loc)
+	if t.Hour() == at.Hour && t.Minute() == at.Minute {
+		return t
+	}
+	// Nonexistent wall time: interpret it with the offset in force before
+	// the gap, which lands after the transition, then snap back to it.
+	naive := time.Date(year, month, day, at.Hour, at.Minute, 0, 0, time.UTC)
+	_, offsetBefore := naive.Add(-12 * time.Hour).In(loc).Zone()
+	start, _ := naive.Add(-time.Duration(offsetBefore) * time.Second).In(loc).ZoneBounds()
+	return start.In(loc)
 }

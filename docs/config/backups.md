@@ -21,7 +21,7 @@ Each backup flow runs on one installation-wide schedule. Apps only declare
 | `weekly` | every Sunday | `03:00` |
 | `monthly` | the first day of each month | `04:00` |
 
-- `time` is `HH:MM` (24-hour) in the **server's local timezone** (`TZ`, or `/etc/localtime`). The run keeps the same wall-clock time across daylight-saving changes.
+- `time` is `HH:MM` (24-hour) in the **server's local timezone** (`TZ`, or `/etc/localtime`). The run keeps the same wall-clock time across daylight-saving changes. A time skipped by the spring-forward change runs when the gap ends. A time repeated by the fall-back change runs once.
 - The next run is computed from the current time when Gordon starts. A run that falls while Gordon is down is skipped, not caught up: no workload runs then, so there is nothing new to back up.
 - Gordon logs the schedule and `next_run` at startup (`backup scheduler enabled`, `volume backup scheduler enabled`).
 
