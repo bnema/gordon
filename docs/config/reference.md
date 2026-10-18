@@ -172,6 +172,23 @@ preserve = true                              # Keep volumes when containers are 
 # allowed_apps = ["video"]                   # Required; exact, non-empty
 # allowed_services = ["transcoder"]          # Required; exact, non-empty
 
+# =============================================================================
+# ADMINISTRATIVE APP CAPABILITIES
+# =============================================================================
+# A named capability grant is the only way an app manifest may add Linux
+# capabilities. The manifest declares capabilities = ["<name>"] (a policy
+# name, not a capability). Granted capabilities are added on top of Gordon's
+# defaults; cap_drop = ALL, no-new-privileges, and non-privileged mode always
+# remain. Allowed names (no CAP_ prefix): AUDIT_WRITE, CHOWN, DAC_OVERRIDE,
+# FOWNER, FSETID, IPC_LOCK, KILL, MKNOD, NET_ADMIN, NET_BIND_SERVICE,
+# NET_RAW, SETFCAP, SETGID, SETPCAP, SETUID, SYS_CHROOT, SYS_NICE,
+# SYS_RESOURCE. ALL, SYS_ADMIN, SYS_PTRACE, SYS_MODULE and the rest are
+# rejected. allowed_apps and allowed_services are exact and non-empty.
+# [app_capabilities.vm-net]
+# add = ["NET_ADMIN"]                        # Required; allowed set only
+# allowed_apps = ["myapp"]             # Required; exact, non-empty
+# allowed_services = ["worker"]              # Required; exact, non-empty
+
 # REMOVED in v3: [routes], [attachments], [network_groups],
 # app-like [[services]], [service_routes], [auto_route], [previews].
 # Declare apps in standalone files (see ./apps.md). The standalone
@@ -324,6 +341,9 @@ keep_last = 3                                # Keep N newest tags per repository
 | `app_devices.<name>.cdi` | none | Required explicit, non-empty CDI device IDs granted under this logical name (no `=all` aggregate form) |
 | `app_devices.<name>.allowed_apps` | none | Required exact, non-empty app allowlist for this grant (no wildcard or empty-means-all form) |
 | `app_devices.<name>.allowed_services` | none | Required exact, non-empty service allowlist for this grant |
+| `app_capabilities.<name>.add` | none | Required explicit, non-empty Linux capability names (no `CAP_` prefix) added on top of Gordon's defaults. Only the documented safe set is accepted; `ALL` and `SYS_ADMIN` are rejected |
+| `app_capabilities.<name>.allowed_apps` | none | Required exact, non-empty app allowlist for this grant |
+| `app_capabilities.<name>.allowed_services` | none | Required exact, non-empty service allowlist for this grant |
 | `services[].name` | none | Standalone service name used by `service:<service>:<port-name>` traffic refs |
 | `services[].image` | none | Container image for enabled standalone services |
 | `services[].enabled` | `false` | Whether Gordon creates, starts, and reconciles the service container |

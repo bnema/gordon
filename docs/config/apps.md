@@ -32,6 +32,7 @@ image = "gordon.mydomain.com/blog:1.4.2"
 command = ["node", "server.js"]  # optional override
 stop_grace = "30s"               # optional, default 30s
 devices = ["transcode-gpu"]      # 0..n logical names from [app_devices.<name>]
+capabilities = ["vm-net"]    # 0..n logical names from [app_capabilities.<name>]
 
 [services.web.readiness]         # optional explicit readiness
 type = "http"
@@ -86,6 +87,7 @@ services = ["web"]
 - Service name: the `[services.<name>]` table key — `[a-z0-9_.-]`, max 63, quoted when it contains a dot. TOML keys are unique, so one table exists per name; names that share a runtime identifier after normalization (`web.api` and `web-api`) are rejected.
 - Bind name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
 - Device name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service.
+- Capability policy name: `[a-z0-9_.-]`, max 63, must not contain `--`, unique within its service. It names an `[app_capabilities.<name>]` policy, not a Linux capability: `capabilities = ["NET_ADMIN"]` is rejected.
 - Removing an app ends its incarnation: the name is freed, volumes and secrets are archived as retained under the old internal UUID, desired/active/intent state is cleared, and the next apply allocates a new UUID. A new app reusing the name never adopts the old secrets or volumes.
 
 ## Services
@@ -135,6 +137,7 @@ A deploy recreates a service whose image digest, spec, environment, or secret va
 - Named volumes are Gordon-owned app data: created, labeled, retained, backed up, and pruned by Gordon. Administrative binds are operator-owned host locations: Gordon mounts them and never creates, deletes, owns, backs up, or prunes them.
 - `[[services.<name>.bind]]` requires an absolute, normalized container `path` and an optional `readonly`. The policy's `read_only` and the bind's `readonly` force read-only together: either side wins and a manifest can never weaken its policy. Reserved destinations (`/`, `/proc`, `/sys`, `/dev`, `/boot` and their children) and paths colliding with a declared volume or another bind are rejected at apply time.
 - `devices` lists logical device names granted by `[app_devices.<name>]` policy the operator declares in `gordon.toml`; a device whose name has no matching policy, or whose policy does not allow the app+service pair, is rejected at apply time. Gordon resolves each name to explicit CDI IDs at activation time and encodes them as one native CDI `DeviceRequest`. Revisions persist the logical names, never the host resolution. A device add/remove shows as `service/<name>/devices` in diffs; reorder-only input is a no-op. Changing a mapping never recreates a running container: the next deploy serves the new resolution. Revoking a grant fails subsequent deploys closed while the running service is untouched. Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured; older or unrecognized engines return a structured `runtime-unsupported` error and never run without devices. Gordon installs no drivers, manages no quotas, and injects no `NVIDIA_*` environment: images carry their own runtime expectations.
+- `capabilities` lists logical capability-policy names granted by `[app_capabilities.<name>]` policy the operator declares in `gordon.toml`; a name with no matching policy, or whose policy does not allow the app+service pair, is rejected at apply time. Gordon resolves each name to Linux capabilities at activation time and adds them on top of its default capability set; `cap_drop = ALL`, `no-new-privileges`, and non-privileged mode always remain. Only a documented safe set of capabilities can be granted (never `ALL` or `SYS_ADMIN`; see [Security Hardening](security-hardening.md#administrative-app-capabilities)). Revisions persist the logical names, never the resolution. An add/remove shows as `service/<name>/capabilities` in diffs; reorder-only input is a no-op. Revoking a grant fails subsequent deploys, restarts, and recoveries closed while the running service is untouched.
 - A service with any bind runs as a single writer, like a volume-backed service: replacements never run two generations at once. `gordon apps status` and `apps show` mark such services `single-writer` (`restart_unsafe` in JSON); the mark is informational. See [apps status](../cli/apps.md#gordon-apps-status).
 - A volume declared `readonly = true` is mounted read-only in the container; the service cannot modify protected data.
 - `[[services.<name>.database]]` declares databases explicitly (no image inference). Only PostgreSQL is supported, and each database declares its own backup `schedule` (`hourly`, `daily`, `weekly`, or `monthly`).

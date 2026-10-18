@@ -83,6 +83,65 @@ The manifest references only the logical name: `devices = ["transcode-gpu"]`.
 - Device-bearing creates require Podman 5.4+ or Docker 28.3+ with native CDI configured. Older or unrecognized engines fail with a structured `runtime-unsupported` error and never run without devices.
 - Gordon installs no drivers, manages no quotas, and injects no device environment: images carry their own runtime expectations.
 
+### Plain device nodes under rootless Podman
+
+CDI is not GPU-specific. Any device node can be exposed through a user-level CDI spec, so `/dev/kvm` and `/dev/net/tun` reach a rootless Podman service without raw `/dev` paths in manifests and without any privilege:
+
+```yaml
+# ~/.config/cdi/vm.yaml  (rootless user, mode 0644)
+cdiVersion: "0.6.0"
+kind: example.com/vm
+devices:
+  - name: kvm
+    containerEdits:
+      deviceNodes:
+        - path: /dev/kvm
+  - name: net-tun
+    containerEdits:
+      deviceNodes:
+        - path: /dev/net/tun
+```
+
+```toml
+# ~/.config/containers/containers.conf (the rootless user that runs the Podman API service)
+[engine]
+# Setting cdi_spec_dirs replaces the defaults: keep /etc/cdi and /var/run/cdi if you use them.
+cdi_spec_dirs = ["/etc/cdi", "/var/run/cdi", "/home/<user>/.config/cdi"]
+```
+
+```toml
+# gordon.toml
+[app_devices.my-vm-device]
+cdi = ["example.com/vm=kvm", "example.com/vm=net-tun"]
+allowed_apps = ["myapp"]
+allowed_services = ["worker"]
+```
+
+- No Gordon change is needed (verified against the Podman 5.7 sources; confirm with a live create on your host). Gordon sends the IDs as a native `cdi` `DeviceRequest`; the Podman compat API forwards them to the same CDI injection as `podman run --device <id>`, which reads `cdi_spec_dirs` from the containers.conf of the user running the API service. Restart that service (`systemctl --user restart podman.socket podman.service`) after editing `containers.conf`; edits to the spec files themselves are picked up on the next container create.
+- Under rootless Podman the OCI runtime (crun or runc) cannot `mknod` in a user namespace and falls back to bind-mounting the host device node into the container. The node must therefore be accessible to the rootless user on the host: `/dev/kvm` and `/dev/net/tun` are usually `0666` or group-owned (`kvm`). Supplementary groups do not carry into the user namespace, so prefer a `0666`/ACL-based permission over group membership.
+- CDI device names Gordon accepts match `[A-Za-z0-9][A-Za-z0-9_.-]*` (so `kvm` and `net-tun` are valid; names containing `:` are not).
+- A missing spec dir entry, an unreadable spec, or an unknown device name surfaces as a redacted create failure (`runtime error redacted`); check the Podman service journal for the CDI error.
+
+## Administrative app capabilities
+
+App manifests cannot add Linux capabilities. A grant exists only when the operator declares a named policy in `gordon.toml`:
+
+```toml
+[app_capabilities.vm-net]
+add = ["NET_ADMIN"]
+allowed_apps = ["myapp"]    # exact, non-empty
+allowed_services = ["worker"]     # exact, non-empty
+```
+
+The manifest references only the logical name: `capabilities = ["vm-net"]`.
+
+- `add` holds explicit Linux capability names, written without the `CAP_` prefix. Only this allowed set is accepted: `AUDIT_WRITE`, `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `FSETID`, `IPC_LOCK`, `KILL`, `MKNOD`, `NET_ADMIN`, `NET_BIND_SERVICE`, `NET_RAW`, `SETFCAP`, `SETGID`, `SETPCAP`, `SETUID`, `SYS_CHROOT`, `SYS_NICE`, `SYS_RESOURCE`. Everything else is rejected when the config loads, including `ALL`, `SYS_ADMIN`, `SYS_PTRACE`, `SYS_MODULE`, `SYS_RAWIO`, `SYS_BOOT`, `SYS_TIME`, `DAC_READ_SEARCH`, `BPF`, `PERFMON`, `MAC_ADMIN`, `MAC_OVERRIDE`, `AUDIT_CONTROL`, and `SYSLOG`. These can reach the host or defeat container confinement; a workload that needs one is not an unprivileged service.
+- `allowed_apps` and `allowed_services` are exact, non-empty allowlists. There is no wildcard, prefix, or empty-means-all form. Unknown keys inside `[app_capabilities.<name>]` fail closed.
+- Granted capabilities are added on top of Gordon's default set (`CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID`, `SETGID`, `NET_BIND_SERVICE`). Gordon's `cap_drop = ALL` and `no-new-privileges` stay in force, and containers are never privileged. The runtime guard re-checks the resolved list before every create.
+- Capabilities apply inside the container's own user and network namespaces. Under rootless Podman, `NET_ADMIN` lets the service create TAP devices and nftables rules in its own network namespace, not on the host. Because `no-new-privileges` stays on, a process only holds the added capabilities when it runs as container root (uid 0 in the user namespace, which is an unprivileged host user under rootless Podman); a non-root container user cannot gain them through file capabilities.
+- Gordon resolves logical names at activation time. Revisions persist the logical names, never the resolution. The grant is re-resolved before every preflight, container create, restart, and recovery. Revoking a grant blocks future deploys and restarts while the running service is untouched.
+- Adding or removing a policy name shows as `service/<name>/capabilities` in diffs and recreates the container on the next deploy; reorder-only input is a no-op. Changing what a policy grants does not recreate a running container: the next deploy serves the new resolution.
+
 ## External image registries
 
 Docker Hub, `ghcr.io`, `quay.io`, and Gordon's configured registry are always allowed. Add every other registry hostname and non-default port explicitly:
