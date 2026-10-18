@@ -333,6 +333,9 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
+	if err := s.verifyReusableCapabilities(ctx, app, eff); err != nil {
+		return fail(err.Error())
+	}
 	if err := s.refuseInhibitedRestart(ctx, app, name, eff.Container); err != nil {
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
@@ -708,6 +711,10 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 			return
 		}
+		if err := s.verifyReusableCapabilities(ctx, app, eff); err != nil {
+			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
+			return
+		}
 		// Boot recovery refuses a generation whose recovery is durably
 		// inhibited: a replacement may already have written to its
 		// volume, so reviving this ID could corrupt the newer data.
@@ -764,6 +771,9 @@ func (s *Service) redeployPinned(ctx context.Context, app, opID, name string, ef
 	}
 	// Revoked device grants fail before any runtime mutation.
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
+		return failedServiceResult(eff.Container, err), err
+	}
+	if _, err := s.resolveServiceCapabilities(app, eff.Spec); err != nil {
 		return failedServiceResult(eff.Container, err), err
 	}
 	pinned := pinnedService{

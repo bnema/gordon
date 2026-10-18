@@ -38,6 +38,9 @@ type Service struct {
 	// atomically; applies read the current map without holding the lock.
 	deviceMu       sync.RWMutex
 	devicePolicies map[string]domain.AppDevicePolicy
+	// capabilityMu guards capabilityPolicies, replaced atomically on reload.
+	capabilityMu       sync.RWMutex
+	capabilityPolicies map[string]domain.AppCapabilityPolicy
 }
 
 // NewService creates the apps use case over an AppState store.
@@ -115,6 +118,36 @@ func (s *Service) snapshotDevicePolicies() map[string]domain.AppDevicePolicy {
 	s.deviceMu.RLock()
 	defer s.deviceMu.RUnlock()
 	return s.devicePolicies
+}
+
+// WithCapabilityPolicies supplies the initial administrative capability policies.
+func (s *Service) WithCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) *Service {
+	s.SetCapabilityPolicies(policies)
+	return s
+}
+
+// SetCapabilityPolicies atomically replaces the administrative capability
+// policies used to authorize manifest capabilities. The map and its slices
+// are copied so later caller mutation cannot race an in-flight apply.
+func (s *Service) SetCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) {
+	copied := make(map[string]domain.AppCapabilityPolicy, len(policies))
+	for name, policy := range policies {
+		policy.Add = append([]string(nil), policy.Add...)
+		policy.AllowedApps = append([]string(nil), policy.AllowedApps...)
+		policy.AllowedServices = append([]string(nil), policy.AllowedServices...)
+		copied[name] = policy
+	}
+	s.capabilityMu.Lock()
+	s.capabilityPolicies = copied
+	s.capabilityMu.Unlock()
+}
+
+// snapshotCapabilityPolicies returns the current policy map.
+// SetCapabilityPolicies never mutates a published map.
+func (s *Service) snapshotCapabilityPolicies() map[string]domain.AppCapabilityPolicy {
+	s.capabilityMu.RLock()
+	defer s.capabilityMu.RUnlock()
+	return s.capabilityPolicies
 }
 
 // noopLease is a GC lease for an unwired barrier.
@@ -213,6 +246,9 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 	if err := s.validateDevicePolicies(spec); err != nil {
 		return nil, nil, err
 	}
+	if err := s.validateCapabilityPolicies(spec); err != nil {
+		return nil, nil, err
+	}
 	if err := s.validateEntrypointCompatibility(spec); err != nil {
 		return nil, nil, err
 	}
@@ -290,6 +326,26 @@ func (s *Service) validateDevicePolicies(spec domain.AppSpec) error {
 		// device, so this wraps only the cross-device conflict.
 		if _, err := domain.ResolveAppDevices(spec.Name, svc.Name, svc.Devices, policies); err != nil {
 			return fmt.Errorf("apps: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateCapabilityPolicies resolves every declared capability policy
+// against the administrative capability policies before any desired state
+// is persisted. Errors name only the policy, app, and service with an
+// actionable hint.
+func (s *Service) validateCapabilityPolicies(spec domain.AppSpec) error {
+	policies := s.snapshotCapabilityPolicies()
+	for _, svc := range spec.Services {
+		for _, name := range svc.Capabilities {
+			policy, ok := policies[name]
+			if !ok {
+				return fmt.Errorf("%w: app %q service %q capability %q: no administrative capability policy configured (declare [app_capabilities.%s] with add/allowed_apps/allowed_services)", domain.ErrCapabilityPolicy, spec.Name, svc.Name, name, name)
+			}
+			if _, err := policy.ResolveAppCapabilities(spec.Name, svc.Name); err != nil {
+				return fmt.Errorf("%w: app %q service %q capability %q: refused by administrative capability policy (check allowed_apps/allowed_services)", domain.ErrCapabilityPolicy, spec.Name, svc.Name, name)
+			}
 		}
 	}
 	return nil

@@ -83,6 +83,10 @@ var (
 	// distinct from ErrInvalidAppSpec: the manifest may be valid while the
 	// installation policy refuses to serve it.
 	ErrDevicePolicy = errors.New("device policy violation")
+	// ErrCapabilityPolicy wraps administrative Linux capability policy
+	// violations. It is distinct from ErrInvalidAppSpec: the manifest may
+	// be valid while the installation policy refuses to serve it.
+	ErrCapabilityPolicy = errors.New("capability policy violation")
 	// ErrRuntimeGuard wraps app container configs refused by the runtime
 	// guard: host or shared namespaces, host paths passed as volume
 	// names, or binds overlapping Gordon's own sensitive paths.

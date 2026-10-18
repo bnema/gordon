@@ -255,3 +255,35 @@ func TestBuildBindMounts(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestMergeAddedCapabilities(t *testing.T) {
+	base := []string{"CHOWN", "NET_BIND_SERVICE"}
+	assert.Equal(t, base, mergeAddedCapabilities(base, nil))
+	assert.Equal(t, []string{"CHOWN", "NET_BIND_SERVICE", "NET_ADMIN"}, mergeAddedCapabilities(base, []string{"NET_ADMIN", "CHOWN"}))
+	assert.Equal(t, []string{"CHOWN", "NET_BIND_SERVICE"}, base, "base slice is never mutated")
+}
+
+// TestRuntime_CreateContainerAddsGrantedCapabilitiesOnTopOfDefaults proves
+// resolved capabilities are added to Gordon's default set while the default
+// drop, no-new-privileges, and non-privileged mode stay in force.
+func TestRuntime_CreateContainerAddsGrantedCapabilitiesOnTopOfDefaults(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{
+		Image:             "nginx:latest",
+		Name:              "gordon-app",
+		AddedCapabilities: []string{"NET_ADMIN"},
+	})
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"ALL"}, hostConfig["CapDrop"])
+	// The Docker client normalizes names to the CAP_ form and sorts them.
+	assert.Equal(t, []any{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_SETGID", "CAP_SETUID"}, hostConfig["CapAdd"])
+	assert.Equal(t, []any{"no-new-privileges:true"}, hostConfig["SecurityOpt"])
+	assert.NotEqual(t, true, hostConfig["Privileged"])
+}
+
+func TestRuntime_CreateContainerWithoutGrantsKeepsDefaultCapabilities(t *testing.T) {
+	createBody := createTestContainer(t, &domain.ContainerConfig{Image: "nginx:latest", Name: "gordon-app"})
+	hostConfig, ok := createBody["HostConfig"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_NET_BIND_SERVICE", "CAP_SETGID", "CAP_SETUID"}, hostConfig["CapAdd"])
+}

@@ -208,6 +208,18 @@ func (s *AppServiceImpl) SetDevicePolicies(policies map[string]domain.AppDeviceP
 	s.core.SetDevicePolicies(policies)
 }
 
+// WithCapabilityPolicies supplies the administrative capability policies used at apply time.
+func (s *AppServiceImpl) WithCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) *AppServiceImpl {
+	s.core.SetCapabilityPolicies(policies)
+	return s
+}
+
+// SetCapabilityPolicies atomically replaces the administrative capability
+// policies. It is safe to call from a config reload while applies are in flight.
+func (s *AppServiceImpl) SetCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) {
+	s.core.SetCapabilityPolicies(policies)
+}
+
 var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.

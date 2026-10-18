@@ -24,6 +24,10 @@ type Container struct {
 	// Env is the container's KEY=value environment as created. It may hold
 	// secret values: compare it in memory only, never persist or log it.
 	Env []string
+	// CapAdd is the container's configured capability add set as reported
+	// by the engine (names may carry a CAP_ prefix). Nil when the engine
+	// reports none. Reuse paths compare it with the current authorization.
+	CapAdd []string
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.
@@ -122,17 +126,22 @@ type ContainerConfig struct {
 	// CDIDevices holds explicit CDI device IDs resolved from administrative
 	// device policy at activation time. It is ephemeral like Binds: never
 	// persisted, never logged by the runtime adapter.
-	CDIDevices     []string // ephemeral resolved CDI IDs, encoded as one native CDI DeviceRequest
-	NetworkMode    string   // Network to join
-	Hostname       string   // Container hostname for DNS
-	Aliases        []string // Additional network aliases
-	MemoryLimit    int64    // Memory limit in bytes (0 = no limit)
-	NanoCPUs       int64    // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
-	PidsLimit      int64    // Max number of PIDs (0 = no limit)
-	ReadOnlyRootFS bool     // Mount container root filesystem read-only
-	User           string   // User to run as
-	CapDrop        []string // Linux capabilities to drop; nil uses runtime compat defaults
-	CapAdd         []string // Linux capabilities to add; nil uses runtime compat defaults
+	CDIDevices []string // ephemeral resolved CDI IDs, encoded as one native CDI DeviceRequest
+	// AddedCapabilities holds Linux capabilities resolved from
+	// administrative capability policy at activation time. It is ephemeral
+	// like CDIDevices: never persisted. The runtime adds them on top of the
+	// base capability set (default or CapAdd) and never alters CapDrop.
+	AddedCapabilities []string
+	NetworkMode       string   // Network to join
+	Hostname          string   // Container hostname for DNS
+	Aliases           []string // Additional network aliases
+	MemoryLimit       int64    // Memory limit in bytes (0 = no limit)
+	NanoCPUs          int64    // CPU quota in nanoseconds (1e9 = 1 core, 0 = no limit)
+	PidsLimit         int64    // Max number of PIDs (0 = no limit)
+	ReadOnlyRootFS    bool     // Mount container root filesystem read-only
+	User              string   // User to run as
+	CapDrop           []string // Linux capabilities to drop; nil uses runtime compat defaults
+	CapAdd            []string // Linux capabilities to add; nil uses runtime compat defaults
 }
 
 // ContainerStatus represents the current state of a container.

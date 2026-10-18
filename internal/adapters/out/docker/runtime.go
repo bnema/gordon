@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -197,13 +198,14 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		resources.PidsLimit = &config.PidsLimit
 	}
 	capDrop := []string{"ALL"}
-	capAdd := []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	capAdd := domain.DefaultAppCapAdd()
 	if config.CapDrop != nil {
 		capDrop = config.CapDrop
 	}
 	if config.CapAdd != nil {
 		capAdd = config.CapAdd
 	}
+	capAdd = mergeAddedCapabilities(capAdd, config.AddedCapabilities)
 	hostConfig := &container.HostConfig{
 		PortBindings:   portBindings,
 		AutoRemove:     config.AutoRemove,
@@ -496,6 +498,23 @@ func parseEngineVersionComponent(value string) (int, bool) {
 	return n, true
 }
 
+// mergeAddedCapabilities appends the operator-granted capabilities to the
+// base add set without duplicates. The base set, CapDrop, and the
+// no-new-privileges option are never replaced or weakened: grants are
+// strictly additive on top of Gordon's defaults.
+func mergeAddedCapabilities(base, added []string) []string {
+	if len(added) == 0 {
+		return base
+	}
+	merged := append([]string(nil), base...)
+	for _, name := range added {
+		if !slices.Contains(merged, name) {
+			merged = append(merged, name)
+		}
+	}
+	return merged
+}
+
 // buildDeviceRequests encodes ephemeral CDI device IDs as one native CDI
 // DeviceRequest. Capabilities and Options stay empty; Count stays 0 so the
 // explicit DeviceIDs are the only grant. CDI IDs are never logged or echoed
@@ -779,6 +798,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		})
 	}
 
+	var capAdd []string
+	if resp.HostConfig != nil {
+		capAdd = append([]string(nil), resp.HostConfig.CapAdd...)
+	}
+
 	return &domain.Container{
 		ID:           resp.ID,
 		Image:        resp.Config.Image,
@@ -792,6 +816,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Created:      created,
 		StartedAt:    startedAt,
 		Env:          resp.Config.Env,
+		CapAdd:       capAdd,
 	}, nil
 }
 

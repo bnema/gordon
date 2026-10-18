@@ -116,9 +116,14 @@ type AppService struct {
 	// Devices lists logical device names granted by administrative
 	// [app_devices] policy. Names resolve to CDI device IDs at activation
 	// time; the logical names (not host resolution) persist in revisions.
-	Devices   []string
-	Databases []AppDatabase
-	Backup    AppBackup
+	Devices []string
+	// Capabilities lists logical capability-policy names granted by
+	// administrative [app_capabilities] policy. Names resolve to Linux
+	// capabilities added on top of Gordon's defaults at activation time;
+	// the logical names (not the resolution) persist in revisions.
+	Capabilities []string
+	Databases    []AppDatabase
+	Backup       AppBackup
 	// LogExportDisabled opts the service out of OTLP log export. The
 	// manifest resolves it from [services.<name>.telemetry] logs, then
 	// the app-level [telemetry] logs, then the default (export on). The
@@ -571,6 +576,9 @@ func (s *AppService) validate() error {
 	if err := s.validateDevices(); err != nil {
 		return err
 	}
+	if err := s.validateCapabilities(); err != nil {
+		return err
+	}
 	if err := s.validateDatabases(volumes); err != nil {
 		return err
 	}
@@ -702,6 +710,23 @@ func (s *AppService) validateDevices() error {
 		}
 		if _, ok := seen[name]; ok {
 			return fmt.Errorf("%w: service %q duplicate device %q", ErrInvalidAppSpec, s.Name, name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// validateCapabilities checks logical capability-policy names and
+// duplicates. Authorization against administrative policy happens at
+// apply/deploy time, not here.
+func (s *AppService) validateCapabilities() error {
+	seen := map[string]struct{}{}
+	for _, name := range s.Capabilities {
+		if err := ValidateCapabilityPolicyRef(name); err != nil {
+			return fmt.Errorf("%w: service %q: %v", ErrInvalidAppSpec, s.Name, err)
+		}
+		if _, ok := seen[name]; ok {
+			return fmt.Errorf("%w: service %q duplicate capability %q", ErrInvalidAppSpec, s.Name, name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -1114,6 +1139,7 @@ func diffService(name string, desired, effective AppService) []string {
 		changed = append(changed, "service/"+name+"/binds")
 	}
 	changed = appendDeviceChanges(changed, name, desired.Devices, effective.Devices)
+	changed = appendCapabilityChanges(changed, name, desired.Capabilities, effective.Capabilities)
 	return appendOperationChanges(changed, name, desired, effective)
 }
 
@@ -1311,6 +1337,16 @@ func equalDevices(a, b []string) bool {
 func appendDeviceChanges(changed []string, name string, desired, effective []string) []string {
 	if !equalDevices(desired, effective) {
 		changed = append(changed, "service/"+name+"/devices")
+	}
+	return changed
+}
+
+// appendCapabilityChanges appends the service capabilities diff entry when
+// the capability-policy name sets differ. Like devices, the slices compare
+// as sets: reorder-only input is a no-op.
+func appendCapabilityChanges(changed []string, name string, desired, effective []string) []string {
+	if !equalDevices(desired, effective) {
+		changed = append(changed, "service/"+name+"/capabilities")
 	}
 	return changed
 }

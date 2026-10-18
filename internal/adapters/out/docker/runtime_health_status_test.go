@@ -75,3 +75,23 @@ func TestRuntime_GetContainerHealthStatus_DisabledHealthcheck(t *testing.T) {
 	assert.False(t, hasHealthcheck)
 	assert.Equal(t, "", status)
 }
+
+// TestRuntime_InspectContainer_ReportsConfiguredCapAdd proves the reuse
+// gate can see the capability set a container was created with.
+func TestRuntime_InspectContainer_ReportsConfiguredCapAdd(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"Id":"abc123","Name":"/c","State":{"Status":"running"},
+			"Config":{"Image":"img"},
+			"HostConfig":{"CapAdd":["CAP_CHOWN","NET_ADMIN"]}
+		}`))
+	}))
+	defer server.Close()
+
+	runtime := newRuntimeForHTTPServer(t, server)
+	ctr, err := runtime.InspectContainer(context.Background(), "abc123")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"CAP_CHOWN", "NET_ADMIN"}, ctr.CapAdd)
+}

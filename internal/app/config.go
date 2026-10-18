@@ -63,6 +63,11 @@ type Config struct {
 	// `devices` list.
 	AppDevices map[string]AppDevicePolicy `mapstructure:"app_devices"`
 
+	// AppCapabilities declares administrative Linux capability grants keyed
+	// by stable logical name, referenced by name from an app manifest's
+	// `capabilities` list.
+	AppCapabilities map[string]AppCapabilityPolicy `mapstructure:"app_capabilities"`
+
 	Logging struct {
 		Level  string `mapstructure:"level"`
 		Format string `mapstructure:"format"`
@@ -244,6 +249,9 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 		return nil, Config{}, err
 	}
 	if err := validateDeviceConfig(v, cfg); err != nil {
+		return nil, Config{}, err
+	}
+	if err := validateCapabilityConfig(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
 
