@@ -713,3 +713,20 @@ func TestHandler_AppApply_MapsRuntimeUnsupported(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
 	assert.Equal(t, "runtime-unsupported", envelope.Error)
 }
+
+func TestApplyApp_MapsCapabilityPolicyViolation(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+
+	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+		nil, nil,
+		fmt.Errorf("%w: app %q service %q capability %q: refused by administrative capability policy", domain.ErrCapabilityPolicy, "blog", "web", "net-admin"),
+	).Once()
+
+	rec := appsRequest(t, handler, http.MethodPost, "/admin/apps/apply",
+		dto.AppApplyRequest{ManifestTOML: validAppManifest}, "admin:apps:write")
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var envelope dto.AppError
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "capability-policy-violation", envelope.Error)
+}

@@ -620,3 +620,40 @@ func TestParse_TelemetryLogsDefaultOn(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, spec.Services[0].LogExportDisabled)
 }
+
+func TestParse_Capabilities(t *testing.T) {
+	doc := `
+name = "demo"
+[services.worker]
+image = "registry.example.com/demo/worker:1"
+capabilities = ["net-admin", "ipc-lock"]
+`
+	spec, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.NoError(t, err)
+	require.Len(t, spec.Services, 1)
+	assert.Equal(t, []string{"net-admin", "ipc-lock"}, spec.Services[0].Capabilities)
+}
+
+func TestParse_CapabilitiesWrongType(t *testing.T) {
+	doc := `
+name = "demo"
+[services.worker]
+image = "registry.example.com/demo/worker:1"
+capabilities = "net-admin"
+`
+	_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+	require.Error(t, err)
+}
+
+func TestParse_CapabilitiesMalformedAndDuplicateRejected(t *testing.T) {
+	for _, list := range []string{`["Bad Name!"]`, `["NET_ADMIN"]`, `["net-admin", "net-admin"]`} {
+		doc := `
+name = "demo"
+[services.worker]
+image = "registry.example.com/demo/worker:1"
+capabilities = ` + list + `
+`
+		_, _, err := appmanifest.Parse([]byte(doc), "demo.toml")
+		require.ErrorIs(t, err, domain.ErrInvalidAppSpec, list)
+	}
+}

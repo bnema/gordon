@@ -127,14 +127,20 @@ func (si *serviceInit) initApps() error {
 	if err != nil {
 		return err
 	}
+	capabilityPolicies, err := buildAppCapabilityPolicies(si.cfg)
+	if err != nil {
+		return err
+	}
 	si.svc.appDeploySvc.SetBindPolicies(mountPolicies)
 	si.svc.appDeploySvc.SetDevicePolicies(devicePolicies)
+	si.svc.appDeploySvc.SetCapabilityPolicies(capabilityPolicies)
 	appSvcImpl := newAppDaemonService(si.ctx, store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
 		WithImagePolicy(imagePolicy).
 		WithBindPolicies(mountPolicies).
-		WithDevicePolicies(devicePolicies)
+		WithDevicePolicies(devicePolicies).
+		WithCapabilityPolicies(capabilityPolicies)
 	si.svc.appSvcImpl = appSvcImpl
 	si.svc.appSvc = appSvcImpl
 	// Health checks resolve from ACTIVE state (loopback backends).

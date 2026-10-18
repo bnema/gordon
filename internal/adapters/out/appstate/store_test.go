@@ -615,3 +615,33 @@ const legacyDesiredWithoutDevices = `{
   "secrets_env": {},
   "status": "pending"
 }`
+
+func TestStore_DesiredCapabilitiesRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	intent := testIntent("blog", "rev-1")
+	intent.Spec.Services[0].Capabilities = []string{"net-admin"}
+	require.NoError(t, store.StageApply(ctx, intent))
+	require.NoError(t, store.CommitApply(ctx, "blog", "apply-test-rev-1"))
+	require.NoError(t, store.MaterializeApply(ctx, "blog", "apply-test-rev-1"))
+
+	desired, ok, err := store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, desired.Spec.Services, 1)
+	assert.Equal(t, []string{"net-admin"}, desired.Spec.Services[0].Capabilities, "logical names persist in revisions")
+}
+
+// A record written before capabilities existed carries no Capabilities key:
+// it must load without a phantom grant.
+func TestStore_DesiredWithoutCapabilitiesLoads(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+
+	require.NoError(t, appstate.SeedDesiredRecordForTest(store, "blog", []byte(legacyDesiredWithoutDevices)))
+	desired, ok, err := store.LoadDesired(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Nil(t, desired.Spec.Services[0].Capabilities)
+}

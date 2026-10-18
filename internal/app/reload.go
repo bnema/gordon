@@ -261,6 +261,7 @@ type reloadPlan struct {
 	tlsConfig      *tls.Config
 	bindPolicies   map[string]domain.AppBindPolicy
 	devicePolicies map[string]domain.AppDevicePolicy
+	capPolicies    map[string]domain.AppCapabilityPolicy
 }
 
 // Apply is the reloadCoordinator's runtime step.
@@ -301,6 +302,9 @@ func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, er
 		if plan.devicePolicies, err = buildAppDevicePolicies(cfg); err != nil {
 			return plan, err
 		}
+		if plan.capPolicies, err = buildAppCapabilityPolicies(cfg); err != nil {
+			return plan, err
+		}
 	}
 	return plan, nil
 }
@@ -327,7 +331,7 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 	return nil
 }
 
-// applyAppPolicies publishes the reloaded bind and device policies to both
+// applyAppPolicies publishes the reloaded bind, device, and capability policies to both
 // app services that enforce them.
 func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
 	if r.svc.appSvcImpl == nil {
@@ -335,9 +339,11 @@ func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
 	}
 	r.svc.appSvcImpl.SetBindPolicies(plan.bindPolicies)
 	r.svc.appSvcImpl.SetDevicePolicies(plan.devicePolicies)
+	r.svc.appSvcImpl.SetCapabilityPolicies(plan.capPolicies)
 	if r.svc.appDeploySvc != nil {
 		r.svc.appDeploySvc.SetBindPolicies(plan.bindPolicies)
 		r.svc.appDeploySvc.SetDevicePolicies(plan.devicePolicies)
+		r.svc.appDeploySvc.SetCapabilityPolicies(plan.capPolicies)
 	}
 }
 

@@ -116,6 +116,9 @@ type Service struct {
 	// the lock.
 	deviceMu       sync.RWMutex
 	devicePolicies map[string]domain.AppDevicePolicy
+	// capabilityMu guards capabilityPolicies, replaced atomically on reload.
+	capabilityMu       sync.RWMutex
+	capabilityPolicies map[string]domain.AppCapabilityPolicy
 	// liveMu guards liveOps. liveOps holds the operations this process
 	// owns between the StartDeploy claim and the end of ExecuteDeploy. It
 	// is in-memory only: a fresh Service (boot) starts empty and may
@@ -243,6 +246,62 @@ func (s *Service) snapshotDevicePolicies() map[string]domain.AppDevicePolicy {
 	s.deviceMu.RLock()
 	defer s.deviceMu.RUnlock()
 	return s.devicePolicies
+}
+
+// WithCapabilityPolicies supplies the initial administrative capability policies.
+func (s *Service) WithCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) *Service {
+	s.SetCapabilityPolicies(policies)
+	return s
+}
+
+// SetCapabilityPolicies atomically replaces the administrative capability
+// policies used to authorize service capabilities. The map and its slices
+// are copied so later caller mutation cannot race an in-flight deploy.
+func (s *Service) SetCapabilityPolicies(policies map[string]domain.AppCapabilityPolicy) {
+	copied := make(map[string]domain.AppCapabilityPolicy, len(policies))
+	for name, policy := range policies {
+		policy.Add = append([]string(nil), policy.Add...)
+		policy.AllowedApps = append([]string(nil), policy.AllowedApps...)
+		policy.AllowedServices = append([]string(nil), policy.AllowedServices...)
+		copied[name] = policy
+	}
+	s.capabilityMu.Lock()
+	s.capabilityPolicies = copied
+	s.capabilityMu.Unlock()
+}
+
+// snapshotCapabilityPolicies returns the current policy map.
+// SetCapabilityPolicies never mutates a published map.
+func (s *Service) snapshotCapabilityPolicies() map[string]domain.AppCapabilityPolicy {
+	s.capabilityMu.RLock()
+	defer s.capabilityMu.RUnlock()
+	return s.capabilityPolicies
+}
+
+// resolveServiceCapabilities resolves every declared capability policy
+// against the current administrative policies into the Linux capabilities
+// to add. Errors name only the app, service, and policy.
+func (s *Service) resolveServiceCapabilities(app string, svc domain.AppService) ([]string, error) {
+	if len(svc.Capabilities) == 0 {
+		return nil, nil
+	}
+	caps, err := domain.ResolveAppCapabilities(app, svc.Name, svc.Capabilities, s.snapshotCapabilityPolicies())
+	if err != nil {
+		return nil, fmt.Errorf("deployment: %w", err)
+	}
+	return caps, nil
+}
+
+// resolveServiceGrants resolves the device and capability policies of a
+// service in one fail-closed step.
+func (s *Service) resolveServiceGrants(app string, svc domain.AppService) (devices, caps []string, err error) {
+	if devices, err = s.resolveServiceDevices(app, svc); err != nil {
+		return nil, nil, err
+	}
+	if caps, err = s.resolveServiceCapabilities(app, svc); err != nil {
+		return nil, nil, err
+	}
+	return devices, caps, nil
 }
 
 // resolveServiceDevices resolves every declared logical device against the
@@ -751,6 +810,9 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 			return nil, err
 		}
 		if err := s.preflightServiceDevices(ctx, app, svc, pinned); err != nil {
+			return nil, err
+		}
+		if _, err := s.resolveServiceCapabilities(app, svc); err != nil {
 			return nil, err
 		}
 		pinned = append(pinned, pinnedService{

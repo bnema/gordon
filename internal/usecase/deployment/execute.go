@@ -489,6 +489,8 @@ func (s *Service) unchangedRefusal(ctx context.Context, app string, p pinnedServ
 	switch {
 	case len(p.spec.Binds) > 0 || len(p.spec.Devices) > 0:
 		return "host binds or devices"
+	case len(p.spec.Capabilities) > 0:
+		return "administrative capabilities"
 	case !domain.SameAppServiceRuntime(p.spec, eff.Spec):
 		// Backup declarations never reach the container, so a backup-only
 		// change keeps it; publishService still records the new spec in ACTIVE.
@@ -745,7 +747,7 @@ func (s *Service) deployOverlap(ctx context.Context, app, revision string, p pin
 	return result
 }
 
-// revalidateService re-resolves the binds and devices of a service against
+// revalidateService re-resolves the binds, devices, and capabilities of a service against
 // the current policy before any workload mutation. It returns the failed
 // result and false when either was revoked since preflight.
 func (s *Service) revalidateService(app, revision string, p pinnedService, before string) (ServiceResult, bool) {
@@ -753,6 +755,9 @@ func (s *Service) revalidateService(app, revision string, p pinnedService, befor
 		return s.failResult(revision, before, "", err), false
 	}
 	if _, err := s.resolveServiceDevices(app, p.spec); err != nil {
+		return s.failResult(revision, before, "", err), false
+	}
+	if _, err := s.resolveServiceCapabilities(app, p.spec); err != nil {
 		return s.failResult(revision, before, "", err), false
 	}
 	return ServiceResult{}, true

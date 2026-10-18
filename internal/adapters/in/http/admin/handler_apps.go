@@ -532,6 +532,7 @@ func isMappedPreflightError(err error, op *domain.AppOperation) bool {
 	return errors.Is(err, domain.ErrInvalidAppSpec) ||
 		errors.Is(err, domain.ErrBindPolicy) ||
 		errors.Is(err, domain.ErrDevicePolicy) ||
+		errors.Is(err, domain.ErrCapabilityPolicy) ||
 		isPreflightErrorRest(err)
 }
 
@@ -559,6 +560,8 @@ func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
 		h.sendAppError(w, http.StatusBadRequest, "bind-policy-violation", err.Error(), "", "check the administrative mount authorization")
 	case errors.Is(err, domain.ErrDevicePolicy):
 		h.sendAppError(w, http.StatusBadRequest, "device-policy-violation", err.Error(), "", "check the administrative device authorization")
+	case errors.Is(err, domain.ErrCapabilityPolicy):
+		h.sendAppError(w, http.StatusBadRequest, "capability-policy-violation", err.Error(), "", "check the administrative capability authorization")
 	case errors.Is(err, domain.ErrRuntimeGuard):
 		h.sendAppError(w, http.StatusBadRequest, "runtime-guard-violation", err.Error(), "", "check administrative mounts and network settings")
 	case errors.Is(err, domain.ErrRuntimeUnsupported):

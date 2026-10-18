@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -204,6 +205,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	if config.CapAdd != nil {
 		capAdd = config.CapAdd
 	}
+	capAdd = mergeAddedCapabilities(capAdd, config.AddedCapabilities)
 	hostConfig := &container.HostConfig{
 		PortBindings:   portBindings,
 		AutoRemove:     config.AutoRemove,
@@ -494,6 +496,23 @@ func parseEngineVersionComponent(value string) (int, bool) {
 		return 0, false
 	}
 	return n, true
+}
+
+// mergeAddedCapabilities appends the operator-granted capabilities to the
+// base add set without duplicates. The base set, CapDrop, and the
+// no-new-privileges option are never replaced or weakened: grants are
+// strictly additive on top of Gordon's defaults.
+func mergeAddedCapabilities(base, added []string) []string {
+	if len(added) == 0 {
+		return base
+	}
+	merged := append([]string(nil), base...)
+	for _, name := range added {
+		if !slices.Contains(merged, name) {
+			merged = append(merged, name)
+		}
+	}
+	return merged
 }
 
 // buildDeviceRequests encodes ephemeral CDI device IDs as one native CDI

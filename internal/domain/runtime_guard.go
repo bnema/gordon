@@ -41,6 +41,9 @@ func (g RuntimeGuard) Check(config *ContainerConfig) error {
 	if err := checkGuardVolumes(config.ReadOnlyVolumes); err != nil {
 		return err
 	}
+	if err := ValidateAddableCapabilities(config.AddedCapabilities); err != nil {
+		return fmt.Errorf("%w: %v", ErrRuntimeGuard, err)
+	}
 	for _, bind := range config.Binds {
 		if g.isOwnSecretBind(config, bind) {
 			continue

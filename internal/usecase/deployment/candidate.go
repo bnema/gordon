@@ -42,9 +42,9 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	if err != nil {
 		return startedCandidate{}, err
 	}
-	// Re-resolve devices from the current policy under the same
-	// fail-closed rule: revoked grants never reach the runtime.
-	resolvedDevices, err := s.resolveServiceDevices(app, p.spec)
+	// Re-resolve devices and capabilities from the current policy under
+	// the same fail-closed rule: revoked grants never reach the runtime.
+	resolvedDevices, resolvedCaps, err := s.resolveServiceGrants(app, p.spec)
 	if err != nil {
 		return startedCandidate{}, err
 	}
@@ -90,24 +90,25 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		volumes[vol.Path] = runtimeName
 	}
 	config := &domain.ContainerConfig{
-		Image:           image,
-		Name:            domain.LogicalServiceIdentity(app, p.spec.Name) + "--" + shortOp(opID),
-		Env:             env,
-		Entrypoint:      append([]string(nil), p.spec.Command...),
-		Volumes:         volumes,
-		ReadOnlyVolumes: readOnlyVolumes,
-		Binds:           resolvedBinds,
-		CDIDevices:      resolvedDevices,
-		Labels:          appLabels(app, p.spec.Name, revision),
-		AutoRemove:      false,
-		RestartPolicy:   domain.RestartPolicyAlways,
-		PortPublishes:   backendPublishes(p.spec),
-		NetworkMode:     nets.private,
-		Hostname:        p.spec.Name,
-		Aliases:         []string{p.spec.Name},
-		MemoryLimit:     s.deps.Limits.MemoryBytes,
-		NanoCPUs:        s.deps.Limits.NanoCPUs,
-		PidsLimit:       s.deps.Limits.PidsLimit,
+		Image:             image,
+		Name:              domain.LogicalServiceIdentity(app, p.spec.Name) + "--" + shortOp(opID),
+		Env:               env,
+		Entrypoint:        append([]string(nil), p.spec.Command...),
+		Volumes:           volumes,
+		ReadOnlyVolumes:   readOnlyVolumes,
+		Binds:             resolvedBinds,
+		CDIDevices:        resolvedDevices,
+		AddedCapabilities: resolvedCaps,
+		Labels:            appLabels(app, p.spec.Name, revision),
+		AutoRemove:        false,
+		RestartPolicy:     domain.RestartPolicyAlways,
+		PortPublishes:     backendPublishes(p.spec),
+		NetworkMode:       nets.private,
+		Hostname:          p.spec.Name,
+		Aliases:           []string{p.spec.Name},
+		MemoryLimit:       s.deps.Limits.MemoryBytes,
+		NanoCPUs:          s.deps.Limits.NanoCPUs,
+		PidsLimit:         s.deps.Limits.PidsLimit,
 	}
 	created, err := s.createWithSecretFiles(ctx, app, p.name, config, files)
 	if err != nil {

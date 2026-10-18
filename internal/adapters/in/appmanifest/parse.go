@@ -58,10 +58,13 @@ type rawService struct {
 	Volumes []rawVolume    `toml:"volume"`
 	Binds   []rawBind      `toml:"bind"`
 	// Devices lists logical device names from `devices = [...]`.
-	Devices   []string      `toml:"devices"`
-	Databases []rawDatabase `toml:"database"`
-	Backup    rawBackup     `toml:"backup"`
-	Telemetry rawTelemetry  `toml:"telemetry"`
+	Devices []string `toml:"devices"`
+	// Capabilities lists logical capability-policy names from
+	// `capabilities = [...]`.
+	Capabilities []string      `toml:"capabilities"`
+	Databases    []rawDatabase `toml:"database"`
+	Backup       rawBackup     `toml:"backup"`
+	Telemetry    rawTelemetry  `toml:"telemetry"`
 }
 
 // rawReadiness mirrors [services.<name>.readiness].
@@ -346,6 +349,8 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 	// Preserve manifest order; domain equalDevices treats the slice as a
 	// set, so reorder-only input is a no-op in diffs.
 	svc.Devices = append([]string(nil), raw.Devices...)
+	// Same set semantics for capability-policy names.
+	svc.Capabilities = append([]string(nil), raw.Capabilities...)
 	for _, db := range raw.Databases {
 		svc.Databases = append(svc.Databases, domain.AppDatabase{
 			Name:     db.Name,
