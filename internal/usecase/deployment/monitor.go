@@ -739,7 +739,7 @@ func (s *Service) startRecovered(serviceCtx context.Context, app, name string, e
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return false, err
 	}
-	if _, err := s.resolveServiceCapabilities(app, eff.Spec); err != nil {
+	if err := s.verifyReusableCapabilities(serviceCtx, app, eff); err != nil {
 		return false, err
 	}
 	if err := s.deps.Runtime.StartContainer(serviceCtx, eff.Container); err != nil {
@@ -798,7 +798,7 @@ func (s *Service) recoverHealth(serviceCtx context.Context, app, name string, ef
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return false, false, err
 	}
-	if _, err := s.resolveServiceCapabilities(app, eff.Spec); err != nil {
+	if err := s.verifyReusableCapabilities(serviceCtx, app, eff); err != nil {
 		return false, false, err
 	}
 	if err := s.deps.Runtime.RestartContainer(serviceCtx, eff.Container, serviceStopGrace(eff)); err != nil {

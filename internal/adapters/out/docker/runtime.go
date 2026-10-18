@@ -198,7 +198,7 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 		resources.PidsLimit = &config.PidsLimit
 	}
 	capDrop := []string{"ALL"}
-	capAdd := []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+	capAdd := domain.DefaultAppCapAdd()
 	if config.CapDrop != nil {
 		capDrop = config.CapDrop
 	}
@@ -798,6 +798,11 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		})
 	}
 
+	var capAdd []string
+	if resp.HostConfig != nil {
+		capAdd = append([]string(nil), resp.HostConfig.CapAdd...)
+	}
+
 	return &domain.Container{
 		ID:           resp.ID,
 		Image:        resp.Config.Image,
@@ -811,6 +816,7 @@ func (r *Runtime) InspectContainer(ctx context.Context, containerID string) (*do
 		Created:      created,
 		StartedAt:    startedAt,
 		Env:          resp.Config.Env,
+		CapAdd:       capAdd,
 	}, nil
 }
 

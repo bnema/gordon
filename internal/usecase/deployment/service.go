@@ -292,6 +292,39 @@ func (s *Service) resolveServiceCapabilities(app string, svc domain.AppService) 
 	return caps, nil
 }
 
+// verifyReusableCapabilities gates every path that reuses an existing
+// capability-bearing container (restart, start, health recovery). Policy
+// resolution alone is not enough: the container keeps the capability set it
+// was created with, so a policy narrowed after creation would still run with
+// the revoked capability. The container's configured CapAdd must therefore
+// not exceed Gordon's defaults plus the currently authorized grant;
+// otherwise the reuse is refused and a deploy must recreate it. A container
+// holding fewer capabilities than authorized is fine (least privilege).
+// A container that no longer exists is left to the caller's existing
+// rebuild path, which re-resolves the policy.
+func (s *Service) verifyReusableCapabilities(ctx context.Context, app string, eff domain.AppEffectiveService) error {
+	granted, err := s.resolveServiceCapabilities(app, eff.Spec)
+	if err != nil {
+		return err
+	}
+	if len(eff.Spec.Capabilities) == 0 || eff.Container == "" {
+		return nil
+	}
+	ctr, err := s.deps.Runtime.InspectContainer(ctx, eff.Container)
+	if err != nil {
+		if errors.Is(err, domain.ErrContainerNotFound) {
+			return nil
+		}
+		return fmt.Errorf("deployment: app %q service %q: cannot verify container capabilities: %w", app, eff.Spec.Name, domain.ErrCapabilityPolicy)
+	}
+	authorized := append(domain.DefaultAppCapAdd(), granted...)
+	if excess := domain.ExcessCapabilities(ctr.CapAdd, authorized); len(excess) > 0 {
+		return fmt.Errorf("deployment: app %q service %q: container holds capabilities beyond the current policy (%s); deploy to recreate it: %w",
+			app, eff.Spec.Name, strings.Join(excess, ", "), domain.ErrCapabilityPolicy)
+	}
+	return nil
+}
+
 // resolveServiceGrants resolves the device and capability policies of a
 // service in one fail-closed step.
 func (s *Service) resolveServiceGrants(app string, svc domain.AppService) (devices, caps []string, err error) {

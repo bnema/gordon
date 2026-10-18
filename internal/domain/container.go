@@ -24,6 +24,10 @@ type Container struct {
 	// Env is the container's KEY=value environment as created. It may hold
 	// secret values: compare it in memory only, never persist or log it.
 	Env []string
+	// CapAdd is the container's configured capability add set as reported
+	// by the engine (names may carry a CAP_ prefix). Nil when the engine
+	// reports none. Reuse paths compare it with the current authorization.
+	CapAdd []string
 }
 
 // ContainerVolumeMount describes a mounted volume-like resource on a container.

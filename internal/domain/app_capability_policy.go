@@ -42,6 +42,42 @@ var allowedAppCapabilities = []string{
 	"SYS_RESOURCE",
 }
 
+// defaultAppCapAdd is Gordon's base capability add set for app containers
+// (on top of cap_drop = ALL). Granted capabilities are added to it.
+var defaultAppCapAdd = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE"}
+
+// DefaultAppCapAdd returns Gordon's base capability add set. The slice is a
+// copy.
+func DefaultAppCapAdd() []string {
+	return slices.Clone(defaultAppCapAdd)
+}
+
+// NormalizeCapability returns the canonical form of a capability name as
+// reported by an engine: upper case without the CAP_ prefix.
+func NormalizeCapability(name string) string {
+	return strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(name)), "CAP_")
+}
+
+// ExcessCapabilities returns the sorted, normalized capabilities in actual
+// that are not in authorized. Both sides are normalized first, so engines
+// that report CAP_ prefixed names compare equal. A container holding fewer
+// capabilities than authorized is not excess.
+func ExcessCapabilities(actual, authorized []string) []string {
+	allowed := make(map[string]struct{}, len(authorized))
+	for _, name := range authorized {
+		allowed[NormalizeCapability(name)] = struct{}{}
+	}
+	var excess []string
+	for _, name := range actual {
+		n := NormalizeCapability(name)
+		if _, ok := allowed[n]; !ok {
+			excess = append(excess, n)
+		}
+	}
+	slices.Sort(excess)
+	return slices.Compact(excess)
+}
+
 // AllowedAppCapabilities returns the sorted capability names a policy may
 // add. The slice is a copy.
 func AllowedAppCapabilities() []string {

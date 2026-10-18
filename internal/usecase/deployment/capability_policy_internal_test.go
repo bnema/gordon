@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/bnema/zerowrap"
@@ -173,4 +174,131 @@ func TestUnchangedRefusal_CapabilitiesNeverKeepRunningContainer(t *testing.T) {
 	p := pinnedService{name: "web", spec: domain.AppService{Name: "web", Capabilities: []string{"net-admin"}}}
 	reason := svc.unchangedRefusal(context.Background(), "blog", p, domain.AppEffectiveService{Spec: p.spec})
 	assert.Equal(t, "administrative capabilities", reason)
+}
+
+// narrowedFixture models a policy narrowed from {NET_ADMIN, IPC_LOCK} to
+// {IPC_LOCK} after a container was created with both: policy resolution
+// still succeeds, but the existing container holds the revoked NET_ADMIN.
+func narrowedFixture(t *testing.T, containerCaps []string) (*Service, *outmocks.MockContainerRuntime, domain.AppEffectiveService) {
+	t.Helper()
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{Runtime: runtime}, zerowrap.Default()).
+		WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{
+			"net-admin": {Name: "net-admin", Add: []string{"IPC_LOCK"}, AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}},
+		})
+	eff := domain.AppEffectiveService{
+		Container: "c1",
+		Spec:      domain.AppService{Name: "web", Capabilities: []string{"net-admin"}},
+	}
+	runtime.EXPECT().InspectContainer(mock.Anything, "c1").
+		Return(&domain.Container{ID: "c1", CapAdd: containerCaps}, nil).Maybe()
+	return svc, runtime, eff
+}
+
+var staleCaps = []string{"CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "NET_BIND_SERVICE", "NET_ADMIN", "IPC_LOCK"}
+
+func TestVerifyReusableCapabilities(t *testing.T) {
+	t.Run("narrowed policy refuses a container holding a revoked capability", func(t *testing.T) {
+		svc, _, eff := narrowedFixture(t, staleCaps)
+		err := svc.verifyReusableCapabilities(context.Background(), "blog", eff)
+		require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
+		assert.Contains(t, err.Error(), "NET_ADMIN")
+		assert.NotContains(t, err.Error(), "IPC_LOCK")
+	})
+	t.Run("CAP_ prefixed engine names compare equal", func(t *testing.T) {
+		svc, _, eff := narrowedFixture(t, []string{"CAP_CHOWN", "CAP_NET_BIND_SERVICE", "CAP_IPC_LOCK"})
+		require.NoError(t, svc.verifyReusableCapabilities(context.Background(), "blog", eff))
+	})
+	t.Run("fewer capabilities than authorized is allowed", func(t *testing.T) {
+		svc, _, eff := narrowedFixture(t, []string{"CHOWN"})
+		require.NoError(t, svc.verifyReusableCapabilities(context.Background(), "blog", eff))
+	})
+	t.Run("prefixed revoked capability is still caught", func(t *testing.T) {
+		svc, _, eff := narrowedFixture(t, []string{"CAP_NET_ADMIN"})
+		require.ErrorIs(t, svc.verifyReusableCapabilities(context.Background(), "blog", eff), domain.ErrCapabilityPolicy)
+	})
+	t.Run("uninspectable container fails closed", func(t *testing.T) {
+		runtime := outmocks.NewMockContainerRuntime(t)
+		runtime.EXPECT().InspectContainer(mock.Anything, "c1").Return(nil, fmt.Errorf("daemon down at /run/podman.sock")).Once()
+		svc := NewService(Deps{Runtime: runtime}, zerowrap.Default()).
+			WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{
+				"net-admin": capabilityPolicyFor([]string{"blog"}, []string{"web"}),
+			})
+		eff := domain.AppEffectiveService{Container: "c1", Spec: domain.AppService{Name: "web", Capabilities: []string{"net-admin"}}}
+		err := svc.verifyReusableCapabilities(context.Background(), "blog", eff)
+		require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
+		assert.NotContains(t, err.Error(), "podman.sock")
+	})
+	t.Run("missing container is left to the rebuild path", func(t *testing.T) {
+		runtime := outmocks.NewMockContainerRuntime(t)
+		runtime.EXPECT().InspectContainer(mock.Anything, "c1").Return(nil, domain.ErrContainerNotFound).Once()
+		svc := NewService(Deps{Runtime: runtime}, zerowrap.Default()).
+			WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{
+				"net-admin": capabilityPolicyFor([]string{"blog"}, []string{"web"}),
+			})
+		eff := domain.AppEffectiveService{Container: "c1", Spec: domain.AppService{Name: "web", Capabilities: []string{"net-admin"}}}
+		require.NoError(t, svc.verifyReusableCapabilities(context.Background(), "blog", eff))
+	})
+	t.Run("service without capabilities never inspects", func(t *testing.T) {
+		runtime := outmocks.NewMockContainerRuntime(t)
+		svc := NewService(Deps{Runtime: runtime}, zerowrap.Default())
+		eff := domain.AppEffectiveService{Container: "c1", Spec: domain.AppService{Name: "web"}}
+		require.NoError(t, svc.verifyReusableCapabilities(context.Background(), "blog", eff))
+	})
+}
+
+func TestRestartOneService_NarrowedCapabilityPolicyRefusesInPlaceRestart(t *testing.T) {
+	svc, runtime, eff := narrowedFixture(t, staleCaps)
+	op := &domain.AppOperation{Op: "op-1", Steps: []domain.AppOperationStep{{
+		ID: "service.web.restart", State: domain.AppStepPending, Before: eff.Container,
+	}}}
+	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", eff, op, 0)
+
+	assert.Equal(t, "failed", result.Result)
+	assert.Equal(t, domain.AppStepFailed, op.Steps[0].State)
+	assert.Contains(t, op.Steps[0].Error, "NET_ADMIN")
+	runtime.AssertNotCalled(t, "RestartContainer")
+	runtime.AssertNotCalled(t, "StartContainer")
+}
+
+func TestEnsureServiceRunning_NarrowedCapabilityPolicyRefusesStart(t *testing.T) {
+	svc, runtime, eff := narrowedFixture(t, staleCaps)
+	op := &domain.AppOperation{Op: "op-1", Steps: []domain.AppOperationStep{{
+		ID: "service.web.start", State: domain.AppStepPending, Before: eff.Container,
+	}}}
+	result := &LifecycleResult{Services: map[string]ServiceResult{}}
+
+	svc.ensureServiceRunning(context.Background(), "blog", "op-1", "web", eff, op, 0, result)
+
+	assert.Equal(t, domain.AppStepFailed, op.Steps[0].State)
+	assert.Contains(t, op.Steps[0].Error, "NET_ADMIN")
+	runtime.AssertNotCalled(t, "StartContainer")
+	runtime.AssertNotCalled(t, "IsContainerRunning")
+}
+
+func TestStartRecovered_NarrowedCapabilityPolicyRefusesStart(t *testing.T) {
+	svc, runtime, eff := narrowedFixture(t, staleCaps)
+	started, err := svc.startRecovered(context.Background(), "blog", "web", eff, recoveryKey{app: "blog", service: "web", container: "c1"})
+
+	require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
+	assert.False(t, started)
+	runtime.AssertNotCalled(t, "StartContainer")
+}
+
+func TestRecoverHealth_NarrowedCapabilityPolicyRefusesRestart(t *testing.T) {
+	svc, runtime, eff := narrowedFixture(t, staleCaps)
+	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c1").Return("unhealthy", true, nil).Once()
+	key := recoveryKey{app: "blog", service: "web", container: "c1"}
+	for i := 0; i < unhealthyThreshold; i++ {
+		_, _, err := svc.recoverHealth(context.Background(), "blog", "web", eff, key)
+		if err != nil {
+			require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
+			runtime.AssertNotCalled(t, "RestartContainer")
+			return
+		}
+		if i < unhealthyThreshold-1 {
+			runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c1").Return("unhealthy", true, nil).Once()
+		}
+	}
+	t.Fatal("expected recoverHealth to refuse the restart")
 }

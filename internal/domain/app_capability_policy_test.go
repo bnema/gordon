@@ -177,3 +177,17 @@ func TestDiffAppSpecCapabilities(t *testing.T) {
 	assert.NotContains(t, diff.Changed, "service/worker/capabilities", "nil vs empty is a no-op")
 	assert.NotContains(t, diff.Changed, "service/worker/devices")
 }
+
+func TestExcessCapabilities(t *testing.T) {
+	authorized := append(DefaultAppCapAdd(), "IPC_LOCK")
+	assert.Empty(t, ExcessCapabilities([]string{"CAP_CHOWN", "ipc_lock"}, authorized))
+	assert.Empty(t, ExcessCapabilities(nil, authorized))
+	assert.Equal(t, []string{"NET_ADMIN"}, ExcessCapabilities([]string{"CHOWN", "CAP_NET_ADMIN", "NET_ADMIN"}, authorized))
+	assert.Equal(t, "NET_ADMIN", NormalizeCapability(" cap_net_admin "))
+}
+
+func TestDefaultAppCapAddIsCopy(t *testing.T) {
+	d := DefaultAppCapAdd()
+	d[0] = "mutated"
+	assert.NotEqual(t, "mutated", DefaultAppCapAdd()[0])
+}

@@ -333,7 +333,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	if _, err := s.resolveServiceDevices(app, eff.Spec); err != nil {
 		return fail(err.Error())
 	}
-	if _, err := s.resolveServiceCapabilities(app, eff.Spec); err != nil {
+	if err := s.verifyReusableCapabilities(ctx, app, eff); err != nil {
 		return fail(err.Error())
 	}
 	if err := s.refuseInhibitedRestart(ctx, app, name, eff.Container); err != nil {
@@ -711,7 +711,7 @@ func (s *Service) ensureServiceRunning(ctx context.Context, app, opID, name stri
 			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 			return
 		}
-		if _, err := s.resolveServiceCapabilities(app, eff.Spec); err != nil {
+		if err := s.verifyReusableCapabilities(ctx, app, eff); err != nil {
 			s.failServiceStep(ctx, app, name, eff, step, result, err.Error())
 			return
 		}
