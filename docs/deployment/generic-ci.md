@@ -34,7 +34,7 @@ Add these secrets to your CI system:
 
 ```bash
 # 1. Install Gordon binary
-curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 \
+curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 \
   -o /usr/local/bin/gordon
 chmod +x /usr/local/bin/gordon
 
@@ -86,7 +86,7 @@ pipeline {
         stage('Deploy') {
             steps {
                 sh '''
-                    curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 \
+                    curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 \
                       -o /usr/local/bin/gordon
                     chmod +x /usr/local/bin/gordon
                     gordon images push --build --remote "$GORDON_REMOTE"
@@ -113,7 +113,7 @@ jobs:
           name: Install Gordon
           command: |
             apk add --no-cache curl
-            curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 \
+            curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 \
               -o /usr/local/bin/gordon
             chmod +x /usr/local/bin/gordon
       - run:
@@ -150,7 +150,7 @@ steps:
         from_secret: gordon_remote
     commands:
       - apk add --no-cache curl
-      - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+      - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
       - chmod +x /usr/local/bin/gordon
       - gordon images push --build --remote "$GORDON_REMOTE"
 

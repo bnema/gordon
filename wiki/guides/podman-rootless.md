@@ -95,9 +95,9 @@ EOF
 
 ```bash
 # Download (choose your architecture)
-wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
+wget https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64.tar.gz
 # or for ARM64:
-# wget https://github.com/bnema/gordon/releases/latest/download/gordon_linux_arm64.tar.gz
+# wget https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_arm64.tar.gz
 
 tar -xzf gordon_linux_*.tar.gz
 chmod +x gordon

@@ -42,7 +42,7 @@ deploy:
     - docker:24-dind
   before_script:
     - apk add --no-cache curl
-    - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+    - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
     - gordon images push --build
@@ -70,7 +70,7 @@ deploy:
     - docker:24-dind
   before_script:
     - apk add --no-cache curl
-    - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+    - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
     - gordon images push --build
@@ -93,7 +93,7 @@ deploy:
     - docker:24-dind
   before_script:
     - apk add --no-cache curl
-    - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+    - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
     - gordon images push --build
@@ -114,7 +114,7 @@ deploy:
     - docker:24-dind
   before_script:
     - apk add --no-cache curl
-    - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+    - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
     - gordon images push --build
@@ -134,7 +134,7 @@ deploy:
     - docker:24-dind
   before_script:
     - apk add --no-cache curl
-    - curl -fsSL https://github.com/bnema/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
+    - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
     - chmod +x /usr/local/bin/gordon
   script:
     - gordon images push --build

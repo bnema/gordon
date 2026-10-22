@@ -7,6 +7,9 @@ set -e
 # Usage with next source build: curl -fsSL https://bnema.dev/gordon/install | GORDON_CHANNEL=next sh
 
 REPO="bnema/gordon"
+# Releases are hosted on the ermite forge; only the `next` source build uses GitHub.
+FORGE="https://git.bnema.dev"
+FORGE_REPO="gordon"
 VERSION="${GORDON_VERSION:-latest}"
 CHANNEL="${GORDON_CHANNEL:-stable}"
 
@@ -345,13 +348,16 @@ TARBALL="gordon_${OS}_${ARCH}.tar.gz"
 # Determine version to download
 if [ "$VERSION" = "latest" ] && [ -n "$GORDON_PRERELEASE" ]; then
     echo "Finding latest pre-release..."
-    # Get latest release (including pre-releases) from GitHub API
-    RELEASE_DATA=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases?per_page=1" 2>/dev/null || echo "")
+    # Get latest release (including pre-releases) from the forge's GitHub-compatible API
+    RELEASE_DATA=$(curl -fsSL "${FORGE}/-/github/api/repos/${REPO}/releases?per_page=1" 2>/dev/null || echo "")
     if [ -z "$RELEASE_DATA" ]; then
-        echo "Error: Failed to fetch release information from GitHub API"
+        echo "Error: Failed to fetch release information from ${FORGE}/-/github/api/repos/${REPO}/releases"
         exit 1
     fi
-    VERSION=$(echo "$RELEASE_DATA" | grep -m1 '"tag_name"' | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+    VERSION=$(printf '%s\n' "$RELEASE_DATA" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 | cut -d'"' -f4)
+    case "$VERSION" in
+        *[!0-9A-Za-z._+-]*) VERSION="" ;;
+    esac
     if [ -z "$VERSION" ]; then
         echo "Error: Could not determine latest pre-release version"
         exit 1
@@ -362,13 +368,13 @@ elif [ "$VERSION" = "latest" ]; then
     # Resolve "latest" to an exact tag by following the web redirect
     # (releases/latest -> releases/tag/<tag>). Unlike the REST API, this is
     # not rate-limited per IP for anonymous clients.
-    LATEST_URL=$(curl -fsSL -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest" 2>/dev/null || echo "")
-    VERSION=${LATEST_URL#"https://github.com/${REPO}/releases/tag/"}
+    LATEST_URL=$(curl -fsSL -o /dev/null -w '%{url_effective}' "${FORGE}/${FORGE_REPO}/releases/latest" 2>/dev/null || echo "")
+    VERSION=${LATEST_URL#"${FORGE}/${FORGE_REPO}/releases/tag/"}
     case "$VERSION" in
         "$LATEST_URL"|''|*[!0-9A-Za-z._+-]*) VERSION="" ;;
     esac
     if [ -z "$VERSION" ]; then
-        echo "Error: Could not determine latest stable version from https://github.com/${REPO}/releases/latest"
+        echo "Error: Could not determine latest stable version from ${FORGE}/${FORGE_REPO}/releases/latest"
         echo "Set GORDON_VERSION (e.g. GORDON_VERSION=v3.4.0) to install a specific release."
         exit 1
     fi
@@ -377,14 +383,14 @@ else
     echo "Using version: ${VERSION}"
 fi
 
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${TARBALL}"
+DOWNLOAD_URL="${FORGE}/${FORGE_REPO}/releases/download/${VERSION}/${TARBALL}"
 
 # Create temporary directory
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Download checksums file
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+CHECKSUMS_URL="${FORGE}/${FORGE_REPO}/releases/download/${VERSION}/checksums.txt"
 echo "Downloading checksums..."
 if ! curl -fsSL "$CHECKSUMS_URL" -o "$TMP_DIR/checksums.txt"; then
     echo "Error: Failed to download checksums file"

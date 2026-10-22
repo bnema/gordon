@@ -152,10 +152,10 @@ dev-release: build ## Create dev GitHub release
 	@echo "Dev release created successfully!"
 	@echo ""
 	@echo "📦 Download URLs:"
-	@echo "  AMD64: wget https://github.com/bnema/gordon/releases/download/$(DEV_TAG)/gordon-linux-amd64"
-	@echo "  ARM64: wget https://github.com/bnema/gordon/releases/download/$(DEV_TAG)/gordon-linux-arm64"
+	@echo "  AMD64: wget https://git.bnema.dev/gordon/releases/download/$(DEV_TAG)/gordon-linux-amd64"
+	@echo "  ARM64: wget https://git.bnema.dev/gordon/releases/download/$(DEV_TAG)/gordon-linux-arm64"
 	@echo ""
-	@echo "🔗 Release page: https://github.com/bnema/gordon/releases/tag/$(DEV_TAG)"
+	@echo "🔗 Release page: https://git.bnema.dev/gordon/releases/tag/$(DEV_TAG)"
 
 ##@ Cleanup
 

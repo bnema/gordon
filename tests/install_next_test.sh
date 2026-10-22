@@ -36,7 +36,7 @@ printf '%s\n' "\$*" >>'$case_dir/curl.log'
 case "\$*" in
   *api.github.com/repos/bnema/gordon/commits/next*) printf '%s\n' '{"sha":"$SHA"}' ;;
   *codeload.github.com/bnema/gordon/tar.gz/$SHA*) : >'$case_dir/source.tar.gz' ;;
-  *github.com/bnema/gordon/releases/latest*) printf '%s' "\${MOCK_LATEST_URL-https://github.com/bnema/gordon/releases/tag/v9.9.9}" ;;
+  *git.bnema.dev/gordon/releases/latest*) printf '%s' "\${MOCK_LATEST_URL-https://git.bnema.dev/gordon/releases/tag/v9.9.9}" ;;
   *) exit 90 ;;
 esac
 EOF
@@ -249,7 +249,8 @@ test_stable_latest_without_api() {
     run_case stable-latest env sh "$ROOT/install.sh"
     # The mock refuses the checksum download; resolution is what is tested.
     if grep -q "Resolved version: v9.9.9" "$case_dir/out" &&
-        grep -q "github.com/bnema/gordon/releases/download/v9.9.9/checksums.txt" "$case_dir/curl.log" &&
+        grep -q "git.bnema.dev/gordon/releases/download/v9.9.9/checksums.txt" "$case_dir/curl.log" &&
+        ! grep -q "/-/github/api" "$case_dir/curl.log" &&
         ! grep -q "api.github.com" "$case_dir/curl.log"; then
         pass "stable latest resolves from the release redirect without the API"
     else
@@ -257,7 +258,7 @@ test_stable_latest_without_api() {
         fail "stable latest resolves from the release redirect without the API"
     fi
 
-    run_case stable-latest-bad env MOCK_LATEST_URL='https://github.com/bnema/gordon/releases' sh "$ROOT/install.sh"
+    run_case stable-latest-bad env MOCK_LATEST_URL='https://git.bnema.dev/gordon/releases' sh "$ROOT/install.sh"
     if [ "$status" -ne 0 ] && grep -q "Could not determine latest stable version" "$case_dir/out" &&
         ! grep -q "releases/download" "$case_dir/curl.log"; then
         pass "unexpected latest redirect is rejected"
@@ -266,7 +267,7 @@ test_stable_latest_without_api() {
         fail "unexpected latest redirect is rejected"
     fi
 
-    run_case stable-latest-unsafe env MOCK_LATEST_URL='https://github.com/bnema/gordon/releases/tag/v1.0.0;rm' sh "$ROOT/install.sh"
+    run_case stable-latest-unsafe env MOCK_LATEST_URL='https://git.bnema.dev/gordon/releases/tag/v1.0.0;rm' sh "$ROOT/install.sh"
     if [ "$status" -ne 0 ] && grep -q "Could not determine latest stable version" "$case_dir/out"; then
         pass "unsafe latest tag is rejected"
     else

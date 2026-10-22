@@ -1,5 +1,13 @@
 version: 2
 
+# Releases are published on ermite. In CI the runner sets GITHUB_API_URL and
+# GITHUB_SERVER_URL to an address the job can reach; the public URLs are the
+# fallback for a local run.
+github_urls:
+  api: '{{ or (index .Env "GITHUB_API_URL") "https://git.bnema.dev/-/github/api" }}/'
+  upload: '{{ or (index .Env "GITHUB_API_URL") "https://git.bnema.dev/-/github/api" }}/uploads/'
+  download: '{{ or (index .Env "GITHUB_SERVER_URL") "https://git.bnema.dev" }}/'
+
 before:
   hooks:
 
@@ -7,6 +15,10 @@ git:
   prerelease_suffix: "-"
 
 release:
+  github:
+    owner: bnema
+    name: gordon
+  # Publish after checking it: ermite release edit gordon <tag> --publish
   draft: true
   prerelease: auto
 

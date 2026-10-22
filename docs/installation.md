@@ -56,7 +56,7 @@ Manual archive installation requires downloading the matching `checksums.txt` re
 **Linux (x86_64)**
 
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_amd64.tar.gz,checksums.txt}
+wget https://git.bnema.dev/gordon/releases/latest/download/{gordon_linux_amd64.tar.gz,checksums.txt}
 grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_linux_amd64\.tar\.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_amd64.tar.gz
 chmod +x gordon
@@ -66,7 +66,7 @@ sudo mv gordon /usr/local/bin/
 **Linux (ARM64)** - for Raspberry Pi 4, AWS Graviton, Oracle Ampere, etc.
 
 ```bash
-wget https://github.com/bnema/gordon/releases/latest/download/{gordon_linux_arm64.tar.gz,checksums.txt}
+wget https://git.bnema.dev/gordon/releases/latest/download/{gordon_linux_arm64.tar.gz,checksums.txt}
 grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_linux_arm64\.tar\.gz$' checksums.txt | sha256sum --check --strict
 tar -xzf gordon_linux_arm64.tar.gz
 chmod +x gordon
@@ -76,7 +76,7 @@ sudo mv gordon /usr/local/bin/
 **macOS (Apple Silicon)**
 
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_arm64.tar.gz,checksums.txt}
+curl -LO https://git.bnema.dev/gordon/releases/latest/download/{gordon_darwin_arm64.tar.gz,checksums.txt}
 grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_darwin_arm64\.tar\.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_arm64.tar.gz
 chmod +x gordon
@@ -86,7 +86,7 @@ sudo mv gordon /usr/local/bin/
 **macOS (Intel)**
 
 ```bash
-curl -LO https://github.com/bnema/gordon/releases/latest/download/{gordon_darwin_amd64.tar.gz,checksums.txt}
+curl -LO https://git.bnema.dev/gordon/releases/latest/download/{gordon_darwin_amd64.tar.gz,checksums.txt}
 grep -E '^[[:xdigit:]]{64} ([* ]?)gordon_darwin_amd64\.tar\.gz$' checksums.txt | shasum -a 256 --check
 tar -xzf gordon_darwin_amd64.tar.gz
 chmod +x gordon
@@ -352,7 +352,7 @@ curl -fsSL https://bnema.dev/gordon/install | GORDON_PRERELEASE=1 sh
 curl -fsSL https://bnema.dev/gordon/install | GORDON_CHANNEL=next sh
 ```
 
-Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The default stable install resolves the latest tag from the `github.com/bnema/gordon/releases/latest` redirect, so it does not use the rate-limited GitHub API; exact-version installs make no lookup at all. Pre-release lookups still use the GitHub API. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
+Stable, exact-version, and pre-release installs download release binaries and verify their published checksums. The default stable install resolves the latest tag from the `git.bnema.dev/gordon/releases/latest` redirect on the ermite forge (no API call); exact-version installs make no lookup at all. Pre-release lookups use the forge's GitHub-compatible API. The `next` channel is an **unverified development source build**: it resolves the branch through the GitHub API, pins the resulting commit SHA, downloads that exact source snapshot, and builds it locally for the detected platform. It requires the Go version declared by that commit's `go.mod`, is not covered by release checksums, and may be unstable. Do not combine `GORDON_CHANNEL=next` with `GORDON_VERSION` or `GORDON_PRERELEASE`.
 
 ## Verify Installation
 
