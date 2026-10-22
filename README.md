@@ -1,6 +1,6 @@
 # Gordon
 
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%203.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 Self-hosted container deployment. Push an image, declare an app, deploy it.
 
@@ -179,4 +179,4 @@ Full documentation at **[bnema.dev/gordon](https://bnema.dev/gordon)**
 
 ## License
 
-GPL-3.0 — Use freely, contribute back.
+[AGPL-3.0](LICENSE). If you run a modified Gordon as a network service, you must offer its source code to its users.
