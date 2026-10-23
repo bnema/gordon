@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,7 +77,11 @@ func (c *Client) doMutation(ctx context.Context, method, path, key string, jsonB
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
+	if errors.Is(err, ErrCIInsecureTransport) {
+		// Refused before sending or on a redirect answer: not ambiguous.
+		return nil, err
+	}
 	if err != nil {
 		return nil, &OutcomeUnknownError{Method: method, Path: path, Err: err}
 	}

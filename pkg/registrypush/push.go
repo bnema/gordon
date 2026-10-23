@@ -40,6 +40,7 @@ type Pusher struct {
 	transport   http.RoundTripper
 	insecureTLS bool
 	plainHTTP   bool
+	tlsOnly     bool
 	imageSource func(ctx context.Context, ref string) (v1.Image, func(), error)
 	cleanupFn   func()
 	progress    io.Writer
@@ -75,6 +76,17 @@ func WithInsecureTLS(insecure bool) Option {
 // TLS certificate verification while still using https://.
 func WithPlainHTTP(plain bool) Option {
 	return func(p *Pusher) { p.plainHTTP = plain }
+}
+
+// ErrInsecureTransport reports a push that TLS-only mode refuses: a
+// plaintext registry URL or a redirect answer.
+var ErrInsecureTransport = errors.New("refusing to send registry credentials")
+
+// WithTLSOnly restricts every registry request to https:// and refuses
+// redirects, so credentials that must never travel in plaintext reach only
+// the registry host itself. It conflicts with WithPlainHTTP.
+func WithTLSOnly(tlsOnly bool) Option {
+	return func(p *Pusher) { p.tlsOnly = tlsOnly }
 }
 
 // WithImageSource overrides the default daemon-based image reader.
@@ -142,6 +154,9 @@ func (p *Pusher) Push(ctx context.Context, ref string) (string, error) {
 	tag, ok := parsedRef.(name.Tag)
 	if !ok {
 		return "", fmt.Errorf("image ref %s must include a tag", ref)
+	}
+	if p.tlsOnly && p.plainHTTP {
+		return "", fmt.Errorf("%w to %s over http: TLS-only mode requires an https registry", ErrInsecureTransport, parsedRef.Context().RegistryStr())
 	}
 
 	var authHeader string
@@ -398,6 +413,9 @@ func resolveAuthHeader(ref name.Reference) (string, error) {
 }
 
 func (p *Pusher) registryBaseURL(host string) string {
+	if p.tlsOnly {
+		return "https://" + host
+	}
 	if p.plainHTTP {
 		return "http://" + host
 	}
@@ -546,7 +564,29 @@ func (p *Pusher) finalizeBlobUpload(ctx context.Context, baseURL, uploadURL, dig
 }
 
 func (p *Pusher) httpClient() *http.Client {
-	return &http.Client{Transport: p.transport, Timeout: p.timeout}
+	client := &http.Client{Transport: p.transport, Timeout: p.timeout}
+	if p.tlsOnly {
+		client.Transport = tlsOnlyTransport{next: p.transport}
+		client.CheckRedirect = func(req *http.Request, _ []*http.Request) error {
+			return fmt.Errorf("%w: the registry answered with a redirect to %s://%s; redirects are not followed", ErrInsecureTransport, req.URL.Scheme, req.URL.Host)
+		}
+	}
+	return client
+}
+
+// tlsOnlyTransport refuses any request that is not https before it is sent.
+type tlsOnlyTransport struct {
+	next http.RoundTripper
+}
+
+func (t tlsOnlyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme != "https" {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, fmt.Errorf("%w to %s over %s", ErrInsecureTransport, req.URL.Host, req.URL.Scheme)
+	}
+	return t.next.RoundTrip(req)
 }
 
 // setScopedAuth attaches the auth header only if the request URL matches the

@@ -102,17 +102,20 @@ func (d *dockerImageOps) Tag(ctx context.Context, sourceRef, targetRef string) e
 }
 
 func (d *dockerImageOps) Push(ctx context.Context, ref string) (string, error) {
+	oidc := d.remoteClient != nil && d.remoteClient.IsOIDC()
 	opts := []registrypush.Option{
 		registrypush.WithProgress(d.progress),
 		registrypush.WithInsecureTLS(d.insecureTLS),
 		registrypush.WithPlainHTTP(d.plainHTTP),
+		// A ci-access token only travels over https, without redirects.
+		registrypush.WithTLSOnly(oidc),
 	}
 
 	push := func(auth string) (string, error) {
 		pushOpts := append(opts[:len(opts):len(opts)], registrypush.WithAuth(auth))
 		return registrypush.New(pushOpts...).Push(ctx, ref)
 	}
-	if d.remoteClient != nil && d.remoteClient.IsOIDC() {
+	if oidc {
 		return d.pushWithAuthRetry(ctx, push, func(ctx context.Context) (string, error) {
 			return ciRegistryAuth(ctx, d.remoteClient, pushRepository(ref))
 		})

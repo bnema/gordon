@@ -179,9 +179,9 @@ func (f *fakeCIHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newOIDCClient(t *testing.T) (*Client, *fakeCIHost) {
 	t.Helper()
 	host := &fakeCIHost{t: t}
-	srv := httptest.NewServer(host)
+	srv := httptest.NewTLSServer(host)
 	t.Cleanup(srv.Close)
-	return NewClient(srv.URL, WithToken("ignored-stored-token"), WithOIDC(&OIDCSource{static: testJWT})), host
+	return NewClient(srv.URL, WithHTTPClient(srv.Client()), WithToken("ignored-stored-token"), WithOIDC(&OIDCSource{static: testJWT})), host
 }
 
 func TestClientOIDC_PromoteAndLookupUseCIHost(t *testing.T) {
@@ -240,13 +240,13 @@ func TestClientOIDC_AdminCallsRefusedWithoutNetwork(t *testing.T) {
 }
 
 func TestClientOIDC_ExchangeFailureCarriesStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Retry-After", "30")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(dto.AppError{Error: "identity-provider-unavailable", Message: "identity provider unavailable"})
 	}))
 	defer srv.Close()
-	client := NewClient(srv.URL, WithOIDC(&OIDCSource{static: testJWT}))
+	client := NewClient(srv.URL, WithHTTPClient(srv.Client()), WithOIDC(&OIDCSource{static: testJWT}))
 	_, err := client.ExchangeCIToken(context.Background())
 	var httpErr *HTTPError
 	require.True(t, errors.As(err, &httpErr))

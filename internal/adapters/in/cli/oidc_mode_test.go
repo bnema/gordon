@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
+	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
 // These tests run real httptest servers (sockets) for the CI host and the
@@ -63,7 +64,7 @@ func oidcEnv(t *testing.T) (*ciHostFake, *httptest.Server) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"value": oidcJWT})
 	}))
 	t.Cleanup(runner.Close)
-	host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	host := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fake.record(r)
 		if r.URL.Path == "/auth/token" {
 			if user, pass, ok := r.BasicAuth(); !ok || user != "oidc" || pass != oidcJWT {
@@ -91,6 +92,11 @@ func oidcEnv(t *testing.T) (*ciHostFake, *httptest.Server) {
 		}
 	}))
 	t.Cleanup(host.Close)
+	origNewClient := newOIDCClient
+	t.Cleanup(func() { newOIDCClient = origNewClient })
+	newOIDCClient = func(baseURL string, opts ...remote.ClientOption) *remote.Client {
+		return remote.NewClient(baseURL, append(opts, remote.WithHTTPClient(host.Client()))...)
+	}
 	t.Setenv("GORDON_OIDC_TOKEN", "")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", runner.URL+"?api-version=2.0")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", oidcRequestToken)
@@ -209,7 +215,7 @@ func TestImagesPush_OIDCModePushesToCIHostWithScopedToken(t *testing.T) {
 	cmd.SetArgs([]string{"e2e-demo:v1", "--tag", "v1", "--json"})
 	require.NoError(t, cmd.Execute(), stderr.String())
 
-	ciHost := strings.TrimPrefix(host.URL, "http://")
+	ciHost := strings.TrimPrefix(host.URL, "https://")
 	var result map[string]string
 	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
 	assert.Equal(t, ciHost+"/e2e-demo", result["repository"], "the CI host is the push registry")
@@ -221,4 +227,28 @@ func TestImagesPush_OIDCModePushesToCIHostWithScopedToken(t *testing.T) {
 	require.NotEmpty(t, fake.scopes)
 	assert.Equal(t, []string{"repository:e2e-demo:push,pull"}, fake.scopes[len(fake.scopes)-1])
 	assertNoSecrets(t, stdout.String(), stderr.String())
+}
+
+func TestAppPromote_OIDCModeRefusesPlaintextRemote(t *testing.T) {
+	fake, _ := oidcEnv(t)
+	var hits int
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(plain.Close)
+	t.Setenv("GORDON_OIDC_TOKEN", oidcJWT)
+
+	root := NewRootCmd()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"apps", "promote", "e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--remote", plain.URL, "--json"})
+	err := root.Execute()
+	require.ErrorIs(t, err, remote.ErrCIInsecureTransport)
+	assert.Contains(t, err.Error(), "https://")
+	assertNoSecrets(t, stdout.String(), stderr.String(), err.Error())
+	assert.Zero(t, hits, "nothing reached the plaintext remote")
+	assert.Empty(t, fake.Paths())
+	assert.Empty(t, fake.audiences, "the runner token endpoint is not even asked")
 }

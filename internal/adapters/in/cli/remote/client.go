@@ -324,7 +324,10 @@ func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.do(req)
+	if errors.Is(err, ErrCIInsecureTransport) {
+		return nil, err
+	}
 	if err != nil {
 		return nil, &requestTransportError{
 			err: fmt.Errorf("%s %s transport request: %w", method, path, err),

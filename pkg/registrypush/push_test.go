@@ -755,3 +755,95 @@ func (f *fakePushRegistry) handlerWithAuthCheck(t *testing.T, expectedAuth strin
 		inner.ServeHTTP(w, r)
 	})
 }
+
+// TestPusher_TLSOnly_RefusesPlaintextRegistry proves TLS-only mode never
+// dials a plaintext registry, even when WithPlainHTTP asks for it.
+func TestPusher_TLSOnly_RefusesPlaintextRegistry(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+
+	var hits int
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plain.Close()
+	plainURL, err := url.Parse(plain.URL)
+	require.NoError(t, err)
+
+	p := registrypush.New(
+		registrypush.WithTLSOnly(true),
+		registrypush.WithPlainHTTP(true),
+		registrypush.WithAuth("Bearer ci-secret"),
+		registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) { return img, nil }),
+	)
+	_, err = p.Push(context.Background(), plainURL.Host+"/demo/app:v1")
+	require.ErrorIs(t, err, registrypush.ErrInsecureTransport)
+	assert.NotContains(t, err.Error(), "ci-secret")
+	assert.Zero(t, hits)
+
+	// A localhost registry normally falls back to http://; TLS-only mode
+	// keeps https:// and fails the handshake against the plaintext server
+	// instead of sending the request in clear.
+	p = registrypush.New(
+		registrypush.WithTLSOnly(true),
+		registrypush.WithAuth("Bearer ci-secret"),
+		registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) { return img, nil }),
+	)
+	_, err = p.Push(context.Background(), plainURL.Host+"/demo/app:v1")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "ci-secret")
+	assert.Zero(t, hits, "no request reached the plaintext registry")
+}
+
+// TestPusher_TLSOnly_RefusesRedirect proves TLS-only mode never follows a
+// registry redirect, so the bearer never reaches the redirect target.
+func TestPusher_TLSOnly_RefusesRedirect(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+
+	var leaked []string
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = append(leaked, r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer plain.Close()
+
+	registry := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, plain.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	defer registry.Close()
+	registryURL, err := url.Parse(registry.URL)
+	require.NoError(t, err)
+
+	p := registrypush.New(
+		registrypush.WithTLSOnly(true),
+		registrypush.WithTransport(registry.Client().Transport),
+		registrypush.WithAuth("Bearer ci-secret"),
+		registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) { return img, nil }),
+	)
+	_, err = p.Push(context.Background(), registryURL.Host+"/demo/app:v1")
+	require.ErrorIs(t, err, registrypush.ErrInsecureTransport)
+	assert.Contains(t, err.Error(), "redirect")
+	assert.NotContains(t, err.Error(), "ci-secret")
+	assert.Empty(t, leaked, "the redirect target received no request")
+}
+
+// TestPusher_TLSOnly_PushesOverHTTPS proves TLS-only mode still pushes to
+// an https registry.
+func TestPusher_TLSOnly_PushesOverHTTPS(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	require.NoError(t, err)
+	registry := httptest.NewTLSServer(newFakePushRegistry(t, img, map[string]bool{}).handler())
+	defer registry.Close()
+	registryURL, err := url.Parse(registry.URL)
+	require.NoError(t, err)
+
+	p := registrypush.New(
+		registrypush.WithTLSOnly(true),
+		registrypush.WithTransport(registry.Client().Transport),
+		registrypush.WithImageSource(func(context.Context, string) (v1.Image, error) { return img, nil }),
+	)
+	_, err = p.Push(context.Background(), registryURL.Host+"/demo/app:v1")
+	require.NoError(t, err)
+}

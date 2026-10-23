@@ -33,6 +33,65 @@ const (
 // operation lookup).
 var ErrOIDCAdminUnavailable = errors.New("not available with an OIDC identity: the CI host serves only image push, app promotion and operation lookup")
 
+// ErrCIInsecureTransport reports a CI credential (the workload identity or
+// a ci-access token) that would leave the client over plaintext or follow a
+// redirect. CI credentials only travel on a direct https request to the CI
+// host.
+var ErrCIInsecureTransport = errors.New("refusing to send CI credentials")
+
+// CheckCIRemote reports whether rawURL may receive CI credentials: it must
+// be an absolute https URL. The error never includes credentials.
+func CheckCIRemote(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("%w: the CI host URL is not a valid absolute URL", ErrCIInsecureTransport)
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return fmt.Errorf("%w to %s over %s: the CI host must be an https:// URL", ErrCIInsecureTransport, u.Host, u.Scheme)
+	}
+	return nil
+}
+
+// isRedirectStatus reports the statuses net/http would follow.
+func isRedirectStatus(status int) bool {
+	switch status {
+	case http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+		http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		return true
+	default:
+		return false
+	}
+}
+
+// ciDo sends a request carrying a CI credential. It refuses any non-https
+// destination before dialing and never follows a redirect: a redirect
+// answer is an error, so the credential reaches only the CI host itself.
+func (c *Client) ciDo(req *http.Request) (*http.Response, error) {
+	if err := CheckCIRemote(req.URL.String()); err != nil {
+		return nil, err
+	}
+	noRedirect := *c.httpClient
+	noRedirect.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := noRedirect.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if isRedirectStatus(resp.StatusCode) {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodySize))
+		resp.Body.Close()
+		return nil, fmt.Errorf("%w: %s %s answered with a redirect (%s); redirects are not followed", ErrCIInsecureTransport, req.Method, req.URL.Path, resp.Status)
+	}
+	return resp, nil
+}
+
+// do sends an admin or CI request: CI credentials go through ciDo.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	if c.oidc != nil {
+		return c.ciDo(req)
+	}
+	return c.httpClient.Do(req)
+}
+
 // OIDCSource yields the workload identity token (an OIDC JWT) the client
 // exchanges at the CI host. It holds either a static token or the CI
 // runner's ID token request endpoint.
@@ -149,6 +208,10 @@ func (c *Client) ExchangeCIToken(ctx context.Context, scopes ...string) (string,
 	if c.oidc == nil {
 		return "", errors.New("ci-access token exchange requires an OIDC identity")
 	}
+	// Refuse a plaintext CI host before fetching the identity token.
+	if err := CheckCIRemote(c.baseURL); err != nil {
+		return "", err
+	}
 	key := strings.Join(scopes, " ")
 	c.ciMu.Lock()
 	defer c.ciMu.Unlock()
@@ -193,7 +256,7 @@ func (c *Client) exchangeCIToken(ctx context.Context, scopes []string) (string, 
 	}
 	req.SetBasicAuth("oidc", jwt)
 	req.Header.Set("Accept", "application/json")
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.ciDo(req)
 	if err != nil {
 		return "", 0, fmt.Errorf("ci-access token exchange: %w", err)
 	}
