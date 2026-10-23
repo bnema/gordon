@@ -51,6 +51,16 @@ type AppDeployRequest struct {
 	All bool `json:"all,omitempty"`
 }
 
+// AppPromoteRequest runs exactly one registry digest in one service.
+// Image is `[host/]repository@sha256:<64 hex>`; ExpectedRevision, when set,
+// must equal the current desired revision. The response is
+// AppDeployResponse.
+type AppPromoteRequest struct {
+	Service          string `json:"service"`
+	Image            string `json:"image"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+}
+
 // AppServiceResultDTO is one service's terminal deployment result.
 type AppServiceResultDTO struct {
 	Result            string `json:"result"`

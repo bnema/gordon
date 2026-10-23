@@ -10,6 +10,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/appmanifest"
+	"github.com/bnema/gordon/internal/adapters/in/http/appapi"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -88,6 +89,8 @@ func (h *Handler) dispatchAppVerb(w http.ResponseWriter, r *http.Request, app, v
 		h.handleAppDiff(w, r, app)
 	case verb == "deploy" && r.Method == http.MethodPost:
 		h.handleAppDeploy(w, r, app)
+	case verb == "promote" && r.Method == http.MethodPost:
+		h.handleAppPromote(w, r, app)
 	case verb == "restart" && r.Method == http.MethodPost:
 		h.handleAppRestart(w, r, app)
 	case (verb == "stop" || verb == "start" || verb == "remove") && r.Method == http.MethodPost:
@@ -390,19 +393,70 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
+// handleAppPromote serves POST /apps/{app}/promote: run exactly one registry
+// digest in one service. A stored-token caller promotes as the gordon
+// principal of its token subject and needs a promotion policy; the owner-only
+// local socket promotes as the local owner without one.
+func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app string) {
+	ctx := r.Context()
+	if !HasAccess(ctx, domain.AdminResourceApps, domain.AdminActionWrite) {
+		h.sendError(w, http.StatusForbidden, "insufficient permissions for apps:write")
+		return
+	}
+	svc, ok := h.appService(w)
+	if !ok {
+		return
+	}
+	req, err := appapi.DecodePromoteRequest(w, r)
+	if err != nil {
+		h.sendAppOpError(w, err)
+		return
+	}
+	key, ok := appIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	principal, localOwner := adminPrincipal(ctx)
+	op, err := svc.Promote(ctx, appapi.PromoteInput(app, key, req, principal, localOwner))
+	status, respond := appapi.PromoteOutcome(op, err)
+	if !respond {
+		h.sendAppOpError(w, err)
+		return
+	}
+	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
+}
+
+// adminPrincipal returns the promotion identity of an admin caller. The
+// local socket is the only path that sets LocalAuthoritySubject without a
+// token, so token claims are required for every other subject.
+func adminPrincipal(ctx context.Context) (domain.WorkloadPrincipal, bool) {
+	subject := GetSubject(ctx)
+	principal := domain.WorkloadPrincipal{Issuer: domain.GordonIssuer, Subject: subject}
+	_, hasClaims := ctx.Value(domain.TokenClaimsKey).(*domain.TokenClaims)
+	return principal, subject == LocalAuthoritySubject && !hasClaims
+}
+
 func appIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if key == "" || len(key) > 128 {
+	if !ValidIdempotencyKey(key) {
 		http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
 		return "", false
 	}
+	return key, true
+}
+
+// ValidIdempotencyKey reports whether key is a non-empty printable ASCII
+// token of at most 128 bytes.
+func ValidIdempotencyKey(key string) bool {
+	if key == "" || len(key) > 128 {
+		return false
+	}
 	for _, char := range key {
 		if char < '!' || char > '~' {
-			http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
-			return "", false
+			return false
 		}
 	}
-	return key, true
+	return true
 }
 
 // handleAppOpLookup serves GET /apps/{app}/operations/{key}.
@@ -553,40 +607,8 @@ func isPreflightErrorRest(err error) bool {
 
 // sendAppOpError maps domain errors to status + envelope.
 func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, domain.ErrInvalidAppSpec):
-		h.sendAppError(w, http.StatusBadRequest, "invalid-manifest", err.Error(), "", "")
-	case errors.Is(err, domain.ErrBindPolicy):
-		h.sendAppError(w, http.StatusBadRequest, "bind-policy-violation", err.Error(), "", "check the administrative mount authorization")
-	case errors.Is(err, domain.ErrDevicePolicy):
-		h.sendAppError(w, http.StatusBadRequest, "device-policy-violation", err.Error(), "", "check the administrative device authorization")
-	case errors.Is(err, domain.ErrCapabilityPolicy):
-		h.sendAppError(w, http.StatusBadRequest, "capability-policy-violation", err.Error(), "", "check the administrative capability authorization")
-	case errors.Is(err, domain.ErrRuntimeGuard):
-		h.sendAppError(w, http.StatusBadRequest, "runtime-guard-violation", err.Error(), "", "check administrative mounts and network settings")
-	case errors.Is(err, domain.ErrRuntimeUnsupported):
-		h.sendAppError(w, http.StatusBadRequest, "runtime-unsupported", err.Error(), "", "use an engine with native CDI support")
-	case errors.Is(err, domain.ErrAppReservationConflict):
-		h.sendAppError(w, http.StatusConflict, "reservation-conflict", err.Error(), "", "")
-	case errors.Is(err, domain.ErrAppImageUnresolvable):
-		h.sendAppError(w, http.StatusBadRequest, "image-unresolvable", err.Error(), "", "")
-	case errors.Is(err, domain.ErrAppSecretMissing):
-		h.sendAppError(w, http.StatusBadRequest, "secret-missing", err.Error(), "", "set the secret, then redeploy")
-	case errors.Is(err, domain.ErrAppUnmanagedImageVolume):
-		h.sendAppError(w, http.StatusBadRequest, "unmanaged-image-volume", err.Error(), "", "")
-	case errors.Is(err, domain.ErrAppServiceScope):
-		h.sendAppError(w, http.StatusBadRequest, "service-scope-required", err.Error(), "", "pass --service NAME or --all")
-	case errors.Is(err, domain.ErrAppNotFound):
-		h.sendAppError(w, http.StatusNotFound, "app-not-found", err.Error(), "", "check the app name")
-	case errors.Is(err, domain.ErrAppRevisionNotFound),
-		errors.Is(err, domain.ErrAppIntentNotFound),
-		errors.Is(err, domain.ErrAppOperationNotFound):
-		h.sendAppError(w, http.StatusNotFound, "not-found", err.Error(), "", "")
-	case errors.Is(err, domain.ErrAppStateConflict):
-		h.sendAppError(w, http.StatusConflict, "state-conflict", err.Error(), "", "")
-	default:
-		h.sendAppError(w, http.StatusInternalServerError, "internal", "app operation failed", "", "")
-	}
+	status, envelope := appapi.ErrorResponse(err)
+	h.sendAppError(w, status, envelope.Error, envelope.Message, envelope.Cause, envelope.Hint)
 }
 
 // toAppDiffSection maps the domain diff to its DTO shape.
@@ -594,7 +616,6 @@ func toAppDiffSection(diff domain.AppDiff) dto.AppDiffSection {
 	return dto.AppDiffSection{Added: diff.Added, Removed: diff.Removed, Changed: diff.Changed}
 }
 
-// toAppDeployResponse maps a journaled operation to its DTO shape.
 // toAppDeployResponse maps an operation journal record to the wire DTO.
 // includeDiagnostics must be true only for callers holding the logs read
 // scope: application output is never returned on a mutation response.
