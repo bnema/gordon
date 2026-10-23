@@ -924,7 +924,9 @@ func (s *Service) recordConvergence(ctx context.Context, app, revision string, p
 		return nil
 	}
 	candidate := *active
-	candidate.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	if networksPublished(*active, *p.revisionSpec, revision) {
+		candidate.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	}
 	converged, err := domain.AppSpecConverged(*p.revisionSpec, candidate, func(id string) (map[string]string, error) {
 		if id == revision {
 			return p.revisionSpec.Env, nil
@@ -940,6 +942,31 @@ func (s *Service) recordConvergence(ctx context.Context, app, revision string, p
 		active.Networks = candidate.Networks
 	}
 	return nil
+}
+
+// networksPublished reports whether ACTIVE already runs the revision's shared
+// networks: every service whose memberships differ between ACTIVE and the
+// revision was published under the revision, so its container joined them.
+// Until then ACTIVE keeps its recorded networks and convergence compares
+// against those.
+func networksPublished(active domain.AppActive, spec domain.AppSpec, revision string) bool {
+	current := domain.AppSpec{Networks: active.Networks}
+	names := map[string]struct{}{}
+	for _, svc := range spec.Services {
+		names[svc.Name] = struct{}{}
+	}
+	for name := range active.Services {
+		names[name] = struct{}{}
+	}
+	for name := range names {
+		if reflect.DeepEqual(domain.AppServiceSharedNetworks(current, name), domain.AppServiceSharedNetworks(spec, name)) {
+			continue
+		}
+		if svc, ok := active.Services[name]; !ok || svc.EffectiveRevision != revision {
+			return false
+		}
+	}
+	return true
 }
 
 // clearSupersededMarker clears the recovery inhibition of the generation a

@@ -43,6 +43,8 @@ type promoHarness struct {
 	svc       *deployment.Service
 	known     map[string]bool
 	seq       atomic.Int32
+	// failCreate, when set, fails CreateContainer for the named service.
+	failCreate string
 }
 
 func newPromoHarness(t *testing.T) *promoHarness {
@@ -96,9 +98,13 @@ func (h *promoHarness) expectRuntime() {
 	r.EXPECT().InspectImageVolumes(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	r.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{}, nil).Maybe()
 	r.EXPECT().CreateNetwork(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	r.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(func(context.Context, *domain.ContainerConfig) (*domain.Container, error) {
+	r.EXPECT().CreateContainer(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, cfg *domain.ContainerConfig) (*domain.Container, error) {
+		if h.failCreate != "" && cfg.Labels[domain.LabelAppService] == h.failCreate {
+			return nil, fmt.Errorf("create %s refused", h.failCreate)
+		}
 		return &domain.Container{ID: fmt.Sprintf("c-new-%d", h.seq.Add(1)), Name: "web"}, nil
 	}).Maybe()
+	r.EXPECT().ConnectContainerToNetwork(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	r.EXPECT().StartContainer(mock.Anything, mock.Anything).Return(nil).Maybe()
 	r.EXPECT().InspectContainer(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, id string) (*domain.Container, error) {
 		return &domain.Container{ID: id, Status: "running", StartedAt: executionStartedAt}, nil

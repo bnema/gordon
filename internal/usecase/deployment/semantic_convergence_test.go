@@ -102,6 +102,39 @@ func TestDeploy_TargetedDeployConvergesSemanticallyAndKeepsOtherProvenance(t *te
 	assert.True(t, activatedAt.Equal(worker.ActivatedAt))
 }
 
+// TestDeploy_NetworkOnlyChangeConvergesOnlyWhenEveryMemberIsRepublished
+// proves semantic convergence sees shared-network changes: a full deploy of a
+// revision that only adds both services to a shared network leaves ACTIVE
+// unconverged (and desired pending) when the second member fails, and
+// converged when both members were republished under the revision.
+func TestDeploy_NetworkOnlyChangeConvergesOnlyWhenEveryMemberIsRepublished(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fail      string
+		converged bool
+	}{
+		{name: "second member fails", fail: "worker"},
+		{name: "every member republished", converged: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPromoHarness(t)
+			h.failCreate = tc.fail
+			web, worker := promoServices()
+			next := testRevision("blog", web, worker)
+			next.Revision = "rev-1"
+			next.Spec.Networks = []domain.AppSharedNetwork{{Network: "shared", Services: []string{"web", "worker"}}}
+			seedRevision(t, h.ctx, h.store, "intent-1", "rev-0", next)
+
+			_, _ = h.svc.Deploy(h.ctx, deployment.DeployInput{App: "blog", Op: "op-net"})
+			active := h.active()
+			assert.Equal(t, tc.converged, active.Converged)
+			converged, err := domain.AppSpecConverged(next.Spec, active, func(string) (map[string]string, error) { return map[string]string{}, nil })
+			require.NoError(t, err)
+			assert.Equal(t, tc.converged, converged, "desired is pending exactly when ACTIVE is unconverged")
+		})
+	}
+}
+
 // TestDeploy_TargetedDeployStaysUnconvergedWhenAnotherServiceDiffers proves
 // semantic convergence still reports divergence: a targeted deploy of the
 // web service leaves a worker whose desired image changed unconverged.
