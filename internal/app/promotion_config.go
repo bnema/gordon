@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -64,7 +63,7 @@ func buildPromotionSnapshot(cfg Config) (PromotionSnapshot, error) {
 	}
 	policies, err := domain.NewPromotionPolicySet(cfg.PromotionPolicies)
 	if err != nil {
-		return snapshot, fmt.Errorf("promotion_policies: %w", err)
+		return snapshot, fmt.Errorf("promotion_policies: %w", redactedPromotionPolicyError{err})
 	}
 	snapshot.policies = policies
 	return snapshot, nil
@@ -88,21 +87,25 @@ func buildTrustedIssuer(raw TrustedIssuerConfig) (domain.TrustedIssuer, error) {
 	return issuer, issuer.Validate()
 }
 
-func canonicalPromotionHost(host string) string {
-	return strings.TrimSuffix(strings.ToLower(host), ".")
-}
+// redactedPromotionPolicyError preserves errors.Is/As without echoing identifiers.
+type redactedPromotionPolicyError struct{ cause error }
+
+func (e redactedPromotionPolicyError) Error() string { return redactedDevicePolicyReason(e.cause) }
+func (e redactedPromotionPolicyError) Unwrap() error { return e.cause }
 
 func validateCIDomain(cfg Config) error {
-	host := canonicalPromotionHost(cfg.Server.CIDomain)
-	if host == "" {
+	if cfg.Server.CIDomain == "" {
 		return nil
+	}
+	if _, ok := domain.CanonicalRouteDomain(cfg.Server.CIDomain); !ok {
+		return fmt.Errorf("server.ci_domain must be a public hostname without a port or trailing dot")
 	}
 	if !cfg.Auth.Enabled {
 		return fmt.Errorf("server.ci_domain requires auth.enabled")
 	}
 	reserved := append([]string{cfg.Server.GordonDomain}, cfg.Server.LegacyRegistryDomains...)
 	for _, other := range reserved {
-		if host == canonicalPromotionHost(other) {
+		if canonicalHostsEqual(cfg.Server.CIDomain, other) {
 			return fmt.Errorf("server.ci_domain collides with a management domain")
 		}
 	}
@@ -110,17 +113,14 @@ func validateCIDomain(cfg Config) error {
 }
 
 func validatePromotionConfig(v *viper.Viper, cfg Config) error {
-	for name, allowed := range map[string]string{
-		"trusted_issuers":    " issuer audience jwks_uri max_token_lifetime clock_skew allow_private_network ",
-		"promotion_policies": " issuer subjects app service repository ",
-	} {
+	for name, allowed := range knownPromotionConfigKeys {
 		var entries []map[string]any
 		if err := v.UnmarshalKey(name, &entries); err != nil {
 			return fmt.Errorf("invalid %s: %w", name, err)
 		}
 		for _, entry := range entries {
 			for key := range entry {
-				if !strings.Contains(allowed, " "+key+" ") {
+				if _, ok := allowed[key]; !ok {
 					return fmt.Errorf("unknown %s key %q", name, key)
 				}
 			}
@@ -136,7 +136,7 @@ func validateCIAppHosts(cfg Config, hosts appHostRoutes) error {
 		return nil
 	}
 	for _, host := range hosts.AppHosts() {
-		if canonicalPromotionHost(host.Host) == canonicalPromotionHost(cfg.Server.CIDomain) {
+		if canonicalHostsEqual(host.Host, cfg.Server.CIDomain) {
 			return fmt.Errorf("server.ci_domain collides with an app host")
 		}
 	}
@@ -156,4 +156,10 @@ func (si *serviceInit) initPromotionSnapshot() error {
 	}
 	si.svc.promotionSnapshot.Store(&snapshot)
 	return nil
+}
+
+// Exact subtree key sets: quoted keys containing spaces are not individual keys.
+var knownPromotionConfigKeys = map[string]map[string]struct{}{
+	"trusted_issuers":    {"issuer": {}, "audience": {}, "jwks_uri": {}, "max_token_lifetime": {}, "clock_skew": {}, "allow_private_network": {}},
+	"promotion_policies": {"issuer": {}, "subjects": {}, "app": {}, "service": {}, "repository": {}},
 }

@@ -130,3 +130,26 @@ func TestTrustedIssuerRejectsWildcards(t *testing.T) {
 		require.Error(t, issuer.Validate())
 	}
 }
+
+func TestPromotionExactIdentityEdges(t *testing.T) {
+	// HTTPS issuer URLs accept Unicode hosts and explicit ports syntactically.
+	// Identity matching remains byte-exact; no IDNA, port or case normalization.
+	for _, issuer := range []string{"https://issuer.example", "https://issuer.example/", "https://ISSUER.example", "https://例え.example", "https://issuer.example:443"} {
+		require.NoError(t, (TrustedIssuer{Issuer: issuer, Audience: "aud"}).Validate())
+		principal := WorkloadPrincipal{issuer, " subject:é\t "}
+		parsed, err := ParseWorkloadPrincipal(principal.String())
+		require.NoError(t, err)
+		require.Equal(t, principal, parsed)
+		set, err := NewPromotionPolicySet([]PromotionPolicy{{Issuer: issuer, Subjects: []string{principal.Subject}, App: "web", Service: "web", Repository: "web"}})
+		require.NoError(t, err)
+		require.True(t, set.Allows(principal, "web", "web", "web"))
+		for _, other := range []string{"subject:é", " subject:e\u0301\t ", " subject:é\t"} {
+			require.False(t, set.Allows(WorkloadPrincipal{issuer, other}, "web", "web", "web"))
+		}
+		for _, other := range []string{"https://issuer.example", "https://issuer.example/", "https://ISSUER.example", "https://issuer.example:443"} {
+			if other != issuer {
+				require.False(t, set.Allows(WorkloadPrincipal{other, principal.Subject}, "web", "web", "web"))
+			}
+		}
+	}
+}

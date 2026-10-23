@@ -191,7 +191,7 @@ func TestPromotionCIDomainCollisionKeepsPublishedState(t *testing.T) {
 	require.NoError(t, publisher.RebuildTraffic(ctx))
 	var cfg Config
 	cfg.Auth.Enabled = true
-	cfg.Server.CIDomain = "BLOG.EXAMPLE.COM."
+	cfg.Server.CIDomain = " BLOG.EXAMPLE.COM "
 	snapshot, err := buildPromotionSnapshot(Config{})
 	require.NoError(t, err)
 	svc.promotionSnapshot.Store(&snapshot)

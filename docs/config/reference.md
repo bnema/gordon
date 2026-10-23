@@ -493,8 +493,14 @@ app/service/repository names, wildcards (`*`), and duplicate
 `(issuer, subject, app, service)` grants are rejected. Duplicate issuer
 declarations are also rejected. `ci_domain` requires `auth.enabled` and must
 not equal `gordon_domain`, a legacy registry domain, or a served app host.
+`ci_domain` must be a public DNS hostname, not an IP, URL, wildcard, or
+host with a port or trailing dot (matching route-domain validation).
+Surrounding whitespace and case are ignored in host comparisons; collision
+checks also ignore a trailing dot on the compared management/app host.
+Issuer URLs, unlike routing hosts, are byte-exact: case, trailing slashes,
+Unicode hosts, and explicit ports are preserved. Subjects are also exact;
+whitespace and Unicode are not normalized.
 A rejected reload retains the previous identity and policy snapshot.
-
 
 ## Related
 

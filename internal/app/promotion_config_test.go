@@ -16,6 +16,7 @@ import (
 
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/apptraffic"
 )
 
 const promotionTOML = `
@@ -162,4 +163,64 @@ func TestPromotionStartupRejectsAppHostCollision(t *testing.T) {
 	si := &serviceInit{ctx: context.Background(), cfg: cfg, svc: svc}
 	require.ErrorContains(t, si.initPromotionSnapshot(), "collides with an app host")
 	require.Nil(t, svc.promotionSnapshot.Load())
+}
+
+func TestCIDomainHostnameValidation(t *testing.T) {
+	for _, host := range []string{"*", "https://ci.example", "ci.example:443", "ci.example/path", ".", " ", "bad..example", "-bad.example", "127.0.0.1", "[::1]", "ci.example."} {
+		t.Run(host, func(t *testing.T) {
+			var cfg Config
+			cfg.Auth.Enabled = true
+			cfg.Server.CIDomain = host
+			require.Error(t, validateCIDomain(cfg))
+			cfg.Auth.Enabled = false
+			require.Error(t, validateCIDomain(cfg))
+		})
+	}
+	var cfg Config
+	require.NoError(t, validateCIDomain(cfg))
+	cfg.Auth.Enabled = true
+	cfg.Server.CIDomain = " CI.EXAMPLE "
+	require.NoError(t, validateCIDomain(cfg))
+	for _, host := range []string{" gordon.example ", "GORDON.EXAMPLE", "gordon.example."} {
+		cfg.Server.CIDomain = host
+		cfg.Server.GordonDomain = "gordon.example"
+		require.Error(t, validateCIDomain(cfg))
+	}
+	cfg.Server.CIDomain = "ci.example"
+	cfg.Server.GordonDomain = "other.example"
+	cfg.Server.LegacyRegistryDomains = []string{" CI.EXAMPLE. "}
+	require.Error(t, validateCIDomain(cfg))
+}
+
+func TestPromotionQuotedUnknownKey(t *testing.T) {
+	for _, text := range []string{promotionTOML + "\"issuer subjects\" = \"ignored\"\n", strings.Replace(promotionTOML, `audience = "aud"`, "audience = \"aud\"\n\"issuer audience\" = \"ignored\"", 1)} {
+		v, cfg := readPromotionConfig(t, text)
+		require.Error(t, validatePromotionConfig(v, cfg))
+	}
+}
+
+func TestPromotionPolicyErrorRedactsIdentifiers(t *testing.T) {
+	for _, field := range []string{"app", "service"} {
+		_, cfg := readPromotionConfig(t, promotionTOML)
+		if field == "app" {
+			cfg.PromotionPolicies[0].App = "PrivateAppName"
+		} else {
+			cfg.PromotionPolicies[0].Service = "PrivateServiceName"
+		}
+		_, err := buildPromotionSnapshot(cfg)
+		require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
+		require.NotContains(t, err.Error(), "PrivateAppName")
+		require.NotContains(t, err.Error(), "PrivateServiceName")
+		require.Contains(t, err.Error(), field+" name")
+	}
+}
+
+func TestPromotionCIAppHostCanonicalCollisions(t *testing.T) {
+	var cfg Config
+	cfg.Server.CIDomain = " CI.EXAMPLE "
+	for _, host := range []string{"ci.example", "CI.EXAMPLE", " ci.example ", "ci.example."} {
+		index := apptraffic.NewHostIndex()
+		index.Replace([]apptraffic.RouteEntry{{Kind: "http", Host: host, Backend: domain.AppBackend{Host: "127.0.0.1", Port: 8080, ContainerID: "c-1"}}})
+		require.ErrorContains(t, validateCIAppHosts(cfg, index), "collides with an app host")
+	}
 }
