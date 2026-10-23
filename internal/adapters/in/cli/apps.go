@@ -131,6 +131,7 @@ Examples:
 		newAppsDiffCmd(),
 		newAppsSecretsCmd(),
 		newAppDeployCmd(),
+		newAppPromoteCmd(),
 		newAppRestartCmd(),
 		newAppStopCmd(),
 		newAppStartCmd(),
@@ -826,6 +827,67 @@ func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.A
 		return writeJSON(out, resp)
 	}
 	return renderAppDeployResponse(out, resp)
+}
+
+// newAppPromoteCmd creates `promote APP`: run one registry digest in one
+// service.
+func newAppPromoteCmd() *cobra.Command {
+	var req dto.AppPromoteRequest
+	var jsonOut bool
+	cmd := &cobra.Command{
+		Use:   "promote APP",
+		Short: "Run one pushed image digest in one service",
+		Long: `Promote exactly one image digest from this installation's registry into one
+service. The daemon accepts a desired revision whose only change is that
+service image, deploys it, and this command waits for the outcome.
+
+Examples:
+  gordon apps promote blog --service web --image web@sha256:<digest>
+  gordon apps promote blog --service web --image web@sha256:<digest> --expected-revision rev-123 --json`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			handle, err := resolveAppPlane()
+			if err != nil {
+				return err
+			}
+			defer handle.close()
+			return runAppPromote(cmd.Context(), handle.plane, args[0], req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
+		},
+	}
+	cmd.Flags().StringVar(&req.Service, "service", "", "Service to promote (required)")
+	cmd.Flags().StringVar(&req.Image, "image", "", "Image as REPOSITORY@sha256:DIGEST (required)")
+	cmd.Flags().StringVar(&req.ExpectedRevision, "expected-revision", "", "Refuse unless desired state is still at this revision")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	_ = cmd.MarkFlagRequired("service")
+	_ = cmd.MarkFlagRequired("image")
+	return cmd
+}
+
+// runAppPromote issues one promotion and, when the daemon answers 202,
+// polls the by-key endpoint to terminal. It never retries the mutation: a
+// 409 renders the journal (or the conflict) and exits nonzero.
+func runAppPromote(ctx context.Context, plane ControlPlane, app string, req dto.AppPromoteRequest, out, errOut io.Writer, jsonOut bool) error {
+	resp, key, err := plane.PromoteApp(ctx, app, req)
+	if err != nil {
+		if conflictErr, ok := renderAppOpConflict(out, "promote", app, key, err, jsonOut); ok {
+			return conflictErr
+		}
+		return appMutationError("promote", app, key, err)
+	}
+	if resp.Status == dto.AppStatusRunning {
+		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)
+	}
+	if jsonOut {
+		if err := writeJSON(out, resp); err != nil {
+			return err
+		}
+	} else if err := renderAppDeployResponse(out, resp); err != nil {
+		return err
+	}
+	if resp.Outcome != domain.AppOutcomeSuccess {
+		return &OperationFailedError{App: app, Op: resp.Op, Outcome: resp.Outcome}
+	}
+	return nil
 }
 
 // newAppRestartCmd creates `restart APP`: pinned digests, no re-resolve.

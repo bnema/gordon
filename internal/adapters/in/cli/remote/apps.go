@@ -155,6 +155,19 @@ func (c *Client) DeployApp(ctx context.Context, app string, req dto.AppDeployReq
 	return result, key, err
 }
 
+// PromoteApp runs exactly one registry digest in one service. It returns the
+// key used so the operation can be polled and an ambiguous outcome
+// recovered via OperationByKey.
+func (c *Client) PromoteApp(ctx context.Context, app string, req dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error) {
+	key := newIdempotencyKey()
+	resp, err := c.mutationPost(ctx, "/apps/"+url.PathEscape(app)+"/promote", key, req)
+	if err != nil {
+		return nil, key, err
+	}
+	result, err := parseDeployResponse(resp, "promote", app)
+	return result, key, err
+}
+
 // StopApp persists durable stopped intent and stops exact containers.
 func (c *Client) StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error) {
 	return c.lifecyclePost(ctx, app, "stop")

@@ -19,6 +19,7 @@ type ControlPlane interface {
 	ShowApp(ctx context.Context, app string) (*dto.AppShowResponse, error)
 	DiffApp(ctx context.Context, app string) (*dto.AppDiffResponse, error)
 	DeployApp(ctx context.Context, app string, req dto.AppDeployRequest) (*dto.AppDeployResponse, string, error)
+	PromoteApp(ctx context.Context, app string, req dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error)
 	StopApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
 	StartApp(ctx context.Context, app string) (*dto.AppDeployResponse, string, error)
 	RestartApp(ctx context.Context, app, service string, all bool) (*dto.AppDeployResponse, string, error)

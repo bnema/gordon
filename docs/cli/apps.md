@@ -35,6 +35,7 @@ See [Local-only Mode](../config/auth.md#local-only-mode).
 | `diff` | Show the normalized desired-vs-active diff |
 | `secrets` | Manage app secret values |
 | `deploy` | Activate an app revision |
+| `promote` | Run one pushed image digest in one service |
 | `restart` | Restart an app from pinned digests |
 | `stop` | Stop an app (preserves all data) |
 | `start` | Start a stopped app from active state |
@@ -290,6 +291,47 @@ state changes. It never reissues the mutation. In `--json` mode stdout
 carries one final document and progress goes to stderr. Ctrl-C stops only
 local polling (the daemon-side operation keeps running) and prints the
 `gordon apps operations watch` command to resume.
+
+---
+
+## gordon apps promote
+
+```bash
+gordon apps promote APP --service SVC --image REPO@sha256:DIGEST [--expected-revision REV] [--json]
+```
+
+Runs exactly one image digest from this installation's registry in one
+service. The daemon creates a desired revision whose only change is that
+service image and deploys that service. Other services keep running and keep
+their provenance.
+
+- `--image` must be pinned by digest: `REPO@sha256:<64 hex>`, optionally
+  prefixed with this installation's registry, management, CI, or legacy
+  registry host. Tags and other registries are refused.
+- The manifest must already be in the registry (`gordon images push`).
+- The app must be running and its other services must match desired state.
+- Over the local admin socket the owner may promote any service. A token
+  caller needs a `[[promotion_policies]]` entry with issuer `gordon` and its
+  token subject.
+- Promoting a digest the service already runs succeeds without a change.
+
+| Flag | Description |
+|------|-------------|
+| `--service NAME` | Service to promote (required) |
+| `--image REF` | Image as `REPO@sha256:DIGEST` (required) |
+| `--expected-revision REV` | Refuse unless desired state is still at this revision |
+| `--json` | Output as JSON |
+
+The command polls the operation by key like `apps deploy` and exits 0 only
+when the promotion succeeds. It never retries: on a conflict (HTTP 409), for
+example a concurrent apply or a changed `--expected-revision`, it exits 1.
+If the outcome is unknown, check it with
+`gordon apps operations show APP --key KEY` before promoting again.
+
+```bash
+gordon apps promote blog --service web \
+  --image registry.example.com/web@sha256:3f1c...
+```
 
 ---
 
