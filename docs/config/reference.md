@@ -14,6 +14,7 @@ tls_cert_file = ""                           # PEM cert path (optional, for stat
 tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
 force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
+ci_domain = ""                               # Optional CI hostname; configuration only (routing not yet implemented)
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "95MB"                 # Max size per registry blob upload chunk
 max_blob_size = "1GB"                        # Max cumulative size per registry blob/layer upload
@@ -462,6 +463,44 @@ gordon serve
 | `"info"` | General operational information |
 | `"warn"` | Warning conditions |
 | `"error"` | Error conditions only |
+
+## CI Identity and Promotion Policies
+
+CI identity and promotion configuration is validated at startup and reload.
+The configuration snapshot is stored for future CI authentication and promotion
+consumers; these settings do not yet enable CI routes or image promotion.
+
+```toml
+[[trusted_issuers]]
+issuer = "https://issuer.example.com"          # Exact issuer URL
+audience = "https://gordon.example.com"        # Required, exact audience
+# jwks_uri = "https://issuer.example.com/keys" # Optional override
+max_token_lifetime = "1h"                     # Default; positive duration
+clock_skew = "60s"                            # Default; non-negative duration
+allow_private_network = false                # Permit private issuer network access
+
+[[promotion_policies]]
+issuer = "https://issuer.example.com"          # Declared issuer, or "gordon"
+subjects = ["repo:acme/web:production"]        # Non-empty exact subjects
+app = "web"
+service = "web"
+repository = "web"                            # Registry repository path
+```
+
+Issuer and JWKS URLs must be absolute HTTPS URLs without userinfo, query,
+or fragment. Unknown issuer/policy keys, undeclared policy issuers, invalid
+app/service/repository names, wildcards (`*`), and duplicate
+`(issuer, subject, app, service)` grants are rejected. Duplicate issuer
+declarations are also rejected. `ci_domain` requires `auth.enabled` and must
+not equal `gordon_domain`, a legacy registry domain, or a served app host.
+`ci_domain` must be a public DNS hostname, not an IP, URL, wildcard, or
+host with a port or trailing dot (matching route-domain validation).
+Surrounding whitespace and case are ignored in host comparisons; collision
+checks also ignore a trailing dot on the compared management/app host.
+Issuer URLs, unlike routing hosts, are byte-exact: case, trailing slashes,
+Unicode hosts, and explicit ports are preserved. Subjects are also exact;
+whitespace and Unicode are not normalized.
+A rejected reload retains the previous identity and policy snapshot.
 
 ## Related
 
