@@ -11,7 +11,11 @@ import (
 // the trusted issuers of the startup promotion snapshot. Key fetching runs in
 // the background, so an unreachable issuer never delays boot.
 func (si *serviceInit) initWorkloadIdentity() {
-	si.svc.workloadIdentitySvc = workloadauth.NewService(si.ctx, oidc.NewProvider(), time.Now)
+	provider := si.oidcProvider
+	if provider == nil {
+		provider = oidc.NewProvider()
+	}
+	si.svc.workloadIdentitySvc = workloadauth.NewService(si.ctx, provider, time.Now)
 	si.svc.reloadWorkloadIdentity()
 }
 

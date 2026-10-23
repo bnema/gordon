@@ -114,6 +114,8 @@ type serviceInit struct {
 	cfg Config
 	log zerowrap.Logger
 	svc *services
+	// oidcProvider overrides the OIDC network adapter (tests); nil uses oidc.NewProvider().
+	oidcProvider out.OIDCProvider
 }
 
 // createServices creates all the application services for server runtime.

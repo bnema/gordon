@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,6 +45,19 @@ func TestWorkloadIdentityReceivesIssuersAtStartupAndReload(t *testing.T) {
 	require.Error(t, r.Apply(context.Background(), cfg))
 }
 
+// blockingOIDCProvider records discovery calls and blocks them until ctx ends.
+type blockingOIDCProvider struct{ discovered chan domain.TrustedIssuer }
+
+func (p blockingOIDCProvider) Discover(ctx context.Context, issuer domain.TrustedIssuer) (string, error) {
+	p.discovered <- issuer
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (blockingOIDCProvider) FetchJWKS(context.Context, domain.TrustedIssuer, string) ([]byte, error) {
+	return nil, errors.New("unexpected JWKS fetch")
+}
+
 func TestInitWorkloadIdentityDoesNotBlockOnUnreachableIssuer(t *testing.T) {
 	_, cfg := readPromotionConfig(t, promotionTOML)
 	snapshot, err := buildPromotionSnapshot(cfg)
@@ -52,7 +66,8 @@ func TestInitWorkloadIdentityDoesNotBlockOnUnreachableIssuer(t *testing.T) {
 	svc.promotionSnapshot.Store(&snapshot)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	si := &serviceInit{ctx: ctx, cfg: cfg, svc: svc}
+	provider := blockingOIDCProvider{discovered: make(chan domain.TrustedIssuer, 1)}
+	si := &serviceInit{ctx: ctx, cfg: cfg, svc: svc, oidcProvider: provider}
 
 	done := make(chan struct{})
 	go func() {
@@ -65,6 +80,12 @@ func TestInitWorkloadIdentityDoesNotBlockOnUnreachableIssuer(t *testing.T) {
 		t.Fatal("startup blocked on issuer discovery")
 	}
 	require.NotNil(t, svc.workloadIdentitySvc)
+	select {
+	case issuer := <-provider.discovered:
+		require.Equal(t, "https://issuer.example", issuer.Issuer, "the injected provider receives the configured issuer")
+	case <-time.After(2 * time.Second):
+		t.Fatal("background warm-up never reached the provider")
+	}
 }
 
 // TestCIAccessTokenRejectedOnMainHost drives a real ci-access token through the
