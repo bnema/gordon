@@ -262,6 +262,25 @@ func subBucket(parent *bolt.Bucket, name []byte, create bool) (*bolt.Bucket, err
 	return parent.Bucket(name), nil
 }
 
+// incarnationIDLocked returns the live incarnation of an app: the ownership
+// record ID, or the app record ID when no ownership record exists yet. It is
+// the single definition LoadOwnership and AcceptPromotion share.
+func incarnationIDLocked(bucket *bolt.Bucket, app string) (string, error) {
+	var ownership domain.AppOwnership
+	found, err := getRecord(bucket, keyOwnership, &ownership, "ownership")
+	if err != nil {
+		return "", err
+	}
+	if found {
+		return ownership.ID, nil
+	}
+	record, err := ensureAppRecordLocked(bucket, app, false)
+	if err != nil {
+		return "", err
+	}
+	return record.ID, nil
+}
+
 // ensureAppRecordLocked returns the stable UUID for an app, assigning one
 // on first write. Reads leave the database untouched.
 func ensureAppRecordLocked(bucket *bolt.Bucket, app string, create bool) (appRecord, error) {
@@ -598,11 +617,11 @@ func (s *Store) LoadOwnership(ctx context.Context, app string) (domain.AppOwners
 			return err
 		}
 		if !found {
-			record, err := ensureAppRecordLocked(bucket, app, false)
+			id, err := incarnationIDLocked(bucket, app)
 			if err != nil {
 				return err
 			}
-			ownership = domain.AppOwnership{App: app, ID: record.ID}
+			ownership = domain.AppOwnership{App: app, ID: id}
 		}
 		return nil
 	}); err != nil {

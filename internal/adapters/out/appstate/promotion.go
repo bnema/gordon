@@ -10,7 +10,11 @@ import (
 )
 
 // AcceptPromotion atomically publishes desired state and its protective journal.
-// Replays are resolved before checking freshness or the app incarnation.
+// Replays are resolved before checking freshness or the app incarnation. A
+// committed apply intent is materialized first, inside the same transaction:
+// CommitApply stays the single commit point of an apply, so the promotion's
+// CAS then loses against it instead of dropping it. Revisions beyond
+// retention are swept in the same transaction.
 func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (existing *domain.AppOperation, claimed bool, err error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, false, err
@@ -32,17 +36,17 @@ func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevisi
 		if bucket == nil {
 			return domain.ErrAppNotFound
 		}
-		if err := verifySupersedesLocked(bucket, domain.AppApplyIntent{App: rev.App, Supersedes: rev.Supersedes}); err != nil {
+		if err := verifyPromotionBaseLocked(tx, bucket, rev); err != nil {
 			return err
-		}
-		var owner domain.AppOwnership
-		if _, err := getRecord(bucket, keyOwnership, &owner, "ownership"); err != nil {
-			return err
-		}
-		if owner.ID != rev.Promotion.AppID {
-			return fmt.Errorf("appstate: promotion incarnation changed: %w", domain.ErrAppStateConflict)
 		}
 		if err := writePromotionLocked(bucket, rev, &op); err != nil {
+			return err
+		}
+		protected, err := protectedRevisionsLocked(bucket, rev.App, nil)
+		if err != nil {
+			return err
+		}
+		if err := sweepRevisionsLocked(bucket, protected, s.Retention()); err != nil {
 			return err
 		}
 		existing, claimed = &op, true
@@ -52,6 +56,25 @@ func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevisi
 		return nil, false, err
 	}
 	return existing, claimed, nil
+}
+
+// verifyPromotionBaseLocked materializes committed applies, then checks the
+// desired-revision CAS and the app incarnation.
+func verifyPromotionBaseLocked(tx *bolt.Tx, bucket *bolt.Bucket, rev domain.AppDesiredRevision) error {
+	if err := materializeCommittedLocked(tx, bucket); err != nil {
+		return err
+	}
+	if err := verifySupersedesLocked(bucket, domain.AppApplyIntent{App: rev.App, Supersedes: rev.Supersedes}); err != nil {
+		return err
+	}
+	id, err := incarnationIDLocked(bucket, rev.App)
+	if err != nil {
+		return err
+	}
+	if id == "" || id != rev.Promotion.AppID {
+		return fmt.Errorf("appstate: promotion incarnation changed: %w", domain.ErrAppStateConflict)
+	}
+	return nil
 }
 
 func validPromotion(rev domain.AppDesiredRevision, op domain.AppOperation) bool {
