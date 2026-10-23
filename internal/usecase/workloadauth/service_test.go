@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -37,7 +38,7 @@ type providerStub struct {
 	discoveries int
 	jwksURIs    []string
 	gate        chan struct{} // when set, FetchJWKS waits for it to close (or ctx)
-	entered     chan struct{} // when set, receives one value per FetchJWKS call
+	ignoreCtx   bool          // with gate: wait for the gate only, like a hung adapter
 	fetchCtxErr error         // ctx.Err() seen by the last FetchJWKS
 }
 
@@ -50,14 +51,14 @@ func (p *providerStub) Discover(context.Context, domain.TrustedIssuer) (string, 
 
 func (p *providerStub) FetchJWKS(ctx context.Context, _ domain.TrustedIssuer, uri string) ([]byte, error) {
 	p.mu.Lock()
-	gate, entered := p.gate, p.entered
+	gate, ignoreCtx := p.gate, p.ignoreCtx
 	p.fetches++
 	p.jwksURIs = append(p.jwksURIs, uri)
 	p.mu.Unlock()
-	if entered != nil {
-		entered <- struct{}{}
-	}
-	if gate != nil {
+	switch {
+	case gate != nil && ignoreCtx:
+		<-gate
+	case gate != nil:
 		select {
 		case <-gate:
 		case <-ctx.Done():
@@ -140,8 +141,8 @@ func testPolicy() domain.TrustedIssuer {
 		MaxTokenLifetime: time.Hour, ClockSkew: time.Minute}
 }
 
-// newFixture builds a service for policy and waits for the background warm-up
-// so fetch counts are deterministic.
+// newFixture builds a service for policy on a manual clock and waits for the
+// background warm-up so fetch counts are deterministic.
 func newFixture(t *testing.T, raw []byte, fetchErr error, policy domain.TrustedIssuer) (*Service, *providerStub, *clock) {
 	t.Helper()
 	clk := &clock{}
@@ -149,22 +150,39 @@ func newFixture(t *testing.T, raw []byte, fetchErr error, policy domain.TrustedI
 	p := &providerStub{raw: raw, err: fetchErr}
 	s := NewService(t.Context(), p, clk.now)
 	s.SetIssuers([]domain.TrustedIssuer{policy})
-	require.Eventually(t, func() bool { return p.fetchCount() == 1 }, time.Second, time.Millisecond)
-	waitIdle(t, s, policy.Issuer)
+	waitIdle(s, policy.Issuer)
+	require.Equal(t, 1, p.fetchCount(), "warm-up fetch")
 	return s, p, clk
 }
 
-// waitIdle waits until no refresh is running for issuer.
-func waitIdle(t *testing.T, s *Service, issuer string) {
+// newBubbleFixture is newFixture for a synctest bubble: the service runs on the
+// bubble's fake clock and context, and synctest.Wait lets the warm-up finish.
+func newBubbleFixture(t *testing.T, raw []byte) (*Service, *providerStub) {
 	t.Helper()
+	p := &providerStub{raw: raw}
+	s := NewService(t.Context(), p, time.Now)
+	s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+	synctest.Wait()
+	require.Equal(t, 1, p.fetchCount(), "warm-up fetch")
+	return s, p
+}
+
+// waitIdle blocks until the fetch running for issuer, if any, has published.
+// SetIssuers and Verify start fetches before returning, so a sequential test
+// that calls it afterwards observes the fetch they triggered.
+func waitIdle(s *Service, issuer string) {
 	s.mu.RLock()
 	state := s.issuers[issuer]
 	s.mu.RUnlock()
-	require.Eventually(t, func() bool {
+	for {
 		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.refreshing == nil
-	}, 2*time.Second, time.Millisecond)
+		done := state.refreshing
+		state.mu.Unlock()
+		if done == nil {
+			return
+		}
+		<-done
+	}
 }
 
 func generateKeys(t *testing.T) (*rsa.PrivateKey, *ecdsa.PrivateKey) {
@@ -370,8 +388,8 @@ func TestCacheTTLRefresh(t *testing.T) {
 	require.Equal(t, 1, p.fetchCount())
 	clk.advance(time.Second)
 	require.NoError(t, verify(), "expired TTL is served from cache while refreshing")
-	require.Eventually(t, func() bool { return p.fetchCount() == 2 }, time.Second, time.Millisecond)
-	waitIdle(t, s, testIssuer)
+	waitIdle(s, testIssuer)
+	require.Equal(t, 2, p.fetchCount())
 }
 
 func TestStaleWindowThenFailClosed(t *testing.T) {
@@ -384,7 +402,7 @@ func TestStaleWindowThenFailClosed(t *testing.T) {
 	p.set(nil, errors.New("issuer offline"))
 	clk.advance(CacheTTL)
 	require.NoError(t, verify(), "stale keys stay usable while refresh fails")
-	waitIdle(t, s, testIssuer)
+	waitIdle(s, testIssuer)
 	fetches := p.fetchCount()
 	for range 5 {
 		require.NoError(t, verify())
@@ -443,47 +461,43 @@ func TestDiscoveryOnlyWithoutJWKSURI(t *testing.T) {
 
 func TestSetIssuersNeverBlocksAndReplacesTrust(t *testing.T) {
 	rsaKey, _ := generateKeys(t)
-	gate := make(chan struct{})
-	p := &providerStub{raw: keySet(t, rsaJWK(rsaKey, "k1")), gate: gate}
-	clk := &clock{}
-	clk.unix.Store(time.Now().Unix())
-	s := NewService(t.Context(), p, clk.now)
+	synctest.Test(t, func(t *testing.T) {
+		gate := make(chan struct{})
+		p := &providerStub{raw: keySet(t, rsaJWK(rsaKey, "k1")), gate: gate}
+		s := NewService(t.Context(), p, time.Now)
 
-	done := make(chan struct{})
-	go func() {
+		// Fake time only moves when every goroutine blocks: a SetIssuers waiting
+		// on the gated fetch would return after refreshTimeout, not instantly.
+		start := time.Now()
 		s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("SetIssuers blocked on the network")
-	}
-	close(gate)
-	require.Eventually(t, func() bool { return p.fetchCount() == 1 }, time.Second, time.Millisecond)
-	waitIdle(t, s, testIssuer)
+		require.Zero(t, time.Since(start), "SetIssuers blocked on the network")
+		synctest.Wait()
+		require.Equal(t, 1, p.fetchCount(), "the warm-up fetch runs in the background")
+		close(gate)
+		synctest.Wait()
 
-	token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "k1")
-	_, err := s.Verify(t.Context(), token)
-	require.NoError(t, err)
+		token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(time.Now()), "k1")
+		_, err := s.Verify(t.Context(), token)
+		require.NoError(t, err)
 
-	s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
-	_, err = s.Verify(t.Context(), token)
-	require.NoError(t, err, "an unchanged issuer keeps its cache")
-	waitIdle(t, s, testIssuer)
-	require.Equal(t, 1, p.fetchCount())
+		s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+		_, err = s.Verify(t.Context(), token)
+		require.NoError(t, err, "an unchanged issuer keeps its cache")
+		synctest.Wait()
+		require.Equal(t, 1, p.fetchCount())
 
-	changed := testPolicy()
-	changed.Audience = "https://new.example"
-	s.SetIssuers([]domain.TrustedIssuer{changed})
-	_, err = s.Verify(t.Context(), token)
-	require.ErrorIs(t, err, domain.ErrInvalidToken, "new audience applies immediately")
+		changed := testPolicy()
+		changed.Audience = "https://new.example"
+		s.SetIssuers([]domain.TrustedIssuer{changed})
+		_, err = s.Verify(t.Context(), token)
+		require.ErrorIs(t, err, domain.ErrInvalidToken, "new audience applies immediately")
 
-	invalid := testPolicy()
-	invalid.Issuer = "http://insecure.example"
-	s.SetIssuers([]domain.TrustedIssuer{invalid})
-	_, err = s.Verify(t.Context(), token)
-	require.ErrorIs(t, err, domain.ErrInvalidToken, "removed issuer is no longer trusted")
+		invalid := testPolicy()
+		invalid.Issuer = "http://insecure.example"
+		s.SetIssuers([]domain.TrustedIssuer{invalid})
+		_, err = s.Verify(t.Context(), token)
+		require.ErrorIs(t, err, domain.ErrInvalidToken, "removed issuer is no longer trusted")
+	})
 }
 
 func TestConcurrentVerifyAndReload(t *testing.T) {

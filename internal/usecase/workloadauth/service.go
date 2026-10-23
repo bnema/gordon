@@ -41,7 +41,6 @@ type issuerState struct {
 	fetched    time.Time     // start of the last successful fetch
 	attempted  time.Time     // start of the last fetch, successful or not
 	refreshing chan struct{} // non-nil while a fetch runs; closed when it ends
-	waiters    int           // Verify calls blocked on refreshing (observability, tests)
 }
 
 // Service implements in.WorkloadIdentityService. Each issuer has its own key
@@ -151,23 +150,18 @@ func (s *Service) key(ctx context.Context, state *issuerState, token *jwt.Token)
 	if wait == nil {
 		return key, err
 	}
-	err = s.wait(ctx, state, wait)
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	state.waiters--
-	if err != nil {
+	if err := s.wait(ctx, wait); err != nil {
 		return nil, err
 	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	key, _, err = s.lookupLocked(state, token, false)
 	return key, err
 }
 
 // wait blocks until the in-flight fetch ends, the caller gives up or the
-// service shuts down. The caller must decrement state.waiters afterwards.
-func (s *Service) wait(ctx context.Context, state *issuerState, done <-chan struct{}) error {
-	state.mu.Lock()
-	state.waiters++
-	state.mu.Unlock()
+// service shuts down.
+func (s *Service) wait(ctx context.Context, done <-chan struct{}) error {
 	select {
 	case <-done:
 	case <-ctx.Done():

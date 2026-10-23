@@ -6,6 +6,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -15,183 +16,186 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
+// The coordination tests below run in a synctest bubble: the service, its
+// refresh goroutines and the gated provider share the bubble's fake clock, and
+// synctest.Wait returns once every goroutine is blocked on a gate, a waiter
+// channel or a timer. An elapsed fake time of zero proves nothing waited for a
+// timeout.
+
 // WA-1: a fetch started by a request whose context is already cancelled still
 // completes on the service context, publishes keys and uses the refresh slot.
 func TestRefreshIgnoresCallerContext(t *testing.T) {
 	oldKey, _ := generateKeys(t)
 	newKey := mustRSA(t)
-	s, p, clk := newFixture(t, keySet(t, rsaJWK(oldKey, "old")), nil, testPolicy())
-	gate := make(chan struct{})
-	p.setGate(gate)
-	p.set(keySet(t, rsaJWK(newKey, "new")), nil)
-	clk.advance(RefreshInterval)
+	synctest.Test(t, func(t *testing.T) {
+		s, p := newBubbleFixture(t, keySet(t, rsaJWK(oldKey, "old")))
+		gate := make(chan struct{})
+		p.setGate(gate)
+		p.set(keySet(t, rsaJWK(newKey, "new")), nil)
+		time.Sleep(RefreshInterval)
 
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	token := sign(t, jwt.SigningMethodRS256, newKey, baseClaims(clk.now()), "new")
-	_, err := s.Verify(cancelled, token)
-	require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
-	require.ErrorIs(t, err, context.Canceled)
+		cancelled, cancel := context.WithCancel(t.Context())
+		cancel()
+		token := sign(t, jwt.SigningMethodRS256, newKey, baseClaims(time.Now()), "new")
+		_, err := s.Verify(cancelled, token)
+		require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+		require.ErrorIs(t, err, context.Canceled)
+		synctest.Wait()
+		require.Equal(t, 2, p.fetchCount(), "the caller started a fetch before giving up")
 
-	close(gate)
-	waitIdle(t, s, testIssuer)
-	p.mu.Lock()
-	require.NoError(t, p.fetchCtxErr, "the fetch must not run on the caller context")
-	p.mu.Unlock()
-	require.Equal(t, 2, p.fetchCount())
+		close(gate)
+		synctest.Wait()
+		p.mu.Lock()
+		require.NoError(t, p.fetchCtxErr, "the fetch must not run on the caller context")
+		p.mu.Unlock()
 
-	_, err = s.Verify(t.Context(), token)
-	require.NoError(t, err, "keys fetched for the cancelled caller are published")
-	require.Equal(t, 2, p.fetchCount(), "no second fetch was needed")
+		_, err = s.Verify(t.Context(), token)
+		require.NoError(t, err, "keys fetched for the cancelled caller are published")
+		require.Equal(t, 2, p.fetchCount(), "no second fetch was needed")
+	})
 }
 
 // WA-2: a cached key answers while a refresh is blocked on the network.
 func TestKnownKidServedDuringBlockedRefresh(t *testing.T) {
 	rsaKey, _ := generateKeys(t)
-	s, p, clk := newFixture(t, keySet(t, rsaJWK(rsaKey, "k1")), nil, testPolicy())
-	gate := make(chan struct{})
-	defer close(gate)
-	p.setGate(gate)
-	clk.advance(CacheTTL) // the next Verify starts a background refresh that blocks
+	synctest.Test(t, func(t *testing.T) {
+		s, p := newBubbleFixture(t, keySet(t, rsaJWK(rsaKey, "k1")))
+		gate := make(chan struct{})
+		defer close(gate)
+		p.setGate(gate)
+		time.Sleep(CacheTTL) // the next Verify starts a background refresh that blocks
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := s.Verify(t.Context(), sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "k1"))
-		done <- err
-	}()
-	select {
-	case err := <-done:
+		// Waiting on the gated fetch would only end at refreshTimeout.
+		start := time.Now()
+		_, err := s.Verify(t.Context(), sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(time.Now()), "k1"))
 		require.NoError(t, err)
-	case <-time.After(2 * time.Second):
-		t.Fatal("Verify of a cached kid waited for the network")
-	}
-	require.Eventually(t, func() bool { return p.fetchCount() == 2 }, time.Second, time.Millisecond)
+		require.Zero(t, time.Since(start), "Verify of a cached kid waited for the network")
+		synctest.Wait()
+		require.Equal(t, 2, p.fetchCount(), "the TTL refresh is in flight")
 
-	// A second known-kid request during the same blocked fetch also returns.
-	_, err := s.Verify(t.Context(), sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "k1"))
-	require.NoError(t, err)
+		// A second known-kid request during the same blocked fetch also returns.
+		_, err = s.Verify(t.Context(), sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(time.Now()), "k1"))
+		require.NoError(t, err)
+		require.Zero(t, time.Since(start))
+		require.Equal(t, 2, p.fetchCount())
+	})
 }
 
 // WA-2: a request waiting for a fetch gives up when its own context ends.
 func TestWaiterHonoursContext(t *testing.T) {
 	rsaKey, _ := generateKeys(t)
-	s, p, clk := newFixture(t, keySet(t, rsaJWK(rsaKey, "k1")), nil, testPolicy())
-	gate := make(chan struct{})
-	defer close(gate)
-	p.setGate(gate)
-	clk.advance(RefreshInterval)
+	synctest.Test(t, func(t *testing.T) {
+		s, p := newBubbleFixture(t, keySet(t, rsaJWK(rsaKey, "k1")))
+		gate := make(chan struct{})
+		defer close(gate)
+		p.setGate(gate)
+		time.Sleep(RefreshInterval)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	_, err := s.Verify(ctx, sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "unknown"))
-	require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	require.Less(t, time.Since(start), time.Second)
+		const timeout = 50 * time.Millisecond
+		ctx, cancel := context.WithTimeout(t.Context(), timeout)
+		defer cancel()
+		start := time.Now()
+		_, err := s.Verify(ctx, sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(time.Now()), "unknown"))
+		require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, timeout, time.Since(start), "the waiter returns at its own deadline, not the fetch timeout")
+	})
 }
 
 // WA-2: concurrent requests for the same unknown kid share one fetch.
 func TestConcurrentUnknownKidSingleFlight(t *testing.T) {
 	oldKey, _ := generateKeys(t)
 	newKey := mustRSA(t)
-	s, p, clk := newFixture(t, keySet(t, rsaJWK(oldKey, "old")), nil, testPolicy())
-	gate := make(chan struct{})
-	entered := make(chan struct{}, 16)
-	p.mu.Lock()
-	p.gate, p.entered = gate, entered
-	p.mu.Unlock()
-	p.set(keySet(t, rsaJWK(newKey, "new")), nil)
-	clk.advance(RefreshInterval)
+	synctest.Test(t, func(t *testing.T) {
+		s, p := newBubbleFixture(t, keySet(t, rsaJWK(oldKey, "old")))
+		gate := make(chan struct{})
+		p.setGate(gate)
+		p.set(keySet(t, rsaJWK(newKey, "new")), nil)
+		time.Sleep(RefreshInterval)
 
-	token := sign(t, jwt.SigningMethodRS256, newKey, baseClaims(clk.now()), "new")
-	const callers = 10
-	errs := make(chan error, callers)
-	var wg sync.WaitGroup
-	for range callers {
-		wg.Go(func() {
-			_, err := s.Verify(t.Context(), token)
-			errs <- err
-		})
-	}
-	<-entered
-	waitForWaiters(t, s, testIssuer, callers)
-	close(gate)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	require.Equal(t, 2, p.fetchCount(), "warm-up plus exactly one shared fetch")
-}
-
-// waitForWaiters waits until n Verify calls are blocked on the issuer refresh.
-func waitForWaiters(t *testing.T, s *Service, issuer string, n int) {
-	t.Helper()
-	s.mu.RLock()
-	state := s.issuers[issuer]
-	s.mu.RUnlock()
-	require.Eventually(t, func() bool {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.refreshing != nil && state.waiters == n
-	}, 2*time.Second, time.Millisecond)
+		token := sign(t, jwt.SigningMethodRS256, newKey, baseClaims(time.Now()), "new")
+		const callers = 10
+		errs := make(chan error, callers)
+		for range callers {
+			go func() {
+				_, err := s.Verify(t.Context(), token)
+				errs <- err
+			}()
+		}
+		synctest.Wait() // every caller is blocked on the one in-flight fetch
+		require.Empty(t, errs, "no caller returned before the fetch ended")
+		require.Equal(t, 2, p.fetchCount(), "warm-up plus exactly one shared fetch")
+		close(gate)
+		for range callers {
+			require.NoError(t, <-errs)
+		}
+		require.Equal(t, 2, p.fetchCount())
+	})
 }
 
 // Cancelling the service context wakes blocked waiters with
-// ErrIdentityProviderUnavailable, with or without stale keys in the cache.
+// ErrIdentityProviderUnavailable, with or without stale keys in the cache. The
+// fetch ignores its context, so only the service context can wake them.
 func TestServiceShutdownWakesWaiters(t *testing.T) {
 	rsaKey, _ := generateKeys(t)
 	for name, cached := range map[string][]byte{"empty cache": nil, "unknown kid": keySet(t, rsaJWK(rsaKey, "k1"))} {
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			clk := &clock{}
-			clk.unix.Store(time.Now().Unix())
-			entered := make(chan struct{}, 4)
-			p := &providerStub{raw: cached, entered: entered}
-			s := NewService(ctx, p, clk.now)
-			s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
-			<-entered
-			waitIdle(t, s, testIssuer)
-			p.setGate(make(chan struct{})) // the next fetch blocks until ctx ends
-			clk.advance(RefreshInterval)
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				p := &providerStub{raw: cached}
+				s := NewService(ctx, p, time.Now)
+				s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+				synctest.Wait()
+				gate := make(chan struct{})
+				defer close(gate)
+				p.mu.Lock()
+				p.gate, p.ignoreCtx = gate, true // the next fetch hangs past shutdown
+				p.mu.Unlock()
+				time.Sleep(RefreshInterval)
 
-			const callers = 3
-			errs := make(chan error, callers)
-			token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "rotated")
-			for range callers {
-				go func() {
-					_, err := s.Verify(context.Background(), token)
-					errs <- err
-				}()
-			}
-			waitForWaiters(t, s, testIssuer, callers)
-			cancel()
-			for range callers {
-				select {
-				case err := <-errs:
-					require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
-				case <-time.After(2 * time.Second):
-					t.Fatal("waiter not woken by service shutdown")
+				const callers = 3
+				errs := make(chan error, callers)
+				token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(time.Now()), "rotated")
+				for range callers {
+					go func() {
+						_, err := s.Verify(t.Context(), token)
+						errs <- err
+					}()
 				}
-			}
+				synctest.Wait()
+				require.Empty(t, errs, "callers wait for the hung fetch")
+				require.Equal(t, 2, p.fetchCount())
+
+				cancel()
+				synctest.Wait()
+				require.Len(t, errs, callers, "waiters not woken by service shutdown")
+				for range callers {
+					require.ErrorIs(t, <-errs, domain.ErrIdentityProviderUnavailable)
+				}
+			})
 		})
 	}
 }
 
 // Refresh goroutines end when the service context is cancelled.
 func TestRefreshStopsWithServiceContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	entered := make(chan struct{}, 1)
-	p := &providerStub{gate: make(chan struct{}), entered: entered}
-	s := NewService(ctx, p, time.Now)
-	s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
-	<-entered
-	cancel()
-	waitIdle(t, s, testIssuer)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	require.ErrorIs(t, p.fetchCtxErr, context.Canceled)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		p := &providerStub{gate: make(chan struct{})}
+		s := NewService(ctx, p, time.Now)
+		s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+		synctest.Wait()
+		require.Equal(t, 1, p.fetchCount(), "the warm-up fetch is blocked")
+
+		start := time.Now()
+		cancel()
+		waitIdle(s, testIssuer)
+		require.Zero(t, time.Since(start), "the fetch ended with the service, not at refreshTimeout")
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		require.ErrorIs(t, p.fetchCtxErr, context.Canceled)
+	})
 }
 
 type syncBuffer struct {

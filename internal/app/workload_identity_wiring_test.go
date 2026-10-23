@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -62,30 +63,25 @@ func TestInitWorkloadIdentityDoesNotBlockOnUnreachableIssuer(t *testing.T) {
 	_, cfg := readPromotionConfig(t, promotionTOML)
 	snapshot, err := buildPromotionSnapshot(cfg)
 	require.NoError(t, err)
-	svc := &services{}
-	svc.promotionSnapshot.Store(&snapshot)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	provider := blockingOIDCProvider{discovered: make(chan domain.TrustedIssuer, 1)}
-	si := &serviceInit{ctx: ctx, cfg: cfg, svc: svc, oidcProvider: provider}
+	synctest.Test(t, func(t *testing.T) {
+		svc := &services{}
+		svc.promotionSnapshot.Store(&snapshot)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		provider := blockingOIDCProvider{discovered: make(chan domain.TrustedIssuer, 1)}
+		si := &serviceInit{ctx: ctx, cfg: cfg, svc: svc, oidcProvider: provider}
 
-	done := make(chan struct{})
-	go func() {
+		// In the bubble, a startup that waited for discovery would only return
+		// when the refresh timeout fires, so fake time would have moved.
+		start := time.Now()
 		si.initWorkloadIdentity()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("startup blocked on issuer discovery")
-	}
-	require.NotNil(t, svc.workloadIdentitySvc)
-	select {
-	case issuer := <-provider.discovered:
-		require.Equal(t, "https://issuer.example", issuer.Issuer, "the injected provider receives the configured issuer")
-	case <-time.After(2 * time.Second):
-		t.Fatal("background warm-up never reached the provider")
-	}
+		require.Zero(t, time.Since(start), "startup blocked on issuer discovery")
+		require.NotNil(t, svc.workloadIdentitySvc)
+
+		synctest.Wait()
+		require.Len(t, provider.discovered, 1, "background warm-up never reached the provider")
+		require.Equal(t, "https://issuer.example", (<-provider.discovered).Issuer, "the injected provider receives the configured issuer")
+	})
 }
 
 // TestCIAccessTokenRejectedOnMainHost drives a real ci-access token through the
