@@ -3,6 +3,7 @@ package apps_test
 import (
 	"context"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -28,7 +29,14 @@ func promoteOp(outcome string) domain.AppOperation {
 // TestAppServiceImpl_Promote_SchedulesOwnedClaim proves Promote mirrors
 // Deploy: the input reaches StartPromotion with the apply validator, the
 // owned claim executes in the background, and the running journal returns.
+// It runs in a synctest bubble: the background execution goroutine is
+// created inside it and synctest.Wait observes its completion without a
+// timeout guard (mocks only, no real I/O).
 func TestAppServiceImpl_Promote_SchedulesOwnedClaim(t *testing.T) {
+	synctest.Test(t, testPromoteSchedulesOwnedClaim)
+}
+
+func testPromoteSchedulesOwnedClaim(t *testing.T) {
 	store := newMockAppState(t)
 	deploy := newMockDeployEngine(t)
 	svc := apps.NewAppServiceImpl(store, deploy, newMockSecretWriter(t), zerowrap.Default())
@@ -41,9 +49,9 @@ func TestAppServiceImpl_Promote_SchedulesOwnedClaim(t *testing.T) {
 		got = input
 		return &deployment.StartDeployResult{Claim: deployment.DeployClaim{App: "blog", Op: "key-1", Service: "web", Journal: op}, Owned: true}, nil
 	}
-	executed := make(chan deployment.DeployClaim, 1)
+	var executed []deployment.DeployClaim
 	deploy.executeDeployFn = func(_ context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error) {
-		executed <- claim
+		executed = append(executed, claim)
 		return &deployment.DeployResult{}, nil
 	}
 
@@ -61,12 +69,9 @@ func TestAppServiceImpl_Promote_SchedulesOwnedClaim(t *testing.T) {
 	assert.False(t, got.LocalOwner)
 	require.NotNil(t, got.Validate, "the candidate is validated like an applied manifest")
 	require.Error(t, got.Validate(domain.AppSpec{}), "the validator rejects an invalid spec")
-	select {
-	case claim := <-executed:
-		assert.Equal(t, "key-1", claim.Op)
-	case <-time.After(3 * time.Second):
-		t.Fatal("the owned claim was not executed")
-	}
+	synctest.Wait()
+	require.Len(t, executed, 1, "the owned claim executes exactly once")
+	assert.Equal(t, "key-1", executed[0].Op)
 }
 
 // TestAppServiceImpl_Promote_ReplayNeverExecutes proves a replayed key
