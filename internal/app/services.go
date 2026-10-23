@@ -222,7 +222,7 @@ func (si *serviceInit) initPKI() error {
 		return si.log.WrapErr(err, "failed to initialize internal CA")
 	}
 	si.svc.caAdapter = caAdapter
-	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.appRoutes(), []string{si.cfg.Server.GordonDomain}, si.log)
+	si.svc.pkiSvc = pkiusecase.NewService(si.ctx, caAdapter, si.appRoutes(), managementHosts(si.cfg), si.log)
 	return nil
 }
 
@@ -298,7 +298,7 @@ func (si *serviceInit) initPublicTLS() error {
 		ZoneResolver:    zoneResolver,
 		Challenges:      challenges,
 		Effective:       effective,
-		AdditionalHosts: []string{si.cfg.Server.GordonDomain},
+		AdditionalHosts: managementHosts(si.cfg),
 	})
 
 	if err := svc.Load(ctx); err != nil {
@@ -660,6 +660,7 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 	return &proxyConfigResult{
 		proxyConfig: proxy.Config{
 			RegistryDomain:     registryDomain,
+			CIDomain:           cfg.Server.CIDomain,
 			RegistryPort:       cfg.Server.RegistryPort,
 			MaxBodySize:        maxProxyBodySize,
 			MaxResponseSize:    maxProxyResponseSize,

@@ -72,11 +72,7 @@ func (si *serviceInit) initApps() error {
 		si.svc.volumeSvc.WithPrunePorts(store, si.svc.runtime, si.svc.gcBarrier)
 	}
 	registryDomain := si.svc.configSvc.GetRegistryDomain()
-	imagePolicy := domain.ImageSourcePolicy{
-		AllowedRegistries:    si.cfg.Images.AllowedRegistries,
-		RequireDigest:        si.cfg.Images.RequireDigest,
-		InstallationRegistry: registryDomain,
-	}
+	imagePolicy := installationImagePolicy(si.cfg, registryDomain)
 	if err := imagePolicy.Validate(); err != nil {
 		return fmt.Errorf("invalid image registry policy: %w", err)
 	}
@@ -155,6 +151,18 @@ func (si *serviceInit) initApps() error {
 		si.svc.proxySvc.WithAppTargets(si.svc.appHostIndex)
 	}
 	return nil
+}
+
+// installationImagePolicy builds the image-source policy. The CI domain
+// serves the same registry, so a reference naming it is an installation
+// image pulled through the internal registry.
+func installationImagePolicy(cfg Config, registryDomain string) domain.ImageSourcePolicy {
+	return domain.ImageSourcePolicy{
+		AllowedRegistries:    cfg.Images.AllowedRegistries,
+		RequireDigest:        cfg.Images.RequireDigest,
+		InstallationRegistry: registryDomain,
+		InstallationAliases:  []string{cfg.Server.CIDomain},
+	}
 }
 
 // appRouteSource adapts the ACTIVE-derived host index plus installation

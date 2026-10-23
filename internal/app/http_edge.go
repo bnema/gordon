@@ -98,6 +98,11 @@ func createHTTPHandlers(svc *services, cfg Config, log zerowrap.Logger, accessWr
 	// never reach it through this proxy.
 	proxyHandler := proxyadapter.NewHandler(svc.proxySvc, trustedNets, log).
 		WithRegistryForwarding(cfg.Auth.Enabled)
+	// The CI host is served in-process by its own router, on the raw
+	// registry handler: it is never forwarded to the registry listener.
+	if ciHandler := buildCIHandler(svc, cfg, trustedNets, registryHandler, log); ciHandler != nil {
+		proxyHandler.WithCIHandler(ciHandler)
+	}
 
 	// HTTP proxy handler chain: HTTPS redirect for non-proxy clients, then CIDR allowlist
 	proxyAllowedNets, proxyCIDRMiddleware := buildProxyCIDRAllowlistMiddleware(cfg, trustedNets, log)

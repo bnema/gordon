@@ -326,12 +326,12 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 	if err := svc.appTrafficPublisher.RebuildWithConfig(ctx, cfg); err != nil {
 		return err
 	}
-	managementHosts := []string{cfg.Server.GordonDomain}
+	hosts := managementHosts(cfg)
 	if svc.pkiSvc != nil {
-		svc.pkiSvc.SetAdditionalDomains(managementHosts)
+		svc.pkiSvc.SetAdditionalDomains(hosts)
 	}
 	if svc.publicTLSSvc != nil {
-		svc.publicTLSSvc.SetAdditionalHosts(ctx, managementHosts)
+		svc.publicTLSSvc.SetAdditionalHosts(ctx, hosts)
 	}
 	svc.tlsHTTPEntryPoints = registerTLSMuxHTTPServers(svc.trafficManager, cfg, svc.httpsProxyHandler, plan.tlsConfig, svc.tlsHTTPEntryPoints)
 	svc.smartHTTPEntryPoints = registerSmartTCPHTTPServers(svc.trafficManager, cfg, svc.httpProxyHandler, svc.httpsProxyHandler, plan.tlsConfig, svc.smartHTTPEntryPoints)
