@@ -40,7 +40,7 @@ func (h *Handler) authenticate(r *http.Request) (caller, bool) {
 func (h *Handler) requireCaller(w http.ResponseWriter, r *http.Request, registry bool) (*http.Request, caller, bool) {
 	c, ok := h.authenticate(r)
 	if !ok {
-		h.challenge(w, registry, "")
+		challenge(w, r, registry, "")
 		return r, caller{}, false
 	}
 	log := zerowrap.FromCtx(r.Context())
@@ -50,8 +50,9 @@ func (h *Handler) requireCaller(w http.ResponseWriter, r *http.Request, registry
 
 // challenge answers 401 with a Bearer challenge pointing at the CI token
 // endpoint. scope, when set, names the scope the client must request.
-func (h *Handler) challenge(w http.ResponseWriter, registry bool, scope string) {
-	value := `Bearer realm="` + h.realm() + `",service="` + h.ciDomain() + `"`
+func challenge(w http.ResponseWriter, r *http.Request, registry bool, scope string) {
+	domain := requestDomain(r)
+	value := `Bearer realm="` + realm(domain) + `",service="` + domain + `"`
 	if scope != "" {
 		value += `,scope="` + scope + `"`
 	}

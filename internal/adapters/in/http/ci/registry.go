@@ -53,7 +53,7 @@ func (h *Handler) mayAccess(w http.ResponseWriter, r *http.Request, c caller, op
 		if action == domain.ScopeActionPush {
 			scope += "," + domain.ScopeActionPull
 		}
-		h.challenge(w, true, scope)
+		challenge(w, r, true, scope)
 		return false
 	}
 	return true

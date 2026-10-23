@@ -7,6 +7,7 @@
 package ci
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -86,6 +87,7 @@ func NewHandler(deps Deps) *Handler {
 		middleware.RequestLogger(deps.Log, deps.TrustedNets),
 		middleware.SecurityHeaders,
 		h.httpsOnly,
+		h.currentHostOnly,
 	)(http.HandlerFunc(h.route))
 	return h
 }
@@ -136,16 +138,44 @@ func (h *Handler) isHTTPS(r *http.Request) bool {
 	return len(values) == 1 && strings.EqualFold(strings.TrimSpace(values[0]), "https")
 }
 
-// ciDomain is the canonical configured CI domain.
-func (h *Handler) ciDomain() string {
-	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h.deps.Domain())), ".")
+type domainKey struct{}
+
+// currentHostOnly reads the CI domain once per request and answers 404
+// unless the request Host is that domain. The proxy chose this router from
+// an earlier config read; a reload that removed or changed ci_domain since
+// must not let the request through. The domain read here is the one the
+// whole request uses (challenge realm and service).
+func (h *Handler) currentHostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		domain := canonicalHost(h.deps.Domain())
+		if domain == "" || canonicalHost(r.Host) != domain {
+			writeNotFound(w)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), domainKey{}, domain)))
+	})
+}
+
+// canonicalHost lowercases a host and strips its port and trailing dot.
+func canonicalHost(host string) string {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
+// requestDomain is the CI domain currentHostOnly admitted the request for.
+func requestDomain(r *http.Request) string {
+	domain, _ := r.Context().Value(domainKey{}).(string)
+	return domain
 }
 
 // realm is the token endpoint URL announced in Bearer challenges. It is
 // built from the configured domain, never from request headers, and is
 // always https because the router serves nothing else.
-func (h *Handler) realm() string {
-	return "https://" + h.ciDomain() + tokenPath
+func realm(domain string) string {
+	return "https://" + domain + tokenPath
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
