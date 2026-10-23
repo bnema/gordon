@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,9 @@ const (
 	serviceTokenSubject = "gordon-service"
 	// TokenTypeCIAccess is the token_type claim of CI-host access tokens.
 	TokenTypeCIAccess = "ci-access"
+	// CIAccessAudience is the aud claim of CI-host access tokens. ValidateCIAccessToken
+	// requires it and the main-host token parser refuses it.
+	CIAccessAudience = "gordon-ci"
 )
 
 // Config holds the authentication configuration.
@@ -177,6 +181,11 @@ func (s *Service) parseTokenClaims(tokenString string) (jwt.MapClaims, error) {
 
 	// SECURITY: Double-check issuer claim matches expected value
 	if iss, ok := claims["iss"].(string); !ok || iss != TokenIssuer {
+		return nil, domain.ErrInvalidToken
+	}
+
+	// SECURITY: CI-host tokens are never valid on the main host.
+	if aud, err := claims.GetAudience(); err != nil || slices.Contains(aud, CIAccessAudience) {
 		return nil, domain.ErrInvalidToken
 	}
 
@@ -395,6 +404,9 @@ func (s *Service) GenerateCIAccessToken(ctx context.Context, principal domain.Wo
 	if err != nil || parsed != principal {
 		return "", fmt.Errorf("invalid workload principal")
 	}
+	if err := validateCIScopes(scopes); err != nil {
+		return "", err
+	}
 	if ttl <= 0 {
 		ttl = s.GetAccessTokenTTL()
 	}
@@ -405,6 +417,7 @@ func (s *Service) GenerateCIAccessToken(ctx context.Context, principal domain.Wo
 		"jti":        tokenID,
 		"sub":        principal.String(),
 		"iss":        TokenIssuer,
+		"aud":        CIAccessAudience,
 		"iat":        now.Unix(),
 		"nbf":        now.Unix(),
 		"exp":        now.Add(ttl).Unix(),
@@ -428,7 +441,7 @@ func (s *Service) GenerateCIAccessToken(ctx context.Context, principal domain.Wo
 // GenerateCIAccessToken and returns their principal and scopes.
 func (s *Service) ValidateCIAccessToken(_ context.Context, raw string) (domain.WorkloadPrincipal, []string, error) {
 	token, err := jwt.Parse(raw, func(*jwt.Token) (any, error) { return s.config.TokenSecret, nil },
-		jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(TokenIssuer),
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(TokenIssuer), jwt.WithAudience(CIAccessAudience),
 		jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 	if err != nil {
 		return domain.WorkloadPrincipal{}, nil, domain.ErrInvalidToken

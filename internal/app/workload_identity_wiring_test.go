@@ -74,7 +74,7 @@ func TestCIAccessTokenRejectedOnMainHost(t *testing.T) {
 	authSvc := auth.NewService(auth.Config{Enabled: true, AuthType: domain.AuthTypeToken, TokenSecret: []byte("0123456789abcdef0123456789abcdef")},
 		outmocks.NewMockTokenStore(t), log)
 	principal := domain.WorkloadPrincipal{Issuer: "https://issuer.example", Subject: "repo:acme/web"}
-	ciToken, err := authSvc.GenerateCIAccessToken(context.Background(), principal, []string{"repository:web:push,pull", "admin:*:*"}, 0)
+	ciToken, err := authSvc.GenerateCIAccessToken(context.Background(), principal, []string{"repository:web:push,pull"}, 0)
 	require.NoError(t, err)
 	accessToken, err := authSvc.GenerateAccessToken(context.Background(), "deployer", []string{"repository:web:push,pull", "admin:*:*"}, 5*time.Minute)
 	require.NoError(t, err)

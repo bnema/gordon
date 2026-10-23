@@ -104,7 +104,7 @@ func TestGenerateCIAccessTokenRejectsInvalidPrincipal(t *testing.T) {
 func TestCIAccessTokenRejectedOutsideCIHost(t *testing.T) {
 	svc := ciService(t, 0)
 	ctx := testContext()
-	raw, err := svc.GenerateCIAccessToken(ctx, ciPrincipal(), []string{"admin:*:*", "repository:web:push,pull"}, 0)
+	raw, err := svc.GenerateCIAccessToken(ctx, ciPrincipal(), []string{"repository:web:push,pull"}, 0)
 	require.NoError(t, err)
 
 	claims, err := svc.ValidateToken(ctx, raw)
@@ -129,7 +129,7 @@ func TestValidateCIAccessTokenRejectsOtherTokens(t *testing.T) {
 
 	valid := func() jwt.MapClaims {
 		return jwt.MapClaims{"iss": TokenIssuer, "sub": ciPrincipal().String(), "token_type": "ci-access",
-			"iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix()}
+			"aud": "gordon-ci", "iat": now.Unix(), "nbf": now.Unix(), "exp": now.Add(10 * time.Minute).Unix()}
 	}
 	with := func(change func(jwt.MapClaims)) jwt.MapClaims {
 		c := valid()
@@ -150,6 +150,8 @@ func TestValidateCIAccessTokenRejectsOtherTokens(t *testing.T) {
 		"lifetime above max":     signCI(t, ciSecret, jwt.SigningMethodHS256, with(func(c jwt.MapClaims) { c["exp"] = now.Add(2 * time.Hour).Unix() })),
 		"invalid principal":      signCI(t, ciSecret, jwt.SigningMethodHS256, with(func(c jwt.MapClaims) { c["sub"] = "deployer" })),
 		"empty principal":        signCI(t, ciSecret, jwt.SigningMethodHS256, with(func(c jwt.MapClaims) { c["sub"] = "" })),
+		"no audience":            signCI(t, ciSecret, jwt.SigningMethodHS256, with(func(c jwt.MapClaims) { delete(c, "aud") })),
+		"wrong audience":         signCI(t, ciSecret, jwt.SigningMethodHS256, with(func(c jwt.MapClaims) { c["aud"] = "gordon" })),
 		"none":                   noneToken(t, valid()),
 		"garbage":                "garbage",
 	}
@@ -168,4 +170,57 @@ func noneToken(t *testing.T, claims jwt.MapClaims) string {
 	raw, err := jwt.NewWithClaims(jwt.SigningMethodNone, claims).SignedString(jwt.UnsafeAllowNoneSignatureType)
 	require.NoError(t, err)
 	return raw
+}
+
+func TestCIAccessTokenCarriesCIAudience(t *testing.T) {
+	svc := ciService(t, 0)
+	raw, err := svc.GenerateCIAccessToken(testContext(), ciPrincipal(), nil, 0)
+	require.NoError(t, err)
+	aud, err := decodeClaims(t, raw).GetAudience()
+	require.NoError(t, err)
+	require.Equal(t, jwt.ClaimStrings{"gordon-ci"}, aud)
+}
+
+// A token carrying the CI audience is refused by the main-host parser even if
+// its token_type claims to be an ordinary access token.
+func TestValidateTokenRefusesCIAudience(t *testing.T) {
+	svc := ciService(t, 0)
+	now := time.Now().UTC()
+	for _, aud := range []any{"gordon-ci", []string{"other", "gordon-ci"}} {
+		raw := signCI(t, ciSecret, jwt.SigningMethodHS256, jwt.MapClaims{"iss": TokenIssuer, "sub": "deployer",
+			"token_type": "access", "aud": aud, "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix()})
+		_, err := svc.ValidateToken(testContext(), raw)
+		require.ErrorIs(t, err, domain.ErrInvalidToken)
+		_, err = svc.ExtendToken(testContext(), raw)
+		require.Error(t, err)
+	}
+	// Control: the same token without the CI audience is a valid access token.
+	raw := signCI(t, ciSecret, jwt.SigningMethodHS256, jwt.MapClaims{"iss": TokenIssuer, "sub": "deployer",
+		"token_type": "access", "iat": now.Unix(), "exp": now.Add(5 * time.Minute).Unix()})
+	_, err := svc.ValidateToken(testContext(), raw)
+	require.NoError(t, err)
+}
+
+func TestGenerateCIAccessTokenScopes(t *testing.T) {
+	svc := ciService(t, 0)
+	allowed := [][]string{
+		nil,
+		{"repository:web:push"},
+		{"repository:web:pull"},
+		{"repository:acme/web:push,pull"},
+		{"repository:web:pull,push", "repository:api:pull"},
+	}
+	for _, scopes := range allowed {
+		_, err := svc.GenerateCIAccessToken(testContext(), ciPrincipal(), scopes, 0)
+		require.NoError(t, err, "%v", scopes)
+	}
+	rejected := []string{
+		"admin:*:*", "admin:apps:write", "repository:web:*", "repository:web:delete", "repository:web:push,delete",
+		"repository:*:push", "repository:Web:push", "repository:../etc:push", "repository::push", "repository:web:",
+		"repository:web:push,", "repository:web", "push", "registry:catalog:*", "", "repository:web:push:extra",
+	}
+	for _, scope := range rejected {
+		_, err := svc.GenerateCIAccessToken(testContext(), ciPrincipal(), []string{"repository:web:pull", scope}, 0)
+		require.Error(t, err, "%q", scope)
+	}
 }

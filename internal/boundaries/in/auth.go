@@ -27,8 +27,10 @@ type AuthService interface {
 	GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)
 
 	// GenerateCIAccessToken mints an unpersisted "ci-access" token for a workload
-	// principal. ttl <= 0 uses the access-token TTL; ttl is capped at one hour.
-	// ValidateToken rejects these tokens, so they only work on the CI host.
+	// principal. scopes must be repository:<name>:<push|pull[,…]> entries.
+	// ttl <= 0 uses the access-token TTL; ttl is capped at one hour. The token
+	// carries aud "gordon-ci"; ValidateToken rejects it, so it only works on
+	// the CI host.
 	GenerateCIAccessToken(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration) (string, error)
 
 	// ValidateCIAccessToken accepts only "ci-access" tokens and returns their
