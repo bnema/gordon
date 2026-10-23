@@ -5,10 +5,16 @@ E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 E2E_STATE="${E2E_STATE:-$E2E_DIR/.state}"
 E2E_PROJECT=gordon-e2e-ci
 E2E_EDGE_PORT="${E2E_EDGE_PORT:-18443}"
+E2E_SUBNET="${E2E_SUBNET:-10.231.77.0/24}"
+E2E_EDGE_IP="${E2E_EDGE_IP:-10.231.77.10}"
 E2E_REPO=e2e-demo
+# Seed image built on the host daemon. Named after the edge's registry host,
+# so `gordon images push` keeps repository e2e-demo and the name stays
+# specific to this harness.
+E2E_SEED_IMAGE=gordon.localtest.me/e2e-demo
 GORDON_SRC="${GORDON_SRC:-$(cd "$E2E_DIR/../../.." && pwd)}"
 ERMITE_SRC="${ERMITE_SRC:-}"
-export E2E_STATE E2E_EDGE_PORT GORDON_SRC ERMITE_SRC
+export E2E_STATE E2E_EDGE_PORT E2E_SUBNET E2E_EDGE_IP E2E_SEED_IMAGE GORDON_SRC ERMITE_SRC
 
 log() { printf '\033[1;34m[e2e]\033[0m %s\n' "$*" >&2; }
 die() { printf '\033[1;31m[e2e] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -32,6 +38,16 @@ load_env() {
 ermite_cli() {
 	ERMITE_TOKEN="$ERMITE_ADMIN_TOKEN" compose exec -T \
 		-e ERMITE_URL=http://127.0.0.1:7341 -e ERMITE_TOKEN ermite ermite "$@"
+}
+
+# ermite_git runs git against the fixture repo through the edge as the
+# owner. The admin token travels through GIT_CONFIG_* variables, never on a
+# command line, and is not written to any git config.
+ermite_git() {
+	GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader \
+		GIT_CONFIG_VALUE_0="Authorization: Bearer $ERMITE_ADMIN_TOKEN" \
+		git -c http.sslCAInfo="$E2E_STATE/ca/root.crt" \
+		-c "http.curloptResolve=ermite.localtest.me:$E2E_EDGE_PORT:127.0.0.1" "$@"
 }
 
 # tools runs a command in the tools container on the e2e network, where the
@@ -59,12 +75,19 @@ host_curl() {
 }
 
 # save_run_log ID NAME: writes the job logs of run ID to $E2E_STATE/runs/
-# NAME-ID.log, prints its path, and fails when it holds a JWT or an ermite
-# job/OIDC request token.
+# NAME-ID.log, prints its path, and fails when the log cannot be fetched, is
+# empty, or holds a JWT or an ermite job/OIDC request token.
 save_run_log() {
 	local f="$E2E_STATE/runs/$2-$1.log"
-	ermite_cli run view "$E2E_REPO" "$1" --log >"$f" 2>&1 || true
 	printf '%s\n' "$f"
+	if ! ermite_cli run view "$E2E_REPO" "$1" --log >"$f" 2>&1; then
+		log "FAIL: could not fetch the log of run $1"
+		return 1
+	fi
+	if [ ! -s "$f" ]; then
+		log "FAIL: run $1 log is empty"
+		return 1
+	fi
 	if grep -Eq 'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}' "$f"; then
 		log "FAIL: run $1 log contains a JWT"
 		return 1

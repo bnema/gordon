@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       digest:
-        description: a pushed e2e-demo manifest digest, for the replay check
+        description: the e2e-demo manifest digest service web runs, for the replay check
         required: false
         type: string
 

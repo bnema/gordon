@@ -16,7 +16,7 @@ for a in "$@"; do
 	esac
 done
 
-for c in docker curl jq git go openssl; do command -v "$c" >/dev/null || die "$c is not installed"; done
+for c in docker curl jq git go openssl ss sha256sum; do command -v "$c" >/dev/null || die "$c is not installed"; done
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "/dev/kvm is not usable by $(id -un): the runner needs it"
 docker image inspect "${RUNNER_IMAGE:-ermite-runner:e2e-final}" >/dev/null 2>&1 ||
 	die "runner image ${RUNNER_IMAGE:-ermite-runner:e2e-final} missing: build it (ermite-runner docs/container.md) or set RUNNER_IMAGE"
@@ -35,6 +35,8 @@ if [ ! -f "$E2E_STATE/.env" ]; then
 			echo "E2E_STATE=$E2E_STATE"
 			echo "E2E_EDGE_PORT=$E2E_EDGE_PORT"
 			echo "ERMITE_SRC=$ERMITE_SRC"
+			echo "E2E_SUBNET=$E2E_SUBNET"
+			echo "E2E_EDGE_IP=$E2E_EDGE_IP"
 			echo "HOST_DOCKER_SOCK=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/docker.sock"
 			echo "ERMITE_ADMIN_TOKEN=$(openssl rand -hex 32)"
 			echo "ERMITE_SECRETS_KEY=$(head -c 32 /dev/urandom | base64 -w0)"
@@ -122,17 +124,15 @@ cp -r "$E2E_DIR/fixture-repo/." "$work/"
 	git -c user.name=e2e -c user.email=e2e@localtest.me -c commit.gpgsign=false add -A
 	git -c user.name=e2e -c user.email=e2e@localtest.me -c commit.gpgsign=false commit -qm "e2e fixture"
 	# The root token is the owner: its push makes later runs trusted (OIDC).
-	git -c http.sslCAInfo="$E2E_STATE/ca/root.crt" \
-		-c "http.extraHeader=Authorization: Bearer $ERMITE_ADMIN_TOKEN" \
-		-c "http.curloptResolve=ermite.localtest.me:$E2E_EDGE_PORT:127.0.0.1" \
-		push -qf "https://ermite.localtest.me:$E2E_EDGE_PORT/$E2E_REPO.git" main
+	ermite_git push -qf "https://ermite.localtest.me:$E2E_EDGE_PORT/$E2E_REPO.git" main
 )
 log "fixture repo pushed to e2e/$E2E_REPO"
 
 [ "$WITH_GORDON" = 1 ] || { log "base stack ready (without gordon)"; exit 0; }
 
 # --- gordon -----------------------------------------------------------------
-(umask 077 && sed "s|@TOKEN_SECRET@|$GORDON_AUTH_TOKEN_SECRET|" "$E2E_DIR/gordon.toml" >"$E2E_STATE/gordon.toml.new")
+(umask 077 && sed -e "s|@TOKEN_SECRET@|$GORDON_AUTH_TOKEN_SECRET|" -e "s|@EDGE_IP@|$E2E_EDGE_IP|g" \
+	"$E2E_DIR/gordon.toml" >"$E2E_STATE/gordon.toml.new")
 # The gordon user of the image (uid 1000 in the container) must read it.
 chmod 644 "$E2E_STATE/gordon.toml.new"
 mv "$E2E_STATE/gordon.toml.new" "$E2E_STATE/gordon.toml"
@@ -154,8 +154,10 @@ fi
 # The CLI runs in the tools container: there gordon.localtest.me is the edge
 # on 443, and the image is read from the host daemon through its socket.
 log "building and pushing the demo image v1"
-docker build -q --build-arg VERSION=v1 -t e2e-demo:v1 "$E2E_DIR/fixture-repo" >/dev/null
-gordon_admin images push e2e-demo:v1 --tag v1 --json >"$E2E_STATE/push-v1.json"
+# The label lets teardown.sh find this image and every tag push adds to it.
+docker build -q --build-arg VERSION=v1 --label gordon-e2e-ci.seed=1 \
+	-t "$E2E_SEED_IMAGE:v1" "$E2E_DIR/fixture-repo" >/dev/null
+gordon_admin images push "$E2E_SEED_IMAGE:v1" --tag v1 --json >"$E2E_STATE/push-v1.json"
 image_v1="$(jq -r .image "$E2E_STATE/push-v1.json")"
 log "v1 image: $image_v1"
 sed "s|@IMAGE@|$image_v1|g" "$E2E_DIR/e2e-demo.toml.tmpl" >"$E2E_STATE/e2e-demo.toml"

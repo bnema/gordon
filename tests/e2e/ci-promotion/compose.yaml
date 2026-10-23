@@ -11,7 +11,7 @@ networks:
   e2e:
     ipam:
       config:
-        - subnet: ${E2E_SUBNET:-10.231.77.0/24}
+        - subnet: ${E2E_SUBNET:?}
 
 services:
   # Single TLS edge (tls internal). Every public name resolves to it inside
@@ -29,7 +29,7 @@ services:
       - caddy-data:/data
     networks:
       e2e:
-        ipv4_address: ${E2E_EDGE_IP:-10.231.77.10}
+        ipv4_address: ${E2E_EDGE_IP:?}
         aliases:
           - ermite.localtest.me
           - gordon.localtest.me
@@ -47,7 +47,7 @@ services:
       ERMITE_OWNER: e2e
       ERMITE_ADMIN_TOKEN: ${ERMITE_ADMIN_TOKEN:?}
       ERMITE_SECRETS_KEY: ${ERMITE_SECRETS_KEY:?}
-      ERMITE_TRUSTED_PROXIES: ${E2E_EDGE_IP:-10.231.77.10}/32
+      ERMITE_TRUSTED_PROXIES: ${E2E_EDGE_IP:?}/32
       ERMITE_CI_POLL_TIMEOUT: 25s
       ERMITE_LOG_FORMAT: console
     volumes:
@@ -79,7 +79,7 @@ services:
       # Jobs reach ermite.localtest.me:443 through a relay to the edge, so
       # every name the edge serves is reachable from a job (by SNI/Host).
       ERMITE_RUNNER_GUEST_FORGE: "1"
-      ERMITE_RUNNER_GUEST_FORGE_TARGET: ${E2E_EDGE_IP:-10.231.77.10}:443
+      ERMITE_RUNNER_GUEST_FORGE_TARGET: ${E2E_EDGE_IP:?}:443
       ERMITE_RUNNER_JOB_MEMORY: ${E2E_JOB_MEMORY:-3G}
       ERMITE_RUNNER_JOB_DISK: 24G
       ERMITE_RUNNER_LOG_FORMAT: console
@@ -134,7 +134,7 @@ services:
       <<: *ca-bundle
       DOCKER_HOST: unix:///var/run/docker.sock
     volumes:
-      - ${HOST_DOCKER_SOCK:-/run/user/1000/docker.sock}:/var/run/docker.sock
+      - ${HOST_DOCKER_SOCK:?}:/var/run/docker.sock
       - ${E2E_STATE:?}/ca:/e2e-ca:ro
       - ${E2E_STATE:?}/files/gordon:/usr/local/bin/gordon:ro
       - ${E2E_STATE:?}:/state
