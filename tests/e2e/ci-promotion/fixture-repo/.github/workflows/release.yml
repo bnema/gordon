@@ -1,0 +1,68 @@
+# Builds the demo image, pushes it to Gordon's CI host with the job's OIDC
+# identity and promotes exactly that digest to service "web" of e2e-demo.
+# Needs Gordon's CI host. No Gordon secret is stored in the repository.
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: version baked into the image
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  GORDON_REMOTE: https://ci.localtest.me
+  GORDON_OIDC_AUDIENCE: https://ci.localtest.me
+
+jobs:
+  release:
+    runs-on: [self-hosted, e2e]
+    steps:
+      - name: Trust the edge and install gordon
+        env:
+          E2E_CA_PEM: ${{ vars.E2E_CA_PEM }}
+          E2E_PREPARE: ${{ vars.E2E_PREPARE }}
+          INSTALL_GORDON: "1"
+        run: printf '%s\n' "$E2E_PREPARE" | bash
+
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build --build-arg VERSION="${{ inputs.version }}" -t e2e-demo:${{ inputs.version }} .
+
+      # gordon reads ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN itself (OIDC mode),
+      # exchanges the ID token at <remote>/auth/token and pushes with the
+      # resulting ci-access token. Only the digest goes to the log.
+      - name: Push
+        id: push
+        run: |
+          set -euo pipefail
+          gordon images push e2e-demo:${{ inputs.version }} --tag ${{ inputs.version }} --remote "$GORDON_REMOTE" --json >push.json
+          jq -e '.digest | test("^sha256:[0-9a-f]{64}$")' push.json >/dev/null
+          echo "repository=$(jq -r .repository push.json)" >>"$GITHUB_OUTPUT"
+          echo "digest=$(jq -r .digest push.json)" >>"$GITHUB_OUTPUT"
+          jq '{repository, tag, digest}' push.json
+
+      - name: Promote
+        run: |
+          set -euo pipefail
+          gordon apps promote e2e-demo --service web \
+            --image "${{ steps.push.outputs.repository }}@${{ steps.push.outputs.digest }}" \
+            --remote "$GORDON_REMOTE" --json >promote.json
+          jq '{op, app, status, outcome}' promote.json
+          jq -e '.outcome == "success"' promote.json >/dev/null
+
+      - name: Verify
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 30); do
+            body="$(curl -fsS https://app.localtest.me/ || true)"
+            echo "app.localtest.me -> $body"
+            case "$body" in *"version=${{ inputs.version }}"*) exit 0 ;; esac
+            sleep 2
+          done
+          exit 1

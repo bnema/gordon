@@ -1,0 +1,59 @@
+# Gordon config template of the e2e harness. setup.sh renders it into
+# $E2E_STATE/gordon.toml (untracked), replacing @TOKEN_SECRET@ with the
+# generated GORDON_AUTH_TOKEN_SECRET: `gordon serve` reads the env var, but
+# `gordon auth token generate` with the unsafe backend signs with the literal
+# auth.token_secret value, so both must be the same string.
+
+[server]
+gordon_domain = "gordon.localtest.me"
+ci_domain = "ci.localtest.me"
+registry_port = 5000
+data_dir = "/data"
+# Cleartext HTTP is served only to these peers (others get CA onboarding):
+# the edge, which terminates TLS.
+proxy_allowed_ips = ["10.231.77.10"]
+
+# Caddy terminates TLS and forwards cleartext HTTP here (dind:8080).
+[entrypoints.edge]
+address = ":8080"
+protocol = "smart_tcp"
+
+[tls.acme]
+enabled = false
+
+[auth]
+enabled = true
+secrets_backend = "unsafe"
+token_secret = "@TOKEN_SECRET@"
+token_expiry = "1d"
+access_token_ttl = "15m"
+
+[api.rate_limit]
+enabled = true
+global_rps = 500
+per_ip_rps = 50
+burst = 100
+# The edge (Caddy): its X-Forwarded-For / X-Forwarded-Proto are trusted.
+trusted_proxies = ["10.231.77.10"]
+
+[network_isolation]
+enabled = true
+network_prefix = "gordon"
+
+[logging]
+level = "debug"
+format = "console"
+
+# ermite issues RS256 ID tokens; its issuer sits on a private address here.
+[[trusted_issuers]]
+issuer = "https://ermite.localtest.me/-/oidc"
+audience = "https://ci.localtest.me"
+allow_private_network = true
+
+# Only the main branch of e2e/e2e-demo may promote, and only service "web".
+[[promotion_policies]]
+issuer = "https://ermite.localtest.me/-/oidc"
+subjects = ["repo:e2e/e2e-demo:ref:refs/heads/main"]
+app = "e2e-demo"
+service = "web"
+repository = "e2e-demo"

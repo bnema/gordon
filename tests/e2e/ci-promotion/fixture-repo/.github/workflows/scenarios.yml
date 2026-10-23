@@ -1,0 +1,30 @@
+# Negative checks against Gordon's CI host with real ID tokens.
+# Dispatched on main (policy subject) and on branch "other" (not in policy).
+name: scenarios
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: a pushed e2e-demo manifest digest, for the replay check
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  scenarios:
+    runs-on: [self-hosted, e2e]
+    steps:
+      - name: Trust the edge
+        env:
+          E2E_CA_PEM: ${{ vars.E2E_CA_PEM }}
+          E2E_PREPARE: ${{ vars.E2E_PREPARE }}
+        run: printf '%s\n' "$E2E_PREPARE" | bash
+      - uses: actions/checkout@v4
+      - name: Scenarios
+        env:
+          DIGEST: ${{ inputs.digest }}
+          EXPECT_SUBJECT_ALLOWED: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
+        run: bash .github/scripts/ci-scenarios.sh

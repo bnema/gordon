@@ -1,0 +1,37 @@
+# Two-service demo app. setup.sh replaces @IMAGE@ with the digest-pinned v1
+# image; CI then promotes only "web", "api" must keep v1.
+name = "e2e-demo"
+
+[services.web]
+image = "@IMAGE@"
+
+[services.web.env]
+SERVICE = "web"
+
+[services.web.readiness]
+type = "http"
+path = "/"
+port = 8000
+timeout = "30s"
+
+[[services.web.http]]
+host = "app.localtest.me"
+port = 8000
+tls = "never"
+
+[services.api]
+image = "@IMAGE@"
+
+[services.api.env]
+SERVICE = "api"
+
+[services.api.readiness]
+type = "http"
+path = "/"
+port = 8000
+timeout = "30s"
+
+[[services.api.http]]
+host = "api.localtest.me"
+port = 8000
+tls = "never"

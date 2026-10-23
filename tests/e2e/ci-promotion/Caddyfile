@@ -1,0 +1,38 @@
+{
+	local_certs
+	skip_install_trust
+	admin off
+}
+
+ermite.localtest.me {
+	tls internal
+	reverse_proxy ermite:7341
+}
+
+# Static files for jobs: the gordon binary built from this worktree.
+files.localtest.me {
+	tls internal
+	root * /srv/files
+	file_server
+}
+
+# The CI host. /-/e2e/ping is answered by the edge itself so the relay can be
+# checked without Gordon; everything else goes to Gordon's edge.
+ci.localtest.me {
+	tls internal
+	handle /-/e2e/ping {
+		respond "ci-edge-ok" 200
+	}
+	handle {
+		reverse_proxy {$GORDON_UPSTREAM} {
+			header_up Host {host}
+		}
+	}
+}
+
+gordon.localtest.me, app.localtest.me, api.localtest.me {
+	tls internal
+	reverse_proxy {$GORDON_UPSTREAM} {
+		header_up Host {host}
+	}
+}

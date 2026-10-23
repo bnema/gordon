@@ -1,0 +1,36 @@
+# Checks the harness without Gordon's CI host: the job gets an OIDC token
+# with the expected claims and reaches the CI host name through the relay.
+name: probe
+on: workflow_dispatch
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  probe:
+    runs-on: [self-hosted, e2e]
+    steps:
+      - name: Trust the edge
+        env:
+          E2E_CA_PEM: ${{ vars.E2E_CA_PEM }}
+          E2E_PREPARE: ${{ vars.E2E_PREPARE }}
+        run: printf '%s\n' "$E2E_PREPARE" | bash
+      - uses: actions/checkout@v4
+      - name: OIDC token claims
+        env:
+          WANT_ISS: https://ermite.localtest.me/-/oidc
+          WANT_AUD: https://ci.localtest.me
+          WANT_SUB: repo:${{ github.repository }}:ref:${{ github.ref }}
+        run: |
+          JWT="$(bash .github/scripts/oidc-token.sh "$WANT_AUD")"
+          export JWT
+          python3 .github/scripts/jwt-claims.py
+      - name: CI host through the relay
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS https://ci.localtest.me/-/e2e/ping)"
+          echo "ci.localtest.me/-/e2e/ping -> $body"
+          [ "$body" = ci-edge-ok ]
+          curl -fsS -o /dev/null https://files.localtest.me/gordon.sha256
+          echo "files.localtest.me reachable"

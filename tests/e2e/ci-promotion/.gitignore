@@ -1,0 +1,4 @@
+.env
+.state/
+playwright/test-results/
+playwright/playwright-report/
