@@ -76,6 +76,11 @@ type PassStore struct {
 	revokedList []string                // cached revocation list
 	revokedSet  map[string]struct{}     // for O(1) lookup
 
+	// revokedMu serializes revocation list reads from pass with Revoke, so only
+	// one refresh runs at a time and an older snapshot never overwrites a newer
+	// one. Lock order: revokedMu before cacheMu.
+	revokedMu sync.Mutex
+
 	// revokedLoadedAt is when the revocation cache was last refreshed.
 	// The list is re-read from pass once revokedTTL has elapsed, so revocations
 	// made by other processes (e.g. the CLI) are picked up.
@@ -384,8 +389,8 @@ func (s *PassStore) ListTokens(ctx context.Context) ([]domain.Token, error) {
 
 // Revoke adds token ID to revocation list in pass.
 func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
-	s.cacheMu.Lock()
-	defer s.cacheMu.Unlock()
+	s.revokedMu.Lock()
+	defer s.revokedMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -415,7 +420,9 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 	}
 
 	// Update cache
+	s.cacheMu.Lock()
 	s.setRevokedCacheLocked(revokedList)
+	s.cacheMu.Unlock()
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -424,6 +431,18 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 		Msg("token revoked")
 
 	return nil
+}
+
+// cachedRevoked reports whether tokenID is in the cached revocation list and
+// whether that cache is still fresh.
+func (s *PassStore) cachedRevoked(tokenID string) (revoked, fresh bool) {
+	s.cacheMu.RLock()
+	defer s.cacheMu.RUnlock()
+	if s.revokedList == nil || time.Since(s.revokedLoadedAt) >= s.revokedTTL {
+		return false, false
+	}
+	_, revoked = s.revokedSet[tokenID]
+	return revoked, true
 }
 
 // setRevokedCacheLocked replaces the revocation cache. Caller must hold cacheMu for writing.
@@ -439,14 +458,16 @@ func (s *PassStore) setRevokedCacheLocked(revokedList []string) {
 // IsRevoked checks if token ID is in revocation list.
 // The list is cached for revokedTTL; read errors are returned and never cached.
 func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
-	// Check cache first
-	s.cacheMu.RLock()
-	if s.revokedList != nil && time.Since(s.revokedLoadedAt) < s.revokedTTL {
-		_, revoked := s.revokedSet[tokenID]
-		s.cacheMu.RUnlock()
+	if revoked, fresh := s.cachedRevoked(tokenID); fresh {
 		return revoked, nil
 	}
-	s.cacheMu.RUnlock()
+
+	// Single refresh at a time; recheck in case another caller just refreshed.
+	s.revokedMu.Lock()
+	defer s.revokedMu.Unlock()
+	if revoked, fresh := s.cachedRevoked(tokenID); fresh {
+		return revoked, nil
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()

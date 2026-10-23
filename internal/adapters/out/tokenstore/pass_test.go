@@ -440,6 +440,7 @@ cmd="$1"; shift
 case "$cmd" in
 show)
   path="$1"
+  echo x >> "$DATA/.show_calls"
   if [ -e "$DATA/FAIL" ]; then
     echo "gpg: decryption failed: No secret key" >&2
     exit 2
@@ -517,6 +518,61 @@ func TestPassStore_IsRevoked_ReadFailureNotCached(t *testing.T) {
 	revoked, err = store.IsRevoked(ctx, "tok-1")
 	require.NoError(t, err)
 	assert.True(t, revoked)
+}
+
+// expireRevokedCache marks the revocation cache as stale.
+func expireRevokedCache(store *PassStore) {
+	store.cacheMu.Lock()
+	store.revokedLoadedAt = time.Time{}
+	store.cacheMu.Unlock()
+}
+
+func showCalls(t *testing.T, dataDir string) int {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(dataDir, ".show_calls"))
+	require.NoError(t, err)
+	return len(data) / len("x\n")
+}
+
+func TestPassStore_IsRevoked_ConcurrentExpiryRefreshesOnce(t *testing.T) {
+	dataDir := setupFakePass(t)
+	ctx := context.Background()
+	require.NoError(t, os.WriteFile(revokedFile(dataDir), []byte(`["tok-1"]`), 0o600))
+
+	store := newTestPassStore()
+	_, err := store.IsRevoked(ctx, "tok-1")
+	require.NoError(t, err)
+	expireRevokedCache(store)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			revoked, err := store.IsRevoked(ctx, "tok-1")
+			assert.NoError(t, err)
+			assert.True(t, revoked)
+		}()
+	}
+	wg.Wait()
+
+	assert.Equal(t, 2, showCalls(t, dataDir), "one initial load plus a single refresh")
+}
+
+func TestPassStore_IsRevoked_ReadFailureAfterExpiryFailsClosed(t *testing.T) {
+	dataDir := setupFakePass(t)
+	ctx := context.Background()
+	require.NoError(t, os.WriteFile(revokedFile(dataDir), []byte(`["tok-1"]`), 0o600))
+
+	store := newTestPassStore()
+	_, err := store.IsRevoked(ctx, "tok-1")
+	require.NoError(t, err)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "FAIL"), nil, 0o600))
+	expireRevokedCache(store)
+
+	_, err = store.IsRevoked(ctx, "tok-2")
+	require.Error(t, err)
 }
 
 func TestPassStore_Revoke_ReadFailureKeepsStoredList(t *testing.T) {
