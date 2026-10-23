@@ -104,6 +104,86 @@ func (_c *MockAppState_AcceptApply_Call) RunAndReturn(run func(ctx context.Conte
 	return _c
 }
 
+// AcceptPromotion provides a mock function for the type MockAppState
+func (_mock *MockAppState) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error) {
+	ret := _mock.Called(ctx, rev, op)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AcceptPromotion")
+	}
+
+	var r0 *domain.AppOperation
+	var r1 bool
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppDesiredRevision, domain.AppOperation) (*domain.AppOperation, bool, error)); ok {
+		return returnFunc(ctx, rev, op)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppDesiredRevision, domain.AppOperation) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, rev, op)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.AppOperation)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, domain.AppDesiredRevision, domain.AppOperation) bool); ok {
+		r1 = returnFunc(ctx, rev, op)
+	} else {
+		r1 = ret.Get(1).(bool)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, domain.AppDesiredRevision, domain.AppOperation) error); ok {
+		r2 = returnFunc(ctx, rev, op)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockAppState_AcceptPromotion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AcceptPromotion'
+type MockAppState_AcceptPromotion_Call struct {
+	*mock.Call
+}
+
+// AcceptPromotion is a helper method to define mock.On call
+//   - ctx context.Context
+//   - rev domain.AppDesiredRevision
+//   - op domain.AppOperation
+func (_e *MockAppState_Expecter) AcceptPromotion(ctx any, rev any, op any) *MockAppState_AcceptPromotion_Call {
+	return &MockAppState_AcceptPromotion_Call{Call: _e.mock.On("AcceptPromotion", ctx, rev, op)}
+}
+
+func (_c *MockAppState_AcceptPromotion_Call) Run(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation)) *MockAppState_AcceptPromotion_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.AppDesiredRevision
+		if args[1] != nil {
+			arg1 = args[1].(domain.AppDesiredRevision)
+		}
+		var arg2 domain.AppOperation
+		if args[2] != nil {
+			arg2 = args[2].(domain.AppOperation)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppState_AcceptPromotion_Call) Return(existing *domain.AppOperation, claimed bool, err error) *MockAppState_AcceptPromotion_Call {
+	_c.Call.Return(existing, claimed, err)
+	return _c
+}
+
+func (_c *MockAppState_AcceptPromotion_Call) RunAndReturn(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error)) *MockAppState_AcceptPromotion_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // AppExists provides a mock function for the type MockAppState
 func (_mock *MockAppState) AppExists(ctx context.Context, app string) (bool, error) {
 	ret := _mock.Called(ctx, app)

@@ -92,6 +92,10 @@ type AppState interface {
 	// does not fail the accepted apply.
 	AcceptApply(ctx context.Context, intent domain.AppApplyIntent) error
 
+	// AcceptPromotion atomically checks the request key, desired revision and
+	// app incarnation, then writes revision, desired and a protective journal.
+	AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (existing *domain.AppOperation, claimed bool, err error)
+
 	// SaveOperation persists an operation journal record atomically.
 	SaveOperation(ctx context.Context, op domain.AppOperation) error
 
