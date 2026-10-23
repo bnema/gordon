@@ -192,6 +192,84 @@ func (_c *MockAuthService_GenerateAccessToken_Call) RunAndReturn(run func(ctx co
 	return _c
 }
 
+// GenerateCIAccessToken provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) GenerateCIAccessToken(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration) (string, error) {
+	ret := _mock.Called(ctx, principal, scopes, ttl)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GenerateCIAccessToken")
+	}
+
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.WorkloadPrincipal, []string, time.Duration) (string, error)); ok {
+		return returnFunc(ctx, principal, scopes, ttl)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.WorkloadPrincipal, []string, time.Duration) string); ok {
+		r0 = returnFunc(ctx, principal, scopes, ttl)
+	} else {
+		r0 = ret.Get(0).(string)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, domain.WorkloadPrincipal, []string, time.Duration) error); ok {
+		r1 = returnFunc(ctx, principal, scopes, ttl)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAuthService_GenerateCIAccessToken_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GenerateCIAccessToken'
+type MockAuthService_GenerateCIAccessToken_Call struct {
+	*mock.Call
+}
+
+// GenerateCIAccessToken is a helper method to define mock.On call
+//   - ctx context.Context
+//   - principal domain.WorkloadPrincipal
+//   - scopes []string
+//   - ttl time.Duration
+func (_e *MockAuthService_Expecter) GenerateCIAccessToken(ctx any, principal any, scopes any, ttl any) *MockAuthService_GenerateCIAccessToken_Call {
+	return &MockAuthService_GenerateCIAccessToken_Call{Call: _e.mock.On("GenerateCIAccessToken", ctx, principal, scopes, ttl)}
+}
+
+func (_c *MockAuthService_GenerateCIAccessToken_Call) Run(run func(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration)) *MockAuthService_GenerateCIAccessToken_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 domain.WorkloadPrincipal
+		if args[1] != nil {
+			arg1 = args[1].(domain.WorkloadPrincipal)
+		}
+		var arg2 []string
+		if args[2] != nil {
+			arg2 = args[2].([]string)
+		}
+		var arg3 time.Duration
+		if args[3] != nil {
+			arg3 = args[3].(time.Duration)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthService_GenerateCIAccessToken_Call) Return(s string, err error) *MockAuthService_GenerateCIAccessToken_Call {
+	_c.Call.Return(s, err)
+	return _c
+}
+
+func (_c *MockAuthService_GenerateCIAccessToken_Call) RunAndReturn(run func(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration) (string, error)) *MockAuthService_GenerateCIAccessToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GenerateToken provides a mock function for the type MockAuthService
 func (_mock *MockAuthService) GenerateToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error) {
 	ret := _mock.Called(ctx, subject, scopes, expiry)
@@ -639,6 +717,80 @@ func (_c *MockAuthService_RevokeToken_Call) Return(err error) *MockAuthService_R
 }
 
 func (_c *MockAuthService_RevokeToken_Call) RunAndReturn(run func(ctx context.Context, tokenID string) error) *MockAuthService_RevokeToken_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ValidateCIAccessToken provides a mock function for the type MockAuthService
+func (_mock *MockAuthService) ValidateCIAccessToken(ctx context.Context, token string) (domain.WorkloadPrincipal, []string, error) {
+	ret := _mock.Called(ctx, token)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ValidateCIAccessToken")
+	}
+
+	var r0 domain.WorkloadPrincipal
+	var r1 []string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (domain.WorkloadPrincipal, []string, error)); ok {
+		return returnFunc(ctx, token)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) domain.WorkloadPrincipal); ok {
+		r0 = returnFunc(ctx, token)
+	} else {
+		r0 = ret.Get(0).(domain.WorkloadPrincipal)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) []string); ok {
+		r1 = returnFunc(ctx, token)
+	} else {
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).([]string)
+		}
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string) error); ok {
+		r2 = returnFunc(ctx, token)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockAuthService_ValidateCIAccessToken_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ValidateCIAccessToken'
+type MockAuthService_ValidateCIAccessToken_Call struct {
+	*mock.Call
+}
+
+// ValidateCIAccessToken is a helper method to define mock.On call
+//   - ctx context.Context
+//   - token string
+func (_e *MockAuthService_Expecter) ValidateCIAccessToken(ctx any, token any) *MockAuthService_ValidateCIAccessToken_Call {
+	return &MockAuthService_ValidateCIAccessToken_Call{Call: _e.mock.On("ValidateCIAccessToken", ctx, token)}
+}
+
+func (_c *MockAuthService_ValidateCIAccessToken_Call) Run(run func(ctx context.Context, token string)) *MockAuthService_ValidateCIAccessToken_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAuthService_ValidateCIAccessToken_Call) Return(principal domain.WorkloadPrincipal, scopes []string, err error) *MockAuthService_ValidateCIAccessToken_Call {
+	_c.Call.Return(principal, scopes, err)
+	return _c
+}
+
+func (_c *MockAuthService_ValidateCIAccessToken_Call) RunAndReturn(run func(ctx context.Context, token string) (domain.WorkloadPrincipal, []string, error)) *MockAuthService_ValidateCIAccessToken_Call {
 	_c.Call.Return(run)
 	return _c
 }

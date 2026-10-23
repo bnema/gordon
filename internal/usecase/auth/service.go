@@ -33,6 +33,8 @@ const (
 	// serviceTokenSubject is the subject used for internal service tokens.
 	// Service tokens are not extended to avoid churn on the token store.
 	serviceTokenSubject = "gordon-service"
+	// TokenTypeCIAccess is the token_type claim of CI-host access tokens.
+	TokenTypeCIAccess = "ci-access"
 )
 
 // Config holds the authentication configuration.
@@ -94,6 +96,11 @@ func (s *Service) ValidateToken(ctx context.Context, tokenString string) (*domai
 	}
 
 	tokenClaims := buildTokenClaims(claims)
+	// ci-access tokens are valid only on the CI host (ValidateCIAccessToken).
+	if tokenClaims.TokenType == TokenTypeCIAccess {
+		log.Debug().Msg("ci-access token rejected outside the CI host")
+		return nil, domain.ErrInvalidToken
+	}
 
 	// Access tokens (short-lived, ≤1h, recently issued) skip store validation.
 	// CLI-generated tokens must exist in store to prevent use of externally-created tokens.
@@ -378,6 +385,68 @@ func (s *Service) GenerateAccessToken(ctx context.Context, subject string, scope
 		Msg("access token generated")
 
 	return tokenString, nil
+}
+
+// GenerateCIAccessToken mints an unpersisted "ci-access" token whose subject is
+// principal.String(). ttl <= 0 uses access_token_ttl; ttl is capped at
+// MaxAccessTokenLifetime. ValidateToken rejects these tokens.
+func (s *Service) GenerateCIAccessToken(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration) (string, error) {
+	parsed, err := domain.ParseWorkloadPrincipal(principal.String())
+	if err != nil || parsed != principal {
+		return "", fmt.Errorf("invalid workload principal")
+	}
+	if ttl <= 0 {
+		ttl = s.GetAccessTokenTTL()
+	}
+	ttl = min(ttl, MaxAccessTokenLifetime)
+	tokenID := uuid.New().String()
+	now := time.Now().UTC()
+	claims := jwt.MapClaims{
+		"jti":        tokenID,
+		"sub":        principal.String(),
+		"iss":        TokenIssuer,
+		"iat":        now.Unix(),
+		"nbf":        now.Unix(),
+		"exp":        now.Add(ttl).Unix(),
+		"scopes":     scopes,
+		"token_type": TokenTypeCIAccess,
+	}
+	tokenString, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.config.TokenSecret)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign ci-access token: %w", err)
+	}
+	log := zerowrap.FromCtx(ctx)
+	log.Debug().
+		Str(zerowrap.FieldLayer, "usecase").
+		Str("token_id", tokenID).
+		Str("principal", principal.String()).
+		Msg("ci-access token generated")
+	return tokenString, nil
+}
+
+// ValidateCIAccessToken accepts only "ci-access" tokens minted by
+// GenerateCIAccessToken and returns their principal and scopes.
+func (s *Service) ValidateCIAccessToken(_ context.Context, raw string) (domain.WorkloadPrincipal, []string, error) {
+	token, err := jwt.Parse(raw, func(*jwt.Token) (any, error) { return s.config.TokenSecret, nil },
+		jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(TokenIssuer),
+		jwt.WithExpirationRequired(), jwt.WithIssuedAt())
+	if err != nil {
+		return domain.WorkloadPrincipal{}, nil, domain.ErrInvalidToken
+	}
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return domain.WorkloadPrincipal{}, nil, domain.ErrInvalidToken
+	}
+	c := buildTokenClaims(claims)
+	if c.TokenType != TokenTypeCIAccess || c.IssuedAt <= 0 || c.ExpiresAt <= c.IssuedAt ||
+		c.ExpiresAt-c.IssuedAt > maxAccessTokenLifetimeSecs {
+		return domain.WorkloadPrincipal{}, nil, domain.ErrInvalidToken
+	}
+	principal, err := domain.ParseWorkloadPrincipal(c.Subject)
+	if err != nil {
+		return domain.WorkloadPrincipal{}, nil, domain.ErrInvalidToken
+	}
+	return principal, c.Scopes, nil
 }
 
 // RevokeToken revokes a token by its ID.

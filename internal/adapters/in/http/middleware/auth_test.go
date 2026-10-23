@@ -142,6 +142,14 @@ func (s stubAuthService) GenerateAccessToken(context.Context, string, []string, 
 	return "", errors.New("not implemented")
 }
 
+func (s stubAuthService) GenerateCIAccessToken(context.Context, domain.WorkloadPrincipal, []string, time.Duration) (string, error) {
+	return "", errors.New("not implemented")
+}
+
+func (s stubAuthService) ValidateCIAccessToken(context.Context, string) (domain.WorkloadPrincipal, []string, error) {
+	return domain.WorkloadPrincipal{}, nil, errors.New("not implemented")
+}
+
 func (s stubAuthService) RevokeToken(context.Context, string) error {
 	return errors.New("not implemented")
 }

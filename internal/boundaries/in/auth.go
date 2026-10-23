@@ -26,6 +26,15 @@ type AuthService interface {
 	// Used by /v2/token endpoint for Docker client sessions.
 	GenerateAccessToken(ctx context.Context, subject string, scopes []string, expiry time.Duration) (string, error)
 
+	// GenerateCIAccessToken mints an unpersisted "ci-access" token for a workload
+	// principal. ttl <= 0 uses the access-token TTL; ttl is capped at one hour.
+	// ValidateToken rejects these tokens, so they only work on the CI host.
+	GenerateCIAccessToken(ctx context.Context, principal domain.WorkloadPrincipal, scopes []string, ttl time.Duration) (string, error)
+
+	// ValidateCIAccessToken accepts only "ci-access" tokens and returns their
+	// principal and scopes. Any other token yields domain.ErrInvalidToken.
+	ValidateCIAccessToken(ctx context.Context, token string) (principal domain.WorkloadPrincipal, scopes []string, err error)
+
 	// RevokeToken revokes a token by its ID.
 	RevokeToken(ctx context.Context, tokenID string) error
 
