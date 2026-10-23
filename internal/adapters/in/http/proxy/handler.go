@@ -31,7 +31,10 @@ type Handler struct {
 	// registry is a local-only service reached by direct loopback
 	// connection, never through public ingress.
 	registryForwarding bool
-	activeConns        atomic.Int64
+	// ciHandler serves the CI host in-process. Nil means no CI router is
+	// wired and CI-host matching is skipped.
+	ciHandler   http.Handler
+	activeConns atomic.Int64
 }
 
 // NewHandler creates a new proxy HTTP handler. Registry forwarding is
@@ -52,6 +55,14 @@ func NewHandler(proxySvc in.ProxyService, trustedNets []*net.IPNet, log zerowrap
 // disabled-auth registry must stay unreachable through public ingress.
 func (h *Handler) WithRegistryForwarding(enabled bool) *Handler {
 	h.registryForwarding = enabled
+	return h
+}
+
+// WithCIHandler wires the CI router. Requests whose Host is the configured
+// CI domain are served by it in-process and never forwarded to the
+// registry listener or an app.
+func (h *Handler) WithCIHandler(ci http.Handler) *Handler {
+	h.ciHandler = ci
 	return h
 }
 
@@ -90,6 +101,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	host := normalizeRequestHost(r.Host)
 	if host == "" {
 		proxyError(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+
+	// The CI host is answered by the in-process CI router, before the
+	// registry branch, so it can never reach the full registry or admin.
+	if h.ciHandler != nil && h.proxySvc.IsCIDomain(host) {
+		log.Debug().Msg("routing request to CI router")
+		h.ciHandler.ServeHTTP(w, r)
 		return
 	}
 

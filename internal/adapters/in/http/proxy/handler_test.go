@@ -81,6 +81,62 @@ func TestHandler_DeniesRegistryForwardingWhenAuthDisabled(t *testing.T) {
 	proxySvc.AssertNotCalled(t, "TrackRegistryRequest")
 }
 
+// TestHandler_CIHostServedInProcess proves the CI host is answered by the
+// CI router before the registry branch: it is never forwarded to the
+// registry listener nor resolved as an app.
+func TestHandler_CIHostServedInProcess(t *testing.T) {
+	for _, host := range []string{"ci.example.com", "CI.example.com:443", "ci.example.com."} {
+		t.Run(host, func(t *testing.T) {
+			proxySvc := inmocks.NewMockProxyService(t)
+			proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{RegistryPort: 5000})
+			proxySvc.EXPECT().IsCIDomain("ci.example.com").Return(true)
+
+			var gotHost string
+			ci := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHost = r.Host
+				w.WriteHeader(http.StatusTeapot)
+			})
+			handler := NewHandler(proxySvc, nil, testLogger()).WithRegistryForwarding(true).WithCIHandler(ci)
+
+			req := httptest.NewRequest(http.MethodGet, "http://ci.example.com/v2/", nil)
+			req.Host = host
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, http.StatusTeapot, w.Code)
+			assert.Equal(t, host, gotHost, "the CI router receives the original request")
+			proxySvc.AssertNotCalled(t, "IsRegistryDomain", mock.Anything)
+			proxySvc.AssertNotCalled(t, "TrackRegistryRequest")
+			proxySvc.AssertNotCalled(t, "GetTarget", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// TestHandler_NonCIHostsNeverReachCIRouter proves registry and app hosts
+// keep their routes when a CI router is wired.
+func TestHandler_NonCIHostsNeverReachCIRouter(t *testing.T) {
+	ci := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("non-CI host reached the CI router")
+	})
+
+	proxySvc := inmocks.NewMockProxyService(t)
+	proxySvc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+	proxySvc.EXPECT().IsCIDomain("registry.example.com").Return(false)
+	proxySvc.EXPECT().IsRegistryDomain("registry.example.com").Return(true)
+	proxySvc.EXPECT().IsCIDomain("app.example.com").Return(false)
+	proxySvc.EXPECT().IsRegistryDomain("app.example.com").Return(false)
+	proxySvc.EXPECT().GetTarget(mock.Anything, "app.example.com").Return(nil, domain.ErrNoTargetAvailable)
+	handler := NewHandler(proxySvc, nil, testLogger()).WithCIHandler(ci)
+
+	for _, host := range []string{"registry.example.com", "app.example.com"} {
+		req := httptest.NewRequest(http.MethodGet, "http://"+host+"/v2/", nil)
+		req.Host = host
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusNotFound, w.Code, host)
+	}
+}
+
 func TestHandler_NormalizesRequestHostForLookup(t *testing.T) {
 	tests := []struct {
 		name     string

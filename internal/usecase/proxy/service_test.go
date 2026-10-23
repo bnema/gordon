@@ -562,3 +562,26 @@ func TestService_TrackRegistryRequest(t *testing.T) {
 	svc.ReleaseRegistryRequest()
 	assert.Equal(t, int64(0), svc.RegistryInFlight())
 }
+
+func TestService_IsCIDomain(t *testing.T) {
+	configSvc := inmocks.NewMockConfigService(t)
+	configSvc.EXPECT().GetExternalRoutes().Return(map[string]string{}).Maybe()
+	svc := testService(t, configSvc, nil)
+	ctx := testContext()
+
+	assert.False(t, svc.IsCIDomain("ci.example.com"), "no CI domain configured")
+	assert.False(t, svc.IsKnownHost(ctx, "ci.example.com"))
+
+	svc.UpdateConfig(Config{RegistryDomain: "registry.example.com", CIDomain: "ci.example.com"})
+	assert.True(t, svc.IsCIDomain("ci.example.com"))
+	assert.True(t, svc.IsCIDomain("CI.Example.com"), "hosts are case-insensitive")
+	assert.False(t, svc.IsCIDomain("registry.example.com"))
+	assert.False(t, svc.IsCIDomain(""))
+	assert.True(t, svc.IsKnownHost(ctx, "ci.example.com"))
+	assert.Equal(t, "ci.example.com", svc.ProxyConfig().CIDomain)
+
+	// A reload that removes ci_domain disables the CI host immediately.
+	svc.UpdateConfig(Config{RegistryDomain: "registry.example.com"})
+	assert.False(t, svc.IsCIDomain("ci.example.com"))
+	assert.False(t, svc.IsKnownHost(ctx, "ci.example.com"))
+}

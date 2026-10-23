@@ -25,14 +25,34 @@ type ImagePullRequest struct {
 	Transport ImagePullTransport
 }
 
-// IsInstallationImage reports whether ref belongs to the configured installation registry.
+// IsInstallationImage reports whether ref belongs to the configured
+// installation registry, under its own host or one of its aliases.
 func (p ImageSourcePolicy) IsInstallationImage(ref string) bool {
 	host, _, err := parseImageRegistry(strings.TrimSpace(ref))
 	if err != nil || p.InstallationRegistry == "" {
 		return false
 	}
-	installation, err := canonicalRegistryHost(p.InstallationRegistry)
-	return err == nil && dockerRegistryAlias(host) == dockerRegistryAlias(installation)
+	for _, entry := range p.installationHosts() {
+		installation, err := canonicalRegistryHost(entry)
+		if err == nil && dockerRegistryAlias(host) == dockerRegistryAlias(installation) {
+			return true
+		}
+	}
+	return false
+}
+
+// installationHosts lists the installation registry and its non-empty aliases.
+func (p ImageSourcePolicy) installationHosts() []string {
+	if p.InstallationRegistry == "" {
+		return nil
+	}
+	hosts := []string{p.InstallationRegistry}
+	for _, alias := range p.InstallationAliases {
+		if strings.TrimSpace(alias) != "" {
+			hosts = append(hosts, alias)
+		}
+	}
+	return hosts
 }
 
 // ImageSourcePolicy is the installation policy for every image reference
@@ -44,14 +64,14 @@ type ImageSourcePolicy struct {
 	RequireDigest bool
 	// InstallationRegistry is Gordon's own registry host, always allowed.
 	InstallationRegistry string
+	// InstallationAliases are other hosts that serve the same registry
+	// (the CI host). They are allowed and treated as the installation.
+	InstallationAliases []string
 }
 
 // Validate checks every configured registry authority.
 func (p ImageSourcePolicy) Validate() error {
-	entries := append([]string{}, p.AllowedRegistries...)
-	if p.InstallationRegistry != "" {
-		entries = append(entries, p.InstallationRegistry)
-	}
+	entries := append(append([]string{}, p.AllowedRegistries...), p.installationHosts()...)
 	for _, entry := range entries {
 		if _, err := canonicalRegistryHost(entry); err != nil {
 			return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
@@ -87,9 +107,7 @@ func (p ImageSourcePolicy) ValidateImageSource(ref string) error {
 
 func (p ImageSourcePolicy) registryAllowed(host string) bool {
 	entries := append(append([]string{}, defaultImageRegistries...), p.AllowedRegistries...)
-	if p.InstallationRegistry != "" {
-		entries = append(entries, p.InstallationRegistry)
-	}
+	entries = append(entries, p.installationHosts()...)
 	for _, entry := range entries {
 		allowed, err := canonicalRegistryHost(entry)
 		if err == nil && dockerRegistryAlias(allowed) == dockerRegistryAlias(host) {

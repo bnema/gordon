@@ -24,7 +24,11 @@ type ProxyService interface {
 	// IsRegistryDomain returns true if the host matches the configured registry domain.
 	IsRegistryDomain(host string) bool
 
-	// IsKnownHost returns true if the host is configured as registry, route, or external route.
+	// IsCIDomain returns true if the host matches the configured CI domain.
+	// The CI host is served in-process by the CI router, never forwarded.
+	IsCIDomain(host string) bool
+
+	// IsKnownHost returns true if the host is configured as registry, CI host, route, or external route.
 	IsKnownHost(ctx context.Context, host string) bool
 
 	// TrackInFlight records an in-flight request for a container.
@@ -46,6 +50,7 @@ type ProxyService interface {
 // from the usecase layer for HTTP-level enforcement.
 type ProxyServiceConfig struct {
 	RegistryDomain     string
+	CIDomain           string
 	RegistryPort       int
 	MaxBodySize        int64
 	MaxResponseSize    int64

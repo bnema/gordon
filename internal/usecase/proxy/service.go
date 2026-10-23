@@ -24,7 +24,10 @@ var proxyTracer = otel.Tracer("gordon.proxy")
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
-	RegistryDomain     string
+	RegistryDomain string
+	// CIDomain is the optional CI host (server.ci_domain), served by the
+	// in-process CI router. Empty disables it.
+	CIDomain           string
 	RegistryPort       int
 	MaxBodySize        int64 // Maximum request body size in bytes (0 = no limit)
 	MaxResponseSize    int64 // Maximum response body size in bytes (0 = no limit)
@@ -338,14 +341,27 @@ func (s *Service) IsRegistryDomain(host string) bool {
 	return ok && canonicalHost == registryDomain
 }
 
-// IsKnownHost returns true for the registry domain, external routes,
-// and app-served hosts from the ACTIVE-derived index.
+// IsCIDomain returns true if the host matches the configured CI domain.
+func (s *Service) IsCIDomain(host string) bool {
+	canonicalHost, ok := domain.CanonicalRouteDomain(host)
+	if !ok {
+		return false
+	}
+
+	s.mu.RLock()
+	ciDomain, ok := domain.CanonicalRouteDomain(s.config.CIDomain)
+	s.mu.RUnlock()
+	return ok && canonicalHost == ciDomain
+}
+
+// IsKnownHost returns true for the registry and CI domains, external
+// routes, and app-served hosts from the ACTIVE-derived index.
 func (s *Service) IsKnownHost(_ context.Context, host string) bool {
 	canonicalHost, ok := domain.CanonicalRouteDomain(host)
 	if !ok {
 		return false
 	}
-	if s.IsRegistryDomain(canonicalHost) {
+	if s.IsRegistryDomain(canonicalHost) || s.IsCIDomain(canonicalHost) {
 		return true
 	}
 	if _, ok := s.configSvc.GetExternalRoutes()[canonicalHost]; ok {
@@ -399,6 +415,7 @@ func (s *Service) ProxyConfig() in.ProxyServiceConfig {
 	defer s.mu.RUnlock()
 	return in.ProxyServiceConfig{
 		RegistryDomain:     s.config.RegistryDomain,
+		CIDomain:           s.config.CIDomain,
 		RegistryPort:       s.config.RegistryPort,
 		MaxBodySize:        s.config.MaxBodySize,
 		MaxResponseSize:    s.config.MaxResponseSize,

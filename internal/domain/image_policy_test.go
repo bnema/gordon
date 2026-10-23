@@ -115,6 +115,21 @@ func TestImageSourcePolicy_IsInstallationImageDockerHubAlias(t *testing.T) {
 	}
 }
 
+func TestImageSourcePolicy_InstallationAliases(t *testing.T) {
+	policy := domain.ImageSourcePolicy{
+		InstallationRegistry: "gordon.example.com",
+		InstallationAliases:  []string{"ci.example.com", ""},
+	}
+	require.NoError(t, policy.Validate())
+	assert.True(t, policy.IsInstallationImage("gordon.example.com/web@"+testDigest202))
+	assert.True(t, policy.IsInstallationImage("CI.example.com./web@"+testDigest202), "aliases are canonicalized")
+	assert.False(t, policy.IsInstallationImage("other.example.com/web@"+testDigest202))
+	require.NoError(t, policy.ValidateImageSource("ci.example.com/web@"+testDigest202), "an alias is an allowed registry")
+
+	bad := domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", InstallationAliases: []string{"bad host/"}}
+	assert.ErrorIs(t, bad.Validate(), domain.ErrAppImageNotAllowed)
+}
+
 func TestIsLocalOrPrivateHost(t *testing.T) {
 	local := []string{"localhost", "sub.localhost", "127.0.0.1", "127.0.0.1:5000", "[::1]:5000", "10.0.0.1", "192.168.0.1", "172.31.0.1", "fc00::1", "0.0.0.0", "169.254.169.254"}
 	for _, host := range local {

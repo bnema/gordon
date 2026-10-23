@@ -116,6 +116,57 @@ func (_c *MockProxyService_GetTarget_Call) RunAndReturn(run func(ctx context.Con
 	return _c
 }
 
+// IsCIDomain provides a mock function for the type MockProxyService
+func (_mock *MockProxyService) IsCIDomain(host string) bool {
+	ret := _mock.Called(host)
+
+	if len(ret) == 0 {
+		panic("no return value specified for IsCIDomain")
+	}
+
+	var r0 bool
+	if returnFunc, ok := ret.Get(0).(func(string) bool); ok {
+		r0 = returnFunc(host)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+	return r0
+}
+
+// MockProxyService_IsCIDomain_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'IsCIDomain'
+type MockProxyService_IsCIDomain_Call struct {
+	*mock.Call
+}
+
+// IsCIDomain is a helper method to define mock.On call
+//   - host string
+func (_e *MockProxyService_Expecter) IsCIDomain(host any) *MockProxyService_IsCIDomain_Call {
+	return &MockProxyService_IsCIDomain_Call{Call: _e.mock.On("IsCIDomain", host)}
+}
+
+func (_c *MockProxyService_IsCIDomain_Call) Run(run func(host string)) *MockProxyService_IsCIDomain_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 string
+		if args[0] != nil {
+			arg0 = args[0].(string)
+		}
+		run(
+			arg0,
+		)
+	})
+	return _c
+}
+
+func (_c *MockProxyService_IsCIDomain_Call) Return(b bool) *MockProxyService_IsCIDomain_Call {
+	_c.Call.Return(b)
+	return _c
+}
+
+func (_c *MockProxyService_IsCIDomain_Call) RunAndReturn(run func(host string) bool) *MockProxyService_IsCIDomain_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // IsKnownHost provides a mock function for the type MockProxyService
 func (_mock *MockProxyService) IsKnownHost(ctx context.Context, host string) bool {
 	ret := _mock.Called(ctx, host)
