@@ -92,7 +92,11 @@ func (s *OIDCSource) IDToken(ctx context.Context) (string, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := (&http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}).Do(req)
 	if err != nil {
-		return "", fmt.Errorf("fetch OIDC ID token: request failed")
+		// The transport error embeds the request URL; report only its kind.
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "", fmt.Errorf("fetch OIDC ID token: the CI runner did not answer: timed out")
+		}
+		return "", fmt.Errorf("fetch OIDC ID token: request to the CI runner failed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
