@@ -474,7 +474,7 @@ behavior, and [Promotion Policies](./promotion.md) for grant semantics.
 ```toml
 [[trusted_issuers]]
 issuer = "https://issuer.example.com"          # Exact issuer URL
-audience = "https://gordon.example.com"        # Required, exact audience
+audience = "https://ci.example.com"            # Required, exact audience
 # jwks_uri = "https://issuer.example.com/keys" # Optional override
 max_token_lifetime = "1h"                     # Default; positive duration
 clock_skew = "60s"                            # Default; non-negative duration

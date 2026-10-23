@@ -38,6 +38,9 @@ promote:
 
 `GORDON_OIDC_TOKEN` selects OIDC mode; no `GORDON_TOKEN` is needed.
 Promotion polls by key; exit 0 means success, exit 1 means failure or refusal.
+GitLab ID tokens expire at the job timeout, and Gordon rejects tokens whose
+lifetime exceeds `max_token_lifetime` (default `1h`): set `max_token_lifetime`
+on the trusted issuer to at least the job timeout.
 
 ### Docker and curl
 
@@ -57,15 +60,15 @@ For runners without OIDC, the following workflows transfer images through
 the main host with a stored token. Apply and deploy separately after push;
 prefer OIDC promotion for CI.
 
-## Prerequisites
+### Prerequisites
 
 1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
 2. A least-privilege token: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the pipeline applies or deploys apps
 3. GitLab CI/CD variables configured
 
-## Quick Setup
+### Quick Setup
 
-### 1. Generate Deployment Token
+#### 1. Generate Deployment Token
 
 On your Gordon server:
 
@@ -76,7 +79,7 @@ gordon auth token generate \
   --expiry 0
 ```
 
-### 2. Add CI/CD Variables
+#### 2. Add CI/CD Variables
 
 In your project: Settings > CI/CD > Variables
 
@@ -85,7 +88,7 @@ In your project: Settings > CI/CD > Variables
 | `GORDON_TOKEN` | The generated token | Yes | Yes |
 | `GORDON_REMOTE` | `https://gordon.example.com` | Yes | No |
 
-### 3. Create Pipeline
+#### 3. Create Pipeline
 
 Create `.gitlab-ci.yml`:
 
@@ -110,9 +113,9 @@ deploy:
 
 Gordon auto-detects the version from `$CI_COMMIT_TAG`.
 
-## Pipeline Examples
+### Pipeline Examples
 
-### Deploy on Tag Push
+#### Deploy on Tag Push
 
 ```yaml
 stages:
@@ -136,7 +139,7 @@ deploy:
     - if: $CI_COMMIT_TAG
 ```
 
-### Continuous Deployment
+#### Continuous Deployment
 
 Deploy on every push to main:
 
@@ -159,7 +162,7 @@ deploy:
     - if: $CI_COMMIT_BRANCH == "main"
 ```
 
-### Manual Deployment
+#### Manual Deployment
 
 ```yaml
 deploy:
@@ -179,7 +182,7 @@ deploy:
   when: manual
 ```
 
-### With Build Arguments
+#### With Build Arguments
 
 ```yaml
 deploy:
@@ -202,7 +205,7 @@ deploy:
     - if: $CI_COMMIT_TAG
 ```
 
-## Alternative: Docker-based Pipeline
+### Alternative: Docker-based Pipeline
 
 For environments where installing the Gordon binary is not desired:
 
@@ -223,7 +226,7 @@ deploy:
 This requires additional CI/CD variables: `GORDON_REGISTRY` and `GORDON_USERNAME`.
 Pushing only stores the image; deploy explicitly with `gordon apps deploy` afterwards.
 
-## Version Detection
+### Version Detection
 
 Gordon automatically detects the version tag from GitLab CI environment variables:
 

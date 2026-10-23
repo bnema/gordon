@@ -1,10 +1,21 @@
 # Deployment Overview
 
-Gordon deploys apps in two explicit steps: push the image to its built-in registry, then apply the app manifest and deploy. Push transfers OCI content only — it never deploys, creates routes, or modifies manifests.
+Gordon deploys apps in two explicit steps: push the image to its built-in registry, then activate it. Push transfers OCI content only — it never deploys, creates routes, or modifies manifests.
 
-## Recommended: gordon images push + apps deploy
+## Recommended for CI: OIDC Digest Promotion
 
-`gordon images push --build --remote` builds, pushes, and stores the image from CI/CD pipelines. Activation is a separate explicit step with the Gordon CLI.
+The CI job uses its OIDC ID token on the [CI host](../config/server.md#ci-host), pushes the image, and runs exactly that digest in one service of an existing app. No long-lived Gordon token is stored in CI; a [promotion policy](../config/promotion.md) limits each identity to one app, service, and repository.
+
+```bash
+gordon images push web --build --tag v1.2.0 --remote https://ci.example.com --json >push.json
+gordon apps promote web --service web --image "$(jq -r .image push.json)" --remote https://ci.example.com
+```
+
+See [Generic CI](./generic-ci.md) for setup, the Docker + curl flow, and HTTP results.
+
+## Stored Token: gordon images push + apps deploy
+
+`gordon images push --build --remote` builds, pushes, and stores the image from CI/CD pipelines. Activation is a separate explicit step with the Gordon CLI. Use this when the runner has no OIDC identity or the app manifest itself changes.
 
 - Single secret (`GORDON_TOKEN`): auto-exchanges for a short-lived registry token
 - Auto-detects version from CI environment (`$GITHUB_REF`, `$CI_COMMIT_TAG`, `$BUILD_SOURCEBRANCH`, or `git describe`)
@@ -25,10 +36,11 @@ gordon apps deploy blog --remote https://gordon.example.com
 
 | Method | Best For | Secrets Needed | Registry Access | Deploy Control |
 |--------|----------|----------------|-----------------|----------------|
-| `gordon images push` + `apps deploy` (Recommended) | CI/CD pipelines | 1 (`GORDON_TOKEN`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
+| `gordon images push` + `apps promote` (OIDC) | CI/CD pipelines with an OIDC identity | None (job ID token) | Via CI host (HTTPS, push only) | One digest in one service |
+| `gordon images push` + `apps deploy` | CI/CD pipelines without OIDC | 1 (`GORDON_TOKEN`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 | `docker push` + `apps deploy` | Simple setups, existing Docker workflows | 2 (`username` + `token`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 
-### Method 1: gordon images push + apps deploy (Recommended)
+### Method 1: gordon images push + apps deploy
 
 The Gordon CLI handles authentication, image building, and registry upload in a single step. Deploy stays explicit.
 

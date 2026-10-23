@@ -336,13 +336,14 @@ If the outcome is unknown, check it with
 
 ### OIDC Mode
 
-Use `--remote https://ci.example.com` with `GORDON_OIDC_TOKEN`, or
+Use an https `--remote`, such as `https://ci.example.com`, with
+`GORDON_OIDC_TOKEN`, or
 `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`.
 The runner endpoint requires `--oidc-audience` or `GORDON_OIDC_AUDIENCE`;
 a non-empty `GORDON_OIDC_TOKEN` takes precedence. Gordon exchanges the JWT
 for a ci-access token and uses only promotion and by-key lookup routes,
-without admin verification. Stored-token mode remains available when no
-OIDC source is set. The identity needs an exact
+without admin verification. OIDC mode refuses non-https remotes.
+Without an OIDC source, the CLI uses stored-token mode. The identity needs an exact
 [promotion policy](../config/promotion.md).
 
 ```bash
@@ -354,8 +355,12 @@ gordon apps promote blog --service web \
 JSON mode emits one final operation document (a no-op example):
 
 ```json
-{"op":"op-1","app":"blog","revision":"rev-2","status":"success","outcome":"success","services":{},"steps":[]}
+{"op":"op-1","app":"blog","revision":"rev-2","status":"success","outcome":"success","services":{},"steps":[],"effective":{"converged":true,"converged_revision":"rev-2","services":{"web":"rev-2"}}}
 ```
+
+`effective` is present when the promotion answers with a terminal result
+directly; a result reached by polling the operation omits it. Stored-token
+responses also list the app's `retained` resources; OIDC responses omit them.
 
 Stored-token callers submit to `POST /admin/apps/{app}/promote`; OIDC
 callers submit to `POST /-/ci/apps/{app}/promote`. Both accept `service`,

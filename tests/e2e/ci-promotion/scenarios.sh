@@ -6,6 +6,7 @@
 # Job side (real ermite ID tokens, workflow scenarios.yml):
 #   main   : wrong audience 401, policy subject 200, catalog/tags/pull/admin/
 #            mount 404, tag image 400, other service 403, replay -> same op
+#            (replays the digest web already runs: web keeps its version)
 #   other  : the branch subject is outside the policy -> 403
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -41,7 +42,12 @@ check plain-http-other-peer 403 "${plain:-none}"
 # (covered by Go tests; the job-side check exchanges only on the CI host)
 
 # --- job side ---------------------------------------------------------------
-digest="$(jq -r '.digest // empty' "$E2E_STATE/push-v1.json" 2>/dev/null || true)"
+# The replay check promotes the digest web runs now (v1 after setup, the
+# released version after run.sh release), so it never changes web.
+digest="$(gordon_admin apps show e2e-demo --json | jq -r '.active.services.web.digest // empty')" ||
+	die "cannot read the digest service web runs"
+[ -n "$digest" ] || die "service web of e2e-demo runs no digest: run setup.sh --with-gordon"
+log "replay digest (web now): $digest"
 dispatch_and_wait scenarios.yml main -f "digest=$digest" || fail=1
 id="$(jq -r .id "$E2E_STATE/runs/scenarios-main.json")"
 f="$(save_run_log "$id" scenarios-main)" || fail=1
@@ -51,14 +57,8 @@ grep -E 'SCENARIO' "$f" | sed 's/^/    /' >&2 || true
 # gets ID tokens, but its subject (ref:refs/heads/other) is not in the policy.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-git -c http.sslCAInfo="$E2E_STATE/ca/root.crt" \
-	-c "http.extraHeader=Authorization: Bearer $ERMITE_ADMIN_TOKEN" \
-	-c "http.curloptResolve=ermite.localtest.me:$E2E_EDGE_PORT:127.0.0.1" \
-	clone -q "https://ermite.localtest.me:$E2E_EDGE_PORT/$E2E_REPO.git" "$work/repo"
-git -C "$work/repo" -c http.sslCAInfo="$E2E_STATE/ca/root.crt" \
-	-c "http.extraHeader=Authorization: Bearer $ERMITE_ADMIN_TOKEN" \
-	-c "http.curloptResolve=ermite.localtest.me:$E2E_EDGE_PORT:127.0.0.1" \
-	push -qf origin main:other
+ermite_git clone -q "https://ermite.localtest.me:$E2E_EDGE_PORT/$E2E_REPO.git" "$work/repo"
+ermite_git -C "$work/repo" push -qf origin main:other
 dispatch_and_wait scenarios.yml other || fail=1
 id="$(jq -r .id "$E2E_STATE/runs/scenarios-other.json")"
 f="$(save_run_log "$id" scenarios-other)" || fail=1

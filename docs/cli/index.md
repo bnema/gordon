@@ -56,6 +56,7 @@ gordon apps list
 gordon apps show blog
 gordon apps diff blog
 gordon apps deploy blog
+gordon apps promote blog --service web --image web@sha256:<digest>
 gordon apps restart blog
 gordon apps stop blog
 gordon apps start blog

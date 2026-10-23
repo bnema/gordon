@@ -3,7 +3,8 @@
 # Prints "SCENARIO <name> PASS|FAIL (...)"; exits 1 when any check fails.
 #
 # EXPECT_SUBJECT_ALLOWED=1 on main (the policy subject), 0 on another branch.
-# DIGEST is a pushed manifest digest of e2e-demo (from release), optional.
+# DIGEST is the manifest digest service web runs (scenarios.sh reads it), so
+# the replay check never changes web. Optional.
 set -uo pipefail
 
 CI=https://ci.localtest.me
@@ -28,6 +29,13 @@ exchange() { # jwt -> prints http code, writes body to /tmp/exchange.json
 
 good_jwt="$(bash .github/scripts/oidc-token.sh "$AUD")"
 wrong_aud_jwt="$(bash .github/scripts/oidc-token.sh "https://wrong-audience.localtest.me")"
+# Without both ID tokens every check below would measure the wrong thing.
+for jwt in "$good_jwt" "$wrong_aud_jwt"; do
+	case "$jwt" in
+	eyJ?*) ;;
+	*) echo "SCENARIO id-tokens FAIL (could not get both OIDC ID tokens)"; exit 1 ;;
+	esac
+done
 
 # 1. wrong audience -> 401
 check wrong-audience 401 "$(exchange "$wrong_aud_jwt")"

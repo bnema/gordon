@@ -75,17 +75,17 @@ For runners without OIDC, the following image-transfer workflows use the
 main host and a stored token. Push does not deploy: apply the app manifest
 and run `gordon apps deploy` separately. Prefer OIDC promotion for CI.
 
-## Prerequisites
+### Prerequisites
 
 1. Gordon server running with registry authentication enabled; CI reaches the public Gordon HTTPS domain, not the loopback `server.registry_port`
 2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
-## Stored-Token CLI
+### Stored-Token CLI
 
 Use the `gordon images push` CLI for a lightweight build and push.
 
-### 1. Generate Token
+#### 1. Generate Token
 
 On your Gordon server:
 
@@ -98,7 +98,7 @@ gordon auth token generate \
 
 Save the token output.
 
-### 2. Add GitHub Secrets
+#### 2. Add GitHub Secrets
 
 In your repository: Settings → Secrets → Actions → New repository secret
 
@@ -107,7 +107,7 @@ In your repository: Settings → Secrets → Actions → New repository secret
 | `GORDON_TOKEN` | The generated token |
 | `GORDON_REMOTE` | `https://gordon.example.com` |
 
-### 3. Setup Gordon CLI
+#### 3. Setup Gordon CLI
 
 Add this step to your workflow to install the Gordon binary:
 
@@ -118,9 +118,9 @@ Add this step to your workflow to install the Gordon binary:
   #   version: latest  # default, or pin to e.g. v2.0.0
 ```
 
-### 4. Workflow Examples
+#### 4. Workflow Examples
 
-#### Deploy on Tag Push
+##### Deploy on Tag Push
 
 Gordon auto-detects the version from `$GITHUB_REF` (e.g., `refs/tags/v1.2.0` → `v1.2.0`).
 
@@ -148,7 +148,7 @@ jobs:
             --remote ${{ secrets.GORDON_REMOTE }}
 ```
 
-#### Continuous Deploy on Main
+##### Continuous Deploy on Main
 
 Deploy on every push to main. The version defaults to `latest` or the output of `git describe`.
 
@@ -180,7 +180,7 @@ jobs:
             --tag latest
 ```
 
-#### Manual Dispatch
+##### Manual Dispatch
 
 Allow manual deployments with an optional tag input:
 
@@ -220,7 +220,7 @@ jobs:
           gordon "${args[@]}"
 ```
 
-#### Monorepo
+##### Monorepo
 
 Deploy multiple services with separate `gordon images push` calls:
 
@@ -259,7 +259,7 @@ jobs:
             myapp-web
 ```
 
-#### With Build Args
+##### With Build Args
 
 Pass build arguments to the Docker build:
 
@@ -276,7 +276,7 @@ Pass build arguments to the Docker build:
 
 ```
 
-### setup-gordon Action Reference
+#### setup-gordon Action Reference
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -287,11 +287,11 @@ Pass build arguments to the Docker build:
 | `version` | The version actually installed |
 | `path` | Path to the installed binary |
 
-## Alternative: Docker-based Workflow
+### Alternative: Docker-based Workflow
 
 For environments where installing the Gordon binary is not desired, use Docker directly to build and push to the Gordon registry. Pushing only stores the image — deploy explicitly with `gordon apps deploy` afterwards.
 
-### Setup
+#### Setup
 
 Add these secrets to your repository:
 
@@ -301,7 +301,7 @@ Add these secrets to your repository:
 | `GORDON_USERNAME` | `github-actions` |
 | `GORDON_TOKEN` | The generated token |
 
-### Workflow
+#### Workflow
 
 ```yaml
 name: Deploy to Gordon
@@ -325,17 +325,17 @@ jobs:
           docker push ${{ secrets.GORDON_REGISTRY }}/myapp:${{ github.ref_name }}
 ```
 
-## Alternative: Gordon GitHub Action
+### Alternative: Gordon GitHub Action
 
 Use the official `bnema/gordon` action for a fully declarative workflow. This action handles login, build, and push in a single step.
 
-### Setup
+#### Setup
 
 Requires the same 3 secrets as the Docker-based workflow: `GORDON_REGISTRY`, `GORDON_USERNAME`, `GORDON_TOKEN`.
 
-### Workflow Examples
+#### Workflow Examples
 
-#### Deploy on Tag Push
+##### Deploy on Tag Push
 
 ```yaml
 name: Deploy to Gordon
@@ -359,7 +359,7 @@ jobs:
           password: ${{ secrets.GORDON_TOKEN }}
 ```
 
-#### Continuous Deployment
+##### Continuous Deployment
 
 Deploy on every push to main:
 
@@ -386,7 +386,7 @@ jobs:
           push-latest: 'true'
 ```
 
-#### Manual Deployment
+##### Manual Deployment
 
 Allow manual deployments with a custom tag:
 
@@ -417,7 +417,7 @@ jobs:
           tag: ${{ github.event.inputs.tag }}
 ```
 
-#### Monorepo Deployment
+##### Monorepo Deployment
 
 Deploy multiple services:
 
@@ -457,7 +457,7 @@ jobs:
           context: ./services/web
 ```
 
-#### With Build Arguments
+##### With Build Arguments
 
 ```yaml
 - uses: bnema/gordon/.github/actions/deploy@main
@@ -471,7 +471,7 @@ jobs:
       BUILD_DATE=${{ github.event.head_commit.timestamp }}
 ```
 
-#### Multi-Platform Build
+##### Multi-Platform Build
 
 ```yaml
 - uses: bnema/gordon/.github/actions/deploy@main
@@ -482,9 +482,9 @@ jobs:
     platforms: linux/amd64,linux/arm64
 ```
 
-### Action Reference
+#### Action Reference
 
-#### Inputs
+##### Inputs
 
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -499,14 +499,14 @@ jobs:
 | `platforms` | No | `linux/amd64` | Target platforms |
 | `build-args` | No | - | Build arguments |
 
-#### Outputs
+##### Outputs
 
 | Output | Description |
 |--------|-------------|
 | `image` | Full image name |
 | `tag` | Image tag |
 
-#### Deployment Summary
+##### Deployment Summary
 
 Add a deployment summary to your workflow:
 
