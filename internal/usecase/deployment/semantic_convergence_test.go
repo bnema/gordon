@@ -214,8 +214,12 @@ func TestDeploy_KeptServiceKeepsItsJoinedNetworks(t *testing.T) {
 }
 
 // TestDeploy_TargetedDeployStaysUnconvergedWhenAnotherServiceDiffers proves
-// semantic convergence still reports divergence: a targeted deploy of the
-// web service leaves a worker whose desired image changed unconverged.
+// a targeted deploy never converges an app whose desired revision also
+// changes another service: the real targeted-deploy path refuses it with
+// ErrAppStateConflict naming the other service's change, before it claims
+// an operation, resolves an image, or touches the runtime. ACTIVE (both
+// services, convergence, provenance) stays exactly as it was, and desired
+// remains pending against it.
 func TestDeploy_TargetedDeployStaysUnconvergedWhenAnotherServiceDiffers(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -226,10 +230,37 @@ func TestDeploy_TargetedDeployStaysUnconvergedWhenAnotherServiceDiffers(t *testi
 	next := testRevision("blog", web, worker)
 	next.Revision = "rev-2"
 	seedRevision(t, ctx, store, "intent-2", "rev-1", next)
+	before, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
 
-	active, _, err := store.LoadActive(ctx, "blog")
+	// Strict mocks without expectations: any image resolution or runtime
+	// call fails the test.
+	svc := deployment.NewService(deployment.Deps{
+		State: store, Runtime: outmocks.NewMockContainerRuntime(t), Images: outmocks.NewMockImageResolver(t),
+		Secrets: outmocks.NewMockSecretProvider(t),
+	}, zerowrap.Default())
+
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Service: "web", Op: "op-web"})
+	require.ErrorIs(t, err, domain.ErrAppStateConflict)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "service-targeted deploy refused")
+	assert.Contains(t, err.Error(), "rev-2")
+	assert.Contains(t, err.Error(), "service/worker/image", "the refusal names the other service's change")
+
+	after, ok, err := store.LoadActive(ctx, "blog")
 	require.NoError(t, err)
-	converged, err := domain.AppSpecConverged(next.Spec, active, func(string) (map[string]string, error) { return map[string]string{}, nil })
+	require.True(t, ok)
+	assert.Equal(t, before, after, "ACTIVE is untouched: no service, convergence, or provenance change")
+	assert.Equal(t, "c-worker", after.Services["worker"].Container)
+	assert.Equal(t, "docker.io/example/worker:1", after.Services["worker"].Image)
+	assert.Equal(t, "rev-0", after.ConvergedRevision)
+
+	_, found, err := store.LoadLatestOperation(ctx, "blog")
 	require.NoError(t, err)
-	assert.False(t, converged)
+	assert.False(t, found, "the refused deploy claimed no operation")
+
+	converged, err := domain.AppSpecConverged(next.Spec, after, func(string) (map[string]string, error) { return map[string]string{}, nil })
+	require.NoError(t, err)
+	assert.False(t, converged, "desired rev-2 stays pending")
 }
