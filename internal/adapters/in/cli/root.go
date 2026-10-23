@@ -180,6 +180,20 @@ func newVersionCmd() *cobra.Command {
 		Short: "Print version information",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
+			if cmd.Flags().Changed("remote") {
+				if remoteFlag == "" {
+					return fmt.Errorf("--remote requires a remote name or URL")
+				}
+				resolved, isRemote, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
+				if err != nil {
+					return err
+				}
+				if !isRemote {
+					return fmt.Errorf("explicit remote did not resolve to a server")
+				}
+				client := remote.NewClient(resolved.URL, remoteClientOptions(resolved.Token, resolved.InsecureTLS)...)
+				return runRemoteVersion(cmd, client, resolved.DisplayName())
+			}
 			if err := cliWriteLine(out, cliRenderTitle("Gordon "+Version)); err != nil {
 				return err
 			}
@@ -280,4 +294,38 @@ func SetVersionInfo(version, commit, date, dirty string) {
 	Commit = commit
 	BuildDate = date
 	Dirty = dirty
+}
+
+// runRemoteVersion prints compact build information for both peers.
+func runRemoteVersion(cmd *cobra.Command, client *remote.Client, displayName string) error {
+	info, err := client.VerifyAuth(cmd.Context())
+	if err != nil {
+		return fmt.Errorf("failed to get server version: %w", err)
+	}
+	out := cmd.OutOrStdout()
+	if err := writeVersionPeer(out, "Client", Version, Commit, BuildDate, Dirty, ""); err != nil {
+		return err
+	}
+	if info.Version == "" {
+		return cliWriteLine(out, "Server  unknown (server predates version reporting)  "+displayName)
+	}
+	if err := writeVersionPeer(out, "Server", info.Version, info.Commit, info.BuildDate, info.Dirty, displayName); err != nil {
+		return err
+	}
+	if Version != info.Version {
+		return cliWriteLine(out, cliRenderWarning("Client and server versions differ."))
+	}
+	return nil
+}
+
+func writeVersionPeer(out io.Writer, label, version, commit, date, dirty, displayName string) error {
+	metadata := commit + ", " + date
+	if dirty == "true" {
+		metadata += ", dirty"
+	}
+	line := fmt.Sprintf("%s  Gordon %s  (%s)", label, version, metadata)
+	if displayName != "" {
+		line += "  " + displayName
+	}
+	return cliWriteLine(out, line)
 }

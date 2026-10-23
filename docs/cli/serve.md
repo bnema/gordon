@@ -130,12 +130,20 @@ Reload and startup recovery never activate pending desired app state, re-resolve
 
 ## gordon version
 
-Print version information.
+Print the local CLI build information.
+
+With `--remote`/`-r`, print one line for the client and one for the server, with
+the remote name on the server line. Any admin token works (the version comes from
+`/admin/auth/verify`). A notice follows when the versions differ. A server too old
+to report its version prints `Server  unknown (server predates version reporting)`.
+
+Without the flag, `GORDON_REMOTE` and the active remote are ignored.
 
 ### Synopsis
 
 ```bash
 gordon version
+gordon version --remote production
 ```
 
 ### Output
@@ -144,6 +152,14 @@ gordon version
 Gordon v2.0.0
 Commit: abc1234
 Build Date: 2024-01-15
+Dirty: false
+```
+
+With `--remote`:
+
+```
+Client  Gordon v2.0.0  (abc1234, 2024-01-15)
+Server  Gordon v2.0.0  (abc1234, 2024-01-15)  production
 ```
 
 ## Related

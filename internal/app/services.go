@@ -43,6 +43,7 @@ import (
 	"github.com/bnema/gordon/internal/usecase/registrystate"
 	volumesSvc "github.com/bnema/gordon/internal/usecase/volumes"
 	"github.com/bnema/gordon/pkg/bytesize"
+	"github.com/bnema/gordon/pkg/version"
 )
 
 // services holds all the services used by the application.
@@ -423,6 +424,7 @@ func (si *serviceInit) initHandlers() {
 	}
 
 	si.svc.adminHandler = admin.NewHandler(admin.HandlerDeps{
+		BuildInfo:       admin.BuildInfo{Version: version.Version(), Commit: version.Commit(), BuildDate: version.BuildDate(), Dirty: version.Dirty()},
 		ConfigSvc:       si.svc.configSvc,
 		AuthSvc:         si.svc.authSvc,
 		ContainerSvc:    si.svc.containerSvc,

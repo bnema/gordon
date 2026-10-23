@@ -224,6 +224,7 @@ func TestHandler_AuthVerify_PublishesRegistryDomainForValidTokens(t *testing.T) 
 			handler := newTestHandler(t, func(d *HandlerDeps) {
 				d.ConfigSvc = configSvc
 				d.AuthSvc = authSvc
+				d.BuildInfo = BuildInfo{Version: "3.5.0", Commit: "abc", BuildDate: "date", Dirty: "false"}
 			})
 			authSvc.EXPECT().GetAuthStatus(mock.Anything).Return(&domain.AuthStatus{Valid: tt.valid, Subject: "ci"}, nil).Once()
 			if tt.valid {
@@ -239,6 +240,17 @@ func TestHandler_AuthVerify_PublishesRegistryDomainForValidTokens(t *testing.T) 
 			var resp dto.AuthVerifyResponse
 			require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 			assert.Equal(t, tt.wantDomain, resp.RegistryDomain)
+			if tt.valid {
+				assert.Equal(t, "3.5.0", resp.Version)
+				assert.Equal(t, "abc", resp.Commit)
+				assert.Equal(t, "date", resp.BuildDate)
+				assert.Equal(t, "false", resp.Dirty)
+			} else {
+				assert.Empty(t, resp.Version)
+				assert.Empty(t, resp.Commit)
+				assert.Empty(t, resp.BuildDate)
+				assert.Empty(t, resp.Dirty)
+			}
 		})
 	}
 }
