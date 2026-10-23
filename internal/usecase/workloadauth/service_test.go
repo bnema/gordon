@@ -36,7 +36,9 @@ type providerStub struct {
 	fetches     int
 	discoveries int
 	jwksURIs    []string
-	block       chan struct{} // when set, FetchJWKS waits for it to close
+	gate        chan struct{} // when set, FetchJWKS waits for it to close (or ctx)
+	entered     chan struct{} // when set, receives one value per FetchJWKS call
+	fetchCtxErr error         // ctx.Err() seen by the last FetchJWKS
 }
 
 func (p *providerStub) Discover(context.Context, domain.TrustedIssuer) (string, error) {
@@ -46,18 +48,34 @@ func (p *providerStub) Discover(context.Context, domain.TrustedIssuer) (string, 
 	return "https://issuer.example/discovered-keys", p.err
 }
 
-func (p *providerStub) FetchJWKS(_ context.Context, _ domain.TrustedIssuer, uri string) ([]byte, error) {
+func (p *providerStub) FetchJWKS(ctx context.Context, _ domain.TrustedIssuer, uri string) ([]byte, error) {
 	p.mu.Lock()
-	block := p.block
+	gate, entered := p.gate, p.entered
+	p.fetches++
+	p.jwksURIs = append(p.jwksURIs, uri)
 	p.mu.Unlock()
-	if block != nil {
-		<-block
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	if gate != nil {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.fetches++
-	p.jwksURIs = append(p.jwksURIs, uri)
+	p.fetchCtxErr = ctx.Err()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	return append([]byte(nil), p.raw...), p.err
+}
+
+func (p *providerStub) setGate(gate chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.gate = gate
 }
 
 func (p *providerStub) set(raw []byte, err error) {
@@ -132,17 +150,21 @@ func newFixture(t *testing.T, raw []byte, fetchErr error, policy domain.TrustedI
 	s := NewService(t.Context(), p, clk.now)
 	s.SetIssuers([]domain.TrustedIssuer{policy})
 	require.Eventually(t, func() bool { return p.fetchCount() == 1 }, time.Second, time.Millisecond)
-	waitIdle(s, policy.Issuer)
+	waitIdle(t, s, policy.Issuer)
 	return s, p, clk
 }
 
-// waitIdle blocks until no refresh is running for issuer.
-func waitIdle(s *Service, issuer string) {
+// waitIdle waits until no refresh is running for issuer.
+func waitIdle(t *testing.T, s *Service, issuer string) {
+	t.Helper()
 	s.mu.RLock()
 	state := s.issuers[issuer]
 	s.mu.RUnlock()
-	state.mu.Lock()
-	state.mu.Unlock() //nolint:staticcheck // empty critical section is the point
+	require.Eventually(t, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.refreshing == nil
+	}, 2*time.Second, time.Millisecond)
 }
 
 func generateKeys(t *testing.T) (*rsa.PrivateKey, *ecdsa.PrivateKey) {
@@ -347,8 +369,9 @@ func TestCacheTTLRefresh(t *testing.T) {
 	require.NoError(t, verify())
 	require.Equal(t, 1, p.fetchCount())
 	clk.advance(time.Second)
-	require.NoError(t, verify())
-	require.Equal(t, 2, p.fetchCount())
+	require.NoError(t, verify(), "expired TTL is served from cache while refreshing")
+	require.Eventually(t, func() bool { return p.fetchCount() == 2 }, time.Second, time.Millisecond)
+	waitIdle(t, s, testIssuer)
 }
 
 func TestStaleWindowThenFailClosed(t *testing.T) {
@@ -361,6 +384,7 @@ func TestStaleWindowThenFailClosed(t *testing.T) {
 	p.set(nil, errors.New("issuer offline"))
 	clk.advance(CacheTTL)
 	require.NoError(t, verify(), "stale keys stay usable while refresh fails")
+	waitIdle(t, s, testIssuer)
 	fetches := p.fetchCount()
 	for range 5 {
 		require.NoError(t, verify())
@@ -419,7 +443,8 @@ func TestDiscoveryOnlyWithoutJWKSURI(t *testing.T) {
 
 func TestSetIssuersNeverBlocksAndReplacesTrust(t *testing.T) {
 	rsaKey, _ := generateKeys(t)
-	p := &providerStub{raw: keySet(t, rsaJWK(rsaKey, "k1")), block: make(chan struct{})}
+	gate := make(chan struct{})
+	p := &providerStub{raw: keySet(t, rsaJWK(rsaKey, "k1")), gate: gate}
 	clk := &clock{}
 	clk.unix.Store(time.Now().Unix())
 	s := NewService(t.Context(), p, clk.now)
@@ -434,8 +459,9 @@ func TestSetIssuersNeverBlocksAndReplacesTrust(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("SetIssuers blocked on the network")
 	}
-	close(p.block)
+	close(gate)
 	require.Eventually(t, func() bool { return p.fetchCount() == 1 }, time.Second, time.Millisecond)
+	waitIdle(t, s, testIssuer)
 
 	token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "k1")
 	_, err := s.Verify(t.Context(), token)
@@ -444,7 +470,7 @@ func TestSetIssuersNeverBlocksAndReplacesTrust(t *testing.T) {
 	s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
 	_, err = s.Verify(t.Context(), token)
 	require.NoError(t, err, "an unchanged issuer keeps its cache")
-	waitIdle(s, testIssuer)
+	waitIdle(t, s, testIssuer)
 	require.Equal(t, 1, p.fetchCount())
 
 	changed := testPolicy()

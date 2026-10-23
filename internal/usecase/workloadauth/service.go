@@ -4,7 +4,8 @@ package workloadauth
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,22 +17,30 @@ import (
 )
 
 const (
-	// CacheTTL is how long fetched keys are used before a regular refresh.
+	// CacheTTL is how long fetched keys are used before a background refresh.
 	CacheTTL = time.Hour
-	// RefreshInterval bounds network refreshes (forced or failed) per issuer.
+	// RefreshInterval bounds key fetches per issuer: at most one fetch starts per
+	// interval, whatever triggered it (startup or reload warm-up, TTL expiry, an
+	// unknown kid, a retry after failure). A key rotated within this interval
+	// after a previous fetch is therefore picked up up to RefreshInterval late.
 	RefreshInterval = time.Minute
 	// StaleLimit is how long keys stay usable while refreshes keep failing.
 	StaleLimit = 24 * time.Hour
+	// refreshTimeout bounds one discovery + JWKS fetch (two adapter requests).
+	refreshTimeout = 20 * time.Second
 )
 
 var allowedAlgs = []string{"RS256", "ES256"}
 
+// issuerState is one issuer's key cache. mu guards the mutable fields and is
+// never held during network I/O.
 type issuerState struct {
-	policy    domain.TrustedIssuer // immutable after creation
-	mu        sync.Mutex           // serialises refreshes and guards the fields below
-	keys      []verificationKey
-	fetched   time.Time // last successful fetch
-	attempted time.Time // last fetch attempt, successful or not
+	policy     domain.TrustedIssuer // immutable after creation
+	mu         sync.Mutex
+	keys       []verificationKey
+	fetched    time.Time     // start of the last successful fetch
+	attempted  time.Time     // start of the last fetch, successful or not
+	refreshing chan struct{} // non-nil while a fetch runs; closed when it ends
 }
 
 // Service implements in.WorkloadIdentityService. Each issuer has its own key
@@ -44,8 +53,9 @@ type Service struct {
 	issuers  map[string]*issuerState
 }
 
-// NewService builds the verifier. ctx bounds background cache warm-ups and
-// should live as long as the daemon. now must be safe for concurrent use.
+// NewService builds the verifier. ctx is the service lifetime: key fetches run
+// on it (never on a caller's context) and stop when it is cancelled. now must
+// be safe for concurrent use.
 func NewService(ctx context.Context, provider out.OIDCProvider, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
@@ -53,14 +63,20 @@ func NewService(ctx context.Context, provider out.OIDCProvider, now func() time.
 	return &Service{ctx: ctx, provider: provider, now: now, issuers: make(map[string]*issuerState)}
 }
 
-// SetIssuers atomically replaces the trusted issuers and warms their caches in
-// the background; it never blocks on the network. Policies come from validated
+// SetIssuers atomically replaces the trusted issuers and starts background key
+// fetches; it never blocks on the network. Policies come from validated
 // configuration with defaults applied (an explicit zero clock skew is kept).
 func (s *Service) SetIssuers(issuers []domain.TrustedIssuer) {
 	next := make(map[string]*issuerState, len(issuers))
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, policy := range issuers {
-		if policy.Validate() != nil || policy.MaxTokenLifetime <= 0 {
+		if err := checkPolicy(policy); err != nil {
+			log := zerowrap.FromCtx(s.ctx)
+			log.Warn().Err(err).
+				Str(zerowrap.FieldLayer, "usecase").
+				Str("issuer", policy.Issuer).
+				Msg("trusted issuer ignored")
 			continue
 		}
 		state := s.issuers[policy.Issuer]
@@ -70,25 +86,31 @@ func (s *Service) SetIssuers(issuers []domain.TrustedIssuer) {
 		next[policy.Issuer] = state
 	}
 	s.issuers = next
-	s.mu.Unlock()
 	for _, state := range next {
-		go s.warm(state)
+		state.mu.Lock()
+		s.startRefreshLocked(state, false)
+		state.mu.Unlock()
 	}
 }
 
-func (s *Service) warm(state *issuerState) {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	_ = s.refreshLocked(s.ctx, state, false)
+func checkPolicy(policy domain.TrustedIssuer) error {
+	if err := policy.Validate(); err != nil {
+		return err
+	}
+	if policy.MaxTokenLifetime <= 0 {
+		return fmt.Errorf("max token lifetime must be positive")
+	}
+	return nil
 }
 
 // Verify returns the token principal. Invalid or untrusted tokens yield
 // domain.ErrInvalidToken; domain.ErrIdentityProviderUnavailable means no usable
-// keys exist for the issuer (empty cache or keys older than StaleLimit).
+// keys exist for the issuer (empty cache, keys older than StaleLimit, or ctx
+// ended while waiting for a fetch).
 func (s *Service) Verify(ctx context.Context, raw string) (domain.WorkloadPrincipal, error) {
 	var unverified jwt.RegisteredClaims
-	token, _, err := jwt.NewParser(jwt.WithValidMethods(allowedAlgs)).ParseUnverified(raw, &unverified)
-	if err != nil || (token.Method.Alg() != "RS256" && token.Method.Alg() != "ES256") {
+	token, _, err := jwt.NewParser().ParseUnverified(raw, &unverified)
+	if err != nil || !slices.Contains(allowedAlgs, token.Method.Alg()) {
 		return domain.WorkloadPrincipal{}, domain.ErrInvalidToken
 	}
 	s.mu.RLock()
@@ -118,30 +140,52 @@ func (s *Service) verifySigned(raw string, p domain.TrustedIssuer, key any) (dom
 	return domain.WorkloadPrincipal{Issuer: p.Issuer, Subject: claims.Subject}, nil
 }
 
-// key returns the verification key for token, refreshing the cache when it is
-// older than CacheTTL or, at most once per RefreshInterval, for an unknown kid.
+// key returns the verification key for token. It waits for an in-flight fetch
+// only when the cache cannot answer (no usable keys, or an unknown kid); ctx
+// bounds that wait, never the fetch itself.
 func (s *Service) key(ctx context.Context, state *issuerState, token *jwt.Token) (any, error) {
 	state.mu.Lock()
+	key, wait, err := s.lookupLocked(state, token, true)
+	state.mu.Unlock()
+	if wait == nil {
+		return key, err
+	}
+	select {
+	case <-wait:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %w", domain.ErrIdentityProviderUnavailable, ctx.Err())
+	}
+	state.mu.Lock()
 	defer state.mu.Unlock()
-	refreshErr := s.refreshLocked(ctx, state, false)
+	key, _, err = s.lookupLocked(state, token, false)
+	return key, err
+}
+
+// lookupLocked answers from the cache. With mayRefresh it starts a fetch when
+// the cache is older than CacheTTL (served meanwhile) or the kid is unknown,
+// and returns a channel to wait on when only that fetch can answer.
+func (s *Service) lookupLocked(state *issuerState, token *jwt.Token, mayRefresh bool) (any, <-chan struct{}, error) {
+	var inflight chan struct{}
+	if mayRefresh {
+		inflight = s.startRefreshLocked(state, false)
+	}
 	if !s.usableLocked(state) {
-		return nil, domain.ErrIdentityProviderUnavailable
+		if inflight != nil {
+			return nil, inflight, nil
+		}
+		return nil, nil, domain.ErrIdentityProviderUnavailable
 	}
 	key, known := selectKey(state.keys, token)
 	if key != nil {
-		return key, nil
+		return key, nil, nil
 	}
-	if known || refreshErr != nil {
-		return nil, domain.ErrInvalidToken
+	if !known && mayRefresh {
+		// An explicit kid absent from the cache may be a rotated key.
+		if inflight = s.startRefreshLocked(state, true); inflight != nil {
+			return nil, inflight, nil
+		}
 	}
-	// An explicit kid absent from the cache may be a rotated key.
-	if err := s.refreshLocked(ctx, state, true); err != nil && !s.usableLocked(state) {
-		return nil, domain.ErrIdentityProviderUnavailable
-	}
-	if key, _ := selectKey(state.keys, token); key != nil {
-		return key, nil
-	}
-	return nil, domain.ErrInvalidToken
+	return nil, nil, domain.ErrInvalidToken
 }
 
 func (s *Service) usableLocked(state *issuerState) bool {
@@ -175,31 +219,48 @@ func selectKey(keys []verificationKey, token *jwt.Token) (key any, known bool) {
 	return nil, false
 }
 
-// refreshLocked fetches the issuer keys when the cache is older than CacheTTL
-// (or always when force is set), at most once per RefreshInterval.
-func (s *Service) refreshLocked(ctx context.Context, state *issuerState, force bool) error {
+// startRefreshLocked returns the in-flight fetch, or starts one when the cache
+// is older than CacheTTL (always when force is set) and RefreshInterval has
+// passed since the last attempt. It returns nil when no fetch runs.
+func (s *Service) startRefreshLocked(state *issuerState, force bool) chan struct{} {
+	if state.refreshing != nil {
+		return state.refreshing
+	}
 	now := s.now()
 	if !force && len(state.keys) > 0 && now.Sub(state.fetched) < CacheTTL {
 		return nil
 	}
 	if !state.attempted.IsZero() && now.Sub(state.attempted) < RefreshInterval {
-		return errRefreshThrottled
+		return nil
 	}
 	state.attempted = now
+	done := make(chan struct{})
+	state.refreshing = done
+	go s.refresh(state, now, done)
+	return done
+}
+
+// refresh fetches keys on a context detached from any caller, bounded by the
+// service lifetime and refreshTimeout, then publishes them and closes done.
+func (s *Service) refresh(state *issuerState, started time.Time, done chan struct{}) {
+	ctx, cancel := context.WithTimeout(s.ctx, refreshTimeout)
+	defer cancel()
 	keys, err := s.fetch(ctx, state.policy)
 	if err != nil {
-		log := zerowrap.FromCtx(ctx)
+		log := zerowrap.FromCtx(s.ctx)
 		log.Warn().Err(err).
 			Str(zerowrap.FieldLayer, "usecase").
 			Str("issuer", state.policy.Issuer).
 			Msg("workload identity key refresh failed")
-		return domain.ErrIdentityProviderUnavailable
 	}
-	state.keys, state.fetched = keys, now
-	return nil
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if err == nil {
+		state.keys, state.fetched = keys, started
+	}
+	state.refreshing = nil
+	close(done)
 }
-
-var errRefreshThrottled = errors.New("key refresh throttled")
 
 func (s *Service) fetch(ctx context.Context, policy domain.TrustedIssuer) ([]verificationKey, error) {
 	uri := policy.JWKSURI
