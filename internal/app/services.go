@@ -48,6 +48,7 @@ import (
 
 // services holds all the services used by the application.
 type services struct {
+	workloadIdentitySvc   in.WorkloadIdentityService
 	promotionSnapshot     atomic.Pointer[PromotionSnapshot]
 	runtime               *docker.Runtime
 	eventBus              *eventbus.InMemory
@@ -356,7 +357,11 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 	if err := si.initApps(); err != nil {
 		return err
 	}
-	return si.initPromotionSnapshot()
+	if err := si.initPromotionSnapshot(); err != nil {
+		return err
+	}
+	si.initWorkloadIdentity()
+	return nil
 }
 
 func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {

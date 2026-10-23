@@ -9,6 +9,7 @@ pkgname: 'mocks'
 packages:
   github.com/bnema/gordon/internal/boundaries/out:
     interfaces:
+      OIDCProvider:
       ContainerRuntime:
       BlobStorage:
       ManifestStorage:
@@ -50,6 +51,7 @@ packages:
       ProxyService:
       ConfigService:
       AuthService:
+      WorkloadIdentityService:
       HealthService:
       HTTPProber:
       LogService:

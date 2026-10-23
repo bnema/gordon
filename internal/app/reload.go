@@ -342,6 +342,7 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 // app services that enforce them.
 func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
 	r.svc.promotionSnapshot.Store(&plan.promotion)
+	r.svc.reloadWorkloadIdentity()
 	if r.svc.appSvcImpl == nil {
 		return
 	}
