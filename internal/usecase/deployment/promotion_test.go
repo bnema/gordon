@@ -416,9 +416,11 @@ func TestStartPromotion_CASLoserWritesNothing(t *testing.T) {
 	}
 }
 
-// TestStartPromotion_ConcurrentPromotionsOneWins proves two promotions of
-// the same base serialize: both succeed in order or the loser conflicts,
-// and no request is accepted twice.
+// TestStartPromotion_ConcurrentPromotionsSerialize proves two concurrent
+// promotions of the same base serialize on the app lock: exactly one is
+// accepted and the other is refused as busy while the winner is unfinished.
+// It uses real bbolt (file I/O), so it runs outside synctest and joins the
+// goroutines with a WaitGroup.
 func TestStartPromotion_ConcurrentPromotionsSerialize(t *testing.T) {
 	h := newPromoHarness(t)
 	h.known["web@"+promoDigest("c")] = true
@@ -438,7 +440,8 @@ func TestStartPromotion_ConcurrentPromotionsSerialize(t *testing.T) {
 		if err == nil {
 			ok++
 		} else {
-			require.ErrorIs(t, err, domain.ErrAppStateConflict, "the loser sees the unfinished winner")
+			require.ErrorIs(t, err, domain.ErrAppBusy, "the loser sees the unfinished winner")
+			require.ErrorIs(t, err, domain.ErrAppStateConflict, "busy is still a conflict")
 		}
 	}
 	assert.Equal(t, 1, ok)

@@ -58,9 +58,16 @@ type PromotionInput struct {
 	Validate func(domain.AppSpec) error
 }
 
-// promotionPlan carries what the promotion read under the app lock.
+// ErrPromotionUnavailable marks a promotion the daemon cannot serve because
+// it is not wired for it (no installation registry or manifest store). It is
+// an internal fault, never a client error.
+var ErrPromotionUnavailable = errors.New("promotion unavailable")
+
+// promotionPlan carries what the promotion read under the app lock. cfg is
+// the single promotion generation the whole request uses.
 type promotionPlan struct {
 	input     PromotionInput
+	cfg       PromotionConfig
 	image     domain.PromotionImage
 	canonical string
 	request   domain.AppOperationRequest
@@ -68,9 +75,11 @@ type promotionPlan struct {
 	ownership domain.AppOwnership
 }
 
-// StartPromotion is the first phase of a promotion. Under the GC shared lease
-// and the app lock it converges an interrupted predecessor, authorizes the
-// principal, validates and canonicalizes the image, replays a known key,
+// StartPromotion is the first phase of a promotion. It validates and
+// canonicalizes the image and authorizes the principal before taking any
+// lock, so an unauthorized caller never contends on the app or triggers its
+// reconciliation. Under the GC shared lease and the app lock it then
+// converges an interrupted predecessor, replays a known key,
 // verifies the manifest exists in the installation registry, and checks the
 // app is converged except the target service. It then atomically accepts a
 // new desired revision whose only change is that service's image together
@@ -81,6 +90,10 @@ type promotionPlan struct {
 // writing desired state; a request whose digest is desired but not yet
 // active claims a deploy of the current desired revision for that service.
 func (s *Service) StartPromotion(ctx context.Context, input PromotionInput) (*StartDeployResult, error) {
+	plan, err := s.authorizePromotion(input)
+	if err != nil {
+		return nil, err
+	}
 	release, err := s.acquireAppContext(ctx, input.App)
 	if err != nil {
 		return nil, err
@@ -92,53 +105,48 @@ func (s *Service) StartPromotion(ctx context.Context, input PromotionInput) (*St
 		"app":                 input.App,
 		"service":             input.Service,
 	})
-	plan, replay, err := s.preparePromotionLocked(ctx, input)
+	replay, err := s.preparePromotionLocked(ctx, &plan)
 	if err != nil || replay != nil {
 		return replay, err
 	}
 	return s.claimPromotionLocked(ctx, plan)
 }
 
-// preparePromotionLocked runs every check that needs no state write. It
-// returns a replay result when the key already answered this request.
-func (s *Service) preparePromotionLocked(ctx context.Context, input PromotionInput) (promotionPlan, *StartDeployResult, error) {
-	if input.Op == "" || input.Validate == nil {
-		return promotionPlan{}, nil, fmt.Errorf("deployment: promotion requires an idempotency key and a spec validator: %w", domain.ErrInvalidAppSpec)
-	}
+// preparePromotionLocked runs every locked check that needs no state write.
+// It returns a replay result when the key already answered this request.
+func (s *Service) preparePromotionLocked(ctx context.Context, plan *promotionPlan) (*StartDeployResult, error) {
 	if err := s.deps.State.Recover(ctx); err != nil {
-		return promotionPlan{}, nil, fmt.Errorf("deployment: recover before promotion: %w", err)
+		return nil, fmt.Errorf("deployment: recover before promotion: %w", err)
 	}
-	if err := s.reconcileInterruptedDeploy(ctx, input.App); err != nil {
-		return promotionPlan{}, nil, err
+	if err := s.reconcileInterruptedDeploy(ctx, plan.input.App); err != nil {
+		return nil, err
 	}
-	plan, err := s.authorizePromotion(input)
-	if err != nil {
-		return promotionPlan{}, nil, err
-	}
-	if replay, err := s.replayPromotion(ctx, plan); err != nil || replay != nil {
-		return promotionPlan{}, replay, err
+	if replay, err := s.replayPromotion(ctx, *plan); err != nil || replay != nil {
+		return replay, err
 	}
 	if err := s.requireManifest(plan.image); err != nil {
-		return promotionPlan{}, nil, err
+		return nil, err
 	}
-	if err := s.loadPromotionBase(ctx, &plan); err != nil {
-		return promotionPlan{}, nil, err
-	}
-	return plan, nil, nil
+	return nil, s.loadPromotionBase(ctx, plan)
 }
 
-// authorizePromotion parses the image and checks the principal may promote
-// its repository into the service. Parsing comes first because the policy
-// grants a repository, not an image reference.
+// authorizePromotion is pure: it checks the request shape and wiring, parses
+// the image, and checks the principal may promote its repository into the
+// service. Parsing comes first because the policy grants a repository, not
+// an image reference. It reads the promotion generation once for the whole
+// request.
 func (s *Service) authorizePromotion(input PromotionInput) (promotionPlan, error) {
+	if input.Op == "" || input.Validate == nil {
+		return promotionPlan{}, fmt.Errorf("deployment: promotion requires an idempotency key and a spec validator: %w", domain.ErrInvalidAppSpec)
+	}
 	if err := domain.ValidateServiceName(input.Service); err != nil {
 		return promotionPlan{}, fmt.Errorf("deployment: promotion service: %w", domain.ErrInvalidAppSpec)
 	}
-	cfg := s.promotionConfig()
 	registry := s.deps.Registry.Domain
-	if registry == "" {
-		return promotionPlan{}, fmt.Errorf("deployment: promotion needs an installation registry: %w", domain.ErrInvalidPromotionImage)
+	if registry == "" || s.deps.Manifests == nil {
+		return promotionPlan{}, fmt.Errorf("deployment: no installation registry is wired: %w", ErrPromotionUnavailable)
 	}
+	cfg := s.promotionConfig()
 	image, err := domain.ParsePromotionImage(input.Image, append([]string{registry}, cfg.RegistryHosts...))
 	if err != nil {
 		return promotionPlan{}, err
@@ -149,7 +157,7 @@ func (s *Service) authorizePromotion(input PromotionInput) (promotionPlan, error
 	}
 	canonical := image.Canonical(registry)
 	return promotionPlan{
-		input: input, image: image, canonical: canonical,
+		input: input, cfg: cfg, image: image, canonical: canonical,
 		request: domain.AppOperationRequest{
 			Kind: domain.AppOperationKindPromote, App: input.App, Service: input.Service, Image: canonical,
 		},
@@ -184,9 +192,6 @@ func promotionReplay(plan promotionPlan, op domain.AppOperation) *StartDeployRes
 // registry. The caller holds the GC shared lease, so prune cannot delete the
 // manifest between this read and the durable journal that protects it.
 func (s *Service) requireManifest(image domain.PromotionImage) error {
-	if s.deps.Manifests == nil {
-		return fmt.Errorf("deployment: manifest storage unavailable: %w", domain.ErrManifestNotFound)
-	}
 	if _, _, err := s.deps.Manifests.GetManifest(image.Repository, image.Digest); err != nil {
 		if errors.Is(err, domain.ErrManifestNotFound) {
 			return fmt.Errorf("deployment: %s@%s: %w", image.Repository, image.Digest, domain.ErrManifestNotFound)
@@ -247,13 +252,15 @@ func specService(spec domain.AppSpec, name string) (domain.AppService, bool) {
 }
 
 // claimPromotionLocked applies the no-op rules, then accepts the candidate
-// revision and its journal in one store transaction.
+// revision and its journal in one store transaction. The no-op path checks
+// for an unfinished operation through claimOperation; the accepting path
+// checks it here, once.
 func (s *Service) claimPromotionLocked(ctx context.Context, plan promotionPlan) (*StartDeployResult, error) {
-	if err := s.refuseUnfinishedOperation(ctx, plan.input.App, plan.input.Op); err != nil {
-		return nil, err
-	}
 	if s.desiredRunsDigest(plan) {
 		return s.claimPromotionNoop(ctx, plan)
+	}
+	if err := s.refuseUnfinishedOperation(ctx, plan.input.App, plan.input.Op); err != nil {
+		return nil, err
 	}
 	rev, err := s.promotionRevision(plan)
 	if err != nil {
@@ -272,7 +279,8 @@ func (s *Service) claimPromotionLocked(ctx context.Context, plan promotionPlan) 
 	}
 	s.markOperationLive(plan.input.App, existing.Op)
 	log := zerowrap.FromCtx(ctx)
-	log.Info().Str("op", existing.Op).Str("revision", rev.Revision).Str("digest", plan.image.Digest).Msg("deployment: promotion accepted")
+	log.Info().Str("op", existing.Op).Str("revision", rev.Revision).Str("digest", plan.image.Digest).
+		Str("principal", existing.Principal).Msg("deployment: promotion accepted")
 	return &StartDeployResult{
 		Claim: DeployClaim{
 			App: plan.input.App, Op: existing.Op, Service: plan.input.Service, Revision: rev.Revision,
@@ -286,7 +294,7 @@ func (s *Service) claimPromotionLocked(ctx context.Context, plan promotionPlan) 
 // promoted repository and digest on an installation registry host.
 func (s *Service) desiredRunsDigest(plan promotionPlan) bool {
 	svc, _ := specService(plan.desired.Spec, plan.input.Service)
-	hosts := append([]string{s.deps.Registry.Domain}, s.promotionConfig().RegistryHosts...)
+	hosts := append([]string{s.deps.Registry.Domain}, plan.cfg.RegistryHosts...)
 	current, err := domain.ParsePromotionImage(svc.Image, hosts)
 	return err == nil && current == plan.image
 }

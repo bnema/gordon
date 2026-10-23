@@ -211,6 +211,9 @@ type AppOperationRequest struct {
 	Service  string `json:"service,omitempty"`
 }
 
+// AppOperationKindDeploy is the operation kind of a revision deploy.
+const AppOperationKindDeploy = "deploy"
+
 // AppOperationRequestFor builds the request identity of one app
 // mutation from the caller's inputs: the resolved revision is never
 // part of it, so a repeat of the same request always matches.

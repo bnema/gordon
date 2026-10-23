@@ -134,9 +134,13 @@ func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 // the live marker is released and the journal converged as interrupted, so it
 // can neither execute nor stay marked live forever.
 func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) error {
+	useCase := "Deploy"
+	if claim.Journal.Kind == domain.AppOperationKindPromote {
+		useCase = "Promote"
+	}
 	opFields := map[string]any{
 		zerowrap.FieldLayer:   "usecase",
-		zerowrap.FieldUseCase: "Deploy",
+		zerowrap.FieldUseCase: useCase,
 		"app":                 claim.App,
 		"op":                  claim.Op,
 	}

@@ -7,9 +7,6 @@ import (
 	"github.com/bnema/gordon/pkg/validation"
 )
 
-// AppOperationKindDeploy is the operation kind of a revision deploy.
-const AppOperationKindDeploy = "deploy"
-
 // PromotionImage is a parsed promotion reference: an installation registry
 // repository pinned to one exact sha256 digest.
 type PromotionImage struct {
