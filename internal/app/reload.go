@@ -280,6 +280,7 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 		}
 	}
 	r.applyAppPolicies(plan)
+	r.svc.publishPromotion(plan.promotion, cfg)
 	return nil
 }
 
@@ -341,8 +342,6 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 // applyAppPolicies publishes the reloaded bind, device, and capability policies to both
 // app services that enforce them.
 func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
-	r.svc.promotionSnapshot.Store(&plan.promotion)
-	r.svc.reloadWorkloadIdentity()
 	if r.svc.appSvcImpl == nil {
 		return
 	}

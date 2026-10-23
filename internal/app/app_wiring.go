@@ -25,6 +25,7 @@ import (
 // composition root stays decoupled from engine internals.
 type appDeployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	StartPromotion(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error)
 	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
@@ -112,6 +113,7 @@ func (si *serviceInit) initApps() error {
 		Traffic:     si.svc.appTrafficPublisher,
 		SecretFiles: secretFiles,
 		Guard:       guard,
+		Manifests:   si.svc.manifestStorage,
 	}, si.log).WithGCBarrier(si.svc.gcBarrier)
 	// createServices runs before any listener starts, so no deploy can
 	// race this sweep of secret files left by crashes or downgrades.

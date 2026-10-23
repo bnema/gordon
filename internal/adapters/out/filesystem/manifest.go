@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/validation"
 )
 
@@ -51,7 +52,7 @@ func (s *ManifestStorage) GetManifest(name, reference string) ([]byte, string, e
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, "", fmt.Errorf("manifest not found: %s/%s", name, reference)
+			return nil, "", fmt.Errorf("%w: %s/%s", domain.ErrManifestNotFound, name, reference)
 		}
 		return nil, "", fmt.Errorf("failed to read manifest: %w", err)
 	}

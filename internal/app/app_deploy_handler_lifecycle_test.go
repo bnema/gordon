@@ -39,6 +39,10 @@ func (e *blockingHandlerDeployEngine) StartDeploy(context.Context, deployment.De
 	}, nil
 }
 
+func (e *blockingHandlerDeployEngine) StartPromotion(context.Context, deployment.PromotionInput) (*deployment.StartDeployResult, error) {
+	return nil, domain.ErrPromotionDenied
+}
+
 func (e *blockingHandlerDeployEngine) ExecuteDeploy(ctx context.Context, _ deployment.DeployClaim) (*deployment.DeployResult, error) {
 	e.started <- ctx
 	<-e.release

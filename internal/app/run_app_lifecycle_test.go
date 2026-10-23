@@ -28,6 +28,10 @@ type fakeAppDeployEngine struct {
 	executeStarted chan context.Context
 }
 
+func (f *fakeAppDeployEngine) StartPromotion(context.Context, deployment.PromotionInput) (*deployment.StartDeployResult, error) {
+	return nil, domain.ErrPromotionDenied
+}
+
 func (f *fakeAppDeployEngine) StartDeploy(context.Context, deployment.DeployInput) (*deployment.StartDeployResult, error) {
 	return &deployment.StartDeployResult{
 		Owned: true,

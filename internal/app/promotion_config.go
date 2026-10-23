@@ -154,7 +154,7 @@ func (si *serviceInit) initPromotionSnapshot() error {
 			return err
 		}
 	}
-	si.svc.promotionSnapshot.Store(&snapshot)
+	si.svc.publishPromotion(snapshot, si.cfg)
 	return nil
 }
 

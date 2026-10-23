@@ -288,7 +288,7 @@ func (s *Service) loadClaim(ctx context.Context, claim DeployClaim) (domain.AppO
 	if op.App != claim.App || op.Op != claim.Op {
 		return domain.AppOperation{}, fmt.Errorf("deployment: claim does not identify app %q operation %q: %w", claim.App, claim.Op, domain.ErrAppStateConflict)
 	}
-	if op.Kind != "deploy" {
+	if op.Kind != domain.AppOperationKindDeploy && op.Kind != domain.AppOperationKindPromote {
 		return domain.AppOperation{}, fmt.Errorf("deployment: operation %q is %q, not a deploy: %w", claim.Op, op.Kind, domain.ErrAppStateConflict)
 	}
 	return op, nil

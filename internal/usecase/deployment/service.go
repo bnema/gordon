@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -55,6 +56,10 @@ type Deps struct {
 	// runtime create. The zero value still refuses host/shared network
 	// namespaces and host paths passed as volume names.
 	Guard domain.RuntimeGuard
+	// Manifests is the installation registry manifest store. Promotion
+	// verifies the promoted digest exists there before accepting it. Nil
+	// refuses every promotion.
+	Manifests out.ManifestStorage
 }
 
 // RegistryConfig carries the installation registry identity for pulls.
@@ -127,6 +132,9 @@ type Service struct {
 	// goroutine still owns.
 	liveMu  sync.Mutex
 	liveOps map[string]struct{}
+	// promotion is the published promotion policy generation, replaced
+	// atomically on reload. Nil denies every non-local promotion.
+	promotion atomic.Pointer[PromotionConfig]
 }
 
 // NewService creates the deployment engine. All deps are required;
@@ -561,11 +569,11 @@ func (s *Service) claimDeploymentLocked(ctx context.Context, input DeployInput) 
 	}
 
 	op := domain.AppOperation{
-		Kind:          "deploy",
+		Kind:          domain.AppOperationKindDeploy,
 		App:           input.App,
 		InputRevision: rev.Revision,
 		StartedAt:     time.Now().UTC(),
-		Request:       domain.AppOperationRequestFor("deploy", input.App, input.Revision, input.Service),
+		Request:       domain.AppOperationRequestFor(domain.AppOperationKindDeploy, input.App, input.Revision, input.Service),
 	}
 	op, owned, err := s.claimOperation(ctx, input.Op, op, []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending}})
 	if err != nil {
@@ -655,16 +663,8 @@ func (s *Service) convergeResumedCandidates(ctx context.Context, app string, op 
 // journal under a generated id.
 func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppOperation, steps []domain.AppOperationStep) (domain.AppOperation, bool, error) {
 	op.Steps = steps
-	// A journal is never opened while a different operation of this app is
-	// still unfinished: that predecessor must be reconciled first, or this
-	// claim would mask it and its leftover generation could stay untracked.
-	latest, found, err := s.deps.State.LoadLatestOperation(ctx, op.App)
-	if err != nil {
-		return domain.AppOperation{}, false, fmt.Errorf("deployment: load latest operation: %w", err)
-	}
-	if found && !latest.Terminal() && latest.Op != key {
-		return domain.AppOperation{}, false, fmt.Errorf(
-			"deployment: app %q has unfinished operation %s: %w", op.App, latest.Op, domain.ErrAppStateConflict)
+	if err := s.refuseUnfinishedOperation(ctx, op.App, key); err != nil {
+		return domain.AppOperation{}, false, err
 	}
 	if key == "" {
 		op.Op = newOpID()
@@ -682,6 +682,21 @@ func (s *Service) claimOperation(ctx context.Context, key string, op domain.AppO
 		return existing, false, nil
 	}
 	return op, true, nil
+}
+
+// refuseUnfinishedOperation refuses a new journal while a different
+// operation of this app is still unfinished: that predecessor must be
+// reconciled first, or the new claim would mask it and its leftover
+// generation could stay untracked.
+func (s *Service) refuseUnfinishedOperation(ctx context.Context, app, key string) error {
+	latest, found, err := s.deps.State.LoadLatestOperation(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: load latest operation: %w", err)
+	}
+	if found && !latest.Terminal() && latest.Op != key {
+		return fmt.Errorf("deployment: app %q has unfinished operation %s: %w", app, latest.Op, domain.ErrAppStateConflict)
+	}
+	return nil
 }
 
 // replayError reports a replayed key whose journal never reached a
