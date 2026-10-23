@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"slices"
 )
 
 type verificationKey struct {
@@ -15,11 +16,30 @@ type verificationKey struct {
 	public   any
 }
 
-type jwk struct{ Kty, Kid, Alg, Use, N, E, Crv, X, Y string }
+// jwk holds the RFC 7517/7518 members Gordon reads; pointers record presence.
+type jwk struct {
+	Kty    string    `json:"kty"`
+	Kid    string    `json:"kid"`
+	Alg    string    `json:"alg"`
+	Use    *string   `json:"use"`
+	KeyOps *[]string `json:"key_ops"`
+	N      string    `json:"n"`
+	E      string    `json:"e"`
+	Crv    string    `json:"crv"`
+	X      string    `json:"x"`
+	Y      string    `json:"y"`
+}
+
+// isSigningKey: use, when present, must be "sig"; key_ops, when present, must allow "verify".
+func (k jwk) isSigningKey() bool {
+	return (k.Use == nil || *k.Use == "sig") && (k.KeyOps == nil || slices.Contains(*k.KeyOps, "verify"))
+}
 
 // parseJWKS keeps only signing keys usable by RS256 (RSA ≥ 2048 bits) or ES256 (P-256).
 func parseJWKS(raw []byte) ([]verificationKey, error) {
-	var set struct{ Keys []jwk }
+	var set struct {
+		Keys []jwk `json:"keys"`
+	}
 	if err := json.Unmarshal(raw, &set); err != nil {
 		return nil, err
 	}
@@ -27,10 +47,10 @@ func parseJWKS(raw []byte) ([]verificationKey, error) {
 	seen := make(map[string]bool)
 	for _, k := range set.Keys {
 		public, alg := parsePublicKey(k)
-		if k.Use != "sig" || public == nil || (k.Alg != "" && k.Alg != alg) {
+		if !k.isSigningKey() || public == nil || (k.Alg != "" && k.Alg != alg) {
 			continue
 		}
-		if seen[k.Kid] {
+		if k.Kid != "" && seen[k.Kid] {
 			return nil, fmt.Errorf("ambiguous JWKS kid")
 		}
 		seen[k.Kid] = true

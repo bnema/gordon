@@ -502,7 +502,9 @@ func TestParseJWKS(t *testing.T) {
 		{"RSA alg mismatch", rsaJWK(rsaKey, "r"), "alg", "ES256"},
 		{"RSA alg RS512", rsaJWK(rsaKey, "r"), "alg", "RS512"},
 		{"use enc", rsaJWK(rsaKey, "r"), "use", "enc"},
-		{"use missing", rsaJWK(rsaKey, "r"), "use", ""},
+		{"use empty string", rsaJWK(rsaKey, "r"), "use", ""},
+		{"key_ops without verify", rsaJWK(rsaKey, "r"), "key_ops", []string{"encrypt"}},
+		{"key_ops empty", rsaJWK(rsaKey, "r"), "key_ops", []string{}},
 		{"EC curve P-384", ecJWK(ecKey, "e"), "crv", "P-384"},
 		{"EC point off curve", ecJWK(ecKey, "e"), "x", b64(make([]byte, 32))},
 		{"EC short coordinate", ecJWK(ecKey, "e"), "y", b64(make([]byte, 31))},
@@ -518,6 +520,18 @@ func TestParseJWKS(t *testing.T) {
 
 	_, err = parseJWKS(keySet(t, rsaJWK(rsaKey, "same"), ecJWK(ecKey, "same")))
 	require.Error(t, err, "duplicate kid is ambiguous")
+	keys, err := parseJWKS(keySet(t, rsaJWK(rsaKey, ""), ecJWK(ecKey, "")))
+	require.NoError(t, err, "several kid-less keys are allowed; tokens must then name a kid")
+	require.Len(t, keys, 2)
+
+	noUse := rsaJWK(rsaKey, "no-use")
+	delete(noUse, "use")
+	verifyOps := ecJWK(ecKey, "ops")
+	delete(verifyOps, "use")
+	verifyOps["key_ops"] = []string{"verify"}
+	keys, err = parseJWKS(keySet(t, noUse, verifyOps))
+	require.NoError(t, err, "keys without use, or with key_ops containing verify, are signing keys")
+	require.Len(t, keys, 2)
 	_, err = parseJWKS([]byte("{"))
 	require.Error(t, err)
 
@@ -525,7 +539,7 @@ func TestParseJWKS(t *testing.T) {
 	delete(noAlg, "alg")
 	enc := ecJWK(ecKey, "enc")
 	enc["use"] = "enc"
-	keys, err := parseJWKS(keySet(t, noAlg, enc, ecJWK(ecKey, "e")))
+	keys, err = parseJWKS(keySet(t, noAlg, enc, ecJWK(ecKey, "e")))
 	require.NoError(t, err)
 	require.Len(t, keys, 2, "unusable keys are skipped, usable ones kept")
 	require.Equal(t, "RS256", keys[0].alg)
