@@ -872,6 +872,10 @@ func runAppPromote(ctx context.Context, plane ControlPlane, app string, req dto.
 		if conflictErr, ok := renderAppOpConflict(out, "promote", app, key, err, jsonOut); ok {
 			return conflictErr
 		}
+		if isAppBusy(err) {
+			return fmt.Errorf("app-busy: another operation of %s is still running; nothing was promoted. "+
+				"Wait for it (gordon apps show %s), then run the promotion again; it uses a new key: %w", app, app, err)
+		}
 		return appMutationError("promote", app, key, err)
 	}
 	if resp.Status == dto.AppStatusRunning {
@@ -888,6 +892,12 @@ func runAppPromote(ctx context.Context, plane ControlPlane, app string, req dto.
 		return &OperationFailedError{App: app, Op: resp.Op, Outcome: resp.Outcome}
 	}
 	return nil
+}
+
+// isAppBusy reports a refusal because another operation of the app runs.
+func isAppBusy(err error) bool {
+	var httpErr *remote.HTTPError
+	return errors.As(err, &httpErr) && httpErr.Code == "app-busy"
 }
 
 // newAppRestartCmd creates `restart APP`: pinned digests, no re-resolve.

@@ -40,6 +40,21 @@ func TestClientPromoteApp_PostsBodyWithKey(t *testing.T) {
 	assert.Equal(t, dto.AppStatusRunning, resp.Status)
 }
 
+func TestClientPromoteApp_BusyCarriesCode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "5")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(dto.AppError{Error: "app-busy", Message: "app has an unfinished operation"})
+	}))
+	defer srv.Close()
+
+	_, _, err := NewClient(srv.URL).PromoteApp(context.Background(), "blog", dto.AppPromoteRequest{Service: "web", Image: "x"})
+	var httpErr *HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, "app-busy", httpErr.Code)
+}
+
 func TestClientPromoteApp_ConflictIsNotRetried(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

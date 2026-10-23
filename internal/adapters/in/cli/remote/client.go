@@ -336,6 +336,9 @@ func parseResponse(resp *http.Response, target any) error {
 type HTTPError struct {
 	StatusCode int
 	Status     string
+	// Code is the stable error code of a v3 app error envelope (for example
+	// app-busy); empty for other bodies.
+	Code       string
 	Body       string
 	Cause      string
 	Hint       string
@@ -387,9 +390,14 @@ func parseErrorResponse(resp *http.Response, body []byte) error {
 			msg = errResp.Error
 		}
 	}
+	code := ""
+	if errResp.Message != "" {
+		code = errResp.Error
+	}
 	return &HTTPError{
 		StatusCode: resp.StatusCode,
 		Status:     resp.Status,
+		Code:       code,
 		Body:       msg,
 		Cause:      errResp.Cause,
 		Hint:       errResp.Hint,

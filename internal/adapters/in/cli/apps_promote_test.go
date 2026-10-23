@@ -115,6 +115,16 @@ func TestRunAppPromote_ConflictIsNotRetried(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "state-conflict")
 	})
+	t.Run("busy app", func(t *testing.T) {
+		plane := appPlane(t)
+		busy := &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "app-busy", Body: "app has an unfinished operation"}
+		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(nil, "key-1", busy).Once()
+		var out, errOut bytes.Buffer
+		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false)
+		require.ErrorAs(t, err, &busy)
+		assert.Contains(t, err.Error(), "app-busy")
+		assert.Contains(t, err.Error(), "new key")
+	})
 	t.Run("ambiguous outcome", func(t *testing.T) {
 		plane := appPlane(t)
 		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(nil, "key-1",

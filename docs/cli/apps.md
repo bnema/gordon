@@ -325,6 +325,9 @@ their provenance.
 The command polls the operation by key like `apps deploy` and exits 0 only
 when the promotion succeeds. It never retries: on a conflict (HTTP 409), for
 example a concurrent apply or a changed `--expected-revision`, it exits 1.
+When another operation of the app is still running (`app-busy`, with
+`Retry-After`), nothing was promoted: run the command again later; each run
+uses a new key.
 If the outcome is unknown, check it with
 `gordon apps operations show APP --key KEY` before promoting again.
 
