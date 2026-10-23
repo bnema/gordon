@@ -294,7 +294,7 @@ func (s *AppServiceImpl) summary(ctx context.Context, app string) (in.AppSummary
 		App:           app,
 		Desired:       desired.Revision,
 		DesiredStatus: desired.Status,
-		Pending:       desiredPending(desired.Revision, active, ok),
+		Pending:       s.desiredPending(ctx, desired, active, ok),
 		Stopped:       intent.Stopped,
 	}
 	if ok {
@@ -336,7 +336,7 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 		App:               app,
 		DesiredRevision:   desired.Revision,
 		DesiredStatus:     desired.Status,
-		Pending:           desiredPending(desired.Revision, active, ok),
+		Pending:           s.desiredPending(ctx, desired, active, ok),
 		Converged:         active.Converged,
 		ConvergedRevision: active.ConvergedRevision,
 		Services:          map[string]in.AppServiceView{},
@@ -368,14 +368,28 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 	return detail, nil
 }
 
-// desiredPending reports desired state the active revision has not
-// reached. It reads desired vs ACTIVE only: a journal outcome never
-// decides convergence.
-func desiredPending(desiredRevision string, active domain.AppActive, hasActive bool) bool {
-	if desiredRevision == "" {
+// desiredPending reports desired state ACTIVE has not reached. It reads
+// desired vs ACTIVE only: a journal outcome never decides convergence.
+// Convergence is semantic, the same predicate deploy publication records:
+// a service promoted alone (or kept unchanged) may carry another effective
+// revision than desired while running exactly what desired declares.
+func (s *AppServiceImpl) desiredPending(ctx context.Context, desired domain.AppDesiredRevision, active domain.AppActive, hasActive bool) bool {
+	if desired.Revision == "" {
 		return false
 	}
-	return !hasActive || !active.Converged || active.ConvergedRevision != desiredRevision
+	if !hasActive || len(active.Services) == 0 {
+		return true
+	}
+	if active.Converged && active.ConvergedRevision == desired.Revision {
+		return false
+	}
+	converged, err := domain.AppSpecConverged(desired.Spec, active, func(revision string) (map[string]string, error) {
+		if revision == desired.Revision {
+			return desired.Spec.Env, nil
+		}
+		return revisionEnv(ctx, s.store, active.App, revision)
+	})
+	return err != nil || !converged
 }
 
 // retainedView lists the resources the app owns and would retain on

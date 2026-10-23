@@ -879,13 +879,19 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 	if active.Services == nil {
 		active.Services = map[string]domain.AppEffectiveService{}
 	}
-	activatedBy, activatedAt := opID, time.Now().UTC()
+	activatedBy, activatedAt, effectiveRevision := opID, time.Now().UTC(), revision
 	if previous, ok := active.Services[p.name]; ok && result.Result == ServiceResultUnchanged {
-		// A kept container keeps the activation of the operation that created it.
+		// A kept container keeps the activation of the operation that created
+		// it. Its revision is kept too when the recorded spec is identical, so
+		// a deploy of another service leaves this one's provenance untouched;
+		// a backup-only change records the revision that declares it.
 		activatedBy, activatedAt = previous.ActivatedBy, previous.ActivatedAt
+		if domain.SameAppService(previous.Spec, p.spec) {
+			effectiveRevision = previous.EffectiveRevision
+		}
 	}
 	active.Services[p.name] = domain.AppEffectiveService{
-		EffectiveRevision: revision,
+		EffectiveRevision: effectiveRevision,
 		ActivatedBy:       activatedBy,
 		ActivatedAt:       activatedAt,
 		Image:             p.spec.Image,
@@ -895,17 +901,8 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 		BackendBinds:      result.BackendBinds,
 		UDPBackendBinds:   result.UDPBackendBinds,
 	}
-	active.ConvergedRevision = revision
-	converged := true
-	for _, svc := range active.Services {
-		if svc.EffectiveRevision != revision {
-			converged = false
-			break
-		}
-	}
-	active.Converged = converged
-	if converged {
-		active.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	if err := s.recordConvergence(ctx, app, revision, p, &active); err != nil {
+		return err
 	}
 	if err := s.deps.State.SaveActive(ctx, active); err != nil {
 		return fmt.Errorf("deployment: publish active: %w", err)
@@ -914,6 +911,35 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 		return err
 	}
 	return s.clearSupersededMarker(ctx, app, p.name, result)
+}
+
+// recordConvergence updates the convergence record of ACTIVE after one
+// service was published for revision. ACTIVE is converged on revision when
+// every effective service equals the revision's service semantically, with
+// the revision's shared networks, whatever revision activated each service.
+// A recovery rebuild (no revision spec) republishes an unchanged effective
+// service and keeps the record as it was.
+func (s *Service) recordConvergence(ctx context.Context, app, revision string, p pinnedService, active *domain.AppActive) error {
+	if p.revisionSpec == nil {
+		return nil
+	}
+	candidate := *active
+	candidate.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
+	converged, err := domain.AppSpecConverged(*p.revisionSpec, candidate, func(id string) (map[string]string, error) {
+		if id == revision {
+			return p.revisionSpec.Env, nil
+		}
+		return s.revisionEnv(ctx, app, id)
+	})
+	if err != nil {
+		return fmt.Errorf("deployment: compute convergence: %w", err)
+	}
+	active.ConvergedRevision = revision
+	active.Converged = converged
+	if converged {
+		active.Networks = candidate.Networks
+	}
+	return nil
 }
 
 // clearSupersededMarker clears the recovery inhibition of the generation a

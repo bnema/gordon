@@ -2,6 +2,7 @@ package apps_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,4 +189,51 @@ func TestAppService_List_SkipsRetiredNamesAndReportsReadModel(t *testing.T) {
 	assert.Equal(t, "rev-1", summaries[0].Active)
 	assert.True(t, summaries[0].Pending)
 	assert.Equal(t, domain.AppOutcomePartial, summaries[0].LastOutcome)
+}
+
+// TestAppService_Show_SemanticConvergenceIsNotPending proves pending reads
+// desired vs ACTIVE semantically: a service kept from an older revision
+// whose spec and app env equal desired does not make the app pending, while
+// a real difference still does.
+func TestAppService_Show_SemanticConvergenceIsNotPending(t *testing.T) {
+	web := domain.AppService{Name: "web", Image: "registry.example.com/web@sha256:" + strings.Repeat("a", 64)}
+	worker := domain.AppService{Name: "worker", Image: "registry.example.com/worker:1"}
+	desired := domain.AppDesiredRevision{App: "blog", Revision: "rev-2", Spec: domain.AppSpec{
+		Name: "blog", Env: map[string]string{"MODE": "prod"}, Services: []domain.AppService{web, worker},
+	}}
+	for _, tc := range []struct {
+		name        string
+		workerImage string
+		pending     bool
+	}{
+		{name: "kept service equals desired", workerImage: worker.Image},
+		{name: "kept service differs", workerImage: "registry.example.com/worker:0", pending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := newMockAppState(t)
+			svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+			keptWorker := worker
+			keptWorker.Image = tc.workerImage
+			store.EXPECT().AppExists(mock.Anything, "blog").Return(true, nil).Once()
+			store.EXPECT().LoadDesired(mock.Anything, "blog").Return(desired, true, nil).Once()
+			store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
+				App: "blog", Converged: false, ConvergedRevision: "rev-2",
+				Services: map[string]domain.AppEffectiveService{
+					"web":    {EffectiveRevision: "rev-2", Spec: web},
+					"worker": {EffectiveRevision: "rev-1", Spec: keptWorker},
+				},
+			}, true, nil).Once()
+			store.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{
+				App: "blog", Revision: "rev-1", Spec: domain.AppSpec{Name: "blog", Env: map[string]string{"MODE": "prod"}},
+			}, nil).Maybe()
+			store.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil).Once()
+			store.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-1"}, nil).Once()
+			store.EXPECT().LoadLatestOperation(mock.Anything, "blog").Return(domain.AppOperation{}, false, nil).Once()
+
+			detail, err := svc.Show(ctx, "blog")
+			require.NoError(t, err)
+			assert.Equal(t, tc.pending, detail.Pending)
+		})
+	}
 }

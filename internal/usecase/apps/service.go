@@ -474,19 +474,25 @@ type revisionLoader interface {
 // diffing, including the app env of the revisions services run from.
 func activeSpec(ctx context.Context, store revisionLoader, active domain.AppActive, desiredEnv map[string]string) (domain.AppSpec, error) {
 	spec, err := domain.ActiveAppSpec(active, desiredEnv, func(revision string) (map[string]string, error) {
-		rev, err := store.LoadRevision(ctx, active.App, revision)
-		if errors.Is(err, domain.ErrAppRevisionNotFound) {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, err
-		}
-		return rev.Spec.Env, nil
+		return revisionEnv(ctx, store, active.App, revision)
 	})
 	if err != nil {
 		return domain.AppSpec{}, fmt.Errorf("apps: rebuild active spec: %w", err)
 	}
 	return spec, nil
+}
+
+// revisionEnv returns the app env of a stored revision, or nil when the
+// revision was garbage-collected.
+func revisionEnv(ctx context.Context, store revisionLoader, app, revision string) (map[string]string, error) {
+	rev, err := store.LoadRevision(ctx, app, revision)
+	if errors.Is(err, domain.ErrAppRevisionNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rev.Spec.Env, nil
 }
 
 // specsEqual compares normalized specs for no-op detection.

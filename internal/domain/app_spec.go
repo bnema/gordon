@@ -1350,3 +1350,28 @@ func appendCapabilityChanges(changed []string, name string, desired, effective [
 	}
 	return changed
 }
+
+// AppSpecConverged reports whether every effective service of active equals
+// its desired service semantically, independent of the revision identifiers
+// that activated each service. Service sets, service specs, and shared
+// networks are compared first without reading any revision; the app env of
+// each effective revision is read through revisionEnv only when the structure
+// already matches.
+func AppSpecConverged(desired AppSpec, active AppActive, revisionEnv func(string) (map[string]string, error)) (bool, error) {
+	structural, err := ActiveAppSpec(active, desired.Env, func(string) (map[string]string, error) { return desired.Env, nil })
+	if err != nil {
+		return false, err
+	}
+	if !emptyDiff(DiffAppSpec(desired, structural)) {
+		return false, nil
+	}
+	effective, err := ActiveAppSpec(active, desired.Env, revisionEnv)
+	if err != nil {
+		return false, err
+	}
+	return emptyDiff(DiffAppSpec(desired, effective)), nil
+}
+
+func emptyDiff(diff AppDiff) bool {
+	return len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) == 0
+}

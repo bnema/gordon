@@ -520,6 +520,11 @@ type pinnedService struct {
 	runtimeImage string
 	appEnv       map[string]string
 	appNetworks  []domain.AppSharedNetwork
+	// revisionSpec is the whole spec of the revision a deploy activates; ACTIVE
+	// converges when every effective service matches it semantically. Nil for
+	// a recovery rebuild, which republishes an unchanged effective service
+	// and leaves the convergence record as it was.
+	revisionSpec *domain.AppSpec
 	// sharedNetworks are the declared shared-network memberships this
 	// service joins. The private incarnation network is derived from the
 	// app UUID at create time so recovery and deploy agree.
@@ -852,6 +857,7 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 			name: svc.Name, spec: svc, digest: digest, runtimeImage: runtimeImage, appEnv: appEnv,
 			appNetworks:    append([]domain.AppSharedNetwork(nil), rev.Spec.Networks...),
 			sharedNetworks: domain.AppServiceSharedNetworks(rev.Spec, svc.Name),
+			revisionSpec:   &rev.Spec,
 		})
 	}
 	if err := s.recheckReservations(ctx, app, rev); err != nil {
