@@ -694,7 +694,7 @@ func (s *Service) refuseUnfinishedOperation(ctx context.Context, app, key string
 		return fmt.Errorf("deployment: load latest operation: %w", err)
 	}
 	if found && !latest.Terminal() && latest.Op != key {
-		return fmt.Errorf("deployment: app %q has unfinished operation %s: %w", app, latest.Op, domain.ErrAppStateConflict)
+		return fmt.Errorf("deployment: app %q has unfinished operation %s: %w", app, latest.Op, domain.ErrAppBusy)
 	}
 	return nil
 }

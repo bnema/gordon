@@ -100,6 +100,10 @@ var (
 	ErrAppStateCorrupt      = errors.New("app state is corrupt")
 	ErrAppStateIncompatible = errors.New("app state format is not supported by this binary")
 	ErrAppStateConflict     = errors.New("app state conflict")
+	// ErrAppBusy marks a mutation refused because another operation of the
+	// app is still unfinished. It is also an ErrAppStateConflict; unlike a
+	// CAS loss or a key reuse, a client may retry later with a new key.
+	ErrAppBusy error = busyError{}
 	// ErrAppNotFound marks a lifecycle mutation of a name that has no
 	// live app identity at all. It is distinct from a missing revision
 	// or operation on a known app.
@@ -180,3 +184,10 @@ var (
 	// Traffic errors
 	ErrTrafficStatusUnavailable = errors.New("traffic status unavailable")
 )
+
+// busyError is ErrAppBusy: it also matches ErrAppStateConflict so every
+// existing conflict check keeps treating it as a conflict.
+type busyError struct{}
+
+func (busyError) Error() string        { return "app has an unfinished operation" }
+func (busyError) Is(target error) bool { return target == ErrAppStateConflict }
