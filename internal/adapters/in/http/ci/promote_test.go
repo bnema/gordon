@@ -132,3 +132,18 @@ func TestOperationByKey_ScopedToPrincipal(t *testing.T) {
 	rec = h.serve(lookup(h.ciToken(webPrincipal), "/-/ci/apps/web/operations/by-key/key-1"))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+func TestPromote_KeyRoundTrip(t *testing.T) {
+	h := newHarness(t)
+	key := "AZaz09-_.~"
+	token := h.ciToken(webPrincipal)
+	op := runningOp(key)
+	h.apps.EXPECT().Promote(mock.Anything, mock.MatchedBy(func(input in.PromoteInput) bool { return input.IdempotencyKey == key })).Return(op, nil).Once()
+	h.apps.EXPECT().Show(mock.Anything, "web").Return(nil, domain.ErrAppNotFound).Maybe()
+	h.apps.EXPECT().PrincipalOperationByKey(mock.Anything, "web", key, webPrincipal).Return(op, nil).Once()
+	require.Equal(t, http.StatusAccepted, h.serve(promoteRequest(token, key, promoteBody)).Code)
+	rec := h.serve(withBearer(request(http.MethodGet, "/-/ci/apps/web/operations/by-key/"+key, nil), token))
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, h.serve(promoteRequest(token, "a/b", promoteBody)).Code)
+	// The strict mock permits exactly one Promote call: rejection cannot create an operation.
+}

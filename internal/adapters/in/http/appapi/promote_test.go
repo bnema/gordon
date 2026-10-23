@@ -120,4 +120,8 @@ func TestValidIdempotencyKey(t *testing.T) {
 	assert.False(t, ValidIdempotencyKey(strings.Repeat("k", 129)))
 	assert.False(t, ValidIdempotencyKey("a b"))
 	assert.False(t, ValidIdempotencyKey("é"))
+	for _, key := range []string{"a/b", "a?b", "a#b", "a%b", "a+b", "a&b", ".", ".."} {
+		assert.False(t, ValidIdempotencyKey(key), key)
+	}
+	assert.True(t, ValidIdempotencyKey("AZaz09-_.~"))
 }

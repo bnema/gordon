@@ -71,14 +71,14 @@ func requireCanonicalFields(raw []byte) error {
 	return nil
 }
 
-// ValidIdempotencyKey reports whether key is a non-empty printable ASCII
-// token of at most 128 bytes.
+// ValidIdempotencyKey accepts URL-unreserved tokens of at most 128 bytes.
+// Dot segments are excluded so a key survives path routing unchanged.
 func ValidIdempotencyKey(key string) bool {
-	if key == "" || len(key) > 128 {
+	if key == "" || key == "." || key == ".." || len(key) > 128 {
 		return false
 	}
 	for _, char := range key {
-		if char < '!' || char > '~' {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.~", char) {
 			return false
 		}
 	}

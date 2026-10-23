@@ -172,3 +172,18 @@ func TestHandleAppPromote_LocalSocketIsLocalOwner(t *testing.T) {
 	assert.True(t, localPathAllowed(http.MethodPost, "/apps/blog/promote"))
 	assert.False(t, localPathAllowed(http.MethodGet, "/apps/blog/promote"))
 }
+
+func TestPromote_KeyRoundTrip(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	key := "AZaz09-_.~"
+	op := &domain.AppOperation{Op: key, App: "blog"}
+	appSvc.EXPECT().Promote(mock.Anything, mock.MatchedBy(func(input in.PromoteInput) bool { return input.IdempotencyKey == key })).Return(op, nil).Once()
+	appSvc.EXPECT().Show(mock.Anything, "blog").Return(nil, domain.ErrAppNotFound).Maybe()
+	appSvc.EXPECT().OperationByKey(mock.Anything, "blog", key).Return(op, nil).Once()
+	require.Equal(t, http.StatusAccepted, promoteRequest(t, handler, tokenCtx("ci-bot", "admin:apps:write"), promoteBody, key).Code)
+	rec := appsRequest(t, handler, http.MethodGet, "/admin/apps/blog/operations/by-key/"+key, nil, "admin:apps:read")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Equal(t, http.StatusBadRequest, promoteRequest(t, handler, tokenCtx("ci-bot", "admin:apps:write"), promoteBody, "a/b").Code)
+	// The strict mock permits exactly one Promote call: rejection cannot create an operation.
+}
