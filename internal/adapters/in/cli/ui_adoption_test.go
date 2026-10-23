@@ -40,6 +40,14 @@ func TestPresentationHelpers(t *testing.T) {
 }
 
 func TestUIAdoptionRuntimeSeams(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("PASSWORD_STORE_DIR", t.TempDir())
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("GORDON_REMOTE", "")
+	previousRemote := remoteFlag
+	remoteFlag = ""
+	t.Cleanup(func() { remoteFlag = previousRemote })
 	uiAdoptionSeamMu.Lock()
 	defer uiAdoptionSeamMu.Unlock()
 

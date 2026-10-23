@@ -32,8 +32,17 @@ type reloadTrigger interface {
 	Trigger(ctx context.Context) error
 }
 
-// Handler implements the HTTP handler for the admin API.
+// BuildInfo contains build metadata injected by the application.
+type BuildInfo struct {
+	Version   string
+	Commit    string
+	BuildDate string
+	Dirty     string
+}
+
+// Handler implements the admin API.
 type Handler struct {
+	buildInfo       BuildInfo
 	configSvc       in.ConfigService
 	authSvc         in.AuthService
 	containerSvc    in.ContainerService
@@ -111,6 +120,7 @@ func toVolumeBackupJobResponse(job domain.VolumeBackupJob) dto.VolumeBackupJob {
 
 // HandlerDeps contains all dependencies for the admin HTTP handler.
 type HandlerDeps struct {
+	BuildInfo       BuildInfo
 	ConfigSvc       in.ConfigService
 	AuthSvc         in.AuthService
 	ContainerSvc    in.ContainerService
@@ -132,6 +142,7 @@ type HandlerDeps struct {
 // NewHandler creates a new admin HTTP handler.
 func NewHandler(deps HandlerDeps) *Handler {
 	return &Handler{
+		buildInfo:       deps.BuildInfo,
 		configSvc:       deps.ConfigSvc,
 		authSvc:         deps.AuthSvc,
 		containerSvc:    deps.ContainerSvc,
@@ -931,6 +942,12 @@ func (h *Handler) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		Scopes:    status.Scopes,
 		ExpiresAt: status.ExpiresAt,
 		IssuedAt:  status.IssuedAt,
+	}
+	if status.Valid {
+		response.Version = h.buildInfo.Version
+		response.Commit = h.buildInfo.Commit
+		response.BuildDate = h.buildInfo.BuildDate
+		response.Dirty = h.buildInfo.Dirty
 	}
 	if status.Valid && h.configSvc != nil {
 		// Push clients need the registry host but not admin:status:read,
