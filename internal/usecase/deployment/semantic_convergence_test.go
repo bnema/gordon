@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/bnema/gordon/internal/adapters/out/appstate"
+	"github.com/bnema/gordon/internal/boundaries/out"
 	outmocks "github.com/bnema/gordon/internal/boundaries/out/mocks"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/deployment"
@@ -131,6 +132,83 @@ func TestDeploy_NetworkOnlyChangeConvergesOnlyWhenEveryMemberIsRepublished(t *te
 			converged, err := domain.AppSpecConverged(next.Spec, active, func(string) (map[string]string, error) { return map[string]string{}, nil })
 			require.NoError(t, err)
 			assert.Equal(t, tc.converged, converged, "desired is pending exactly when ACTIVE is unconverged")
+		})
+	}
+}
+
+// goneRevisionStore reports one revision as garbage-collected after its
+// first load: the deploy's keep decision still sees it, and the convergence
+// check that follows does not, as if retention collected it in between.
+type goneRevisionStore struct {
+	out.AppState
+	gone  string
+	loads int
+}
+
+func (s *goneRevisionStore) LoadRevision(ctx context.Context, app, revision string) (domain.AppDesiredRevision, error) {
+	if revision == s.gone {
+		s.loads++
+		if s.loads > 1 {
+			return domain.AppDesiredRevision{}, domain.ErrAppRevisionNotFound
+		}
+	}
+	return s.AppState.LoadRevision(ctx, app, revision)
+}
+
+// TestDeploy_KeptServiceKeepsItsJoinedNetworks is the regression for a
+// kept container keeping an older effective revision: rev-1 adds web and
+// worker to a shared network and only web is published; rev-2 also changes
+// the worker env. Web is kept unchanged with effective revision rev-1, whose
+// memberships already match, so the rev-2 deploy converges and ACTIVE adopts
+// the shared network. When rev-1 was garbage-collected, web's membership
+// cannot be proven and convergence fails closed.
+func TestDeploy_KeptServiceKeepsItsJoinedNetworks(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		gcRev1    bool
+		converged bool
+	}{
+		{name: "kept member converges", converged: true},
+		{name: "effective revision collected fails closed", gcRev1: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newPromoHarness(t)
+			shared := []domain.AppSharedNetwork{{Network: "shared", Services: []string{"web", "worker"}}}
+			web, worker := promoServices()
+			rev1 := testRevision("blog", web, worker)
+			rev1.Revision = "rev-1"
+			rev1.Spec.Networks = shared
+			seedRevision(t, h.ctx, h.store, "intent-1", "rev-0", rev1)
+
+			h.failCreate = "worker"
+			_, _ = h.svc.Deploy(h.ctx, deployment.DeployInput{App: "blog", Op: "op-rev1"})
+			active := h.active()
+			require.False(t, active.Converged, "the partial rev-1 deploy is not converged")
+			require.Equal(t, "rev-1", active.Services["web"].EffectiveRevision)
+			require.Empty(t, active.Networks)
+
+			worker.Env = map[string]string{"MODE": "prod"}
+			rev2 := testRevision("blog", web, worker)
+			rev2.Revision = "rev-2"
+			rev2.Spec.Networks = shared
+			seedRevision(t, h.ctx, h.store, "intent-2", "rev-1", rev2)
+			h.failCreate = ""
+			if tc.gcRev1 {
+				h.state = &goneRevisionStore{AppState: h.store, gone: "rev-1"}
+				h.build()
+			}
+			_, err := h.svc.Deploy(h.ctx, deployment.DeployInput{App: "blog", Op: "op-rev2"})
+			require.NoError(t, err)
+
+			active = h.active()
+			assert.Equal(t, "rev-2", active.Services["worker"].EffectiveRevision)
+			assert.Equal(t, "rev-1", active.Services["web"].EffectiveRevision, "web was kept unchanged")
+			assert.Equal(t, tc.converged, active.Converged)
+			if tc.converged {
+				assert.Equal(t, shared, active.Networks)
+			} else {
+				assert.Empty(t, active.Networks, "unproven memberships are not adopted")
+			}
 		})
 	}
 }

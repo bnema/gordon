@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -924,7 +925,11 @@ func (s *Service) recordConvergence(ctx context.Context, app, revision string, p
 		return nil
 	}
 	candidate := *active
-	if networksPublished(*active, *p.revisionSpec, revision) {
+	published, err := s.networksPublished(ctx, app, *active, *p.revisionSpec, revision)
+	if err != nil {
+		return err
+	}
+	if published {
 		candidate.Networks = append([]domain.AppSharedNetwork(nil), p.appNetworks...)
 	}
 	converged, err := domain.AppSpecConverged(*p.revisionSpec, candidate, func(id string) (map[string]string, error) {
@@ -945,28 +950,66 @@ func (s *Service) recordConvergence(ctx context.Context, app, revision string, p
 }
 
 // networksPublished reports whether ACTIVE already runs the revision's shared
-// networks: every service whose memberships differ between ACTIVE and the
-// revision was published under the revision, so its container joined them.
-// Until then ACTIVE keeps its recorded networks and convergence compares
-// against those.
-func networksPublished(active domain.AppActive, spec domain.AppSpec, revision string) bool {
+// networks: every service whose memberships differ between the networks
+// ACTIVE records and the revision runs a container created with the target
+// memberships. A service's memberships are those of its own effective
+// revision: a kept container keeps the revision that created it, and
+// unchangedRefusal only keeps a container whose effective revision declares
+// the same memberships as the deployed one. Until every such service joined,
+// ACTIVE keeps its recorded networks and convergence compares against those.
+func (s *Service) networksPublished(ctx context.Context, app string, active domain.AppActive, spec domain.AppSpec, revision string) (bool, error) {
 	current := domain.AppSpec{Networks: active.Networks}
-	names := map[string]struct{}{}
-	for _, svc := range spec.Services {
-		names[svc.Name] = struct{}{}
-	}
-	for name := range active.Services {
-		names[name] = struct{}{}
-	}
-	for name := range names {
-		if reflect.DeepEqual(domain.AppServiceSharedNetworks(current, name), domain.AppServiceSharedNetworks(spec, name)) {
+	for _, name := range serviceNames(active, spec) {
+		target := domain.AppServiceSharedNetworks(spec, name)
+		if reflect.DeepEqual(domain.AppServiceSharedNetworks(current, name), target) {
 			continue
 		}
-		if svc, ok := active.Services[name]; !ok || svc.EffectiveRevision != revision {
-			return false
+		joined, err := s.serviceJoined(ctx, app, active, spec, revision, name, target)
+		if err != nil || !joined {
+			return false, err
 		}
 	}
-	return true
+	return true, nil
+}
+
+// serviceJoined reports whether the effective container of one service was
+// created with the target shared-network memberships, read from the
+// service's own effective revision. A missing service or a revision that was
+// garbage-collected fails closed: membership cannot be proven.
+func (s *Service) serviceJoined(ctx context.Context, app string, active domain.AppActive, spec domain.AppSpec, revision, name string, target []domain.AppSharedNetwork) (bool, error) {
+	eff, ok := active.Services[name]
+	if !ok || eff.EffectiveRevision == "" {
+		return false, nil
+	}
+	effSpec := spec
+	if eff.EffectiveRevision != revision {
+		rev, err := s.deps.State.LoadRevision(ctx, app, eff.EffectiveRevision)
+		if errors.Is(err, domain.ErrAppRevisionNotFound) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("deployment: load effective revision %s of service %q: %w", eff.EffectiveRevision, name, err)
+		}
+		effSpec = rev.Spec
+	}
+	return reflect.DeepEqual(domain.AppServiceSharedNetworks(effSpec, name), target), nil
+}
+
+// serviceNames lists every service named by ACTIVE or the spec, sorted.
+func serviceNames(active domain.AppActive, spec domain.AppSpec) []string {
+	set := map[string]struct{}{}
+	for _, svc := range spec.Services {
+		set[svc.Name] = struct{}{}
+	}
+	for name := range active.Services {
+		set[name] = struct{}{}
+	}
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // clearSupersededMarker clears the recovery inhibition of the generation a
