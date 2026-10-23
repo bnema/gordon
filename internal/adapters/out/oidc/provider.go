@@ -12,7 +12,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/netip"
 	"strings"
 	"time"
 
@@ -20,10 +19,10 @@ import (
 )
 
 const (
-	// MaxBodySize caps discovery and JWKS responses.
-	MaxBodySize = 256 << 10
-	// RequestTimeout bounds one discovery or JWKS request end to end.
-	RequestTimeout = 10 * time.Second
+	// maxBodySize caps discovery and JWKS responses.
+	maxBodySize = 256 << 10
+	// requestTimeout bounds one discovery or JWKS request end to end.
+	requestTimeout = 10 * time.Second
 )
 
 // ErrDestinationNotPublic is returned when a dialed address is not public and
@@ -110,12 +109,12 @@ func (p *Provider) get(ctx context.Context, issuer domain.TrustedIssuer, uri str
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("OIDC request to %s: status %d", uri, resp.StatusCode)
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxBodySize+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read OIDC response: %w", err)
 	}
-	if len(raw) > MaxBodySize {
-		return nil, fmt.Errorf("OIDC response from %s exceeds %d bytes", uri, MaxBodySize)
+	if len(raw) > maxBodySize {
+		return nil, fmt.Errorf("OIDC response from %s exceeds %d bytes", uri, maxBodySize)
 	}
 	return raw, nil
 }
@@ -129,13 +128,13 @@ func (p *Provider) client(allowPrivate bool) (*http.Client, func()) {
 			return p.dial(ctx, network, address, allowPrivate)
 		},
 		TLSClientConfig:       &tls.Config{RootCAs: p.rootCAs, MinVersion: tls.VersionTLS12},
-		TLSHandshakeTimeout:   RequestTimeout,
-		ResponseHeaderTimeout: RequestTimeout,
+		TLSHandshakeTimeout:   requestTimeout,
+		ResponseHeaderTimeout: requestTimeout,
 		ForceAttemptHTTP2:     true,
 	}
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   RequestTimeout,
+		Timeout:   requestTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("OIDC redirects are refused")
 		},
@@ -158,11 +157,11 @@ func (p *Provider) dial(ctx context.Context, network, address string, allowPriva
 		return nil, fmt.Errorf("OIDC host %s has no addresses", host)
 	}
 	for _, a := range addrs {
-		if !allowPrivate && !IsPublicIP(a.IP) {
+		if !allowPrivate && !isPublicIP(a.IP) {
 			return nil, fmt.Errorf("%w: %s resolves to %s", ErrDestinationNotPublic, host, a.IP)
 		}
 	}
-	dialer := &net.Dialer{Timeout: RequestTimeout}
+	dialer := &net.Dialer{Timeout: requestTimeout}
 	var lastErr error
 	for _, a := range addrs {
 		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(a.IP.String(), port))
@@ -172,34 +171,4 @@ func (p *Provider) dial(ctx context.Context, network, address string, allowPriva
 		lastErr = err
 	}
 	return nil, lastErr
-}
-
-var nonPublicPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),     // "this" network
-	netip.MustParsePrefix("100.64.0.0/10"), // carrier-grade NAT
-	netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
-	netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
-	netip.MustParsePrefix("240.0.0.0/4"),   // reserved, broadcast
-	netip.MustParsePrefix("64:ff9b::/96"),  // NAT64 can reach IPv4 private ranges
-}
-
-// IsPublicIP reports whether ip is a globally routable unicast address. It
-// rejects loopback, link-local (incl. 169.254.169.254), RFC 1918, 100.64/10,
-// ULA, unspecified, multicast and other reserved ranges.
-func IsPublicIP(ip net.IP) bool {
-	addr, ok := netip.AddrFromSlice(ip)
-	if !ok {
-		return false
-	}
-	addr = addr.Unmap()
-	if addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() ||
-		addr.IsInterfaceLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
-		return false
-	}
-	for _, prefix := range nonPublicPrefixes {
-		if prefix.Contains(addr) {
-			return false
-		}
-	}
-	return true
 }

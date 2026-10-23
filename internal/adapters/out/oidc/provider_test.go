@@ -148,14 +148,14 @@ func TestRedirectRefused(t *testing.T) {
 func TestBodyCap(t *testing.T) {
 	srv := newIssuerServer(t)
 	srv.mux.HandleFunc("/exact", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(strings.Repeat("a", MaxBodySize)))
+		_, _ = w.Write([]byte(strings.Repeat("a", maxBodySize)))
 	})
 	srv.mux.HandleFunc("/big", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(strings.Repeat("a", MaxBodySize+1)))
+		_, _ = w.Write([]byte(strings.Repeat("a", maxBodySize+1)))
 	})
 	raw, err := srv.provider().FetchJWKS(t.Context(), srv.policy(true), srv.base+"/exact")
 	require.NoError(t, err)
-	require.Len(t, raw, MaxBodySize)
+	require.Len(t, raw, maxBodySize)
 	_, err = srv.provider().FetchJWKS(t.Context(), srv.policy(true), srv.base+"/big")
 	require.ErrorContains(t, err, "exceeds")
 }
@@ -226,18 +226,41 @@ func TestUntrustedCertificateRefused(t *testing.T) {
 }
 
 func TestIsPublicIP(t *testing.T) {
-	public := []string{"93.184.215.14", "8.8.8.8", "1.1.1.1", "2606:4700::1111", "100.128.0.1", "172.32.0.1"}
+	public := []string{
+		"93.184.215.14", "8.8.8.8", "1.1.1.1", "2606:4700::1111", "100.128.0.1", "172.32.0.1",
+		// NAT64 (well-known and local-use) embedding a public IPv4 address.
+		"64:ff9b::808:808", "64:ff9b:1::808:808", "64:ff9b:1:ffff:ffff:ffff:808:808",
+		// 6to4 embedding a public IPv4 address (bits 16-48).
+		"2002:808:808::1",
+	}
 	private := []string{
 		"127.0.0.1", "127.1.2.3", "::1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.1",
 		"169.254.169.254", "169.254.0.1", "fe80::1", "100.64.0.1", "100.127.255.255", "fc00::1", "fd12::1",
 		"0.0.0.0", "::", "224.0.0.1", "ff02::1", "255.255.255.255", "::ffff:127.0.0.1", "::ffff:10.0.0.1",
-		"64:ff9b::a00:1", "198.18.0.1", "192.0.0.8",
+		"198.18.0.1", "192.0.0.8",
+		// NAT64 embedding non-public IPv4 addresses.
+		"64:ff9b::a00:1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "64:ff9b:1::6440:1",
+		// IPv4-compatible (deprecated) addresses, public or not.
+		"::808:808", "::7f00:1", "::a00:1",
+		// Site-local (deprecated).
+		"fec0::1", "feff::1",
+		// 6to4 embedding non-public IPv4 addresses.
+		"2002:7f00:1::1", "2002:a00:1::", "2002:a9fe:a9fe::1", "2002:c0a8:101::1",
+		// Teredo is always refused.
+		"2001::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2",
 	}
 	for _, ip := range public {
-		require.True(t, IsPublicIP(net.ParseIP(ip)), ip)
+		require.True(t, isPublicIP(net.ParseIP(ip)), ip)
 	}
 	for _, ip := range private {
-		require.False(t, IsPublicIP(net.ParseIP(ip)), ip)
+		require.False(t, isPublicIP(net.ParseIP(ip)), ip)
 	}
-	require.False(t, IsPublicIP(nil))
+	require.False(t, isPublicIP(nil))
+}
+
+func TestNAT64PrivateDestinationRefused(t *testing.T) {
+	srv := newIssuerServer(t)
+	srv.serveJWKS(`{}`)
+	_, err := srv.provider("64:ff9b::7f00:1").FetchJWKS(t.Context(), srv.policy(false), srv.base+"/keys")
+	require.ErrorIs(t, err, ErrDestinationNotPublic)
 }
