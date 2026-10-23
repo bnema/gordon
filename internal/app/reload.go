@@ -200,6 +200,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateRetiredAppConfig(c.v); err != nil {
 		return err
 	}
+	if err := validatePromotionConfig(c.v, reloadCfg); err != nil {
+		return err
+	}
 	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
 		return err
 	}
@@ -257,6 +260,7 @@ type reloadRuntime struct {
 
 // reloadPlan holds the values derived from one config before any apply.
 type reloadPlan struct {
+	promotion      PromotionSnapshot
 	containerCfg   container.Config
 	tlsConfig      *tls.Config
 	bindPolicies   map[string]domain.AppBindPolicy
@@ -282,6 +286,9 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, error) {
 	var plan reloadPlan
 	var err error
+	if plan.promotion, err = buildPromotionSnapshot(cfg); err != nil {
+		return plan, err
+	}
 	if r.svc.containerSvc != nil {
 		if plan.containerCfg, err = buildContainerServiceConfig(ctx, r.v, cfg, r.svc, r.log); err != nil {
 			return plan, err
@@ -334,6 +341,7 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 // applyAppPolicies publishes the reloaded bind, device, and capability policies to both
 // app services that enforce them.
 func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
+	r.svc.promotionSnapshot.Store(&plan.promotion)
 	if r.svc.appSvcImpl == nil {
 		return
 	}

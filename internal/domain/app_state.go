@@ -79,6 +79,7 @@ type AppListenerReservation struct {
 
 // AppDesiredRevision is one accepted desired revision.
 type AppDesiredRevision struct {
+	Promotion       *AppPromotionProvenance  `json:"promotion,omitempty"`
 	Revision        string                   `json:"revision"`
 	App             string                   `json:"app"`
 	Supersedes      string                   `json:"supersedes,omitempty"`
@@ -203,6 +204,7 @@ type AppOperationStep struct {
 // for a different request is rejected instead of silently replaying
 // another request's result. It never carries a secret value.
 type AppOperationRequest struct {
+	Image    string `json:"image,omitempty"`
 	Kind     string `json:"kind"`
 	App      string `json:"app"`
 	Revision string `json:"revision,omitempty"`
@@ -218,6 +220,7 @@ func AppOperationRequestFor(kind, app, revision, service string) AppOperationReq
 
 // AppOperation is one durable operation journal record.
 type AppOperation struct {
+	Principal     string             `json:"principal,omitempty"`
 	Op            string             `json:"op"`
 	Kind          string             `json:"kind"`
 	App           string             `json:"app"`

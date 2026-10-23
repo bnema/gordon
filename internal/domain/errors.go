@@ -5,6 +5,9 @@ import "errors"
 // Domain errors represent business-level errors that can occur in the system.
 // These errors are used across layers to communicate specific failure conditions.
 var (
+	ErrPromotionDenied             = errors.New("promotion denied")
+	ErrInvalidPromotionImage       = errors.New("invalid promotion image")
+	ErrIdentityProviderUnavailable = errors.New("identity provider unavailable")
 	// Container errors
 	ErrContainerNotFound   = errors.New("container not found")
 	ErrContainerExists     = errors.New("container already exists")

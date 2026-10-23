@@ -78,8 +78,11 @@ func (p *appTrafficPublisher) RebuildWithConfig(ctx context.Context, cfg Config)
 		return fmt.Errorf("traffic publisher: %w", err)
 	}
 	defer p.release()
+	if err := p.rebuild(ctx, cfg); err != nil {
+		return err
+	}
 	p.cfg = cfg
-	return p.rebuild(ctx, cfg)
+	return nil
 }
 
 // WithdrawService makes one service non-forwardable and republishes.
@@ -184,6 +187,9 @@ func (p *appTrafficPublisher) projectCandidate(ctx context.Context, cfg Config) 
 	candidate := apptraffic.NewHostIndex()
 	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg)); err != nil {
 		return nil, fmt.Errorf("project app host index: %w", err)
+	}
+	if err := validateCIAppHosts(cfg, candidate); err != nil {
+		return nil, err
 	}
 	return candidate, nil
 }

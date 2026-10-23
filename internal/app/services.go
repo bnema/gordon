@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -47,6 +48,7 @@ import (
 
 // services holds all the services used by the application.
 type services struct {
+	promotionSnapshot     atomic.Pointer[PromotionSnapshot]
 	runtime               *docker.Runtime
 	eventBus              *eventbus.InMemory
 	metrics               *telemetry.Metrics
@@ -351,7 +353,10 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 		return err
 	}
 	si.svc.trafficManager = trafficadapter.NewManager()
-	return si.initApps()
+	if err := si.initApps(); err != nil {
+		return err
+	}
+	return si.initPromotionSnapshot()
 }
 
 func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
