@@ -109,8 +109,8 @@ the submitting principal and requires a current policy for the app.
 
 ## HTTP Results and Retries
 
-Promotion requires an `Idempotency-Key`: 1–128 printable ASCII bytes without
-spaces or `/`. Use a URL-safe value for lookup. JSON accepts only `service`, `image`,
+Promotion requires an `Idempotency-Key`: 1–128 characters from
+`A–Z a–z 0–9 - _ . ~`, other than `.` or `..` alone. JSON accepts only `service`, `image`,
 and optional `expected_revision`, with a 4 KiB body limit.
 
 | Status | Meaning |

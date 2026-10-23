@@ -2,8 +2,10 @@ package app
 
 import (
 	"context"
+	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -163,6 +165,11 @@ func TestImagePolicy_SnapshotIsImmutable(t *testing.T) {
 // TestImagePolicy_ConcurrentReadsDuringReload runs readers against reloads
 // that alternate the CI domain. Under -race it proves the provider is safe
 // to read while a reload publishes; every read is one whole generation.
+//
+// Not synctest: the readers spin on an atomic snapshot and never block
+// durably, so synctest.Wait cannot observe them. Instead the test waits for
+// every reader to start, then for new reads after each reload, so reads are
+// guaranteed to overlap the reload sequence.
 func TestImagePolicy_ConcurrentReadsDuringReload(t *testing.T) {
 	v, first := withCIDomain(t, "ci.example.com")
 	_, second := withCIDomain(t, "ci2.example.com")
@@ -170,10 +177,15 @@ func TestImagePolicy_ConcurrentReadsDuringReload(t *testing.T) {
 	runtime := &reloadRuntime{v: v, svc: svc, log: zerowrap.Default()}
 	require.NoError(t, runtime.Apply(t.Context(), first))
 
+	const readerCount = 4
 	stop := make(chan struct{})
+	var started sync.WaitGroup
+	var reads atomic.Int64
 	var readers sync.WaitGroup
-	for range 4 {
+	started.Add(readerCount)
+	for range readerCount {
 		readers.Go(func() {
+			once := false
 			for {
 				select {
 				case <-stop:
@@ -181,19 +193,31 @@ func TestImagePolicy_ConcurrentReadsDuringReload(t *testing.T) {
 				default:
 				}
 				policy := svc.ImagePolicy()
-				require.Len(t, policy.InstallationAliases, 1)
-				alias := policy.InstallationAliases[0]
-				require.Contains(t, []string{"ci.example.com", "ci2.example.com"}, alias)
-				require.True(t, policy.IsInstallationImage(alias+"/web:v1"))
+				assert.Len(t, policy.InstallationAliases, 1)
+				if len(policy.InstallationAliases) == 1 {
+					alias := policy.InstallationAliases[0]
+					assert.Contains(t, []string{"ci.example.com", "ci2.example.com"}, alias)
+					assert.True(t, policy.IsInstallationImage(alias+"/web:v1"))
+				}
+				reads.Add(1)
+				if !once {
+					once = true
+					started.Done()
+				}
 			}
 		})
 	}
+	started.Wait()
 	for i := range 100 {
 		cfg := first
 		if i%2 == 0 {
 			cfg = second
 		}
+		before := reads.Load()
 		require.NoError(t, runtime.Apply(t.Context(), cfg))
+		for reads.Load() == before {
+			goruntime.Gosched()
+		}
 	}
 	close(stop)
 	readers.Wait()
