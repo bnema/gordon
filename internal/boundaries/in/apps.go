@@ -54,9 +54,21 @@ type AppService interface {
 	// owned orphans and the name stays reserved.
 	Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
+	// Promote runs exactly one registry digest in one service: it accepts a
+	// desired revision whose only change is that service image and starts
+	// its deploy, shaped like Deploy (a running journal for a new claim, the
+	// stored journal for a replay of the same key).
+	Promote(ctx context.Context, input PromoteInput) (*domain.AppOperation, error)
+
 	// OperationByKey recovers an ambiguous mutation outcome by the
 	// client-supplied idempotency key.
 	OperationByKey(ctx context.Context, app, key string) (*domain.AppOperation, error)
+
+	// PrincipalOperationByKey is OperationByKey scoped to one principal: an
+	// operation recorded for another principal (or none) reports
+	// domain.ErrAppOperationNotFound, so a caller never learns about keys it
+	// did not submit.
+	PrincipalOperationByKey(ctx context.Context, app, key string, principal domain.WorkloadPrincipal) (*domain.AppOperation, error)
 
 	// ListSecrets returns metadata-only desired and active registrations.
 	ListSecrets(ctx context.Context, app, service string) ([]AppSecretMetadata, error)
@@ -68,6 +80,19 @@ type AppService interface {
 
 	// DeleteSecret removes one secret value. Refused when referenced.
 	DeleteSecret(ctx context.Context, app, service, key string) error
+}
+
+// PromoteInput is one promotion request. Principal identifies the caller;
+// LocalOwner is set only for the owner-only admin socket, which may promote
+// without a promotion policy.
+type PromoteInput struct {
+	App              string
+	Service          string
+	Image            string
+	ExpectedRevision string
+	IdempotencyKey   string
+	Principal        domain.WorkloadPrincipal
+	LocalOwner       bool
 }
 
 // AppApplyResult describes one accepted (or no-op) apply.

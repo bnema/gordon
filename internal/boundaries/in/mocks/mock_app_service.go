@@ -573,6 +573,154 @@ func (_c *MockAppService_OperationByKey_Call) RunAndReturn(run func(ctx context.
 	return _c
 }
 
+// PrincipalOperationByKey provides a mock function for the type MockAppService
+func (_mock *MockAppService) PrincipalOperationByKey(ctx context.Context, app string, key string, principal domain.WorkloadPrincipal) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, app, key, principal)
+
+	if len(ret) == 0 {
+		panic("no return value specified for PrincipalOperationByKey")
+	}
+
+	var r0 *domain.AppOperation
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, domain.WorkloadPrincipal) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, app, key, principal)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, domain.WorkloadPrincipal) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, app, key, principal)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.AppOperation)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, string, domain.WorkloadPrincipal) error); ok {
+		r1 = returnFunc(ctx, app, key, principal)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppService_PrincipalOperationByKey_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PrincipalOperationByKey'
+type MockAppService_PrincipalOperationByKey_Call struct {
+	*mock.Call
+}
+
+// PrincipalOperationByKey is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - key string
+//   - principal domain.WorkloadPrincipal
+func (_e *MockAppService_Expecter) PrincipalOperationByKey(ctx any, app any, key any, principal any) *MockAppService_PrincipalOperationByKey_Call {
+	return &MockAppService_PrincipalOperationByKey_Call{Call: _e.mock.On("PrincipalOperationByKey", ctx, app, key, principal)}
+}
+
+func (_c *MockAppService_PrincipalOperationByKey_Call) Run(run func(ctx context.Context, app string, key string, principal domain.WorkloadPrincipal)) *MockAppService_PrincipalOperationByKey_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 domain.WorkloadPrincipal
+		if args[3] != nil {
+			arg3 = args[3].(domain.WorkloadPrincipal)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppService_PrincipalOperationByKey_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_PrincipalOperationByKey_Call {
+	_c.Call.Return(appOperation, err)
+	return _c
+}
+
+func (_c *MockAppService_PrincipalOperationByKey_Call) RunAndReturn(run func(ctx context.Context, app string, key string, principal domain.WorkloadPrincipal) (*domain.AppOperation, error)) *MockAppService_PrincipalOperationByKey_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// Promote provides a mock function for the type MockAppService
+func (_mock *MockAppService) Promote(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, input)
+
+	if len(ret) == 0 {
+		panic("no return value specified for Promote")
+	}
+
+	var r0 *domain.AppOperation
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.PromoteInput) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, input)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.PromoteInput) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, input)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.AppOperation)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, in.PromoteInput) error); ok {
+		r1 = returnFunc(ctx, input)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppService_Promote_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Promote'
+type MockAppService_Promote_Call struct {
+	*mock.Call
+}
+
+// Promote is a helper method to define mock.On call
+//   - ctx context.Context
+//   - input in.PromoteInput
+func (_e *MockAppService_Expecter) Promote(ctx any, input any) *MockAppService_Promote_Call {
+	return &MockAppService_Promote_Call{Call: _e.mock.On("Promote", ctx, input)}
+}
+
+func (_c *MockAppService_Promote_Call) Run(run func(ctx context.Context, input in.PromoteInput)) *MockAppService_Promote_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 in.PromoteInput
+		if args[1] != nil {
+			arg1 = args[1].(in.PromoteInput)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppService_Promote_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_Promote_Call {
+	_c.Call.Return(appOperation, err)
+	return _c
+}
+
+func (_c *MockAppService_Promote_Call) RunAndReturn(run func(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error)) *MockAppService_Promote_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Remove provides a mock function for the type MockAppService
 func (_mock *MockAppService) Remove(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error) {
 	ret := _mock.Called(ctx, app, idempotencyKey)

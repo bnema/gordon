@@ -191,6 +191,38 @@ func TestAppService_List_SkipsRetiredNamesAndReportsReadModel(t *testing.T) {
 	assert.Equal(t, domain.AppOutcomePartial, summaries[0].LastOutcome)
 }
 
+// TestAppService_Show_PromotedServiceIsNotPending proves the read model
+// after a promotion: desired names a revision that only the promoted
+// service runs, the other service keeps an older effective revision, and
+// ACTIVE recorded convergence, so the app is not pending.
+func TestAppService_Show_PromotedServiceIsNotPending(t *testing.T) {
+	ctx := context.Background()
+	store := newMockAppState(t)
+	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
+	web := domain.AppService{Name: "web", Image: "registry.example.com/web@sha256:" + strings.Repeat("c", 64)}
+	worker := domain.AppService{Name: "worker", Image: "registry.example.com/worker@sha256:" + strings.Repeat("b", 64)}
+	store.EXPECT().AppExists(mock.Anything, "blog").Return(true, nil).Once()
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{
+		App: "blog", Revision: "rev-promoted", Spec: domain.AppSpec{Name: "blog", Services: []domain.AppService{web, worker}},
+		Promotion: &domain.AppPromotionProvenance{Service: "web", Image: web.Image},
+	}, true, nil).Once()
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
+		App: "blog", Converged: true, ConvergedRevision: "rev-promoted",
+		Services: map[string]domain.AppEffectiveService{
+			"web":    {EffectiveRevision: "rev-promoted", Spec: web},
+			"worker": {EffectiveRevision: "rev-0", Spec: worker},
+		},
+	}, true, nil).Once()
+	store.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil).Once()
+	store.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-1"}, nil).Once()
+	store.EXPECT().LoadLatestOperation(mock.Anything, "blog").Return(domain.AppOperation{}, false, nil).Once()
+
+	detail, err := svc.Show(ctx, "blog")
+	require.NoError(t, err)
+	assert.False(t, detail.Pending)
+	assert.Equal(t, "rev-0", detail.Services["worker"].EffectiveRevision)
+}
+
 // TestAppService_Show_SemanticConvergenceIsNotPending proves pending reads
 // desired vs ACTIVE semantically: a service kept from an older revision
 // whose spec and app env equal desired does not make the app pending, while

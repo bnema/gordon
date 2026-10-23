@@ -47,6 +47,7 @@ type AppServiceImpl struct {
 // deployEngine is the subset of the deployment engine the app service needs.
 type deployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	StartPromotion(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error)
 	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
@@ -469,6 +470,36 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service stri
 	return s.operationResult(ctx, app, started.Claim.Op, nil)
 }
 
+// Promote implements in.AppService. It is shaped like Deploy: the hand-off
+// is enrolled with the lifecycle, StartPromotion validates, authorizes, and
+// atomically accepts the candidate revision with its journal, and the
+// unchanged deploy execution runs in the background. The candidate spec is
+// validated by the same checks Apply runs.
+func (s *AppServiceImpl) Promote(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error) {
+	done, err := s.beginDeploy()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+
+	started, err := s.deploy.StartPromotion(ctx, deployment.PromotionInput{
+		App: input.App, Service: input.Service, Image: input.Image,
+		ExpectedRevision: input.ExpectedRevision, Op: input.IdempotencyKey,
+		Principal: input.Principal, LocalOwner: input.LocalOwner,
+		Validate: s.core.ValidateSpec,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !started.Owned {
+		return s.operationResult(ctx, input.App, started.Claim.Op, started.ReplayError())
+	}
+	if err := s.scheduleExecution(started.Claim); err != nil {
+		return s.operationResult(ctx, input.App, started.Claim.Op, err)
+	}
+	return s.operationResult(ctx, input.App, started.Claim.Op, nil)
+}
+
 // requireServiceScope refuses an app-wide deploy or restart of a
 // multi-service app unless the caller asked for it with all, so an
 // unrelated service (a database, say) is never replaced by accident. It
@@ -620,6 +651,19 @@ func (s *AppServiceImpl) OperationByKey(ctx context.Context, app, key string) (*
 	op, err := s.store.LoadOperation(ctx, app, key)
 	if err != nil {
 		return nil, err
+	}
+	return &op, nil
+}
+
+// PrincipalOperationByKey implements in.AppService. A journal recorded for
+// another principal is reported exactly like a missing key.
+func (s *AppServiceImpl) PrincipalOperationByKey(ctx context.Context, app, key string, principal domain.WorkloadPrincipal) (*domain.AppOperation, error) {
+	op, err := s.store.LoadOperation(ctx, app, key)
+	if err != nil {
+		return nil, err
+	}
+	if op.Principal == "" || op.Principal != principal.String() {
+		return nil, fmt.Errorf("apps: operation %s not found: %w", key, domain.ErrAppOperationNotFound)
 	}
 	return &op, nil
 }

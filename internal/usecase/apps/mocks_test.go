@@ -20,9 +20,10 @@ type mockDeployEngine struct {
 	// startDeployFn, abandonDeployFn and executeDeployFn override the testify
 	// expectations when set, for tests that script per-call results or block
 	// execution.
-	startDeployFn   func(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
-	abandonDeployFn func(ctx context.Context, claim deployment.DeployClaim) error
-	executeDeployFn func(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
+	startDeployFn    func(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
+	startPromotionFn func(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error)
+	abandonDeployFn  func(ctx context.Context, claim deployment.DeployClaim) error
+	executeDeployFn  func(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 }
 
 func newMockDeployEngine(t *testing.T) *mockDeployEngine {
@@ -35,6 +36,17 @@ func newMockDeployEngine(t *testing.T) *mockDeployEngine {
 func (m *mockDeployEngine) StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error) {
 	if m.startDeployFn != nil {
 		return m.startDeployFn(ctx, input)
+	}
+	args := m.Called(ctx, input)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*deployment.StartDeployResult), args.Error(1)
+}
+
+func (m *mockDeployEngine) StartPromotion(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error) {
+	if m.startPromotionFn != nil {
+		return m.startPromotionFn(ctx, input)
 	}
 	args := m.Called(ctx, input)
 	if args.Get(0) == nil {
