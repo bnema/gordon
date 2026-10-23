@@ -221,6 +221,9 @@ gordon daemon reload
 | `server.max_proxy_body_size` |
 | `server.max_proxy_response_size` |
 | `server.max_concurrent_conns` |
+| `server.ci_domain` (adding or removing it enables or disables the CI router) |
+| `images.allowed_registries` |
+| `images.require_digest` |
 | `traffic.http.*` (new connections after the traffic graph is applied) |
 
 
