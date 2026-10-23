@@ -2,8 +2,10 @@
 package tokenstore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -31,6 +33,9 @@ const (
 	// passRevokedPath is the path for the revocation list in pass.
 	passRevokedPath = "gordon/registry/revoked" //nolint:gosec // Not a credential, this is a pass store path
 )
+
+// errPassEntryNotFound is returned by passShow when the pass entry does not exist.
+var errPassEntryNotFound = errors.New("pass entry not found")
 
 // cachedToken holds a token and its JWT in memory.
 type cachedToken struct {
@@ -70,6 +75,12 @@ type PassStore struct {
 	tokenCache  map[string]*cachedToken // keyed by subject
 	revokedList []string                // cached revocation list
 	revokedSet  map[string]struct{}     // for O(1) lookup
+
+	// revokedLoadedAt is when the revocation cache was last refreshed.
+	// The list is re-read from pass once revokedTTL has elapsed, so revocations
+	// made by other processes (e.g. the CLI) are picked up.
+	revokedLoadedAt time.Time
+	revokedTTL      time.Duration
 }
 
 // NewPassStore creates a new pass-based token store.
@@ -79,6 +90,7 @@ func NewPassStore(log zerowrap.Logger) *PassStore {
 		log:        log,
 		tokenCache: make(map[string]*cachedToken),
 		revokedSet: make(map[string]struct{}),
+		revokedTTL: 5 * time.Second,
 	}
 }
 
@@ -403,11 +415,7 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 	}
 
 	// Update cache
-	s.revokedList = revokedList
-	s.revokedSet = make(map[string]struct{}, len(revokedList))
-	for _, id := range revokedList {
-		s.revokedSet[id] = struct{}{}
-	}
+	s.setRevokedCacheLocked(revokedList)
 
 	s.log.Info().
 		Str(zerowrap.FieldLayer, "adapter").
@@ -418,11 +426,22 @@ func (s *PassStore) Revoke(ctx context.Context, tokenID string) error {
 	return nil
 }
 
+// setRevokedCacheLocked replaces the revocation cache. Caller must hold cacheMu for writing.
+func (s *PassStore) setRevokedCacheLocked(revokedList []string) {
+	s.revokedList = revokedList
+	s.revokedSet = make(map[string]struct{}, len(revokedList))
+	for _, id := range revokedList {
+		s.revokedSet[id] = struct{}{}
+	}
+	s.revokedLoadedAt = time.Now()
+}
+
 // IsRevoked checks if token ID is in revocation list.
+// The list is cached for revokedTTL; read errors are returned and never cached.
 func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error) {
 	// Check cache first
 	s.cacheMu.RLock()
-	if s.revokedList != nil {
+	if s.revokedList != nil && time.Since(s.revokedLoadedAt) < s.revokedTTL {
 		_, revoked := s.revokedSet[tokenID]
 		s.cacheMu.RUnlock()
 		return revoked, nil
@@ -437,13 +456,9 @@ func (s *PassStore) IsRevoked(ctx context.Context, tokenID string) (bool, error)
 		return false, err
 	}
 
-	// Cache the revocation list
+	// Refresh the revocation cache
 	s.cacheMu.Lock()
-	s.revokedList = revokedList
-	s.revokedSet = make(map[string]struct{}, len(revokedList))
-	for _, id := range revokedList {
-		s.revokedSet[id] = struct{}{}
-	}
+	s.setRevokedCacheLocked(revokedList)
 	_, revoked := s.revokedSet[tokenID]
 	s.cacheMu.Unlock()
 
@@ -521,9 +536,14 @@ func (s *PassStore) passInsert(ctx context.Context, path, value string) error {
 // passShow retrieves a value from pass.
 func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
 	cmd := childenv.CommandContext(ctx, "pass", "show", path)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("pass show failed: %w", err)
+		if strings.Contains(stderr.String(), "is not in the password store") {
+			return "", fmt.Errorf("pass show %s: %w", path, errPassEntryNotFound)
+		}
+		return "", fmt.Errorf("pass show failed: %s: %w", strings.TrimSpace(stderr.String()), err)
 	}
 	return strings.TrimSpace(string(output)), nil
 }
@@ -532,8 +552,11 @@ func (s *PassStore) passShow(ctx context.Context, path string) (string, error) {
 func (s *PassStore) getRevokedList(ctx context.Context) ([]string, error) {
 	listJSON, err := s.passShow(ctx, passRevokedPath)
 	if err != nil {
-		// If the list doesn't exist, return empty list
-		return []string{}, nil
+		// Only a missing entry means "nothing revoked"; any other failure must not be masked.
+		if errors.Is(err, errPassEntryNotFound) {
+			return []string{}, nil
+		}
+		return nil, fmt.Errorf("failed to read revocation list: %w", err)
 	}
 
 	var revokedList []string
