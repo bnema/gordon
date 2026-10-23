@@ -63,6 +63,9 @@ func TestHandleAppPromote_StatusTable(t *testing.T) {
 		{name: "manifest missing", err: domain.ErrManifestNotFound, status: http.StatusNotFound, code: "manifest-not-found", calls: true},
 		{name: "cas lost", err: domain.ErrAppStateConflict, status: http.StatusConflict, code: "state-conflict", calls: true},
 		{name: "identity provider down", err: domain.ErrIdentityProviderUnavailable, status: http.StatusServiceUnavailable, code: "identity-provider-unavailable", calls: true},
+		{name: "not wired", err: domain.ErrPromotionUnavailable, status: http.StatusInternalServerError, code: "internal", calls: true},
+		{name: "trailing brace", body: promoteBody + `}`, status: http.StatusBadRequest, code: "invalid-request"},
+		{name: "non-canonical field", body: `{"Service":"web","image":"x"}`, status: http.StatusBadRequest, code: "invalid-request"},
 		{name: "unknown field", body: `{"service":"web","image":"x","extra":1}`, status: http.StatusBadRequest, code: "invalid-request"},
 		{name: "missing image", body: `{"service":"web"}`, status: http.StatusBadRequest, code: "invalid-request"},
 		{name: "trailing data", body: promoteBody + `{}`, status: http.StatusBadRequest, code: "invalid-request"},
@@ -129,6 +132,32 @@ func TestHandleAppPromote_TokenNamedLocalOwnerIsNotLocal(t *testing.T) {
 	})).Return(nil, domain.ErrPromotionDenied).Once()
 	rec := promoteRequest(t, handler, tokenCtx(LocalAuthoritySubject, domain.AdminScopeApps(domain.AdminActionWrite)), promoteBody, "k")
 	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+// TestHandleAppPromote_LocalOwnerNeedsTheSocketMarker proves local-owner
+// rights come only from LocalAuthority: a context carrying the local-owner
+// subject without a token (and without the marker) is not the local owner.
+func TestHandleAppPromote_LocalOwnerNeedsTheSocketMarker(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	appSvc.EXPECT().Promote(mock.Anything, mock.MatchedBy(func(input in.PromoteInput) bool {
+		return !input.LocalOwner
+	})).Return(nil, domain.ErrPromotionDenied).Once()
+	ctx := context.WithValue(ctxWithScopes(domain.AdminScopeApps(domain.AdminActionWrite)), domain.ContextKeySubject, LocalAuthoritySubject)
+	rec := promoteRequest(t, handler, ctx, promoteBody, "k")
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestHandleAppPromote_BusyAppSetsRetryAfter(t *testing.T) {
+	appSvc := inmocks.NewMockAppService(t)
+	handler := appsTestHandler(t, appSvc)
+	appSvc.EXPECT().Promote(mock.Anything, mock.Anything).Return(nil, domain.ErrAppBusy).Once()
+	rec := promoteRequest(t, handler, tokenCtx("ci-bot", domain.AdminScopeApps(domain.AdminActionWrite)), promoteBody, "k")
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, "5", rec.Header().Get("Retry-After"))
+	var envelope dto.AppError
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	assert.Equal(t, "app-busy", envelope.Error)
 }
 
 func TestHandleAppPromote_LocalSocketIsLocalOwner(t *testing.T) {

@@ -24,8 +24,12 @@ const MaxPromoteRequestSize = 4 << 10
 // ErrInvalidRequest marks a malformed promotion request body.
 var ErrInvalidRequest = errors.New("invalid promotion request")
 
+// promoteFields are the canonical JSON field names of a promotion body.
+var promoteFields = map[string]struct{}{"service": {}, "image": {}, "expected_revision": {}}
+
 // DecodePromoteRequest strictly decodes one size-capped promotion body:
-// unknown fields, trailing data, and missing service or image are refused.
+// unknown or non-canonically cased fields, trailing data (including a stray
+// closing brace or bracket), and a missing service or image are refused.
 func DecodePromoteRequest(w http.ResponseWriter, r *http.Request) (dto.AppPromoteRequest, error) {
 	var req dto.AppPromoteRequest
 	if r.Body == nil {
@@ -35,18 +39,50 @@ func DecodePromoteRequest(w http.ResponseWriter, r *http.Request) (dto.AppPromot
 	if err != nil {
 		return req, fmt.Errorf("%w: body unreadable or too large", ErrInvalidRequest)
 	}
+	if err := requireCanonicalFields(raw); err != nil {
+		return req, err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		return req, fmt.Errorf("%w: invalid JSON", ErrInvalidRequest)
 	}
-	if decoder.More() {
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return req, fmt.Errorf("%w: trailing data", ErrInvalidRequest)
 	}
 	if strings.TrimSpace(req.Service) == "" || strings.TrimSpace(req.Image) == "" {
 		return req, fmt.Errorf("%w: service and image are required", ErrInvalidRequest)
 	}
 	return req, nil
+}
+
+// requireCanonicalFields refuses keys that encoding/json would match
+// case-insensitively onto a known field.
+func requireCanonicalFields(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(raw)).Decode(&fields); err != nil {
+		return fmt.Errorf("%w: body must be a JSON object", ErrInvalidRequest)
+	}
+	for key := range fields {
+		if _, ok := promoteFields[key]; !ok {
+			return fmt.Errorf("%w: unknown field %q", ErrInvalidRequest, key)
+		}
+	}
+	return nil
+}
+
+// ValidIdempotencyKey reports whether key is a non-empty printable ASCII
+// token of at most 128 bytes.
+func ValidIdempotencyKey(key string) bool {
+	if key == "" || len(key) > 128 {
+		return false
+	}
+	for _, char := range key {
+		if char < '!' || char > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // PromoteInput builds the port input from a decoded request and the caller
@@ -109,7 +145,32 @@ var errorMappings = []errorMapping{
 	{domain.ErrAppRevisionNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppIntentNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppOperationNotFound, http.StatusNotFound, "not-found", ""},
+	{domain.ErrAppBusy, http.StatusConflict, "app-busy", "another operation of this app is running; retry later with a new key"},
 	{domain.ErrAppStateConflict, http.StatusConflict, "state-conflict", ""},
+}
+
+// RetryAfter returns the Retry-After seconds for a retryable error, or "".
+func RetryAfter(err error) string {
+	switch {
+	case errors.Is(err, domain.ErrAppBusy):
+		return "5"
+	case errors.Is(err, domain.ErrIdentityProviderUnavailable):
+		return "30"
+	default:
+		return ""
+	}
+}
+
+// WriteError answers err with its mapped status, Retry-After when the error
+// is retryable, and the v3 error envelope.
+func WriteError(w http.ResponseWriter, err error) {
+	status, envelope := ErrorResponse(err)
+	if after := RetryAfter(err); after != "" {
+		w.Header().Set("Retry-After", after)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(envelope)
 }
 
 // ErrorResponse maps an app or promotion error to its HTTP status and v3

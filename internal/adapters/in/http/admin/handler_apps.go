@@ -426,37 +426,22 @@ func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app s
 	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
-// adminPrincipal returns the promotion identity of an admin caller. The
-// local socket is the only path that sets LocalAuthoritySubject without a
-// token, so token claims are required for every other subject.
+// adminPrincipal returns the promotion identity of an admin caller and
+// whether it is the local owner. Only LocalAuthority sets the local-owner
+// marker; a token whose subject happens to equal LocalAuthoritySubject is
+// still a token caller.
 func adminPrincipal(ctx context.Context) (domain.WorkloadPrincipal, bool) {
-	subject := GetSubject(ctx)
-	principal := domain.WorkloadPrincipal{Issuer: domain.GordonIssuer, Subject: subject}
-	_, hasClaims := ctx.Value(domain.TokenClaimsKey).(*domain.TokenClaims)
-	return principal, subject == LocalAuthoritySubject && !hasClaims
+	principal := domain.WorkloadPrincipal{Issuer: domain.GordonIssuer, Subject: GetSubject(ctx)}
+	return principal, isLocalOwner(ctx)
 }
 
 func appIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if !ValidIdempotencyKey(key) {
+	if !appapi.ValidIdempotencyKey(key) {
 		http.Error(w, "valid Idempotency-Key header required", http.StatusBadRequest)
 		return "", false
 	}
 	return key, true
-}
-
-// ValidIdempotencyKey reports whether key is a non-empty printable ASCII
-// token of at most 128 bytes.
-func ValidIdempotencyKey(key string) bool {
-	if key == "" || len(key) > 128 {
-		return false
-	}
-	for _, char := range key {
-		if char < '!' || char > '~' {
-			return false
-		}
-	}
-	return true
 }
 
 // handleAppOpLookup serves GET /apps/{app}/operations/{key}.
@@ -607,8 +592,7 @@ func isPreflightErrorRest(err error) bool {
 
 // sendAppOpError maps domain errors to status + envelope.
 func (h *Handler) sendAppOpError(w http.ResponseWriter, err error) {
-	status, envelope := appapi.ErrorResponse(err)
-	h.sendAppError(w, status, envelope.Error, envelope.Message, envelope.Cause, envelope.Hint)
+	appapi.WriteError(w, err)
 }
 
 // toAppDiffSection maps the domain diff to its DTO shape.

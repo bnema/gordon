@@ -14,6 +14,16 @@ import (
 // establishes this identity; the scopes below still gate each route.
 const LocalAuthoritySubject = "local-owner"
 
+// localOwnerKey marks a request served by LocalAuthority. Only that handler
+// sets it, so no token subject can claim local-owner rights.
+type localOwnerKey struct{}
+
+// isLocalOwner reports whether the request came through LocalAuthority.
+func isLocalOwner(ctx context.Context) bool {
+	local, _ := ctx.Value(localOwnerKey{}).(bool)
+	return local
+}
+
 // localAuthorityScopes are the least-privilege scopes required by CLI
 // commands which share the local and remote ControlPlane. The path-and-method
 // allowlist below is the second boundary: config:write, for example, permits
@@ -51,6 +61,7 @@ func (h *Handler) LocalAuthority() http.Handler {
 
 		ctx := context.WithValue(r.Context(), domain.ContextKeyScopes, scopes)
 		ctx = context.WithValue(ctx, domain.ContextKeySubject, LocalAuthoritySubject)
+		ctx = context.WithValue(ctx, localOwnerKey{}, true)
 		h.handleAdminRoutes(w, r.WithContext(ctx))
 	})
 }
