@@ -188,6 +188,21 @@ func (h *Handler) authenticateTokenCredentials(ctx context.Context, r *http.Requ
 }
 
 func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []string, log zerowrap.Logger) []string {
+	effective := IntersectScopes(requestedScopes, grantedScopes)
+
+	log.Debug().
+		Strs("requested_scopes", requestedScopes).
+		Strs("granted_scopes", grantedScopes).
+		Strs("effective_scopes", effective).
+		Msg("calculated effective scopes from parent token")
+
+	return effective
+}
+
+// IntersectScopes keeps, for each requested repository or admin scope, only
+// the actions grantedScopes allow. Requests no grant covers are dropped.
+// Every token endpoint downscopes through it.
+func IntersectScopes(requestedScopes, grantedScopes []string) []string {
 	var effective []string
 
 	for _, reqScopeStr := range requestedScopes {
@@ -210,13 +225,6 @@ func (h *Handler) intersectRequestedScopes(requestedScopes, grantedScopes []stri
 			effective = append(effective, s)
 		}
 	}
-
-	log.Debug().
-		Strs("requested_scopes", requestedScopes).
-		Strs("granted_scopes", grantedScopes).
-		Strs("effective_scopes", effective).
-		Msg("calculated effective scopes from parent token")
-
 	return effective
 }
 
