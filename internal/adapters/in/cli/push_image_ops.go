@@ -23,7 +23,7 @@ type pushImageOps interface {
 	// Tag creates a new tag for an existing local image.
 	Tag(ctx context.Context, sourceRef, targetRef string) error
 	// Push uploads a local image to its registry using chunked blob uploads.
-	Push(ctx context.Context, ref string) error
+	Push(ctx context.Context, ref string) (string, error)
 	// Exists checks whether a local image exists.
 	Exists(ctx context.Context, imageRef string) (bool, error)
 	// Build runs a container image build. Only Docker with buildx is supported;
@@ -37,6 +37,7 @@ type dockerImageOps struct {
 	insecureTLS  bool
 	plainHTTP    bool
 	progress     io.Writer
+	buildOutput  io.Writer
 	remoteClient *remote.Client // nil when local
 }
 
@@ -87,42 +88,38 @@ func (d *dockerImageOps) Tag(ctx context.Context, sourceRef, targetRef string) e
 	return nil
 }
 
-func (d *dockerImageOps) Push(ctx context.Context, ref string) error {
+func (d *dockerImageOps) Push(ctx context.Context, ref string) (string, error) {
 	opts := []registrypush.Option{
 		registrypush.WithProgress(d.progress),
 		registrypush.WithInsecureTLS(d.insecureTLS),
 		registrypush.WithPlainHTTP(d.plainHTTP),
 	}
 
-	if d.remoteClient != nil {
-		authHeader, err := d.exchangeRegistryAuth(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to obtain registry credentials: %w", err)
-		}
-		opts = append(opts, registrypush.WithAuth(authHeader))
-
-		pusher := registrypush.New(opts...)
-		err = pusher.Push(ctx, ref)
-		if err != nil && isAuthError(err) {
-			// Token may have expired mid-push; refresh once and retry.
-			authHeader, refreshErr := d.exchangeRegistryAuth(ctx)
-			if refreshErr != nil {
-				return fmt.Errorf("failed to refresh registry credentials after auth error: %w (original: %v)", refreshErr, err)
-			}
-			retryOpts := []registrypush.Option{
-				registrypush.WithProgress(d.progress),
-				registrypush.WithInsecureTLS(d.insecureTLS),
-				registrypush.WithPlainHTTP(d.plainHTTP),
-				registrypush.WithAuth(authHeader),
-			}
-			pusher = registrypush.New(retryOpts...)
-			return pusher.Push(ctx, ref)
-		}
-		return err
+	push := func(auth string) (string, error) {
+		pushOpts := append(opts[:len(opts):len(opts)], registrypush.WithAuth(auth))
+		return registrypush.New(pushOpts...).Push(ctx, ref)
 	}
+	if d.remoteClient != nil {
+		return d.pushWithAuthRetry(ctx, push)
+	}
+	return push("")
+}
 
-	pusher := registrypush.New(opts...)
-	return pusher.Push(ctx, ref)
+func (d *dockerImageOps) pushWithAuthRetry(ctx context.Context, push func(string) (string, error)) (string, error) {
+	authHeader, err := d.exchangeRegistryAuth(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to obtain registry credentials: %w", err)
+	}
+	digest, err := push(authHeader)
+	if err == nil || !isAuthError(err) {
+		return digest, err
+	}
+	// Token may have expired mid-push; refresh once and retry.
+	authHeader, refreshErr := d.exchangeRegistryAuth(ctx)
+	if refreshErr != nil {
+		return "", fmt.Errorf("failed to refresh registry credentials after auth error: %w (original: %v)", refreshErr, err)
+	}
+	return push(authHeader)
 }
 
 // isAuthError returns true if the error indicates an HTTP 401 authentication failure.
@@ -187,7 +184,13 @@ func (d *dockerImageOps) Build(ctx context.Context, args []string) error {
 	cmd := exec.CommandContext(ctx, "docker", args...) // #nosec G204
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stdout
+	if d.buildOutput != nil {
+		cmd.Stdout = d.buildOutput
+	}
 	cmd.Stderr = os.Stderr
+	if d.buildOutput != nil {
+		cmd.Stderr = d.buildOutput
+	}
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("docker buildx build failed: %w", err)
 	}

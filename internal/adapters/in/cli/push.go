@@ -46,11 +46,14 @@ type imagePush struct {
 type pushRequest struct {
 	ImageArg string
 	Tag      string
+	JSON     bool
+	Progress io.Writer
 	Build    buildConfig
 }
 
 func newPushCmd() *cobra.Command {
 	var (
+		jsonOut    bool
 		build      bool
 		platform   string
 		tag        string
@@ -78,6 +81,8 @@ Examples:
 				imageArg = args[0]
 			}
 			return runPush(cmd.Context(), cmd.OutOrStdout(), pushRequest{
+				JSON:     jsonOut,
+				Progress: cmd.ErrOrStderr(),
 				ImageArg: imageArg,
 				Tag:      tag,
 				Build:    buildConfig{Enabled: build, Platform: platform, Dockerfile: dockerfile, BuildArgs: buildArgs},
@@ -85,6 +90,7 @@ Examples:
 		},
 	}
 
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output the pushed repository, tag, digest, and image as JSON")
 	cmd.Flags().BoolVar(&build, "build", false, "Build the image first using docker buildx")
 	cmd.Flags().StringVar(&platform, "platform", "linux/amd64", "Target platform (used with --build)")
 	cmd.Flags().StringVarP(&dockerfile, "file", "f", "", "Path to Dockerfile (default: ./Dockerfile, used with --build)")
@@ -254,6 +260,9 @@ func resolveVersion(ctx context.Context, tag string) (string, error) {
 }
 
 func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
+	resultOut := out
+	out = pushProgressWriter(out, req)
+
 	dockerfile, inferredRemote, handle, err := resolvePushTarget(ctx, out, req)
 	if err != nil {
 		return err
@@ -284,20 +293,49 @@ func runPush(ctx context.Context, out io.Writer, req pushRequest) error {
 	if err := cliWritef(out, "Image:  %s\n", styles.Theme.Bold.Render(img.VersionRef)); err != nil {
 		return err
 	}
-	if version != "latest" {
+	if version != "latest" && !req.JSON {
 		if err := cliWritef(out, "Also:   %s\n", styles.Theme.Bold.Render(img.LatestRef)); err != nil {
 			return err
 		}
 	}
 	build := buildConfig{Enabled: req.Build.Enabled, Platform: req.Build.Platform, Dockerfile: dockerfile, BuildArgs: req.Build.BuildArgs}
-	if err := pushResolvedImage(ctx, out, imageOps, build, img); err != nil {
+	configurePushOutput(imageOps, out, req.JSON)
+	digest, err := pushResolvedImage(ctx, out, imageOps, build, img)
+	if err != nil {
 		return err
 	}
 
+	if req.JSON {
+		return writeJSON(resultOut, pushResult{Repository: registry + "/" + imageName, Tag: version, Digest: digest, Image: registry + "/" + imageName + "@" + digest})
+	}
 	if err := cliWriteLine(out, styles.RenderSuccess("Push complete")); err != nil {
 		return err
 	}
 	return nil
+}
+
+func pushProgressWriter(out io.Writer, req pushRequest) io.Writer {
+	if !req.JSON {
+		return out
+	}
+	if req.Progress != nil {
+		return req.Progress
+	}
+	return os.Stderr
+}
+
+func configurePushOutput(imageOps pushImageOps, out io.Writer, jsonOut bool) {
+	if ops, ok := imageOps.(*dockerImageOps); ok && jsonOut {
+		ops.progress = out
+		ops.buildOutput = out
+	}
+}
+
+type pushResult struct {
+	Repository string `json:"repository"`
+	Tag        string `json:"tag"`
+	Digest     string `json:"digest"`
+	Image      string `json:"image"`
 }
 
 func resolvePushTarget(ctx context.Context, out io.Writer, req pushRequest) (dockerfile string, inferredRemote *remote.ResolvedRemote, handle *controlPlaneHandle, err error) {
@@ -339,7 +377,7 @@ func newPushImageOps(inferredRemote *remote.ResolvedRemote) (pushImageOps, error
 	return newImageOpsFn()
 }
 
-func pushResolvedImage(ctx context.Context, out io.Writer, imageOps pushImageOps, build buildConfig, img imagePush) error {
+func pushResolvedImage(ctx context.Context, out io.Writer, imageOps pushImageOps, build buildConfig, img imagePush) (string, error) {
 	if build.Enabled {
 		return buildAndPush(ctx, out, imageOps, build, img)
 	}
@@ -510,34 +548,37 @@ func parseTagRef(ref string) string {
 	return tag
 }
 
-func buildAndPush(ctx context.Context, out io.Writer, ops pushImageOps, build buildConfig, img imagePush) error {
+func buildAndPush(ctx context.Context, out io.Writer, ops pushImageOps, build buildConfig, img imagePush) (string, error) {
 	if _, err := os.Stat(build.Dockerfile); os.IsNotExist(err) {
-		return fmt.Errorf("dockerfile not found: %s", build.Dockerfile)
+		return "", fmt.Errorf("dockerfile not found: %s", build.Dockerfile)
 	}
 
 	// Build and load into local daemon (NOT --push).
 	// The native registry push client handles chunked uploads to stay
 	// within Cloudflare's 100MB per-request limit.
 	if err := cliWriteLine(out, "\nBuilding image..."); err != nil {
-		return err
+		return "", err
 	}
 	if err := ops.Build(ctx, buildImageArgs(ctx, img.Version, build.Platform, build.Dockerfile, build.BuildArgs, img.VersionRef, img.LatestRef)); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := cliWriteLine(out, "Pushing..."); err != nil {
-		return err
+		return "", err
 	}
-	if err := ops.Push(ctx, img.LatestRef); err != nil {
-		return fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
+	latestDigest, err := ops.Push(ctx, img.LatestRef)
+	if err != nil {
+		return "", fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
 	}
 	if img.Version != "latest" {
-		if err := ops.Push(ctx, img.VersionRef); err != nil {
-			return fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
+		digest, err := ops.Push(ctx, img.VersionRef)
+		if err != nil {
+			return "", fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
 		}
+		return digest, nil
 	}
 
-	return nil
+	return latestDigest, nil
 }
 
 // standardBuildArgs returns the standard set of git-related build args as
@@ -590,47 +631,48 @@ func buildImageArgs(ctx context.Context, version, platform, dockerfile string, b
 	return args
 }
 
-func tagAndPush(ctx context.Context, out io.Writer, ops pushImageOps, img imagePush) error {
+func tagAndPush(ctx context.Context, out io.Writer, ops pushImageOps, img imagePush) (string, error) {
 	localImage := img.SourceRef
 	if localImage == "" {
-		return errors.New("push source image reference cannot be empty")
+		return "", errors.New("push source image reference cannot be empty")
 	}
 
 	if err := cliWriteLine(out, "\nChecking local image..."); err != nil {
-		return err
+		return "", err
 	}
 	exists, err := ops.Exists(ctx, localImage)
 	if err != nil {
-		return fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
+		return "", fmt.Errorf("failed to inspect local image %s: %w", localImage, err)
 	}
 	if !exists {
-		return fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
+		return "", fmt.Errorf("local image %s not found; build and tag it before pushing", localImage)
 	}
 
 	if err := cliWriteLine(out, "Tagging..."); err != nil {
-		return err
+		return "", err
 	}
 	if err := ops.Tag(ctx, localImage, img.VersionRef); err != nil {
-		return fmt.Errorf("failed to tag %s: %w", img.VersionRef, err)
+		return "", fmt.Errorf("failed to tag %s: %w", img.VersionRef, err)
 	}
 	if img.Version != "latest" {
 		if err := ops.Tag(ctx, localImage, img.LatestRef); err != nil {
-			return fmt.Errorf("failed to tag %s: %w", img.LatestRef, err)
+			return "", fmt.Errorf("failed to tag %s: %w", img.LatestRef, err)
 		}
 	}
 
 	if err := cliWriteLine(out, "Pushing..."); err != nil {
-		return err
+		return "", err
 	}
-	if err := ops.Push(ctx, img.VersionRef); err != nil {
-		return fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
+	digest, err := ops.Push(ctx, img.VersionRef)
+	if err != nil {
+		return "", fmt.Errorf("failed to push %s: %w", img.VersionRef, err)
 	}
 	if img.Version != "latest" {
-		if err := ops.Push(ctx, img.LatestRef); err != nil {
-			return fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
+		if _, err := ops.Push(ctx, img.LatestRef); err != nil {
+			return "", fmt.Errorf("failed to push %s: %w", img.LatestRef, err)
 		}
 	}
-	return nil
+	return digest, nil
 }
 
 func isInteractiveTerminal() bool {

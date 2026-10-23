@@ -130,16 +130,18 @@ func New(opts ...Option) *Pusher {
 // Push reads a local image (by ref) from the Docker/Podman daemon and uploads
 // it to the registry encoded in the ref, using chunked blob uploads.
 //
-// The ref must be fully qualified: registry.example.com/name:tag
-func (p *Pusher) Push(ctx context.Context, ref string) error {
+// The ref must be fully qualified: registry.example.com/name:tag.
+// Push returns the server's Docker-Content-Digest for that tag's manifest PUT.
+// A missing or malformed digest is an error; no local digest is substituted.
+func (p *Pusher) Push(ctx context.Context, ref string) (string, error) {
 	parsedRef, err := name.ParseReference(ref)
 	if err != nil {
-		return fmt.Errorf("failed to parse image ref %s: %w", ref, err)
+		return "", fmt.Errorf("failed to parse image ref %s: %w", ref, err)
 	}
 
 	tag, ok := parsedRef.(name.Tag)
 	if !ok {
-		return fmt.Errorf("image ref %s must include a tag", ref)
+		return "", fmt.Errorf("image ref %s must include a tag", ref)
 	}
 
 	var authHeader string
@@ -149,13 +151,13 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 		var resolveErr error
 		authHeader, resolveErr = resolveAuthHeader(parsedRef)
 		if resolveErr != nil {
-			return resolveErr
+			return "", resolveErr
 		}
 	}
 
 	img, sourceCleanup, err := p.imageSource(ctx, ref)
 	if err != nil {
-		return err
+		return "", err
 	}
 	userCleanup := p.cleanupFn
 	switch {
@@ -174,11 +176,11 @@ func (p *Pusher) Push(ctx context.Context, ref string) error {
 	repo := parsedRef.Context().RepositoryStr()
 
 	if err := p.uploadImageLayers(ctx, img, baseURL, repo, authHeader); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := p.uploadImageConfig(ctx, img, baseURL, repo, authHeader); err != nil {
-		return err
+		return "", err
 	}
 
 	return p.uploadManifest(ctx, baseURL, repo, tag.Identifier(), img, authHeader)
@@ -327,20 +329,20 @@ func (p *Pusher) uploadImageConfig(ctx context.Context, img v1.Image, baseURL, r
 	return nil
 }
 
-func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, img v1.Image, auth string) error {
+func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, img v1.Image, auth string) (string, error) {
 	manifest, err := img.RawManifest()
 	if err != nil {
-		return fmt.Errorf("failed to read image manifest: %w", err)
+		return "", fmt.Errorf("failed to read image manifest: %w", err)
 	}
 
 	mediaType, err := img.MediaType()
 	if err != nil {
-		return fmt.Errorf("failed to read image media type: %w", err)
+		return "", fmt.Errorf("failed to read image media type: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/v2/%s/manifests/%s", baseURL, repo, tag), bytesReader(manifest))
 	if err != nil {
-		return fmt.Errorf("failed to create manifest upload request: %w", err)
+		return "", fmt.Errorf("failed to create manifest upload request: %w", err)
 	}
 	setScopedAuth(req, auth, baseURL)
 	req.Header.Set("Content-Type", string(mediaType))
@@ -348,16 +350,20 @@ func (p *Pusher) uploadManifest(ctx context.Context, baseURL, repo, tag string, 
 
 	resp, err := p.httpClient().Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to upload manifest: %w", err)
+		return "", fmt.Errorf("failed to upload manifest: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("manifest upload returned status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("manifest upload returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return nil
+	digest := resp.Header.Get("Docker-Content-Digest")
+	if _, err := v1.NewHash(digest); err != nil {
+		return "", fmt.Errorf("invalid manifest Docker-Content-Digest %q: %w", digest, err)
+	}
+	return digest, nil
 }
 
 func resolveAuthHeader(ref name.Reference) (string, error) {

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +15,7 @@ type recordingPushOps struct {
 	tags      [][2]string
 	pushes    []string
 	exists    bool
+	failRef   string
 }
 
 func (o *recordingPushOps) Exists(_ context.Context, ref string) (bool, error) {
@@ -25,9 +28,15 @@ func (o *recordingPushOps) Tag(_ context.Context, source, target string) error {
 	return nil
 }
 
-func (o *recordingPushOps) Push(_ context.Context, ref string) error {
+func (o *recordingPushOps) Push(_ context.Context, ref string) (string, error) {
 	o.pushes = append(o.pushes, ref)
-	return nil
+	if ref == o.failRef {
+		return "", errors.New("upload failed")
+	}
+	if strings.HasSuffix(ref, ":latest") {
+		return "sha256:" + strings.Repeat("b", 64), nil
+	}
+	return "sha256:" + strings.Repeat("a", 64), nil
 }
 
 func (*recordingPushOps) Build(context.Context, []string) error { return nil }
@@ -40,7 +49,9 @@ func TestTagAndPushPreservesExactSourceReference(t *testing.T) {
 		LatestRef: "registry.example.com/team/app:latest",
 	}
 
-	require.NoError(t, tagAndPush(context.Background(), io.Discard, ops, img))
+	digest, err := tagAndPush(context.Background(), io.Discard, ops, img)
+	require.NoError(t, err)
+	require.Equal(t, "sha256:"+strings.Repeat("a", 64), digest)
 	require.Equal(t, img.SourceRef, ops.existsRef)
 	require.Equal(t, [][2]string{
 		{img.SourceRef, img.VersionRef},
@@ -51,7 +62,7 @@ func TestTagAndPushPreservesExactSourceReference(t *testing.T) {
 
 func TestTagAndPushRejectsMissingSourceReference(t *testing.T) {
 	ops := &recordingPushOps{exists: true}
-	err := tagAndPush(context.Background(), io.Discard, ops, imagePush{
+	_, err := tagAndPush(context.Background(), io.Discard, ops, imagePush{
 		Registry: "registry.example.com", ImageName: "team/app", Version: "v4",
 	})
 	require.EqualError(t, err, "push source image reference cannot be empty")

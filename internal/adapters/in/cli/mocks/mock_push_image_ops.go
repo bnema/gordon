@@ -170,20 +170,29 @@ func (_c *MockpushImageOps_Exists_Call) RunAndReturn(run func(ctx context.Contex
 }
 
 // Push provides a mock function for the type MockpushImageOps
-func (_mock *MockpushImageOps) Push(ctx context.Context, ref string) error {
+func (_mock *MockpushImageOps) Push(ctx context.Context, ref string) (string, error) {
 	ret := _mock.Called(ctx, ref)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Push")
 	}
 
-	var r0 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string) error); ok {
+	var r0 string
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) (string, error)); ok {
+		return returnFunc(ctx, ref)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string) string); ok {
 		r0 = returnFunc(ctx, ref)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(string)
 	}
-	return r0
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = returnFunc(ctx, ref)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
 }
 
 // MockpushImageOps_Push_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Push'
@@ -216,12 +225,12 @@ func (_c *MockpushImageOps_Push_Call) Run(run func(ctx context.Context, ref stri
 	return _c
 }
 
-func (_c *MockpushImageOps_Push_Call) Return(err error) *MockpushImageOps_Push_Call {
-	_c.Call.Return(err)
+func (_c *MockpushImageOps_Push_Call) Return(s string, err error) *MockpushImageOps_Push_Call {
+	_c.Call.Return(s, err)
 	return _c
 }
 
-func (_c *MockpushImageOps_Push_Call) RunAndReturn(run func(ctx context.Context, ref string) error) *MockpushImageOps_Push_Call {
+func (_c *MockpushImageOps_Push_Call) RunAndReturn(run func(ctx context.Context, ref string) (string, error)) *MockpushImageOps_Push_Call {
 	_c.Call.Return(run)
 	return _c
 }

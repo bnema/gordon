@@ -40,6 +40,7 @@ gordon images push [image] [options]
 | Option | Description |
 |--------|-------------|
 | `--build` | Build the image first using `docker buildx` |
+| `--json` | Output repository, tag, registry manifest digest, and digest-pinned image as JSON |
 | `-f, --file` | Path to Dockerfile (default: `./Dockerfile`, used with `--build`) |
 | `--platform` | Target platform for buildx (default: `linux/amd64`) |
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
@@ -130,6 +131,22 @@ gordon images push myapp --build -f docker/app/Dockerfile --remote https://gordo
 export GORDON_TOKEN="your-token"
 gordon images push myapp --build --remote https://gordon.example.com
 ```
+
+### JSON Output
+
+```bash
+gordon images push myapp --tag v1.2.0 --json --remote https://gordon.example.com
+```
+
+```json
+{"repository":"registry.example.com/myapp","tag":"v1.2.0","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","image":"registry.example.com/myapp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+```
+
+The digest comes from the registry's manifest PUT response for the requested
+version tag, not the `latest` alias or local image ID. Missing or malformed
+registry digests fail the push command. In JSON mode, stdout contains only the
+result; build and upload progress go to stderr, and the `Also: …:latest` line
+is omitted. Push still uploads the `latest` alias and never deploys.
 
 ### Notes
 

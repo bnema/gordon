@@ -139,7 +139,8 @@ func TestPusher_PlainHTTP(t *testing.T) {
 			return img, nil
 		}),
 	)
-	require.NoError(t, p.Push(context.Background(), serverURL.Host+"/demo/app:v1"))
+	_, err = p.Push(context.Background(), serverURL.Host+"/demo/app:v1")
+	require.NoError(t, err)
 }
 
 func TestPusher_Push(t *testing.T) {
@@ -213,7 +214,7 @@ func TestPusher_Push(t *testing.T) {
 				}),
 			)
 
-			err = p.Push(context.Background(), ref)
+			_, err = p.Push(context.Background(), ref)
 			require.NoError(t, err)
 
 			expectedDigests := make([]string, 0, len(serverState.expectedBlobs))
@@ -255,11 +256,11 @@ func TestPusher_Push_InvokesCleanup(t *testing.T) {
 	)
 
 	registryHost := strings.TrimPrefix(registry.URL, "http://")
-	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
+	_, err = p.Push(context.Background(), registryHost+"/demo/app:v1")
 	require.NoError(t, err)
 	assert.Equal(t, 1, cleanupCount, "cleanup callback should have been invoked after first push")
 
-	err = p.Push(context.Background(), registryHost+"/demo/app:v1")
+	_, err = p.Push(context.Background(), registryHost+"/demo/app:v1")
 	require.NoError(t, err)
 	assert.Equal(t, 2, cleanupCount, "cleanup callback should have been invoked after second push")
 }
@@ -654,6 +655,7 @@ func (f *fakePushRegistry) handleManifestPut(w http.ResponseWriter, r *http.Requ
 	body, err := io.ReadAll(r.Body)
 	require.NoError(f.t, err)
 	f.manifestPuts[repo+":"+tag] = fakeManifestPut{contentType: r.Header.Get("Content-Type"), body: body}
+	w.Header().Set("Docker-Content-Digest", fmt.Sprintf("sha256:%x", sha256.Sum256(body)))
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -707,7 +709,7 @@ func TestPusher_WithAuth(t *testing.T) {
 			registrypush.WithAuth(explicitToken),
 		)
 
-		err = p.Push(context.Background(), ref)
+		_, err = p.Push(context.Background(), ref)
 		require.NoError(t, err)
 		assert.Positive(t, requestCount, "at least one request should have been made")
 	})
@@ -732,7 +734,7 @@ func TestPusher_WithAuth(t *testing.T) {
 			}),
 		)
 
-		err = p.Push(context.Background(), ref)
+		_, err = p.Push(context.Background(), ref)
 		require.NoError(t, err)
 
 		// Manifest should have been pushed — verifies the push completed normally.

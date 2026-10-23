@@ -41,7 +41,7 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 	ops := climocks.NewMockpushImageOps(t)
 	ops.On("Tag", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 	ops.On("Exists", mock.Anything, registry+"/testapp:v1.0.0").Return(true, nil)
-	ops.EXPECT().Push(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, ref string) error {
+	ops.EXPECT().Push(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, ref string) (string, error) {
 		pusher := registrypush.New(
 			registrypush.WithChunkSize(256),
 			registrypush.WithTransport(harness.server.Client().Transport),
@@ -52,7 +52,7 @@ func TestIntegration_TagAndPush_NativeRegistry(t *testing.T) {
 		return pusher.Push(ctx, ref)
 	})
 
-	err = tagAndPush(ctx, io.Discard, ops, imagePush{
+	_, err = tagAndPush(ctx, io.Discard, ops, imagePush{
 		Registry:   registry,
 		ImageName:  "testapp",
 		SourceRef:  versionRef,

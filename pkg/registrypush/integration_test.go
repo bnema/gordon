@@ -157,7 +157,8 @@ func (h *registryHarness) Push(ctx context.Context, img v1.Image, opts ...regist
 	}, opts...)
 
 	pusher := registrypush.New(allOpts...)
-	return pusher.Push(ctx, h.ref)
+	_, err := pusher.Push(ctx, h.ref)
+	return err
 }
 
 func (h *registryHarness) GetManifest(t *testing.T) *http.Response {
