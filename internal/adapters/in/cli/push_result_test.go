@@ -82,7 +82,7 @@ func TestPushAuthRetryReturnsRetryDigest(t *testing.T) {
 			return "", errors.New("manifest upload returned status 401")
 		}
 		return "sha256:" + strings.Repeat("b", 64), nil
-	})
+	}, ops.exchangeRegistryAuth)
 	require.NoError(t, err)
 	require.Equal(t, "sha256:"+strings.Repeat("b", 64), digest)
 	require.Equal(t, 2, calls)

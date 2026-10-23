@@ -56,7 +56,20 @@ func newDockerImageOps(insecureTLS bool, progress io.Writer) (*dockerImageOps, e
 
 // newImageOpsFromFlags resolves TLS settings from CLI flags/config and creates ops.
 func newImageOpsFromFlags() (pushImageOps, error) {
-	resolved, _, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
+	resolved, oidcClient, err := resolveOIDCRemote()
+	if err != nil {
+		return nil, err
+	}
+	if oidcClient != nil {
+		ops, err := newImageOpsForResolvedRemote(&remote.ResolvedRemote{URL: resolved.URL, InsecureTLS: resolved.InsecureTLS})
+		if err != nil {
+			return nil, err
+		}
+		docker := ops.(*dockerImageOps)
+		docker.remoteClient = oidcClient
+		return docker, nil
+	}
+	resolved, _, err = remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
 	if err != nil {
 		return nil, err
 	}
@@ -99,14 +112,19 @@ func (d *dockerImageOps) Push(ctx context.Context, ref string) (string, error) {
 		pushOpts := append(opts[:len(opts):len(opts)], registrypush.WithAuth(auth))
 		return registrypush.New(pushOpts...).Push(ctx, ref)
 	}
+	if d.remoteClient != nil && d.remoteClient.IsOIDC() {
+		return d.pushWithAuthRetry(ctx, push, func(ctx context.Context) (string, error) {
+			return ciRegistryAuth(ctx, d.remoteClient, pushRepository(ref))
+		})
+	}
 	if d.remoteClient != nil {
-		return d.pushWithAuthRetry(ctx, push)
+		return d.pushWithAuthRetry(ctx, push, d.exchangeRegistryAuth)
 	}
 	return push("")
 }
 
-func (d *dockerImageOps) pushWithAuthRetry(ctx context.Context, push func(string) (string, error)) (string, error) {
-	authHeader, err := d.exchangeRegistryAuth(ctx)
+func (d *dockerImageOps) pushWithAuthRetry(ctx context.Context, push func(string) (string, error), exchange func(context.Context) (string, error)) (string, error) {
+	authHeader, err := exchange(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to obtain registry credentials: %w", err)
 	}
@@ -115,11 +133,21 @@ func (d *dockerImageOps) pushWithAuthRetry(ctx context.Context, push func(string
 		return digest, err
 	}
 	// Token may have expired mid-push; refresh once and retry.
-	authHeader, refreshErr := d.exchangeRegistryAuth(ctx)
+	if d.remoteClient != nil && d.remoteClient.IsOIDC() {
+		d.remoteClient.ResetCIToken()
+	}
+	authHeader, refreshErr := exchange(ctx)
 	if refreshErr != nil {
 		return "", fmt.Errorf("failed to refresh registry credentials after auth error: %w (original: %v)", refreshErr, err)
 	}
 	return push(authHeader)
+}
+
+// pushRepository returns the repository path of a fully qualified tag
+// reference (host/repo:tag).
+func pushRepository(ref string) string {
+	_, name, _ := parseImageRef(ref)
+	return name
 }
 
 // isAuthError returns true if the error indicates an HTTP 401 authentication failure.

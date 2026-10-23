@@ -74,6 +74,7 @@ Commands are organized by where they run:
 	rootCmd.PersistentFlags().StringVarP(&remoteFlag, "remote", "r", "", "Remote name or URL (e.g., prod, https://gordon.mydomain.com)")
 	rootCmd.PersistentFlags().StringVar(&tokenFlag, "token-file", "", "Read remote authentication token from a mode 0600 file")
 	rootCmd.PersistentFlags().BoolVar(&insecureTLSFlag, "insecure", false, "Skip TLS certificate verification for remote HTTPS endpoints")
+	rootCmd.PersistentFlags().StringVar(&oidcAudienceFlag, "oidc-audience", "", "Audience of the CI runner OIDC ID token (overrides GORDON_OIDC_AUDIENCE)")
 
 	// Server-only commands (must run on the Gordon host)
 	serveCmd := newServeCmd()
@@ -118,6 +119,9 @@ Commands are organized by where they run:
 // GetRemoteClient returns a remote client if targeting a remote instance,
 // or nil if running locally.
 func GetRemoteClient() (*remote.Client, bool, error) {
+	if _, client, err := resolveOIDCRemote(); err != nil || client != nil {
+		return client, client != nil, err
+	}
 	resolved, isRemote, err := remote.ResolveStrict(remoteFlag, tokenFlag, insecureTLSFlag)
 	if err != nil {
 		return nil, false, err

@@ -51,7 +51,10 @@ func (c *Client) mutationPost(ctx context.Context, path string, key string, body
 // re-query GET …/operations/by-key/{key} before any retry, and retries
 // reuse the SAME key.
 func (c *Client) doMutation(ctx context.Context, method, path, key string, jsonBody []byte) (*http.Response, error) {
-	reqURL := c.baseURL + "/admin" + path
+	reqURL, err := c.adminURL(method, path)
+	if err != nil {
+		return nil, err
+	}
 
 	var bodyReader io.Reader
 	if jsonBody != nil {

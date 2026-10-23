@@ -201,6 +201,13 @@ func resolveImageTarget(ctx context.Context, out io.Writer, handle *controlPlane
 // token can read, so push needs no admin:status:read scope. The local admin
 // socket and servers that predate that field are asked through /admin/status.
 func targetRegistryDomain(ctx context.Context, handle *controlPlaneHandle) (string, error) {
+	// An OIDC identity pushes through the CI host itself; it has no access
+	// to the admin API that reports the registry domain.
+	if client, ok := handle.plane.(*remote.Client); ok {
+		if host, ok := client.CIRegistryHost(); ok {
+			return host, nil
+		}
+	}
 	if handle.isRemote {
 		verify, err := handle.plane.VerifyAuth(ctx)
 		if isForbidden(err) {

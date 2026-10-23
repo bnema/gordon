@@ -34,6 +34,12 @@ type Client struct {
 	subject      string     // JWT subject extracted from long-lived token
 	ephemeral    string     // cached ephemeral admin token
 	ephemeralExp time.Time  // expiry of cached ephemeral token
+
+	// OIDC mode: a workload identity exchanged for ci-access tokens on the
+	// CI host instead of a stored Gordon token.
+	oidc     *OIDCSource
+	ciMu     sync.Mutex // protects ciTokens
+	ciTokens map[string]cachedCIToken
 }
 
 var (
@@ -182,6 +188,9 @@ func (c *Client) exchangeToken(ctx context.Context) error {
 // It exchanges the long-lived token for an ephemeral one via /auth/token.
 // If subject extraction failed, uses "unknown" — the server validates everything.
 func (c *Client) bearerToken(ctx context.Context) (string, error) {
+	if c.oidc != nil {
+		return c.ExchangeCIToken(ctx)
+	}
 	if c.token == "" {
 		return "", nil
 	}
@@ -246,6 +255,15 @@ func (c *Client) request(ctx context.Context, method, path string, body any) (*h
 		return nil, err
 	}
 
+	// On 401 in OIDC mode: drop the ci-access token and retry once with a
+	// fresh exchange.
+	if resp.StatusCode == http.StatusUnauthorized && c.oidc != nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodySize))
+		resp.Body.Close()
+		c.ResetCIToken()
+		return c.doRequest(ctx, method, path, jsonBody)
+	}
+
 	// On 401: invalidate ephemeral, re-exchange, retry once.
 	if resp.StatusCode == http.StatusUnauthorized && c.subject != "" && c.ephemeral != "" {
 		// Drain and close the first response.
@@ -280,7 +298,10 @@ func (e *requestTransportError) Unwrap() error {
 
 // doRequest builds and executes a single HTTP request to the admin API.
 func (c *Client) doRequest(ctx context.Context, method, path string, jsonBody []byte) (*http.Response, error) {
-	reqURL := c.baseURL + "/admin" + path
+	reqURL, err := c.adminURL(method, path)
+	if err != nil {
+		return nil, err
+	}
 
 	var bodyReader io.Reader
 	if jsonBody != nil {
@@ -890,7 +911,10 @@ func (c *Client) StreamContainerLogs(ctx context.Context, logDomain string, line
 
 // ListOrphanedAttachments returns running attachment containers no longer configured.
 func (c *Client) openSSEStream(ctx context.Context, path string) (*http.Response, error) {
-	streamURL := c.baseURL + "/admin" + path
+	streamURL, err := c.adminURL(http.MethodGet, path)
+	if err != nil {
+		return nil, err
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, streamURL, nil)
 	if err != nil {
