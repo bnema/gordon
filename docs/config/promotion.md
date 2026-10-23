@@ -16,7 +16,7 @@ repository = "web"
 |-----|-------------|
 | `issuer` | Exact declared `trusted_issuers` issuer, or `gordon` for stored-token callers |
 | `subjects` | Non-empty list of exact subject strings; any listed subject matches |
-| `app` | One existing app name |
+| `app` | One app name; validated as a name, not checked against existing apps |
 | `service` | One service name in that app |
 | `repository` | One registry repository path, without host, tag, or digest |
 

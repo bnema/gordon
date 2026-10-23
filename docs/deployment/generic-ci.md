@@ -49,15 +49,19 @@ but the CI host does not serve image pulls.
 ```bash
 set -euo pipefail
 CI=https://ci.example.com
+docker build -t ci.example.com/web:v1.2.0 .
+# Log in right before the push: the JWT may expire during a long build.
 printf '%s' "$GORDON_OIDC_TOKEN" |
   docker login ci.example.com --username oidc --password-stdin
-docker build -t ci.example.com/web:v1.2.0 .
 docker push ci.example.com/web:v1.2.0
+docker logout ci.example.com
+# The pushed manifest digest, not a layer digest or image ID.
+DIGEST=$(docker image inspect \
+  --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+  ci.example.com/web:v1.2.0 | grep '^ci.example.com/web@' | cut -d@ -f2)
 ```
 
-Read the `sha256:…` digest reported by `docker push` (the manifest digest,
-not a layer digest or image ID). Set `DIGEST` to that value. Exchange the
-JWT for a bearer token to promote; the Basic username is ignored:
+Exchange the JWT for a bearer token to promote; the Basic username is ignored:
 
 ```bash
 # Keep credentials out of curl's command-line arguments.
@@ -86,7 +90,7 @@ Poll `GET /-/ci/apps/{app}/operations/by-key/{key}` until `status` is no
 longer `running`. For example, a bounded wait:
 
 ```bash
-for attempt in $(seq 1 120); do
+for _ in $(seq 1 120); do
   printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" |
     curl --fail-with-body -sS --config - \
       "$CI/-/ci/apps/web/operations/by-key/$KEY" >operation.json
@@ -106,18 +110,20 @@ the submitting principal and requires a current policy for the app.
 ## HTTP Results and Retries
 
 Promotion requires an `Idempotency-Key`: 1–128 printable ASCII bytes without
-spaces. Use a URL-safe value for lookup. JSON accepts only `service`, `image`,
+spaces or `/`. Use a URL-safe value for lookup. JSON accepts only `service`, `image`,
 and optional `expected_revision`, with a 4 KiB body limit.
 
 | Status | Meaning |
 |--------|---------|
 | `202` | Accepted, still running; poll by key |
 | `200` | Terminal promotion result (including successful replay or no-op); lookup also returns 200 while running |
-| `400` | Malformed request, tag/non-installation image, or invalid candidate configuration |
+| `400` | Malformed request, missing or invalid `Idempotency-Key`, tag/non-installation image, or invalid candidate configuration |
 | `401` | Invalid identity at exchange, or missing/invalid ci-access bearer token |
 | `403` | No matching policy or requested repository scope |
 | `404` | Missing app, service, manifest, or visible operation; route outside the CI allowlist |
 | `409` | `app-busy`, state/revision conflict, key reuse, or unfinished/failed replay |
+| `429` | `/auth/token` rate limit exceeded; `Retry-After: 1` |
+| `500` | Promotion unavailable on this daemon, or an internal error |
 | `503` | Identity provider unavailable; `Retry-After: 30` |
 
 `app-busy` returns `Retry-After: 5`: nothing was promoted; wait, then submit
