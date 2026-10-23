@@ -228,8 +228,10 @@ func TestUntrustedCertificateRefused(t *testing.T) {
 func TestIsPublicIP(t *testing.T) {
 	public := []string{
 		"93.184.215.14", "8.8.8.8", "1.1.1.1", "2606:4700::1111", "100.128.0.1", "172.32.0.1",
-		// NAT64 (well-known and local-use) embedding a public IPv4 address.
-		"64:ff9b::808:808", "64:ff9b:1::808:808", "64:ff9b:1:ffff:ffff:ffff:808:808",
+		// NAT64 well-known prefix embedding a public IPv4 address.
+		"64:ff9b::808:808",
+		// SIIT (::ffff:0:0:0/96) embedding a public IPv4 address.
+		"::ffff:0:808:808",
 		// 6to4 embedding a public IPv4 address (bits 16-48).
 		"2002:808:808::1",
 	}
@@ -239,7 +241,12 @@ func TestIsPublicIP(t *testing.T) {
 		"0.0.0.0", "::", "224.0.0.1", "ff02::1", "255.255.255.255", "::ffff:127.0.0.1", "::ffff:10.0.0.1",
 		"198.18.0.1", "192.0.0.8",
 		// NAT64 embedding non-public IPv4 addresses.
-		"64:ff9b::a00:1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe", "64:ff9b:1::a00:1", "64:ff9b:1::6440:1",
+		"64:ff9b::a00:1", "64:ff9b::7f00:1", "64:ff9b::a9fe:a9fe",
+		// NAT64 local-use prefix is refused whatever it embeds (RFC 6052 layouts vary).
+		"64:ff9b:1::a00:1", "64:ff9b:1::6440:1", "64:ff9b:1::808:808", "64:ff9b:1:ffff:ffff:ffff:808:808",
+		"64:ff9b:1:0a00:0:100:808:808",
+		// SIIT embedding non-public IPv4 addresses.
+		"::ffff:0:a00:1", "::ffff:0:7f00:1", "::ffff:0:a9fe:a9fe",
 		// IPv4-compatible (deprecated) addresses, public or not.
 		"::808:808", "::7f00:1", "::a00:1",
 		// Site-local (deprecated).

@@ -114,7 +114,7 @@ func TestConcurrentUnknownKidSingleFlight(t *testing.T) {
 		})
 	}
 	<-entered
-	time.Sleep(50 * time.Millisecond) // let every caller reach the wait
+	waitForWaiters(t, s, testIssuer, callers)
 	close(gate)
 	wg.Wait()
 	close(errs)
@@ -122,6 +122,61 @@ func TestConcurrentUnknownKidSingleFlight(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, 2, p.fetchCount(), "warm-up plus exactly one shared fetch")
+}
+
+// waitForWaiters waits until n Verify calls are blocked on the issuer refresh.
+func waitForWaiters(t *testing.T, s *Service, issuer string, n int) {
+	t.Helper()
+	s.mu.RLock()
+	state := s.issuers[issuer]
+	s.mu.RUnlock()
+	require.Eventually(t, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.refreshing != nil && state.waiters == n
+	}, 2*time.Second, time.Millisecond)
+}
+
+// Cancelling the service context wakes blocked waiters with
+// ErrIdentityProviderUnavailable, with or without stale keys in the cache.
+func TestServiceShutdownWakesWaiters(t *testing.T) {
+	rsaKey, _ := generateKeys(t)
+	for name, cached := range map[string][]byte{"empty cache": nil, "unknown kid": keySet(t, rsaJWK(rsaKey, "k1"))} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			clk := &clock{}
+			clk.unix.Store(time.Now().Unix())
+			entered := make(chan struct{}, 4)
+			p := &providerStub{raw: cached, entered: entered}
+			s := NewService(ctx, p, clk.now)
+			s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+			<-entered
+			waitIdle(t, s, testIssuer)
+			p.setGate(make(chan struct{})) // the next fetch blocks until ctx ends
+			clk.advance(RefreshInterval)
+
+			const callers = 3
+			errs := make(chan error, callers)
+			token := sign(t, jwt.SigningMethodRS256, rsaKey, baseClaims(clk.now()), "rotated")
+			for range callers {
+				go func() {
+					_, err := s.Verify(context.Background(), token)
+					errs <- err
+				}()
+			}
+			waitForWaiters(t, s, testIssuer, callers)
+			cancel()
+			for range callers {
+				select {
+				case err := <-errs:
+					require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+				case <-time.After(2 * time.Second):
+					t.Fatal("waiter not woken by service shutdown")
+				}
+			}
+		})
+	}
 }
 
 // Refresh goroutines end when the service context is cancelled.
