@@ -53,7 +53,7 @@ func preflightService(
 		Return(domain.AppOperation{}, false, nil).Maybe()
 	return deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets,
-		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
+		ImagePolicy: deployment.FixedImagePolicy(domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}}),
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },

@@ -28,8 +28,10 @@ type Service struct {
 	// barrier is the process-wide GC barrier. An apply holds the shared
 	// lease from validation through durable publication, so prune can
 	// never snapshot between a staged intent and its materialization.
-	barrier     out.GCBarrier
-	imagePolicy domain.ImageSourcePolicy
+	barrier out.GCBarrier
+	// imagePolicy returns the current installation image policy, read once
+	// per validation. Nil means the zero policy (default registries only).
+	imagePolicy func() domain.ImageSourcePolicy
 	// bindMu guards bindPolicies. Reload replaces the whole map
 	// atomically; applies read the current map without holding the lock.
 	bindMu       sync.RWMutex
@@ -55,11 +57,20 @@ func (s *Service) WithGCBarrier(barrier out.GCBarrier) *Service {
 	return s
 }
 
-// WithImagePolicy supplies the installation registry policy enforced while
-// validating manifests, before any desired state is persisted.
-func (s *Service) WithImagePolicy(policy domain.ImageSourcePolicy) *Service {
+// WithImagePolicy supplies the provider of the current installation
+// registry policy enforced while validating manifests, before any desired
+// state is persisted. Reload publishes new policies through it.
+func (s *Service) WithImagePolicy(policy func() domain.ImageSourcePolicy) *Service {
 	s.imagePolicy = policy
 	return s
+}
+
+// currentImagePolicy reads the image policy once for one validation.
+func (s *Service) currentImagePolicy() domain.ImageSourcePolicy {
+	if s.imagePolicy == nil {
+		return domain.ImageSourcePolicy{}
+	}
+	return s.imagePolicy()
 }
 
 // WithBindPolicies supplies the initial administrative bind policies.
@@ -272,8 +283,9 @@ func (s *Service) ValidateSpec(spec domain.AppSpec) error {
 	if err := spec.Validate(); err != nil {
 		return err
 	}
+	imagePolicy := s.currentImagePolicy()
 	for _, service := range spec.Services {
-		if err := s.imagePolicy.ValidateImageSource(service.Image); err != nil {
+		if err := imagePolicy.ValidateImageSource(service.Image); err != nil {
 			return fmt.Errorf("apps: service %q image %q: %w", service.Name, service.Image, err)
 		}
 	}

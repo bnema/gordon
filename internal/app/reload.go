@@ -261,6 +261,7 @@ type reloadRuntime struct {
 // reloadPlan holds the values derived from one config before any apply.
 type reloadPlan struct {
 	promotion      PromotionSnapshot
+	imagePolicy    domain.ImageSourcePolicy
 	containerCfg   container.Config
 	tlsConfig      *tls.Config
 	bindPolicies   map[string]domain.AppBindPolicy
@@ -280,7 +281,7 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 		}
 	}
 	r.applyAppPolicies(plan)
-	r.svc.publishPromotion(plan.promotion, cfg)
+	r.svc.publishPromotion(plan.promotion, plan.imagePolicy, cfg)
 	return nil
 }
 
@@ -288,6 +289,9 @@ func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, er
 	var plan reloadPlan
 	var err error
 	if plan.promotion, err = buildPromotionSnapshot(cfg); err != nil {
+		return plan, err
+	}
+	if plan.imagePolicy, err = buildImagePolicy(cfg); err != nil {
 		return plan, err
 	}
 	if r.svc.containerSvc != nil {

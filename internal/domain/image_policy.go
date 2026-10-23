@@ -69,6 +69,56 @@ type ImageSourcePolicy struct {
 	InstallationAliases []string
 }
 
+// Clone returns a deep copy, so a published policy snapshot never shares
+// slices with the config it was built from.
+func (p ImageSourcePolicy) Clone() ImageSourcePolicy {
+	clone := p
+	clone.AllowedRegistries = cloneStrings(p.AllowedRegistries)
+	clone.InstallationAliases = cloneStrings(p.InstallationAliases)
+	return clone
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	return append([]string(nil), values...)
+}
+
+// ImageReference is a parsed image reference: the canonical registry host,
+// the registry-relative repository, and the tag or digest (either may be
+// empty).
+type ImageReference struct {
+	Host       string
+	Repository string
+	Tag        string
+	Digest     string
+}
+
+// ParseImageReference splits ref into host, repository, tag, and digest
+// following Docker's host rule, so callers that already classified the host
+// (for example as an installation host) can address the repository
+// independently of which host name the reference used.
+func ParseImageReference(ref string) (ImageReference, error) {
+	host, rest, err := parseImageRegistry(strings.TrimSpace(ref))
+	if err != nil {
+		return ImageReference{}, err
+	}
+	parsed := ImageReference{Host: host}
+	if base, digest, ok := strings.Cut(rest, "@"); ok {
+		if err := validation.ValidateImageDigest(digest); err != nil {
+			return ImageReference{}, err
+		}
+		parsed.Digest = digest
+		rest = base
+	}
+	parsed.Repository, parsed.Tag = splitRepositoryReference(rest)
+	if err := validation.ValidateRepositoryName(parsed.Repository); err != nil {
+		return ImageReference{}, err
+	}
+	return parsed, nil
+}
+
 // Validate checks every configured registry authority.
 func (p ImageSourcePolicy) Validate() error {
 	entries := append(append([]string{}, p.AllowedRegistries...), p.installationHosts()...)

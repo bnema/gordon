@@ -49,8 +49,12 @@ import (
 
 // services holds all the services used by the application.
 type services struct {
-	workloadIdentitySvc   in.WorkloadIdentityService
-	promotionSnapshot     atomic.Pointer[PromotionSnapshot]
+	workloadIdentitySvc in.WorkloadIdentityService
+	promotionSnapshot   atomic.Pointer[PromotionSnapshot]
+	// imagePolicy is the current installation image-source policy,
+	// published with each promotion generation. Consumers read it through
+	// ImagePolicy.
+	imagePolicy           atomic.Pointer[domain.ImageSourcePolicy]
 	runtime               *docker.Runtime
 	eventBus              *eventbus.InMemory
 	metrics               *telemetry.Metrics

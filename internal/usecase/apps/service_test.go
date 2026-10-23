@@ -2,6 +2,7 @@ package apps_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +66,7 @@ func TestApply_RejectsImageOutsideRegistryAllowlistBeforeStoreAccess(t *testing.
 	store := outmocks.NewMockAppState(t)
 	spec := testSpec("blog")
 	spec.Services[0].Image = "registry.example.com/team/app:1"
-	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(domain.ImageSourcePolicy{})
+	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(fixedImagePolicy(domain.ImageSourcePolicy{}))
 
 	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
 
@@ -76,13 +77,50 @@ func TestApply_RequireDigestIncludesInstallationRegistry(t *testing.T) {
 	store := outmocks.NewMockAppState(t)
 	spec := testSpec("blog")
 	spec.Services[0].Image = "gordon.example.com/team/app:1"
-	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(domain.ImageSourcePolicy{
+	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(fixedImagePolicy(domain.ImageSourcePolicy{
 		InstallationRegistry: "gordon.example.com",
 		RequireDigest:        true,
-	})
+	}))
 
 	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
 	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
+}
+
+func fixedImagePolicy(policy domain.ImageSourcePolicy) func() domain.ImageSourcePolicy {
+	return func() domain.ImageSourcePolicy { return policy }
+}
+
+// TestApply_DryRunFollowsPublishedImagePolicy proves a reload that adds or
+// changes the CI domain reaches apply validation: the provider is read on
+// every apply, so the new alias is accepted and a former alias refused.
+func TestApply_DryRunFollowsPublishedImagePolicy(t *testing.T) {
+	ctx := context.Background()
+	digest := "@sha256:" + strings.Repeat("a", 64)
+	store := outmocks.NewMockAppState(t)
+	store.EXPECT().Recover(mock.Anything).Return(nil)
+	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil)
+	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil)
+	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil)
+	policy := domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com"}
+	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(func() domain.ImageSourcePolicy { return policy })
+	spec := testSpec("blog")
+	spec.Services[0].Image = "ci.example.com/web" + digest
+
+	_, _, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.ErrorIs(t, err, domain.ErrAppImageNotAllowed, "no CI domain yet")
+
+	policy = domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", InstallationAliases: []string{"ci.example.com"}}
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.NoError(t, err)
+	require.NotNil(t, dry)
+	assert.True(t, dry.Valid)
+
+	policy = domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", InstallationAliases: []string{"ci2.example.com"}}
+	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.ErrorIs(t, err, domain.ErrAppImageNotAllowed, "the former CI domain is refused")
+	spec.Services[0].Image = "ci2.example.com/web" + digest
+	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), true)
+	require.NoError(t, err)
 }
 
 // TestApply_HoldsSharedGCLease proves apply holds the shared GC lease for

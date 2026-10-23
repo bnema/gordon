@@ -140,3 +140,41 @@ func TestIsLocalOrPrivateHost(t *testing.T) {
 		assert.False(t, domain.IsLocalOrPrivateHost(host), "host %q should be public", host)
 	}
 }
+
+func TestImageSourcePolicy_CloneIsIndependent(t *testing.T) {
+	policy := domain.ImageSourcePolicy{
+		AllowedRegistries:    []string{"registry.example.com"},
+		InstallationRegistry: "gordon.example.com",
+		InstallationAliases:  []string{"ci.example.com"},
+		RequireDigest:        true,
+	}
+	clone := policy.Clone()
+	assert.Equal(t, policy, clone)
+	policy.AllowedRegistries[0] = "changed.example.com"
+	policy.InstallationAliases[0] = "changed.example.com"
+	assert.Equal(t, []string{"registry.example.com"}, clone.AllowedRegistries)
+	assert.Equal(t, []string{"ci.example.com"}, clone.InstallationAliases)
+	assert.Equal(t, domain.ImageSourcePolicy{}, domain.ImageSourcePolicy{}.Clone())
+}
+
+func TestParseImageReference_IndependentOfHost(t *testing.T) {
+	cases := []struct {
+		ref  string
+		want domain.ImageReference
+	}{
+		{"ci.example.com/web:v1", domain.ImageReference{Host: "ci.example.com", Repository: "web", Tag: "v1"}},
+		{"ci.example.com/web", domain.ImageReference{Host: "ci.example.com", Repository: "web"}},
+		{"CI.example.com:443/team/web:v1", domain.ImageReference{Host: "ci.example.com", Repository: "team/web", Tag: "v1"}},
+		{"gordon.example.com:5000/team/web@" + testDigest202, domain.ImageReference{Host: "gordon.example.com:5000", Repository: "team/web", Digest: testDigest202}},
+		{"nginx:1.0", domain.ImageReference{Host: "docker.io", Repository: "nginx", Tag: "1.0"}},
+	}
+	for _, tc := range cases {
+		got, err := domain.ParseImageReference(tc.ref)
+		require.NoError(t, err, tc.ref)
+		assert.Equal(t, tc.want, got, tc.ref)
+	}
+	for _, bad := range []string{"", "https://ci.example.com/web", "ci.example.com/", "ci.example.com/Web:v1"} {
+		_, err := domain.ParseImageReference(bad)
+		assert.Error(t, err, bad)
+	}
+}

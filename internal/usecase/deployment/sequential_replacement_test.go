@@ -789,7 +789,7 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
-		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
+		ImagePolicy: deployment.FixedImagePolicy(domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}}),
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 503, nil },
 		func(context.Context, string) error { return assert.AnError },

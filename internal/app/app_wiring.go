@@ -72,11 +72,7 @@ func (si *serviceInit) initApps() error {
 		si.svc.volumeSvc.WithPrunePorts(store, si.svc.runtime, si.svc.gcBarrier)
 	}
 	registryDomain := si.svc.configSvc.GetRegistryDomain()
-	imagePolicy := installationImagePolicy(si.cfg, registryDomain)
-	if err := imagePolicy.Validate(); err != nil {
-		return fmt.Errorf("invalid image registry policy: %w", err)
-	}
-	resolver := imageref.NewResolver(registryDomain, si.svc.manifestStorage, nil).WithPolicy(imagePolicy)
+	resolver := si.svc.newImageResolver(registryDomain)
 	// The publisher is the single serialized HTTP/L4 boundary: raw
 	// activations, fail-closed recovery withdrawal, and reload all go
 	// through it. It resolves writers/permission paths late-bound.
@@ -105,7 +101,7 @@ func (si *serviceInit) initApps() error {
 			Internal: si.cfg.NetworkIsolation.Internal,
 		},
 		Limits:      limits,
-		ImagePolicy: imagePolicy,
+		ImagePolicy: si.svc.ImagePolicy,
 		Traffic:     si.svc.appTrafficPublisher,
 		SecretFiles: secretFiles,
 		Guard:       guard,
@@ -135,7 +131,7 @@ func (si *serviceInit) initApps() error {
 	appSvcImpl := newAppDaemonService(si.ctx, store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
-		WithImagePolicy(imagePolicy).
+		WithImagePolicy(si.svc.ImagePolicy).
 		WithBindPolicies(mountPolicies).
 		WithDevicePolicies(devicePolicies).
 		WithCapabilityPolicies(capabilityPolicies)
@@ -153,16 +149,45 @@ func (si *serviceInit) initApps() error {
 	return nil
 }
 
+// newImageResolver builds the app image resolver over the installation
+// manifest store. Like every image-policy consumer it reads the published
+// snapshot, so a reload reaches apply validation, deploy pulls, and
+// resolution.
+func (s *services) newImageResolver(registryDomain string) *imageref.Resolver {
+	return imageref.NewResolver(registryDomain, s.manifestStorage, nil).WithPolicy(s.ImagePolicy)
+}
+
 // installationImagePolicy builds the image-source policy. The CI domain
 // serves the same registry, so a reference naming it is an installation
-// image pulled through the internal registry.
+// image pulled through the internal registry. The result shares no slice
+// with cfg.
 func installationImagePolicy(cfg Config, registryDomain string) domain.ImageSourcePolicy {
 	return domain.ImageSourcePolicy{
 		AllowedRegistries:    cfg.Images.AllowedRegistries,
 		RequireDigest:        cfg.Images.RequireDigest,
 		InstallationRegistry: registryDomain,
 		InstallationAliases:  []string{cfg.Server.CIDomain},
+	}.Clone()
+}
+
+// buildImagePolicy builds and validates the image-source policy of one
+// config generation, before anything publishes it.
+func buildImagePolicy(cfg Config) (domain.ImageSourcePolicy, error) {
+	registryDomain, _ := resolveRegistryDomains(cfg)
+	policy := installationImagePolicy(cfg, registryDomain)
+	if err := policy.Validate(); err != nil {
+		return domain.ImageSourcePolicy{}, fmt.Errorf("invalid image registry policy: %w", err)
 	}
+	return policy, nil
+}
+
+// ImagePolicy returns a copy of the current image-source policy. Before the
+// first publication it is the zero policy.
+func (s *services) ImagePolicy() domain.ImageSourcePolicy {
+	if current := s.imagePolicy.Load(); current != nil {
+		return current.Clone()
+	}
+	return domain.ImageSourcePolicy{}
 }
 
 // appRouteSource adapts the ACTIVE-derived host index plus installation

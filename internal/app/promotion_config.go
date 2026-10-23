@@ -149,12 +149,16 @@ func (si *serviceInit) initPromotionSnapshot() error {
 	if err != nil {
 		return err
 	}
+	imagePolicy, err := buildImagePolicy(si.cfg)
+	if err != nil {
+		return err
+	}
 	if si.cfg.Server.CIDomain != "" && si.svc.appTrafficPublisher != nil {
 		if _, err := si.svc.appTrafficPublisher.projectCandidate(si.ctx, si.cfg); err != nil {
 			return err
 		}
 	}
-	si.svc.publishPromotion(snapshot, si.cfg)
+	si.svc.publishPromotion(snapshot, imagePolicy, si.cfg)
 	return nil
 }
 

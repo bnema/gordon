@@ -183,8 +183,9 @@ func (s *AppServiceImpl) WithGCBarrier(barrier out.GCBarrier) *AppServiceImpl {
 	return s
 }
 
-// WithImagePolicy supplies the registry policy used for manifest validation.
-func (s *AppServiceImpl) WithImagePolicy(policy domain.ImageSourcePolicy) *AppServiceImpl {
+// WithImagePolicy supplies the provider of the current registry policy used
+// for manifest validation.
+func (s *AppServiceImpl) WithImagePolicy(policy func() domain.ImageSourcePolicy) *AppServiceImpl {
 	s.core.WithImagePolicy(policy)
 	return s
 }

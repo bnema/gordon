@@ -276,7 +276,7 @@ func overlapDeployMocks(runtime *outmocks.MockContainerRuntime, images *outmocks
 func overlapService(store *appstate.Store, runtime *outmocks.MockContainerRuntime, images *outmocks.MockImageResolver, secrets *outmocks.MockSecretProvider, traffic *storeTraffic) *deployment.Service {
 	return deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
-		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
+		ImagePolicy: deployment.FixedImagePolicy(domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}}),
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
@@ -732,7 +732,7 @@ func TestReconcileRunning_KeepsMarkerUntilBackendClaimsAreReleased(t *testing.T)
 	traffic := &storeTraffic{store: store}
 	svc := deployment.NewService(deployment.Deps{
 		State: state, Runtime: runtime, Images: images, Secrets: secrets, Traffic: traffic,
-		ImagePolicy: domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}},
+		ImagePolicy: deployment.FixedImagePolicy(domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}}),
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },

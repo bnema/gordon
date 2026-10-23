@@ -409,14 +409,14 @@ func sortedEnv(envMap map[string]string) []string {
 // External refs pull anonymously; installation-registry refs use the
 // internal credentials. A missing registry config disables pulling
 // (tests and pre-pulled environments).
-func (s *Service) pullImage(ctx context.Context, image string) (string, error) {
-	if err := s.validateImageSource(image, ""); err != nil {
+func (s *Service) pullImage(ctx context.Context, policy domain.ImageSourcePolicy, image string) (string, error) {
+	if err := validateImageSource(policy, image, ""); err != nil {
 		return "", err
 	}
 	if s.deps.Registry.Domain == "" {
 		return image, nil
 	}
-	if !s.deps.ImagePolicy.IsInstallationImage(image) {
+	if !policy.IsInstallationImage(image) {
 		if err := s.deps.Runtime.PullImage(ctx, image); err != nil {
 			return "", fmt.Errorf("deployment: pull image %q: %w", image, err)
 		}

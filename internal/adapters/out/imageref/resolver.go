@@ -27,26 +27,28 @@ type RemoteResolver interface {
 
 // Resolver implements out.ImageResolver.
 type Resolver struct {
-	registryDomain string
-	manifests      ManifestReader
-	remote         RemoteResolver
-	policy         domain.ImageSourcePolicy
+	manifests ManifestReader
+	remote    RemoteResolver
+	policy    func() domain.ImageSourcePolicy
 }
 
-// NewResolver wires local manifest resolution with an optional remote.
+// NewResolver wires local manifest resolution with an optional remote. The
+// default policy treats registryDomain as the only installation registry.
 func NewResolver(registryDomain string, manifests ManifestReader, remote RemoteResolver) *Resolver {
+	fixed := domain.ImageSourcePolicy{InstallationRegistry: registryDomain}
 	return &Resolver{
-		registryDomain: registryDomain,
-		manifests:      manifests,
-		remote:         remote,
-		policy:         domain.ImageSourcePolicy{InstallationRegistry: registryDomain},
+		manifests: manifests,
+		remote:    remote,
+		policy:    func() domain.ImageSourcePolicy { return fixed },
 	}
 }
 
-// WithPolicy installs the installation image-source policy. Every
-// reference, including an already-pinned digest, is validated against it
-// before resolution.
-func (r *Resolver) WithPolicy(policy domain.ImageSourcePolicy) *Resolver {
+// WithPolicy installs the provider of the current installation image-source
+// policy, read once per resolution. Every reference, including an
+// already-pinned digest, is validated against it before resolution, and
+// references on any installation host (the registry or an alias such as the
+// CI host) resolve through local manifest storage.
+func (r *Resolver) WithPolicy(policy func() domain.ImageSourcePolicy) *Resolver {
 	r.policy = policy
 	return r
 }
@@ -67,15 +69,17 @@ func (r *Resolver) ResolveDigest(ctx context.Context, ref string) (string, error
 		}
 	}
 	// Every reference, pinned or not, is validated against installation
-	// policy before any resolution or pull.
-	if err := r.policy.ValidateImageSource(trimmed); err != nil {
+	// policy before any resolution or pull. One policy value serves the
+	// whole resolution.
+	policy := r.policy()
+	if err := policy.ValidateImageSource(trimmed); err != nil {
 		return "", fmt.Errorf("imageref: %w", err)
 	}
 	if _, digest, ok := strings.Cut(trimmed, "@"); ok {
 		return digest, nil
 	}
 	// Installation-registry refs resolve locally.
-	if name, tag, ok := splitLocalRef(r.registryDomain, trimmed); ok {
+	if name, tag, ok := localRef(policy, trimmed); ok {
 		raw, _, err := r.manifests.GetManifest(name, tag)
 		if err != nil {
 			return "", fmt.Errorf("imageref: local manifest %s:%s: %w", name, tag, domain.ErrAppImageUnresolvable)
@@ -97,18 +101,19 @@ func (r *Resolver) ResolveDigest(ctx context.Context, ref string) (string, error
 	return digest, nil
 }
 
-// splitLocalRef splits registry-domain refs into name + tag.
-func splitLocalRef(registryDomain, ref string) (string, string, bool) {
-	host, rest, ok := strings.Cut(ref, "/")
-	if !ok || host != registryDomain {
+// localRef splits a reference on any installation host into repository and
+// tag (default latest), independent of which installation host it names.
+func localRef(policy domain.ImageSourcePolicy, ref string) (string, string, bool) {
+	if !policy.IsInstallationImage(ref) {
 		return "", "", false
 	}
-	name, tag, _ := strings.Cut(rest, ":")
-	if name == "" {
+	parsed, err := domain.ParseImageReference(ref)
+	if err != nil || parsed.Digest != "" {
 		return "", "", false
 	}
+	tag := parsed.Tag
 	if tag == "" {
 		tag = "latest"
 	}
-	return name, tag, true
+	return parsed.Repository, tag, true
 }

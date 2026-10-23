@@ -38,10 +38,12 @@ type Deps struct {
 	// Limits are the installation container resource limits applied on
 	// every create and recovery path. Zero means unlimited.
 	Limits ResourceLimits
-	// ImagePolicy restricts which registries and references may be
-	// resolved, pulled, or run. It is enforced on every path, including
-	// boot, restart, and recovery.
-	ImagePolicy domain.ImageSourcePolicy
+	// ImagePolicy returns the current policy restricting which registries
+	// and references may be resolved, pulled, or run. Reload publishes new
+	// policies through it; each preflight step reads it once. It is
+	// enforced on every path, including boot, restart, and recovery. Nil
+	// means the zero policy with Registry.Domain as installation registry.
+	ImagePolicy func() domain.ImageSourcePolicy
 	// Traffic is the serialized HTTP/L4 publish boundary. Rebuilt after
 	// every activation (deploy/start/restart/stop/remove) so the proxy
 	// host index follows ACTIVE; recovery also withdraws one service
@@ -140,9 +142,6 @@ type Service struct {
 // NewService creates the deployment engine. All deps are required;
 // Secrets may be nil only in tests that never reach secret preflight.
 func NewService(deps Deps, log zerowrap.Logger) *Service {
-	if deps.ImagePolicy.InstallationRegistry == "" {
-		deps.ImagePolicy.InstallationRegistry = deps.Registry.Domain
-	}
 	return &Service{
 		deps:    deps,
 		log:     log,
@@ -972,29 +971,46 @@ func (s *Service) appSecretID(ctx context.Context, app string) (string, error) {
 	return ownership.ID, nil
 }
 
+// imagePolicy reads the current image policy once. An empty installation
+// registry defaults to the configured registry domain.
+func (s *Service) imagePolicy() domain.ImageSourcePolicy {
+	var policy domain.ImageSourcePolicy
+	if s.deps.ImagePolicy != nil {
+		policy = s.deps.ImagePolicy()
+	}
+	if policy.InstallationRegistry == "" {
+		policy.InstallationRegistry = s.deps.Registry.Domain
+	}
+	return policy
+}
+
+// preflightImage validates and pulls one resolved image under a single
+// policy read, so a concurrent reload cannot change the policy between
+// the source check and the pull classification.
 func (s *Service) preflightImage(ctx context.Context, image, digest string) (string, error) {
 	if err := validation.ValidateImageDigest(digest); err != nil {
 		return "", fmt.Errorf("deployment: image %q resolved to invalid digest: %w", image, domain.ErrAppImageUnresolvable)
 	}
-	if err := s.validateImageSource(image, digest); err != nil {
+	policy := s.imagePolicy()
+	if err := validateImageSource(policy, image, digest); err != nil {
 		return "", err
 	}
 	if s.deps.Registry.Domain == "" {
 		return image, nil
 	}
-	return s.pullImage(ctx, stripImageTag(image)+"@"+digest)
+	return s.pullImage(ctx, policy, stripImageTag(image)+"@"+digest)
 }
 
 // validateImageSource enforces the installation image policy on a
 // reference before any pull. Both the manifest reference and the pinned
 // digest are checked, so a digest-pinned ref cannot bypass the hostname
 // and port allowlist on deploy or recovery.
-func (s *Service) validateImageSource(image, digest string) error {
+func validateImageSource(policy domain.ImageSourcePolicy, image, digest string) error {
 	ref := strings.TrimSpace(image)
 	if digest != "" && !strings.Contains(ref, "@") {
 		ref = stripImageTag(image) + "@" + digest
 	}
-	if err := s.deps.ImagePolicy.ValidateImageSource(ref); err != nil {
+	if err := policy.ValidateImageSource(ref); err != nil {
 		return fmt.Errorf("deployment: image %q: %w", image, err)
 	}
 	return nil
