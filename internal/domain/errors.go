@@ -8,6 +8,10 @@ var (
 	ErrPromotionDenied             = errors.New("promotion denied")
 	ErrInvalidPromotionImage       = errors.New("invalid promotion image")
 	ErrIdentityProviderUnavailable = errors.New("identity provider unavailable")
+	// ErrPromotionUnavailable marks a promotion the daemon cannot serve
+	// because it is not wired for it (no installation registry or manifest
+	// store). It is an internal fault, never a client error.
+	ErrPromotionUnavailable = errors.New("promotion unavailable")
 	// Container errors
 	ErrContainerNotFound   = errors.New("container not found")
 	ErrContainerExists     = errors.New("container already exists")

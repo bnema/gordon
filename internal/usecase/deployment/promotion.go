@@ -58,11 +58,6 @@ type PromotionInput struct {
 	Validate func(domain.AppSpec) error
 }
 
-// ErrPromotionUnavailable marks a promotion the daemon cannot serve because
-// it is not wired for it (no installation registry or manifest store). It is
-// an internal fault, never a client error.
-var ErrPromotionUnavailable = errors.New("promotion unavailable")
-
 // promotionPlan carries what the promotion read under the app lock. cfg is
 // the single promotion generation the whole request uses.
 type promotionPlan struct {
@@ -144,7 +139,7 @@ func (s *Service) authorizePromotion(input PromotionInput) (promotionPlan, error
 	}
 	registry := s.deps.Registry.Domain
 	if registry == "" || s.deps.Manifests == nil {
-		return promotionPlan{}, fmt.Errorf("deployment: no installation registry is wired: %w", ErrPromotionUnavailable)
+		return promotionPlan{}, fmt.Errorf("deployment: no installation registry is wired: %w", domain.ErrPromotionUnavailable)
 	}
 	cfg := s.promotionConfig()
 	image, err := domain.ParsePromotionImage(input.Image, append([]string{registry}, cfg.RegistryHosts...))

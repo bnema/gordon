@@ -63,7 +63,7 @@ func TestStartPromotion_RefusedBeforeAnyLockOrState(t *testing.T) {
 		{name: "tag image", registry: promoRegistry, want: domain.ErrInvalidPromotionImage, input: deployment.PromotionInput{
 			App: "blog", Service: "web", Image: "web:latest", Op: "k", Validate: validate, Principal: ciPrincipal,
 		}},
-		{name: "no installation registry", want: deployment.ErrPromotionUnavailable, input: deployment.PromotionInput{
+		{name: "no installation registry", want: domain.ErrPromotionUnavailable, input: deployment.PromotionInput{
 			App: "blog", Service: "web", Image: "web@" + promoDigest("c"), Op: "k", Validate: validate, Principal: ciPrincipal,
 		}},
 	} {
