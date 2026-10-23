@@ -51,6 +51,7 @@ Gordon runs on your VPS and provides:
 - [Migrate to Gordon v3](./migrate-to-v3.md) - Breaking upgrade and explicit secret migration
 - [Traffic Plane](./config/traffic.md) - TCP, UDP, and TLS passthrough entrypoints
 - [Authentication](./config/auth.md) - Registry auth plus remote CLI login/token workflows
+- [Promotion Policies](./config/promotion.md) - Exact CI identity grants
 - [Secrets](./config/secrets.md) - Installation secrets and app secret values
 - [Network Isolation](./config/network-isolation.md) - Installation network policy
 - [Logging](./config/logging.md) - Log collection and rotation

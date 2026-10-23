@@ -7,7 +7,8 @@ Core server settings for Gordon.
 ```toml
 [server]
 registry_port = 5000                     # Container registry port
-gordon_domain = "gordon.mydomain.com"    # Gordon domain (required)
+gordon_domain = "gordon.example.com"     # Gordon domain (required)
+# ci_domain = "ci.example.com"            # Optional HTTPS CI host
 # tls_cert_file = ""                       # Optional: PEM certificate for static TLS
 # tls_key_file = ""                        # Optional: PEM key for static TLS
 # force_https_redirect = false             # Redirect cleartext HTTP requests to HTTPS
@@ -30,6 +31,7 @@ protocol = "smart_tcp"
 | `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
 | `force_https_redirect` | bool | `false` | Redirect cleartext HTTP requests to HTTPS on HTTP-capable edge entrypoints |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
+| `ci_domain` | string | `""` | Optional separate host for OIDC image push, promotion, and operation lookup; requires authentication |
 | `registry_domain` | string | - | Deprecated migration key. Set `gordon_domain` instead. |
 | `legacy_registry_domains` | []string | `[]` | Additional Gordon registry hosts treated as aliases during staged migration. See [Upgrading: Staged Registry Host Rename](../upgrading.md#staged-registry-host-rename). |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and state |
@@ -461,6 +463,43 @@ With firewall port forwarding:
 sudo firewall-cmd --permanent --add-forward-port=port=443:proto=tcp:toport=9000
 sudo firewall-cmd --reload
 ```
+
+## CI Host
+
+`server.ci_domain` enables a restricted HTTPS endpoint separate from
+`server.gordon_domain`. Use a public DNS hostname without a port or trailing
+dot, distinct from the main host, legacy registry hosts, and app hosts.
+`auth.enabled` must be true. Removing `ci_domain` disables the CI router.
+The main registry and admin host can remain private.
+
+For TLS termination upstream, route public DNS → reverse proxy → Gordon's
+edge entrypoint, not `server.registry_port`. Preserve `Host` and overwrite
+`X-Forwarded-Proto` with a single `https` value. Configure both lists:
+
+```toml
+[server]
+gordon_domain = "gordon.example.com"
+ci_domain = "ci.example.com"
+proxy_allowed_ips = ["192.0.2.10"]
+
+[entrypoints.edge]
+address = ":8080"
+protocol = "smart_tcp"
+
+[api.rate_limit]
+trusted_proxies = ["192.0.2.10"]
+```
+
+Replace the example address with the proxy's actual peer IP or CIDR.
+`server.proxy_allowed_ips` lets that peer reach normal cleartext HTTP paths
+instead of CA onboarding. `api.rate_limit.trusted_proxies` trusts its
+`X-Forwarded-For` and `X-Forwarded-Proto`; it does not replace the first list.
+Restrict network access to the backend edge to the proxy. Without TLS or a
+trusted proxy reporting HTTPS, the CI router returns 404.
+Gordon must reach issuer discovery and JWKS endpoints over HTTPS.
+
+See [Authentication](./auth.md#oidc-trusted-issuers),
+[Promotion Policies](./promotion.md), and [CI Deployment](../deployment/generic-ci.md).
 
 ## Related
 

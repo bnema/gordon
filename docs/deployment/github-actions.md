@@ -1,6 +1,79 @@
 # GitHub Actions Deployment
 
-Two approaches for deploying with GitHub Actions: the `gordon images push` CLI (recommended) or a Docker-based workflow using Gordon's official action.
+## Recommended: OIDC Promotion
+
+Configure the issuer and exact subject on Gordon:
+
+```toml
+[[trusted_issuers]]
+issuer = "https://token.actions.githubusercontent.com"
+audience = "https://ci.example.com"
+
+[[promotion_policies]]
+issuer = "https://token.actions.githubusercontent.com"
+subjects = ["repo:acme/web:ref:refs/heads/main"]
+app = "web"
+service = "web"
+repository = "web"
+```
+
+The subject must match the job's actual `sub`. Jobs using an environment
+have a different subject, for example `repo:acme/web:environment:production`.
+Install Gordon, Docker, and `jq` on the runner, then:
+
+```yaml
+name: Promote
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      GORDON_REMOTE: https://ci.example.com
+      GORDON_OIDC_AUDIENCE: https://ci.example.com
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bnema/gordon/.github/actions/setup-gordon@main
+      - name: Push and promote
+        run: |
+          set -euo pipefail
+          gordon images push web --build --tag "$GITHUB_SHA" --remote "$GORDON_REMOTE" --json >push.json
+          gordon apps promote web --service web --image "$(jq -r .image push.json)" --remote "$GORDON_REMOTE" --json
+```
+
+The CLI reads `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`. `--oidc-audience` overrides
+`GORDON_OIDC_AUDIENCE`. No Gordon token secret is needed. Promotion polls
+by key; exit 0 means success, exit 1 means failure or refusal.
+
+### Docker and curl
+
+Fetch the JWT explicitly when not using the CLI:
+
+```bash
+GORDON_OIDC_TOKEN=$(curl --fail-with-body -sS \
+  -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fci.example.com" | jq -er .value)
+export GORDON_OIDC_TOKEN
+```
+
+Then follow [Docker and curl](./generic-ci.md#docker-and-curl): log in as
+`oidc` with the JWT, push, read the manifest digest, exchange at `/auth/token`,
+POST `/-/ci/apps/web/promote` with `Idempotency-Key`, and poll
+`/-/ci/apps/web/operations/by-key/{key}`. See
+[HTTP Results and Retries](./generic-ci.md#http-results-and-retries) for
+202 versus 200, 409 `app-busy`/`Retry-After`, and the push-only CI allowlist.
+The CI host does not serve pulls or admin calls; the main host may stay private.
+
+## Stored-Token Workflows
+
+For runners without OIDC, the following image-transfer workflows use the
+main host and a stored token. Push does not deploy: apply the app manifest
+and run `gordon apps deploy` separately. Prefer OIDC promotion for CI.
 
 ## Prerequisites
 
@@ -8,9 +81,9 @@ Two approaches for deploying with GitHub Actions: the `gordon images push` CLI (
 2. Deployment token generated with the minimum required scopes: `push,pull` for image transfer, plus `admin:apps:read,admin:apps:write` only when the workflow applies or deploys apps
 3. GitHub repository secrets configured
 
-## Recommended: gordon images push
+## Stored-Token CLI
 
-Use the `gordon images push` CLI for a lightweight, single-step build and deploy.
+Use the `gordon images push` CLI for a lightweight build and push.
 
 ### 1. Generate Token
 
@@ -139,7 +212,7 @@ jobs:
           GORDON_REMOTE: ${{ secrets.GORDON_REMOTE }}
           DEPLOY_TAG: ${{ inputs.tag }}
         run: |
-          args=(push --build --remote "$GORDON_REMOTE")
+          args=(images push --build --remote "$GORDON_REMOTE")
           if [[ -n "$DEPLOY_TAG" ]]; then
             [[ "$DEPLOY_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || exit 1
             args+=(--tag "$DEPLOY_TAG")
@@ -466,7 +539,7 @@ Error: unauthorized: authentication required
 
 ### Image Not Found After Push
 
-**Solution:** Ensure Gordon config has a route for the pushed image.
+**Solution:** Check the repository and tag. A push stores the image without creating a route or deploying an app.
 
 ### Build Fails
 

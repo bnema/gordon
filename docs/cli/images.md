@@ -15,13 +15,13 @@ Subcommands:
 - `prune` - Prune dangling runtime images and old registry tags.
 - `tags` - List registry tags for a specific repository.
 
-> **Note:** Images commands require remote mode (`--remote` + `--token`, or configured remotes).
+> **Note:** Images commands require remote mode. Push also supports OIDC credentials on the CI host.
 
 ## gordon images push
 
 Tag and push an image to the Gordon registry. Push transfers OCI content
-only: it never deploys. Deploy separately with `gordon apps deploy` after
-applying the manifest that references the pushed tag.
+only: it never deploys. For CI, use `gordon apps promote` with the digest
+from `--json`. For manifest changes, apply the manifest and run `gordon apps deploy`.
 
 ### Synopsis
 
@@ -46,7 +46,8 @@ gordon images push [image] [options]
 | `--build-arg` | Additional build args (repeatable, `KEY=VALUE`) |
 | `--tag` | Override pushed version tag (default: tag ref from CI, then `git describe --tags --dirty`) |
 | `--remote, -r` | Remote name or URL (e.g., prod, https://gordon.mydomain.com) |
-| `--token` | Authentication token for remote |
+| `--token` | Stored authentication token for remote |
+| `--oidc-audience` | Audience requested from the runner ID token endpoint; overrides `GORDON_OIDC_AUDIENCE` |
 
 ### Description
 
@@ -58,8 +59,9 @@ It auto-selects only when exactly one remote matches. If multiple remotes match,
 or a saved remote cannot be probed safely, the command stops and asks you to use
 `--remote` explicitly.
 
-The registry comes from the target Gordon instance. A bare image name such as
-`myapp` or `myapp:v1` is pushed to the target's `server.registry_domain`, read
+In stored-token mode, the registry comes from the target Gordon instance.
+A bare image name such as `myapp` or `myapp:v1` is pushed to the target's
+`server.gordon_domain`, read
 from `/admin/auth/verify` (any admin-scoped token, no `admin:status:read`
 needed). A fully qualified
 reference such as `registry.example.com/myapp` must name that same registry;
@@ -83,12 +85,21 @@ Domain-style push targets are retired: push an image name, then
 
 ### Authentication
 
-When used with `--remote`, gordon images push authenticates in two ways:
+For OIDC, select the CI host with `--remote https://ci.example.com`. Set
+`GORDON_OIDC_TOKEN`, or provide `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN` with `--oidc-audience` or
+`GORDON_OIDC_AUDIENCE`. A non-empty static token takes precedence.
+The CLI exchanges the JWT at `/auth/token`, pushes to the CI host, and skips
+admin verification and image inference calls. Use an explicit image name.
+Only policy-granted repositories are accessible; the CI host cannot serve
+pulls. See [CI Deployment](../deployment/generic-ci.md).
+
+In stored-token mode, `gordon images push` authenticates in two ways:
 
 - **Admin API** (tag listing for inference): uses `--token` or `$GORDON_TOKEN` as Bearer token
-- **Registry push**: automatically exchanges the token for a short-lived (5 min) registry access token via `/auth/token` -- no `docker login` required
+- **Registry push**: automatically exchanges the token for a short-lived registry access token via `/auth/token` -- no `docker login` required
 
-This means CI/CD pipelines only need a single secret (`GORDON_TOKEN`). The token
+Stored-token pipelines use a single secret (`GORDON_TOKEN`). The token
 needs `push` plus at least one `admin:*` scope, because the admin API rejects
 tokens without one; `push,pull,admin:apps:read` is the minimum. A `push,pull`
 token only works with `docker login` and `docker push`.

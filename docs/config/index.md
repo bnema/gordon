@@ -253,6 +253,7 @@ Pattern: `GORDON_SECTION_KEY` (uppercase, underscores instead of dots)
 - [Standalone Services](./services.md)
 - [Traffic Plane](./traffic.md)
 - [Authentication](./auth.md)
+- [Promotion Policies](./promotion.md) - Exact CI identity grants
 - [Telemetry](./telemetry.md)
 - [Backups](./backups.md)
 - [Images](./images.md)

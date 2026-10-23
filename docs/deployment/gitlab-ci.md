@@ -1,6 +1,61 @@
 # GitLab CI/CD Deployment
 
-Automated deployment with GitLab CI/CD using Gordon's push command.
+## Recommended: OIDC Promotion
+
+Configure Gordon with your GitLab issuer and the job's exact subject:
+
+```toml
+[[trusted_issuers]]
+issuer = "https://gitlab.com"
+audience = "https://ci.example.com"
+
+[[promotion_policies]]
+issuer = "https://gitlab.com"
+subjects = ["project_path:acme/web:ref_type:branch:ref:main"]
+app = "web"
+service = "web"
+repository = "web"
+```
+
+For a self-managed GitLab, use its exact issuer URL. The runner needs Gordon,
+Docker, and `jq`; Docker-in-Docker runners also need their usual daemon setup.
+Request an ID token with the configured audience and pass it directly to Gordon:
+
+```yaml
+promote:
+  stage: deploy
+  id_tokens:
+    GORDON_OIDC_TOKEN:
+      aud: https://ci.example.com
+  variables:
+    GORDON_REMOTE: https://ci.example.com
+  script:
+    - gordon images push web --build --tag "$CI_COMMIT_SHA" --remote "$GORDON_REMOTE" --json >push.json
+    - gordon apps promote web --service web --image "$(jq -r .image push.json)" --remote "$GORDON_REMOTE" --json
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+```
+
+`GORDON_OIDC_TOKEN` selects OIDC mode; no `GORDON_TOKEN` is needed.
+Promotion polls by key; exit 0 means success, exit 1 means failure or refusal.
+
+### Docker and curl
+
+Use the same `id_tokens` declaration with the
+[Docker and curl flow](./generic-ci.md#docker-and-curl): Docker login uses
+username `oidc` and `GORDON_OIDC_TOKEN` as password. Push, read the manifest
+digest, exchange Basic credentials at `/auth/token`, POST
+`/-/ci/apps/web/promote` with `Idempotency-Key`, then poll
+`/-/ci/apps/web/operations/by-key/{key}`. See
+[HTTP Results and Retries](./generic-ci.md#http-results-and-retries) for
+202 versus 200, 409 `app-busy`/`Retry-After`, and the allowlist.
+The CI host does not serve image pulls or admin calls; the main host may stay private.
+
+## Stored-Token Workflows
+
+For runners without OIDC, the following workflows transfer images through
+the main host with a stored token. Apply and deploy separately after push;
+prefer OIDC promotion for CI.
 
 ## Prerequisites
 

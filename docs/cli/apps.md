@@ -2,7 +2,8 @@
 
 Validate, persist, inspect, and operate applications.
 
-All mutations are executed by the daemon through the admin API.
+All mutations are executed by the daemon. Owner/stored-token commands use
+the admin API; OIDC promotion uses the restricted CI host.
 Without a reachable daemon the commands fail with `daemon-unavailable`
 instead of writing locally. Mutations are idempotent: every request carries a
 client-generated key, and the daemon binds that key to the exact request.
@@ -320,6 +321,8 @@ their provenance.
 | `--service NAME` | Service to promote (required) |
 | `--image REF` | Image as `REPO@sha256:DIGEST` (required) |
 | `--expected-revision REV` | Refuse unless desired state is still at this revision |
+| `--remote, -r` | Remote name or URL; use the CI host for OIDC |
+| `--oidc-audience` | Runner ID token audience; overrides `GORDON_OIDC_AUDIENCE` |
 | `--json` | Output as JSON |
 
 The command polls the operation by key like `apps deploy` and exits 0 only
@@ -331,10 +334,37 @@ uses a new key.
 If the outcome is unknown, check it with
 `gordon apps operations show APP --key KEY` before promoting again.
 
+### OIDC Mode
+
+Use `--remote https://ci.example.com` with `GORDON_OIDC_TOKEN`, or
+`ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`.
+The runner endpoint requires `--oidc-audience` or `GORDON_OIDC_AUDIENCE`;
+a non-empty `GORDON_OIDC_TOKEN` takes precedence. Gordon exchanges the JWT
+for a ci-access token and uses only promotion and by-key lookup routes,
+without admin verification. Stored-token mode remains available when no
+OIDC source is set. The identity needs an exact
+[promotion policy](../config/promotion.md).
+
 ```bash
+gordon images push web --build --remote https://ci.example.com --json >push.json
 gordon apps promote blog --service web \
-  --image registry.example.com/web@sha256:3f1c...
+  --image "$(jq -r .image push.json)" --remote https://ci.example.com --json
 ```
+
+JSON mode emits one final operation document (a no-op example):
+
+```json
+{"op":"op-1","app":"blog","revision":"rev-2","status":"success","outcome":"success","services":{},"steps":[]}
+```
+
+Stored-token callers submit to `POST /admin/apps/{app}/promote`; OIDC
+callers submit to `POST /-/ci/apps/{app}/promote`. Both accept `service`,
+`image`, and optional `expected_revision`, and require `Idempotency-Key`.
+
+Progress goes to stderr. HTTP 202 starts polling; HTTP 200 returns a terminal
+result. A 409, including an unfinished/failed replay, exits 1 without retrying.
+OIDC lookup is limited to the submitting principal with a current app policy.
+See [CI Deployment](../deployment/generic-ci.md#http-results-and-retries).
 
 ---
 

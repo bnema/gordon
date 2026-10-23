@@ -14,7 +14,7 @@ tls_cert_file = ""                           # PEM cert path (optional, for stat
 tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
 force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
-ci_domain = ""                               # Optional CI hostname; configuration only (routing not yet implemented)
+ci_domain = ""                               # Optional HTTPS CI host for push, promotion, and lookup
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "95MB"                 # Max size per registry blob upload chunk
 max_blob_size = "1GB"                        # Max cumulative size per registry blob/layer upload
@@ -467,8 +467,9 @@ gordon serve
 ## CI Identity and Promotion Policies
 
 CI identity and promotion configuration is validated at startup and reload.
-The configuration snapshot is stored for future CI authentication and promotion
-consumers; these settings do not yet enable CI routes or image promotion.
+`server.ci_domain` enables the restricted CI router. See
+[Trusted Issuers](./auth.md#oidc-trusted-issuers) for key defaults and cache
+behavior, and [Promotion Policies](./promotion.md) for grant semantics.
 
 ```toml
 [[trusted_issuers]]

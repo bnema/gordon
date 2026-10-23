@@ -170,6 +170,65 @@ gordon auth internal
 
 > **Note:** Internal credentials are stored with restrictive permissions (0600) in secure runtime directories (XDG_RUNTIME_DIR or ~/.gordon/run) and cleaned up on shutdown.
 
+## OIDC Trusted Issuers
+
+Declare each workload identity provider at the top level of `gordon.toml`:
+
+```toml
+[[trusted_issuers]]
+issuer = "https://issuer.example.com"
+audience = "https://ci.example.com"
+# jwks_uri = "https://issuer.example.com/keys"
+max_token_lifetime = "1h"
+clock_skew = "60s"
+allow_private_network = false
+```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `issuer` | Required | Byte-exact JWT `iss`; absolute HTTPS URL without userinfo, query, or fragment |
+| `audience` | Required | Non-empty exact value that must occur in JWT `aud` |
+| `jwks_uri` | `""` | HTTPS JWKS override; otherwise discovered from the issuer's `/.well-known/openid-configuration` |
+| `max_token_lifetime` | `"1h"` | Positive maximum `exp - iat` |
+| `clock_skew` | `"60s"` | Non-negative allowance for time claims; `"0s"` disables it |
+| `allow_private_network` | `false` | Permit private, loopback, link-local and other non-public destination IPs for this issuer's discovery and JWKS requests |
+
+Issuer URLs and subjects are not normalized; trailing slashes matter.
+`jwks_uri` follows the same URL rules as `issuer`. Wildcards and unknown keys
+are rejected. Discovery must report the exact configured issuer. Redirects
+are refused, HTTPS certificates are verified, and destination IPs are checked
+on connection. Enable private network access only for a provider you control.
+
+Tokens must use RS256 or ES256 and contain `sub`, `iat`, and `exp`;
+`nbf`, when present, is checked. A `kid` is required with multiple keys.
+Keys are cached for 1 hour. An unknown `kid` can trigger a refresh, but only
+one fetch per issuer per minute is allowed, including reload and failed
+fetches. A rotated issuer key can therefore be refused for up to 60 seconds
+after a reload or a forged-`kid` probe. On fetch failure, cached keys remain
+usable for up to 24 hours from their last successful fetch; after that Gordon
+fails closed. No usable keys yields HTTP 503 with `Retry-After: 30`;
+an invalid identity token yields 401.
+
+## CI Access Tokens
+
+On the [CI host](./server.md#ci-host), `GET /auth/token` exchanges Basic
+credentials (username `oidc`, password the OIDC JWT) for a short-lived
+`ci-access` bearer token. The username is ignored. A matching
+[promotion policy](./promotion.md) is required. Requested repository scopes
+are intersected with policy grants: only `push` and `pull` are issued,
+never admin scopes. `pull` permits the HEAD checks needed for pushing;
+the CI host does not serve image pulls.
+
+The response contains `token`, `expires_in` (seconds), and `issued_at`
+(RFC 3339). A login without a scope gets an unscoped token. Promotion and
+lookup use the bearer token, not the raw OIDC JWT.
+TTL is `auth.access_token_ttl` (default `15m`), capped at 1 hour.
+CI access tokens cannot authenticate to the main registry or admin API.
+They are not stored and are revoked only by rotating the token secret;
+removing an issuer does not revoke already issued tokens. Current policies
+are still checked on requests: removing a policy blocks its repository
+access and promotions, and hides operation lookups without an app policy.
+
 ## Related
 
 - [Secret Providers](./secrets.md)

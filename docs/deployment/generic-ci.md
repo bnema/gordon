@@ -1,14 +1,149 @@
 # Generic CI/CD Deployment
 
-Deploy with Gordon from any CI/CD system.
+Use OIDC promotion for CI: push an image, then run exactly its digest in one
+service. No long-lived Gordon admin token is required.
 
 ## Requirements
 
-- Docker available on CI runner (for building images)
-- Network access to the public Gordon HTTPS domain; do not expose or target the loopback `server.registry_port`
-- Gordon binary (optional but recommended)
+- Docker on the runner; Gordon CLI and `jq` for the CLI example, or `curl` and `jq` for the HTTP example
+- A public HTTPS [CI host](../config/server.md#ci-host), separate from the main registry/admin host
+- A configured [trusted issuer](../config/auth.md#oidc-trusted-issuers) and [promotion policy](../config/promotion.md)
+- An existing running app whose other services match desired state; provision app manifests and secrets separately as an administrator
 
-## Recommended: gordon images push
+Gordon must reach issuer discovery and JWKS endpoints over HTTPS. The main
+host may remain private. Never target the loopback `server.registry_port`.
+
+## CLI: Push and Promote
+
+Obtain a job OIDC JWT with the configured audience and pass it through
+`GORDON_OIDC_TOKEN`. Gordon also supports `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN`: it fetches a JWT with the audience from
+`--oidc-audience` or `GORDON_OIDC_AUDIENCE` (required in this mode).
+A non-empty `GORDON_OIDC_TOKEN` takes precedence. With neither source,
+the CLI uses stored-token authentication (`GORDON_TOKEN`).
+
+```bash
+set -euo pipefail
+export GORDON_REMOTE=https://ci.example.com
+# GORDON_OIDC_TOKEN is supplied by the job's identity provider.
+gordon images push web --build --tag v1.2.0 \
+  --remote "$GORDON_REMOTE" --json >push.json
+gordon apps promote web --service web \
+  --image "$(jq -r .image push.json)" \
+  --remote "$GORDON_REMOTE" --json >promote.json
+jq '{op, app, status, outcome}' promote.json
+```
+
+Push JSON contains `repository`, `tag`, `digest`, and `image`; `image` is
+`repository@digest`. Use that value, not a tag or local image ID.
+Promotion waits by polling the operation by key. Exit 0 means success;
+exit 1 means refusal or unsuccessful completion. JSON mode prints one final
+document to stdout; build, upload, and watch progress goes to stderr.
+
+## Docker and curl
+
+Use the OIDC JWT as the Docker password. Do not enable shell tracing or
+print JWTs or exchanged tokens. A `pull` scope is needed for HEAD checks,
+but the CI host does not serve image pulls.
+
+```bash
+set -euo pipefail
+CI=https://ci.example.com
+printf '%s' "$GORDON_OIDC_TOKEN" |
+  docker login ci.example.com --username oidc --password-stdin
+docker build -t ci.example.com/web:v1.2.0 .
+docker push ci.example.com/web:v1.2.0
+```
+
+Read the `sha256:…` digest reported by `docker push` (the manifest digest,
+not a layer digest or image ID). Set `DIGEST` to that value. Exchange the
+JWT for a bearer token to promote; the Basic username is ignored:
+
+```bash
+# Keep credentials out of curl's command-line arguments.
+BASIC=$(printf 'oidc:%s' "$GORDON_OIDC_TOKEN" | base64 | tr -d '\n')
+TOKEN=$(printf 'header = "Authorization: Basic %s"\n' "$BASIC" |
+  curl --fail-with-body -sS --config - --get "$CI/auth/token" \
+    --data-urlencode 'service=ci.example.com' \
+    --data-urlencode 'scope=repository:web:push,pull' | jq -er .token)
+unset BASIC
+
+# Persist this key and the exact request body before submitting.
+KEY="release-$(date +%s)-$$"
+printf '%s\n' "$KEY" >operation-key.txt
+jq -n --arg image "web@$DIGEST" \
+  '{service:"web",image:$image}' >request.json
+printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" |
+  curl --fail-with-body -sS --config - \
+    -H 'Content-Type: application/json' -H "Idempotency-Key: $KEY" \
+    --data-binary @request.json "$CI/-/ci/apps/web/promote" >operation.json
+```
+
+The exchange can also be used by a registry client instead of Docker's
+login handshake. `/auth/token` returns `token`, `expires_in`, and `issued_at`.
+Use the exchanged token, never the raw JWT, for promotion and lookup.
+Poll `GET /-/ci/apps/{app}/operations/by-key/{key}` until `status` is no
+longer `running`. For example, a bounded wait:
+
+```bash
+for attempt in $(seq 1 120); do
+  printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" |
+    curl --fail-with-body -sS --config - \
+      "$CI/-/ci/apps/web/operations/by-key/$KEY" >operation.json
+  case "$(jq -r .status operation.json)" in
+    success) exit 0 ;;
+    running) sleep 2 ;;
+    *) cat operation.json; exit 1 ;;
+  esac
+done
+echo "Wait timed out; query the same key before retrying" >&2
+exit 1
+```
+
+Refresh the bearer token if it expires while waiting. Lookup is scoped to
+the submitting principal and requires a current policy for the app.
+
+## HTTP Results and Retries
+
+Promotion requires an `Idempotency-Key`: 1–128 printable ASCII bytes without
+spaces. Use a URL-safe value for lookup. JSON accepts only `service`, `image`,
+and optional `expected_revision`, with a 4 KiB body limit.
+
+| Status | Meaning |
+|--------|---------|
+| `202` | Accepted, still running; poll by key |
+| `200` | Terminal promotion result (including successful replay or no-op); lookup also returns 200 while running |
+| `400` | Malformed request, tag/non-installation image, or invalid candidate configuration |
+| `401` | Invalid identity at exchange, or missing/invalid ci-access bearer token |
+| `403` | No matching policy or requested repository scope |
+| `404` | Missing app, service, manifest, or visible operation; route outside the CI allowlist |
+| `409` | `app-busy`, state/revision conflict, key reuse, or unfinished/failed replay |
+| `503` | Identity provider unavailable; `Retry-After: 30` |
+
+`app-busy` returns `Retry-After: 5`: nothing was promoted; wait, then submit
+with a new key. For an ambiguous network result, query the original key
+before any retry. An identical replay returns the recorded operation;
+a different request under the same key is refused. The CLI does not retry
+409 mutations. Terminal `partial` or `failed` is not success.
+
+The CI host allowlist is:
+
+- `GET /auth/token` and `GET /v2/`
+- `HEAD /v2/<repo>/blobs/<digest>`
+- `POST /v2/<repo>/blobs/uploads/` without `mount` or `from`
+- `PATCH` or `PUT /v2/<repo>/blobs/uploads/<uuid>`
+- `PUT` or `HEAD /v2/<repo>/manifests/<ref>`
+- `POST /-/ci/apps/{app}/promote`
+- `GET /-/ci/apps/{app}/operations/by-key/{key}`
+
+Repositories must be policy-granted. Manifest/blob GET, tag listing,
+catalog, deletion, cross-repository mounts, and `/admin` return 404.
+
+## Stored-Token Deployment
+
+For CI without OIDC, use the main host and a least-privilege stored token.
+This requires network access to the private main host. Do not send stored
+tokens to the CI host.
 
 ### 1. Generate Deployment Token
 
@@ -38,11 +173,14 @@ curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_am
   -o /usr/local/bin/gordon
 chmod +x /usr/local/bin/gordon
 
-# 2. Build, push, and deploy
+# 2. Build and push (does not deploy)
 export GORDON_TOKEN="$GORDON_TOKEN"
 gordon images push --build \
-  --remote "$GORDON_REMOTE" \
+  --remote "$GORDON_REMOTE"
 
+# Apply the app manifest and activate it explicitly
+gordon apps apply --file myapp.toml --remote "$GORDON_REMOTE"
+gordon apps deploy myapp --remote "$GORDON_REMOTE"
 ```
 
 Gordon auto-detects the version from CI environment variables:
@@ -70,94 +208,6 @@ docker push gordon.example.com/myapp:v1.0.0
 
 This requires the token subject (`ci-deploy`) as the username.
 Pushing only stores the image; deploy explicitly with `gordon apps deploy` afterwards.
-
-## CI System Examples
-
-### Jenkins
-
-```groovy
-pipeline {
-    agent any
-    environment {
-        GORDON_TOKEN = credentials('gordon-token')
-        GORDON_REMOTE = 'https://gordon.example.com'
-    }
-    stages {
-        stage('Deploy') {
-            steps {
-                sh '''
-                    curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 \
-                      -o /usr/local/bin/gordon
-                    chmod +x /usr/local/bin/gordon
-                    gordon images push --build --remote "$GORDON_REMOTE"
-                '''
-            }
-        }
-    }
-}
-```
-
-### CircleCI
-
-```yaml
-version: 2.1
-
-jobs:
-  deploy:
-    docker:
-      - image: docker:24
-    steps:
-      - checkout
-      - setup_remote_docker
-      - run:
-          name: Install Gordon
-          command: |
-            apk add --no-cache curl
-            curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 \
-              -o /usr/local/bin/gordon
-            chmod +x /usr/local/bin/gordon
-      - run:
-          name: Deploy
-          command: |
-            gordon images push --build \
-              --remote "$GORDON_REMOTE"
-
-workflows:
-  deploy:
-    jobs:
-      - deploy:
-          filters:
-            tags:
-              only: /^v.*/
-            branches:
-              ignore: /.*/
-```
-
-### Drone
-
-```yaml
-kind: pipeline
-type: docker
-name: deploy
-
-steps:
-  - name: deploy
-    image: docker:24
-    environment:
-      GORDON_TOKEN:
-        from_secret: gordon_token
-      GORDON_REMOTE:
-        from_secret: gordon_remote
-    commands:
-      - apk add --no-cache curl
-      - curl -fsSL https://git.bnema.dev/gordon/releases/latest/download/gordon_linux_amd64 -o /usr/local/bin/gordon
-      - chmod +x /usr/local/bin/gordon
-      - gordon images push --build --remote "$GORDON_REMOTE"
-
-trigger:
-  event:
-    - tag
-```
 
 ## Token Scopes Reference
 
