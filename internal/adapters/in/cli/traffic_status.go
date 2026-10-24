@@ -94,9 +94,9 @@ func renderTrafficEntryPoints(out io.Writer, entries []dto.TrafficEntryPointStat
 }
 
 func renderTrafficEntryPoint(out io.Writer, entry dto.TrafficEntryPointStatus) error {
-	if err := cliWritef(out, "  %s  %s  %s  active=%t tcp=%d udp=%d accepted=%d refused=%d errors=%d\n",
+	if err := cliWritef(out, "  %s  %s  %s  active=%t tcp=%d udp=%d accepted=%d refused=%d held=%d errors=%d\n",
 		entry.Name, entry.Protocol, entry.Address, entry.Active, entry.ActiveTCPConnections, entry.ActiveUDPSessions,
-		entry.TotalAccepted, entry.TotalRefused, entry.TotalErrors); err != nil {
+		entry.TotalAccepted, entry.TotalRefused, entry.TotalHeld, entry.TotalErrors); err != nil {
 		return err
 	}
 	if hasSmartTCPCounters(entry.SmartTCP) {
@@ -109,9 +109,9 @@ func renderTrafficTotals(out io.Writer, counters dto.TrafficCounters) error {
 	if err := cliWriteLine(out, ""); err != nil {
 		return err
 	}
-	if err := cliWritef(out, "Totals: tcp=%d udp=%d accepted=%d refused=%d errors=%d bytes_in=%d bytes_out=%d\n",
+	if err := cliWritef(out, "Totals: tcp=%d udp=%d accepted=%d refused=%d held=%d errors=%d bytes_in=%d bytes_out=%d\n",
 		counters.ActiveTCPConnections, counters.ActiveUDPSessions, counters.TotalAccepted,
-		counters.TotalRefused, counters.TotalErrors, counters.BytesIn, counters.BytesOut); err != nil {
+		counters.TotalRefused, counters.TotalHeld, counters.TotalErrors, counters.BytesIn, counters.BytesOut); err != nil {
 		return err
 	}
 	if hasSmartTCPCounters(counters.SmartTCP) {

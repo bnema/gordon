@@ -19,6 +19,7 @@ type TrafficEntryPointStatus struct {
 	ActiveTCPConnections int64                     `json:"active_tcp_connections"`
 	ActiveUDPSessions    int64                     `json:"active_udp_sessions"`
 	TotalAccepted        int64                     `json:"total_accepted"`
+	TotalHeld            int64                     `json:"total_held"`
 	TotalRefused         int64                     `json:"total_refused"`
 	TotalErrors          int64                     `json:"total_errors"`
 	BytesIn              int64                     `json:"bytes_in"`
@@ -58,6 +59,7 @@ type TrafficCounters struct {
 	ActiveTCPConnections int64            `json:"active_tcp_connections"`
 	ActiveUDPSessions    int64            `json:"active_udp_sessions"`
 	TotalAccepted        int64            `json:"total_accepted"`
+	TotalHeld            int64            `json:"total_held"`
 	TotalRefused         int64            `json:"total_refused"`
 	TotalErrors          int64            `json:"total_errors"`
 	BytesIn              int64            `json:"bytes_in"`
@@ -97,7 +99,7 @@ func trafficEntryPointsFromDomain(values []domain.EntryPointStatus) []TrafficEnt
 		out = append(out, TrafficEntryPointStatus{
 			Name: value.Name, Address: value.Address, Protocol: value.Protocol, Active: value.Active,
 			ActiveTCPConnections: value.ActiveTCPConnections, ActiveUDPSessions: value.ActiveUDPSessions,
-			TotalAccepted: value.TotalAccepted, TotalRefused: value.TotalRefused, TotalErrors: value.TotalErrors,
+			TotalAccepted: value.TotalAccepted, TotalRefused: value.TotalRefused, TotalHeld: value.TotalHeld, TotalErrors: value.TotalErrors,
 			BytesIn: value.BytesIn, BytesOut: value.BytesOut, SmartTCP: smartTCPCountersFromDomain(value.SmartTCP),
 		})
 	}
@@ -139,6 +141,7 @@ func trafficCountersFromDomain(value domain.TrafficCounters) TrafficCounters {
 		ActiveUDPSessions:    value.ActiveUDPSessions,
 		TotalAccepted:        value.TotalAccepted,
 		TotalRefused:         value.TotalRefused,
+		TotalHeld:            value.TotalHeld,
 		TotalErrors:          value.TotalErrors,
 		BytesIn:              value.BytesIn,
 		BytesOut:             value.BytesOut,

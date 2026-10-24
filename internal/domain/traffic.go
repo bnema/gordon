@@ -113,6 +113,7 @@ type EntryPointStatus struct {
 	ActiveTCPConnections int64
 	ActiveUDPSessions    int64
 	TotalAccepted        int64
+	TotalHeld            int64
 	TotalRefused         int64
 	TotalErrors          int64
 	BytesIn              int64
@@ -147,6 +148,7 @@ type TrafficCounters struct {
 	ActiveTCPConnections int64
 	ActiveUDPSessions    int64
 	TotalAccepted        int64
+	TotalHeld            int64
 	TotalRefused         int64
 	TotalErrors          int64
 	BytesIn              int64

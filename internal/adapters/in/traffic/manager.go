@@ -49,6 +49,8 @@ func trafficWarn(ctx context.Context) *zerolog.Event {
 
 // Manager owns runtime entrypoints for the traffic plane.
 type Manager struct {
+	changedMu    sync.Mutex
+	changed      chan struct{}
 	mu           sync.Mutex
 	stopped      atomic.Bool
 	bindMu       sync.Mutex
@@ -66,6 +68,7 @@ type Manager struct {
 // NewManager creates a traffic manager.
 func NewManager() *Manager {
 	manager := &Manager{
+		changed:          make(chan struct{}),
 		listeners:        map[string]*entryPointRuntime{},
 		udpListeners:     map[string]*udpEntryPointRuntime{},
 		lastReloadStatus: reloadStatusOK,
@@ -520,6 +523,7 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 			status.ActiveTCPConnections = counters.ActiveTCPConnections
 			status.TotalAccepted = counters.TotalAccepted
 			status.TotalRefused = counters.TotalRefused
+			status.TotalHeld = counters.TotalHeld
 			status.TotalErrors = counters.TotalErrors
 			status.BytesIn = counters.BytesIn
 			status.BytesOut = counters.BytesOut
@@ -531,6 +535,7 @@ func entryPointStatuses(entries []domain.EntryPoint, listeners map[string]*entry
 			status.ActiveUDPSessions = counters.ActiveUDPSessions
 			status.TotalAccepted = counters.TotalAccepted
 			status.TotalRefused = counters.TotalRefused
+			status.TotalHeld = counters.TotalHeld
 			status.TotalErrors = counters.TotalErrors
 			status.BytesIn = counters.BytesIn
 			status.BytesOut = counters.BytesOut
@@ -581,6 +586,7 @@ func aggregateCounters(entries []domain.EntryPointStatus) domain.TrafficCounters
 		counters.ActiveUDPSessions += entry.ActiveUDPSessions
 		counters.TotalAccepted += entry.TotalAccepted
 		counters.TotalRefused += entry.TotalRefused
+		counters.TotalHeld += entry.TotalHeld
 		counters.TotalErrors += entry.TotalErrors
 		counters.BytesIn += entry.BytesIn
 		counters.BytesOut += entry.BytesOut
@@ -633,6 +639,7 @@ type trafficCounters struct {
 	activeTCPConnections atomic.Int64
 	activeUDPSessions    atomic.Int64
 	totalAccepted        atomic.Int64
+	totalHeld            atomic.Int64
 	totalRefused         atomic.Int64
 	totalErrors          atomic.Int64
 	bytesIn              atomic.Int64
@@ -661,6 +668,7 @@ func (c *trafficCounters) snapshot() domain.TrafficCounters {
 		ActiveUDPSessions:    c.activeUDPSessions.Load(),
 		TotalAccepted:        c.totalAccepted.Load(),
 		TotalRefused:         c.totalRefused.Load(),
+		TotalHeld:            c.totalHeld.Load(),
 		TotalErrors:          c.totalErrors.Load(),
 		BytesIn:              c.bytesIn.Load(),
 		BytesOut:             c.bytesOut.Load(),
@@ -771,6 +779,10 @@ func (m *Manager) commitGraph(nextGraph *domain.TrafficGraph, newListeners map[s
 	m.listeners = newListeners
 	m.udpListeners = newUDPListeners
 	m.snapshot.Store(nextGraph)
+	m.changedMu.Lock()
+	close(m.changed)
+	m.changed = make(chan struct{})
+	m.changedMu.Unlock()
 	for _, runtime := range createdListeners {
 		runtime.start()
 	}
@@ -779,4 +791,10 @@ func (m *Manager) commitGraph(nextGraph *domain.TrafficGraph, newListeners map[s
 	}
 	m.lastReloadStatus = reloadStatusOK
 	m.lastReloadError = ""
+}
+
+func (m *Manager) graphChanged() <-chan struct{} {
+	m.changedMu.Lock()
+	defer m.changedMu.Unlock()
+	return m.changed
 }

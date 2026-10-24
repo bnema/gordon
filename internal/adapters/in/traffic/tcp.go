@@ -318,7 +318,10 @@ func (r *entryPointRuntime) handleTCPConn(client net.Conn) {
 }
 
 func (r *entryPointRuntime) handlePlainTCP(tracked *trackedTCPConn, options domain.TCPOptions) {
-	_, backend, ok := r.resolveTCPBackend()
+	backend, ok := r.awaitTCPBackend(func() (domain.TrafficBackend, time.Time, bool) {
+		_, backend, until, ok := r.resolveTCPBackend()
+		return backend, until, ok
+	})
 	if !ok {
 		r.counters.totalRefused.Add(1)
 		_ = tracked.client.Close()
@@ -398,7 +401,13 @@ func (r *entryPointRuntime) handleSmartTCPTLSPeekError(conn net.Conn, err error)
 }
 
 func (r *entryPointRuntime) handleSmartTCPUnknown(tracked *trackedTCPConn, conn net.Conn, options domain.TCPOptions) bool {
-	backend, rawFallbackName, ok, rawCIDRRefused := r.resolveRawFallbackBackendDetailed(conn.RemoteAddr())
+	var rawFallbackName string
+	var rawCIDRRefused bool
+	backend, ok := r.awaitTCPBackend(func() (domain.TrafficBackend, time.Time, bool) {
+		backend, until, name, found, refused := r.resolveRawFallbackBackendDetailed(conn.RemoteAddr())
+		rawFallbackName, rawCIDRRefused = name, refused
+		return backend, until, found
+	})
 	if ok {
 		tracked.markRawFallback(rawFallbackName)
 		r.proxyToBackendAfterDial(tracked, conn, backend, options, func() {
@@ -495,59 +504,50 @@ func (r *entryPointRuntime) proxyToBackendAfterDial(tracked *trackedTCPConn, cli
 	return true
 }
 
-func (r *entryPointRuntime) resolveRawFallbackBackendDetailed(remote net.Addr) (domain.TrafficBackend, string, bool, bool) {
+func (r *entryPointRuntime) resolveRawFallbackBackendDetailed(remote net.Addr) (domain.TrafficBackend, time.Time, string, bool, bool) {
 	graph := r.manager.snapshot.Load()
 	if graph == nil {
-		return domain.TrafficBackend{}, "", false, false
+		return domain.TrafficBackend{}, time.Time{}, "", false, false
 	}
 	entryPoint := r.entryPointSnapshot()
 	if entryPoint.RawFallback == "" {
-		return domain.TrafficBackend{}, "", false, false
+		return domain.TrafficBackend{}, time.Time{}, "", false, false
 	}
 	if !entryPoint.AllowPublicRawFallback {
 		trusted := r.rawFallbackTrustedSnapshot()
 		if len(trusted) == 0 || !trustedRemoteAddr(trusted, remote) {
-			return domain.TrafficBackend{}, "", false, true
+			return domain.TrafficBackend{}, time.Time{}, "", false, true
 		}
 	}
 	for _, router := range graph.Routers {
 		if router.Name == entryPoint.RawFallback && router.EntryPoint == entryPoint.Name && router.Protocol == domain.RouterProtocolTCP {
-			backend, ok := r.backendForRouter(graph, router)
-			return backend, entryPoint.RawFallback, ok, false
+			backend, until, ok := r.backendForRouter(graph, router)
+			return backend, until, entryPoint.RawFallback, ok, false
 		}
 	}
-	return domain.TrafficBackend{}, "", false, false
+	return domain.TrafficBackend{}, time.Time{}, "", false, false
 }
 
-func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.TrafficBackend, bool) {
+func (r *entryPointRuntime) resolveTCPBackend() (domain.TrafficRouter, domain.TrafficBackend, time.Time, bool) {
 	graph := r.manager.snapshot.Load()
 	if graph == nil {
-		return domain.TrafficRouter{}, domain.TrafficBackend{}, false
+		return domain.TrafficRouter{}, domain.TrafficBackend{}, time.Time{}, false
 	}
 	entryPoint := r.entryPointSnapshot()
 	var router domain.TrafficRouter
 	for _, candidate := range graph.Routers {
 		if candidate.EntryPoint == entryPoint.Name && candidate.Protocol == domain.RouterProtocolTCP {
 			if router.Name != "" {
-				return domain.TrafficRouter{}, domain.TrafficBackend{}, false
+				return domain.TrafficRouter{}, domain.TrafficBackend{}, time.Time{}, false
 			}
 			router = candidate
 		}
 	}
 	if router.Name == "" {
-		return domain.TrafficRouter{}, domain.TrafficBackend{}, false
+		return domain.TrafficRouter{}, domain.TrafficBackend{}, time.Time{}, false
 	}
-	for _, service := range graph.Services {
-		if service.Name != router.Service || len(service.Backends) != 1 {
-			continue
-		}
-		backend := service.Backends[0]
-		if backend.Protocol != domain.NetworkProtocolTCP {
-			return domain.TrafficRouter{}, domain.TrafficBackend{}, false
-		}
-		return router, backend, true
-	}
-	return domain.TrafficRouter{}, domain.TrafficBackend{}, false
+	backend, until, ok := r.backendForRouter(graph, router)
+	return router, backend, until, ok
 }
 
 func (r *entryPointRuntime) resolveTLSBackend(sni string) (domain.TrafficBackend, bool) {
@@ -557,10 +557,12 @@ func (r *entryPointRuntime) resolveTLSBackend(sni string) (domain.TrafficBackend
 		return domain.TrafficBackend{}, false
 	}
 	if router, ok := r.findExactTLSRouter(graph, sni); ok {
-		return r.backendForRouter(graph, router)
+		backend, until, ok := r.backendForRouter(graph, router)
+		return backend, ok && until.IsZero()
 	}
 	if router, ok := r.findWildcardTLSRouter(graph, sni); ok {
-		return r.backendForRouter(graph, router)
+		backend, until, ok := r.backendForRouter(graph, router)
+		return backend, ok && until.IsZero()
 	}
 	return domain.TrafficBackend{}, false
 }
@@ -586,13 +588,52 @@ func (r *entryPointRuntime) findWildcardTLSRouter(graph *domain.TrafficGraph, sn
 	return domain.TrafficRouter{}, false
 }
 
-func (r *entryPointRuntime) backendForRouter(graph *domain.TrafficGraph, router domain.TrafficRouter) (domain.TrafficBackend, bool) {
+func (r *entryPointRuntime) backendForRouter(graph *domain.TrafficGraph, router domain.TrafficRouter) (domain.TrafficBackend, time.Time, bool) {
 	for _, service := range graph.Services {
-		if service.Name == router.Service && len(service.Backends) == 1 && service.Backends[0].Protocol == domain.NetworkProtocolTCP {
-			return service.Backends[0], true
+		if service.Name != router.Service {
+			continue
+		}
+		if len(service.Backends) == 0 && !service.HoldUntil.IsZero() {
+			return domain.TrafficBackend{}, service.HoldUntil, true
+		}
+		if len(service.Backends) == 1 && service.Backends[0].Protocol == domain.NetworkProtocolTCP {
+			return service.Backends[0], time.Time{}, true
 		}
 	}
-	return domain.TrafficBackend{}, false
+	return domain.TrafficBackend{}, time.Time{}, false
+}
+
+// awaitTCPBackend does not read client bytes. Held connections retain their
+// admission slot and therefore count against traffic.tcp.max_connections.
+func (r *entryPointRuntime) awaitTCPBackend(resolve func() (domain.TrafficBackend, time.Time, bool)) (domain.TrafficBackend, bool) {
+	held := false
+	for {
+		ch := r.manager.graphChanged()
+		backend, until, ok := resolve()
+		if !ok {
+			return domain.TrafficBackend{}, false
+		}
+		if backend.Port > 0 {
+			return backend, true
+		}
+		if !until.After(time.Now()) {
+			return domain.TrafficBackend{}, false
+		}
+		if !held {
+			r.counters.totalHeld.Add(1)
+			held = true
+		}
+		timer := time.NewTimer(time.Until(until))
+		select {
+		case <-ch:
+			timer.Stop()
+		case <-timer.C:
+			return domain.TrafficBackend{}, false
+		case <-r.ctx.Done():
+			timer.Stop()
+			return domain.TrafficBackend{}, false
+		}
+	}
 }
 
 func hostMatchesTLSWildcard(host string, wildcard string) bool {
