@@ -730,7 +730,7 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 	select {
 	case <-r.acceptDone:
 	case <-ctx.Done():
-		return
+		r.closeActiveConns()
 	}
 	r.stopTLSHTTPServer(ctx, drainTimeout)
 	r.stopSmartTCPHTTPServer(ctx, drainTimeout)
@@ -739,7 +739,7 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 		return
 	}
-	trafficDebug(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
+	trafficWarn(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
 	r.closeActiveConns()
 	select {
 	case <-r.activeDone():
@@ -778,7 +778,7 @@ func stopTLSHTTPServer(ctx context.Context, entryPointName string, listener *tls
 	shutdownCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		trafficDebug(ctx).Err(err).Str("entrypoint", entryPointName).Msg("forcing tls mux https server close")
+		trafficWarn(ctx).Err(err).Str("entrypoint", entryPointName).Msg("forcing tls mux https server close")
 		_ = server.Close()
 	}
 	select {

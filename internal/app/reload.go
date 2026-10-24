@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -42,17 +43,18 @@ type loadedConfigApplier interface {
 }
 
 type reloadCoordinator struct {
-	mu                 sync.Mutex
+	mu                 reloadMutex
 	lastRun            time.Time
 	debounce           time.Duration
 	trailingTimer      *time.Timer
 	trailingGeneration uint64
-	stopped            bool
+	stopped            atomic.Bool
 
 	// lifecycleCtx owns the context used by debounced trailing reloads. Its
 	// base is detached from any caller's cancellation so a short-lived request
 	// context cannot abort a coalesced apply, while lifecycleCancel lets Stop
 	// tear the coordinator's own lifecycle down explicitly.
+	lifecycleMu     sync.Mutex
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 
@@ -97,20 +99,14 @@ func (c *reloadCoordinator) SetRegistryLimits(limits interface {
 
 // Trigger requests a config reload that first re-reads config from disk.
 func (c *reloadCoordinator) Trigger(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.reloadDebouncedLocked(ctx, true)
+	return c.requestReload(ctx, true)
 }
 
 // ApplyLoadedConfig requests a reload of the config the watcher already
 // loaded from disk. It shares the debounce/coalescing policy with Trigger so
 // a burst of fsnotify callbacks applies the final state exactly once.
 func (c *reloadCoordinator) ApplyLoadedConfig(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	return c.reloadDebouncedLocked(ctx, false)
+	return c.requestReload(ctx, false)
 }
 
 // reloadDebouncedLocked is the single owner of the debounce/coalescing policy
@@ -127,15 +123,13 @@ func (c *reloadCoordinator) reloadDebouncedLocked(ctx context.Context, loadConfi
 }
 
 func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context, loadConfig bool) {
-	if c.stopped {
+	if c.stopped.Load() {
 		return
 	}
 	if c.trailingTimer != nil {
 		c.trailingTimer.Stop()
 	}
-	if c.lifecycleCancel == nil {
-		c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.WithoutCancel(ctx))
-	}
+	c.reloadContext(ctx)
 	c.trailingGeneration++
 	generation := c.trailingGeneration
 	trailingCtx := c.lifecycleCtx
@@ -149,7 +143,7 @@ func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation ui
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.stopped || generation != c.trailingGeneration {
+	if c.stopped.Load() || generation != c.trailingGeneration {
 		return
 	}
 	c.trailingTimer = nil
@@ -158,21 +152,39 @@ func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation ui
 	}
 }
 
+// Stop cancels reload work without waiting for the reload serialization lock.
 func (c *reloadCoordinator) Stop() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.stopped = true
-	c.trailingGeneration++
-	if c.trailingTimer != nil {
-		c.trailingTimer.Stop()
-		c.trailingTimer = nil
-	}
+	c.stopped.Store(true)
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	if c.lifecycleCancel != nil {
 		c.lifecycleCancel()
 	}
 }
 
+func (c *reloadCoordinator) reloadContext(ctx context.Context) context.Context {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.lifecycleCancel == nil {
+		c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.WithoutCancel(ctx))
+	}
+	if c.stopped.Load() {
+		c.lifecycleCancel()
+	}
+	return c.lifecycleCtx
+}
+
 func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(c.reloadContext(ctx), cancel)
+	defer stop()
+	if c.stopped.Load() {
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	now := time.Now()
 	if loadConfig {
 		if err := c.configSvc.Reload(ctx); err != nil {
@@ -189,21 +201,11 @@ func (c *reloadCoordinator) reloadLocked(ctx context.Context, loadConfig bool) e
 }
 
 func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time) error {
-	var reloadCfg Config
-	if err := c.v.Unmarshal(&reloadCfg); err != nil {
-		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
-		return fmt.Errorf("failed to unmarshal config on reload: %w", err)
-	}
-	if err := validateEntrypointMigration(c.v, reloadCfg); err != nil {
+	if err := c.checkReload(ctx); err != nil {
 		return err
 	}
-	if err := validateRetiredAppConfig(c.v); err != nil {
-		return err
-	}
-	if err := validateSetImageConfig(c.v, reloadCfg); err != nil {
-		return err
-	}
-	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
+	reloadCfg, err := c.loadedConfig()
+	if err != nil {
 		return err
 	}
 
@@ -218,6 +220,9 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 			c.log.Error().Err(err).Msg("failed to apply runtime config on reload")
 			return fmt.Errorf("failed to apply runtime config on reload: %w", err)
 		}
+	}
+	if err := c.checkReload(ctx); err != nil {
+		return err
 	}
 	c.proxySvc.UpdateConfig(reloadedProxy.proxyConfig)
 	if c.registryLimits != nil {
@@ -271,6 +276,9 @@ type reloadPlan struct {
 
 // Apply is the reloadCoordinator's runtime step.
 func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	plan, err := r.prepare(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("prepare reload: %w", err)
@@ -279,6 +287,9 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 		if err := r.applyServing(ctx, cfg, plan); err != nil {
 			return fmt.Errorf("apply serving config: %w", err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	r.applyAppPolicies(plan)
 	r.svc.publishSetImage(plan.setImage, plan.imagePolicy, cfg)
@@ -330,6 +341,9 @@ func (r *reloadRuntime) applyServing(ctx context.Context, cfg Config, plan reloa
 	if err := svc.appTrafficPublisher.RebuildWithConfig(ctx, cfg); err != nil {
 		return err
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	hosts := managementHosts(cfg)
 	if svc.pkiSvc != nil {
 		svc.pkiSvc.SetAdditionalDomains(hosts)
@@ -362,10 +376,79 @@ func (r *reloadRuntime) applyAppPolicies(plan reloadPlan) {
 // setupConfigHotReload sets up config hot reload.
 func setupConfigHotReload(ctx context.Context, configSvc configWatcher, coordinator loadedConfigApplier) error {
 	if err := configSvc.Watch(ctx, func() {
-		_ = coordinator.ApplyLoadedConfig(ctx)
+		if ctx.Err() == nil {
+			_ = coordinator.ApplyLoadedConfig(ctx)
+		}
 	}); err != nil {
 		return fmt.Errorf("failed to watch config: %w", err)
 	}
 
 	return nil
+}
+
+func (c *reloadCoordinator) checkReload(ctx context.Context) error {
+	if c.stopped.Load() {
+		return context.Canceled
+	}
+	return ctx.Err()
+}
+
+func (c *reloadCoordinator) loadedConfig() (Config, error) {
+	var reloadCfg Config
+	if err := c.v.Unmarshal(&reloadCfg); err != nil {
+		c.log.Error().Err(err).Msg("failed to unmarshal config on reload")
+		return Config{}, fmt.Errorf("failed to unmarshal config on reload: %w", err)
+	}
+	if err := validateHTTPTimeouts(reloadCfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateEntrypointMigration(c.v, reloadCfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateRetiredAppConfig(c.v); err != nil {
+		return Config{}, err
+	}
+	if err := validateSetImageConfig(c.v, reloadCfg); err != nil {
+		return Config{}, err
+	}
+	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
+		return Config{}, err
+	}
+
+	return reloadCfg, nil
+}
+
+// reloadMutex preserves serialization while allowing queued signal/watcher work
+// to leave on cancellation instead of waiting behind a slow reload.
+type reloadMutex struct {
+	once  sync.Once
+	token chan struct{}
+}
+
+func (m *reloadMutex) init()   { m.once.Do(func() { m.token = make(chan struct{}, 1) }) }
+func (m *reloadMutex) Lock()   { m.init(); m.token <- struct{}{} }
+func (m *reloadMutex) Unlock() { <-m.token }
+func (m *reloadMutex) lockContext(ctx context.Context) error {
+	m.init()
+	select {
+	case m.token <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *reloadCoordinator) requestReload(ctx context.Context, loadConfig bool) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(c.reloadContext(ctx), cancel)
+	defer stop()
+	if err := c.mu.lockContext(ctx); err != nil {
+		return err
+	}
+	defer c.mu.Unlock()
+	if err := c.checkReload(ctx); err != nil {
+		return err
+	}
+	return c.reloadDebouncedLocked(ctx, loadConfig)
 }

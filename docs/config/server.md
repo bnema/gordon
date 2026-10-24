@@ -52,6 +52,17 @@ protocol = "smart_tcp"
 
 `entrypoints.edge.address` is not an HTTP or HTTPS port. It is the TCP address Gordon sniffs for cleartext HTTP, h2c, TLS passthrough, normal HTTPS fallback, or explicit raw TCP fallback. Gordon does not provide a built-in default public port; choose `:443`, a high port such as `:9000`, or container/firewall mappings to match your deployment.
 
+## Shutdown Draining
+
+`server.shutdown_drain_timeout` (env `GORDON_SERVER_SHUTDOWN_DRAIN_TIMEOUT`) defaults to `"5s"`. It is a positive Go duration, at most `"5m"`, applied on daemon restart.
+
+Shutdown suppresses config reloads and stops accepting connections, then drains HTTP requests (including registry transfers) and TCP/UDP relays on one shared deadline. Connections remaining at the deadline are force-closed. This deadline does not shorten app reconciliation joins or the separate 30-second app-administration quiescence limit. Running containers stay running across daemon restarts.
+
+```toml
+[server]
+shutdown_drain_timeout = "5s"
+```
+
 ## Registry HTTP Timeouts
 
 The registry listeners (`registry_port`, plus the loopback listener used for the internal registry) apply fixed per-connection timeouts. Values are Go duration strings; malformed, zero, or negative values are rejected when the configuration loads.

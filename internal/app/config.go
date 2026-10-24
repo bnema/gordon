@@ -22,6 +22,7 @@ type Config struct {
 	TrustedIssuers   []TrustedIssuerConfig   `mapstructure:"trusted_issuers"`
 	SetImagePolicies []domain.SetImagePolicy `mapstructure:"set_image_policies"`
 	Server           struct {
+		ShutdownDrainTimeout  string   `mapstructure:"shutdown_drain_timeout"`
 		Port                  int      `mapstructure:"port"`
 		RegistryPort          int      `mapstructure:"registry_port"`
 		CIDomain              string   `mapstructure:"ci_domain"`
@@ -473,6 +474,7 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.registry_listen_address", "")
 
 	// HTTP timeouts. Every key needs a default so GORDON_* env overrides apply.
+	v.SetDefault("server.shutdown_drain_timeout", "5s")
 	v.SetDefault("server.http.read_header_timeout", domain.DefaultRegistryReadHeaderTimeout.String())
 	v.SetDefault("server.http.read_timeout", domain.DefaultRegistryReadTimeout.String())
 	v.SetDefault("server.http.write_timeout", domain.DefaultRegistryWriteTimeout.String())
@@ -506,6 +508,9 @@ func loadConfig(v *viper.Viper, configPath string) error {
 // validateHTTPTimeouts rejects malformed, zero, or negative HTTP timeouts at
 // config load, before any listener is started.
 func validateHTTPTimeouts(cfg Config) error {
+	if _, err := buildShutdownDrainTimeout(cfg); err != nil {
+		return err
+	}
 	if _, err := buildRegistryHTTPTimeouts(cfg); err != nil {
 		return err
 	}
@@ -552,4 +557,21 @@ func parsePositiveDuration(value string, fallback time.Duration, key string) (ti
 		return 0, fmt.Errorf("invalid %s: must be positive", key)
 	}
 	return d, nil
+}
+
+// buildShutdownDrainTimeout bounds connection draining, not lifecycle joins.
+func buildShutdownDrainTimeout(cfg Config) (time.Duration, error) {
+	d, err := parsePositiveDuration(cfg.Server.ShutdownDrainTimeout, 5*time.Second, "server.shutdown_drain_timeout")
+	if err != nil {
+		return 0, err
+	}
+	if d > 5*time.Minute {
+		return 0, fmt.Errorf("invalid server.shutdown_drain_timeout: must not exceed 5m")
+	}
+	return d, nil
+}
+
+func drainTimeout(cfg Config) time.Duration {
+	d, _ := buildShutdownDrainTimeout(cfg) // Validated during configuration loading.
+	return d
 }

@@ -199,3 +199,6 @@ type busyError struct{}
 
 func (busyError) Error() string        { return "app has an unfinished operation" }
 func (busyError) Is(target error) bool { return target == ErrAppStateConflict }
+
+// ErrTrafficManagerStopped rejects traffic changes after shutdown begins.
+var ErrTrafficManagerStopped = errors.New("traffic manager is shut down")

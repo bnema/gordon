@@ -180,31 +180,7 @@ func loadExternalRoutes(raw any) (map[string]string, error) {
 // loadStringArrayMap loads a map[string][]string from a viper value.
 func (s *Service) Watch(ctx context.Context, onChange func()) error {
 	log := zerowrap.FromCtx(ctx)
-
-	s.viper.OnConfigChange(func(e fsnotify.Event) {
-		// Check if this event is within the debounce window of our own Save
-		lastSave := atomic.LoadInt64(&s.lastSaveTime)
-		if lastSave > 0 && time.Now().UnixNano()-lastSave < s.debounceDelay {
-			log.Debug().Str("file", e.Name).Msg("skipping config reload (triggered by save)")
-			return
-		}
-
-		log.Info().Str("file", e.Name).Msg("config file changed")
-
-		if err := s.viper.ReadInConfig(); err != nil {
-			log.WrapErr(err, "failed to reload config")
-			return
-		}
-
-		if err := s.Load(ctx); err != nil {
-			log.WrapErr(err, "failed to load updated config")
-			return
-		}
-
-		if onChange != nil {
-			onChange()
-		}
-	})
+	s.viper.OnConfigChange(s.configChangeCallback(ctx, onChange))
 
 	s.viper.WatchConfig()
 	log.Info().Msg("watching for configuration changes")
@@ -301,4 +277,39 @@ func ExtractDomainFromImageName(imageName string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// configChangeCallback leaves Viper watcher ownership unchanged while suppressing
+// reads and reloads after the daemon cancels its watcher context.
+func (s *Service) configChangeCallback(ctx context.Context, onChange func()) func(fsnotify.Event) {
+	log := zerowrap.FromCtx(ctx)
+
+	return func(e fsnotify.Event) {
+		if ctx.Err() != nil {
+			return
+		}
+		// Check if this event is within the debounce window of our own Save
+		lastSave := atomic.LoadInt64(&s.lastSaveTime)
+		if lastSave > 0 && time.Now().UnixNano()-lastSave < s.debounceDelay {
+			log.Debug().Str("file", e.Name).Msg("skipping config reload (triggered by save)")
+			return
+		}
+
+		log.Info().Str("file", e.Name).Msg("config file changed")
+
+		if err := s.viper.ReadInConfig(); err != nil {
+			log.WrapErr(err, "failed to reload config")
+			return
+		}
+
+		if err := s.Load(ctx); err != nil {
+			log.WrapErr(err, "failed to load updated config")
+			return
+		}
+
+		if onChange != nil {
+			onChange()
+		}
+	}
+
 }

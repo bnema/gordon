@@ -146,7 +146,7 @@ func TestGracefulShutdown_FailsClosedWhenAppAdministrationDoesNotQuiesce(t *test
 	store := outmocks.NewMockAppState(t)
 
 	containerSvc := container.NewService(nil, nil, nil, container.Config{})
-	err := gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default())
+	err := gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default(), 5*time.Second)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "quiescence")
@@ -169,7 +169,7 @@ func TestGracefulShutdown_QuiescesAppAdministrationBeforeClosingState(t *testing
 	store.EXPECT().Close().Run(func() { order = append(order, "state-close") }).Return(nil)
 
 	containerSvc := container.NewService(nil, nil, nil, container.Config{})
-	require.NoError(t, gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default()))
+	require.NoError(t, gracefulShutdown(nil, nil, nil, containerSvc, nil, nil, nil, nil, nil, admin, store, zerowrap.Default(), 5*time.Second))
 
 	require.Equal(t, []string{"app-shutdown", "state-close"}, order)
 	assert.True(t, admin.deadline, "app administration shutdown must run on the bounded shutdown context")

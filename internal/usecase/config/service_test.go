@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bnema/zerowrap"
+	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -317,4 +318,21 @@ func TestLoadStringMap(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestConfigChangeCallbackDoesNothingAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(testContext())
+	v := viper.New()
+	path := filepath.Join(t.TempDir(), "gordon.toml")
+	require.NoError(t, os.WriteFile(path, []byte("[server]\nregistry_port = 5000\n"), 0o600))
+	v.SetConfigFile(path)
+	require.NoError(t, v.ReadInConfig())
+	svc := NewService(v, mocks.NewMockEventPublisher(t))
+	called := false
+	callback := svc.configChangeCallback(ctx, func() { called = true })
+	cancel()
+	require.NoError(t, os.WriteFile(path, []byte("[server]\nregistry_port = 6000\n"), 0o600))
+	callback(fsnotify.Event{Name: path, Op: fsnotify.Write})
+	assert.False(t, called)
+	assert.Equal(t, 5000, v.GetInt("server.registry_port"), "cancelled callback must not reload Viper either")
 }

@@ -103,7 +103,11 @@ func Run(ctx context.Context, configPath string) error {
 	// timers before graceful shutdown, preventing deploys during drain.
 
 	// Set up config hot reload
-	if err := setupConfigHotReload(ctx, svc.configSvc, svc.reloadCoordinator); err != nil {
+	watchCtx, stopWatcher := context.WithCancel(ctx)
+	defer stopWatcher()
+	originalCleanup := cleanupHandlers
+	cleanupHandlers = func() { stopWatcher(); originalCleanup() }
+	if err := setupConfigHotReload(watchCtx, svc.configSvc, svc.reloadCoordinator); err != nil {
 		return err
 	}
 
@@ -309,12 +313,15 @@ func runServers(ctx context.Context, v *viper.Viper, cfg Config, svc *services, 
 	}
 
 	waitForShutdown(ctx, errChan, reloadChan, reload, svc.eventBus, log)
-	cleanupHandlers() // Stop debounce timers before draining containers
+	cleanupHandlers() // Cancel watcher and reload before stopping ingress.
+	if svc.trafficManager != nil {
+		svc.trafficManager.StopAccepting()
+	}
 	// Stop app administration before tearing down traffic/runtime dependencies,
 	// so no new mutation can begin during shutdown.
 	localAdmin.Close()
 	registrySrvs := []*http.Server{registrySrv, internalRegistrySrv}
-	return gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appSvcImpl, svc.appState, log)
+	return gracefulShutdown(registrySrvs, proxySrv, tlsSrv, svc.containerSvc, svc.proxySvc, svc.pkiSvc, svc.publicTLSSvc, svc.trafficManager, svc.appMonitor, svc.appSvcImpl, svc.appState, log, drainTimeout(cfg))
 }
 
 // workloadLogExporter returns the OTLP workload log exporter, or nil

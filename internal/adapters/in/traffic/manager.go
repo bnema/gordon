@@ -50,6 +50,8 @@ func trafficWarn(ctx context.Context) *zerolog.Event {
 // Manager owns runtime entrypoints for the traffic plane.
 type Manager struct {
 	mu           sync.Mutex
+	stopped      atomic.Bool
+	bindMu       sync.Mutex
 	snapshot     atomic.Pointer[domain.TrafficGraph]
 	listeners    map[string]*entryPointRuntime
 	udpListeners map[string]*udpEntryPointRuntime
@@ -76,16 +78,20 @@ func NewManager() *Manager {
 
 // Apply validates and applies a new traffic graph snapshot.
 func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
-	if graph == nil {
-		return m.recordReloadError(ctx, fmt.Errorf("%w: traffic graph is required", domain.ErrTrafficGraphRequired))
+	if err := m.checkRunning(ctx); err != nil {
+		return err
 	}
-	if err := graph.Validate(); err != nil {
-		return m.recordReloadError(ctx, fmt.Errorf("validate traffic graph: %w", err))
+	if err := validateGraph(graph); err != nil {
+		return m.recordReloadError(ctx, err)
 	}
 	trafficDebug(ctx).Int("entrypoints", len(graph.EntryPoints)).Int("routers", len(graph.Routers)).Int("services", len(graph.Services)).Msg("applying traffic graph")
 
 	nextGraph := cloneTrafficGraph(*graph)
 	m.mu.Lock()
+	if err := m.checkRunning(ctx); err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	newListeners, createdListeners, tcpUpdates, err := m.prepareTCPListeners(ctx, &nextGraph)
 	if err != nil {
 		m.lastReloadStatus = reloadStatusError
@@ -104,26 +110,19 @@ func (m *Manager) Apply(ctx context.Context, graph *domain.TrafficGraph) error {
 		return err
 	}
 
-	for _, update := range tcpUpdates {
-		update.runtime.updateEntryPoint(update.entryPoint, update.trusted, update.rawTrusted)
+	// The terminal transition and final publication share bindMu. In particular,
+	// retained-listener updates cannot bypass shutdown by avoiding bind calls.
+	m.bindMu.Lock()
+	if err := m.checkRunning(ctx); err != nil {
+		m.bindMu.Unlock()
+		m.mu.Unlock()
+		stopTCPRuntimes(context.Background(), createdListeners, time.Nanosecond)
+		stopUDPRuntimes(context.Background(), createdUDPListeners, time.Nanosecond)
+		return err
 	}
-	for _, update := range udpUpdates {
-		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
-	}
-
-	oldListeners := m.listeners
-	oldUDPListeners := m.udpListeners
-	m.listeners = newListeners
-	m.udpListeners = newUDPListeners
-	m.snapshot.Store(&nextGraph)
-	for _, runtime := range createdListeners {
-		runtime.start()
-	}
-	for _, runtime := range createdUDPListeners {
-		runtime.start()
-	}
-	m.lastReloadStatus = reloadStatusOK
-	m.lastReloadError = ""
+	oldListeners, oldUDPListeners := m.listeners, m.udpListeners
+	m.commitGraph(&nextGraph, newListeners, newUDPListeners, createdListeners, createdUDPListeners, tcpUpdates, udpUpdates)
+	m.bindMu.Unlock()
 	m.mu.Unlock()
 
 	tcpDrainTimeout := effectiveTCPOptions(snapshotTCPOptions(&nextGraph)).DrainTimeout
@@ -196,9 +195,11 @@ func logAppliedTrafficGraph(
 
 // Shutdown stops all listeners and active TCP streams.
 func (m *Manager) Shutdown(ctx context.Context) error {
+	m.bindMu.Lock()
+	m.stopped.Store(true)
+	m.bindMu.Unlock()
 	trafficInfo(ctx).Msg("shutting down traffic manager")
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	listeners := m.listeners
 	udpListeners := m.udpListeners
@@ -206,6 +207,7 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	m.udpListeners = map[string]*udpEntryPointRuntime{}
 	graph := m.snapshot.Load()
 	m.snapshot.Store(nil)
+	m.mu.Unlock()
 
 	tcpDrainTimeout := defaultTCPOptions().DrainTimeout
 	udpDrainTimeout := defaultUDPOptions().DrainTimeout
@@ -213,12 +215,16 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		tcpDrainTimeout = effectiveTCPOptions(graph.Options.TCP).DrainTimeout
 		udpDrainTimeout = effectiveUDPOptions(graph.Options.UDP).DrainTimeout
 	}
+	var wg sync.WaitGroup
 	for _, runtime := range listeners {
-		runtime.stop(ctx, tcpDrainTimeout)
+		_ = runtime.listener.Close()
+		wg.Go(func() { runtime.stop(ctx, tcpDrainTimeout) })
 	}
 	for _, runtime := range udpListeners {
-		runtime.stop(ctx, udpDrainTimeout)
+		_ = runtime.packetConn.Close()
+		wg.Go(func() { runtime.stop(ctx, udpDrainTimeout) })
 	}
+	wg.Wait()
 	trafficInfo(ctx).Int("tcp_listeners", len(listeners)).Int("udp_listeners", len(udpListeners)).Msg("traffic manager shut down")
 	return nil
 }
@@ -337,6 +343,14 @@ func conflictingTCPRuntime(current map[string]*entryPointRuntime, entryPoint dom
 }
 
 func (m *Manager) bindTCPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*entryPointRuntime, error) {
+	m.bindMu.Lock()
+	defer m.bindMu.Unlock()
+	if m.stopped.Load() {
+		return nil, domain.ErrTrafficManagerStopped
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", entryPoint.Address)
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
@@ -408,6 +422,14 @@ func conflictingUDPRuntime(current map[string]*udpEntryPointRuntime, entryPoint 
 }
 
 func (m *Manager) bindUDPEntryPoint(ctx context.Context, entryPoint domain.EntryPoint) (*udpEntryPointRuntime, error) {
+	m.bindMu.Lock()
+	defer m.bindMu.Unlock()
+	if m.stopped.Load() {
+		return nil, domain.ErrTrafficManagerStopped
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	packetConn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", entryPoint.Address)
 	if err != nil {
 		if errors.Is(err, syscall.EADDRINUSE) {
@@ -695,4 +717,60 @@ func effectiveUDPOptions(options domain.UDPOptions) domain.UDPOptions {
 		options.MaxSessions = defaults.MaxSessions
 	}
 	return options
+}
+
+func (m *Manager) checkRunning(ctx context.Context) error {
+	if m.stopped.Load() {
+		return domain.ErrTrafficManagerStopped
+	}
+	return ctx.Err()
+}
+
+func validateGraph(graph *domain.TrafficGraph) error {
+	if graph == nil {
+		return fmt.Errorf("%w: traffic graph is required", domain.ErrTrafficGraphRequired)
+	}
+	if err := graph.Validate(); err != nil {
+		return fmt.Errorf("validate traffic graph: %w", err)
+	}
+	return nil
+}
+
+// StopAccepting permanently closes admission without waiting for active streams.
+// Shutdown subsequently drains those streams on the caller's deadline.
+func (m *Manager) StopAccepting() {
+	m.bindMu.Lock()
+	m.stopped.Store(true)
+	m.bindMu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, runtime := range m.listeners {
+		_ = runtime.listener.Close()
+	}
+	for _, runtime := range m.udpListeners {
+		_ = runtime.packetConn.Close()
+	}
+}
+
+// commitGraph runs with both mu and bindMu held, after the final cancellation
+// check. Preparation leaves retained runtimes untouched until this point.
+func (m *Manager) commitGraph(nextGraph *domain.TrafficGraph, newListeners map[string]*entryPointRuntime, newUDPListeners map[string]*udpEntryPointRuntime, createdListeners []*entryPointRuntime, createdUDPListeners []*udpEntryPointRuntime, tcpUpdates []tcpRuntimeUpdate, udpUpdates []udpRuntimeUpdate) {
+	for _, update := range tcpUpdates {
+		update.runtime.updateEntryPoint(update.entryPoint, update.trusted, update.rawTrusted)
+	}
+	for _, update := range udpUpdates {
+		update.runtime.updateEntryPoint(update.entryPoint, update.trusted)
+	}
+
+	m.listeners = newListeners
+	m.udpListeners = newUDPListeners
+	m.snapshot.Store(nextGraph)
+	for _, runtime := range createdListeners {
+		runtime.start()
+	}
+	for _, runtime := range createdUDPListeners {
+		runtime.start()
+	}
+	m.lastReloadStatus = reloadStatusOK
+	m.lastReloadError = ""
 }
