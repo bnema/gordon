@@ -636,7 +636,7 @@ func (p *changingProvider) replace(b domain.AppBackend, until time.Time, known b
 	p.changed = make(chan struct{})
 }
 func TestHeldTargets(t *testing.T) {
-	for _, mode := range []string{"resolved", "deadline", "dropped", "removed", "canceled", "disabled", "unknown", "cap", "missed-wakeup", "max-hold", "extended"} {
+	for _, mode := range []string{"resolved", "deadline", "dropped", "removed", "canceled", "disabled", "unknown", "cap", "missed-wakeup", "max-hold", "extended", "stopped"} {
 		t.Run(mode, func(t *testing.T) {
 			p := &changingProvider{until: time.Now().Add(time.Second), known: true, changed: make(chan struct{}), looked: make(chan struct{})}
 			cfg := inmocks.NewMockConfigService(t)
@@ -689,6 +689,10 @@ func TestHeldTargets(t *testing.T) {
 				p.replace(domain.AppBackend{}, time.Time{}, false)
 			case "canceled":
 				cancel()
+			case "stopped":
+				// Shutdown releases held requests without waiting for the
+				// hold deadline or a request cancel.
+				svc.StopHolding()
 			}
 			select {
 			case err := <-done:
@@ -715,4 +719,16 @@ func TestHoldOutcome(t *testing.T) {
 	assert.Equal(t, "canceled", holdOutcome(context.DeadlineExceeded))
 	assert.Equal(t, "unrouted", holdOutcome(domain.ErrNoTargetAvailable))
 	assert.Equal(t, "timeout", holdOutcome(domain.ErrTargetUnavailable))
+}
+
+func TestStopHoldingRefusesNewHolds(t *testing.T) {
+	p := &changingProvider{until: time.Now().Add(time.Minute), known: true, changed: make(chan struct{}), looked: make(chan struct{})}
+	cfg := inmocks.NewMockConfigService(t)
+	cfg.EXPECT().GetExternalRoutes().Return(map[string]string{})
+	svc := NewService(cfg, Config{MaxHold: time.Minute}).WithAppTargets(p)
+	svc.StopHolding()
+	svc.StopHolding()
+	_, err := svc.GetTarget(testContext(), "app.example.com")
+	require.ErrorIs(t, err, domain.ErrTargetUnavailable)
+	assert.Empty(t, svc.held)
 }

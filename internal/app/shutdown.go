@@ -118,6 +118,11 @@ func drainIngress(registry []*http.Server, proxySrv, tlsSrv *http.Server, proxyS
 	ctx, cancel := context.WithTimeout(zerowrap.WithCtx(context.Background(), log), timeout)
 	defer cancel()
 	started := time.Now()
+	// http.Server.Shutdown does not cancel active requests: release held
+	// app requests first so they cannot stall the drain until its deadline.
+	if proxySvc != nil {
+		proxySvc.StopHolding()
+	}
 	var wg sync.WaitGroup
 	for _, srv := range []*http.Server{proxySrv, tlsSrv} {
 		if srv != nil {

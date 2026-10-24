@@ -71,6 +71,8 @@ type Service struct {
 	inFlightMu       sync.Mutex
 	heldMu           sync.Mutex
 	held             map[string]int
+	stopHolding      chan struct{}
+	stopHoldingOnce  sync.Once
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
@@ -100,11 +102,28 @@ func NewService(
 	config Config,
 ) *Service {
 	return &Service{
-		configSvc: configSvc,
-		config:    config,
-		targets:   make(map[string]cachedTarget),
-		inFlight:  make(map[string]int),
-		held:      make(map[string]int),
+		configSvc:   configSvc,
+		config:      config,
+		targets:     make(map[string]cachedTarget),
+		inFlight:    make(map[string]int),
+		held:        make(map[string]int),
+		stopHolding: make(chan struct{}),
+	}
+}
+
+// StopHolding releases every held request and refuses new holds. Shutdown
+// calls it so held clients get an immediate 503 instead of keeping the HTTP
+// drain waiting until its deadline.
+func (s *Service) StopHolding() {
+	s.stopHoldingOnce.Do(func() { close(s.stopHolding) })
+}
+
+func (s *Service) holdingStopped() bool {
+	select {
+	case <-s.stopHolding:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -180,7 +199,7 @@ func (s *Service) resolveAppTarget(ctx context.Context, domainName string, log z
 	if backend.Resolved() {
 		return appTarget(domainName, backend), nil
 	}
-	if maxHold <= 0 || !until.After(time.Now()) {
+	if maxHold <= 0 || !until.After(time.Now()) || s.holdingStopped() {
 		return nil, domain.ErrTargetUnavailable
 	}
 	return s.waitHeldTarget(ctx, provider, domainName, ch, until, maxHold, maxHeld)
@@ -227,6 +246,8 @@ func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, h
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-timer.C:
+			return nil, domain.ErrTargetUnavailable
+		case <-s.stopHolding:
 			return nil, domain.ErrTargetUnavailable
 		case <-ch:
 			ch = provider.Changed()

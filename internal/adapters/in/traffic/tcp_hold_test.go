@@ -120,3 +120,27 @@ func TestTCPHoldDoesNotMissGraphChange(t *testing.T) {
 	require.Equal(t, 1234, backend.Port)
 	require.Equal(t, int64(1), runtime.counters.totalHeld.Load())
 }
+
+func TestTCPHoldReleasedByStopAcceptingAndShutdown(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	graph.Services[0].Backends = nil
+	graph.Services[0].HoldUntil = time.Now().Add(time.Minute)
+	manager := NewManager()
+	require.NoError(t, manager.Apply(context.Background(), &graph))
+	conn := dialTCP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	require.Eventually(t, func() bool { return manager.Status().Counters.TotalHeld == 1 }, time.Second, time.Millisecond)
+
+	manager.StopAccepting()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	require.NoError(t, manager.Shutdown(ctx))
+	require.Less(t, time.Since(start), 2*time.Second, "a held connection must not keep shutdown waiting for its hold or drain budget")
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+	_, err := conn.Read(make([]byte, 1))
+	require.Error(t, err)
+	require.Zero(t, manager.Status().Counters.ActiveTCPConnections)
+}
