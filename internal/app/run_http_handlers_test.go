@@ -249,6 +249,13 @@ func (s stubAppTargets) LookupHost(host string) (domain.AppBackend, bool) {
 	return backend, ok
 }
 
+func (s stubAppTargets) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
+	backend, ok := s.LookupHost(host)
+	return backend, time.Time{}, ok
+}
+
+func (s stubAppTargets) Changed() <-chan struct{} { return nil }
+
 func TestCreateHTTPHandlers_RedirectUsesSelectedEntrypointPorts(t *testing.T) {
 	t.Parallel()
 	cfg := Config{}

@@ -2,7 +2,10 @@ package proxy
 
 import (
 	"context"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 	"time"
 
 	"github.com/bnema/zerowrap"
@@ -25,6 +28,12 @@ func (s *stubProvider) LookupHost(host string) (domain.AppBackend, bool) {
 	backend, ok := s.backends[host]
 	return backend, ok
 }
+
+func (s *stubProvider) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
+	b, ok := s.LookupHost(host)
+	return b, time.Time{}, ok
+}
+func (s *stubProvider) Changed() <-chan struct{} { return nil }
 
 func testService(t *testing.T, configSvc *inmocks.MockConfigService, provider TargetProvider) *Service {
 	if configSvc == nil {
@@ -112,7 +121,7 @@ func TestService_GetTarget_AppBackendUnresolved(t *testing.T) {
 	ctx := testContext()
 
 	result, err := svc.GetTarget(ctx, "app.example.com")
-	assert.ErrorIs(t, err, domain.ErrNoTargetAvailable)
+	assert.ErrorIs(t, err, domain.ErrTargetUnavailable)
 	assert.Nil(t, result)
 }
 
@@ -584,4 +593,118 @@ func TestService_IsCIDomain(t *testing.T) {
 	svc.UpdateConfig(Config{RegistryDomain: "registry.example.com"})
 	assert.False(t, svc.IsCIDomain("ci.example.com"))
 	assert.False(t, svc.IsKnownHost(ctx, "ci.example.com"))
+}
+
+// changingProvider models atomic index replacement and its broadcast wakeup.
+type changingProvider struct {
+	mu      sync.Mutex
+	backend domain.AppBackend
+	until   time.Time
+	known   bool
+	changed chan struct{}
+	looked  chan struct{}
+	once    sync.Once
+	hook    func()
+}
+
+func (p *changingProvider) Changed() <-chan struct{} {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.changed
+}
+func (p *changingProvider) LookupHost(host string) (domain.AppBackend, bool) {
+	b, _, ok := p.LookupRoute(host)
+	return b, ok
+}
+func (p *changingProvider) LookupRoute(_ string) (domain.AppBackend, time.Time, bool) {
+	p.mu.Lock()
+	b, u, ok := p.backend, p.until, p.known
+	p.mu.Unlock()
+	p.once.Do(func() {
+		if p.hook != nil {
+			p.hook()
+		}
+		close(p.looked)
+	})
+	return b, u, ok
+}
+func (p *changingProvider) replace(b domain.AppBackend, until time.Time, known bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.backend, p.until, p.known = b, until, known
+	close(p.changed)
+	p.changed = make(chan struct{})
+}
+func TestHeldTargets(t *testing.T) {
+	for _, mode := range []string{"resolved", "deadline", "dropped", "removed", "canceled", "disabled", "unknown", "cap", "missed-wakeup", "max-hold", "extended"} {
+		t.Run(mode, func(t *testing.T) {
+			p := &changingProvider{until: time.Now().Add(time.Second), known: true, changed: make(chan struct{}), looked: make(chan struct{})}
+			cfg := inmocks.NewMockConfigService(t)
+			cfg.EXPECT().GetExternalRoutes().Return(map[string]string{})
+			svc := NewService(cfg, Config{MaxHold: time.Second, MaxHeldRequests: 1}).WithAppTargets(p)
+			ctx, cancel := context.WithCancel(testContext())
+			defer cancel()
+			expected := domain.ErrTargetUnavailable
+			switch mode {
+			case "deadline":
+				p.until = time.Now().Add(20 * time.Millisecond)
+			case "max-hold":
+				svc.config.MaxHold = 20 * time.Millisecond
+			case "disabled":
+				svc.config.MaxHold = 0
+			case "unknown":
+				p.known = false
+				expected = domain.ErrNoTargetAvailable
+			case "removed":
+				expected = domain.ErrNoTargetAvailable
+			case "canceled":
+				expected = context.Canceled
+			case "cap":
+				svc.held["app.example.com"] = 1
+			case "resolved", "extended":
+				expected = nil
+			case "missed-wakeup":
+				expected = nil
+				p.hook = func() { p.replace(appBackend("", 18080), time.Time{}, true) }
+			}
+			done := make(chan error, 1)
+			go func() {
+				target, err := svc.GetTarget(ctx, "app.example.com")
+				if err == nil && (target == nil || target.Port != 18080) {
+					done <- domain.ErrNoTargetAvailable
+					return
+				}
+				done <- err
+			}()
+			<-p.looked
+			switch mode {
+			case "resolved":
+				p.replace(appBackend("", 18080), time.Time{}, true)
+			case "extended":
+				p.replace(domain.AppBackend{}, time.Now().Add(2*time.Second), true)
+				p.replace(appBackend("", 18080), time.Time{}, true)
+			case "dropped":
+				p.replace(domain.AppBackend{}, time.Time{}, true)
+			case "removed":
+				p.replace(domain.AppBackend{}, time.Time{}, false)
+			case "canceled":
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if expected == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, expected)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("hold did not finish")
+			}
+			svc.heldMu.Lock()
+			defer svc.heldMu.Unlock()
+			if mode != "cap" {
+				require.Empty(t, svc.held)
+			}
+		})
+	}
 }

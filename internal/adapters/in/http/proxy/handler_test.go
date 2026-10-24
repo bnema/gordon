@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -335,4 +337,30 @@ func TestHandler_NoConcurrencyLimitWhenZero(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestHandler_TargetErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		retry  string
+	}{
+		{"unavailable", domain.ErrTargetUnavailable, 503, "5"},
+		{"unknown", domain.ErrNoTargetAvailable, 404, ""},
+		{"canceled", context.Canceled, 499, ""},
+		{"deadline", context.DeadlineExceeded, 499, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := inmocks.NewMockProxyService(t)
+			svc.EXPECT().ProxyConfig().Return(in.ProxyServiceConfig{})
+			svc.EXPECT().IsRegistryDomain("example.com").Return(false)
+			svc.EXPECT().GetTarget(mock.Anything, "example.com").Return(nil, fmt.Errorf("wrapped: %w", tc.err))
+			h := NewHandler(svc, nil, testLogger())
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://example.com/", nil))
+			require.Equal(t, tc.status, w.Code)
+			require.Equal(t, tc.retry, w.Header().Get("Retry-After"))
+		})
+	}
 }

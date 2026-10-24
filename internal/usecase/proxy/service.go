@@ -24,7 +24,9 @@ var proxyTracer = otel.Tracer("gordon.proxy")
 
 // Config holds configuration needed by the proxy service.
 type Config struct {
-	RegistryDomain string
+	MaxHold         time.Duration // Zero disables handover holding.
+	MaxHeldRequests int           // Per host; non-positive uses 1024.
+	RegistryDomain  string
 	// CIDomain is the optional CI host (server.ci_domain), served by the
 	// in-process CI router. Empty disables it.
 	CIDomain           string
@@ -40,6 +42,10 @@ type Config struct {
 type TargetProvider interface {
 	// LookupHost returns the projected backend for a canonical host.
 	LookupHost(host string) (domain.AppBackend, bool)
+	// LookupRoute also returns the unresolved backend's hold deadline.
+	LookupRoute(host string) (domain.AppBackend, time.Time, bool)
+	// Changed broadcasts index replacement; obtain it before looking up a route.
+	Changed() <-chan struct{}
 }
 
 // Service implements the ProxyService interface.
@@ -62,6 +68,8 @@ type Service struct {
 	mu               sync.RWMutex
 	inFlight         map[string]int
 	inFlightMu       sync.Mutex
+	heldMu           sync.Mutex
+	held             map[string]int
 	registryInFlight atomic.Int64 // active registry proxy requests, for graceful drain
 }
 
@@ -95,6 +103,7 @@ func NewService(
 		config:    config,
 		targets:   make(map[string]cachedTarget),
 		inFlight:  make(map[string]int),
+		held:      make(map[string]int),
 	}
 }
 
@@ -144,7 +153,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 	}
 
 	// App backends resolve from the ACTIVE-derived host index.
-	return s.resolveAppTarget(domainName, log)
+	return s.resolveAppTarget(ctx, domainName, log)
 }
 
 // resolveAppTarget maps a canonical host to its recorded loopback
@@ -153,26 +162,104 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 // rebuilt index is observed on the very next request with no invalidation
 // wiring. Unbound or unknown hosts fail closed (no container-IP
 // fallback, no image-label inference, no stale-target fallback).
-func (s *Service) resolveAppTarget(domainName string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
+func (s *Service) resolveAppTarget(ctx context.Context, domainName string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
 	s.mu.RLock()
 	provider := s.appTargets
+	maxHold, cap := s.config.MaxHold, s.config.MaxHeldRequests
 	s.mu.RUnlock()
 	if provider == nil {
 		log.Debug().Msg("no app target provider wired")
 		return nil, domain.ErrNoTargetAvailable
 	}
-	backend, ok := provider.LookupHost(domainName)
-	if !ok || !backend.Resolved() {
-		log.Debug().Msg("no resolved app backend for host")
+	ch := provider.Changed()
+	backend, until, ok := provider.LookupRoute(domainName)
+	if !ok {
 		return nil, domain.ErrNoTargetAvailable
 	}
-	return &domain.ProxyTarget{
-		Host:        backend.Host,
-		Port:        backend.Port,
-		ContainerID: backend.ContainerID,
-		Scheme:      "http",
-		RouteHost:   domainName,
-	}, nil
+	if backend.Resolved() {
+		return appTarget(domainName, backend), nil
+	}
+	if maxHold <= 0 || !until.After(time.Now()) {
+		return nil, domain.ErrTargetUnavailable
+	}
+	return s.waitHeldTarget(ctx, provider, domainName, ch, until, maxHold, cap)
+}
+
+func appTarget(host string, backend domain.AppBackend) *domain.ProxyTarget {
+	return &domain.ProxyTarget{Host: backend.Host, Port: backend.Port, ContainerID: backend.ContainerID, Scheme: "http", RouteHost: host}
+}
+
+func (s *Service) takeHeldSlot(host string, cap int) bool {
+	if cap <= 0 {
+		cap = 1024
+	}
+	s.heldMu.Lock()
+	defer s.heldMu.Unlock()
+	if s.held[host] >= cap {
+		return false
+	}
+	s.held[host]++
+	return true
+}
+
+func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, host string, ch <-chan struct{}, until time.Time, maxHold time.Duration, cap int) (target *domain.ProxyTarget, err error) {
+	if !s.takeHeldSlot(host, cap) {
+		return nil, domain.ErrTargetUnavailable
+	}
+	start := time.Now()
+	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("proxy.held", true))
+	defer func() {
+		s.heldMu.Lock()
+		s.held[host]--
+		if s.held[host] == 0 {
+			delete(s.held, host)
+		}
+		s.heldMu.Unlock()
+		outcome := "resolved"
+		if err != nil {
+			outcome = err.Error()
+		}
+		log := zerowrap.FromCtx(ctx)
+		log.Debug().Int64("held_ms", time.Since(start).Milliseconds()).Str("outcome", outcome).Err(err).Msg("app target hold released")
+	}()
+	limit := start.Add(maxHold)
+	timer := time.NewTimer(time.Until(holdDeadline(until, limit)))
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, domain.ErrTargetUnavailable
+		case <-ch:
+			ch = provider.Changed()
+			backend, nextUntil, ok := provider.LookupRoute(host)
+			if !ok {
+				return nil, domain.ErrNoTargetAvailable
+			}
+			if backend.Resolved() {
+				return appTarget(host, backend), nil
+			}
+			deadline := holdDeadline(nextUntil, limit)
+			if !deadline.After(time.Now()) {
+				return nil, domain.ErrTargetUnavailable
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(time.Until(deadline))
+		}
+	}
+}
+
+func holdDeadline(until, limit time.Time) time.Time {
+	if until.Before(limit) {
+		return until
+	}
+	return limit
 }
 
 // resolveExternalRoute resolves an external route target address into a ProxyTarget,

@@ -2,6 +2,8 @@
 package proxy
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"strconv"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/in/http/middleware"
 	"github.com/bnema/gordon/internal/boundaries/in"
+	"github.com/bnema/gordon/internal/domain"
 )
 
 // Handler implements http.Handler for the reverse proxy.
@@ -133,7 +136,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target, err := h.proxySvc.GetTarget(ctx, host)
 	if err != nil {
 		log.Warn().Err(err).Msg("no route found for domain")
-		proxyError(w, "404 page not found", http.StatusNotFound)
+		targetError(w, err)
 		return
 	}
 
@@ -166,4 +169,16 @@ func normalizeRequestHost(host string) string {
 	host = strings.ToLower(host)
 	host = strings.TrimSuffix(host, ".")
 	return host
+}
+
+func targetError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, domain.ErrTargetUnavailable):
+		w.Header().Set("Retry-After", "5")
+		proxyError(w, "Service Unavailable", http.StatusServiceUnavailable)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		clientClosedRequest(w)
+	default:
+		proxyError(w, "404 page not found", http.StatusNotFound)
+	}
 }
