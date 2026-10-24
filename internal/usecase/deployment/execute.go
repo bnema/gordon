@@ -354,7 +354,7 @@ func (s *Service) runServiceStep(
 		Before: before, State: domain.AppStepPending,
 	}
 	var svcResult ServiceResult
-	overlap := false
+	overlap, handover := false, false
 	// The grace of the generation being superseded, read before anything
 	// publishes a record of its replacement.
 	beforeGrace := activeStopGrace(active, p.name)
@@ -372,6 +372,7 @@ func (s *Service) runServiceStep(
 		overlap = true
 		svcResult = s.deployOverlap(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	} else {
+		handover = before != "" && s.holdingEnabled()
 		svcResult = s.deployService(ctx, app, revision, p, op.Op, before, beforeGrace, s.journalCandidate(op, index+1))
 	}
 	result.Services[p.name] = svcResult
@@ -404,6 +405,10 @@ func (s *Service) runServiceStep(
 				Service: p.name, Leftover: before,
 				Detail: "superseded container kept running: the new generation was not confirmed published and routed",
 			})
+		}
+		if handover {
+			// Held clients must fail fast instead of waiting out the budget.
+			s.endHandover(ctx, app, p.name)
 		}
 		result.Services[p.name] = svcResult
 		return fail(err)
