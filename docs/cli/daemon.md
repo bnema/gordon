@@ -430,6 +430,7 @@ Remote mode queries the running Gordon admin API. Local mode does not synthesize
       "active_tcp_connections": 1,
       "active_udp_sessions": 0,
       "total_accepted": 12,
+      "total_held": 0,
       "total_refused": 0,
       "total_errors": 0,
       "bytes_in": 4096,
@@ -456,6 +457,7 @@ Remote mode queries the running Gordon admin API. Local mode does not synthesize
     "active_tcp_connections": 1,
     "active_udp_sessions": 0,
     "total_accepted": 12,
+    "total_held": 0,
     "total_refused": 0,
     "total_errors": 0,
     "bytes_in": 4096,
@@ -477,6 +479,8 @@ Remote mode queries the running Gordon admin API. Local mode does not synthesize
   }
 }
 ```
+
+`total_held` counts TCP connections held during a [handover](../config/traffic.md#handover); held HTTP requests are not counted.
 
 ---
 

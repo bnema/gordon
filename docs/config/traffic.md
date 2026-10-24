@@ -160,7 +160,7 @@ Each request has an inactivity timer, armed when the request starts. Progress re
 
 ## Handover
 
-A service that owns a volume, bind, or device, a UDP service, and `gordon apps restart` are replaced sequentially: the old container stops before the new one starts. Gordon holds traffic for the service during that window so clients wait instead of failing. See [Deployment updates](../deployment/index.md#updates) for the sequence.
+A service that owns a volume, bind, or device, and a UDP service, are replaced sequentially: the old container stops before the new one starts. `gordon apps restart` restarts the existing container in place. Gordon holds traffic for the service during either window so clients wait instead of failing. See [Deployment updates](../deployment/index.md#updates) for the sequence.
 
 ```toml
 [traffic.handover]
@@ -179,7 +179,8 @@ The effective hold deadline is the old container's `stop_grace` plus the readine
 - TCP connections on the service's entrypoint are accepted and wait. Held connections count against `traffic.tcp.max_connections`.
 - UDP routes are withdrawn during the handover.
 - A known app host with no available backend answers `503` with `Retry-After`; unknown hosts answer `404`.
-- Both keys are read at startup only; changing them requires a restart. Invalid or negative values are rejected when the configuration loads.
+- An empty `max_hold` and a `0` `max_held_requests` use the defaults.
+- Both keys are read at startup only; changing them requires a restart. Invalid or negative values are rejected at startup. In a reload they are ignored with a warning, and the startup values stay in force until restart.
 
 ## TCP Routers
 

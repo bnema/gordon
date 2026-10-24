@@ -72,7 +72,7 @@ DATABASE_URL = "database-url"
 
 ## Updates
 
-Gordon deploys an app's services one at a time in sorted order. A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime; every other service is replaced sequentially and may be briefly interrupted. Gordon never runs two Gordon-managed generations of a service that owns a volume, a bind, or a device, and a UDP service is excluded because UDP sessions stay pinned to the backend they started on.
+Gordon deploys an app's services one at a time in sorted order. A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime; every other service is replaced sequentially while Gordon holds its traffic, so clients wait instead of failing within a deadline. Gordon never runs two Gordon-managed generations of a service that owns a volume, a bind, or a device, and a UDP service is excluded because UDP sessions stay pinned to the backend they started on.
 
 Preflight completes before anything is disrupted (image resolution and pull, secrets, volumes, networks, bind policy, reservations). If preflight fails, the running service is left untouched.
 
@@ -87,8 +87,10 @@ The old container keeps serving and stays routed until the new one is ready and 
 A service with a volume, a bind, a device, or a UDP interface is replaced sequentially:
 
 ```
-Preflight ─► withdraw traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► route traffic
+Preflight ─► create new ─► hold traffic ─► stop + remove old ─► start new ─► readiness ─► publish ACTIVE ─► release held traffic
 ```
+
+Held HTTP requests and TCP connections wait for the new container; UDP routes are withdrawn. When the hold deadline passes or the replacement fails, held HTTP requests get `503` with `Retry-After: 5` and held TCP connections are closed. `traffic.handover.max_hold = "0s"` withdraws traffic instead. See [Handover](./config/traffic.md#handover).
 
 If replacement fails after the old container was removed, the failure is explicit: Gordon does not recreate the old container during that operation and does not promise automatic data rollback. A stateful service's recovery inhibition stays in place until its never-published candidate is confirmed removed; a later boot/start/restart then clears it and rebuilds the generation `ACTIVE` records from its pinned digest, while a candidate that cannot be removed fails recovery closed.
 
@@ -98,7 +100,7 @@ A deploy interrupted after the replacement container was created but before it w
 
 Deploy is the only command that applies changes: it recreates a service whose image digest, spec, app environment, or secret values changed, and keeps an unchanged one, reported `unchanged`.
 
-`gordon apps restart` restarts the same container and applies nothing: it withdraws traffic, restarts the pinned container, verifies readiness, and republishes traffic. No second container is created. When the recorded container is gone, restart rebuilds the service from its pinned `ACTIVE` digest and publishes it.
+`gordon apps restart` restarts the same container and applies nothing: it holds traffic, restarts the pinned container, verifies readiness, and releases held traffic to it. No second container is created. When the recorded container is gone, restart rebuilds the service from its pinned `ACTIVE` digest and publishes it.
 
 ## Deletion and Cleanup Lifecycle
 

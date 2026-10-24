@@ -118,7 +118,7 @@ A deploy recreates a service whose image digest, spec, environment, or secret va
 
 - A stateless TCP or HTTP service (no volume, bind, device, or UDP interface) is replaced without downtime. The new container starts and passes its readiness probe while the old one keeps serving; traffic then switches to the new container; only afterwards does the old container receive SIGTERM, and it is killed once its `stop_grace` (default `30s`) runs out. If the new container is not ready, it is removed and the old one is left untouched.
 - During the overlap both containers answer to the same network alias, so other services of the app may reach either generation for a short time. Database migrations must be backward compatible with the previous version of the service.
-- A service with a volume, bind, device, or UDP interface, or whose currently running generation has one, is replaced sequentially: traffic is withdrawn, the old container is stopped and removed, then the new one starts. It may be briefly interrupted, and two generations of it never run at once. UDP services are excluded from the overlap because UDP sessions stay pinned to the backend they started on.
+- A service with a volume, bind, device, or UDP interface, or whose currently running generation has one, is replaced sequentially: Gordon holds its traffic, stops and removes the old container, then starts the new one. Clients wait instead of failing, within a deadline (see [Handover](./traffic.md#handover)), and two generations of it never run at once. UDP services are excluded from the overlap because UDP sessions stay pinned to the backend they started on.
 
 ## Environment and Secrets
 

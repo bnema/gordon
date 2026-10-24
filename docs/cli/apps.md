@@ -462,8 +462,9 @@ gordon apps restart APP [--service SVC | --all] [--json]
 ```
 
 Restarts the same container. Nothing is applied: new secret values, env,
-image, or config need `gordon apps deploy`. Traffic is withdrawn, the
-container restarts, readiness is checked, and traffic returns. If the
+image, or config need `gordon apps deploy`. Traffic is held, the
+container restarts, readiness is checked, and held traffic is released to it
+(see [Handover](../config/traffic.md#handover)). If the
 container no longer exists, restart rebuilds it from its pinned digest. An
 app with several services needs `--service NAME` or `--all`.
 

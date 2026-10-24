@@ -175,7 +175,7 @@ What these commands do:
 
 - `gordon images push` builds, uploads, and stores the image. It never deploys.
 - `gordon apps apply` validates the manifest and persists it as desired state.
-- `gordon apps deploy` activates the accepted revision: runs preflight, withdraws the service from traffic, stops and removes the old container, starts the new container, waits for readiness, publishes the new `ACTIVE` state, and routes traffic to it.
+- `gordon apps deploy` activates the accepted revision: runs preflight, starts the new container, waits for readiness, publishes the new `ACTIVE` state, routes traffic to it, then stops the old container. A service with a volume, bind, device, or UDP interface is replaced sequentially instead, while Gordon [holds its traffic](config/traffic.md#handover).
 
 If the app needs secrets, register their names in the manifest (`[services.<name>.secrets]` maps ENV name to secret name), then write values — values stay in pass, never in the file:
 
