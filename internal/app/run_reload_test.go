@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -281,6 +282,22 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 		MaxResponseSize:    7 << 20,
 		MaxConcurrentConns: 99,
 	}, proxySvc.Config())
+}
+
+func TestReloadCoordinator_ApplyLoadedConfig_WarnsOnInvalidHandover(t *testing.T) {
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("traffic.handover.max_hold", "bad")
+
+	var output bytes.Buffer
+	log := zerowrap.New(zerowrap.Config{Level: "warn", Format: "json", Output: &output})
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, &reloadRecorder{}, proxySvc, nil, nil, nil, nil, log)
+	coord.SetHandoverConfig(HandoverConfig{MaxHold: 45 * time.Second, MaxHeldRequests: 64})
+	require.NoError(t, coord.ApplyLoadedConfig(context.Background()))
+
+	assert.Contains(t, output.String(), "invalid traffic.handover ignored until restart")
+	assert.Equal(t, 45*time.Second, proxySvc.Config().MaxHold)
 }
 
 func TestReloadCoordinator_ApplyLoadedConfig_KeepsStartupHandoverLimits(t *testing.T) {

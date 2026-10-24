@@ -100,6 +100,17 @@ func (c *reloadCoordinator) SetHandoverConfig(handover HandoverConfig) {
 	c.handover = handover
 }
 
+// checkReloadedHandover validates a reloaded traffic.handover without
+// applying it: the startup values stay in force until restart. It also
+// warns when the kept hold can outlast the reloaded transfer idle timeout.
+func (c *reloadCoordinator) checkReloadedHandover(cfg Config) {
+	if _, err := parseHandoverLimits(cfg); err != nil {
+		c.log.Warn().Err(err).Msg("invalid traffic.handover ignored until restart; keeping startup values")
+	}
+	// HTTP options were validated by loadedConfig, so the error is moot.
+	_ = checkHandoverIdleTimeout(c.log, cfg, c.handover.MaxHold)
+}
+
 func (c *reloadCoordinator) SetRegistryLimits(limits interface {
 	UpdateBlobLimits(maxBlobChunkSize, maxBlobSize int64)
 }) {
@@ -221,6 +232,7 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err != nil {
 		return err
 	}
+	c.checkReloadedHandover(reloadCfg)
 	reloadCfg.Handover = c.handover
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
