@@ -162,6 +162,16 @@ test_default_and_path_modes() {
         fail "forced no does not modify shell config"
     fi
 
+    # setsid detaches the controlling terminal: /dev/tty keeps its 0666 mode
+    # but cannot be opened, as under `ssh host 'curl ... | sh'` or in CI.
+    run_case no-tty env -u GORDON_UPDATE_PATH GORDON_CHANNEL=next setsid -w sh "$ROOT/install.sh" </dev/null
+    if [ "$status" -eq 0 ] && grep -q "Add Gordon to the current shell" "$case_dir/out" && [ ! -e "$case_dir/home/.bashrc" ]; then
+        pass "install without a terminal prints PATH instructions"
+    else
+        cat "$case_dir/out"
+        fail "install without a terminal prints PATH instructions"
+    fi
+
     run_case invalid-update env GORDON_CHANNEL=next GORDON_UPDATE_PATH=maybe sh "$ROOT/install.sh"
     if [ "$status" -ne 0 ] && grep -q "must be 0 or 1" "$case_dir/out"; then
         pass "invalid PATH mode is rejected"

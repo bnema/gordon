@@ -204,7 +204,10 @@ post_install() {
         1) update_shell_path ;;
         0) print_path_instructions ;;
         '')
-            if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+            # /dev/tty is always mode 0666, so test that it opens: without a
+            # controlling terminal (ssh host 'curl ... | sh', CI) it does not.
+            # The subshell matters: a failed redirection exits a POSIX shell.
+            if (true </dev/tty >/dev/tty) 2>/dev/null; then
                 printf 'Add %s to your PATH configuration? [y/N] ' "$INSTALL_DIR" >/dev/tty
                 if IFS= read -r answer </dev/tty; then
                     case "$answer" in
