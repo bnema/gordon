@@ -474,7 +474,9 @@ The main registry and admin host can remain private.
 All admitted CI requests, including allowlist misses, use the configured API
 rate limits when enabled; otherwise limits are 500 requests/s globally (burst
 1000) and 50 requests/s per client IP (burst 100), allowing multi-request pushes.
-The token endpoint also retains its separate, stricter exchange limiter.
+The token endpoint also has its own limiter: the configured API limits when
+enabled, otherwise 50 requests/s globally (burst 100) and 5 requests/s per
+client IP (burst 10).
 
 For TLS termination upstream, route public DNS → reverse proxy → Gordon's
 edge entrypoint, not `server.registry_port`. Preserve `Host` and overwrite
