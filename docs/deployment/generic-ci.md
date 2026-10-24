@@ -1,19 +1,19 @@
 # Generic CI/CD Deployment
 
-Use OIDC promotion for CI: push an image, then run exactly its digest in one
+Use OIDC set-image for CI: push an image, then run exactly its digest in one
 service. No long-lived Gordon admin token is required.
 
 ## Requirements
 
 - Docker on the runner; Gordon CLI and `jq` for the CLI example, or `curl` and `jq` for the HTTP example
 - A public HTTPS [CI host](../config/server.md#ci-host), separate from the main registry/admin host
-- A configured [trusted issuer](../config/auth.md#oidc-trusted-issuers) and [promotion policy](../config/promotion.md)
+- A configured [trusted issuer](../config/auth.md#oidc-trusted-issuers) and [set-image policy](../config/set-image.md)
 - An existing running app whose other services match desired state; provision app manifests and secrets separately as an administrator
 
 Gordon must reach issuer discovery and JWKS endpoints over HTTPS. The main
 host may remain private. Never target the loopback `server.registry_port`.
 
-## CLI: Push and Promote
+## CLI: Push and Set Image
 
 Obtain a job OIDC JWT with the configured audience and pass it through
 `GORDON_OIDC_TOKEN`. Gordon also supports `ACTIONS_ID_TOKEN_REQUEST_URL` and
@@ -28,15 +28,15 @@ export GORDON_REMOTE=https://ci.example.com
 # GORDON_OIDC_TOKEN is supplied by the job's identity provider.
 gordon images push web --build --tag v1.2.0 \
   --remote "$GORDON_REMOTE" --json >push.json
-gordon apps promote web --service web \
+gordon apps set-image web --service web \
   --image "$(jq -r .image push.json)" \
-  --remote "$GORDON_REMOTE" --json >promote.json
-jq '{op, app, status, outcome}' promote.json
+  --remote "$GORDON_REMOTE" --json >set-image.json
+jq '{op, app, status, outcome}' set-image.json
 ```
 
 Push JSON contains `repository`, `tag`, `digest`, and `image`; `image` is
 `repository@digest`. Use that value, not a tag or local image ID.
-Promotion waits by polling the operation by key. Exit 0 means success;
+Set-image waits by polling the operation by key. Exit 0 means success;
 exit 1 means refusal or unsuccessful completion. JSON mode prints one final
 document to stdout; build, upload, and watch progress goes to stderr.
 
@@ -61,7 +61,7 @@ DIGEST=$(docker image inspect \
   ci.example.com/web:v1.2.0 | grep '^ci.example.com/web@' | cut -d@ -f2)
 ```
 
-Exchange the JWT for a bearer token to promote; the Basic username is ignored:
+Exchange the JWT for a bearer token to set the image; the Basic username is ignored:
 
 ```bash
 # Keep credentials out of curl's command-line arguments.
@@ -80,12 +80,12 @@ jq -n --arg image "web@$DIGEST" \
 printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" |
   curl --fail-with-body -sS --config - \
     -H 'Content-Type: application/json' -H "Idempotency-Key: $KEY" \
-    --data-binary @request.json "$CI/-/ci/apps/web/promote" >operation.json
+    --data-binary @request.json "$CI/-/ci/apps/web/set-image" >operation.json
 ```
 
 The exchange can also be used by a registry client instead of Docker's
 login handshake. `/auth/token` returns `token`, `expires_in`, and `issued_at`.
-Use the exchanged token, never the raw JWT, for promotion and lookup.
+Use the exchanged token, never the raw JWT, for set-image and lookup.
 Poll `GET /-/ci/apps/{app}/operations/by-key/{key}` until `status` is no
 longer `running`. For example, a bounded wait:
 
@@ -109,24 +109,24 @@ the submitting principal and requires a current policy for the app.
 
 ## HTTP Results and Retries
 
-Promotion requires an `Idempotency-Key`: 1–128 characters from
+Set-image requires an `Idempotency-Key`: 1–128 characters from
 `A–Z a–z 0–9 - _ . ~`, other than `.` or `..` alone. JSON accepts only `service`, `image`,
 and optional `expected_revision`, with a 4 KiB body limit.
 
 | Status | Meaning |
 |--------|---------|
 | `202` | Accepted, still running; poll by key |
-| `200` | Terminal promotion result (including successful replay or no-op); lookup also returns 200 while running |
+| `200` | Terminal set-image result (including successful replay or no-op); lookup also returns 200 while running |
 | `400` | Malformed request, missing or invalid `Idempotency-Key`, tag/non-installation image, or invalid candidate configuration |
 | `401` | Invalid identity at exchange, or missing/invalid ci-access bearer token |
 | `403` | No matching policy or requested repository scope |
 | `404` | Missing app, service, manifest, or visible operation; route outside the CI allowlist |
 | `409` | `app-busy`, state/revision conflict, key reuse, or unfinished/failed replay |
 | `429` | `/auth/token` rate limit exceeded; `Retry-After: 1` |
-| `500` | Promotion unavailable on this daemon, or an internal error |
+| `500` | Set-image unavailable on this daemon, or an internal error |
 | `503` | Identity provider unavailable; `Retry-After: 30` |
 
-`app-busy` returns `Retry-After: 5`: nothing was promoted; wait, then submit
+`app-busy` returns `Retry-After: 5`: nothing was changed; wait, then submit
 with a new key. For an ambiguous network result, query the original key
 before any retry. An identical replay returns the recorded operation;
 a different request under the same key is refused. The CLI does not retry
@@ -139,7 +139,7 @@ The CI host allowlist is:
 - `POST /v2/<repo>/blobs/uploads/` without `mount` or `from`
 - `PATCH` or `PUT /v2/<repo>/blobs/uploads/<uuid>`
 - `PUT` or `HEAD /v2/<repo>/manifests/<ref>`
-- `POST /-/ci/apps/{app}/promote`
+- `POST /-/ci/apps/{app}/set-image`
 - `GET /-/ci/apps/{app}/operations/by-key/{key}`
 
 Repositories must be policy-granted. Manifest/blob GET, tag listing,

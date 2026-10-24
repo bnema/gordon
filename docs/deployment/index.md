@@ -2,13 +2,13 @@
 
 Gordon deploys apps in two explicit steps: push the image to its built-in registry, then activate it. Push transfers OCI content only — it never deploys, creates routes, or modifies manifests.
 
-## Recommended for CI: OIDC Digest Promotion
+## Recommended for CI: OIDC Set-image
 
-The CI job uses its OIDC ID token on the [CI host](../config/server.md#ci-host), pushes the image, and runs exactly that digest in one service of an existing app. No long-lived Gordon token is stored in CI; a [promotion policy](../config/promotion.md) limits each identity to one app, service, and repository.
+The CI job uses its OIDC ID token on the [CI host](../config/server.md#ci-host), pushes the image, and runs exactly that digest in one service of an existing app. No long-lived Gordon token is stored in CI; a [set-image policy](../config/set-image.md) limits each identity to one app, service, and repository.
 
 ```bash
 gordon images push web --build --tag v1.2.0 --remote https://ci.example.com --json >push.json
-gordon apps promote web --service web --image "$(jq -r .image push.json)" --remote https://ci.example.com
+gordon apps set-image web --service web --image "$(jq -r .image push.json)" --remote https://ci.example.com
 ```
 
 See [Generic CI](./generic-ci.md) for setup, the Docker + curl flow, and HTTP results.
@@ -36,7 +36,7 @@ gordon apps deploy blog --remote https://gordon.example.com
 
 | Method | Best For | Secrets Needed | Registry Access | Deploy Control |
 |--------|----------|----------------|-----------------|----------------|
-| `gordon images push` + `apps promote` (OIDC) | CI/CD pipelines with an OIDC identity | None (job ID token) | Via CI host (HTTPS, push only) | One digest in one service |
+| `gordon images push` + `apps set-image` (OIDC) | CI/CD pipelines with an OIDC identity | None (job ID token) | Via CI host (HTTPS, push only) | One digest in one service |
 | `gordon images push` + `apps deploy` | CI/CD pipelines without OIDC | 1 (`GORDON_TOKEN`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 | `docker push` + `apps deploy` | Simple setups, existing Docker workflows | 2 (`username` + `token`) | Via gordon domain (HTTPS) | Explicit (CLI-triggered) |
 

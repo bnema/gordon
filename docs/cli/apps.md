@@ -3,7 +3,7 @@
 Validate, persist, inspect, and operate applications.
 
 All mutations are executed by the daemon. Owner/stored-token commands use
-the admin API; OIDC promotion uses the restricted CI host.
+the admin API; OIDC set-image uses the restricted CI host.
 Without a reachable daemon the commands fail with `daemon-unavailable`
 instead of writing locally. Mutations are idempotent: every request carries a
 client-generated key, and the daemon binds that key to the exact request.
@@ -36,7 +36,7 @@ See [Local-only Mode](../config/auth.md#local-only-mode).
 | `diff` | Show the normalized desired-vs-active diff |
 | `secrets` | Manage app secret values |
 | `deploy` | Activate an app revision |
-| `promote` | Run one pushed image digest in one service |
+| `set-image` | Set one service's image and deploy it |
 | `restart` | Restart an app from pinned digests |
 | `stop` | Stop an app (preserves all data) |
 | `start` | Start a stopped app from active state |
@@ -295,10 +295,10 @@ local polling (the daemon-side operation keeps running) and prints the
 
 ---
 
-## gordon apps promote
+## gordon apps set-image
 
 ```bash
-gordon apps promote APP --service SVC --image REPO@sha256:DIGEST [--expected-revision REV] [--json]
+gordon apps set-image APP --service SVC --image REPO@sha256:DIGEST [--expected-revision REV] [--json]
 ```
 
 Runs exactly one image digest from this installation's registry in one
@@ -311,14 +311,15 @@ their provenance.
   registry host. Tags and other registries are refused.
 - The manifest must already be in the registry (`gordon images push`).
 - The app must be running and its other services must match desired state.
-- Over the local admin socket the owner may promote any service. A token
-  caller needs a `[[promotion_policies]]` entry with issuer `gordon` and its
+- Over the local admin socket the owner may set the image of any service. A token
+  caller needs a `[[set_image_policies]]` entry with issuer `gordon` and its
   token subject.
-- Promoting a digest the service already runs succeeds without a change.
+- Setting a digest the service already runs succeeds without a change.
+- `apps set-image` is unrelated to the `gordon images` command group.
 
 | Flag | Description |
 |------|-------------|
-| `--service NAME` | Service to promote (required) |
+| `--service NAME` | Service whose image is set (required) |
 | `--image REF` | Image as `REPO@sha256:DIGEST` (required) |
 | `--expected-revision REV` | Refuse unless desired state is still at this revision |
 | `--remote, -r` | Remote name or URL; use the CI host for OIDC |
@@ -326,13 +327,13 @@ their provenance.
 | `--json` | Output as JSON |
 
 The command polls the operation by key like `apps deploy` and exits 0 only
-when the promotion succeeds. It never retries: on a conflict (HTTP 409), for
+when the image change succeeds. It never retries: on a conflict (HTTP 409), for
 example a concurrent apply or a changed `--expected-revision`, it exits 1.
 When another operation of the app is still running (`app-busy`, with
-`Retry-After`), nothing was promoted: run the command again later; each run
+`Retry-After`), nothing was changed: run the command again later; each run
 uses a new key.
 If the outcome is unknown, check it with
-`gordon apps operations show APP --key KEY` before promoting again.
+`gordon apps operations show APP --key KEY` before running set-image again.
 
 ### OIDC Mode
 
@@ -341,14 +342,14 @@ Use an https `--remote`, such as `https://ci.example.com`, with
 `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN`.
 The runner endpoint requires `--oidc-audience` or `GORDON_OIDC_AUDIENCE`;
 a non-empty `GORDON_OIDC_TOKEN` takes precedence. Gordon exchanges the JWT
-for a ci-access token and uses only promotion and by-key lookup routes,
+for a ci-access token and uses only set-image and by-key lookup routes,
 without admin verification. OIDC mode refuses non-https remotes.
 Without an OIDC source, the CLI uses stored-token mode. The identity needs an exact
-[promotion policy](../config/promotion.md).
+[set-image policy](../config/set-image.md).
 
 ```bash
 gordon images push web --build --remote https://ci.example.com --json >push.json
-gordon apps promote blog --service web \
+gordon apps set-image blog --service web \
   --image "$(jq -r .image push.json)" --remote https://ci.example.com --json
 ```
 
@@ -358,12 +359,12 @@ JSON mode emits one final operation document (a no-op example):
 {"op":"op-1","app":"blog","revision":"rev-2","status":"success","outcome":"success","services":{},"steps":[],"effective":{"converged":true,"converged_revision":"rev-2","services":{"web":"rev-2"}}}
 ```
 
-`effective` is present when the promotion answers with a terminal result
+`effective` is present when set-image answers with a terminal result
 directly; a result reached by polling the operation omits it. Stored-token
 responses also list the app's `retained` resources; OIDC responses omit them.
 
-Stored-token callers submit to `POST /admin/apps/{app}/promote`; OIDC
-callers submit to `POST /-/ci/apps/{app}/promote`. Both accept `service`,
+Stored-token callers submit to `POST /admin/apps/{app}/set-image`; OIDC
+callers submit to `POST /-/ci/apps/{app}/set-image`. Both accept `service`,
 `image`, and optional `expected_revision`, and require `Idempotency-Key`.
 
 Progress goes to stderr. HTTP 202 starts polling; HTTP 200 returns a terminal

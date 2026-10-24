@@ -14,7 +14,7 @@ tls_cert_file = ""                           # PEM cert path (optional, for stat
 tls_key_file = ""                            # PEM key path (optional, must be set with tls_cert_file)
 force_https_redirect = false                 # Redirect all HTTP traffic to HTTPS (for direct-access setups)
 gordon_domain = ""                           # Required: Gordon domain (registry + API)
-ci_domain = ""                               # Optional HTTPS CI host for push, promotion, and lookup
+ci_domain = ""                               # Optional HTTPS CI host for push, set-image, and lookup
 data_dir = "~/.gordon"                       # Data directory (varies by install type)
 max_blob_chunk_size = "95MB"                 # Max size per registry blob upload chunk
 max_blob_size = "1GB"                        # Max cumulative size per registry blob/layer upload
@@ -464,12 +464,12 @@ gordon serve
 | `"warn"` | Warning conditions |
 | `"error"` | Error conditions only |
 
-## CI Identity and Promotion Policies
+## CI Identity and Set-image Policies
 
-CI identity and promotion configuration is validated at startup and reload.
+CI identity and set-image configuration is validated at startup and reload.
 `server.ci_domain` enables the restricted CI router. See
 [Trusted Issuers](./auth.md#oidc-trusted-issuers) for key defaults and cache
-behavior, and [Promotion Policies](./promotion.md) for grant semantics.
+behavior, and [Set-image policies](./set-image.md) for grant semantics.
 
 ```toml
 [[trusted_issuers]]
@@ -480,7 +480,7 @@ max_token_lifetime = "1h"                     # Default; positive duration
 clock_skew = "60s"                            # Default; non-negative duration
 allow_private_network = false                # Permit private issuer network access
 
-[[promotion_policies]]
+[[set_image_policies]]
 issuer = "https://issuer.example.com"          # Declared issuer, or "gordon"
 subjects = ["repo:acme/web:production"]        # Non-empty exact subjects
 app = "web"

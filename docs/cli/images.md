@@ -20,7 +20,7 @@ Subcommands:
 ## gordon images push
 
 Tag and push an image to the Gordon registry. Push transfers OCI content
-only: it never deploys. For CI, use `gordon apps promote` with the digest
+only: it never deploys. For CI, use `gordon apps set-image` with the digest
 from `--json`. For manifest changes, apply the manifest and run `gordon apps deploy`.
 
 ### Synopsis

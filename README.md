@@ -71,14 +71,14 @@ gordon apps secrets set blog --service web DATABASE_URL=... --remote prod
 
 ## Deploy from CI/CD
 
-Push never triggers a deploy by itself. The recommended CI path is OIDC digest promotion: the job authenticates with its OIDC ID token on a dedicated CI host, pushes the image, and runs exactly that digest in one service. No long-lived Gordon token is stored in CI.
+Push never triggers a deploy by itself. The recommended CI path is OIDC digest set-image: the job authenticates with its OIDC ID token on a dedicated CI host, pushes the image, and runs exactly that digest in one service. No long-lived Gordon token is stored in CI.
 
 ```bash
 gordon images push web --build --tag v1.2.0 --remote https://ci.example.com --json >push.json
-gordon apps promote web --service web --image "$(jq -r .image push.json)" --remote https://ci.example.com
+gordon apps set-image web --service web --image "$(jq -r .image push.json)" --remote https://ci.example.com
 ```
 
-See [Generic CI](docs/deployment/generic-ci.md) for the server-side trusted issuer and promotion policy, and a Docker + curl variant.
+See [Generic CI](docs/deployment/generic-ci.md) for the server-side trusted issuer and set-image policy, and a Docker + curl variant.
 
 Runners without OIDC can push with a stored token, then apply and deploy with the CLI:
 
@@ -123,7 +123,7 @@ gordon apps deploy blog --remote prod
 |---------|-------------|
 | `gordon apps apply --file FILE` | Validate and persist an app manifest |
 | `gordon apps deploy APP` | Activate an app revision |
-| `gordon apps promote APP --service SVC --image REPO@DIGEST` | Run one pushed digest in one service |
+| `gordon apps set-image APP --service SVC --image REPO@DIGEST` | Run one pushed digest in one service |
 | `gordon apps list` | List applications |
 | `gordon apps show APP` | Show desired and active state |
 | `gordon apps status APP` | Show effective vs observed state |

@@ -37,7 +37,7 @@ Gordon combines a Docker registry with a declarative app runtime:
 ```
 
 Pushing an image only stores it. Nothing runs, no route is created, no manifest is modified. Activation is explicit: use `gordon apps deploy` for manifest changes or
-`gordon apps promote` to run one pushed digest in one service.
+`gordon apps set-image` to run one pushed digest in one service.
 
 ## Declarative Apps
 
@@ -211,19 +211,19 @@ Gordon stamps app ownership labels on every container and volume it creates:
 
 Queries by logical identity use labels, never name parsing. Unknown resources (no labels, old labels) are preserved, never adopted or deleted.
 
-## CI Promotion
+## CI Set-image
 
-CI pushes an image, reads the registry-confirmed digest, then promotes that
+CI pushes an image, reads the registry-confirmed digest, then sets that
 exact digest. Mutable tags, local image IDs, and the `latest` alias are not
-promotion inputs. Promotion creates the desired image change and activates
+set-image inputs. Set-image changes the desired service image and activates
 it; it does not apply arbitrary app configuration.
 
-`server.ci_domain` exposes only OIDC exchange, push, promotion, and scoped
+`server.ci_domain` exposes only OIDC exchange, push, set-image, and scoped
 operation lookup. It does not serve image pulls or admin operations.
 `server.gordon_domain` remains the main registry and admin host and can stay
 private. The daemon pulls through the main registry, not the CI host.
 See [CI Deployment](./deployment/generic-ci.md) and
-[Promotion Policies](./config/promotion.md).
+[Set-image policies](./config/set-image.md).
 
 ## Related
 

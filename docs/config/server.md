@@ -31,7 +31,7 @@ protocol = "smart_tcp"
 | `tls_key_file` | string | `""` | Path to PEM private key file. Must be set together with `tls_cert_file` |
 | `force_https_redirect` | bool | `false` | Redirect cleartext HTTP requests to HTTPS on HTTP-capable edge entrypoints |
 | `gordon_domain` | string | **required** | Domain for Gordon (registry + admin API) |
-| `ci_domain` | string | `""` | Optional separate host for OIDC image push, promotion, and operation lookup; requires authentication |
+| `ci_domain` | string | `""` | Optional separate host for OIDC image push, set-image, and operation lookup; requires authentication |
 | `registry_domain` | string | - | Deprecated migration key. Set `gordon_domain` instead. |
 | `legacy_registry_domains` | []string | `[]` | Additional Gordon registry hosts treated as aliases during staged migration. See [Upgrading: Staged Registry Host Rename](../upgrading.md#staged-registry-host-rename). |
 | `data_dir` | string | `~/.gordon` | Directory for registry data, logs, and state |
@@ -499,7 +499,7 @@ trusted proxy reporting HTTPS, the CI router returns 404.
 Gordon must reach issuer discovery and JWKS endpoints over HTTPS.
 
 See [Authentication](./auth.md#oidc-trusted-issuers),
-[Promotion Policies](./promotion.md), and [CI Deployment](../deployment/generic-ci.md).
+[Set-image policies](./set-image.md), and [CI Deployment](../deployment/generic-ci.md).
 
 ## Related
 

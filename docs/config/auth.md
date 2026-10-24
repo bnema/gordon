@@ -214,20 +214,20 @@ an invalid identity token yields 401.
 On the [CI host](./server.md#ci-host), `GET /auth/token` exchanges Basic
 credentials (username `oidc`, password the OIDC JWT) for a short-lived
 `ci-access` bearer token. The username is ignored. A matching
-[promotion policy](./promotion.md) is required. Requested repository scopes
+[set-image policy](./set-image.md) is required. Requested repository scopes
 are intersected with policy grants: only `push` and `pull` are issued,
 never admin scopes. `pull` permits the HEAD checks needed for pushing;
 the CI host does not serve image pulls.
 
 The response contains `token`, `expires_in` (seconds), and `issued_at`
-(RFC 3339). A login without a scope gets an unscoped token. Promotion and
+(RFC 3339). A login without a scope gets an unscoped token. Set-image and
 lookup use the bearer token, not the raw OIDC JWT.
 TTL is `auth.access_token_ttl` (default `15m`), capped at 1 hour.
 CI access tokens cannot authenticate to the main registry or admin API.
 They are not stored and are revoked only by rotating the token secret;
 removing an issuer does not revoke already issued tokens. Current policies
 are still checked on requests: removing a policy blocks its repository
-access and promotions, and hides operation lookups without an app policy.
+access and set-image requests, and hides operation lookups without an app policy.
 
 ## Related
 
