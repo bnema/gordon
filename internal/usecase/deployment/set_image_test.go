@@ -23,16 +23,16 @@ import (
 
 const promoRegistry = "registry.example.com"
 
-func promoDigest(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+func setImageDigest(c string) string { return "sha256:" + strings.Repeat(c, 64) }
 
-func promoImage(repo, c string) string { return promoRegistry + "/" + repo + "@" + promoDigest(c) }
+func promoImage(repo, c string) string { return promoRegistry + "/" + repo + "@" + setImageDigest(c) }
 
 var ciPrincipal = domain.WorkloadPrincipal{Issuer: "https://ci.example.com", Subject: "repo:acme/blog"}
 
-// promoHarness is a deployment engine over a real store, with a permissive
+// setImageHarness is a deployment engine over a real store, with a permissive
 // runtime that replaces containers and a manifest store holding the digests
 // listed in manifests.
-type promoHarness struct {
+type setImageHarness struct {
 	t         *testing.T
 	ctx       context.Context
 	store     *appstate.Store
@@ -47,9 +47,9 @@ type promoHarness struct {
 	failCreate string
 }
 
-func newPromoHarness(t *testing.T) *promoHarness {
+func newPromoHarness(t *testing.T) *setImageHarness {
 	t.Helper()
-	h := &promoHarness{
+	h := &setImageHarness{
 		t: t, ctx: context.Background(), store: newTestStore(t),
 		runtime:   outmocks.NewMockContainerRuntime(t),
 		manifests: outmocks.NewMockManifestStorage(t),
@@ -70,7 +70,7 @@ func newPromoHarness(t *testing.T) *promoHarness {
 	return h
 }
 
-func (h *promoHarness) build() {
+func (h *setImageHarness) build() {
 	images := outmocks.NewMockImageResolver(h.t)
 	images.EXPECT().ResolveDigest(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, ref string) (string, error) {
 		_, digest, _ := strings.Cut(ref, "@")
@@ -84,14 +84,14 @@ func (h *promoHarness) build() {
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
 	))
-	policies, err := domain.NewPromotionPolicySet([]domain.PromotionPolicy{{
+	policies, err := domain.NewSetImagePolicySet([]domain.SetImagePolicy{{
 		Issuer: ciPrincipal.Issuer, Subjects: []string{ciPrincipal.Subject}, App: "blog", Service: "web", Repository: "web",
 	}})
 	require.NoError(h.t, err)
-	h.svc.SetPromotionConfig(deployment.PromotionConfig{Policies: policies, RegistryHosts: []string{"ci.example.com"}})
+	h.svc.SetSetImageConfig(deployment.SetImageConfig{Policies: policies, RegistryHosts: []string{"ci.example.com"}})
 }
 
-func (h *promoHarness) expectRuntime() {
+func (h *setImageHarness) expectRuntime() {
 	r := h.runtime
 	r.EXPECT().PullImageWithOptions(mock.Anything, mock.Anything).Return(nil).Maybe()
 	r.EXPECT().VerifyImageDigest(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -123,7 +123,7 @@ func promoServices() (domain.AppService, domain.AppService) {
 	return web, worker
 }
 
-func (h *promoHarness) seed() {
+func (h *setImageHarness) seed() {
 	web, worker := promoServices()
 	at := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
 	base := testRevision("blog", web, worker)
@@ -133,25 +133,25 @@ func (h *promoHarness) seed() {
 		App: "blog", Converged: true, ConvergedRevision: "rev-0",
 		Services: map[string]domain.AppEffectiveService{
 			"web": {Container: "c-web", EffectiveRevision: "rev-0", Image: web.Image, ActivatedBy: "op-created",
-				ActivatedAt: at, Digest: promoDigest("a"), Spec: base.Spec.Services[0], BackendBinds: map[int]int{8080: 18080}},
+				ActivatedAt: at, Digest: setImageDigest("a"), Spec: base.Spec.Services[0], BackendBinds: map[int]int{8080: 18080}},
 			"worker": {Container: "c-worker", EffectiveRevision: "rev-0", Image: worker.Image, ActivatedBy: "op-created",
-				ActivatedAt: at, Digest: promoDigest("b"), Spec: base.Spec.Services[1]},
+				ActivatedAt: at, Digest: setImageDigest("b"), Spec: base.Spec.Services[1]},
 		},
 	}))
 	require.NoError(h.t, h.store.SaveOwnership(h.ctx, domain.AppOwnership{App: "blog", ID: "app-blog"}))
 	seedRevision(h.t, h.ctx, h.store, "intent-0", "", base)
 }
 
-func (h *promoHarness) input(key, image string) deployment.PromotionInput {
-	return deployment.PromotionInput{
+func (h *setImageHarness) input(key, image string) deployment.SetImageInput {
+	return deployment.SetImageInput{
 		App: "blog", Service: "web", Image: image, Op: key, Principal: ciPrincipal,
 		Validate: func(domain.AppSpec) error { return nil },
 	}
 }
 
-func (h *promoHarness) promote(key, image string) (*deployment.StartDeployResult, error) {
+func (h *setImageHarness) setImage(key, image string) (*deployment.StartDeployResult, error) {
 	h.known["web@"+imageDigest(image)] = true
-	return h.svc.StartPromotion(h.ctx, h.input(key, image))
+	return h.svc.StartSetImage(h.ctx, h.input(key, image))
 }
 
 func imageDigest(image string) string {
@@ -159,7 +159,7 @@ func imageDigest(image string) string {
 	return digest
 }
 
-func (h *promoHarness) desired() domain.AppDesiredRevision {
+func (h *setImageHarness) desired() domain.AppDesiredRevision {
 	h.t.Helper()
 	desired, ok, err := h.store.LoadDesired(h.ctx, "blog")
 	require.NoError(h.t, err)
@@ -167,7 +167,7 @@ func (h *promoHarness) desired() domain.AppDesiredRevision {
 	return desired
 }
 
-func (h *promoHarness) active() domain.AppActive {
+func (h *setImageHarness) active() domain.AppActive {
 	h.t.Helper()
 	active, _, err := h.store.LoadActive(h.ctx, "blog")
 	require.NoError(h.t, err)
@@ -199,23 +199,23 @@ func (b *recordingBarrier) requireHeld(t *testing.T, what string) {
 	require.Positive(t, b.held.Load(), "%s must run under the shared GC lease", what)
 }
 
-func TestStartPromotion_TwoServiceAppConvergesAndKeepsOtherProvenance(t *testing.T) {
+func TestStartSetImage_TwoServiceAppConvergesAndKeepsOtherProvenance(t *testing.T) {
 	h := newPromoHarness(t)
-	started, err := h.promote("key-1", "web@"+promoDigest("c"))
+	started, err := h.setImage("key-1", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	require.True(t, started.Owned)
-	assert.Equal(t, domain.AppOperationKindPromote, started.Claim.Journal.Kind)
+	assert.Equal(t, domain.AppOperationKindSetImage, started.Claim.Journal.Kind)
 	assert.Equal(t, ciPrincipal.String(), started.Claim.Journal.Principal)
 	assert.Equal(t, promoImage("web", "c"), started.Claim.Journal.Request.Image, "the image is canonicalized")
-	assert.Equal(t, promoDigest("c"), started.Claim.Journal.Steps[0].Digest, "step 0 protects the digest from prune")
+	assert.Equal(t, setImageDigest("c"), started.Claim.Journal.Steps[0].Digest, "step 0 protects the digest from prune")
 
 	desired := h.desired()
 	assert.Equal(t, "rev-0", desired.Supersedes)
-	require.NotNil(t, desired.Promotion)
-	assert.Equal(t, domain.AppPromotionProvenance{
-		Service: "web", Image: promoImage("web", "c"), Digest: promoDigest("c"),
+	require.NotNil(t, desired.SetImage)
+	assert.Equal(t, domain.AppSetImageProvenance{
+		Service: "web", Image: promoImage("web", "c"), Digest: setImageDigest("c"),
 		Principal: ciPrincipal.String(), Operation: "key-1", AppID: "app-blog",
-	}, *desired.Promotion)
+	}, *desired.SetImage)
 	assert.NotEmpty(t, desired.SourceSHA256)
 	web, worker := promoServices()
 	web.Image = promoImage("web", "c")
@@ -228,15 +228,15 @@ func TestStartPromotion_TwoServiceAppConvergesAndKeepsOtherProvenance(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, domain.AppOutcomeSuccess, op.Outcome)
 	active := h.active()
-	assert.True(t, active.Converged, "promoting one service of a converged app keeps it converged")
+	assert.True(t, active.Converged, "setting one service's image of a converged app keeps it converged")
 	assert.Equal(t, desired.Revision, active.ConvergedRevision)
-	assert.Equal(t, promoDigest("c"), active.Services["web"].Digest)
+	assert.Equal(t, setImageDigest("c"), active.Services["web"].Digest)
 	assert.Equal(t, desired.Revision, active.Services["web"].EffectiveRevision)
 	assert.Equal(t, "rev-0", active.Services["worker"].EffectiveRevision, "the other service keeps its provenance")
 	assert.Equal(t, "op-created", active.Services["worker"].ActivatedBy)
 
-	// A second promotion supersedes the first one.
-	second, err := h.promote("key-2", "ci.example.com/web@"+promoDigest("d"))
+	// A second image change supersedes the first one.
+	second, err := h.setImage("key-2", "ci.example.com/web@"+setImageDigest("d"))
 	require.NoError(t, err)
 	require.True(t, second.Owned)
 	assert.Equal(t, desired.Revision, h.desired().Supersedes)
@@ -244,103 +244,103 @@ func TestStartPromotion_TwoServiceAppConvergesAndKeepsOtherProvenance(t *testing
 	require.NoError(t, err)
 	active = h.active()
 	assert.True(t, active.Converged)
-	assert.Equal(t, promoDigest("d"), active.Services["web"].Digest)
+	assert.Equal(t, setImageDigest("d"), active.Services["web"].Digest)
 	assert.Equal(t, "rev-0", active.Services["worker"].EffectiveRevision)
 }
 
-func TestStartPromotion_ReplayAfterLaterMutationReportsOriginal(t *testing.T) {
+func TestStartSetImage_ReplayAfterLaterMutationReportsOriginal(t *testing.T) {
 	h := newPromoHarness(t)
-	started, err := h.promote("key-1", "web@"+promoDigest("c"))
+	started, err := h.setImage("key-1", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	_, err = h.svc.ExecuteDeploy(h.ctx, started.Claim)
 	require.NoError(t, err)
-	promoted := h.desired().Revision
-	_, err = h.promote("key-2", "web@"+promoDigest("d"))
+	changed := h.desired().Revision
+	_, err = h.setImage("key-2", "web@"+setImageDigest("d"))
 	require.NoError(t, err)
 	before := h.desired().Revision
 
-	replay, err := h.promote("key-1", "registry.example.com/web@"+promoDigest("c"))
+	replay, err := h.setImage("key-1", "registry.example.com/web@"+setImageDigest("c"))
 	require.NoError(t, err, "a terminal success replays without error")
 	assert.False(t, replay.Owned)
 	assert.Equal(t, domain.AppOutcomeSuccess, replay.Claim.Journal.Outcome)
-	assert.Equal(t, promoted, replay.Claim.Journal.InputRevision)
+	assert.Equal(t, changed, replay.Claim.Journal.InputRevision)
 	assert.Equal(t, before, h.desired().Revision, "a replay writes nothing")
 }
 
-func TestStartPromotion_KeyReuseForAnotherRequestConflicts(t *testing.T) {
+func TestStartSetImage_KeyReuseForAnotherRequestConflicts(t *testing.T) {
 	h := newPromoHarness(t)
-	_, err := h.promote("key-1", "web@"+promoDigest("c"))
+	_, err := h.setImage("key-1", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	revision := h.desired().Revision
 
-	_, err = h.promote("key-1", "web@"+promoDigest("d"))
+	_, err = h.setImage("key-1", "web@"+setImageDigest("d"))
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
-	other := h.input("key-1", "web@"+promoDigest("c"))
+	other := h.input("key-1", "web@"+setImageDigest("c"))
 	other.Principal = domain.WorkloadPrincipal{Issuer: domain.GordonIssuer, Subject: "someone"}
 	other.LocalOwner = true
-	_, err = h.svc.StartPromotion(h.ctx, other)
+	_, err = h.svc.StartSetImage(h.ctx, other)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict, "another principal never replays this key")
 	assert.Equal(t, revision, h.desired().Revision)
 }
 
-func TestStartPromotion_RefusesBeforeAnyWrite(t *testing.T) {
+func TestStartSetImage_RefusesBeforeAnyWrite(t *testing.T) {
 	tests := []struct {
 		name    string
-		prepare func(*promoHarness) deployment.PromotionInput
+		prepare func(*setImageHarness) deployment.SetImageInput
 		want    error
 	}{
-		{name: "tag image", want: domain.ErrInvalidPromotionImage, prepare: func(h *promoHarness) deployment.PromotionInput {
+		{name: "tag image", want: domain.ErrInvalidImageReference, prepare: func(h *setImageHarness) deployment.SetImageInput {
 			return h.input("k", "registry.example.com/web:latest")
 		}},
-		{name: "malformed digest", want: domain.ErrInvalidPromotionImage, prepare: func(h *promoHarness) deployment.PromotionInput {
+		{name: "malformed digest", want: domain.ErrInvalidImageReference, prepare: func(h *setImageHarness) deployment.SetImageInput {
 			return h.input("k", "web@sha256:abc")
 		}},
-		{name: "cross host", want: domain.ErrInvalidPromotionImage, prepare: func(h *promoHarness) deployment.PromotionInput {
-			return h.input("k", "ghcr.io/web@"+promoDigest("c"))
+		{name: "cross host", want: domain.ErrInvalidImageReference, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			return h.input("k", "ghcr.io/web@"+setImageDigest("c"))
 		}},
-		{name: "missing manifest", want: domain.ErrManifestNotFound, prepare: func(h *promoHarness) deployment.PromotionInput {
-			return h.input("k", "web@"+promoDigest("e"))
+		{name: "missing manifest", want: domain.ErrManifestNotFound, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			return h.input("k", "web@"+setImageDigest("e"))
 		}},
-		{name: "policy denied", want: domain.ErrPromotionDenied, prepare: func(h *promoHarness) deployment.PromotionInput {
-			in := h.input("k", "web@"+promoDigest("c"))
+		{name: "policy denied", want: domain.ErrSetImageDenied, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			in := h.input("k", "web@"+setImageDigest("c"))
 			in.Principal.Subject = "repo:acme/other"
-			h.known["web@"+promoDigest("c")] = true
+			h.known["web@"+setImageDigest("c")] = true
 			return in
 		}},
-		{name: "repository outside policy", want: domain.ErrPromotionDenied, prepare: func(h *promoHarness) deployment.PromotionInput {
-			h.known["worker@"+promoDigest("c")] = true
-			return h.input("k", "worker@"+promoDigest("c"))
+		{name: "repository outside policy", want: domain.ErrSetImageDenied, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			h.known["worker@"+setImageDigest("c")] = true
+			return h.input("k", "worker@"+setImageDigest("c"))
 		}},
-		{name: "unknown service", want: domain.ErrAppServiceNotFound, prepare: func(h *promoHarness) deployment.PromotionInput {
-			in := h.input("k", "web@"+promoDigest("c"))
+		{name: "unknown service", want: domain.ErrAppServiceNotFound, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			in := h.input("k", "web@"+setImageDigest("c"))
 			in.Service, in.LocalOwner = "api", true
-			h.known["web@"+promoDigest("c")] = true
+			h.known["web@"+setImageDigest("c")] = true
 			return in
 		}},
-		{name: "stale expected revision", want: domain.ErrAppStateConflict, prepare: func(h *promoHarness) deployment.PromotionInput {
-			in := h.input("k", "web@"+promoDigest("c"))
+		{name: "stale expected revision", want: domain.ErrAppStateConflict, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			in := h.input("k", "web@"+setImageDigest("c"))
 			in.ExpectedRevision = "rev-old"
-			h.known["web@"+promoDigest("c")] = true
+			h.known["web@"+setImageDigest("c")] = true
 			return in
 		}},
-		{name: "stopped app", want: domain.ErrAppStateConflict, prepare: func(h *promoHarness) deployment.PromotionInput {
+		{name: "stopped app", want: domain.ErrAppStateConflict, prepare: func(h *setImageHarness) deployment.SetImageInput {
 			require.NoError(t, h.store.SaveIntent(h.ctx, domain.AppStopIntent{App: "blog", Stopped: true}))
-			h.known["web@"+promoDigest("c")] = true
-			return h.input("k", "web@"+promoDigest("c"))
+			h.known["web@"+setImageDigest("c")] = true
+			return h.input("k", "web@"+setImageDigest("c"))
 		}},
-		{name: "divergent base", want: domain.ErrAppStateConflict, prepare: func(h *promoHarness) deployment.PromotionInput {
+		{name: "divergent base", want: domain.ErrAppStateConflict, prepare: func(h *setImageHarness) deployment.SetImageInput {
 			web, worker := promoServices()
 			worker.Image = promoImage("worker", "f")
 			next := testRevision("blog", web, worker)
 			next.Revision = "rev-1"
 			seedRevision(t, h.ctx, h.store, "intent-1", "rev-0", next)
-			h.known["web@"+promoDigest("c")] = true
-			return h.input("k", "web@"+promoDigest("c"))
+			h.known["web@"+setImageDigest("c")] = true
+			return h.input("k", "web@"+setImageDigest("c"))
 		}},
-		{name: "candidate fails validation", want: domain.ErrBindPolicy, prepare: func(h *promoHarness) deployment.PromotionInput {
-			in := h.input("k", "web@"+promoDigest("c"))
+		{name: "candidate fails validation", want: domain.ErrBindPolicy, prepare: func(h *setImageHarness) deployment.SetImageInput {
+			in := h.input("k", "web@"+setImageDigest("c"))
 			in.Validate = func(domain.AppSpec) error { return domain.ErrBindPolicy }
-			h.known["web@"+promoDigest("c")] = true
+			h.known["web@"+setImageDigest("c")] = true
 			return in
 		}},
 	}
@@ -349,56 +349,56 @@ func TestStartPromotion_RefusesBeforeAnyWrite(t *testing.T) {
 			h := newPromoHarness(t)
 			input := tc.prepare(h)
 			before := h.desired().Revision
-			_, err := h.svc.StartPromotion(h.ctx, input)
+			_, err := h.svc.StartSetImage(h.ctx, input)
 			require.ErrorIs(t, err, tc.want)
 			assert.Equal(t, before, h.desired().Revision)
 			_, err = h.store.LoadOperation(h.ctx, "blog", "k")
-			require.ErrorIs(t, err, domain.ErrAppOperationNotFound, "a refused promotion journals nothing")
+			require.ErrorIs(t, err, domain.ErrAppOperationNotFound, "a refused image change journals nothing")
 		})
 	}
 }
 
-func TestStartPromotion_LocalOwnerBypassesPolicy(t *testing.T) {
+func TestStartSetImage_LocalOwnerBypassesPolicy(t *testing.T) {
 	h := newPromoHarness(t)
-	h.known["worker@"+promoDigest("c")] = true
-	in := h.input("k", "worker@"+promoDigest("c"))
+	h.known["worker@"+setImageDigest("c")] = true
+	in := h.input("k", "worker@"+setImageDigest("c"))
 	in.Principal = domain.WorkloadPrincipal{Issuer: domain.GordonIssuer, Subject: "local-owner"}
 	in.LocalOwner = true
-	started, err := h.svc.StartPromotion(h.ctx, in)
+	started, err := h.svc.StartSetImage(h.ctx, in)
 	require.NoError(t, err)
 	assert.True(t, started.Owned)
 	assert.Equal(t, "gordon:local-owner", started.Claim.Journal.Principal)
 }
 
-// casStore runs a concurrent mutation just before AcceptPromotion commits.
+// casStore runs a concurrent mutation just before AcceptSetImage commits.
 type casStore struct {
 	out.AppState
 	before func()
 }
 
-func (s *casStore) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error) {
+func (s *casStore) AcceptSetImage(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error) {
 	s.before()
-	return s.AppState.AcceptPromotion(ctx, rev, op)
+	return s.AppState.AcceptSetImage(ctx, rev, op)
 }
 
-func TestStartPromotion_CASLoserWritesNothing(t *testing.T) {
+func TestStartSetImage_CASLoserWritesNothing(t *testing.T) {
 	tests := []struct {
 		name  string
-		race  func(*promoHarness)
-		check func(*testing.T, *promoHarness)
+		race  func(*setImageHarness)
+		check func(*testing.T, *setImageHarness)
 	}{
-		{name: "concurrent apply", race: func(h *promoHarness) {
+		{name: "concurrent apply", race: func(h *setImageHarness) {
 			web, worker := promoServices()
 			next := testRevision("blog", web, worker)
 			next.Revision = "rev-applied"
 			next.Spec.Env = map[string]string{"MODE": "prod"}
 			seedRevision(h.t, h.ctx, h.store, "intent-race", "rev-0", next)
-		}, check: func(t *testing.T, h *promoHarness) {
+		}, check: func(t *testing.T, h *setImageHarness) {
 			assert.Equal(t, "rev-applied", h.desired().Revision)
 		}},
-		{name: "incarnation changed", race: func(h *promoHarness) {
+		{name: "incarnation changed", race: func(h *setImageHarness) {
 			require.NoError(h.t, h.store.SaveOwnership(h.ctx, domain.AppOwnership{App: "blog", ID: "app-blog-2"}))
-		}, check: func(t *testing.T, h *promoHarness) {
+		}, check: func(t *testing.T, h *setImageHarness) {
 			assert.Equal(t, "rev-0", h.desired().Revision)
 		}},
 	}
@@ -407,7 +407,7 @@ func TestStartPromotion_CASLoserWritesNothing(t *testing.T) {
 			h := newPromoHarness(t)
 			h.state = &casStore{AppState: h.store, before: func() { tc.race(h) }}
 			h.build()
-			_, err := h.promote("k", "web@"+promoDigest("c"))
+			_, err := h.setImage("k", "web@"+setImageDigest("c"))
 			require.ErrorIs(t, err, domain.ErrAppStateConflict)
 			tc.check(t, h)
 			_, err = h.store.LoadOperation(h.ctx, "blog", "k")
@@ -416,22 +416,22 @@ func TestStartPromotion_CASLoserWritesNothing(t *testing.T) {
 	}
 }
 
-// TestStartPromotion_ConcurrentPromotionsSerialize proves two concurrent
-// promotions of the same base serialize on the app lock: exactly one is
+// TestStartSetImage_ConcurrentSetImageRequestsSerialize proves two concurrent
+// image changes of the same base serialize on the app lock: exactly one is
 // accepted and the other is refused as busy while the winner is unfinished.
 // It uses real bbolt (file I/O), so it runs outside synctest and joins the
 // goroutines with a WaitGroup.
-func TestStartPromotion_ConcurrentPromotionsSerialize(t *testing.T) {
+func TestStartSetImage_ConcurrentSetImageRequestsSerialize(t *testing.T) {
 	h := newPromoHarness(t)
-	h.known["web@"+promoDigest("c")] = true
-	h.known["web@"+promoDigest("d")] = true
+	h.known["web@"+setImageDigest("c")] = true
+	h.known["web@"+setImageDigest("d")] = true
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, c := range []string{"c", "d"} {
 		wg.Add(1)
 		go func(i int, c string) {
 			defer wg.Done()
-			_, errs[i] = h.svc.StartPromotion(h.ctx, h.input("key-"+c, "web@"+promoDigest(c)))
+			_, errs[i] = h.svc.StartSetImage(h.ctx, h.input("key-"+c, "web@"+setImageDigest(c)))
 		}(i, c)
 	}
 	wg.Wait()
@@ -447,30 +447,30 @@ func TestStartPromotion_ConcurrentPromotionsSerialize(t *testing.T) {
 	assert.Equal(t, 1, ok)
 }
 
-func TestStartPromotion_CrashAfterClaimReconcilesFailedAndReplays(t *testing.T) {
+func TestStartSetImage_CrashAfterClaimReconcilesFailedAndReplays(t *testing.T) {
 	h := newPromoHarness(t)
-	started, err := h.promote("key-1", "web@"+promoDigest("c"))
+	started, err := h.setImage("key-1", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	require.True(t, started.Owned)
 
 	// A fresh engine over the same store is a restarted daemon: the claim
 	// is no longer live and is never executed.
 	h.build()
-	replay, err := h.promote("key-1", "web@"+promoDigest("c"))
+	replay, err := h.setImage("key-1", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	require.False(t, replay.Owned, "the interrupted claim is never executed again")
 	require.ErrorIs(t, replay.ReplayError(), domain.ErrAppStateConflict)
 	assert.Equal(t, domain.AppOutcomeFailed, replay.Claim.Journal.Outcome, "the replay reports the reconciled failure")
 	op, err := h.store.LoadOperation(h.ctx, "blog", "key-1")
 	require.NoError(t, err)
-	assert.Equal(t, domain.AppOutcomeFailed, op.Outcome, "the interrupted promotion is finalized as failed")
+	assert.Equal(t, domain.AppOutcomeFailed, op.Outcome, "the interrupted image change is finalized as failed")
 	assert.Zero(t, h.seq.Load(), "no container was created")
 }
 
-func TestStartPromotion_NoopRules(t *testing.T) {
+func TestStartSetImage_NoopRules(t *testing.T) {
 	t.Run("desired and active already run the digest", func(t *testing.T) {
 		h := newPromoHarness(t)
-		started, err := h.promote("k", "web@"+promoDigest("a"))
+		started, err := h.setImage("k", "web@"+setImageDigest("a"))
 		require.NoError(t, err)
 		assert.False(t, started.Owned)
 		assert.Equal(t, domain.AppOutcomeSuccess, started.Claim.Journal.Outcome)
@@ -478,7 +478,7 @@ func TestStartPromotion_NoopRules(t *testing.T) {
 		assert.Equal(t, "rev-0", h.desired().Revision, "no desired write")
 		op, err := h.store.LoadOperation(h.ctx, "blog", "k")
 		require.NoError(t, err)
-		assert.Equal(t, domain.AppOperationKindPromote, op.Kind)
+		assert.Equal(t, domain.AppOperationKindSetImage, op.Kind)
 	})
 	t.Run("desired has the digest but active does not", func(t *testing.T) {
 		h := newPromoHarness(t)
@@ -487,23 +487,23 @@ func TestStartPromotion_NoopRules(t *testing.T) {
 		next := testRevision("blog", web, worker)
 		next.Revision = "rev-1"
 		seedRevision(t, h.ctx, h.store, "intent-1", "rev-0", next)
-		started, err := h.promote("k", "web@"+promoDigest("c"))
+		started, err := h.setImage("k", "web@"+setImageDigest("c"))
 		require.NoError(t, err)
 		require.True(t, started.Owned)
 		assert.Equal(t, "rev-1", started.Claim.Revision, "the current desired revision is deployed")
 		assert.Equal(t, "rev-1", h.desired().Revision, "no new revision")
 		_, err = h.svc.ExecuteDeploy(h.ctx, started.Claim)
 		require.NoError(t, err)
-		assert.Equal(t, promoDigest("c"), h.active().Services["web"].Digest)
+		assert.Equal(t, setImageDigest("c"), h.active().Services["web"].Digest)
 		assert.True(t, h.active().Converged)
 	})
 }
 
-func TestStartPromotion_ManifestCheckAndAcceptanceHoldGCLease(t *testing.T) {
+func TestStartSetImage_ManifestCheckAndAcceptanceHoldGCLease(t *testing.T) {
 	h := newPromoHarness(t)
 	h.state = &casStore{AppState: h.store, before: func() { h.barrier.requireHeld(t, "acceptance") }}
 	h.build()
-	_, err := h.promote("k", "web@"+promoDigest("c"))
+	_, err := h.setImage("k", "web@"+setImageDigest("c"))
 	require.NoError(t, err)
 	assert.Zero(t, h.barrier.held.Load(), "the lease is released when the claim phase ends")
 }

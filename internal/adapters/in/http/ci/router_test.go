@@ -93,7 +93,7 @@ type harness struct {
 	identity *fakeIdentity
 	apps     *inmocks.MockAppService
 	registry *spyRegistry
-	policies atomic.Pointer[domain.PromotionPolicySet]
+	policies atomic.Pointer[domain.SetImagePolicySet]
 	logs     *syncBuffer
 	handler  http.Handler
 }
@@ -115,9 +115,9 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-func webPolicies(t *testing.T) domain.PromotionPolicySet {
+func webPolicies(t *testing.T) domain.SetImagePolicySet {
 	t.Helper()
-	set, err := domain.NewPromotionPolicySet([]domain.PromotionPolicy{
+	set, err := domain.NewSetImagePolicySet([]domain.SetImagePolicy{
 		{Issuer: testIssuer, Subjects: []string{webPrincipal.Subject}, App: "web", Service: "web", Repository: "web"},
 		{Issuer: testIssuer, Subjects: []string{webPrincipal.Subject}, App: "web", Service: "worker", Repository: "acme/worker"},
 		{Issuer: testIssuer, Subjects: []string{otherPrincipal.Subject}, App: "other", Service: "api", Repository: "other"},
@@ -143,7 +143,7 @@ func newHarness(t *testing.T, opts ...func(*Deps)) *harness {
 		Auth:        h.auth,
 		Identity:    h.identity,
 		Apps:        h.apps,
-		Policies:    func() domain.PromotionPolicySet { return *h.policies.Load() },
+		Policies:    func() domain.SetImagePolicySet { return *h.policies.Load() },
 		Domain:      func() string { return testDomain },
 		Registry:    h.registry,
 		TrustedNets: httphelper.ParseTrustedProxies([]string{trustedPeer}),
@@ -211,15 +211,15 @@ func TestRouter_DeniedRoutesAre404AndNeverReachRegistryOrAdmin(t *testing.T) {
 		{http.MethodGet, "/v2"},
 		{http.MethodGet, "/v2/BAD/manifests/v1"},
 		{http.MethodGet, "/admin/apps"},
-		{http.MethodPost, "/admin/apps/web/promote"},
+		{http.MethodPost, "/admin/apps/web/set-image"},
 		{http.MethodGet, "/admin/auth/verify"},
 		{http.MethodGet, "/.well-known/gordon/"},
 		{http.MethodGet, "/.well-known/gordon/ca.crt"},
 		{http.MethodPost, "/auth/token"},
 		{http.MethodGet, "/auth/password"},
-		{http.MethodGet, "/-/ci/apps/web/promote"},
+		{http.MethodGet, "/-/ci/apps/web/set-image"},
 		{http.MethodPost, "/-/ci/apps/web/operations/by-key/key-1"},
-		{http.MethodPost, "/-/ci/apps/Bad_App/promote"},
+		{http.MethodPost, "/-/ci/apps/Bad_App/set-image"},
 		{http.MethodGet, "/-/ci/apps/web/operations/by-key/"},
 		{http.MethodGet, "/-/ci/apps/web/operations/by-key/a/b"},
 		{http.MethodGet, "/-/ci/apps/web"},
@@ -283,7 +283,7 @@ func TestRouter_RepositoryOutsidePolicyDenied(t *testing.T) {
 	assert.Equal(t, "DENIED", registryErrorCode(t, rec))
 
 	// A reload that removes the web policy applies to tokens already issued.
-	empty := domain.PromotionPolicySet{}
+	empty := domain.SetImagePolicySet{}
 	h.policies.Store(&empty)
 	rec = h.serve(withBearer(request(http.MethodPost, "/v2/web/blobs/uploads/", nil), token))
 	assert.Equal(t, http.StatusForbidden, rec.Code)

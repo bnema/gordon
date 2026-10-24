@@ -16,7 +16,7 @@ type ciRoute struct {
 	lookup bool
 }
 
-// parseCIRoute matches POST /-/ci/apps/{app}/promote and
+// parseCIRoute matches POST /-/ci/apps/{app}/set-image and
 // GET /-/ci/apps/{app}/operations/by-key/{key}.
 func parseCIRoute(r *http.Request) (ciRoute, bool) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, ciPrefix), "/")
@@ -24,7 +24,7 @@ func parseCIRoute(r *http.Request) (ciRoute, bool) {
 		return ciRoute{}, false
 	}
 	switch {
-	case len(parts) == 3 && parts[2] == "promote" && r.Method == http.MethodPost:
+	case len(parts) == 3 && parts[2] == "set-image" && r.Method == http.MethodPost:
 		return ciRoute{app: parts[1]}, true
 	case len(parts) == 5 && parts[2] == "operations" && parts[3] == "by-key" &&
 		r.Method == http.MethodGet && appapi.ValidIdempotencyKey(parts[4]):
@@ -34,7 +34,7 @@ func parseCIRoute(r *http.Request) (ciRoute, bool) {
 	}
 }
 
-// serveCI serves the promotion routes after the allowlist and CIAuth.
+// serveCI serves the set-image routes after the allowlist and CIAuth.
 func (h *Handler) serveCI(w http.ResponseWriter, r *http.Request) {
 	rt, ok := parseCIRoute(r)
 	if !ok {
@@ -49,15 +49,15 @@ func (h *Handler) serveCI(w http.ResponseWriter, r *http.Request) {
 		h.handleLookup(w, r, c, rt)
 		return
 	}
-	h.handlePromote(w, r, c, rt.app)
+	h.handleSetImage(w, r, c, rt.app)
 }
 
-// handlePromote runs exactly one digest in one service as the ci-access
-// principal. Authorization against the promotion policies happens in the
+// handleSetImage runs exactly one digest in one service as the ci-access
+// principal. Authorization against the set-image policies happens in the
 // usecase, exactly as for an admin caller; a CI caller is never the local
 // owner.
-func (h *Handler) handlePromote(w http.ResponseWriter, r *http.Request, c caller, app string) {
-	req, err := appapi.DecodePromoteRequest(w, r)
+func (h *Handler) handleSetImage(w http.ResponseWriter, r *http.Request, c caller, app string) {
+	req, err := appapi.DecodeSetImageRequest(w, r)
 	if err != nil {
 		appapi.WriteError(w, err)
 		return
@@ -67,8 +67,8 @@ func (h *Handler) handlePromote(w http.ResponseWriter, r *http.Request, c caller
 		writeJSON(w, http.StatusBadRequest, dto.AppError{Error: "invalid-request", Message: "valid Idempotency-Key header required"})
 		return
 	}
-	op, err := h.deps.Apps.Promote(r.Context(), appapi.PromoteInput(app, key, req, c.principal, false))
-	status, respond := appapi.PromoteOutcome(op, err)
+	op, err := h.deps.Apps.SetImage(r.Context(), appapi.SetImageInput(app, key, req, c.principal, false))
+	status, respond := appapi.SetImageOutcome(op, err)
 	if !respond {
 		appapi.WriteError(w, err)
 		return

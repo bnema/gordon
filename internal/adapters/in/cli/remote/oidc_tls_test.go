@@ -53,7 +53,7 @@ func TestClientOIDC_PlaintextRemoteRefusedBeforeAnyRequest(t *testing.T) {
 	assertNoCISecret(t, err)
 	assert.Contains(t, err.Error(), "https")
 
-	_, _, err = client.PromoteApp(context.Background(), "web", dto.AppPromoteRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)})
+	_, _, err = client.SetImageApp(context.Background(), "web", dto.AppSetImageRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)})
 	require.ErrorIs(t, err, ErrCIInsecureTransport)
 	assertNoCISecret(t, err)
 
@@ -87,14 +87,14 @@ func TestClientOIDC_CIRouteRedirectToPlaintextRefused(t *testing.T) {
 	plain := httptest.NewServer(sink.handler(t))
 	defer plain.Close()
 
-	var promotes atomic.Int32
+	var setImageCalls atomic.Int32
 	ciHost := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/auth/token" {
 			_, _ = w.Write([]byte(`{"token":"` + testCIToken + `","expires_in":900}`))
 			return
 		}
 		if r.Method == http.MethodPost {
-			promotes.Add(1)
+			setImageCalls.Add(1)
 		}
 		http.Redirect(w, r, plain.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
 	}))
@@ -102,7 +102,7 @@ func TestClientOIDC_CIRouteRedirectToPlaintextRefused(t *testing.T) {
 
 	client := NewClient(ciHost.URL, WithHTTPClient(ciHost.Client()), WithOIDC(&OIDCSource{static: testJWT}))
 
-	_, _, err := client.PromoteApp(context.Background(), "web", dto.AppPromoteRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)})
+	_, _, err := client.SetImageApp(context.Background(), "web", dto.AppSetImageRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)})
 	require.ErrorIs(t, err, ErrCIInsecureTransport)
 	assertNoCISecret(t, err)
 	var unknown *OutcomeUnknownError
@@ -112,7 +112,7 @@ func TestClientOIDC_CIRouteRedirectToPlaintextRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrCIInsecureTransport)
 	assertNoCISecret(t, err)
 
-	assert.Equal(t, int32(1), promotes.Load(), "the promotion is not retried after a refused redirect")
+	assert.Equal(t, int32(1), setImageCalls.Load(), "the image change is not retried after a refused redirect")
 	assert.Zero(t, sink.hits.Load(), "the ci-access token never followed the redirect")
 }
 

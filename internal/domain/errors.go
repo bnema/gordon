@@ -5,13 +5,13 @@ import "errors"
 // Domain errors represent business-level errors that can occur in the system.
 // These errors are used across layers to communicate specific failure conditions.
 var (
-	ErrPromotionDenied             = errors.New("promotion denied")
-	ErrInvalidPromotionImage       = errors.New("invalid promotion image")
+	ErrSetImageDenied              = errors.New("set-image denied")
+	ErrInvalidImageReference       = errors.New("invalid image reference")
 	ErrIdentityProviderUnavailable = errors.New("identity provider unavailable")
-	// ErrPromotionUnavailable marks a promotion the daemon cannot serve
+	// ErrSetImageUnavailable marks an image change the daemon cannot serve
 	// because it is not wired for it (no installation registry or manifest
 	// store). It is an internal fault, never a client error.
-	ErrPromotionUnavailable = errors.New("promotion unavailable")
+	ErrSetImageUnavailable = errors.New("set-image unavailable")
 	// Container errors
 	ErrContainerNotFound   = errors.New("container not found")
 	ErrContainerExists     = errors.New("container already exists")

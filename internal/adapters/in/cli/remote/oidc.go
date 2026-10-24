@@ -29,9 +29,9 @@ const (
 )
 
 // ErrOIDCAdminUnavailable reports an admin API call in OIDC mode: a workload
-// identity only reaches the CI host (registry push, promotion and its
+// identity only reaches the CI host (registry push, set-image and its
 // operation lookup).
-var ErrOIDCAdminUnavailable = errors.New("not available with an OIDC identity: the CI host serves only image push, app promotion and operation lookup")
+var ErrOIDCAdminUnavailable = errors.New("not available with an OIDC identity: the CI host serves only image push, app set-image and operation lookup")
 
 // ErrCIInsecureTransport reports a CI credential (the workload identity or
 // a ci-access token) that would leave the client over plaintext or follow a
@@ -201,7 +201,7 @@ type cachedCIToken struct {
 	expires time.Time
 }
 
-// ExchangeCIToken returns a ci-access token for scopes (none for promotion
+// ExchangeCIToken returns a ci-access token for scopes (none for set-image
 // and lookup), exchanging the workload identity at the CI token endpoint
 // when no valid cached token exists.
 func (c *Client) ExchangeCIToken(ctx context.Context, scopes ...string) (string, error) {
@@ -280,7 +280,7 @@ func (c *Client) exchangeCIToken(ctx context.Context, scopes []string) (string, 
 }
 
 // adminURL maps an admin API path to its endpoint. In OIDC mode only the
-// promotion and its operation lookup exist, on the CI host routes; every
+// set-image and its operation lookup exist, on the CI host routes; every
 // other admin call fails without any network request.
 func (c *Client) adminURL(method, path string) (string, error) {
 	if c.oidc == nil {
@@ -292,7 +292,7 @@ func (c *Client) adminURL(method, path string) (string, error) {
 	return "", fmt.Errorf("%s %s: %w", method, path, ErrOIDCAdminUnavailable)
 }
 
-// ciRoute maps the admin promote and by-key routes to the CI host routes.
+// ciRoute maps the admin set-image and by-key routes to the CI host routes.
 func ciRoute(method, path string) (string, bool) {
 	rest, ok := strings.CutPrefix(path, "/apps/")
 	if !ok {
@@ -300,7 +300,7 @@ func ciRoute(method, path string) (string, bool) {
 	}
 	parts := strings.Split(rest, "/")
 	switch {
-	case method == http.MethodPost && len(parts) == 2 && parts[1] == "promote":
+	case method == http.MethodPost && len(parts) == 2 && parts[1] == "set-image":
 		return "/-/ci" + path, true
 	case method == http.MethodGet && len(parts) == 4 && parts[1] == "operations" && parts[2] == "by-key":
 		return "/-/ci" + path, true

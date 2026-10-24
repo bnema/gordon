@@ -1306,86 +1306,6 @@ func (_c *MockControlPlane_OperationByKey_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
-// PromoteApp provides a mock function for the type MockControlPlane
-func (_mock *MockControlPlane) PromoteApp(ctx context.Context, app string, req dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error) {
-	ret := _mock.Called(ctx, app, req)
-
-	if len(ret) == 0 {
-		panic("no return value specified for PromoteApp")
-	}
-
-	var r0 *dto.AppDeployResponse
-	var r1 string
-	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error)); ok {
-		return returnFunc(ctx, app, req)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppPromoteRequest) *dto.AppDeployResponse); ok {
-		r0 = returnFunc(ctx, app, req)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dto.AppDeployResponse)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, string, dto.AppPromoteRequest) string); ok {
-		r1 = returnFunc(ctx, app, req)
-	} else {
-		r1 = ret.Get(1).(string)
-	}
-	if returnFunc, ok := ret.Get(2).(func(context.Context, string, dto.AppPromoteRequest) error); ok {
-		r2 = returnFunc(ctx, app, req)
-	} else {
-		r2 = ret.Error(2)
-	}
-	return r0, r1, r2
-}
-
-// MockControlPlane_PromoteApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'PromoteApp'
-type MockControlPlane_PromoteApp_Call struct {
-	*mock.Call
-}
-
-// PromoteApp is a helper method to define mock.On call
-//   - ctx context.Context
-//   - app string
-//   - req dto.AppPromoteRequest
-func (_e *MockControlPlane_Expecter) PromoteApp(ctx any, app any, req any) *MockControlPlane_PromoteApp_Call {
-	return &MockControlPlane_PromoteApp_Call{Call: _e.mock.On("PromoteApp", ctx, app, req)}
-}
-
-func (_c *MockControlPlane_PromoteApp_Call) Run(run func(ctx context.Context, app string, req dto.AppPromoteRequest)) *MockControlPlane_PromoteApp_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 string
-		if args[1] != nil {
-			arg1 = args[1].(string)
-		}
-		var arg2 dto.AppPromoteRequest
-		if args[2] != nil {
-			arg2 = args[2].(dto.AppPromoteRequest)
-		}
-		run(
-			arg0,
-			arg1,
-			arg2,
-		)
-	})
-	return _c
-}
-
-func (_c *MockControlPlane_PromoteApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_PromoteApp_Call {
-	_c.Call.Return(appDeployResponse, s, err)
-	return _c
-}
-
-func (_c *MockControlPlane_PromoteApp_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error)) *MockControlPlane_PromoteApp_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // PruneVolumes provides a mock function for the type MockControlPlane
 func (_mock *MockControlPlane) PruneVolumes(ctx context.Context, req dto.VolumePruneRequest) (*dto.VolumePruneResponse, error) {
 	ret := _mock.Called(ctx, req)
@@ -1884,6 +1804,86 @@ func (_c *MockControlPlane_SetAppSecrets_Call) Return(err error) *MockControlPla
 }
 
 func (_c *MockControlPlane_SetAppSecrets_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSecretSetRequest) error) *MockControlPlane_SetAppSecrets_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetImageApp provides a mock function for the type MockControlPlane
+func (_mock *MockControlPlane) SetImageApp(ctx context.Context, app string, req dto.AppSetImageRequest) (*dto.AppDeployResponse, string, error) {
+	ret := _mock.Called(ctx, app, req)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetImageApp")
+	}
+
+	var r0 *dto.AppDeployResponse
+	var r1 string
+	var r2 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSetImageRequest) (*dto.AppDeployResponse, string, error)); ok {
+		return returnFunc(ctx, app, req)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, dto.AppSetImageRequest) *dto.AppDeployResponse); ok {
+		r0 = returnFunc(ctx, app, req)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*dto.AppDeployResponse)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, string, dto.AppSetImageRequest) string); ok {
+		r1 = returnFunc(ctx, app, req)
+	} else {
+		r1 = ret.Get(1).(string)
+	}
+	if returnFunc, ok := ret.Get(2).(func(context.Context, string, dto.AppSetImageRequest) error); ok {
+		r2 = returnFunc(ctx, app, req)
+	} else {
+		r2 = ret.Error(2)
+	}
+	return r0, r1, r2
+}
+
+// MockControlPlane_SetImageApp_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetImageApp'
+type MockControlPlane_SetImageApp_Call struct {
+	*mock.Call
+}
+
+// SetImageApp is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - req dto.AppSetImageRequest
+func (_e *MockControlPlane_Expecter) SetImageApp(ctx any, app any, req any) *MockControlPlane_SetImageApp_Call {
+	return &MockControlPlane_SetImageApp_Call{Call: _e.mock.On("SetImageApp", ctx, app, req)}
+}
+
+func (_c *MockControlPlane_SetImageApp_Call) Run(run func(ctx context.Context, app string, req dto.AppSetImageRequest)) *MockControlPlane_SetImageApp_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 dto.AppSetImageRequest
+		if args[2] != nil {
+			arg2 = args[2].(dto.AppSetImageRequest)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockControlPlane_SetImageApp_Call) Return(appDeployResponse *dto.AppDeployResponse, s string, err error) *MockControlPlane_SetImageApp_Call {
+	_c.Call.Return(appDeployResponse, s, err)
+	return _c
+}
+
+func (_c *MockControlPlane_SetImageApp_Call) RunAndReturn(run func(ctx context.Context, app string, req dto.AppSetImageRequest) (*dto.AppDeployResponse, string, error)) *MockControlPlane_SetImageApp_Call {
 	_c.Call.Return(run)
 	return _c
 }

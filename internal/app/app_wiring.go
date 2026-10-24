@@ -25,7 +25,7 @@ import (
 // composition root stays decoupled from engine internals.
 type appDeployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
-	StartPromotion(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error)
+	StartSetImage(ctx context.Context, input deployment.SetImageInput) (*deployment.StartDeployResult, error)
 	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)

@@ -11,21 +11,21 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// promotionAfter builds a promotion revision superseding base.
-func promotionAfter(base domain.AppDesiredRevision, revision, appID, key string) (domain.AppDesiredRevision, domain.AppOperation) {
+// setImageAfter builds an image change revision superseding base.
+func setImageAfter(base domain.AppDesiredRevision, revision, appID, key string) (domain.AppDesiredRevision, domain.AppOperation) {
 	rev := base
 	rev.Revision, rev.Supersedes = revision, base.Revision
-	rev.Promotion = &domain.AppPromotionProvenance{AppID: appID, Image: "registry/web@sha256:abc", Digest: "sha256:abc"}
-	op := domain.AppOperation{App: base.App, Op: key, Kind: domain.AppOperationKindPromote, Outcome: domain.AppOutcomeSuccess,
-		Request: domain.AppOperationRequest{Kind: domain.AppOperationKindPromote, App: base.App, Service: "web", Image: key}}
+	rev.SetImage = &domain.AppSetImageProvenance{AppID: appID, Image: "registry/web@sha256:abc", Digest: "sha256:abc"}
+	op := domain.AppOperation{App: base.App, Op: key, Kind: domain.AppOperationKindSetImage, Outcome: domain.AppOutcomeSuccess,
+		Request: domain.AppOperationRequest{Kind: domain.AppOperationKindSetImage, App: base.App, Service: "web", Image: key}}
 	return rev, op
 }
 
-// TestAcceptPromotion_CommittedApplyWins proves CommitApply stays the single
-// commit point of an apply: a promotion that lands between CommitApply and
+// TestAcceptSetImage_CommittedApplyWins proves CommitApply stays the single
+// commit point of an apply: an image change that lands between CommitApply and
 // MaterializeApply materializes the committed intent first, so its CAS fails
 // and the apply is never dropped.
-func TestAcceptPromotion_CommittedApplyWins(t *testing.T) {
+func TestAcceptSetImage_CommittedApplyWins(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	require.NoError(t, store.AcceptApply(ctx, testIntent("web", "r1")))
@@ -38,8 +38,8 @@ func TestAcceptPromotion_CommittedApplyWins(t *testing.T) {
 	require.NoError(t, store.StageApply(ctx, intent))
 	require.NoError(t, store.CommitApply(ctx, "web", intent.Intent))
 
-	rev, op := promotionAfter(base, "r-promo", owner.ID, "key")
-	_, _, err = store.AcceptPromotion(ctx, rev, op)
+	rev, op := setImageAfter(base, "r-promo", owner.ID, "key")
+	_, _, err = store.AcceptSetImage(ctx, rev, op)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 	assert.Contains(t, err.Error(), `expected desired "r1" but found "r2"`, "the CAS lost against the materialized apply")
 
@@ -53,10 +53,10 @@ func TestAcceptPromotion_CommittedApplyWins(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrAppOperationNotFound)
 }
 
-// TestAcceptPromotion_RespectsRevisionRetention proves promotions sweep
+// TestAcceptSetImage_RespectsRevisionRetention proves image changes sweep
 // unreferenced revisions beyond retention in the accepting transaction and
 // never sweep a protected one (desired, active, or an in-flight intent).
-func TestAcceptPromotion_RespectsRevisionRetention(t *testing.T) {
+func TestAcceptSetImage_RespectsRevisionRetention(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t).WithRevisionRetention(2)
 	require.NoError(t, store.AcceptApply(ctx, testIntent("web", "r00")))
@@ -68,8 +68,8 @@ func TestAcceptPromotion_RespectsRevisionRetention(t *testing.T) {
 	for i := 1; i <= 6; i++ {
 		base, _, err := store.LoadDesired(ctx, "web")
 		require.NoError(t, err)
-		rev, op := promotionAfter(base, fmt.Sprintf("r%02d", i), owner.ID, fmt.Sprintf("key-%d", i))
-		_, claimed, err := store.AcceptPromotion(ctx, rev, op)
+		rev, op := setImageAfter(base, fmt.Sprintf("r%02d", i), owner.ID, fmt.Sprintf("key-%d", i))
+		_, claimed, err := store.AcceptSetImage(ctx, rev, op)
 		require.NoError(t, err)
 		require.True(t, claimed)
 	}
@@ -84,10 +84,10 @@ func TestAcceptPromotion_RespectsRevisionRetention(t *testing.T) {
 		"active r00 and desired r06 are protected; two unreferenced revisions are retained")
 }
 
-// TestAcceptPromotion_IncarnationFallsBackToAppRecord proves the
+// TestAcceptSetImage_IncarnationFallsBackToAppRecord proves the
 // incarnation check reads the same identity LoadOwnership reports when the
 // ownership record is absent.
-func TestAcceptPromotion_IncarnationFallsBackToAppRecord(t *testing.T) {
+func TestAcceptSetImage_IncarnationFallsBackToAppRecord(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	require.NoError(t, store.AcceptApply(ctx, testIntent("web", "r1")))
@@ -97,13 +97,13 @@ func TestAcceptPromotion_IncarnationFallsBackToAppRecord(t *testing.T) {
 	base, _, err := store.LoadDesired(ctx, "web")
 	require.NoError(t, err)
 
-	rev, op := promotionAfter(base, "r2", owner.ID, "key")
-	_, claimed, err := store.AcceptPromotion(ctx, rev, op)
+	rev, op := setImageAfter(base, "r2", owner.ID, "key")
+	_, claimed, err := store.AcceptSetImage(ctx, rev, op)
 	require.NoError(t, err)
 	assert.True(t, claimed)
 }
 
-func TestAcceptPromotionAtomicity(t *testing.T) {
+func TestAcceptSetImageAtomicity(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	require.NoError(t, store.AcceptApply(ctx, testIntent("web", "r1")))
@@ -116,32 +116,32 @@ func TestAcceptPromotionAtomicity(t *testing.T) {
 	require.True(t, ok)
 	rev := base
 	rev.Revision, rev.Supersedes = "r2", "r1"
-	rev.Promotion = &domain.AppPromotionProvenance{AppID: owner.ID, Image: "registry/web@sha256:abc", Digest: "sha256:abc"}
-	op := domain.AppOperation{App: "web", Op: "key", Kind: domain.AppOperationKindPromote, Request: domain.AppOperationRequest{Kind: domain.AppOperationKindPromote, App: "web", Service: "web", Image: rev.Promotion.Image}}
-	existing, claimed, err := store.AcceptPromotion(ctx, rev, op)
+	rev.SetImage = &domain.AppSetImageProvenance{AppID: owner.ID, Image: "registry/web@sha256:abc", Digest: "sha256:abc"}
+	op := domain.AppOperation{App: "web", Op: "key", Kind: domain.AppOperationKindSetImage, Request: domain.AppOperationRequest{Kind: domain.AppOperationKindSetImage, App: "web", Service: "web", Image: rev.SetImage.Image}}
+	existing, claimed, err := store.AcceptSetImage(ctx, rev, op)
 	require.NoError(t, err)
 	require.True(t, claimed)
-	require.Equal(t, rev.Promotion.Image, existing.Steps[0].Image)
-	require.Equal(t, rev.Promotion.Digest, existing.Steps[0].Digest)
+	require.Equal(t, rev.SetImage.Image, existing.Steps[0].Image)
+	require.Equal(t, rev.SetImage.Digest, existing.Steps[0].Digest)
 	desired, _, err := store.LoadDesired(ctx, "web")
 	require.NoError(t, err)
 	require.Equal(t, "r2", desired.Revision)
 	// Replay precedes freshness checks, even after a later mutation.
 	require.NoError(t, store.AcceptApply(ctx, testIntentAfter("web", "r3", "r2")))
-	_, claimed, err = store.AcceptPromotion(ctx, rev, op)
+	_, claimed, err = store.AcceptSetImage(ctx, rev, op)
 	require.NoError(t, err)
 	require.False(t, claimed)
 	op.Request.Image = "different"
-	_, _, err = store.AcceptPromotion(ctx, rev, op)
+	_, _, err = store.AcceptSetImage(ctx, rev, op)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 	op.Op = "loser"
-	_, _, err = store.AcceptPromotion(ctx, rev, op)
+	_, _, err = store.AcceptSetImage(ctx, rev, op)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 	_, err = store.LoadOperation(ctx, "web", "loser")
 	require.Error(t, err)
 	rev.Revision, rev.Supersedes = "r4", "r3"
-	rev.Promotion.AppID = "retired-incarnation"
-	_, _, err = store.AcceptPromotion(ctx, rev, op)
+	rev.SetImage.AppID = "retired-incarnation"
+	_, _, err = store.AcceptSetImage(ctx, rev, op)
 	require.ErrorIs(t, err, domain.ErrAppStateConflict)
 	_, err = store.LoadRevision(ctx, "web", "r4")
 	require.ErrorIs(t, err, domain.ErrAppRevisionNotFound)

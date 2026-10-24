@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	GordonIssuer            = "gordon"
-	AppOperationKindPromote = "promote"
-	DefaultMaxTokenLifetime = time.Hour
-	DefaultClockSkew        = time.Minute
+	GordonIssuer             = "gordon"
+	AppOperationKindSetImage = "set-image"
+	DefaultMaxTokenLifetime  = time.Hour
+	DefaultClockSkew         = time.Minute
 )
 
 // WorkloadPrincipal identifies an exact subject in one identity authority.
@@ -93,7 +93,7 @@ func ValidateIssuerURL(raw string) error {
 	return nil
 }
 
-type PromotionPolicy struct {
+type SetImagePolicy struct {
 	Issuer     string   `mapstructure:"issuer"`
 	Subjects   []string `mapstructure:"subjects"`
 	App        string   `mapstructure:"app"`
@@ -101,10 +101,10 @@ type PromotionPolicy struct {
 	Repository string   `mapstructure:"repository"`
 }
 
-func (p PromotionPolicy) Validate() error {
+func (p SetImagePolicy) Validate() error {
 	for _, s := range append([]string{p.Issuer, p.App, p.Service, p.Repository}, p.Subjects...) {
 		if s == "" || strings.Contains(s, "*") {
-			return fmt.Errorf("promotion policy values must be non-empty and contain no wildcards")
+			return fmt.Errorf("set-image policy values must be non-empty and contain no wildcards")
 		}
 	}
 	if len(p.Subjects) == 0 {
@@ -124,46 +124,46 @@ func (p PromotionPolicy) Validate() error {
 	return validation.ValidateRepositoryName(p.Repository)
 }
 
-type promotionGrant struct {
+type setImageGrant struct {
 	principal                WorkloadPrincipal
 	app, service, repository string
 }
-type promotionIdentity struct {
+type setImageIdentity struct {
 	principal    WorkloadPrincipal
 	app, service string
 }
 
-// PromotionPolicySet owns its grants; callers cannot mutate a constructed set.
+// SetImagePolicySet owns its grants; callers cannot mutate a constructed set.
 // Its zero value denies everything and concurrent readers need no locks.
-type PromotionPolicySet struct{ grants map[promotionGrant]struct{} }
+type SetImagePolicySet struct{ grants map[setImageGrant]struct{} }
 
-func NewPromotionPolicySet(policies []PromotionPolicy) (PromotionPolicySet, error) {
-	set := PromotionPolicySet{grants: make(map[promotionGrant]struct{})}
-	seen := make(map[promotionIdentity]struct{})
+func NewSetImagePolicySet(policies []SetImagePolicy) (SetImagePolicySet, error) {
+	set := SetImagePolicySet{grants: make(map[setImageGrant]struct{})}
+	seen := make(map[setImageIdentity]struct{})
 	for _, p := range policies {
 		if err := p.Validate(); err != nil {
-			return PromotionPolicySet{}, err
+			return SetImagePolicySet{}, err
 		}
 		for _, sub := range p.Subjects {
 			principal := WorkloadPrincipal{p.Issuer, sub}
-			key := promotionIdentity{principal, p.App, p.Service}
+			key := setImageIdentity{principal, p.App, p.Service}
 			if _, ok := seen[key]; ok {
-				return PromotionPolicySet{}, fmt.Errorf("duplicate promotion policy issuer, subject, app and service")
+				return SetImagePolicySet{}, fmt.Errorf("duplicate set-image policy issuer, subject, app and service")
 			}
 			seen[key] = struct{}{}
-			set.grants[promotionGrant{principal, p.App, p.Service, p.Repository}] = struct{}{}
+			set.grants[setImageGrant{principal, p.App, p.Service, p.Repository}] = struct{}{}
 		}
 	}
 	return set, nil
 }
 
-func (s PromotionPolicySet) Allows(principal WorkloadPrincipal, app, service, repository string) bool {
-	_, ok := s.grants[promotionGrant{principal, app, service, repository}]
+func (s SetImagePolicySet) Allows(principal WorkloadPrincipal, app, service, repository string) bool {
+	_, ok := s.grants[setImageGrant{principal, app, service, repository}]
 	return ok
 }
 
 // Repositories returns a sorted, deduplicated, caller-owned push allowlist.
-func (s PromotionPolicySet) Repositories(principal WorkloadPrincipal) []string {
+func (s SetImagePolicySet) Repositories(principal WorkloadPrincipal) []string {
 	repos := make(map[string]struct{})
 	for g := range s.grants {
 		if g.principal == principal {
@@ -178,7 +178,7 @@ func (s PromotionPolicySet) Repositories(principal WorkloadPrincipal) []string {
 	return result
 }
 
-func (s PromotionPolicySet) HasAppPolicy(principal WorkloadPrincipal, app string) bool {
+func (s SetImagePolicySet) HasAppPolicy(principal WorkloadPrincipal, app string) bool {
 	for g := range s.grants {
 		if g.principal == principal && g.app == app {
 			return true
@@ -187,8 +187,8 @@ func (s PromotionPolicySet) HasAppPolicy(principal WorkloadPrincipal, app string
 	return false
 }
 
-// AppPromotionProvenance records the accepted promotion's immutable origin.
-type AppPromotionProvenance struct {
+// AppSetImageProvenance records the accepted image change's immutable origin.
+type AppSetImageProvenance struct {
 	Service   string `json:"service,omitempty"`
 	Image     string `json:"image,omitempty"`
 	Digest    string `json:"digest,omitempty"`

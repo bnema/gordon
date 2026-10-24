@@ -1,6 +1,6 @@
 // Package appapi holds the HTTP mapping of app mutations that more than one
 // driving adapter serves: the admin API and the CI host both decode
-// promotion requests, call the same in.AppService port, and map its results
+// set-image requests, call the same in.AppService port, and map its results
 // to the same status codes and DTOs.
 package appapi
 
@@ -18,24 +18,24 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// MaxPromoteRequestSize caps a promotion request body.
-const MaxPromoteRequestSize = 4 << 10
+// MaxSetImageRequestSize caps a set-image request body.
+const MaxSetImageRequestSize = 4 << 10
 
-// ErrInvalidRequest marks a malformed promotion request body.
-var ErrInvalidRequest = errors.New("invalid promotion request")
+// ErrInvalidRequest marks a malformed set-image request body.
+var ErrInvalidRequest = errors.New("invalid set-image request")
 
-// promoteFields are the canonical JSON field names of a promotion body.
-var promoteFields = map[string]struct{}{"service": {}, "image": {}, "expected_revision": {}}
+// setImageFields are the canonical JSON field names of a set-image body.
+var setImageFields = map[string]struct{}{"service": {}, "image": {}, "expected_revision": {}}
 
-// DecodePromoteRequest strictly decodes one size-capped promotion body:
+// DecodeSetImageRequest strictly decodes one size-capped set-image body:
 // unknown or non-canonically cased fields, trailing data (including a stray
 // closing brace or bracket), and a missing service or image are refused.
-func DecodePromoteRequest(w http.ResponseWriter, r *http.Request) (dto.AppPromoteRequest, error) {
-	var req dto.AppPromoteRequest
+func DecodeSetImageRequest(w http.ResponseWriter, r *http.Request) (dto.AppSetImageRequest, error) {
+	var req dto.AppSetImageRequest
 	if r.Body == nil {
 		return req, fmt.Errorf("%w: body required", ErrInvalidRequest)
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxPromoteRequestSize))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxSetImageRequestSize))
 	if err != nil {
 		return req, fmt.Errorf("%w: body unreadable or too large", ErrInvalidRequest)
 	}
@@ -64,7 +64,7 @@ func requireCanonicalFields(raw []byte) error {
 		return fmt.Errorf("%w: body must be a JSON object", ErrInvalidRequest)
 	}
 	for key := range fields {
-		if _, ok := promoteFields[key]; !ok {
+		if _, ok := setImageFields[key]; !ok {
 			return fmt.Errorf("%w: unknown field %q", ErrInvalidRequest, key)
 		}
 	}
@@ -85,21 +85,21 @@ func ValidIdempotencyKey(key string) bool {
 	return true
 }
 
-// PromoteInput builds the port input from a decoded request and the caller
+// SetImageInput builds the port input from a decoded request and the caller
 // identity the driving adapter established.
-func PromoteInput(app, key string, req dto.AppPromoteRequest, principal domain.WorkloadPrincipal, localOwner bool) in.PromoteInput {
-	return in.PromoteInput{
+func SetImageInput(app, key string, req dto.AppSetImageRequest, principal domain.WorkloadPrincipal, localOwner bool) in.SetImageInput {
+	return in.SetImageInput{
 		App: app, Service: req.Service, Image: req.Image, ExpectedRevision: req.ExpectedRevision,
 		IdempotencyKey: key, Principal: principal, LocalOwner: localOwner,
 	}
 }
 
-// PromoteOutcome classifies a Promote result. Respond is false when no
+// SetImageOutcome classifies a SetImage result. Respond is false when no
 // journal exists: the request was refused before any work and is answered
 // with ErrorResponse. Otherwise the journal is the body and Status is 409
 // for a replay that failed or is still unfinished, 202 for a newly owned
 // running operation, and 200 for a terminal success.
-func PromoteOutcome(op *domain.AppOperation, err error) (status int, respond bool) {
+func SetImageOutcome(op *domain.AppOperation, err error) (status int, respond bool) {
 	if op == nil {
 		return 0, false
 	}
@@ -136,12 +136,12 @@ var errorMappings = []errorMapping{
 	{domain.ErrAppSecretMissing, http.StatusBadRequest, "secret-missing", "set the secret, then redeploy"},
 	{domain.ErrAppUnmanagedImageVolume, http.StatusBadRequest, "unmanaged-image-volume", ""},
 	{domain.ErrAppServiceScope, http.StatusBadRequest, "service-scope-required", "pass --service NAME or --all"},
-	{domain.ErrInvalidPromotionImage, http.StatusBadRequest, "invalid-image", "use REPOSITORY@sha256:DIGEST from this installation's registry"},
-	{domain.ErrPromotionDenied, http.StatusForbidden, "promotion-denied", "check the promotion policies"},
+	{domain.ErrInvalidImageReference, http.StatusBadRequest, "invalid-image", "use REPOSITORY@sha256:DIGEST from this installation's registry"},
+	{domain.ErrSetImageDenied, http.StatusForbidden, "set-image-denied", "check the set-image policies"},
 	{domain.ErrIdentityProviderUnavailable, http.StatusServiceUnavailable, "identity-provider-unavailable", "retry later"},
 	{domain.ErrAppNotFound, http.StatusNotFound, "app-not-found", "check the app name"},
 	{domain.ErrAppServiceNotFound, http.StatusNotFound, "service-not-found", "check the service name"},
-	{domain.ErrManifestNotFound, http.StatusNotFound, "manifest-not-found", "push the image before promoting it"},
+	{domain.ErrManifestNotFound, http.StatusNotFound, "manifest-not-found", "push the image before setting it"},
 	{domain.ErrAppRevisionNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppIntentNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppOperationNotFound, http.StatusNotFound, "not-found", ""},
@@ -173,7 +173,7 @@ func WriteError(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(envelope)
 }
 
-// ErrorResponse maps an app or promotion error to its HTTP status and v3
+// ErrorResponse maps an app or image change error to its HTTP status and v3
 // error envelope. Unknown errors map to 500 without leaking the cause.
 func ErrorResponse(err error) (int, dto.AppError) {
 	for _, m := range errorMappings {

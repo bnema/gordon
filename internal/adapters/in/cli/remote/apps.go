@@ -163,16 +163,16 @@ func (c *Client) DeployApp(ctx context.Context, app string, req dto.AppDeployReq
 	return result, key, err
 }
 
-// PromoteApp runs exactly one registry digest in one service. It returns the
+// SetImageApp runs exactly one registry digest in one service. It returns the
 // key used so the operation can be polled and an ambiguous outcome
 // recovered via OperationByKey.
-func (c *Client) PromoteApp(ctx context.Context, app string, req dto.AppPromoteRequest) (*dto.AppDeployResponse, string, error) {
+func (c *Client) SetImageApp(ctx context.Context, app string, req dto.AppSetImageRequest) (*dto.AppDeployResponse, string, error) {
 	key := newIdempotencyKey()
-	resp, err := c.mutationPost(ctx, "/apps/"+url.PathEscape(app)+"/promote", key, req)
+	resp, err := c.mutationPost(ctx, "/apps/"+url.PathEscape(app)+"/set-image", key, req)
 	if err != nil {
 		return nil, key, err
 	}
-	result, err := parseDeployResponse(resp, "promote", app)
+	result, err := parseDeployResponse(resp, "set-image", app)
 	return result, key, err
 }
 

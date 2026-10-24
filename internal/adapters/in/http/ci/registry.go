@@ -12,7 +12,7 @@ import (
 )
 
 // serveRegistry gates the push subset of the registry API: allowlist,
-// ci-access authentication, the current promotion policy, then the token
+// ci-access authentication, the current set-image policy, then the token
 // scope. Only then does the request reach the raw registry handler.
 func (h *Handler) serveRegistry(w http.ResponseWriter, r *http.Request) {
 	op, ok := allowedRegistryRoute(r)
@@ -40,7 +40,7 @@ func (h *Handler) mayAccess(w http.ResponseWriter, r *http.Request, c caller, op
 		log.Warn().
 			Str("principal", c.principal.String()).
 			Str("repository", op.Repository).
-			Msg("CI push denied: repository outside the promotion policies")
+			Msg("CI push denied: repository outside the set-image policies")
 		writeRegistryError(w, http.StatusForbidden, "DENIED", "repository is not allowed for this identity")
 		return false
 	}

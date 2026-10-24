@@ -15,10 +15,10 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-const promoteBody = `{"service":"web","image":"web@` + testDigest + `"}`
+const setImageBody = `{"service":"web","image":"web@` + testDigest + `"}`
 
-func promoteRequest(token, key, body string) *http.Request {
-	req := withBearer(request(http.MethodPost, "/-/ci/apps/web/promote", []byte(body)), token)
+func setImageRequest(token, key, body string) *http.Request {
+	req := withBearer(request(http.MethodPost, "/-/ci/apps/web/set-image", []byte(body)), token)
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
 		req.Header.Set("Idempotency-Key", key)
@@ -30,15 +30,15 @@ func runningOp(key string) *domain.AppOperation {
 	return &domain.AppOperation{Op: key, App: "web", InputRevision: "rev-2", Principal: webPrincipal.String()}
 }
 
-func TestPromote_CallsPortAsCIPrincipal(t *testing.T) {
+func TestSetImage_CallsPortAsCIPrincipal(t *testing.T) {
 	h := newHarness(t)
-	h.apps.EXPECT().Promote(mock.Anything, in.PromoteInput{
+	h.apps.EXPECT().SetImage(mock.Anything, in.SetImageInput{
 		App: "web", Service: "web", Image: "web@" + testDigest, IdempotencyKey: "key-1",
 		Principal: webPrincipal, LocalOwner: false,
 	}).Return(runningOp("key-1"), nil).Once()
 	h.apps.EXPECT().Show(mock.Anything, "web").Return(&in.AppDetail{Converged: true, Retained: in.AppRetainedView{Secrets: []string{"db-password"}}}, nil).Once()
 
-	rec := h.serve(promoteRequest(h.ciToken(webPrincipal), "key-1", promoteBody))
+	rec := h.serve(setImageRequest(h.ciToken(webPrincipal), "key-1", setImageBody))
 	require.Equal(t, http.StatusAccepted, rec.Code, rec.Body.String())
 	var resp dto.AppDeployResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -50,7 +50,7 @@ func TestPromote_CallsPortAsCIPrincipal(t *testing.T) {
 	assert.NotContains(t, rec.Body.String(), "db-password")
 }
 
-func TestPromote_StatusMappingMatchesAdmin(t *testing.T) {
+func TestSetImage_StatusMappingMatchesAdmin(t *testing.T) {
 	cases := []struct {
 		name   string
 		op     *domain.AppOperation
@@ -59,8 +59,8 @@ func TestPromote_StatusMappingMatchesAdmin(t *testing.T) {
 		code   string
 	}{
 		{"terminal success", &domain.AppOperation{Op: "k", App: "web", Outcome: domain.AppOutcomeSuccess}, nil, http.StatusOK, ""},
-		{"denied", nil, fmt.Errorf("x: %w", domain.ErrPromotionDenied), http.StatusForbidden, "promotion-denied"},
-		{"tag image", nil, domain.ErrInvalidPromotionImage, http.StatusBadRequest, "invalid-image"},
+		{"denied", nil, fmt.Errorf("x: %w", domain.ErrSetImageDenied), http.StatusForbidden, "set-image-denied"},
+		{"tag image", nil, domain.ErrInvalidImageReference, http.StatusBadRequest, "invalid-image"},
 		{"missing manifest", nil, domain.ErrManifestNotFound, http.StatusNotFound, "manifest-not-found"},
 		{"conflict", nil, domain.ErrAppStateConflict, http.StatusConflict, "state-conflict"},
 		{"busy", nil, domain.ErrAppBusy, http.StatusConflict, "app-busy"},
@@ -68,9 +68,9 @@ func TestPromote_StatusMappingMatchesAdmin(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			h.apps.EXPECT().Promote(mock.Anything, mock.Anything).Return(tc.op, tc.err).Once()
+			h.apps.EXPECT().SetImage(mock.Anything, mock.Anything).Return(tc.op, tc.err).Once()
 			h.apps.EXPECT().Show(mock.Anything, "web").Return(nil, domain.ErrAppNotFound).Maybe()
-			rec := h.serve(promoteRequest(h.ciToken(webPrincipal), "k", promoteBody))
+			rec := h.serve(setImageRequest(h.ciToken(webPrincipal), "k", setImageBody))
 			assert.Equal(t, tc.status, rec.Code, rec.Body.String())
 			if tc.code != "" {
 				var envelope dto.AppError
@@ -81,22 +81,22 @@ func TestPromote_StatusMappingMatchesAdmin(t *testing.T) {
 	}
 }
 
-func TestPromote_RejectsBadRequestsWithoutCallingPort(t *testing.T) {
+func TestSetImage_RejectsBadRequestsWithoutCallingPort(t *testing.T) {
 	h := newHarness(t)
 	token := h.ciToken(webPrincipal)
 	for name, req := range map[string]*http.Request{
-		"missing key":   promoteRequest(token, "", promoteBody),
-		"bad key":       promoteRequest(token, "has space", promoteBody),
-		"unknown field": promoteRequest(token, "k", `{"service":"web","image":"x","local_owner":true}`),
-		"no image":      promoteRequest(token, "k", `{"service":"web"}`),
+		"missing key":   setImageRequest(token, "", setImageBody),
+		"bad key":       setImageRequest(token, "has space", setImageBody),
+		"unknown field": setImageRequest(token, "k", `{"service":"web","image":"x","local_owner":true}`),
+		"no image":      setImageRequest(token, "k", `{"service":"web"}`),
 	} {
 		t.Run(name, func(t *testing.T) {
 			rec := h.serve(req)
 			assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
 		})
 	}
-	rec := h.serve(promoteRequest("", "k", promoteBody))
-	assert.Equal(t, http.StatusUnauthorized, rec.Code, "promote requires a ci-access token")
+	rec := h.serve(setImageRequest("", "k", setImageBody))
+	assert.Equal(t, http.StatusUnauthorized, rec.Code, "set-image requires a ci-access token")
 }
 
 func TestOperationByKey_ScopedToPrincipal(t *testing.T) {
@@ -127,23 +127,23 @@ func TestOperationByKey_ScopedToPrincipal(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 
 	// Removing the policy hides lookups too (reload applies per request).
-	empty := domain.PromotionPolicySet{}
+	empty := domain.SetImagePolicySet{}
 	h.policies.Store(&empty)
 	rec = h.serve(lookup(h.ciToken(webPrincipal), "/-/ci/apps/web/operations/by-key/key-1"))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-func TestPromote_KeyRoundTrip(t *testing.T) {
+func TestSetImage_KeyRoundTrip(t *testing.T) {
 	h := newHarness(t)
 	key := "AZaz09-_.~"
 	token := h.ciToken(webPrincipal)
 	op := runningOp(key)
-	h.apps.EXPECT().Promote(mock.Anything, mock.MatchedBy(func(input in.PromoteInput) bool { return input.IdempotencyKey == key })).Return(op, nil).Once()
+	h.apps.EXPECT().SetImage(mock.Anything, mock.MatchedBy(func(input in.SetImageInput) bool { return input.IdempotencyKey == key })).Return(op, nil).Once()
 	h.apps.EXPECT().Show(mock.Anything, "web").Return(nil, domain.ErrAppNotFound).Maybe()
 	h.apps.EXPECT().PrincipalOperationByKey(mock.Anything, "web", key, webPrincipal).Return(op, nil).Once()
-	require.Equal(t, http.StatusAccepted, h.serve(promoteRequest(token, key, promoteBody)).Code)
+	require.Equal(t, http.StatusAccepted, h.serve(setImageRequest(token, key, setImageBody)).Code)
 	rec := h.serve(withBearer(request(http.MethodGet, "/-/ci/apps/web/operations/by-key/"+key, nil), token))
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	require.Equal(t, http.StatusBadRequest, h.serve(promoteRequest(token, "a/b", promoteBody)).Code)
-	// The strict mock permits exactly one Promote call: rejection cannot create an operation.
+	require.Equal(t, http.StatusBadRequest, h.serve(setImageRequest(token, "a/b", setImageBody)).Code)
+	// The strict mock permits exactly one SetImage call: rejection cannot create an operation.
 }

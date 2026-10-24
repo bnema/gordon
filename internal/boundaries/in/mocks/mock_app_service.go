@@ -653,74 +653,6 @@ func (_c *MockAppService_PrincipalOperationByKey_Call) RunAndReturn(run func(ctx
 	return _c
 }
 
-// Promote provides a mock function for the type MockAppService
-func (_mock *MockAppService) Promote(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error) {
-	ret := _mock.Called(ctx, input)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Promote")
-	}
-
-	var r0 *domain.AppOperation
-	var r1 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, in.PromoteInput) (*domain.AppOperation, error)); ok {
-		return returnFunc(ctx, input)
-	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, in.PromoteInput) *domain.AppOperation); ok {
-		r0 = returnFunc(ctx, input)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*domain.AppOperation)
-		}
-	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, in.PromoteInput) error); ok {
-		r1 = returnFunc(ctx, input)
-	} else {
-		r1 = ret.Error(1)
-	}
-	return r0, r1
-}
-
-// MockAppService_Promote_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Promote'
-type MockAppService_Promote_Call struct {
-	*mock.Call
-}
-
-// Promote is a helper method to define mock.On call
-//   - ctx context.Context
-//   - input in.PromoteInput
-func (_e *MockAppService_Expecter) Promote(ctx any, input any) *MockAppService_Promote_Call {
-	return &MockAppService_Promote_Call{Call: _e.mock.On("Promote", ctx, input)}
-}
-
-func (_c *MockAppService_Promote_Call) Run(run func(ctx context.Context, input in.PromoteInput)) *MockAppService_Promote_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		var arg0 context.Context
-		if args[0] != nil {
-			arg0 = args[0].(context.Context)
-		}
-		var arg1 in.PromoteInput
-		if args[1] != nil {
-			arg1 = args[1].(in.PromoteInput)
-		}
-		run(
-			arg0,
-			arg1,
-		)
-	})
-	return _c
-}
-
-func (_c *MockAppService_Promote_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_Promote_Call {
-	_c.Call.Return(appOperation, err)
-	return _c
-}
-
-func (_c *MockAppService_Promote_Call) RunAndReturn(run func(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error)) *MockAppService_Promote_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // Remove provides a mock function for the type MockAppService
 func (_mock *MockAppService) Remove(ctx context.Context, app string, idempotencyKey string) (*domain.AppOperation, error) {
 	ret := _mock.Called(ctx, app, idempotencyKey)
@@ -877,6 +809,74 @@ func (_c *MockAppService_Restart_Call) Return(appOperation *domain.AppOperation,
 }
 
 func (_c *MockAppService_Restart_Call) RunAndReturn(run func(ctx context.Context, app string, service string, all bool, idempotencyKey string) (*domain.AppOperation, error)) *MockAppService_Restart_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SetImage provides a mock function for the type MockAppService
+func (_mock *MockAppService) SetImage(ctx context.Context, input in.SetImageInput) (*domain.AppOperation, error) {
+	ret := _mock.Called(ctx, input)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SetImage")
+	}
+
+	var r0 *domain.AppOperation
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.SetImageInput) (*domain.AppOperation, error)); ok {
+		return returnFunc(ctx, input)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.SetImageInput) *domain.AppOperation); ok {
+		r0 = returnFunc(ctx, input)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*domain.AppOperation)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, in.SetImageInput) error); ok {
+		r1 = returnFunc(ctx, input)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// MockAppService_SetImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SetImage'
+type MockAppService_SetImage_Call struct {
+	*mock.Call
+}
+
+// SetImage is a helper method to define mock.On call
+//   - ctx context.Context
+//   - input in.SetImageInput
+func (_e *MockAppService_Expecter) SetImage(ctx any, input any) *MockAppService_SetImage_Call {
+	return &MockAppService_SetImage_Call{Call: _e.mock.On("SetImage", ctx, input)}
+}
+
+func (_c *MockAppService_SetImage_Call) Run(run func(ctx context.Context, input in.SetImageInput)) *MockAppService_SetImage_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 in.SetImageInput
+		if args[1] != nil {
+			arg1 = args[1].(in.SetImageInput)
+		}
+		run(
+			arg0,
+			arg1,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppService_SetImage_Call) Return(appOperation *domain.AppOperation, err error) *MockAppService_SetImage_Call {
+	_c.Call.Return(appOperation, err)
+	return _c
+}
+
+func (_c *MockAppService_SetImage_Call) RunAndReturn(run func(ctx context.Context, input in.SetImageInput) (*domain.AppOperation, error)) *MockAppService_SetImage_Call {
 	_c.Call.Return(run)
 	return _c
 }

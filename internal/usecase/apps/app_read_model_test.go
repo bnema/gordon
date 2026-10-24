@@ -191,11 +191,11 @@ func TestAppService_List_SkipsRetiredNamesAndReportsReadModel(t *testing.T) {
 	assert.Equal(t, domain.AppOutcomePartial, summaries[0].LastOutcome)
 }
 
-// TestAppService_Show_PromotedServiceIsNotPending proves the read model
-// after a promotion: desired names a revision that only the promoted
+// TestAppService_Show_ImageChangedServiceIsNotPending proves the read model
+// after an image change: desired names a revision that only the changed
 // service runs, the other service keeps an older effective revision, and
 // ACTIVE recorded convergence, so the app is not pending.
-func TestAppService_Show_PromotedServiceIsNotPending(t *testing.T) {
+func TestAppService_Show_ImageChangedServiceIsNotPending(t *testing.T) {
 	ctx := context.Background()
 	store := newMockAppState(t)
 	svc := apps.NewAppServiceImpl(store, newMockDeployEngine(t), newMockSecretWriter(t), zerowrap.Default())
@@ -203,13 +203,13 @@ func TestAppService_Show_PromotedServiceIsNotPending(t *testing.T) {
 	worker := domain.AppService{Name: "worker", Image: "registry.example.com/worker@sha256:" + strings.Repeat("b", 64)}
 	store.EXPECT().AppExists(mock.Anything, "blog").Return(true, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{
-		App: "blog", Revision: "rev-promoted", Spec: domain.AppSpec{Name: "blog", Services: []domain.AppService{web, worker}},
-		Promotion: &domain.AppPromotionProvenance{Service: "web", Image: web.Image},
+		App: "blog", Revision: "rev-image-changed", Spec: domain.AppSpec{Name: "blog", Services: []domain.AppService{web, worker}},
+		SetImage: &domain.AppSetImageProvenance{Service: "web", Image: web.Image},
 	}, true, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
-		App: "blog", Converged: true, ConvergedRevision: "rev-promoted",
+		App: "blog", Converged: true, ConvergedRevision: "rev-image-changed",
 		Services: map[string]domain.AppEffectiveService{
-			"web":    {EffectiveRevision: "rev-promoted", Spec: web},
+			"web":    {EffectiveRevision: "rev-image-changed", Spec: web},
 			"worker": {EffectiveRevision: "rev-0", Spec: worker},
 		},
 	}, true, nil).Once()

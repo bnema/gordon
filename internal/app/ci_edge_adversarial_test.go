@@ -47,7 +47,7 @@ func registryListenerSpy(t *testing.T) (*httptest.Server, *atomic.Int32) {
 func ciEdge(t *testing.T) (http.Handler, http.Handler, *atomic.Int32, *services) {
 	t.Helper()
 	spy, hits := registryListenerSpy(t)
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	cfg.Server.RegistryPort = spy.Listener.Addr().(*net.TCPAddr).Port
 	cfg.API.RateLimit.TrustedProxies = []string{"10.0.0.5"}
 	svc := ciEdgeServices(t, cfg)
@@ -200,7 +200,7 @@ func TestCIEdge_ForwardedProtoOnHTTPEdge(t *testing.T) {
 // bubble, so the burst is exact and no request refills it. Requests go
 // straight to the handler with recorders; no socket is involved.
 func TestCIEdge_SpoofedForwardedForCannotEvadeTokenRateLimit(t *testing.T) {
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	cfg.API.RateLimit.TrustedProxies = []string{"10.0.0.5"}
 	synctest.Test(t, func(t *testing.T) {
 		svc := ciEdgeServices(t, cfg)

@@ -89,8 +89,8 @@ func (h *Handler) dispatchAppVerb(w http.ResponseWriter, r *http.Request, app, v
 		h.handleAppDiff(w, r, app)
 	case verb == "deploy" && r.Method == http.MethodPost:
 		h.handleAppDeploy(w, r, app)
-	case verb == "promote" && r.Method == http.MethodPost:
-		h.handleAppPromote(w, r, app)
+	case verb == "set-image" && r.Method == http.MethodPost:
+		h.handleAppSetImage(w, r, app)
 	case verb == "restart" && r.Method == http.MethodPost:
 		h.handleAppRestart(w, r, app)
 	case (verb == "stop" || verb == "start" || verb == "remove") && r.Method == http.MethodPost:
@@ -393,11 +393,11 @@ func (h *Handler) handleAppRestart(w http.ResponseWriter, r *http.Request, app s
 	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
-// handleAppPromote serves POST /apps/{app}/promote: run exactly one registry
-// digest in one service. A stored-token caller promotes as the gordon
-// principal of its token subject and needs a promotion policy; the owner-only
-// local socket promotes as the local owner without one.
-func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app string) {
+// handleAppSetImage serves POST /apps/{app}/set-image: run exactly one registry
+// digest in one service. A stored-token caller sets the image as the gordon
+// principal of its token subject and needs a set-image policy; the owner-only
+// local socket sets the image as the local owner without one.
+func (h *Handler) handleAppSetImage(w http.ResponseWriter, r *http.Request, app string) {
 	ctx := r.Context()
 	if !HasAccess(ctx, domain.AdminResourceApps, domain.AdminActionWrite) {
 		h.sendError(w, http.StatusForbidden, "insufficient permissions for apps:write")
@@ -407,7 +407,7 @@ func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app s
 	if !ok {
 		return
 	}
-	req, err := appapi.DecodePromoteRequest(w, r)
+	req, err := appapi.DecodeSetImageRequest(w, r)
 	if err != nil {
 		h.sendAppOpError(w, err)
 		return
@@ -417,8 +417,8 @@ func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app s
 		return
 	}
 	principal, localOwner := adminPrincipal(ctx)
-	op, err := svc.Promote(ctx, appapi.PromoteInput(app, key, req, principal, localOwner))
-	status, respond := appapi.PromoteOutcome(op, err)
+	op, err := svc.SetImage(ctx, appapi.SetImageInput(app, key, req, principal, localOwner))
+	status, respond := appapi.SetImageOutcome(op, err)
 	if !respond {
 		h.sendAppOpError(w, err)
 		return
@@ -426,7 +426,7 @@ func (h *Handler) handleAppPromote(w http.ResponseWriter, r *http.Request, app s
 	h.sendJSON(w, status, h.appMutationResponse(ctx, svc, app, op, false))
 }
 
-// adminPrincipal returns the promotion identity of an admin caller and
+// adminPrincipal returns the set-image identity of an admin caller and
 // whether it is the local owner. Only LocalAuthority sets the local-owner
 // marker; a token whose subject happens to equal LocalAuthoritySubject is
 // still a token caller.

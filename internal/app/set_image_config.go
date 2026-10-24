@@ -20,27 +20,27 @@ type TrustedIssuerConfig struct {
 	AllowPrivateNetwork bool   `mapstructure:"allow_private_network"`
 }
 
-// PromotionSnapshot is one immutable, atomically published config generation.
-type PromotionSnapshot struct {
+// SetImageSnapshot is one immutable, atomically published config generation.
+type SetImageSnapshot struct {
 	issuers  []domain.TrustedIssuer
-	policies domain.PromotionPolicySet
+	policies domain.SetImagePolicySet
 }
 
-func (s PromotionSnapshot) Issuers() []domain.TrustedIssuer {
+func (s SetImageSnapshot) Issuers() []domain.TrustedIssuer {
 	return append([]domain.TrustedIssuer(nil), s.issuers...)
 }
-func (s PromotionSnapshot) Policies() domain.PromotionPolicySet { return s.policies }
+func (s SetImageSnapshot) Policies() domain.SetImagePolicySet { return s.policies }
 
-// PromotionSnapshot returns a consistent generation; before initialization it denies all grants.
-func (s *services) PromotionSnapshot() PromotionSnapshot {
-	if current := s.promotionSnapshot.Load(); current != nil {
+// SetImageSnapshot returns a consistent generation; before initialization it denies all grants.
+func (s *services) SetImageSnapshot() SetImageSnapshot {
+	if current := s.setImageSnapshot.Load(); current != nil {
 		return *current
 	}
-	return PromotionSnapshot{}
+	return SetImageSnapshot{}
 }
 
-func buildPromotionSnapshot(cfg Config) (PromotionSnapshot, error) {
-	var snapshot PromotionSnapshot
+func buildSetImageSnapshot(cfg Config) (SetImageSnapshot, error) {
+	var snapshot SetImageSnapshot
 	if err := validateCIDomain(cfg); err != nil {
 		return snapshot, err
 	}
@@ -56,14 +56,14 @@ func buildPromotionSnapshot(cfg Config) (PromotionSnapshot, error) {
 		declared[issuer.Issuer] = struct{}{}
 		snapshot.issuers = append(snapshot.issuers, issuer)
 	}
-	for _, policy := range cfg.PromotionPolicies {
+	for _, policy := range cfg.SetImagePolicies {
 		if _, ok := declared[policy.Issuer]; policy.Issuer != domain.GordonIssuer && !ok {
-			return snapshot, fmt.Errorf("promotion policy issuer is not declared")
+			return snapshot, fmt.Errorf("set-image policy issuer is not declared")
 		}
 	}
-	policies, err := domain.NewPromotionPolicySet(cfg.PromotionPolicies)
+	policies, err := domain.NewSetImagePolicySet(cfg.SetImagePolicies)
 	if err != nil {
-		return snapshot, fmt.Errorf("promotion_policies: %w", redactedPromotionPolicyError{err})
+		return snapshot, fmt.Errorf("set_image_policies: %w", redactedSetImagePolicyError{err})
 	}
 	snapshot.policies = policies
 	return snapshot, nil
@@ -87,11 +87,11 @@ func buildTrustedIssuer(raw TrustedIssuerConfig) (domain.TrustedIssuer, error) {
 	return issuer, issuer.Validate()
 }
 
-// redactedPromotionPolicyError preserves errors.Is/As without echoing identifiers.
-type redactedPromotionPolicyError struct{ cause error }
+// redactedSetImagePolicyError preserves errors.Is/As without echoing identifiers.
+type redactedSetImagePolicyError struct{ cause error }
 
-func (e redactedPromotionPolicyError) Error() string { return redactedDevicePolicyReason(e.cause) }
-func (e redactedPromotionPolicyError) Unwrap() error { return e.cause }
+func (e redactedSetImagePolicyError) Error() string { return redactedDevicePolicyReason(e.cause) }
+func (e redactedSetImagePolicyError) Unwrap() error { return e.cause }
 
 func validateCIDomain(cfg Config) error {
 	if cfg.Server.CIDomain == "" {
@@ -112,8 +112,8 @@ func validateCIDomain(cfg Config) error {
 	return nil
 }
 
-func validatePromotionConfig(v *viper.Viper, cfg Config) error {
-	for name, allowed := range knownPromotionConfigKeys {
+func validateSetImageConfig(v *viper.Viper, cfg Config) error {
+	for name, allowed := range knownSetImageConfigKeys {
 		var entries []map[string]any
 		if err := v.UnmarshalKey(name, &entries); err != nil {
 			return fmt.Errorf("invalid %s: %w", name, err)
@@ -126,7 +126,7 @@ func validatePromotionConfig(v *viper.Viper, cfg Config) error {
 			}
 		}
 	}
-	_, err := buildPromotionSnapshot(cfg)
+	_, err := buildSetImageSnapshot(cfg)
 	return err
 }
 
@@ -143,9 +143,9 @@ func validateCIAppHosts(cfg Config, hosts appHostRoutes) error {
 	return nil
 }
 
-// initPromotionSnapshot validates persisted served hosts before startup can continue.
-func (si *serviceInit) initPromotionSnapshot() error {
-	snapshot, err := buildPromotionSnapshot(si.cfg)
+// initSetImageSnapshot validates persisted served hosts before startup can continue.
+func (si *serviceInit) initSetImageSnapshot() error {
+	snapshot, err := buildSetImageSnapshot(si.cfg)
 	if err != nil {
 		return err
 	}
@@ -158,12 +158,12 @@ func (si *serviceInit) initPromotionSnapshot() error {
 			return err
 		}
 	}
-	si.svc.publishPromotion(snapshot, imagePolicy, si.cfg)
+	si.svc.publishSetImage(snapshot, imagePolicy, si.cfg)
 	return nil
 }
 
 // Exact subtree key sets: quoted keys containing spaces are not individual keys.
-var knownPromotionConfigKeys = map[string]map[string]struct{}{
+var knownSetImageConfigKeys = map[string]map[string]struct{}{
 	"trusted_issuers":    {"issuer": {}, "audience": {}, "jwks_uri": {}, "max_token_lifetime": {}, "clock_skew": {}, "allow_private_network": {}},
-	"promotion_policies": {"issuer": {}, "subjects": {}, "app": {}, "service": {}, "repository": {}},
+	"set_image_policies": {"issuer": {}, "subjects": {}, "app": {}, "service": {}, "repository": {}},
 }

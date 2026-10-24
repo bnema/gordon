@@ -58,9 +58,9 @@ type Deps struct {
 	// runtime create. The zero value still refuses host/shared network
 	// namespaces and host paths passed as volume names.
 	Guard domain.RuntimeGuard
-	// Manifests is the installation registry manifest store. Promotion
-	// verifies the promoted digest exists there before accepting it. Nil
-	// refuses every promotion.
+	// Manifests is the installation registry manifest store. Image change
+	// verifies the changed digest exists there before accepting it. Nil
+	// refuses every image change.
 	Manifests out.ManifestStorage
 }
 
@@ -134,9 +134,9 @@ type Service struct {
 	// goroutine still owns.
 	liveMu  sync.Mutex
 	liveOps map[string]struct{}
-	// promotion is the published promotion policy generation, replaced
-	// atomically on reload. Nil denies every non-local promotion.
-	promotion atomic.Pointer[PromotionConfig]
+	// setImage is the published set-image policy generation, replaced
+	// atomically on reload. Nil denies every non-local image change.
+	setImage atomic.Pointer[SetImageConfig]
 }
 
 // NewService creates the deployment engine. All deps are required;

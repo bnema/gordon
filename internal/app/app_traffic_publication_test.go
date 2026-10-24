@@ -179,7 +179,7 @@ func TestAppTrafficPublisher_ProjectionFailureAppliesNoGraph(t *testing.T) {
 	assert.Equal(t, 32770, backend.Port)
 }
 
-func TestPromotionCIDomainCollisionKeepsPublishedState(t *testing.T) {
+func TestSetImageCIDomainCollisionKeepsPublishedState(t *testing.T) {
 	ctx := context.Background()
 	state := outmocks.NewMockAppState(t)
 	svc, index := newPublisherServices(state)
@@ -192,16 +192,16 @@ func TestPromotionCIDomainCollisionKeepsPublishedState(t *testing.T) {
 	var cfg Config
 	cfg.Auth.Enabled = true
 	cfg.Server.CIDomain = " BLOG.EXAMPLE.COM "
-	snapshot, err := buildPromotionSnapshot(Config{})
+	snapshot, err := buildSetImageSnapshot(Config{})
 	require.NoError(t, err)
-	svc.promotionSnapshot.Store(&snapshot)
-	before := svc.promotionSnapshot.Load()
+	svc.setImageSnapshot.Store(&snapshot)
+	before := svc.setImageSnapshot.Load()
 	// Runtime reload rejects the colliding detached host view before publishing policies.
 	svc.appTrafficPublisher = publisher
 	plan, err := (&reloadRuntime{svc: svc}).prepare(ctx, cfg)
 	require.NoError(t, err)
 	require.ErrorContains(t, (&reloadRuntime{svc: svc}).applyServing(ctx, cfg, plan), "collides with an app host")
-	require.Same(t, before, svc.promotionSnapshot.Load())
+	require.Same(t, before, svc.setImageSnapshot.Load())
 	_, ok := index.LookupHost("blog.example.com")
 	require.True(t, ok)
 	require.Empty(t, publisher.cfg.Server.CIDomain)

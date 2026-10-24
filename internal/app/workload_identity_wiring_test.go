@@ -23,13 +23,13 @@ import (
 )
 
 func TestWorkloadIdentityReceivesIssuersAtStartupAndReload(t *testing.T) {
-	v, cfg := readPromotionConfig(t, promotionTOML)
+	v, cfg := readSetImageConfig(t, setImageTOML)
 	identity := inmocks.NewMockWorkloadIdentityService(t)
 	svc := &services{workloadIdentitySvc: identity}
 
-	startup, err := buildPromotionSnapshot(cfg)
+	startup, err := buildSetImageSnapshot(cfg)
 	require.NoError(t, err)
-	svc.promotionSnapshot.Store(&startup)
+	svc.setImageSnapshot.Store(&startup)
 	identity.EXPECT().SetIssuers(startup.Issuers()).Once()
 	svc.reloadWorkloadIdentity()
 
@@ -42,7 +42,7 @@ func TestWorkloadIdentityReceivesIssuersAtStartupAndReload(t *testing.T) {
 
 	// An invalid reload keeps the previous snapshot and never reaches SetIssuers
 	// (the strict mock fails on an unexpected call).
-	cfg.PromotionPolicies[0].Subjects = nil
+	cfg.SetImagePolicies[0].Subjects = nil
 	require.Error(t, r.Apply(context.Background(), cfg))
 }
 
@@ -60,12 +60,12 @@ func (blockingOIDCProvider) FetchJWKS(context.Context, domain.TrustedIssuer, str
 }
 
 func TestInitWorkloadIdentityDoesNotBlockOnUnreachableIssuer(t *testing.T) {
-	_, cfg := readPromotionConfig(t, promotionTOML)
-	snapshot, err := buildPromotionSnapshot(cfg)
+	_, cfg := readSetImageConfig(t, setImageTOML)
+	snapshot, err := buildSetImageSnapshot(cfg)
 	require.NoError(t, err)
 	synctest.Test(t, func(t *testing.T) {
 		svc := &services{}
-		svc.promotionSnapshot.Store(&snapshot)
+		svc.setImageSnapshot.Store(&snapshot)
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		provider := blockingOIDCProvider{discovered: make(chan domain.TrustedIssuer, 1)}

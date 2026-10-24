@@ -264,7 +264,7 @@ func subBucket(parent *bolt.Bucket, name []byte, create bool) (*bolt.Bucket, err
 
 // incarnationIDLocked returns the live incarnation of an app: the ownership
 // record ID, or the app record ID when no ownership record exists yet. It is
-// the single definition LoadOwnership and AcceptPromotion share.
+// the single definition LoadOwnership and AcceptSetImage share.
 func incarnationIDLocked(bucket *bolt.Bucket, app string) (string, error) {
 	var ownership domain.AppOwnership
 	found, err := getRecord(bucket, keyOwnership, &ownership, "ownership")

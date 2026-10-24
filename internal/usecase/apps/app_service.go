@@ -47,7 +47,7 @@ type AppServiceImpl struct {
 // deployEngine is the subset of the deployment engine the app service needs.
 type deployEngine interface {
 	StartDeploy(ctx context.Context, input deployment.DeployInput) (*deployment.StartDeployResult, error)
-	StartPromotion(ctx context.Context, input deployment.PromotionInput) (*deployment.StartDeployResult, error)
+	StartSetImage(ctx context.Context, input deployment.SetImageInput) (*deployment.StartDeployResult, error)
 	AbandonDeploy(ctx context.Context, claim deployment.DeployClaim) error
 	ExecuteDeploy(ctx context.Context, claim deployment.DeployClaim) (*deployment.DeployResult, error)
 	Stop(ctx context.Context, app, opID string) (*deployment.LifecycleResult, error)
@@ -135,8 +135,8 @@ func (s *AppServiceImpl) Shutdown(ctx context.Context) error {
 // can neither execute nor stay marked live forever.
 func (s *AppServiceImpl) scheduleExecution(claim deployment.DeployClaim) error {
 	useCase := "Deploy"
-	if claim.Journal.Kind == domain.AppOperationKindPromote {
-		useCase = "Promote"
+	if claim.Journal.Kind == domain.AppOperationKindSetImage {
+		useCase = "SetImage"
 	}
 	opFields := map[string]any{
 		zerowrap.FieldLayer:   "usecase",
@@ -377,7 +377,7 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 // desiredPending reports desired state ACTIVE has not reached. It reads
 // desired vs ACTIVE only: a journal outcome never decides convergence.
 // Convergence is semantic, the same predicate deploy publication records:
-// a service promoted alone (or kept unchanged) may carry another effective
+// a service changed alone (or kept unchanged) may carry another effective
 // revision than desired while running exactly what desired declares.
 func (s *AppServiceImpl) desiredPending(ctx context.Context, desired domain.AppDesiredRevision, active domain.AppActive, hasActive bool) bool {
 	if desired.Revision == "" {
@@ -475,19 +475,19 @@ func (s *AppServiceImpl) Deploy(ctx context.Context, app, revision, service stri
 	return s.operationResult(ctx, app, started.Claim.Op, nil)
 }
 
-// Promote implements in.AppService. It is shaped like Deploy: the hand-off
-// is enrolled with the lifecycle, StartPromotion validates, authorizes, and
+// SetImage implements in.AppService. It is shaped like Deploy: the hand-off
+// is enrolled with the lifecycle, StartSetImage validates, authorizes, and
 // atomically accepts the candidate revision with its journal, and the
 // unchanged deploy execution runs in the background. The candidate spec is
 // validated by the same checks Apply runs.
-func (s *AppServiceImpl) Promote(ctx context.Context, input in.PromoteInput) (*domain.AppOperation, error) {
+func (s *AppServiceImpl) SetImage(ctx context.Context, input in.SetImageInput) (*domain.AppOperation, error) {
 	done, err := s.beginDeploy()
 	if err != nil {
 		return nil, err
 	}
 	defer done()
 
-	started, err := s.deploy.StartPromotion(ctx, deployment.PromotionInput{
+	started, err := s.deploy.StartSetImage(ctx, deployment.SetImageInput{
 		App: input.App, Service: input.Service, Image: input.Image,
 		ExpectedRevision: input.ExpectedRevision, Op: input.IdempotencyKey,
 		Principal: input.Principal, LocalOwner: input.LocalOwner,

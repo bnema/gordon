@@ -17,7 +17,7 @@ import (
 
 // TestErrorResponse_LocksEveryMapping pins the status, code, and hint of
 // every app error, including the mappings the admin routes used before
-// promotion existed, so no route can silently regress.
+// image change existed, so no route can silently regress.
 func TestErrorResponse_LocksEveryMapping(t *testing.T) {
 	tests := []struct {
 		err    error
@@ -45,15 +45,15 @@ func TestErrorResponse_LocksEveryMapping(t *testing.T) {
 		{errors.New("boom"), 500, "internal", ""},
 		// Changed: was 500 before the shared mapping.
 		{domain.ErrAppImageNotAllowed, 400, "image-not-allowed", ""},
-		// Promotion.
+		// Image change.
 		{ErrInvalidRequest, 400, "invalid-request", ""},
-		{domain.ErrInvalidPromotionImage, 400, "invalid-image", "use REPOSITORY@sha256:DIGEST from this installation's registry"},
-		{domain.ErrPromotionDenied, 403, "promotion-denied", "check the promotion policies"},
+		{domain.ErrInvalidImageReference, 400, "invalid-image", "use REPOSITORY@sha256:DIGEST from this installation's registry"},
+		{domain.ErrSetImageDenied, 403, "set-image-denied", "check the set-image policies"},
 		{domain.ErrIdentityProviderUnavailable, 503, "identity-provider-unavailable", "retry later"},
 		{domain.ErrAppServiceNotFound, 404, "service-not-found", "check the service name"},
-		{domain.ErrManifestNotFound, 404, "manifest-not-found", "push the image before promoting it"},
+		{domain.ErrManifestNotFound, 404, "manifest-not-found", "push the image before setting it"},
 		{domain.ErrAppBusy, 409, "app-busy", "another operation of this app is running; retry later with a new key"},
-		{domain.ErrPromotionUnavailable, 500, "internal", ""},
+		{domain.ErrSetImageUnavailable, 500, "internal", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.err.Error(), func(t *testing.T) {
@@ -79,7 +79,7 @@ func TestRetryAfter(t *testing.T) {
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
 }
 
-func TestDecodePromoteRequest(t *testing.T) {
+func TestDecodeSetImageRequest(t *testing.T) {
 	valid := `{"service":"web","image":"web@sha256:abc","expected_revision":"rev-1"}`
 	req, err := decode(t, valid)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestDecodePromoteRequest(t *testing.T) {
 		"non-canonical case":  `{"Service":"web","image":"x"}`,
 		"non-canonical image": `{"service":"web","IMAGE":"x"}`,
 		"duplicate case":      `{"service":"web","image":"x","Image":"y"}`,
-		"oversized":           `{"service":"web","image":"` + strings.Repeat("a", MaxPromoteRequestSize) + `"}`,
+		"oversized":           `{"service":"web","image":"` + strings.Repeat("a", MaxSetImageRequestSize) + `"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := decode(t, body)
@@ -107,10 +107,10 @@ func TestDecodePromoteRequest(t *testing.T) {
 	}
 }
 
-func decode(t *testing.T, body string) (dto.AppPromoteRequest, error) {
+func decode(t *testing.T, body string) (dto.AppSetImageRequest, error) {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
-	return DecodePromoteRequest(httptest.NewRecorder(), r)
+	return DecodeSetImageRequest(httptest.NewRecorder(), r)
 }
 
 func TestValidIdempotencyKey(t *testing.T) {

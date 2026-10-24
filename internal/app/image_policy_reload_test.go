@@ -30,7 +30,7 @@ gordon_domain = "gordon.example.com"
 enabled = true
 `
 
-// imagePolicyServices runs the real initApps and initPromotionSnapshot
+// imagePolicyServices runs the real initApps and initSetImageSnapshot
 // wiring for cfg, with one local manifest web:v1 and web:latest.
 func imagePolicyServices(t *testing.T, v *viper.Viper, cfg Config) *serviceInit {
 	t.Helper()
@@ -52,7 +52,7 @@ func imagePolicyServices(t *testing.T, v *viper.Viper, cfg Config) *serviceInit 
 		require.NoError(t, si.svc.appSvcImpl.Shutdown(context.Background()))
 		require.NoError(t, si.svc.appState.(*appstate.Store).Close())
 	})
-	require.NoError(t, si.initPromotionSnapshot())
+	require.NoError(t, si.initSetImageSnapshot())
 	return si
 }
 
@@ -76,7 +76,7 @@ func withCIDomain(t *testing.T, ciDomain string) (*viper.Viper, Config) {
 	if ciDomain != "" {
 		text = strings.Replace(text, "[auth]", "ci_domain = \""+ciDomain+"\"\n[auth]", 1)
 	}
-	return readPromotionConfig(t, text)
+	return readSetImageConfig(t, text)
 }
 
 // TestReload_ImagePolicyFollowsCIDomain proves a reload adding, then
@@ -127,14 +127,14 @@ func TestReload_ImagePolicyFollowsCIDomain(t *testing.T) {
 
 // TestReload_InvalidImagePolicyKeepsPrevious proves a reload whose image
 // policy does not validate fails and leaves the published policy, and the
-// promotion generation published with it, unchanged.
+// set-image generation published with it, unchanged.
 func TestReload_InvalidImagePolicyKeepsPrevious(t *testing.T) {
 	v, cfg := withCIDomain(t, "ci.example.com")
 	svc := &services{}
 	runtime := &reloadRuntime{v: v, svc: svc, log: zerowrap.Default()}
 	require.NoError(t, runtime.Apply(t.Context(), cfg))
 	beforePolicy := svc.imagePolicy.Load()
-	beforePromotion := svc.promotionSnapshot.Load()
+	beforeSetImage := svc.setImageSnapshot.Load()
 	require.NotNil(t, beforePolicy)
 
 	invalid := cfg
@@ -142,7 +142,7 @@ func TestReload_InvalidImagePolicyKeepsPrevious(t *testing.T) {
 	invalid.Images.AllowedRegistries = []string{"bad host/with path"}
 	require.ErrorContains(t, runtime.Apply(t.Context(), invalid), "invalid image registry policy")
 	assert.Same(t, beforePolicy, svc.imagePolicy.Load())
-	assert.Same(t, beforePromotion, svc.promotionSnapshot.Load())
+	assert.Same(t, beforeSetImage, svc.setImageSnapshot.Load())
 	assert.Equal(t, []string{"ci.example.com"}, svc.ImagePolicy().InstallationAliases)
 }
 

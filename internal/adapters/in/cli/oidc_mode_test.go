@@ -19,7 +19,7 @@ import (
 )
 
 // These tests run real httptest servers (sockets) for the CI host and the
-// runner's ID token endpoint, so they stay outside synctest; the promote
+// runner's ID token endpoint, so they stay outside synctest; the set-image
 // watch loop is shortened through operationPollInterval instead.
 
 const (
@@ -82,7 +82,7 @@ func oidcEnv(t *testing.T) (*ciHostFake, *httptest.Server) {
 			return
 		}
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/-/ci/apps/e2e-demo/promote":
+		case r.Method == http.MethodPost && r.URL.Path == "/-/ci/apps/e2e-demo/set-image":
 			w.WriteHeader(http.StatusAccepted)
 			_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{Op: r.Header.Get("Idempotency-Key"), App: "e2e-demo", Status: dto.AppStatusRunning})
 		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/-/ci/apps/e2e-demo/operations/by-key/"):
@@ -118,13 +118,13 @@ func assertNoSecrets(t *testing.T, outputs ...string) {
 	}
 }
 
-func TestAppPromote_OIDCModeUsesCIHostRoutes(t *testing.T) {
+func TestAppSetImage_OIDCModeUsesCIHostRoutes(t *testing.T) {
 	fake, _ := oidcEnv(t)
 	orig := operationPollInterval
 	operationPollInterval = time.Millisecond
 	t.Cleanup(func() { operationPollInterval = orig })
 
-	cmd := newAppPromoteCmd()
+	cmd := newAppSetImageCmd()
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
@@ -137,7 +137,7 @@ func TestAppPromote_OIDCModeUsesCIHostRoutes(t *testing.T) {
 	paths := fake.Paths()
 	require.GreaterOrEqual(t, len(paths), 3)
 	assert.Equal(t, "GET /auth/token", paths[0])
-	assert.Equal(t, "POST /-/ci/apps/e2e-demo/promote", paths[1])
+	assert.Equal(t, "POST /-/ci/apps/e2e-demo/set-image", paths[1])
 	assert.True(t, strings.HasPrefix(paths[2], "GET /-/ci/apps/e2e-demo/operations/by-key/"))
 	for _, p := range paths {
 		assert.NotContains(t, p, "/admin", "OIDC mode never calls the admin API")
@@ -146,7 +146,7 @@ func TestAppPromote_OIDCModeUsesCIHostRoutes(t *testing.T) {
 	assertNoSecrets(t, stdout.String(), stderr.String())
 }
 
-func TestAppPromote_OIDCAudienceFlagAndMissingAudience(t *testing.T) {
+func TestAppSetImage_OIDCAudienceFlagAndMissingAudience(t *testing.T) {
 	fake, host := oidcEnv(t)
 	orig := operationPollInterval
 	operationPollInterval = time.Millisecond
@@ -158,7 +158,7 @@ func TestAppPromote_OIDCAudienceFlagAndMissingAudience(t *testing.T) {
 		var stdout, stderr bytes.Buffer
 		root.SetOut(&stdout)
 		root.SetErr(&stderr)
-		root.SetArgs(append([]string{"apps", "promote", "e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--remote", host.URL, "--json"}, args...))
+		root.SetArgs(append([]string{"apps", "set-image", "e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--remote", host.URL, "--json"}, args...))
 		err := root.Execute()
 		assertNoSecrets(t, stdout.String(), stderr.String())
 		if err != nil {
@@ -176,7 +176,7 @@ func TestAppPromote_OIDCAudienceFlagAndMissingAudience(t *testing.T) {
 	assert.Equal(t, []string{"https://flag.example.com"}, fake.audiences)
 }
 
-func TestAppPromote_GordonOIDCTokenTakesPrecedence(t *testing.T) {
+func TestAppSetImage_GordonOIDCTokenTakesPrecedence(t *testing.T) {
 	fake, _ := oidcEnv(t)
 	orig := operationPollInterval
 	operationPollInterval = time.Millisecond
@@ -184,7 +184,7 @@ func TestAppPromote_GordonOIDCTokenTakesPrecedence(t *testing.T) {
 	t.Setenv("GORDON_OIDC_TOKEN", oidcJWT)
 	t.Setenv("GORDON_OIDC_AUDIENCE", "")
 
-	cmd := newAppPromoteCmd()
+	cmd := newAppSetImageCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
 	cmd.SetArgs([]string{"e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64)})
@@ -229,7 +229,7 @@ func TestImagesPush_OIDCModePushesToCIHostWithScopedToken(t *testing.T) {
 	assertNoSecrets(t, stdout.String(), stderr.String())
 }
 
-func TestAppPromote_OIDCModeRefusesPlaintextRemote(t *testing.T) {
+func TestAppSetImage_OIDCModeRefusesPlaintextRemote(t *testing.T) {
 	fake, _ := oidcEnv(t)
 	var hits int
 	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -243,7 +243,7 @@ func TestAppPromote_OIDCModeRefusesPlaintextRemote(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
-	root.SetArgs([]string{"apps", "promote", "e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--remote", plain.URL, "--json"})
+	root.SetArgs([]string{"apps", "set-image", "e2e-demo", "--service", "web", "--image", "e2e-demo@sha256:" + strings.Repeat("a", 64), "--remote", plain.URL, "--json"})
 	err := root.Execute()
 	require.ErrorIs(t, err, remote.ErrCIInsecureTransport)
 	assert.Contains(t, err.Error(), "https://")

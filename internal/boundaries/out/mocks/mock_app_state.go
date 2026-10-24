@@ -104,12 +104,12 @@ func (_c *MockAppState_AcceptApply_Call) RunAndReturn(run func(ctx context.Conte
 	return _c
 }
 
-// AcceptPromotion provides a mock function for the type MockAppState
-func (_mock *MockAppState) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error) {
+// AcceptSetImage provides a mock function for the type MockAppState
+func (_mock *MockAppState) AcceptSetImage(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error) {
 	ret := _mock.Called(ctx, rev, op)
 
 	if len(ret) == 0 {
-		panic("no return value specified for AcceptPromotion")
+		panic("no return value specified for AcceptSetImage")
 	}
 
 	var r0 *domain.AppOperation
@@ -138,20 +138,20 @@ func (_mock *MockAppState) AcceptPromotion(ctx context.Context, rev domain.AppDe
 	return r0, r1, r2
 }
 
-// MockAppState_AcceptPromotion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AcceptPromotion'
-type MockAppState_AcceptPromotion_Call struct {
+// MockAppState_AcceptSetImage_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AcceptSetImage'
+type MockAppState_AcceptSetImage_Call struct {
 	*mock.Call
 }
 
-// AcceptPromotion is a helper method to define mock.On call
+// AcceptSetImage is a helper method to define mock.On call
 //   - ctx context.Context
 //   - rev domain.AppDesiredRevision
 //   - op domain.AppOperation
-func (_e *MockAppState_Expecter) AcceptPromotion(ctx any, rev any, op any) *MockAppState_AcceptPromotion_Call {
-	return &MockAppState_AcceptPromotion_Call{Call: _e.mock.On("AcceptPromotion", ctx, rev, op)}
+func (_e *MockAppState_Expecter) AcceptSetImage(ctx any, rev any, op any) *MockAppState_AcceptSetImage_Call {
+	return &MockAppState_AcceptSetImage_Call{Call: _e.mock.On("AcceptSetImage", ctx, rev, op)}
 }
 
-func (_c *MockAppState_AcceptPromotion_Call) Run(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation)) *MockAppState_AcceptPromotion_Call {
+func (_c *MockAppState_AcceptSetImage_Call) Run(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation)) *MockAppState_AcceptSetImage_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
@@ -174,12 +174,12 @@ func (_c *MockAppState_AcceptPromotion_Call) Run(run func(ctx context.Context, r
 	return _c
 }
 
-func (_c *MockAppState_AcceptPromotion_Call) Return(existing *domain.AppOperation, claimed bool, err error) *MockAppState_AcceptPromotion_Call {
+func (_c *MockAppState_AcceptSetImage_Call) Return(existing *domain.AppOperation, claimed bool, err error) *MockAppState_AcceptSetImage_Call {
 	_c.Call.Return(existing, claimed, err)
 	return _c
 }
 
-func (_c *MockAppState_AcceptPromotion_Call) RunAndReturn(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error)) *MockAppState_AcceptPromotion_Call {
+func (_c *MockAppState_AcceptSetImage_Call) RunAndReturn(run func(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (*domain.AppOperation, bool, error)) *MockAppState_AcceptSetImage_Call {
 	_c.Call.Return(run)
 	return _c
 }

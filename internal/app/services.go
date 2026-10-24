@@ -50,9 +50,9 @@ import (
 // services holds all the services used by the application.
 type services struct {
 	workloadIdentitySvc in.WorkloadIdentityService
-	promotionSnapshot   atomic.Pointer[PromotionSnapshot]
+	setImageSnapshot    atomic.Pointer[SetImageSnapshot]
 	// imagePolicy is the current installation image-source policy,
-	// published with each promotion generation. Consumers read it through
+	// published with each set-image generation. Consumers read it through
 	// ImagePolicy.
 	imagePolicy           atomic.Pointer[domain.ImageSourcePolicy]
 	runtime               *docker.Runtime
@@ -364,7 +364,7 @@ func (si *serviceInit) initRuntimeProxyAndTraffic() error {
 	if err := si.initApps(); err != nil {
 		return err
 	}
-	if err := si.initPromotionSnapshot(); err != nil {
+	if err := si.initSetImageSnapshot(); err != nil {
 		return err
 	}
 	si.initWorkloadIdentity()

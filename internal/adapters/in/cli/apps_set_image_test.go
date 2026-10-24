@@ -17,17 +17,17 @@ import (
 	"github.com/bnema/gordon/internal/adapters/in/cli/remote"
 )
 
-// The promote command tests run in synctest bubbles: the watch loop sleeps
+// The set-image command tests run in synctest bubbles: the watch loop sleeps
 // on operationPollInterval, which the fake clock advances instantly once
 // every goroutine is blocked. The control plane is an in-memory mock, so no
 // real I/O crosses the bubble.
 
-var promoteReq = dto.AppPromoteRequest{Service: "web", Image: "web@sha256:aaaa"}
+var setImageReq = dto.AppSetImageRequest{Service: "web", Image: "web@sha256:aaaa"}
 
-func TestRunAppPromote_PollsAcceptedToTerminalAtTheInterval(t *testing.T) {
+func TestRunAppSetImage_PollsAcceptedToTerminalAtTheInterval(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		plane := appPlane(t)
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(runningOp("key-1"), "key-1", nil).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
 		start := time.Now()
 		var polled []time.Duration
 		plane.EXPECT().OperationByKey(mock.Anything, "blog", "key-1").RunAndReturn(
@@ -40,22 +40,22 @@ func TestRunAppPromote_PollsAcceptedToTerminalAtTheInterval(t *testing.T) {
 			}).Times(2)
 
 		var out, errOut bytes.Buffer
-		require.NoError(t, runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false))
+		require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false))
 		assert.Equal(t, []time.Duration{operationPollInterval, 2 * operationPollInterval}, polled,
 			"polls follow the configured cadence")
 		assert.Contains(t, out.String(), "key-1 blog: success")
 	})
 }
 
-func TestRunAppPromote_JSONTerminalFailureExitsNonzero(t *testing.T) {
+func TestRunAppSetImage_JSONTerminalFailureExitsNonzero(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		plane := appPlane(t)
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(runningOp("key-1"), "key-1", nil).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
 		plane.EXPECT().OperationByKey(mock.Anything, "blog", "key-1").Return(
 			&dto.AppDeployResponse{Op: "key-1", App: "blog", Status: "failed", Outcome: "failed"}, nil).Once()
 
 		var out, errOut bytes.Buffer
-		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, true)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, true)
 		var failed *OperationFailedError
 		require.ErrorAs(t, err, &failed)
 		var doc dto.AppDeployResponse
@@ -65,17 +65,17 @@ func TestRunAppPromote_JSONTerminalFailureExitsNonzero(t *testing.T) {
 	})
 }
 
-func TestRunAppPromote_InterruptedWatchPrintsResume(t *testing.T) {
+func TestRunAppSetImage_InterruptedWatchPrintsResume(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		plane := appPlane(t)
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(runningOp("key-1"), "key-1", nil).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(runningOp("key-1"), "key-1", nil).Once()
 		plane.EXPECT().OperationByKey(mock.Anything, "blog", "key-1").Return(runningOp("key-1"), nil).Maybe()
 		ctx, cancel := context.WithCancel(context.Background())
 		var out, errOut bytes.Buffer
 		var err error
 		done := make(chan struct{})
 		go func() {
-			err = runAppPromote(ctx, plane, "blog", promoteReq, &out, &errOut, false)
+			err = runAppSetImage(ctx, plane, "blog", setImageReq, &out, &errOut, false)
 			close(done)
 		}()
 		synctest.Wait()
@@ -86,59 +86,59 @@ func TestRunAppPromote_InterruptedWatchPrintsResume(t *testing.T) {
 	})
 }
 
-func TestRunAppPromote_TerminalReplayRendersWithoutPolling(t *testing.T) {
+func TestRunAppSetImage_TerminalReplayRendersWithoutPolling(t *testing.T) {
 	plane := appPlane(t)
-	plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(
+	plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(
 		&dto.AppDeployResponse{Op: "key-1", App: "blog", Status: "success", Outcome: "success"}, "key-1", nil).Once()
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false))
+	require.NoError(t, runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false))
 	assert.Contains(t, out.String(), "success")
 }
 
-func TestRunAppPromote_ConflictIsNotRetried(t *testing.T) {
+func TestRunAppSetImage_ConflictIsNotRetried(t *testing.T) {
 	t.Run("journaled conflict", func(t *testing.T) {
 		plane := appPlane(t)
 		conflict := &remote.AppOpConflictError{StatusCode: 409, Status: "409 Conflict",
 			Response: dto.AppDeployResponse{Op: "key-1", App: "blog", Outcome: "failed"}}
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(&conflict.Response, "key-1", conflict).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(&conflict.Response, "key-1", conflict).Once()
 		var out, errOut bytes.Buffer
-		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "gordon apps operations show blog --key key-1")
 		assert.Contains(t, out.String(), "key-1 blog: failed")
 	})
 	t.Run("state conflict", func(t *testing.T) {
 		plane := appPlane(t)
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(nil, "key-1", errors.New("409 Conflict: state-conflict")).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", errors.New("409 Conflict: state-conflict")).Once()
 		var out, errOut bytes.Buffer
-		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "state-conflict")
 	})
 	t.Run("busy app", func(t *testing.T) {
 		plane := appPlane(t)
 		busy := &remote.HTTPError{StatusCode: 409, Status: "409 Conflict", Code: "app-busy", Body: "app has an unfinished operation"}
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(nil, "key-1", busy).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1", busy).Once()
 		var out, errOut bytes.Buffer
-		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
 		require.ErrorAs(t, err, &busy)
 		assert.Contains(t, err.Error(), "app-busy")
 		assert.Contains(t, err.Error(), "new key")
 	})
 	t.Run("ambiguous outcome", func(t *testing.T) {
 		plane := appPlane(t)
-		plane.EXPECT().PromoteApp(mock.Anything, "blog", promoteReq).Return(nil, "key-1",
-			&remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/promote", Err: errors.New("eof")}).Once()
+		plane.EXPECT().SetImageApp(mock.Anything, "blog", setImageReq).Return(nil, "key-1",
+			&remote.OutcomeUnknownError{Method: "POST", Path: "/apps/blog/set-image", Err: errors.New("eof")}).Once()
 		var out, errOut bytes.Buffer
-		err := runAppPromote(context.Background(), plane, "blog", promoteReq, &out, &errOut, false)
+		err := runAppSetImage(context.Background(), plane, "blog", setImageReq, &out, &errOut, false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "outcome-unknown")
 		assert.Contains(t, err.Error(), "--key key-1")
 	})
 }
 
-func TestAppPromoteCmd_RequiresServiceAndImage(t *testing.T) {
-	cmd := newAppPromoteCmd()
+func TestAppSetImageCmd_RequiresServiceAndImage(t *testing.T) {
+	cmd := newAppSetImageCmd()
 	cmd.SetArgs([]string{"blog", "--service", "web"})
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})

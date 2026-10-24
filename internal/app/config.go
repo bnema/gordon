@@ -19,9 +19,9 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
-	TrustedIssuers    []TrustedIssuerConfig    `mapstructure:"trusted_issuers"`
-	PromotionPolicies []domain.PromotionPolicy `mapstructure:"promotion_policies"`
-	Server            struct {
+	TrustedIssuers   []TrustedIssuerConfig   `mapstructure:"trusted_issuers"`
+	SetImagePolicies []domain.SetImagePolicy `mapstructure:"set_image_policies"`
+	Server           struct {
 		Port                  int      `mapstructure:"port"`
 		RegistryPort          int      `mapstructure:"registry_port"`
 		CIDomain              string   `mapstructure:"ci_domain"`
@@ -258,7 +258,7 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 		return nil, Config{}, err
 	}
 
-	if err := validatePromotionConfig(v, cfg); err != nil {
+	if err := validateSetImageConfig(v, cfg); err != nil {
 		return nil, Config{}, err
 	}
 	return v, cfg, nil

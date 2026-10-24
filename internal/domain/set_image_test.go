@@ -47,9 +47,9 @@ func TestTrustedIssuer(t *testing.T) {
 	require.Error(t, c.Validate())
 }
 
-func TestPromotionPolicySet(t *testing.T) {
-	policies := []PromotionPolicy{{Issuer: GordonIssuer, Subjects: []string{"a", "b"}, App: "web", Service: "web", Repository: "web"}, {Issuer: "https://issuer", Subjects: []string{"a"}, App: "web", Service: "api", Repository: "api"}}
-	set, err := NewPromotionPolicySet(policies)
+func TestSetImagePolicySet(t *testing.T) {
+	policies := []SetImagePolicy{{Issuer: GordonIssuer, Subjects: []string{"a", "b"}, App: "web", Service: "web", Repository: "web"}, {Issuer: "https://issuer", Subjects: []string{"a"}, App: "web", Service: "api", Repository: "api"}}
+	set, err := NewSetImagePolicySet(policies)
 	require.NoError(t, err)
 	policies[0].Subjects[0] = "changed"
 	policies[0].Repository = "changed"
@@ -67,34 +67,34 @@ func TestPromotionPolicySet(t *testing.T) {
 		require.False(t, set.Allows(WorkloadPrincipal{GordonIssuer, args[0]}, args[1], args[2], args[3]))
 	}
 	require.False(t, set.Allows(WorkloadPrincipal{"https://issuer", "b"}, "web", "api", "api"))
-	base := PromotionPolicy{Issuer: GordonIssuer, Subjects: []string{"a"}, App: "web", Service: "web", Repository: "web"}
-	_, err = NewPromotionPolicySet([]PromotionPolicy{base, base})
+	base := SetImagePolicy{Issuer: GordonIssuer, Subjects: []string{"a"}, App: "web", Service: "web", Repository: "web"}
+	_, err = NewSetImagePolicySet([]SetImagePolicy{base, base})
 	require.Error(t, err)
-	for _, mutate := range []func(*PromotionPolicy){func(p *PromotionPolicy) { p.Issuer = "" }, func(p *PromotionPolicy) { p.Subjects = nil }, func(p *PromotionPolicy) { p.Subjects = []string{""} }, func(p *PromotionPolicy) { p.App = "Bad" }, func(p *PromotionPolicy) { p.Service = "Bad" }, func(p *PromotionPolicy) { p.Repository = "../bad" }, func(p *PromotionPolicy) { p.Issuer = "*" }, func(p *PromotionPolicy) { p.Subjects = []string{"a*"} }, func(p *PromotionPolicy) { p.App = "*" }, func(p *PromotionPolicy) { p.Service = "*" }, func(p *PromotionPolicy) { p.Repository = "*" }} {
+	for _, mutate := range []func(*SetImagePolicy){func(p *SetImagePolicy) { p.Issuer = "" }, func(p *SetImagePolicy) { p.Subjects = nil }, func(p *SetImagePolicy) { p.Subjects = []string{""} }, func(p *SetImagePolicy) { p.App = "Bad" }, func(p *SetImagePolicy) { p.Service = "Bad" }, func(p *SetImagePolicy) { p.Repository = "../bad" }, func(p *SetImagePolicy) { p.Issuer = "*" }, func(p *SetImagePolicy) { p.Subjects = []string{"a*"} }, func(p *SetImagePolicy) { p.App = "*" }, func(p *SetImagePolicy) { p.Service = "*" }, func(p *SetImagePolicy) { p.Repository = "*" }} {
 		p := base
 		mutate(&p)
-		_, err := NewPromotionPolicySet([]PromotionPolicy{p})
+		_, err := NewSetImagePolicySet([]SetImagePolicy{p})
 		require.Error(t, err)
 	}
 }
 
-func TestPromotionPersistence(t *testing.T) {
+func TestSetImagePersistence(t *testing.T) {
 	var op AppOperation
 	require.NoError(t, json.Unmarshal([]byte(`{"op":"old","kind":"deploy"}`), &op))
 	require.Empty(t, op.Principal)
 	require.Empty(t, op.Request.Image)
 	var rev AppDesiredRevision
 	require.NoError(t, json.Unmarshal([]byte(`{"revision":"old"}`), &rev))
-	require.Nil(t, rev.Promotion)
+	require.Nil(t, rev.SetImage)
 	op.Principal = "gordon:owner"
-	op.Kind = AppOperationKindPromote
+	op.Kind = AppOperationKindSetImage
 	op.Request.Image = "web@sha256:abc"
 	data, err := json.Marshal(op)
 	require.NoError(t, err)
 	var decoded AppOperation
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	require.Equal(t, op, decoded)
-	rev.Promotion = &AppPromotionProvenance{Service: "web", Image: "web@sha256:abc", Digest: "sha256:abc", Principal: op.Principal, Operation: "op", AppID: "id"}
+	rev.SetImage = &AppSetImageProvenance{Service: "web", Image: "web@sha256:abc", Digest: "sha256:abc", Principal: op.Principal, Operation: "op", AppID: "id"}
 	data, err = json.Marshal(rev)
 	require.NoError(t, err)
 	var decodedRev AppDesiredRevision
@@ -102,27 +102,27 @@ func TestPromotionPersistence(t *testing.T) {
 	require.Equal(t, rev, decodedRev)
 }
 
-func TestPromotionPolicySetZeroAndDuplicateSubjects(t *testing.T) {
-	var empty PromotionPolicySet
+func TestSetImagePolicySetZeroAndDuplicateSubjects(t *testing.T) {
+	var empty SetImagePolicySet
 	p := WorkloadPrincipal{GordonIssuer, "owner"}
 	require.False(t, empty.Allows(p, "web", "web", "web"))
 	require.False(t, empty.HasAppPolicy(p, "web"))
 	require.Empty(t, empty.Repositories(p))
-	_, err := NewPromotionPolicySet([]PromotionPolicy{{Issuer: GordonIssuer, Subjects: []string{"owner", "owner"}, App: "web", Service: "web", Repository: "web"}})
+	_, err := NewSetImagePolicySet([]SetImagePolicy{{Issuer: GordonIssuer, Subjects: []string{"owner", "owner"}, App: "web", Service: "web", Repository: "web"}})
 	require.Error(t, err)
-	set, err := NewPromotionPolicySet([]PromotionPolicy{{Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "web", Service: "web", Repository: "shared"}, {Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "web", Service: "api", Repository: "shared"}, {Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "api", Service: "api", Repository: "api"}})
+	set, err := NewSetImagePolicySet([]SetImagePolicy{{Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "web", Service: "web", Repository: "shared"}, {Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "web", Service: "api", Repository: "shared"}, {Issuer: GordonIssuer, Subjects: []string{"owner"}, App: "api", Service: "api", Repository: "api"}})
 	require.NoError(t, err)
 	require.Equal(t, []string{"api", "shared"}, set.Repositories(p))
 }
 
-func TestPromotionJSONOmitsAbsentFields(t *testing.T) {
+func TestSetImageJSONOmitsAbsentFields(t *testing.T) {
 	data, err := json.Marshal(AppOperation{})
 	require.NoError(t, err)
 	require.NotContains(t, string(data), `"principal"`)
 	require.NotContains(t, string(data), `"image"`)
 	data, err = json.Marshal(AppDesiredRevision{})
 	require.NoError(t, err)
-	require.NotContains(t, string(data), `"promotion"`)
+	require.NotContains(t, string(data), `"set_image"`)
 }
 
 func TestTrustedIssuerRejectsWildcards(t *testing.T) {
@@ -131,7 +131,7 @@ func TestTrustedIssuerRejectsWildcards(t *testing.T) {
 	}
 }
 
-func TestPromotionExactIdentityEdges(t *testing.T) {
+func TestSetImageExactIdentityEdges(t *testing.T) {
 	// HTTPS issuer URLs accept Unicode hosts and explicit ports syntactically.
 	// Identity matching remains byte-exact; no IDNA, port or case normalization.
 	for _, issuer := range []string{"https://issuer.example", "https://issuer.example/", "https://ISSUER.example", "https://例え.example", "https://issuer.example:443"} {
@@ -140,7 +140,7 @@ func TestPromotionExactIdentityEdges(t *testing.T) {
 		parsed, err := ParseWorkloadPrincipal(principal.String())
 		require.NoError(t, err)
 		require.Equal(t, principal, parsed)
-		set, err := NewPromotionPolicySet([]PromotionPolicy{{Issuer: issuer, Subjects: []string{principal.Subject}, App: "web", Service: "web", Repository: "web"}})
+		set, err := NewSetImagePolicySet([]SetImagePolicy{{Issuer: issuer, Subjects: []string{principal.Subject}, App: "web", Service: "web", Repository: "web"}})
 		require.NoError(t, err)
 		require.True(t, set.Allows(principal, "web", "web", "web"))
 		for _, other := range []string{"subject:é", " subject:e\u0301\t ", " subject:é\t"} {

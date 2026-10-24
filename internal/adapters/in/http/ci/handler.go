@@ -1,7 +1,7 @@
 // Package ci implements the CI host router: the only surface a CI job of an
 // OIDC-capable forge reaches. It exchanges a workload identity token for a
 // short-lived ci-access token, accepts image pushes into the repositories
-// the promotion policies grant, and serves promotion and operation lookup.
+// the set-image policies grant, and serves set-image and operation lookup.
 // Every other route answers 404: the CI host never reaches the admin API
 // or the full registry.
 package ci
@@ -45,8 +45,8 @@ type Deps struct {
 	Auth     in.AuthService
 	Identity in.WorkloadIdentityService
 	Apps     in.AppService
-	// Policies returns the current promotion policy generation.
-	Policies func() domain.PromotionPolicySet
+	// Policies returns the current set-image policy generation.
+	Policies func() domain.SetImagePolicySet
 	// Domain returns the current CI domain (server.ci_domain).
 	Domain func() string
 	// Registry is the raw registry handler, without the main host's

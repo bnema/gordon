@@ -46,7 +46,7 @@ func TestManagementHosts_IncludeCIDomain(t *testing.T) {
 
 func TestReloadRuntime_ManagementHostsIncludeCIDomain(t *testing.T) {
 	ctx := t.Context()
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	publicTLS := inmocks.NewMockPublicTLSService(t)
 	publicTLS.EXPECT().SetAdditionalHosts(mock.Anything, []string{"gordon.example", "ci.example"}).Once()
 	v, svc := newTestServicesWithContainer(t, publicTLS)
@@ -100,14 +100,14 @@ func ciEdgeServices(t *testing.T, cfg Config) *services {
 		workloadIdentitySvc: inmocks.NewMockWorkloadIdentityService(t),
 		appSvc:              inmocks.NewMockAppService(t),
 	}
-	snapshot, err := buildPromotionSnapshot(cfg)
+	snapshot, err := buildSetImageSnapshot(cfg)
 	require.NoError(t, err)
-	svc.promotionSnapshot.Store(&snapshot)
+	svc.setImageSnapshot.Store(&snapshot)
 	return svc
 }
 
 func TestCreateHTTPHandlers_CIHostServedByCIRouter(t *testing.T) {
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	cfg.API.RateLimit.TrustedProxies = []string{"10.0.0.5"}
 	svc := ciEdgeServices(t, cfg)
 	registryOut, httpOut, httpsOut := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
@@ -159,7 +159,7 @@ func TestCreateHTTPHandlers_CIHostServedByCIRouter(t *testing.T) {
 }
 
 func TestCreateHTTPHandlers_CIRouterAbsentWithoutCIDomain(t *testing.T) {
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	cfg.Server.CIDomain = ""
 	svc := ciEdgeServices(t, cfg)
 	_, _, httpsOut := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
@@ -173,7 +173,7 @@ func TestCreateHTTPHandlers_CIRouterAbsentWithoutCIDomain(t *testing.T) {
 }
 
 func TestCreateHTTPHandlers_CITokenEndpointRateLimited(t *testing.T) {
-	_, cfg := readPromotionConfig(t, promotionTOML)
+	_, cfg := readSetImageConfig(t, setImageTOML)
 	svc := ciEdgeServices(t, cfg)
 	identity := svc.workloadIdentitySvc.(*inmocks.MockWorkloadIdentityService)
 	identity.EXPECT().Verify(mock.Anything, mock.Anything).Return(domain.WorkloadPrincipal{}, domain.ErrInvalidToken)

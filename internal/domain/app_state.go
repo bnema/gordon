@@ -79,7 +79,7 @@ type AppListenerReservation struct {
 
 // AppDesiredRevision is one accepted desired revision.
 type AppDesiredRevision struct {
-	Promotion       *AppPromotionProvenance  `json:"promotion,omitempty"`
+	SetImage        *AppSetImageProvenance   `json:"set_image,omitempty"`
 	Revision        string                   `json:"revision"`
 	App             string                   `json:"app"`
 	Supersedes      string                   `json:"supersedes,omitempty"`

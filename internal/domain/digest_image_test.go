@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParsePromotionImage(t *testing.T) {
+func TestParseDigestImage(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("a", 64)
 	hosts := []string{"gordon.example.com", "ci.example.com", "old.example.com"}
 	valid := map[string]string{
@@ -19,9 +19,9 @@ func TestParsePromotionImage(t *testing.T) {
 		"gordon.example.com/a.b/c@" + digest: "a.b/c",
 	}
 	for ref, repo := range valid {
-		got, err := ParsePromotionImage(ref, hosts)
+		got, err := ParseDigestImage(ref, hosts)
 		require.NoError(t, err, ref)
-		assert.Equal(t, PromotionImage{Repository: repo, Digest: digest}, got, ref)
+		assert.Equal(t, DigestImage{Repository: repo, Digest: digest}, got, ref)
 		assert.Equal(t, "gordon.example.com/"+repo+"@"+digest, got.Canonical("gordon.example.com"))
 	}
 	invalid := []string{
@@ -41,7 +41,7 @@ func TestParsePromotionImage(t *testing.T) {
 		"gordon.example.com/../web@" + digest,
 	}
 	for _, ref := range invalid {
-		_, err := ParsePromotionImage(ref, hosts)
-		require.ErrorIs(t, err, ErrInvalidPromotionImage, ref)
+		_, err := ParseDigestImage(ref, hosts)
+		require.ErrorIs(t, err, ErrInvalidImageReference, ref)
 	}
 }

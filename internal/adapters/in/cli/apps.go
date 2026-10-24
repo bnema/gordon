@@ -131,7 +131,7 @@ Examples:
 		newAppsDiffCmd(),
 		newAppsSecretsCmd(),
 		newAppDeployCmd(),
-		newAppPromoteCmd(),
+		newAppSetImageCmd(),
 		newAppRestartCmd(),
 		newAppStopCmd(),
 		newAppStartCmd(),
@@ -829,21 +829,21 @@ func runAppDeploy(ctx context.Context, plane ControlPlane, app string, req dto.A
 	return renderAppDeployResponse(out, resp)
 }
 
-// newAppPromoteCmd creates `promote APP`: run one registry digest in one
+// newAppSetImageCmd creates `set-image APP`: run one registry digest in one
 // service.
-func newAppPromoteCmd() *cobra.Command {
-	var req dto.AppPromoteRequest
+func newAppSetImageCmd() *cobra.Command {
+	var req dto.AppSetImageRequest
 	var jsonOut bool
 	cmd := &cobra.Command{
-		Use:   "promote APP",
-		Short: "Run one pushed image digest in one service",
-		Long: `Promote exactly one image digest from this installation's registry into one
+		Use:   "set-image APP",
+		Short: "Set one service's image and deploy it",
+		Long: `Set exactly one image digest from this installation's registry into one
 service. The daemon accepts a desired revision whose only change is that
 service image, deploys it, and this command waits for the outcome.
 
 Examples:
-  gordon apps promote blog --service web --image web@sha256:<digest>
-  gordon apps promote blog --service web --image web@sha256:<digest> --expected-revision rev-123 --json`,
+  gordon apps set-image blog --service web --image web@sha256:<digest>
+  gordon apps set-image blog --service web --image web@sha256:<digest> --expected-revision rev-123 --json`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := resolveAppPlane()
@@ -851,10 +851,10 @@ Examples:
 				return err
 			}
 			defer handle.close()
-			return runAppPromote(cmd.Context(), handle.plane, args[0], req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
+			return runAppSetImage(cmd.Context(), handle.plane, args[0], req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOut)
 		},
 	}
-	cmd.Flags().StringVar(&req.Service, "service", "", "Service to promote (required)")
+	cmd.Flags().StringVar(&req.Service, "service", "", "Service whose image is set (required)")
 	cmd.Flags().StringVar(&req.Image, "image", "", "Image as REPOSITORY@sha256:DIGEST (required)")
 	cmd.Flags().StringVar(&req.ExpectedRevision, "expected-revision", "", "Refuse unless desired state is still at this revision")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
@@ -863,20 +863,20 @@ Examples:
 	return cmd
 }
 
-// runAppPromote issues one promotion and, when the daemon answers 202,
+// runAppSetImage issues one set-image request and, when the daemon answers 202,
 // polls the by-key endpoint to terminal. It never retries the mutation: a
 // 409 renders the journal (or the conflict) and exits nonzero.
-func runAppPromote(ctx context.Context, plane ControlPlane, app string, req dto.AppPromoteRequest, out, errOut io.Writer, jsonOut bool) error {
-	resp, key, err := plane.PromoteApp(ctx, app, req)
+func runAppSetImage(ctx context.Context, plane ControlPlane, app string, req dto.AppSetImageRequest, out, errOut io.Writer, jsonOut bool) error {
+	resp, key, err := plane.SetImageApp(ctx, app, req)
 	if err != nil {
-		if conflictErr, ok := renderAppOpConflict(out, "promote", app, key, err, jsonOut); ok {
+		if conflictErr, ok := renderAppOpConflict(out, "set-image", app, key, err, jsonOut); ok {
 			return conflictErr
 		}
 		if isAppBusy(err) {
-			return fmt.Errorf("app-busy: another operation of %s is still running; nothing was promoted. "+
-				"Wait for it (gordon apps show %s), then run the promotion again; it uses a new key: %w", app, app, err)
+			return fmt.Errorf("app-busy: another operation of %s is still running; nothing was changed. "+
+				"Wait for it (gordon apps show %s), then run set-image again; it uses a new key: %w", app, app, err)
 		}
-		return appMutationError("promote", app, key, err)
+		return appMutationError("set-image", app, key, err)
 	}
 	if resp.Status == dto.AppStatusRunning {
 		return watchOperation(ctx, plane, app, key, resp, out, errOut, jsonOut)

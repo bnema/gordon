@@ -16,7 +16,7 @@ import (
 
 // handleToken serves GET /auth/token: it exchanges a workload identity JWT
 // (the Basic password; the username is ignored) for a ci-access token whose
-// scopes are the requested repository scopes the promotion policies grant
+// scopes are the requested repository scopes the set-image policies grant
 // the identity. The response has the shape of the main token endpoint.
 func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
@@ -45,8 +45,8 @@ func (h *Handler) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	scopes, ok := h.grantedScopes(r, principal)
 	if !ok {
-		log.Warn().Str("principal", principal.String()).Msg("CI token request: no promotion policy grants the requested scope")
-		writeJSON(w, http.StatusForbidden, dto.ErrorResponse{Error: "forbidden: no promotion policy grants the requested scope"})
+		log.Warn().Str("principal", principal.String()).Msg("CI token request: no set-image policy grants the requested scope")
+		writeJSON(w, http.StatusForbidden, dto.ErrorResponse{Error: "forbidden: no set-image policy grants the requested scope"})
 		return
 	}
 	h.issue(w, r, principal, scopes)

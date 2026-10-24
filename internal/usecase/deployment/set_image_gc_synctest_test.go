@@ -38,33 +38,33 @@ func (b *pruneBarrier) AcquireExclusive(context.Context) (out.GCLease, error) {
 	return nil, errors.New("not used")
 }
 
-// TestStartPromotion_RefusedBeforeAnyLockOrState proves authorization and
+// TestStartSetImage_RefusedBeforeAnyLockOrState proves authorization and
 // request validation are pure: an unauthorized principal, a malformed image,
 // or a daemon without an installation registry never takes the GC lease,
 // never recovers the store, and never reconciles the app. The mock state has
 // no expectations, so any state call fails the test. Synchronous: no
 // goroutines or time are involved.
-func TestStartPromotion_RefusedBeforeAnyLockOrState(t *testing.T) {
+func TestStartSetImage_RefusedBeforeAnyLockOrState(t *testing.T) {
 	validate := func(domain.AppSpec) error { return nil }
-	policies, err := domain.NewPromotionPolicySet([]domain.PromotionPolicy{{
+	policies, err := domain.NewSetImagePolicySet([]domain.SetImagePolicy{{
 		Issuer: ciPrincipal.Issuer, Subjects: []string{ciPrincipal.Subject}, App: "blog", Service: "web", Repository: "web",
 	}})
 	require.NoError(t, err)
 	for _, tc := range []struct {
 		name     string
 		registry string
-		input    deployment.PromotionInput
+		input    deployment.SetImageInput
 		want     error
 	}{
-		{name: "unauthorized principal", registry: promoRegistry, want: domain.ErrPromotionDenied, input: deployment.PromotionInput{
-			App: "blog", Service: "web", Image: "web@" + promoDigest("c"), Op: "k", Validate: validate,
+		{name: "unauthorized principal", registry: promoRegistry, want: domain.ErrSetImageDenied, input: deployment.SetImageInput{
+			App: "blog", Service: "web", Image: "web@" + setImageDigest("c"), Op: "k", Validate: validate,
 			Principal: domain.WorkloadPrincipal{Issuer: ciPrincipal.Issuer, Subject: "repo:acme/other"},
 		}},
-		{name: "tag image", registry: promoRegistry, want: domain.ErrInvalidPromotionImage, input: deployment.PromotionInput{
+		{name: "tag image", registry: promoRegistry, want: domain.ErrInvalidImageReference, input: deployment.SetImageInput{
 			App: "blog", Service: "web", Image: "web:latest", Op: "k", Validate: validate, Principal: ciPrincipal,
 		}},
-		{name: "no installation registry", want: domain.ErrPromotionUnavailable, input: deployment.PromotionInput{
-			App: "blog", Service: "web", Image: "web@" + promoDigest("c"), Op: "k", Validate: validate, Principal: ciPrincipal,
+		{name: "no installation registry", want: domain.ErrSetImageUnavailable, input: deployment.SetImageInput{
+			App: "blog", Service: "web", Image: "web@" + setImageDigest("c"), Op: "k", Validate: validate, Principal: ciPrincipal,
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -74,19 +74,19 @@ func TestStartPromotion_RefusedBeforeAnyLockOrState(t *testing.T) {
 				State: state, Registry: deployment.RegistryConfig{Domain: tc.registry},
 				Manifests: outmocks.NewMockManifestStorage(t),
 			}, zerowrap.Default()).WithGCBarrier(barrier)
-			svc.SetPromotionConfig(deployment.PromotionConfig{Policies: policies})
-			_, err := svc.StartPromotion(context.Background(), tc.input)
+			svc.SetSetImageConfig(deployment.SetImageConfig{Policies: policies})
+			_, err := svc.StartSetImage(context.Background(), tc.input)
 			require.ErrorIs(t, err, tc.want)
 		})
 	}
 }
 
-// TestStartPromotion_WaitsForPruneExclusiveLease proves a promotion racing
+// TestStartSetImage_WaitsForPruneExclusiveLease proves an image change racing
 // prune never reads or writes state while prune holds the exclusive lease:
 // it is durably blocked on the barrier, and it proceeds only after release.
 // The bubble holds only mocks and channels (no bbolt, no sockets), so
 // synctest.Wait observes the blocked goroutine deterministically.
-func TestStartPromotion_WaitsForPruneExclusiveLease(t *testing.T) {
+func TestStartSetImage_WaitsForPruneExclusiveLease(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		state := outmocks.NewMockAppState(t)
 		barrier := &pruneBarrier{released: make(chan struct{})}
@@ -104,8 +104,8 @@ func TestStartPromotion_WaitsForPruneExclusiveLease(t *testing.T) {
 		var err error
 		done := false
 		go func() {
-			_, err = svc.StartPromotion(context.Background(), deployment.PromotionInput{
-				App: "blog", Service: "web", Image: "web@" + promoDigest("c"), Op: "k",
+			_, err = svc.StartSetImage(context.Background(), deployment.SetImageInput{
+				App: "blog", Service: "web", Image: "web@" + setImageDigest("c"), Op: "k",
 				Validate: func(domain.AppSpec) error { return nil }, LocalOwner: true,
 			})
 			done = true

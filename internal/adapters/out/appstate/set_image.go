@@ -9,18 +9,18 @@ import (
 	"github.com/bnema/gordon/internal/domain"
 )
 
-// AcceptPromotion atomically publishes desired state and its protective journal.
+// AcceptSetImage atomically publishes desired state and its protective journal.
 // Replays are resolved before checking freshness or the app incarnation. A
 // committed apply intent is materialized first, inside the same transaction:
-// CommitApply stays the single commit point of an apply, so the promotion's
+// CommitApply stays the single commit point of an apply, so the set-image
 // CAS then loses against it instead of dropping it. Revisions beyond
 // retention are swept in the same transaction.
-func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (existing *domain.AppOperation, claimed bool, err error) {
+func (s *Store) AcceptSetImage(ctx context.Context, rev domain.AppDesiredRevision, op domain.AppOperation) (existing *domain.AppOperation, claimed bool, err error) {
 	if err := checkCtx(ctx); err != nil {
 		return nil, false, err
 	}
-	if !validPromotion(rev, op) {
-		return nil, false, fmt.Errorf("appstate: invalid promotion: %w", domain.ErrInvalidAppSpec)
+	if !validSetImage(rev, op) {
+		return nil, false, fmt.Errorf("appstate: invalid set-image revision: %w", domain.ErrInvalidAppSpec)
 	}
 	err = s.db.Update(func(tx *bolt.Tx) error {
 		bucket, err := appBucket(tx, rev.App, false)
@@ -36,10 +36,10 @@ func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevisi
 		if bucket == nil {
 			return domain.ErrAppNotFound
 		}
-		if err := verifyPromotionBaseLocked(tx, bucket, rev); err != nil {
+		if err := verifySetImageBaseLocked(tx, bucket, rev); err != nil {
 			return err
 		}
-		if err := writePromotionLocked(bucket, rev, &op); err != nil {
+		if err := writeSetImageLocked(bucket, rev, &op); err != nil {
 			return err
 		}
 		protected, err := protectedRevisionsLocked(bucket, rev.App, nil)
@@ -58,9 +58,9 @@ func (s *Store) AcceptPromotion(ctx context.Context, rev domain.AppDesiredRevisi
 	return existing, claimed, nil
 }
 
-// verifyPromotionBaseLocked materializes committed applies, then checks the
+// verifySetImageBaseLocked materializes committed applies, then checks the
 // desired-revision CAS and the app incarnation.
-func verifyPromotionBaseLocked(tx *bolt.Tx, bucket *bolt.Bucket, rev domain.AppDesiredRevision) error {
+func verifySetImageBaseLocked(tx *bolt.Tx, bucket *bolt.Bucket, rev domain.AppDesiredRevision) error {
 	if err := materializeCommittedLocked(tx, bucket); err != nil {
 		return err
 	}
@@ -71,17 +71,17 @@ func verifyPromotionBaseLocked(tx *bolt.Tx, bucket *bolt.Bucket, rev domain.AppD
 	if err != nil {
 		return err
 	}
-	if id == "" || id != rev.Promotion.AppID {
-		return fmt.Errorf("appstate: promotion incarnation changed: %w", domain.ErrAppStateConflict)
+	if id == "" || id != rev.SetImage.AppID {
+		return fmt.Errorf("appstate: set-image incarnation changed: %w", domain.ErrAppStateConflict)
 	}
 	return nil
 }
 
-func validPromotion(rev domain.AppDesiredRevision, op domain.AppOperation) bool {
-	return rev.Promotion != nil && rev.Promotion.AppID != "" && op.Op != "" && rev.App == op.App && rev.Revision != ""
+func validSetImage(rev domain.AppDesiredRevision, op domain.AppOperation) bool {
+	return rev.SetImage != nil && rev.SetImage.AppID != "" && op.Op != "" && rev.App == op.App && rev.Revision != ""
 }
 
-func writePromotionLocked(bucket *bolt.Bucket, rev domain.AppDesiredRevision, op *domain.AppOperation) error {
+func writeSetImageLocked(bucket *bolt.Bucket, rev domain.AppDesiredRevision, op *domain.AppOperation) error {
 	revisions, err := subBucket(bucket, subRevisions, true)
 	if err != nil {
 		return err
@@ -95,7 +95,7 @@ func writePromotionLocked(bucket *bolt.Bucket, rev domain.AppDesiredRevision, op
 	if err := putRecord(bucket, keyDesired, rev); err != nil {
 		return err
 	}
-	op.Steps = []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending, Image: rev.Promotion.Image, Digest: rev.Promotion.Digest}}
+	op.Steps = []domain.AppOperationStep{{ID: "preflight", State: domain.AppStepPending, Image: rev.SetImage.Image, Digest: rev.SetImage.Digest}}
 	ops, err := subBucket(bucket, subOps, true)
 	if err != nil {
 		return err

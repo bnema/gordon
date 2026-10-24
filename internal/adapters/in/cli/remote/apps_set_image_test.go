@@ -17,11 +17,11 @@ import (
 // These tests use a real httptest server (sockets), so they run outside
 // synctest and observe the request synchronously.
 
-func TestClientPromoteApp_PostsBodyWithKey(t *testing.T) {
+func TestClientSetImageApp_PostsBodyWithKey(t *testing.T) {
 	var gotKey string
-	var gotBody dto.AppPromoteRequest
+	var gotBody dto.AppSetImageRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/admin/apps/blog/promote", r.URL.Path)
+		require.Equal(t, "/admin/apps/blog/set-image", r.URL.Path)
 		require.Equal(t, http.MethodPost, r.Method)
 		gotKey = r.Header.Get("Idempotency-Key")
 		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
@@ -31,8 +31,8 @@ func TestClientPromoteApp_PostsBodyWithKey(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	req := dto.AppPromoteRequest{Service: "web", Image: "web@sha256:abc", ExpectedRevision: "rev-1"}
-	resp, key, err := NewClient(srv.URL).PromoteApp(context.Background(), "blog", req)
+	req := dto.AppSetImageRequest{Service: "web", Image: "web@sha256:abc", ExpectedRevision: "rev-1"}
+	resp, key, err := NewClient(srv.URL).SetImageApp(context.Background(), "blog", req)
 	require.NoError(t, err)
 	assert.Equal(t, req, gotBody)
 	assert.NotEmpty(t, key)
@@ -40,7 +40,7 @@ func TestClientPromoteApp_PostsBodyWithKey(t *testing.T) {
 	assert.Equal(t, dto.AppStatusRunning, resp.Status)
 }
 
-func TestClientPromoteApp_BusyCarriesCode(t *testing.T) {
+func TestClientSetImageApp_BusyCarriesCode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Retry-After", "5")
@@ -49,13 +49,13 @@ func TestClientPromoteApp_BusyCarriesCode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, _, err := NewClient(srv.URL).PromoteApp(context.Background(), "blog", dto.AppPromoteRequest{Service: "web", Image: "x"})
+	_, _, err := NewClient(srv.URL).SetImageApp(context.Background(), "blog", dto.AppSetImageRequest{Service: "web", Image: "x"})
 	var httpErr *HTTPError
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, "app-busy", httpErr.Code)
 }
 
-func TestClientPromoteApp_ConflictIsNotRetried(t *testing.T) {
+func TestClientSetImageApp_ConflictIsNotRetried(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -65,7 +65,7 @@ func TestClientPromoteApp_ConflictIsNotRetried(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	_, key, err := NewClient(srv.URL).PromoteApp(context.Background(), "blog", dto.AppPromoteRequest{Service: "web", Image: "x"})
+	_, key, err := NewClient(srv.URL).SetImageApp(context.Background(), "blog", dto.AppSetImageRequest{Service: "web", Image: "x"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "desired revision changed")
 	assert.NotEmpty(t, key)

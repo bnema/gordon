@@ -39,8 +39,8 @@ func (e *blockingHandlerDeployEngine) StartDeploy(context.Context, deployment.De
 	}, nil
 }
 
-func (e *blockingHandlerDeployEngine) StartPromotion(context.Context, deployment.PromotionInput) (*deployment.StartDeployResult, error) {
-	return nil, domain.ErrPromotionDenied
+func (e *blockingHandlerDeployEngine) StartSetImage(context.Context, deployment.SetImageInput) (*deployment.StartDeployResult, error) {
+	return nil, domain.ErrSetImageDenied
 }
 
 func (e *blockingHandlerDeployEngine) ExecuteDeploy(ctx context.Context, _ deployment.DeployClaim) (*deployment.DeployResult, error) {

@@ -54,11 +54,11 @@ type AppService interface {
 	// owned orphans and the name stays reserved.
 	Remove(ctx context.Context, app, idempotencyKey string) (*domain.AppOperation, error)
 
-	// Promote runs exactly one registry digest in one service: it accepts a
+	// SetImage runs exactly one registry digest in one service: it accepts a
 	// desired revision whose only change is that service image and starts
 	// its deploy, shaped like Deploy (a running journal for a new claim, the
 	// stored journal for a replay of the same key).
-	Promote(ctx context.Context, input PromoteInput) (*domain.AppOperation, error)
+	SetImage(ctx context.Context, input SetImageInput) (*domain.AppOperation, error)
 
 	// OperationByKey recovers an ambiguous mutation outcome by the
 	// client-supplied idempotency key.
@@ -82,10 +82,10 @@ type AppService interface {
 	DeleteSecret(ctx context.Context, app, service, key string) error
 }
 
-// PromoteInput is one promotion request. Principal identifies the caller;
-// LocalOwner is set only for the owner-only admin socket, which may promote
-// without a promotion policy.
-type PromoteInput struct {
+// SetImageInput is one set-image request. Principal identifies the caller;
+// LocalOwner is set only for the owner-only admin socket, which may set the image
+// without a set-image policy.
+type SetImageInput struct {
 	App              string
 	Service          string
 	Image            string

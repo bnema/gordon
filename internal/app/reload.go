@@ -200,7 +200,7 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err := validateRetiredAppConfig(c.v); err != nil {
 		return err
 	}
-	if err := validatePromotionConfig(c.v, reloadCfg); err != nil {
+	if err := validateSetImageConfig(c.v, reloadCfg); err != nil {
 		return err
 	}
 	if err := validateAppPolicies(c.v, reloadCfg); err != nil {
@@ -260,7 +260,7 @@ type reloadRuntime struct {
 
 // reloadPlan holds the values derived from one config before any apply.
 type reloadPlan struct {
-	promotion      PromotionSnapshot
+	setImage       SetImageSnapshot
 	imagePolicy    domain.ImageSourcePolicy
 	containerCfg   container.Config
 	tlsConfig      *tls.Config
@@ -281,14 +281,14 @@ func (r *reloadRuntime) Apply(ctx context.Context, cfg Config) error {
 		}
 	}
 	r.applyAppPolicies(plan)
-	r.svc.publishPromotion(plan.promotion, plan.imagePolicy, cfg)
+	r.svc.publishSetImage(plan.setImage, plan.imagePolicy, cfg)
 	return nil
 }
 
 func (r *reloadRuntime) prepare(ctx context.Context, cfg Config) (reloadPlan, error) {
 	var plan reloadPlan
 	var err error
-	if plan.promotion, err = buildPromotionSnapshot(cfg); err != nil {
+	if plan.setImage, err = buildSetImageSnapshot(cfg); err != nil {
 		return plan, err
 	}
 	if plan.imagePolicy, err = buildImagePolicy(cfg); err != nil {

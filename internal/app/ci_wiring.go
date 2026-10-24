@@ -37,7 +37,7 @@ func buildCIHandler(svc *services, cfg Config, trustedNets []*net.IPNet, rawRegi
 		Auth:           svc.authSvc,
 		Identity:       svc.workloadIdentitySvc,
 		Apps:           svc.appSvc,
-		Policies:       func() domain.PromotionPolicySet { return svc.PromotionSnapshot().Policies() },
+		Policies:       func() domain.SetImagePolicySet { return svc.SetImageSnapshot().Policies() },
 		Domain:         func() string { return svc.proxySvc.ProxyConfig().CIDomain },
 		Registry:       rawRegistry,
 		TrustedNets:    trustedNets,

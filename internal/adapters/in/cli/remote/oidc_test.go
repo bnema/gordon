@@ -135,15 +135,15 @@ func TestOIDCSource_FetchErrorNeverEchoesSecrets(t *testing.T) {
 	require.Error(t, err)
 }
 
-// fakeCIHost is a CI host: token exchange, promote and by-key lookup.
+// fakeCIHost is a CI host: token exchange, set-image and by-key lookup.
 type fakeCIHost struct {
-	t          *testing.T
-	exchanges  atomic.Int32
-	scopes     []string
-	reject401  atomic.Int32
-	promoteKey string
-	promoted   dto.AppPromoteRequest
-	paths      []string
+	t           *testing.T
+	exchanges   atomic.Int32
+	scopes      []string
+	reject401   atomic.Int32
+	setImageKey string
+	changed     dto.AppSetImageRequest
+	paths       []string
 }
 
 func (f *fakeCIHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -164,11 +164,11 @@ func (f *fakeCIHost) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case f.reject401.Load() > 0:
 		f.reject401.Add(-1)
 		w.WriteHeader(http.StatusUnauthorized)
-	case r.Method == http.MethodPost && r.URL.Path == "/-/ci/apps/web/promote":
-		f.promoteKey = r.Header.Get("Idempotency-Key")
-		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&f.promoted))
+	case r.Method == http.MethodPost && r.URL.Path == "/-/ci/apps/web/set-image":
+		f.setImageKey = r.Header.Get("Idempotency-Key")
+		require.NoError(f.t, json.NewDecoder(r.Body).Decode(&f.changed))
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{Op: f.promoteKey, App: "web", Status: dto.AppStatusRunning})
+		_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{Op: f.setImageKey, App: "web", Status: dto.AppStatusRunning})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/-/ci/apps/web/operations/by-key/"):
 		_ = json.NewEncoder(w).Encode(dto.AppDeployResponse{Op: strings.TrimPrefix(r.URL.Path, "/-/ci/apps/web/operations/by-key/"), App: "web", Status: "success", Outcome: "success"})
 	default:
@@ -184,21 +184,21 @@ func newOIDCClient(t *testing.T) (*Client, *fakeCIHost) {
 	return NewClient(srv.URL, WithHTTPClient(srv.Client()), WithToken("ignored-stored-token"), WithOIDC(&OIDCSource{static: testJWT})), host
 }
 
-func TestClientOIDC_PromoteAndLookupUseCIHost(t *testing.T) {
+func TestClientOIDC_SetImageAndLookupUseCIHost(t *testing.T) {
 	client, host := newOIDCClient(t)
-	req := dto.AppPromoteRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)}
-	resp, key, err := client.PromoteApp(context.Background(), "web", req)
+	req := dto.AppSetImageRequest{Service: "web", Image: "ci.example.com/web@sha256:" + strings.Repeat("a", 64)}
+	resp, key, err := client.SetImageApp(context.Background(), "web", req)
 	require.NoError(t, err)
 	assert.Equal(t, dto.AppStatusRunning, resp.Status)
-	assert.Equal(t, key, host.promoteKey)
-	assert.Equal(t, req, host.promoted)
-	assert.Empty(t, host.scopes, "promotion needs no repository scope")
+	assert.Equal(t, key, host.setImageKey)
+	assert.Equal(t, req, host.changed)
+	assert.Empty(t, host.scopes, "set-image needs no repository scope")
 
 	op, err := client.OperationByKey(context.Background(), "web", key)
 	require.NoError(t, err)
 	assert.Equal(t, "success", op.Outcome)
 	assert.Equal(t, int32(1), host.exchanges.Load(), "the ci-access token is cached")
-	assert.Equal(t, []string{"GET /auth/token", "POST /-/ci/apps/web/promote", "GET /-/ci/apps/web/operations/by-key/" + key}, host.paths)
+	assert.Equal(t, []string{"GET /auth/token", "POST /-/ci/apps/web/set-image", "GET /-/ci/apps/web/operations/by-key/" + key}, host.paths)
 }
 
 func TestClientOIDC_ReexchangesOnceAfter401(t *testing.T) {
