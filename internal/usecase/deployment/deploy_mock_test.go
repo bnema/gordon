@@ -165,6 +165,7 @@ func TestDeploy_Mockery_PullsPinnedImageWithRegistryAuth(t *testing.T) {
 		return cfg.Image == "127.0.0.1:5000/blog/web@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" &&
 			assert.Equal(t, svcSpec.Command, cfg.Entrypoint) && assert.Empty(t, cfg.Cmd)
 	})).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	// No TCP-capable interfaces (HTTP nil, readiness empty): no backend
@@ -216,6 +217,7 @@ func TestDeploy_Mockery_HTTPSuccessRecordsLoopbackBinds(t *testing.T) {
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -276,6 +278,7 @@ func TestDeploy_Mockery_HTTPOverlapPublishesBeforeRetiringOldGeneration(t *testi
 		createdAt = step
 		return &domain.Container{ID: "c-new", Name: "web"}, nil
 	}).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -358,6 +361,7 @@ func TestDeploy_Mockery_HTTPSequentialWhenServiceHasVolume(t *testing.T) {
 		createdAt = step
 		return &domain.Container{ID: "c-new", Name: "web"}, nil
 	}).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -409,6 +413,7 @@ func TestDeploy_Mockery_HTTPReadinessFailureKeepsOldGenerationServing(t *testing
 	state.EXPECT().LoadDesired(mock.Anything, "blog").Return(rev, true, nil)
 
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18080, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -527,6 +532,7 @@ func TestDeploy_Mockery_VolumeReplacementMarksUnsafe(t *testing.T) {
 		order = append(order, "create-new")
 		return &domain.Container{ID: "c-new", Name: "web"}, nil
 	}).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return([]domain.ContainerBackendBind{{ContainerPort: 9000, HostPort: 19000, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
@@ -606,6 +612,7 @@ func TestDeploy_Mockery_MixedTCPUDPPublishesBothLoopbacks(t *testing.T) {
 		}
 		return len(byProto) == 2
 	})).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.MatchedBy(func(ports []domain.ContainerBackendPort) bool {
@@ -711,6 +718,7 @@ func TestDeploy_Mockery_InjectsAppEnvAndSecrets(t *testing.T) {
 		workerEnv = append([]string(nil), cfg.Env...)
 		return len(cfg.Env) == 2
 	})).Return(&domain.Container{ID: "c-worker", Name: "worker"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, mock.Anything).Return(nil)
 	runtime.EXPECT().InspectContainer(mock.Anything, mock.Anything).Return(&domain.Container{Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{

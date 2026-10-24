@@ -115,6 +115,7 @@ func expectSequentialCreate(
 			recordEvent(events, "create-new")
 			return &domain.Container{ID: containerID, Name: "web"}, nil
 		}).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, containerID).RunAndReturn(
 		func(context.Context, string) error {
 			recordEvent(events, "start-new")
@@ -656,6 +657,7 @@ func TestDeploy_MultiServiceStopsAtFirstFailure(t *testing.T) {
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 18081, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-beta", Name: "beta"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-beta").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-beta").Return(&domain.Container{ID: "c-beta", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerLogs(mock.Anything, "c-beta", false).Return(nil, assert.AnError).Once()
@@ -778,6 +780,7 @@ func TestDeploy_VolumeReplacementPreventsOverlappingWriters(t *testing.T) {
 			recordEvent(&order, "create-new")
 			return &domain.Container{ID: "c-new", Name: "web"}, nil
 		}).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").RunAndReturn(
 		func(context.Context, string) error {
 			recordEvent(&order, "start-new")

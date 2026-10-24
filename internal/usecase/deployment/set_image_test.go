@@ -105,6 +105,7 @@ func (h *setImageHarness) expectRuntime() {
 		return &domain.Container{ID: fmt.Sprintf("c-new-%d", h.seq.Add(1)), Name: "web"}, nil
 	}).Maybe()
 	r.EXPECT().ConnectContainerToNetwork(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	r.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	r.EXPECT().StartContainer(mock.Anything, mock.Anything).Return(nil).Maybe()
 	r.EXPECT().InspectContainer(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, id string) (*domain.Container, error) {
 		return &domain.Container{ID: id, Status: "running", StartedAt: executionStartedAt}, nil

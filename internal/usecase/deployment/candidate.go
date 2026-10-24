@@ -23,34 +23,42 @@ type startedCandidate struct {
 	UDPBinds  map[int]int
 	// StartedAt is the execution start observed right after the container
 	// was started, before readiness ran. Zero when it could not be read.
-	StartedAt time.Time
+	StartedAt       time.Time
+	CleanupWarnings []CleanupWarning
 }
 
-// createAndStart builds the runtime config and starts the replacement.
-// Preflight already pulled and inspected the pinned runtime image.
-// Every TCP-capable interface port is published on 127.0.0.1 ephemeral
-// plus every UDP interface port on 127.0.0.1/udp ephemeral: readiness
-// and the proxy dial these loopback binds rootless-first,
-// never container IPs. The runtime keeps native restarts; Gordon
-// reconciles intent at boot and in the monitor (accepted decision:
-// native runtime restarts plus daemon reconciliation).
+// preparedCandidate has never run and has no native restart policy.
+// Docker and podman-restart.service cannot start it; boot recovery removes
+// the unpublished journaled candidate.
+type preparedCandidate struct{ Container *domain.Container }
+
 func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (startedCandidate, error) {
+	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
+	if err != nil {
+		return startedCandidate{Container: prepared.Container}, err
+	}
+	return s.startPrepared(ctx, app, p, prepared)
+}
+
+// prepareCandidate creates, journals and connects a candidate without starting
+// it. No restart policy may be applied until its first explicit start.
+func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (preparedCandidate, error) {
 	// Re-resolve binds from the current policy immediately before any
 	// runtime mutation: a bind revoked since preflight must fail here,
 	// before volume ownership or container creation.
 	resolvedBinds, err := s.resolveServiceBinds(app, p.spec)
 	if err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	// Re-resolve devices and capabilities from the current policy under
 	// the same fail-closed rule: revoked grants never reach the runtime.
 	resolvedDevices, resolvedCaps, err := s.resolveServiceGrants(app, p.spec)
 	if err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	env, files, err := s.serviceEnv(ctx, app, p)
 	if err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	image := runtimeImageRef(p)
 	// The incarnation network is verified or created before any
@@ -58,11 +66,11 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	// Gordon-owned network that no other app shares.
 	appID, err := s.ensureIncarnationID(ctx, app)
 	if err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	nets := s.resolveAppNetworks(appID, p.sharedNetworks)
 	if err := s.ensureAppNetworks(ctx, app, appID, nets); err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	volumes := map[string]string{}
 	readOnlyVolumes := map[string]string{}
@@ -74,12 +82,12 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		// incarnation ID is already validated above, so the labels
 		// carry the same ID without another ownership load.
 		if err := s.reserveVolumeOwnership(ctx, app, appID, p.spec.Name, vol.Name, runtimeName); err != nil {
-			return startedCandidate{}, err
+			return preparedCandidate{}, err
 		}
 		if err := s.deps.Runtime.CreateVolume(ctx, runtimeName, volumeProvenanceLabels(app, appID, p.spec.Name, revision)); err != nil {
 			// CreateVolume is idempotent at the adapter; existence was
 			// checked at preflight, so only real backend errors fail here.
-			return startedCandidate{}, fmt.Errorf("deployment: create volume %q: %w", vol.Name, err)
+			return preparedCandidate{}, fmt.Errorf("deployment: create volume %q: %w", vol.Name, err)
 		}
 		// A declared read-only mount must reach the runtime as read-only:
 		// a writable mount would let the service modify protected data.
@@ -101,7 +109,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		AddedCapabilities: resolvedCaps,
 		Labels:            appLabels(app, p.spec.Name, revision),
 		AutoRemove:        false,
-		RestartPolicy:     domain.RestartPolicyAlways,
+		RestartPolicy:     "",
 		PortPublishes:     backendPublishes(p.spec),
 		NetworkMode:       nets.private,
 		Hostname:          p.spec.Name,
@@ -112,21 +120,35 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 	}
 	created, err := s.createWithSecretFiles(ctx, app, p.name, config, files)
 	if err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	// The candidate ID is durably journaled before the container is started
 	// or joins a shared network, so an interrupted deployment can be cleaned
 	// up instead of leaving an untracked running generation.
 	if err := s.recordCandidate(ctx, app, p.spec.Name, created.ID, journal); err != nil {
-		return startedCandidate{}, err
+		return preparedCandidate{}, err
 	}
 	if err := s.connectSharedNetworks(ctx, created.ID, nets); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
-		return startedCandidate{Container: created}, err
+		return preparedCandidate{Container: created}, err
 	}
+	return preparedCandidate{Container: created}, nil
+}
+
+// startPrepared starts before enabling native self-healing. Failure to enable
+// it reduces availability, not data safety, and is an operator warning only.
+func (s *Service) startPrepared(ctx context.Context, app string, p pinnedService, prepared preparedCandidate) (startedCandidate, error) {
+	created := prepared.Container
+
 	if err := s.deps.Runtime.StartContainer(ctx, created.ID); err != nil {
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return startedCandidate{Container: created}, fmt.Errorf("deployment: start container: %w", err)
+	}
+	var warnings []CleanupWarning
+	if err := s.deps.Runtime.UpdateRestartPolicy(ctx, created.ID, domain.RestartPolicyAlways); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Str("container", created.ID).Msg("native restart policy not applied")
+		warnings = append(warnings, CleanupWarning{Service: p.name, Leftover: created.ID, Detail: "native restart policy not applied: " + err.Error()})
 	}
 	// The execution is observed before readiness runs: a native restart
 	// between readiness and the verified-execution record then shows up as a
@@ -137,7 +159,7 @@ func (s *Service) createAndStart(ctx context.Context, app, revision string, p pi
 		s.retireCandidate(ctx, app, p.spec.Name, created.ID)
 		return startedCandidate{Container: created}, err
 	}
-	return startedCandidate{Container: created, TCPBinds: binds, UDPBinds: udpBinds, StartedAt: startedAt}, nil
+	return startedCandidate{Container: created, TCPBinds: binds, UDPBinds: udpBinds, StartedAt: startedAt, CleanupWarnings: warnings}, nil
 }
 
 // runtimeImageRef resolves the exact runtime image reference of one pinned

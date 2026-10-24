@@ -616,10 +616,12 @@ func parseHandoverConfig(cfg Config) (HandoverConfig, error) {
 		return HandoverConfig{}, err
 	}
 	if maxHold >= httpOptions.TransferIdleTimeout {
-		log := zerowrap.Default()
-		log.Warn().Dur("max_hold", maxHold).
-			Dur("transfer_idle_timeout", httpOptions.TransferIdleTimeout).
-			Msg("traffic handover hold may be cut short by the HTTP transfer idle timeout")
+		warnHandoverIdleTimeout(zerowrap.Default(), maxHold, httpOptions.TransferIdleTimeout)
 	}
 	return HandoverConfig{MaxHold: maxHold, MaxHeldRequests: maxRequests}, nil
+}
+
+func warnHandoverIdleTimeout(log zerowrap.Logger, maxHold, idle time.Duration) {
+	log.Warn().Dur("max_hold", maxHold).Dur("transfer_idle_timeout", idle).
+		Msg("traffic handover hold may be cut short by the HTTP transfer idle timeout")
 }

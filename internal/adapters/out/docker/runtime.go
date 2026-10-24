@@ -555,6 +555,17 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 	return nil
 }
 
+// UpdateRestartPolicy enables native recovery after a container's first start.
+func (r *Runtime) UpdateRestartPolicy(ctx context.Context, containerID string, policy domain.RestartPolicy) error {
+	_, err := r.client.ContainerUpdate(ctx, containerID, client.ContainerUpdateOptions{
+		RestartPolicy: &container.RestartPolicy{Name: container.RestartPolicyMode(policy)},
+	})
+	if err != nil {
+		return fmt.Errorf("update container %s restart policy: %w", containerID, err)
+	}
+	return nil
+}
+
 // WaitForContainer waits for a container to stop running.
 func (r *Runtime) WaitForContainer(ctx context.Context, containerID string) error {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{

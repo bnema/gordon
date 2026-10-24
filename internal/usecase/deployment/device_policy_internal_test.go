@@ -126,6 +126,7 @@ func TestCreateAndStart_PassesResolvedCDIIDsToRuntime(t *testing.T) {
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
 		return assert.Equal(t, []string{"example.com/gpu=GPU-test-uuid"}, cfg.CDIDevices)
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 

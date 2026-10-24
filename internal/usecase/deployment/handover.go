@@ -1,0 +1,79 @@
+package deployment
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	"github.com/bnema/zerowrap"
+
+	"github.com/bnema/gordon/internal/domain"
+)
+
+const handoverStartSlack = 15 * time.Second
+
+func (s *Service) handoverBudget(spec domain.AppService, grace time.Duration) time.Duration {
+	return min(grace+readinessTimeout(spec)+handoverStartSlack, s.deps.Handover.MaxHold)
+}
+
+func (s *Service) beginHandover(ctx context.Context, app, name string, until time.Time) error {
+	if s.deps.Handover.MaxHold <= 0 || s.deps.Traffic == nil {
+		return s.withdrawForRecovery(ctx, app, name)
+	}
+	if err := s.deps.Traffic.HoldService(ctx, app, name, until); err != nil {
+		s.publication.mark(app, name)
+		return fmt.Errorf("deployment: hold %s/%s: %w", app, name, err)
+	}
+	s.publication.clear(app, name)
+	return nil
+}
+
+func (s *Service) endHandover(ctx context.Context, app, name string) {
+	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
+		log := zerowrap.FromCtx(ctx)
+		log.Warn().Err(err).Str("app", app).Str("service", name).Msg("failed to end traffic handover")
+	}
+}
+
+func (s *Service) failAfterHandover(ctx context.Context, app, revision string, p pinnedService, before string, prepared preparedCandidate, err error) ServiceResult {
+	s.endHandover(ctx, app, p.name)
+	result := s.failResult(revision, before, prepared.Container.ID, err)
+	result.CleanupWarnings = append(result.CleanupWarnings, s.retireCandidate(ctx, app, p.name, prepared.Container.ID)...)
+	return result
+}
+
+func (s *Service) deployHandover(ctx context.Context, app, revision string, p pinnedService, opID, before string, grace time.Duration, journal candidateJournal) ServiceResult {
+	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
+	if err != nil {
+		return s.failResult(revision, before, "", err)
+	}
+	until := time.Now().Add(s.handoverBudget(p.spec, grace))
+	if err := s.beginHandover(ctx, app, p.name, until); err != nil {
+		result := s.failResult(revision, before, prepared.Container.ID, err)
+		result.CleanupWarnings = s.retireCandidate(ctx, app, p.name, prepared.Container.ID)
+		return result
+	}
+	if singleWriterRequired(p.spec) {
+		if err := s.inhibitRecovery(ctx, app, p.name, before, domain.AppInhibitReplacementPending, opID); err != nil {
+			return s.failAfterHandover(ctx, app, revision, p, before, prepared, err)
+		}
+	}
+	retired := s.retireContainer(ctx, app, retireOptions{Service: p.name, Grace: grace}, before)
+	if !retired.Gone {
+		return s.failAfterHandover(ctx, app, revision, p, before, prepared, fmt.Errorf("deployment: retire superseded container %s: %s", before, cleanupDetail(retired)))
+	}
+	result := s.startPreparedCandidate(ctx, app, revision, p, before, prepared)
+	if result.Result != "deployed" {
+		s.endHandover(ctx, app, p.name)
+	}
+	return result
+}
+
+// Disabled holding retains the legacy state-only restart failure path.
+func (s *Service) endRestartHandover(ctx context.Context, app, name string) {
+	if s.deps.Handover.MaxHold <= 0 {
+		s.clearServiceBinds(ctx, app, name)
+		return
+	}
+	s.endHandover(ctx, app, name)
+}

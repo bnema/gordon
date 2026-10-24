@@ -1,6 +1,8 @@
 package app
 
 import (
+	"bytes"
+	"github.com/bnema/zerowrap"
 	"testing"
 	"time"
 
@@ -40,4 +42,12 @@ func TestInitConfigHandoverDisabled(t *testing.T) {
 	_, cfg, err := initConfig(writeTimeoutConfig(t, "[traffic.handover]\nmax_hold = \"0s\""))
 	require.NoError(t, err)
 	assert.Zero(t, cfg.Handover.MaxHold)
+}
+
+func TestHandoverIdleTimeoutWarning(t *testing.T) {
+	var output bytes.Buffer
+	log := zerowrap.New(zerowrap.Config{Level: "warn", Format: "json", Output: &output})
+	warnHandoverIdleTimeout(log, 2*time.Minute, 2*time.Minute)
+	assert.Contains(t, output.String(), `"level":"warn"`)
+	assert.Contains(t, output.String(), "HTTP transfer idle timeout")
 }

@@ -657,18 +657,21 @@ func (s *Service) journalCandidate(op *domain.AppOperation, index int) candidate
 // rebuild of a missing generation by start and restart; deployOverlap is the
 // overlapping alternative used by a deploy.
 //
-// The order is fixed: withdraw from traffic and confirm it, durably inhibit
-// a single-writer generation, retire the superseded container and confirm
-// it is gone, then create and start the replacement and wait for its
-// readiness probe. Nothing is created before the previous generation is
-// confirmed gone, so two generations never overlap; a withdrawal or
-// retirement that cannot be confirmed aborts without creating a candidate.
+// With holding enabled, prepare without native restart, hold traffic, inhibit
+// recovery, retire the old generation, then start and verify the candidate.
+// A candidate never starts before the previous generation is confirmed gone.
+// Disabled holding retains the legacy withdraw/retire/create ordering.
 func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration, journal candidateJournal) ServiceResult {
 	// Revalidate the current authorization and source before withdrawing or
 	// retiring the serving generation. A reload between preflight and this
 	// service step must fail without mutating the existing workload.
 	if failed, ok := s.revalidateService(app, revision, p, before); !ok {
 		return failed
+	}
+	// Holding prepares before disturbing the old generation. With holding
+	// disabled the legacy withdraw/retire/create ordering below is unchanged.
+	if before != "" && s.deps.Handover.MaxHold > 0 {
+		return s.deployHandover(ctx, app, revision, p, opID, before, beforeGrace, journal)
 	}
 	// Withdraw the service from traffic first and confirm it: a withdrawal
 	// that cannot be applied must block every container mutation, so no
@@ -769,7 +772,19 @@ func (s *Service) revalidateService(app, revision string, p pinnedService, befor
 // redacted diagnostics were captured; whatever generation it supersedes is
 // not touched here.
 func (s *Service) startCandidate(ctx context.Context, app, revision string, p pinnedService, opID, before string, journal candidateJournal) ServiceResult {
-	candidate, err := s.createAndStart(ctx, app, revision, p, opID, journal)
+	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
+	if err != nil {
+		result := s.failResult(revision, before, "", err)
+		if prepared.Container != nil {
+			result.After = prepared.Container.ID
+		}
+		return result
+	}
+	return s.startPreparedCandidate(ctx, app, revision, p, before, prepared)
+}
+
+func (s *Service) startPreparedCandidate(ctx context.Context, app, revision string, p pinnedService, before string, prepared preparedCandidate) ServiceResult {
+	candidate, err := s.startPrepared(ctx, app, p, prepared)
 	if err != nil {
 		result := s.failResult(revision, before, "", err)
 		if candidate.Container != nil {
@@ -796,7 +811,7 @@ func (s *Service) startCandidate(ctx context.Context, app, revision string, p pi
 			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
-			CleanupWarnings:   cleanup,
+			CleanupWarnings:   append(candidate.CleanupWarnings, cleanup...),
 		}
 	}
 	return ServiceResult{
@@ -808,6 +823,7 @@ func (s *Service) startCandidate(ctx context.Context, app, revision string, p pi
 		BackendBinds:      candidate.TCPBinds,
 		UDPBackendBinds:   candidate.UDPBinds,
 		VerifiedStartedAt: candidate.StartedAt,
+		CleanupWarnings:   candidate.CleanupWarnings,
 	}
 }
 

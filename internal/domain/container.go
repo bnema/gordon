@@ -156,6 +156,10 @@ const (
 	ContainerStatusUnknown ContainerStatus = "unknown"
 )
 
+// RestartPolicy is the native runtime restart policy name.
+// Keep the string alias compatible with existing container configurations.
+type RestartPolicy = string
+
 const (
 	RestartPolicyAlways = "always"
 )

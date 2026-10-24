@@ -86,10 +86,11 @@ func (si *serviceInit) initApps() error {
 		return si.log.WrapErr(err, "failed to prepare app runtime safety")
 	}
 	si.svc.appDeploySvc = deployment.NewService(deployment.Deps{
-		State:   store,
-		Runtime: si.svc.runtime,
-		Images:  resolver,
-		Secrets: si.svc.serviceSecretProvider,
+		Handover: deployment.HandoverConfig{MaxHold: si.cfg.Handover.MaxHold},
+		State:    store,
+		Runtime:  si.svc.runtime,
+		Images:   resolver,
+		Secrets:  si.svc.serviceSecretProvider,
 		Registry: deployment.RegistryConfig{
 			Domain:      registryDomain,
 			PullAddress: net.JoinHostPort("127.0.0.1", strconv.Itoa(si.svc.configSvc.GetRegistryPort())),

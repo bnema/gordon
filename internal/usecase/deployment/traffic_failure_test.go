@@ -53,6 +53,7 @@ func TestDeploy_TrafficFailureRecordsFailedServiceStep(t *testing.T) {
 	// The superseded container serves beside the candidate and must survive
 	// the failed switch: no stop, no removal, no claim release.
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(

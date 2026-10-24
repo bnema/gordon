@@ -340,9 +340,8 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
 	}
-	// Withdraw before restarting: a restarting or unverified generation
-	// must not keep receiving traffic.
-	if err := s.withdrawForRecovery(ctx, app, name); err != nil {
+	// Hold (or withdraw when disabled) before restarting an unverified execution.
+	if err := s.beginHandover(ctx, app, name, time.Now().Add(s.handoverBudget(eff.Spec, serviceStopGrace(eff)))); err != nil {
 		return fail(err.Error())
 	}
 	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
@@ -352,6 +351,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 			// until a deploy.
 			svcResult, rebuildErr := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
 			if rebuildErr != nil {
+				s.endRestartHandover(ctx, app, name)
 				svcResult.Error = rebuildErr.Error()
 				step.State = domain.AppStepFailed
 				step.Error = rebuildErr.Error()
@@ -370,7 +370,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 			step.After = svcResult.After
 			return svcResult
 		}
-		s.clearServiceBinds(ctx, app, name)
+		s.endRestartHandover(ctx, app, name)
 		return fail(err.Error())
 	}
 	// The restarted execution is observed before readiness runs.
@@ -380,11 +380,11 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	// bind.
 	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
 	if err != nil {
-		s.clearServiceBinds(ctx, app, name)
+		s.endRestartHandover(ctx, app, name)
 		return fail(err.Error())
 	}
 	if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
-		s.clearServiceBinds(ctx, app, name)
+		s.endRestartHandover(ctx, app, name)
 		return fail(err.Error())
 	}
 	step.State = domain.AppStepSucceeded

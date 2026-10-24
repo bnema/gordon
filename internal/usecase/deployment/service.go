@@ -24,10 +24,11 @@ import (
 
 // Deps are the driven adapters owned by the deployment engine.
 type Deps struct {
-	State   out.AppState
-	Runtime out.ContainerRuntime
-	Images  out.ImageResolver
-	Secrets out.SecretProvider
+	Handover HandoverConfig
+	State    out.AppState
+	Runtime  out.ContainerRuntime
+	Images   out.ImageResolver
+	Secrets  out.SecretProvider
 	// Registry configures image pulls from the installation registry.
 	// Domain scopes which refs pull with auth; empty disables pulling.
 	Registry RegistryConfig
@@ -63,6 +64,9 @@ type Deps struct {
 	// refuses every image change.
 	Manifests out.ManifestStorage
 }
+
+// HandoverConfig bounds process-local holds. Zero preserves withdrawal ordering.
+type HandoverConfig struct{ MaxHold time.Duration }
 
 // RegistryConfig carries the installation registry identity for pulls.
 type RegistryConfig struct {

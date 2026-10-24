@@ -110,6 +110,7 @@ func TestCreateAndStart_PassesResolvedCapabilitiesToRuntime(t *testing.T) {
 			assert.Nil(t, cfg.CapAdd, "base capability set stays with the runtime defaults") &&
 			assert.Nil(t, cfg.CapDrop, "the default drop is never overridden")
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 

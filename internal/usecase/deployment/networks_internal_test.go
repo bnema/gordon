@@ -47,6 +47,7 @@ func TestCreateAndStart_UsesIncarnationPrivateNetworkAndLimits(t *testing.T) {
 			assert.Equal(t, []string{"web"}, cfg.Aliases) &&
 			assert.Equal(t, "web", cfg.Hostname)
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
@@ -77,6 +78,7 @@ func TestCreateAndStart_ReusesOwnedNetwork(t *testing.T) {
 	}, nil).Once()
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).
 		Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
@@ -125,6 +127,7 @@ func TestCreateAndStart_JoinsDeclaredSharedNetworks(t *testing.T) {
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).
 		Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, "c-1", shared).Return(nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 
@@ -157,6 +160,7 @@ func TestCreateAndStart_RoutesDeclaredReadOnlyVolumeToReadOnlyMount(t *testing.T
 		_, writable := cfg.Volumes["/config"]
 		return readOnly && !writable && cfg.ReadOnlyVolumes["/config"] == runtimeName
 	})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 

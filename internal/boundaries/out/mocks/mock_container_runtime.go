@@ -2779,6 +2779,69 @@ func (_c *MockContainerRuntime_UntagImage_Call) RunAndReturn(run func(ctx contex
 	return _c
 }
 
+// UpdateRestartPolicy provides a mock function for the type MockContainerRuntime
+func (_mock *MockContainerRuntime) UpdateRestartPolicy(ctx context.Context, containerID string, policy domain.RestartPolicy) error {
+	ret := _mock.Called(ctx, containerID, policy)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateRestartPolicy")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, domain.RestartPolicy) error); ok {
+		r0 = returnFunc(ctx, containerID, policy)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockContainerRuntime_UpdateRestartPolicy_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateRestartPolicy'
+type MockContainerRuntime_UpdateRestartPolicy_Call struct {
+	*mock.Call
+}
+
+// UpdateRestartPolicy is a helper method to define mock.On call
+//   - ctx context.Context
+//   - containerID string
+//   - policy domain.RestartPolicy
+func (_e *MockContainerRuntime_Expecter) UpdateRestartPolicy(ctx any, containerID any, policy any) *MockContainerRuntime_UpdateRestartPolicy_Call {
+	return &MockContainerRuntime_UpdateRestartPolicy_Call{Call: _e.mock.On("UpdateRestartPolicy", ctx, containerID, policy)}
+}
+
+func (_c *MockContainerRuntime_UpdateRestartPolicy_Call) Run(run func(ctx context.Context, containerID string, policy domain.RestartPolicy)) *MockContainerRuntime_UpdateRestartPolicy_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 domain.RestartPolicy
+		if args[2] != nil {
+			arg2 = args[2].(domain.RestartPolicy)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+		)
+	})
+	return _c
+}
+
+func (_c *MockContainerRuntime_UpdateRestartPolicy_Call) Return(err error) *MockContainerRuntime_UpdateRestartPolicy_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockContainerRuntime_UpdateRestartPolicy_Call) RunAndReturn(run func(ctx context.Context, containerID string, policy domain.RestartPolicy) error) *MockContainerRuntime_UpdateRestartPolicy_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // VerifyImageDigest provides a mock function for the type MockContainerRuntime
 func (_mock *MockContainerRuntime) VerifyImageDigest(ctx context.Context, imageRef string, digest string) error {
 	ret := _mock.Called(ctx, imageRef, digest)

@@ -271,6 +271,7 @@ func overlapDeployMocks(runtime *outmocks.MockContainerRuntime, images *outmocks
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, overlapImage).Return(nil, nil).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-new", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-new").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-new").Return(&domain.Container{ID: "c-new", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-new", mock.Anything).Return(
@@ -1000,6 +1001,7 @@ func TestReconcileRunning_RestoresARebuiltGenerationWhoseTrafficWasRejected(t *t
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
 	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuilt").Return(
 		&domain.Container{ID: "c-rebuilt", Status: "running", StartedAt: executionStartedAt}, nil)

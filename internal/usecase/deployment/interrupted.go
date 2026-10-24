@@ -155,10 +155,11 @@ func (s *Service) convergeInterruptedSteps(ctx context.Context, app string, op *
 // in place, keeping a failed convergence eligible for retry.
 //
 // Once the candidate is converged, the inhibition the replacement wrote for
-// the superseded container is cleared. A sequential replacement confirmed the
-// superseded container gone before the candidate was created (deployService
-// retires it first), so its marker protects nothing and would otherwise
-// refuse the boot/start/restart rebuild from ACTIVE. An overlap replacement
+// the superseded container is cleared. A handover candidate may already exist
+// while the superseded container is still being retired. It has never started
+// and has no restart policy, so removing it is safe. Once that unpublished
+// candidate is removed the old generation can be recovered from ACTIVE.
+// An overlap replacement
 // leaves its superseded container running: when the candidate is published,
 // its retirement-pending marker stays, and the periodic reconciliation
 // retires that container once the candidate is verified and routed. When the

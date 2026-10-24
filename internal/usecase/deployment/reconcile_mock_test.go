@@ -185,6 +185,7 @@ func TestReconcileRunning_StartsExitedExactIDThenVerifiesAndPublishes(t *testing
 	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: startedAt}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: startedAt}, nil).Once()
@@ -308,6 +309,7 @@ func TestReconcileRunning_NativeRestartRaceIsNotCharged(t *testing.T) {
 	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: startedAt}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(assert.AnError).Once()
 	// Native restart policy already revived it: the failed start is not
 	// charged and no second restart is issued.
@@ -476,6 +478,7 @@ func TestReconcileRunning_RetriesWithdrawalBeforeAnyLaterPublication(t *testing.
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil)
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited"}, nil).Times(3)
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-1").Return("", false, nil).Once()
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
@@ -658,6 +661,7 @@ func TestReconcileRunning_LogReadinessUsesTheExactExecutionScope(t *testing.T) {
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: startedAt}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: startedAt}, nil).Twice()
@@ -695,6 +699,7 @@ func TestReconcileRunning_OldExecutionMarkerCannotSatisfyReadiness(t *testing.T)
 	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: startedAt}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "running", StartedAt: startedAt}, nil).Once()
@@ -732,6 +737,7 @@ func TestReconcileRunning_CrashLoopIsChargedEvenWhenStartsSucceed(t *testing.T) 
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").Return(&domain.Container{
 		ID: "c-1", Status: "exited", StartedAt: started,
 	}, nil)
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Times(3)
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-1").Return("", false, nil)
 
@@ -760,6 +766,7 @@ func TestReconcileRunning_StaleExecutionAfterReadinessNeverPublishes(t *testing.
 	firstExecution := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: firstExecution}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-1").Return("", false, nil).Once()
 	// The workload restarted while the pass was verifying it.
@@ -794,6 +801,7 @@ func TestReconcileRunning_FailedReadinessPersistsNoBinds(t *testing.T) {
 	startedAt := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-1").
 		Return(&domain.Container{ID: "c-1", Status: "exited", StartedAt: startedAt}, nil).Once()
+	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
 	runtime.EXPECT().GetContainerHealthStatus(mock.Anything, "c-1").Return("", false, nil).Once()
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-1", mock.Anything).
