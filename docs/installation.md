@@ -29,7 +29,7 @@ Detailed installation guide for production environments.
 )
 ```
 
-Download and inspect the installer before executing it. The installer verifies the release archive checksum, detects Linux/macOS and amd64/arm64, and installs Gordon to `~/.local/bin` without `sudo`. If that directory is absent from `PATH`, an interactive install can offer to add an idempotent marker block to Fish (`~/.config/fish/config.fish`), Bash (`~/.bashrc`), or Zsh (`~/.zshrc`). Restart the shell after accepting, or follow the printed command to update the current shell.
+Download and inspect the installer before executing it. The installer verifies the release archive checksum, detects Linux/macOS and amd64/arm64, and installs Gordon to `~/.local/bin` without `sudo`. If that directory is absent from `PATH`, an interactive install can offer to add an idempotent marker block to Fish (`~/.config/fish/config.fish`), Bash (`~/.bashrc`), or Zsh (`~/.zshrc`). Restart the shell after accepting, or follow the printed command to update the current shell. Without a terminal (for example `ssh host 'curl ... | sh'` or CI), the installer does not prompt and prints that command instead.
 
 For unattended installs, control PATH configuration explicitly:
 
