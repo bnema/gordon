@@ -70,7 +70,10 @@ type reloadCoordinator struct {
 	}
 	eventBus  out.EventPublisher
 	publicTLS publicTLSReconciler
-	log       zerowrap.Logger
+	// handover holds the startup-only handover limits. Reloads re-unmarshal
+	// config without them, so every reloaded config inherits these values.
+	handover HandoverConfig
+	log      zerowrap.Logger
 }
 
 func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc proxyConfigUpdater, registryLimits interface {
@@ -87,6 +90,14 @@ func newReloadCoordinator(v *viper.Viper, configSvc configReloader, proxySvc pro
 		publicTLS:      publicTLS,
 		log:            log,
 	}
+}
+
+// SetHandoverConfig records the startup handover limits that every reload
+// keeps, since traffic.handover is not reloadable.
+func (c *reloadCoordinator) SetHandoverConfig(handover HandoverConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.handover = handover
 }
 
 func (c *reloadCoordinator) SetRegistryLimits(limits interface {
@@ -210,6 +221,7 @@ func (c *reloadCoordinator) applyLoadedConfig(ctx context.Context, now time.Time
 	if err != nil {
 		return err
 	}
+	reloadCfg.Handover = c.handover
 
 	reloadedProxy, err := buildProxyConfig(reloadCfg, c.log)
 	if err != nil {

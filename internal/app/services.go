@@ -206,6 +206,7 @@ func createServicesWithOptions(ctx context.Context, v *viper.Viper, cfg Config, 
 
 	runtime := &reloadRuntime{v: v, svc: si.svc, log: log}
 	si.svc.reloadCoordinator = newReloadCoordinator(v, si.svc.configSvc, si.svc.proxySvc, nil, si.svc.eventBus, si.svc.publicTLSSvc, runtime.Apply, log)
+	si.svc.reloadCoordinator.SetHandoverConfig(si.cfg.Handover)
 
 	si.initHandlers()
 

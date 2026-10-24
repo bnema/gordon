@@ -283,6 +283,22 @@ func TestReloadCoordinator_ApplyLoadedConfig_RebuildsProxyConfigAndPublishesEven
 	}, proxySvc.Config())
 }
 
+func TestReloadCoordinator_ApplyLoadedConfig_KeepsStartupHandoverLimits(t *testing.T) {
+	v := viper.New()
+	v.Set("server.gordon_domain", "reload.example.com")
+	v.Set("traffic.handover.max_hold", "5s")
+	v.Set("traffic.handover.max_held_requests", 3)
+
+	proxySvc := &proxyRecorder{}
+	coord := newReloadCoordinator(v, &reloadRecorder{}, proxySvc, nil, nil, nil, nil, zerowrap.Default())
+	coord.SetHandoverConfig(HandoverConfig{MaxHold: 45 * time.Second, MaxHeldRequests: 64})
+	require.NoError(t, coord.ApplyLoadedConfig(context.Background()))
+
+	got := proxySvc.Config()
+	assert.Equal(t, 45*time.Second, got.MaxHold)
+	assert.Equal(t, 64, got.MaxHeldRequests)
+}
+
 // newTestServices wires the serialized traffic publisher the reload hook
 // requires. Tests that omit app state still exercise the graph apply.
 func newTestServices(svc *services) *services {
