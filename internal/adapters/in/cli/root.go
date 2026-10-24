@@ -38,7 +38,8 @@ const (
 // NewRootCmd creates the root command for Gordon CLI.
 func NewRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use: "gordon",
+		Use:          "gordon",
+		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if tokenFlag == "" {
 				return nil
@@ -62,6 +63,11 @@ Commands are organized by where they run:
   Management:   Work locally or remotely via --remote flag (apps, daemon, images, etc.)
   Client-only:  CLI utilities that don't require a running Gordon server`,
 	}
+
+	rootCmd.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		//nolint:staticcheck // ST1005: this user-facing usage hint is a complete sentence.
+		return fmt.Errorf("%w\nRun '%s --help' for usage.", err, cmd.CommandPath())
+	})
 
 	// Define command groups (order matters for help output)
 	rootCmd.AddGroup(
