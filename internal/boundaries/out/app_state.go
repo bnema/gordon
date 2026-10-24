@@ -2,6 +2,7 @@ package out
 
 import (
 	"context"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -170,6 +171,9 @@ type AppApplyStore interface {
 // service once it returns nil; failing loudly is preferred to leaving
 // stale L4 forwarding behind.
 type AppTrafficRefresher interface {
+	// HoldService clears recorded binds and holds HTTP/TCP traffic until
+	// publication of a ready backend or the process-local deadline.
+	HoldService(ctx context.Context, app, service string, until time.Time) error
 	// RebuildTraffic re-projects verified ACTIVE state and applies the
 	// full HTTP/L4 graph.
 	RebuildTraffic(ctx context.Context) error

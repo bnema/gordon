@@ -3,6 +3,7 @@ package deployment
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,10 @@ import (
 type stubTraffic struct {
 	withdrawn []string
 	fail      bool
+}
+
+func (s *stubTraffic) HoldService(ctx context.Context, app, service string, _ time.Time) error {
+	return s.WithdrawService(ctx, app, service)
 }
 
 func (s *stubTraffic) WithdrawService(_ context.Context, app, service string) error {

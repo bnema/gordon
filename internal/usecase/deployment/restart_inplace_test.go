@@ -30,6 +30,11 @@ func (r *restartTrafficRecorder) record(event string) {
 		*r.events = append(*r.events, event)
 	}
 }
+func (r *restartTrafficRecorder) HoldService(context.Context, string, string, time.Time) error {
+	r.record("hold")
+	return nil
+}
+
 func (r *restartTrafficRecorder) RebuildTraffic(context.Context) error {
 	r.record("traffic")
 	if r.failRebuild {

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/usecase/apptraffic"
@@ -37,6 +38,9 @@ var _ out.AppTrafficRefresher = (*appTrafficPublisher)(nil)
 // stored so activation rebuilds use the same validated snapshot that
 // reload applied.
 func newAppTrafficPublisher(svc *services, cfg Config) *appTrafficPublisher {
+	if svc.appHolds == nil {
+		svc.appHolds = apptraffic.NewHolds()
+	}
 	publisher := &appTrafficPublisher{gate: make(chan struct{}, 1), svc: svc, cfg: cfg}
 	publisher.applyGraph = func(ctx context.Context, cfg Config, hosts appHostRoutes) error {
 		return applyTrafficRuntimeConfig(ctx, svc.trafficManager, cfg, svc.configSvc, hosts)
@@ -98,6 +102,7 @@ func (p *appTrafficPublisher) WithdrawServiceState(ctx context.Context, app, ser
 		return fmt.Errorf("traffic publisher: %w", err)
 	}
 	defer p.release()
+	p.svc.appHolds.Drop(app, service)
 	return p.withdrawFromState(ctx, app, service)
 }
 
@@ -106,9 +111,28 @@ func (p *appTrafficPublisher) WithdrawService(ctx context.Context, app, service 
 		return fmt.Errorf("traffic publisher: %w", err)
 	}
 	defer p.release()
+	p.svc.appHolds.Drop(app, service)
 	if err := p.withdrawFromState(ctx, app, service); err != nil {
 		return err
 	}
+	return p.rebuildWithdrawn(ctx)
+}
+
+// HoldService clears durable binds before publishing a process-local handover.
+// Failed graph application still publishes the held, unresolved host view.
+func (p *appTrafficPublisher) HoldService(ctx context.Context, app, service string, until time.Time) error {
+	if err := p.acquire(ctx); err != nil {
+		return fmt.Errorf("traffic publisher: %w", err)
+	}
+	defer p.release()
+	if err := p.withdrawFromState(ctx, app, service); err != nil {
+		return err
+	}
+	p.svc.appHolds.Set(app, service, until)
+	return p.rebuildWithdrawn(ctx)
+}
+
+func (p *appTrafficPublisher) rebuildWithdrawn(ctx context.Context) error {
 	err := p.rebuild(ctx, p.cfg)
 	if err == nil {
 		return nil
@@ -185,7 +209,7 @@ func (p *appTrafficPublisher) projectCandidate(ctx context.Context, cfg Config) 
 		return nil, nil
 	}
 	candidate := apptraffic.NewHostIndex()
-	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg), nil); err != nil {
+	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg), p.svc.appHolds); err != nil {
 		return nil, fmt.Errorf("project app host index: %w", err)
 	}
 	if err := validateCIAppHosts(cfg, candidate); err != nil {

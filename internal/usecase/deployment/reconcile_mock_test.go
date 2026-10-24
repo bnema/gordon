@@ -30,6 +30,10 @@ type recordingTraffic struct {
 	failRebuild  bool
 }
 
+func (t *recordingTraffic) HoldService(ctx context.Context, app, service string, _ time.Time) error {
+	return t.WithdrawService(ctx, app, service)
+}
+
 func (t *recordingTraffic) WithdrawService(_ context.Context, app, service string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

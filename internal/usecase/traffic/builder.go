@@ -35,11 +35,19 @@ type EntryPointConfig struct {
 
 // Config holds traffic router and option configuration.
 type Config struct {
-	TCP TCPConfig `mapstructure:"tcp"`
-	UDP UDPConfig `mapstructure:"udp"`
-	TLS TLSConfig `mapstructure:"tls"`
+	Handover HandoverConfig `mapstructure:"handover"`
+	TCP      TCPConfig      `mapstructure:"tcp"`
+	UDP      UDPConfig      `mapstructure:"udp"`
+	TLS      TLSConfig      `mapstructure:"tls"`
 	// HTTP configures the HTTP servers behind traffic entrypoints.
 	HTTP HTTPConfig `mapstructure:"http"`
+}
+
+// HandoverConfig bounds process-local traffic holding, read at startup.
+// A zero MaxHold disables holding.
+type HandoverConfig struct {
+	MaxHold         string `mapstructure:"max_hold"`
+	MaxHeldRequests int    `mapstructure:"max_held_requests"`
 }
 
 // HTTPConfig holds traffic.http duration strings (Go duration syntax).

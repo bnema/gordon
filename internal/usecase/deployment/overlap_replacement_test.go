@@ -154,6 +154,10 @@ type storeTraffic struct {
 	routed       []map[string]map[int]int
 }
 
+func (t *storeTraffic) HoldService(ctx context.Context, app, service string, _ time.Time) error {
+	return t.WithdrawService(ctx, app, service)
+}
+
 func (t *storeTraffic) WithdrawService(ctx context.Context, app, service string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()

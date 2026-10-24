@@ -34,6 +34,14 @@ func (t *orderedTraffic) record(event string) {
 	}
 }
 
+func (t *orderedTraffic) HoldService(context.Context, string, string, time.Time) error {
+	t.record("hold")
+	if t.failWithdraw {
+		return assert.AnError
+	}
+	return nil
+}
+
 func (t *orderedTraffic) RebuildTraffic(context.Context) error {
 	t.record("traffic")
 	if t.failRebuild {

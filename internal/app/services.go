@@ -96,6 +96,7 @@ type services struct {
 	appSvcImpl           *apps.AppServiceImpl
 	appActivator         *apptraffic.Activator
 	appHostIndex         *apptraffic.HostIndex
+	appHolds             *apptraffic.Holds
 	appTrafficPublisher  *appTrafficPublisher
 	appMonitor           *appMonitor
 	reloadCoordinator    *reloadCoordinator

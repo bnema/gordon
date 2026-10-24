@@ -6,6 +6,7 @@ package mocks
 
 import (
 	"context"
+	"time"
 
 	mock "github.com/stretchr/testify/mock"
 )
@@ -44,6 +45,75 @@ type MockAppTrafficRefresher_Expecter struct {
 
 func (_m *MockAppTrafficRefresher) EXPECT() *MockAppTrafficRefresher_Expecter {
 	return &MockAppTrafficRefresher_Expecter{mock: &_m.Mock}
+}
+
+// HoldService provides a mock function for the type MockAppTrafficRefresher
+func (_mock *MockAppTrafficRefresher) HoldService(ctx context.Context, app string, service string, until time.Time) error {
+	ret := _mock.Called(ctx, app, service, until)
+
+	if len(ret) == 0 {
+		panic("no return value specified for HoldService")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, string, string, time.Time) error); ok {
+		r0 = returnFunc(ctx, app, service, until)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// MockAppTrafficRefresher_HoldService_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'HoldService'
+type MockAppTrafficRefresher_HoldService_Call struct {
+	*mock.Call
+}
+
+// HoldService is a helper method to define mock.On call
+//   - ctx context.Context
+//   - app string
+//   - service string
+//   - until time.Time
+func (_e *MockAppTrafficRefresher_Expecter) HoldService(ctx any, app any, service any, until any) *MockAppTrafficRefresher_HoldService_Call {
+	return &MockAppTrafficRefresher_HoldService_Call{Call: _e.mock.On("HoldService", ctx, app, service, until)}
+}
+
+func (_c *MockAppTrafficRefresher_HoldService_Call) Run(run func(ctx context.Context, app string, service string, until time.Time)) *MockAppTrafficRefresher_HoldService_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 string
+		if args[1] != nil {
+			arg1 = args[1].(string)
+		}
+		var arg2 string
+		if args[2] != nil {
+			arg2 = args[2].(string)
+		}
+		var arg3 time.Time
+		if args[3] != nil {
+			arg3 = args[3].(time.Time)
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+		)
+	})
+	return _c
+}
+
+func (_c *MockAppTrafficRefresher_HoldService_Call) Return(err error) *MockAppTrafficRefresher_HoldService_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *MockAppTrafficRefresher_HoldService_Call) RunAndReturn(run func(ctx context.Context, app string, service string, until time.Time) error) *MockAppTrafficRefresher_HoldService_Call {
+	_c.Call.Return(run)
+	return _c
 }
 
 // RebuildTraffic provides a mock function for the type MockAppTrafficRefresher

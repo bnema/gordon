@@ -19,6 +19,8 @@ import (
 
 // Config holds the application configuration.
 type Config struct {
+	// Handover is parsed at startup for deployment and proxy wiring.
+	Handover         HandoverConfig          `mapstructure:"-"`
 	TrustedIssuers   []TrustedIssuerConfig   `mapstructure:"trusted_issuers"`
 	SetImagePolicies []domain.SetImagePolicy `mapstructure:"set_image_policies"`
 	Server           struct {
@@ -249,6 +251,11 @@ func initConfig(configPath string) (*viper.Viper, Config, error) {
 	if err := validateHTTPTimeouts(cfg); err != nil {
 		return nil, Config{}, err
 	}
+	handover, err := parseHandoverConfig(cfg)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	cfg.Handover = handover
 	if _, err := buildAppMountPolicies(cfg); err != nil {
 		return nil, Config{}, err
 	}
@@ -479,6 +486,8 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.http.read_timeout", domain.DefaultRegistryReadTimeout.String())
 	v.SetDefault("server.http.write_timeout", domain.DefaultRegistryWriteTimeout.String())
 	v.SetDefault("server.http.idle_timeout", domain.DefaultRegistryIdleTimeout.String())
+	v.SetDefault("traffic.handover.max_hold", "90s")
+	v.SetDefault("traffic.handover.max_held_requests", 1024)
 	v.SetDefault("traffic.http.read_header_timeout", domain.DefaultEntryPointReadHeaderTimeout.String())
 	v.SetDefault("traffic.http.idle_timeout", domain.DefaultEntryPointIdleTimeout.String())
 	v.SetDefault("traffic.http.transfer_idle_timeout", domain.DefaultEntryPointTransferIdleTimeout.String())
@@ -574,4 +583,43 @@ func buildShutdownDrainTimeout(cfg Config) (time.Duration, error) {
 func drainTimeout(cfg Config) time.Duration {
 	d, _ := buildShutdownDrainTimeout(cfg) // Validated during configuration loading.
 	return d
+}
+
+// HandoverConfig is the startup-only parsed traffic handover configuration.
+// Proxy wiring consumes the same limits as the deployment engine.
+type HandoverConfig struct {
+	MaxHold         time.Duration
+	MaxHeldRequests int
+}
+
+func parseHandoverConfig(cfg Config) (HandoverConfig, error) {
+	value := strings.TrimSpace(cfg.Traffic.Handover.MaxHold)
+	if value == "" {
+		value = "90s"
+	}
+	maxHold, err := time.ParseDuration(value)
+	if err != nil {
+		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: %w", err)
+	}
+	if maxHold < 0 {
+		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: must not be negative")
+	}
+	maxRequests := cfg.Traffic.Handover.MaxHeldRequests
+	if maxRequests < 0 {
+		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_held_requests: must not be negative")
+	}
+	if maxRequests == 0 {
+		maxRequests = 1024
+	}
+	httpOptions, err := traffic.ParseHTTPOptions(cfg.Traffic.HTTP)
+	if err != nil {
+		return HandoverConfig{}, err
+	}
+	if maxHold >= httpOptions.TransferIdleTimeout {
+		log := zerowrap.Default()
+		log.Warn().Dur("max_hold", maxHold).
+			Dur("transfer_idle_timeout", httpOptions.TransferIdleTimeout).
+			Msg("traffic handover hold may be cut short by the HTTP transfer idle timeout")
+	}
+	return HandoverConfig{MaxHold: maxHold, MaxHeldRequests: maxRequests}, nil
 }

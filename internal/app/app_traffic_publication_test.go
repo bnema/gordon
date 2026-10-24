@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -206,4 +208,72 @@ func TestSetImageCIDomainCollisionKeepsPublishedState(t *testing.T) {
 	require.True(t, ok)
 	require.Empty(t, publisher.cfg.Server.CIDomain)
 	require.NoError(t, publisher.RebuildTraffic(ctx))
+}
+
+func TestAppTrafficPublisher_HoldLifecycle(t *testing.T) {
+	for _, failApply := range []bool{false, true} {
+		t.Run(fmt.Sprintf("apply_failure=%t", failApply), func(t *testing.T) {
+			ctx := context.Background()
+			state := outmocks.NewMockAppState(t)
+			svc, index := newPublisherServices(state)
+			publisher := newAppTrafficPublisher(svc, Config{})
+			active := domain.AppActive{App: "blog", Services: map[string]domain.AppEffectiveService{
+				"web": {Container: "c-1", Spec: httpAppSpec(), BackendBinds: map[int]int{8080: 32770}, UDPBackendBinds: map[int]int{8080: 32771}},
+			}}
+			state.EXPECT().LoadActive(mock.Anything, "blog").RunAndReturn(func(context.Context, string) (domain.AppActive, bool, error) {
+				return active, true, nil
+			})
+			state.EXPECT().SaveActive(mock.Anything, mock.Anything).RunAndReturn(func(_ context.Context, updated domain.AppActive) error {
+				active = updated
+				return nil
+			})
+			state.EXPECT().ListApps(mock.Anything).Return([]string{"blog"}, nil)
+			state.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil)
+			publisher.applyGraph = func(context.Context, Config, appHostRoutes) error {
+				if failApply {
+					return assert.AnError
+				}
+				return nil
+			}
+			until := time.Now().Add(time.Minute)
+			err := publisher.HoldService(ctx, "blog", "web", until)
+			if failApply {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Empty(t, active.Services["web"].BackendBinds)
+			assert.Empty(t, active.Services["web"].UDPBackendBinds)
+			backend, heldUntil, ok := index.LookupRoute("blog.example.com")
+			require.True(t, ok)
+			assert.False(t, backend.Resolved())
+			assert.Equal(t, until, heldUntil)
+			_, held := svc.appHolds.Until("blog", "web")
+			assert.True(t, held, "failed graph application must retain the hold")
+
+			failApply = false
+			require.NoError(t, publisher.WithdrawService(ctx, "blog", "web"))
+			_, held = svc.appHolds.Until("blog", "web")
+			assert.False(t, held)
+			_, heldUntil, _ = index.LookupRoute("blog.example.com")
+			assert.True(t, heldUntil.IsZero())
+
+			require.NoError(t, publisher.HoldService(ctx, "blog", "web", until))
+			require.NoError(t, publisher.WithdrawServiceState(ctx, "blog", "web"))
+			_, held = svc.appHolds.Until("blog", "web")
+			assert.False(t, held)
+
+			require.NoError(t, publisher.HoldService(ctx, "blog", "web", until))
+			ready := active.Services["web"]
+			ready.BackendBinds = map[int]int{8080: 32772}
+			active.Services["web"] = ready
+			require.NoError(t, publisher.RebuildTraffic(ctx))
+			_, held = svc.appHolds.Until("blog", "web")
+			assert.False(t, held, "ready publication prunes the hold")
+			backend, heldUntil, ok = index.LookupRoute("blog.example.com")
+			require.True(t, ok)
+			assert.True(t, backend.Resolved())
+			assert.True(t, heldUntil.IsZero())
+		})
+	}
 }
