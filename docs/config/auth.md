@@ -201,12 +201,14 @@ on connection. Enable private network access only for a provider you control.
 
 Tokens must use RS256 or ES256 and contain `sub`, `iat`, and `exp`;
 `nbf`, when present, is checked. A `kid` is required with multiple keys.
-Keys are cached for 1 hour. An unknown `kid` can trigger a refresh, but only
-one fetch per issuer per minute is allowed, including reload and failed
-fetches. A rotated issuer key can therefore be refused for up to 60 seconds
-after a reload or a forged-`kid` probe. On fetch failure, cached keys remain
-usable for up to 24 hours from their last successful fetch; after that Gordon
-fails closed. No usable keys yields HTTP 503 with `Retry-After: 30`;
+Keys are cached for 1 hour. Before an issuer's first successful fetch, failed
+attempts back off for 2 seconds, doubling up to 60 seconds; requests trigger
+retries and concurrent requests share one fetch. A changed issuer policy resets
+this state on reload. After success, at most one fetch per issuer per minute
+is allowed, including failures and unknown-`kid` probes, so rotated keys can
+be refused for up to 60 seconds. On fetch failure, cached keys remain usable
+for up to 24 hours from their last successful fetch; after that Gordon fails
+closed. No usable keys yields HTTP 503 with `Retry-After: 30`;
 an invalid identity token yields 401.
 
 ## CI Access Tokens

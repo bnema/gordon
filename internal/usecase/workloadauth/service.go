@@ -19,10 +19,9 @@ import (
 const (
 	// CacheTTL is how long fetched keys are used before a background refresh.
 	CacheTTL = time.Hour
-	// RefreshInterval bounds key fetches per issuer: at most one fetch starts per
-	// interval, whatever triggered it (startup or reload warm-up, TTL expiry, an
-	// unknown kid, a retry after failure). A key rotated within this interval
-	// after a previous fetch is therefore picked up up to RefreshInterval late.
+	// RefreshInterval bounds key fetches per issuer after the first success,
+	// including TTL expiry, unknown kids and retries after failure. Before the
+	// first success, failures back off from 2 seconds up to this interval.
 	RefreshInterval = time.Minute
 	// StaleLimit is how long keys stay usable while refreshes keep failing.
 	StaleLimit = 24 * time.Hour
@@ -41,6 +40,7 @@ type issuerState struct {
 	fetched    time.Time     // start of the last successful fetch
 	attempted  time.Time     // start of the last fetch, successful or not
 	refreshing chan struct{} // non-nil while a fetch runs; closed when it ends
+	retryDelay time.Duration // initial failures only; capped at RefreshInterval
 }
 
 // Service implements in.WorkloadIdentityService. Each issuer has its own key
@@ -233,8 +233,9 @@ func selectKey(keys []verificationKey, token *jwt.Token) (key any, known bool) {
 }
 
 // startRefreshLocked returns the in-flight fetch, or starts one when the cache
-// is older than CacheTTL (always when force is set) and RefreshInterval has
-// passed since the last attempt. It returns nil when no fetch runs.
+// is older than CacheTTL (always when force is set) and the retry interval has
+// passed since the last attempt. Initial failures use a shorter backoff.
+// It returns nil when no fetch runs.
 func (s *Service) startRefreshLocked(state *issuerState, force bool) chan struct{} {
 	if state.refreshing != nil {
 		return state.refreshing
@@ -243,7 +244,11 @@ func (s *Service) startRefreshLocked(state *issuerState, force bool) chan struct
 	if !force && len(state.keys) > 0 && now.Sub(state.fetched) < CacheTTL {
 		return nil
 	}
-	if !state.attempted.IsZero() && now.Sub(state.attempted) < RefreshInterval {
+	interval := RefreshInterval
+	if state.fetched.IsZero() && state.retryDelay > 0 {
+		interval = state.retryDelay
+	}
+	if !state.attempted.IsZero() && now.Sub(state.attempted) < interval {
 		return nil
 	}
 	state.attempted = now
@@ -270,6 +275,13 @@ func (s *Service) refresh(state *issuerState, started time.Time, done chan struc
 	defer state.mu.Unlock()
 	if err == nil {
 		state.keys, state.fetched = keys, started
+		state.retryDelay = 0
+	} else if state.fetched.IsZero() {
+		if state.retryDelay == 0 {
+			state.retryDelay = 2 * time.Second
+		} else {
+			state.retryDelay = min(2*state.retryDelay, RefreshInterval)
+		}
 	}
 	state.refreshing = nil
 	close(done)

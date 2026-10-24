@@ -235,3 +235,79 @@ func TestSetIssuersLogsDroppedIssuer(t *testing.T) {
 	require.Contains(t, out, "https://nolifetime.example")
 	require.Contains(t, out, "max token lifetime must be positive")
 }
+
+func TestInitialFailureBackoff(t *testing.T) {
+	key := mustRSA(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := &providerStub{err: errors.New("startup unavailable")}
+		s := NewService(t.Context(), p, time.Now)
+		s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+		synctest.Wait()
+		require.Equal(t, 1, p.fetchCount())
+		token := sign(t, jwt.SigningMethodRS256, key, baseClaims(time.Now()), "k1")
+		// Every failure doubles the interval, up to the existing minute cap.
+		for _, interval := range []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second, time.Minute, time.Minute} {
+			before := p.fetchCount()
+			time.Sleep(interval - time.Millisecond)
+			for range 10 {
+				_, err := s.Verify(t.Context(), token)
+				require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+			}
+			require.Equal(t, before, p.fetchCount())
+			time.Sleep(time.Millisecond)
+			_, err := s.Verify(t.Context(), token)
+			require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+			require.Equal(t, before+1, p.fetchCount())
+		}
+	})
+}
+
+func TestInitialFailureRecoversWithSingleFlight(t *testing.T) {
+	key := mustRSA(t)
+	synctest.Test(t, func(t *testing.T) {
+		p := &providerStub{err: errors.New("startup unavailable")}
+		s := NewService(t.Context(), p, time.Now)
+		s.SetIssuers([]domain.TrustedIssuer{testPolicy()})
+		synctest.Wait()
+		token := sign(t, jwt.SigningMethodRS256, key, baseClaims(time.Now()), "k1")
+		time.Sleep(time.Second)
+		_, err := s.Verify(t.Context(), token)
+		require.ErrorIs(t, err, domain.ErrIdentityProviderUnavailable)
+		require.Equal(t, 1, p.fetchCount())
+		p.set(keySet(t, rsaJWK(key, "k1")), nil)
+		gate := make(chan struct{})
+		p.setGate(gate)
+		time.Sleep(time.Second)
+		errs := make(chan error, 10)
+		for range 10 {
+			go func() { _, err := s.Verify(t.Context(), token); errs <- err }()
+		}
+		synctest.Wait()
+		require.Equal(t, 2, p.fetchCount())
+		require.Empty(t, errs)
+		close(gate)
+		for range 10 {
+			require.NoError(t, <-errs)
+		}
+
+		// Once successful, failed refreshes and forged kids use the full minute.
+		p.set(nil, errors.New("offline again"))
+		unknown := sign(t, jwt.SigningMethodRS256, key, baseClaims(time.Now()), "forged")
+		time.Sleep(RefreshInterval - time.Second)
+		_, err = s.Verify(t.Context(), unknown)
+		require.ErrorIs(t, err, domain.ErrInvalidToken)
+		require.Equal(t, 2, p.fetchCount())
+		time.Sleep(time.Second)
+		_, err = s.Verify(t.Context(), unknown)
+		require.ErrorIs(t, err, domain.ErrInvalidToken)
+		require.Equal(t, 3, p.fetchCount())
+		time.Sleep(RefreshInterval - time.Second)
+		for range 10 {
+			_, _ = s.Verify(t.Context(), unknown)
+		}
+		require.Equal(t, 3, p.fetchCount())
+		time.Sleep(time.Second)
+		_, _ = s.Verify(t.Context(), unknown)
+		require.Equal(t, 4, p.fetchCount())
+	})
+}
