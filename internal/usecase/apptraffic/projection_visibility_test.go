@@ -31,7 +31,7 @@ func internalActive() domain.AppActive {
 // projects no route: it can never appear in the host index, so it also
 // yields no certificate host and no TLS mode.
 func TestProject_InternalHTTPExcluded(t *testing.T) {
-	entries, err := apptraffic.Project("blog", internalActive(), nil)
+	entries, err := apptraffic.Project("blog", internalActive(), nil, nil)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
 }
@@ -48,7 +48,7 @@ func TestProject_MixedVisibilityProjectsOnlyPublic(t *testing.T) {
 	}
 	active.Services["api"] = svc
 
-	entries, err := apptraffic.Project("blog", active, nil)
+	entries, err := apptraffic.Project("blog", active, nil, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "blog.example.com", entries[0].Host)

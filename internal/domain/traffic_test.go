@@ -717,3 +717,20 @@ func TestTrafficDomainTypesMatchSpecFields(t *testing.T) {
 	require.True(t, status.Services[0].Backends[0].Active)
 	require.Equal(t, int64(7), status.Counters.BytesOut)
 }
+
+func TestValidateL4HeldService(t *testing.T) {
+	for _, protocol := range []RouterProtocol{RouterProtocolTCP, RouterProtocolUDP, RouterProtocolTLSPassthrough} {
+		for _, held := range []bool{false, true} {
+			service := TrafficService{Name: "service:app:port"}
+			if held {
+				service.HoldUntil = time.Now().Add(time.Minute)
+			}
+			err := validateL4RouterService(TrafficRouter{Name: "app", Protocol: protocol, Service: service.Name}, TrafficServiceRef{Kind: TrafficServiceRefService}, service)
+			if held && protocol == RouterProtocolTCP {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, `l4 router service must have exactly one backend for router "app"`)
+			}
+		}
+	}
+}

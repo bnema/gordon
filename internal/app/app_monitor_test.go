@@ -55,7 +55,7 @@ func TestAppTrafficPublisher_WithdrawServiceIsFailClosedInStateAndIndex(t *testi
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(withdrawn, true, nil).Once()
 
 	// Serve the host first so the withdrawal has something to remove.
-	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil))
+	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil, nil))
 	backend, ok := index.LookupHost("blog.example.com")
 	require.True(t, ok)
 	require.True(t, backend.Resolved(), "precondition: the host resolves to a loopback backend")
@@ -82,7 +82,7 @@ func TestAppTrafficPublisher_WithdrawServiceSurfacesStateFailure(t *testing.T) {
 	state.EXPECT().LoadActive(mock.Anything, "blog").Return(served, true, nil).Once()
 	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(assert.AnError).Once()
 
-	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil))
+	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil, nil))
 
 	publisher := newAppTrafficPublisher(svc, Config{})
 	err := publisher.WithdrawService(ctx, "blog", "web")
@@ -351,7 +351,7 @@ func TestAppTrafficPublisher_RebuildSkipsStoppedApps(t *testing.T) {
 		"web": {Container: "c-1", Spec: httpAppSpec(), BackendBinds: map[int]int{8080: 32770}},
 	}}
 	// Precondition: the host is routable while the app runs.
-	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil))
+	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil, nil))
 	backend, ok := index.LookupHost("blog.example.com")
 	require.True(t, ok)
 	require.True(t, backend.Resolved())

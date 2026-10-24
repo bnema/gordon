@@ -185,7 +185,7 @@ func (p *appTrafficPublisher) projectCandidate(ctx context.Context, cfg Config) 
 		return nil, nil
 	}
 	candidate := apptraffic.NewHostIndex()
-	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg)); err != nil {
+	if err := p.svc.appActivator.RebuildHostIndex(ctx, candidate, p.svc.appState, appEntrypointPolicies(cfg), nil); err != nil {
 		return nil, fmt.Errorf("project app host index: %w", err)
 	}
 	if err := validateCIAppHosts(cfg, candidate); err != nil {

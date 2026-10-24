@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bnema/gordon/internal/domain"
 )
@@ -51,21 +52,25 @@ type RouteEntry struct {
 	Service string
 	// Backend is the resolved loopback endpoint for the interface's
 	// container port. Zero when unbound (proxy fails closed).
-	Backend domain.AppBackend
+	Backend   domain.AppBackend
+	HoldUntil time.Time
 }
+
+// Held reports whether an unresolved entry carries a handover hold.
+func (e RouteEntry) Held() bool { return !e.HoldUntil.IsZero() && !e.Backend.Resolved() }
 
 // Project maps one app's active definitions to traffic entries.
 // Entrypoints supplies installation policy by name; unknown entrypoint references are validation errors.
 // Loopback endpoints resolve from each service's recorded backend binds;
 // services without a recorded bind for an interface port project with an
 // empty BackendHost (proxy fails closed).
-func Project(app string, active domain.AppActive, entrypoints map[string]EntrypointPolicy) ([]RouteEntry, error) {
+func Project(app string, active domain.AppActive, entrypoints map[string]EntrypointPolicy, holds HoldSource) ([]RouteEntry, error) {
 	if active.App != "" && active.App != app {
 		return nil, fmt.Errorf("%w: projection for %q got active state of %q", domain.ErrAppTrafficProjection, app, active.App)
 	}
 	var entries []RouteEntry
 	for name, svc := range active.Services {
-		svcEntries, err := projectService(app, name, svc, entrypoints)
+		svcEntries, err := projectService(app, name, svc, entrypoints, holds)
 		if err != nil {
 			return nil, err
 		}
@@ -83,7 +88,7 @@ func Project(app string, active domain.AppActive, entrypoints map[string]Entrypo
 // projectService maps one effective service to entries. Endpoints
 // resolve from the recorded backend binds; missing binds stay empty
 // (proxy fails closed, never falls back to container IPs).
-func projectService(app, name string, eff domain.AppEffectiveService, entrypoints map[string]EntrypointPolicy) ([]RouteEntry, error) {
+func projectService(app, name string, eff domain.AppEffectiveService, entrypoints map[string]EntrypointPolicy, holds HoldSource) ([]RouteEntry, error) {
 	spec := eff.Spec
 	spec.Name = name
 	var entries []RouteEntry
@@ -150,7 +155,21 @@ func projectService(app, name string, eff domain.AppEffectiveService, entrypoint
 			Backend:    eff.BackendForProtocol(u.Port, domain.NetworkProtocolUDP),
 		})
 	}
+	applyHolds(entries, app, name, holds)
 	return entries, nil
+}
+
+func applyHolds(entries []RouteEntry, app, name string, holds HoldSource) {
+	if holds != nil {
+		for i := range entries {
+			e := &entries[i]
+			if e.Kind != "udp" && !e.Backend.Resolved() {
+				if until, ok := holds.Until(app, name); ok {
+					e.HoldUntil = until
+				}
+			}
+		}
+	}
 }
 
 // lookupEntrypoint resolves a named installation entrypoint.

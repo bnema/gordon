@@ -3,6 +3,7 @@ package apptraffic_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
@@ -76,10 +77,40 @@ func TestActivator_RebuildHostIndex(t *testing.T) {
 		intents: map[string]domain.AppStopIntent{"old": {Stopped: true}},
 	}
 
-	require.NoError(t, activator.RebuildHostIndex(ctx, index, state, nil))
+	require.NoError(t, activator.RebuildHostIndex(ctx, index, state, nil, nil))
 
 	_, ok := index.Lookup("blog.example.com")
 	assert.True(t, ok)
 	_, ok = index.Lookup("old.example.com")
 	assert.False(t, ok, "STOPPED-intent app must not stay routable")
+}
+
+func TestRebuildHostIndexPrunesPublishedHold(t *testing.T) {
+	ctx := context.Background()
+	activator := apptraffic.NewActivator(zerowrap.Default())
+	index := apptraffic.NewHostIndex()
+	holds := apptraffic.NewHolds()
+	deadline := time.Now().Add(time.Minute)
+	holds.Set("blog", "web", deadline)
+	active := webActive()
+	svc := active.Services["web"]
+	svc.BackendBinds = nil
+	active.Services["web"] = svc
+	state := stubState{actives: map[string]domain.AppActive{"blog": active}}
+	require.NoError(t, activator.RebuildHostIndex(ctx, index, state, nil, holds))
+	_, until, ok := index.LookupRoute("blog.example.com")
+	require.True(t, ok)
+	require.Equal(t, deadline, until)
+	svc.BackendBinds = map[int]int{8080: 18080}
+	active.Services["web"] = svc
+	require.NoError(t, activator.RebuildHostIndex(ctx, index, state, nil, holds))
+	_, ok = holds.Until("blog", "web")
+	require.False(t, ok)
+	svc.BackendBinds = nil
+	active.Services["web"] = svc
+	require.NoError(t, activator.RebuildHostIndex(ctx, index, state, nil, holds))
+	_, until, ok = index.LookupRoute("blog.example.com")
+	require.True(t, ok)
+	require.True(t, until.IsZero())
+	require.Empty(t, index.AppHosts())
 }

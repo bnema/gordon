@@ -5,12 +5,13 @@ package out
 // host index; read-only, never container IPs.
 //
 // Fail-closed contract: no apps, no ACTIVE record, stopped intent, or
-// unresolved backends yield zero hosts. Installation external and
+// unresolved backends without holds yield zero hosts. A held host stays
+// served during a switch. Installation external and
 // management hosts are authorized independently, never through here.
 // TLS-mode filtering (auto/always/never) is the consumer's decision:
 // the projection preserves TLSMode per host.
 type AppHostSource interface {
-	// AppHosts returns the sorted served hosts with resolved backends.
+	// AppHosts returns the sorted served hosts with resolved backends or holds.
 	AppHosts() []AppHost
 }
 

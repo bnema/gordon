@@ -47,7 +47,7 @@ func webActive() domain.AppActive {
 }
 
 func TestProject_HTTP(t *testing.T) {
-	entries, err := apptraffic.Project("blog", webActive(), nil)
+	entries, err := apptraffic.Project("blog", webActive(), nil, nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "http", entries[0].Kind)
@@ -75,7 +75,7 @@ func TestProject_TCPUDP(t *testing.T) {
 			},
 		},
 	}
-	entries, err := apptraffic.Project("game", active, l4("0.0.0.0:25565", "0.0.0.0:28015"))
+	entries, err := apptraffic.Project("game", active, l4("0.0.0.0:25565", "0.0.0.0:28015"), nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	assert.Equal(t, "tcp", entries[0].Kind)
@@ -104,7 +104,7 @@ func TestProject_SamePortTCPUDPResolvesDistinctBackends(t *testing.T) {
 			},
 		},
 	}
-	entries, err := apptraffic.Project("game", active, l4("0.0.0.0:9000", "0.0.0.0:9000"))
+	entries, err := apptraffic.Project("game", active, l4("0.0.0.0:9000", "0.0.0.0:9000"), nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
 	byKind := map[string]apptraffic.RouteEntry{}
@@ -136,7 +136,7 @@ func TestProject_TCPAsOrdinaryRCON(t *testing.T) {
 			},
 		},
 	}
-	entries, err := apptraffic.Project("rust", active, l4("0.0.0.0:28016", ""))
+	entries, err := apptraffic.Project("rust", active, l4("0.0.0.0:28016", ""), nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "tcp", entries[0].Kind)
@@ -182,7 +182,7 @@ func TestProject_RejectsPublishMismatch(t *testing.T) {
 					},
 				},
 			}
-			_, err := apptraffic.Project("game", active, map[string]apptraffic.EntrypointPolicy{"tcp": tc.entrypoint})
+			_, err := apptraffic.Project("game", active, map[string]apptraffic.EntrypointPolicy{"tcp": tc.entrypoint}, nil)
 			require.ErrorIs(t, err, domain.ErrAppTrafficProjection)
 		})
 	}
@@ -201,7 +201,7 @@ func TestProject_UnknownEntrypoint(t *testing.T) {
 			},
 		},
 	}
-	_, err := apptraffic.Project("game", active, l4("0.0.0.0:25565", ""))
+	_, err := apptraffic.Project("game", active, l4("0.0.0.0:25565", ""), nil)
 	require.ErrorIs(t, err, domain.ErrAppTrafficProjection)
 }
 
@@ -219,7 +219,59 @@ func TestProject_GameExample(t *testing.T) {
 			},
 		},
 	}
-	entries, err := apptraffic.Project("rust", active, l4("0.0.0.0:28016", "0.0.0.0:28015"))
+	entries, err := apptraffic.Project("rust", active, l4("0.0.0.0:28016", "0.0.0.0:28015"), nil)
 	require.NoError(t, err)
 	require.Len(t, entries, 2)
+}
+
+func TestProjectHolds(t *testing.T) {
+	for _, resolved := range []bool{false, true} {
+		for _, live := range []bool{false, true} {
+			active := webActive()
+			svc := active.Services["web"]
+			svc.Spec.TCP = []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 8080, Publish: "0.0.0.0:9000"}}
+			svc.Spec.UDP = []domain.AppUDPInterface{{Entrypoint: "udp", Port: 8080, Publish: "0.0.0.0:9000"}}
+			if !resolved {
+				svc.BackendBinds = nil
+			}
+			active.Services["web"] = svc
+			holds := apptraffic.NewHolds()
+			deadline := time.Now().Add(time.Minute)
+			if !live {
+				deadline = time.Now().Add(-time.Minute)
+			}
+			holds.Set("blog", "web", deadline)
+			entries, err := apptraffic.Project("blog", active, l4(":9000", ":9000"), holds)
+			require.NoError(t, err)
+			require.Len(t, entries, 3)
+			index := apptraffic.NewHostIndex()
+			changed := index.Changed()
+			index.Replace(entries)
+			select {
+			case <-changed:
+			default:
+				t.Fatal("Replace did not close Changed")
+			}
+			require.NotEqual(t, changed, index.Changed())
+			for _, e := range entries {
+				require.Equal(t, live && !resolved && e.Kind != "udp", e.Held())
+			}
+			_, until, ok := index.LookupRoute("blog.example.com")
+			require.True(t, ok)
+			if live && !resolved {
+				require.Equal(t, deadline, until)
+			} else {
+				require.True(t, until.IsZero())
+			}
+			require.Len(t, index.AppHosts(), boolCount(resolved || live))
+			require.Len(t, index.L4Entries(), boolCount(resolved || live))
+		}
+	}
+}
+
+func boolCount(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

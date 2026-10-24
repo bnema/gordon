@@ -75,7 +75,7 @@ func addAppL4Routes(graph *domain.TrafficGraph, routes appHostRoutes) error {
 			protocol = domain.RouterProtocolUDP
 			backendProtocol = domain.NetworkProtocolUDP
 		}
-		if !entry.Backend.Resolved() {
+		if !entry.Backend.Resolved() && !entry.Held() {
 			return fmt.Errorf("app L4 route %q has no resolved backend", entry.RouterName)
 		}
 		// The declared bind must be the listener this router actually
@@ -114,15 +114,24 @@ func addAppL4Routes(graph *domain.TrafficGraph, routes appHostRoutes) error {
 			Name: entry.RouterName, EntryPoint: entry.Entrypoint,
 			Protocol: protocol, Service: serviceName,
 		})
-		graph.Services = append(graph.Services, domain.TrafficService{
-			Name: serviceName,
-			Backends: []domain.TrafficBackend{{
-				Name: entry.App + "--" + entry.Service,
-				Host: entry.Backend.Host, Port: entry.Backend.Port, Protocol: backendProtocol,
-			}},
-		})
+		graph.Services = append(graph.Services, appL4Service(entry, serviceName, backendProtocol))
 	}
 	return graph.Validate()
+}
+
+func appL4Service(entry apptraffic.RouteEntry, serviceName string, backendProtocol domain.NetworkProtocol) domain.TrafficService {
+	service := domain.TrafficService{
+		Name: serviceName,
+		Backends: []domain.TrafficBackend{{
+			Name: entry.App + "--" + entry.Service,
+			Host: entry.Backend.Host, Port: entry.Backend.Port, Protocol: backendProtocol,
+		}},
+	}
+	if entry.Held() {
+		service.Backends = nil
+		service.HoldUntil = entry.HoldUntil
+	}
+	return service
 }
 
 // appHostDomainRoutes maps served hosts to builder route inputs.

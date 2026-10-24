@@ -84,8 +84,9 @@ type TrafficRule struct {
 }
 
 type TrafficService struct {
-	Name     string
-	Backends []TrafficBackend
+	HoldUntil time.Time
+	Name      string
+	Backends  []TrafficBackend
 }
 
 type TrafficBackend struct {
@@ -569,6 +570,9 @@ func validateL4RouterService(router TrafficRouter, ref TrafficServiceRef, servic
 			return fmt.Errorf("static traffic service ref %q is unsupported in traffic graph validation", router.Service)
 		}
 		return fmt.Errorf("l4 router %q requires network_service or service service ref", router.Name)
+	}
+	if len(service.Backends) == 0 && !service.HoldUntil.IsZero() && router.Protocol == RouterProtocolTCP {
+		return nil
 	}
 	if len(service.Backends) != 1 {
 		return fmt.Errorf("l4 router service must have exactly one backend for router %q", router.Name)

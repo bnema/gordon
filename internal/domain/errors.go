@@ -5,6 +5,7 @@ import "errors"
 // Domain errors represent business-level errors that can occur in the system.
 // These errors are used across layers to communicate specific failure conditions.
 var (
+	ErrTargetUnavailable           = errors.New("target temporarily unavailable")
 	ErrSetImageDenied              = errors.New("set-image denied")
 	ErrInvalidImageReference       = errors.New("invalid image reference")
 	ErrIdentityProviderUnavailable = errors.New("identity provider unavailable")

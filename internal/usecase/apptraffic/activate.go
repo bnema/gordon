@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/bnema/zerowrap"
 
@@ -18,13 +19,14 @@ import (
 // and at boot. Lookups never touch container IPs.
 type HostIndex struct {
 	mu      sync.RWMutex
+	changed chan struct{}
 	byHost  map[string]RouteEntry
 	entries []RouteEntry
 }
 
 // NewHostIndex creates an empty host index.
 func NewHostIndex() *HostIndex {
-	return &HostIndex{byHost: map[string]RouteEntry{}}
+	return &HostIndex{byHost: map[string]RouteEntry{}, changed: make(chan struct{})}
 }
 
 // Replace installs a rebuilt host map.
@@ -38,8 +40,25 @@ func (h *HostIndex) Replace(entries []RouteEntry) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.changed != nil {
+		close(h.changed)
+	}
+	h.changed = make(chan struct{})
 	h.byHost = byHost
 	h.entries = append([]RouteEntry(nil), entries...)
+}
+
+// Changed returns the notification channel for the current snapshot.
+func (h *HostIndex) Changed() <-chan struct{} {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.changed
+}
+
+// LookupRoute returns a known host's backend and hold deadline.
+func (h *HostIndex) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
+	entry, ok := h.Lookup(host)
+	return entry.Backend, entry.HoldUntil, ok
 }
 
 // Entries returns a copy of the projected entries, for a caller that
@@ -87,8 +106,8 @@ func (h *HostIndex) LookupHost(host string) (domain.AppBackend, bool) {
 	return entry.Backend, true
 }
 
-// AppHosts returns the sorted served hosts with resolved backends.
-// Unresolved entries (no recorded bind) are excluded: fail closed.
+// AppHosts returns the sorted served hosts with resolved backends or holds.
+// Unresolved entries without holds are excluded: fail closed.
 // It implements out.AppHostSource: the shared read model for traffic,
 // PKI and public-TLS consumers.
 func (h *HostIndex) AppHosts() []out.AppHost {
@@ -99,7 +118,7 @@ func (h *HostIndex) AppHosts() []out.AppHost {
 	defer h.mu.RUnlock()
 	hosts := make([]out.AppHost, 0, len(h.byHost))
 	for host, entry := range h.byHost {
-		if !entry.Backend.Resolved() {
+		if !entry.Backend.Resolved() && !entry.Held() {
 			continue
 		}
 		hosts = append(hosts, out.AppHost{
@@ -113,7 +132,7 @@ func (h *HostIndex) AppHosts() []out.AppHost {
 	return hosts
 }
 
-// L4Entries returns resolved TCP and UDP projections.
+// L4Entries returns resolved TCP/UDP projections and held TCP projections.
 func (h *HostIndex) L4Entries() []RouteEntry {
 	if h == nil {
 		return nil
@@ -122,7 +141,7 @@ func (h *HostIndex) L4Entries() []RouteEntry {
 	defer h.mu.RUnlock()
 	entries := make([]RouteEntry, 0, len(h.entries))
 	for _, entry := range h.entries {
-		if (entry.Kind == "tcp" || entry.Kind == "udp") && entry.Backend.Resolved() {
+		if (entry.Kind == "tcp" || entry.Kind == "udp") && (entry.Backend.Resolved() || (entry.Kind == "tcp" && entry.Held())) {
 			entries = append(entries, entry)
 		}
 	}
@@ -151,6 +170,7 @@ func (a *Activator) RebuildHostIndex(
 	index *HostIndex,
 	state out.AppStateReader,
 	entrypoints map[string]EntrypointPolicy,
+	holds *Holds,
 ) error {
 	apps, err := state.ListApps(ctx)
 	if err != nil {
@@ -174,7 +194,14 @@ func (a *Activator) RebuildHostIndex(
 		}
 		actives[app] = active
 	}
-	projections, err := ProjectAll(actives, entrypoints)
+	if holds != nil {
+		holds.Prune(actives)
+	}
+	var source HoldSource
+	if holds != nil {
+		source = holds
+	}
+	projections, err := ProjectAll(actives, entrypoints, source)
 	if err != nil {
 		return err
 	}
@@ -202,6 +229,7 @@ func sortedKeys(projections map[string][]RouteEntry) []string {
 func ProjectAll(
 	apps map[string]domain.AppActive,
 	entrypoints map[string]EntrypointPolicy,
+	holds HoldSource,
 ) (map[string][]RouteEntry, error) {
 	names := make([]string, 0, len(apps))
 	for app := range apps {
@@ -210,7 +238,7 @@ func ProjectAll(
 	sort.Strings(names)
 	projections := make(map[string][]RouteEntry, len(apps))
 	for _, app := range names {
-		entries, err := Project(app, apps[app], entrypoints)
+		entries, err := Project(app, apps[app], entrypoints, holds)
 		if err != nil {
 			return nil, err
 		}

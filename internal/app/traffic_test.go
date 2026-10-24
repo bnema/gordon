@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -322,4 +323,16 @@ func freeUDPAddress(t *testing.T) string {
 	address := packetConn.LocalAddr().String()
 	require.NoError(t, packetConn.Close())
 	return address
+}
+
+func TestAddAppL4RoutesHeldService(t *testing.T) {
+	until := time.Now().Add(time.Minute)
+	graph := domain.TrafficGraph{EntryPoints: []domain.EntryPoint{{Name: "tcp", Address: ":9000", Protocol: domain.EntryPointProtocolTCP}}}
+	hosts := &stubL4Hosts{entries: []apptraffic.RouteEntry{{Kind: "tcp", RouterName: "app-game--server--tcp-9000", Entrypoint: "tcp", BindIP: "0.0.0.0", BindPort: 9000, App: "game", Service: "server", Backend: domain.AppBackend{ContainerPort: 9000}, HoldUntil: until}}}
+	require.NoError(t, addAppL4Routes(&graph, hosts))
+	require.Len(t, graph.Routers, 1)
+	require.Len(t, graph.Services, 1)
+	require.Nil(t, graph.Services[0].Backends)
+	require.Equal(t, until, graph.Services[0].HoldUntil)
+	require.Equal(t, "service:game--server:tcp-9000", graph.Services[0].Name)
 }
