@@ -91,9 +91,9 @@ func TestDeployHandover(t *testing.T) {
 							}
 						}
 					}
-					if failure != "" && failure != "policy" {
-						traffic.EXPECT().WithdrawService(mock.Anything, "blog", "web").RunAndReturn(func(context.Context, string, string) error { add("release"); return nil }).Once()
-					}
+				}
+				if failure != "" && failure != "policy" {
+					traffic.EXPECT().WithdrawService(mock.Anything, "blog", "web").RunAndReturn(func(context.Context, string, string) error { add("release"); return nil }).Once()
 				}
 				if failure != "" && failure != "policy" {
 					runtime.EXPECT().RemoveContainer(mock.Anything, "new", true).RunAndReturn(func(context.Context, string, bool) error { add("remove-new"); return nil }).Once()
@@ -115,8 +115,10 @@ func TestDeployHandover(t *testing.T) {
 					assert.Equal(t, []string{"create"}, events)
 				}
 				if failure == "hold" {
-					assert.Equal(t, []string{"create", "hold", "remove-new"}, events)
-					assert.True(t, svc.publication.inhibited("blog", "web"))
+					// The hold survives a failed graph apply, so it is released
+					// after the candidate is retired.
+					assert.Equal(t, []string{"create", "hold", "remove-new", "release"}, events)
+					assert.Equal(t, "new", result.After)
 				}
 				if failure == "ready" {
 					assert.Equal(t, []string{"diagnostic"}, result.Diagnostics)
@@ -150,4 +152,62 @@ func TestRestartHandoverRuntimeFailureReleasesHold(t *testing.T) {
 	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", domain.AppEffectiveService{Container: "old", Spec: domain.AppService{Name: "web"}}, &op, 0)
 	assert.Equal(t, "failed", result.Result)
 	assert.Equal(t, []string{"hold", "restart", "release"}, events)
+}
+
+func TestRestartHandoverHoldFailureReleasesHold(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	traffic := outmocks.NewMockAppTrafficRefresher(t)
+	var events []string
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil)
+	traffic.EXPECT().HoldService(mock.Anything, "blog", "web", mock.Anything).RunAndReturn(func(context.Context, string, string, time.Time) error {
+		events = append(events, "hold")
+		return assert.AnError
+	}).Once()
+	traffic.EXPECT().WithdrawService(mock.Anything, "blog", "web").RunAndReturn(func(context.Context, string, string) error { events = append(events, "release"); return nil }).Once()
+	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic, Handover: HandoverConfig{MaxHold: time.Minute}}, zerowrap.Default())
+	op := domain.AppOperation{Steps: []domain.AppOperationStep{{}}}
+	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", domain.AppEffectiveService{Container: "old", Spec: domain.AppService{Name: "web"}}, &op, 0)
+	assert.Equal(t, "failed", result.Result)
+	assert.Equal(t, []string{"hold", "release"}, events, "a hold left by a failed graph apply is released, and the container is never restarted")
+}
+
+func TestDeployHandoverPrepareFailureKeepsCandidateID(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	traffic := outmocks.NewMockAppTrafficRefresher(t)
+	shared := domain.AppSharedNetworkName("", "database")
+	state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-1"}, nil)
+	state.EXPECT().SaveOwnership(mock.Anything, mock.Anything).Return(nil).Maybe()
+	runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{}, nil)
+	runtime.EXPECT().CreateNetwork(mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "new"}, nil).Once()
+	runtime.EXPECT().ConnectContainerToNetwork(mock.Anything, "new", shared).Return(assert.AnError).Once()
+	runtime.EXPECT().RemoveContainer(mock.Anything, "new", true).Return(nil).Once()
+	state.EXPECT().ReleaseBackendBinds(mock.Anything, "blog", "new").Return(nil).Once()
+	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic, Handover: HandoverConfig{MaxHold: time.Minute}}, zerowrap.Default())
+	p := pinnedService{
+		name: "web", spec: domain.AppService{Name: "web"},
+		sharedNetworks: []domain.AppSharedNetwork{{Network: "database", Services: []string{"web"}}},
+	}
+	result := svc.deployService(context.Background(), "blog", "rev-1", p, "op-1", "old", 10*time.Second, nil)
+	require.Equal(t, "failed", result.Result)
+	assert.Equal(t, "new", result.After, "the created candidate stays traceable in the result")
+}
+
+func TestRestartRebuildFailureWithoutHoldingKeepsBinds(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	traffic := outmocks.NewMockAppTrafficRefresher(t)
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil)
+	traffic.EXPECT().WithdrawService(mock.Anything, "blog", "web").Return(nil).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{}, assert.AnError).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "old").Return(nil).Once()
+	// Holding disabled: the strict traffic mock fails on WithdrawServiceState.
+	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic}, zerowrap.Default())
+	op := domain.AppOperation{Steps: []domain.AppOperationStep{{}}}
+	eff := domain.AppEffectiveService{Container: "old", EffectiveRevision: "rev-1", Spec: domain.AppService{Name: "web"}}
+	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", eff, &op, 0)
+	assert.Equal(t, "failed", result.Result)
 }

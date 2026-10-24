@@ -67,7 +67,8 @@ func TestRestart_HoldsRestartsVerifiesAndRepublishes(t *testing.T) {
 	assert.Equal(t, "deployed", result.Services["web"].Result)
 	assert.Equal(t, "c-old", result.Services["web"].After, "the same pinned container is restarted in place")
 	assert.Contains(t, probedURL, "127.0.0.1:32771", "readiness dials the refreshed loopback bind")
-	assert.Equal(t, []string{"hold", "restart", "persist-binds", "ready", "traffic"}, order)
+	assert.Equal(t, []string{"hold", "restart", "ready", "persist-binds", "traffic"}, order,
+		"binds are persisted only after readiness: persisted binds end the hold")
 	assert.Equal(t, map[int]int{8080: 32771}, saved.Services["web"].BackendBinds)
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
@@ -92,8 +93,6 @@ func TestRestart_HoldReadinessFailureReleasesClients(t *testing.T) {
 	runtime.EXPECT().GetContainerBackendBinds(mock.Anything, "c-old", mock.Anything).Return(
 		[]domain.ContainerBackendBind{{ContainerPort: 8080, HostPort: 32771, Protocol: domain.NetworkProtocolTCP}}, nil).Once()
 	state.EXPECT().RegisterBackendBinds(mock.Anything, mock.Anything).Return(nil).Once()
-	state.EXPECT().LoadActive(mock.Anything, "blog").Return(active, true, nil)
-	state.EXPECT().SaveActive(mock.Anything, mock.Anything).Return(nil).Once()
 	state.EXPECT().SaveOperation(mock.Anything, mock.Anything).Return(nil)
 
 	svc := deployment.NewService(deployment.Deps{
@@ -112,6 +111,7 @@ func TestRestart_HoldReadinessFailureReleasesClients(t *testing.T) {
 	assert.Equal(t, "hold", order[0])
 	assert.Contains(t, order, "withdraw", "the unverified generation is withdrawn from state")
 	assert.Contains(t, order, "traffic", "the graph is republished fail-closed")
+	state.AssertNotCalled(t, "SaveActive", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 	runtime.AssertNotCalled(t, "RemoveContainer", mock.Anything, mock.Anything, mock.Anything)

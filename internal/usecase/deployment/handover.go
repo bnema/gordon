@@ -16,8 +16,14 @@ func (s *Service) handoverBudget(spec domain.AppService, grace time.Duration) ti
 	return min(grace+readinessTimeout(spec)+handoverStartSlack, s.deps.Handover.MaxHold)
 }
 
+// holdingEnabled reports whether handovers hold traffic instead of
+// withdrawing it.
+func (s *Service) holdingEnabled() bool {
+	return s.deps.Handover.MaxHold > 0 && s.deps.Traffic != nil
+}
+
 func (s *Service) beginHandover(ctx context.Context, app, name string, until time.Time) error {
-	if s.deps.Handover.MaxHold <= 0 || s.deps.Traffic == nil {
+	if !s.holdingEnabled() {
 		return s.withdrawForRecovery(ctx, app, name)
 	}
 	if err := s.deps.Traffic.HoldService(ctx, app, name, until); err != nil {
@@ -45,12 +51,19 @@ func (s *Service) failAfterHandover(ctx context.Context, app, revision string, p
 func (s *Service) deployHandover(ctx context.Context, app, revision string, p pinnedService, opID, before string, grace time.Duration, journal candidateJournal) ServiceResult {
 	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
 	if err != nil {
-		return s.failResult(revision, before, "", err)
+		result := s.failResult(revision, before, "", err)
+		if prepared.Container != nil {
+			result.After = prepared.Container.ID
+		}
+		return result
 	}
 	until := time.Now().Add(s.handoverBudget(p.spec, grace))
 	if err := s.beginHandover(ctx, app, p.name, until); err != nil {
+		// A failed graph apply still leaves the hold registered: release it
+		// so held clients fail fast instead of waiting out the budget.
 		result := s.failResult(revision, before, prepared.Container.ID, err)
 		result.CleanupWarnings = s.retireCandidate(ctx, app, p.name, prepared.Container.ID)
+		s.endHandover(ctx, app, p.name)
 		return result
 	}
 	if singleWriterRequired(p.spec) {
@@ -69,9 +82,17 @@ func (s *Service) deployHandover(ctx context.Context, app, revision string, p pi
 	return result
 }
 
+// endFailedHold releases a hold whose registration may have survived a
+// failed graph apply. Disabled holding has nothing to release.
+func (s *Service) endFailedHold(ctx context.Context, app, name string) {
+	if s.holdingEnabled() {
+		s.endHandover(ctx, app, name)
+	}
+}
+
 // Disabled holding retains the legacy state-only restart failure path.
 func (s *Service) endRestartHandover(ctx context.Context, app, name string) {
-	if s.deps.Handover.MaxHold <= 0 {
+	if !s.holdingEnabled() {
 		s.clearServiceBinds(ctx, app, name)
 		return
 	}

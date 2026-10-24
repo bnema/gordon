@@ -342,6 +342,7 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	}
 	// Hold (or withdraw when disabled) before restarting an unverified execution.
 	if err := s.beginHandover(ctx, app, name, time.Now().Add(s.handoverBudget(eff.Spec, serviceStopGrace(eff)))); err != nil {
+		s.endFailedHold(ctx, app, name)
 		return fail(err.Error())
 	}
 	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
@@ -351,7 +352,9 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 			// until a deploy.
 			svcResult, rebuildErr := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
 			if rebuildErr != nil {
-				s.endRestartHandover(ctx, app, name)
+				// Disabled holding keeps the legacy path: the rebuild owns
+				// its own withdrawal and no binds are cleared here.
+				s.endFailedHold(ctx, app, name)
 				svcResult.Error = rebuildErr.Error()
 				step.State = domain.AppStepFailed
 				step.Error = rebuildErr.Error()
@@ -375,21 +378,48 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 	}
 	// The restarted execution is observed before readiness runs.
 	startedAt := s.executionStart(ctx, eff.Container)
-	// Ephemeral loopback binds are not guaranteed stable across a runtime
-	// restart: re-inspect before probing so the proxy never dials a stale
-	// bind.
-	binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
+	binds, udpBinds, err := s.verifyRestartedService(ctx, app, name, eff)
 	if err != nil {
-		s.endRestartHandover(ctx, app, name)
-		return fail(err.Error())
-	}
-	if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
 		s.endRestartHandover(ctx, app, name)
 		return fail(err.Error())
 	}
 	step.State = domain.AppStepSucceeded
 	step.After = eff.Container
 	return ServiceResult{Result: "deployed", Before: eff.Container, After: eff.Container, BackendBinds: binds, UDPBackendBinds: udpBinds, VerifiedStartedAt: startedAt}
+}
+
+// verifyRestartedService re-inspects the loopback binds of a restarted
+// container and waits for readiness. Ephemeral binds are not guaranteed
+// stable across a runtime restart, so readiness dials the re-inspected
+// bind. While a hold is active, the binds are persisted only after
+// readiness succeeds: persisted binds end the hold on the next graph
+// rebuild, which must never release held clients to an unready backend.
+func (s *Service) verifyRestartedService(ctx context.Context, app, name string, eff domain.AppEffectiveService) (map[int]int, map[int]int, error) {
+	if !s.holdingEnabled() {
+		binds, udpBinds, err := s.refreshBackendBinds(ctx, app, name, eff, s.deps.Traffic != nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
+			return nil, nil, err
+		}
+		return binds, udpBinds, nil
+	}
+	ports := backendPorts(eff.Spec)
+	if len(ports) == 0 {
+		return nil, nil, s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), nil)
+	}
+	binds, udpBinds, err := s.inspectBackendBinds(ctx, app, name, eff.Container, ports)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := s.waitServiceReady(ctx, app, eff.Container, deploymentReadiness(eff.Spec), binds); err != nil {
+		return nil, nil, err
+	}
+	if err := s.persistRefreshedBinds(ctx, app, name, eff, binds, udpBinds, true); err != nil {
+		return nil, nil, err
+	}
+	return binds, udpBinds, nil
 }
 
 // Remove withdraws workloads by exact container ID; volumes, secrets, and
@@ -850,17 +880,23 @@ func (s *Service) refreshBackendBinds(ctx context.Context, app, name string, eff
 	if !forcePersist && equalBinds(binds, eff.BackendBinds) && equalBinds(udpBinds, eff.UDPBackendBinds) {
 		return binds, udpBinds, nil
 	}
-	active, ok, err := s.deps.State.LoadActive(ctx, app)
-	if err != nil {
-		return nil, nil, fmt.Errorf("deployment: reload active for bind refresh: %w", err)
-	}
-	if !ok {
-		return nil, nil, fmt.Errorf("deployment: app %q has no active state: %w", app, domain.ErrAppStateConflict)
-	}
-	if err := s.persistBackendBinds(ctx, active, name, eff, binds, udpBinds, forcePersist); err != nil {
+	if err := s.persistRefreshedBinds(ctx, app, name, eff, binds, udpBinds, forcePersist); err != nil {
 		return nil, nil, err
 	}
 	return binds, udpBinds, nil
+}
+
+// persistRefreshedBinds records re-inspected binds on the current ACTIVE
+// record of one service.
+func (s *Service) persistRefreshedBinds(ctx context.Context, app, name string, eff domain.AppEffectiveService, binds, udpBinds map[int]int, force bool) error {
+	active, ok, err := s.deps.State.LoadActive(ctx, app)
+	if err != nil {
+		return fmt.Errorf("deployment: reload active for bind refresh: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("deployment: app %q has no active state: %w", app, domain.ErrAppStateConflict)
+	}
+	return s.persistBackendBinds(ctx, active, name, eff, binds, udpBinds, force)
 }
 
 func (s *Service) persistBackendBinds(ctx context.Context, active domain.AppActive, name string, eff domain.AppEffectiveService, binds, udpBinds map[int]int, force bool) error {
