@@ -1,0 +1,26 @@
+# Publishes a link-only GitHub release on the mirror when a tag arrives: the
+# notes of the ermite release and links to its files on git.bnema.dev. Release
+# files are only hosted on ermite. The job is skipped on ermite.
+name: GitHub release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to mirror'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: github.server_url == 'https://github.com'
+    permissions:
+      contents: write
+    uses: bnema/gh-actions/.github/workflows/ermite-release-mirror.yml@main
+    with:
+      tag: ${{ inputs.tag }}
