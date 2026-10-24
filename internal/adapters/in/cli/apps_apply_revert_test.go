@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -78,6 +80,8 @@ func TestRunAppsApply_SetImageRevertConflict(t *testing.T) {
 		{name: "terminal yes retries against the checked revision", interactive: true, answer: "y\n", wantRetry: true},
 		{name: "terminal no keeps the server images", interactive: true, answer: "n\n", wantErr: "apply cancelled"},
 		{name: "terminal empty answer defaults to no", interactive: true, answer: "\n", wantErr: "apply cancelled"},
+		{name: "terminal end of input means no", interactive: true, answer: "", wantErr: "apply cancelled"},
+		{name: "terminal unterminated yes at end of input means no", interactive: true, answer: "yes", wantErr: "apply cancelled"},
 		{name: "no terminal refuses and names --yes", interactive: false, wantErr: "--yes"},
 	}
 	for _, tt := range tests {
@@ -87,19 +91,25 @@ func TestRunAppsApply_SetImageRevertConflict(t *testing.T) {
 			if tt.wantRetry {
 				plane.EXPECT().ApplyApp(mock.Anything, isRealApply(true)).Return(appliedWithRevert(), nil).Once()
 			}
-			var out bytes.Buffer
+			var out, errOut bytes.Buffer
 
-			err := runAppsApply(context.Background(), plane, strings.NewReader(tt.answer), &out, &bytes.Buffer{},
+			err := runAppsApply(context.Background(), plane, strings.NewReader(tt.answer), &out, &errOut,
 				appsApplyOptions{File: writeManifest(t, "x"), Interactive: tt.interactive})
 
+			// On a terminal the warning, prompt and paste lines go to stderr so
+			// a redirected stdout cannot hide the question.
 			text := out.String()
+			if tt.interactive {
+				text = errOut.String()
+				assert.NotContains(t, out.String(), "Continue?")
+			}
 			for _, want := range []string{"web", cliRevert.ServerImage, "img:1", "rev-2", "oidc:https://ci#repo", "2026-10-20T09:30:00Z", "restores the file value"} {
 				assert.Contains(t, text, want)
 			}
 			assert.Equal(t, tt.interactive, strings.Contains(text, "Continue? [y/N]"), "prompt only on a terminal")
 			if tt.wantRetry {
 				require.NoError(t, err)
-				assert.Contains(t, text, "Applied blog (rev-3)")
+				assert.Contains(t, out.String(), "Applied blog (rev-3)")
 				assert.NotContains(t, text, pasteLines)
 				return
 			}
@@ -192,6 +202,48 @@ func TestRunAppsDiffFile(t *testing.T) {
 			assert.Contains(t, text, pasteLines)
 		})
 	}
+}
+
+// The paste lines must decode back to the same service names, including
+// names with dots that a bare TOML key would split into nested tables.
+func TestRenderSetImageKeepLines_RoundTrip(t *testing.T) {
+	reverts := []dto.AppSetImageRevertDTO{
+		{Service: "web", ServerImage: "reg/web@sha256:a"},
+		{Service: "web.api", ServerImage: "reg/api@sha256:b"},
+	}
+	var out bytes.Buffer
+	require.NoError(t, renderSetImageKeepLines(&out, "", reverts))
+
+	text := out.String()
+	body := text[strings.Index(text, "\n["):]
+	var doc struct {
+		Services map[string]struct {
+			Image string `toml:"image"`
+		} `toml:"services"`
+	}
+	require.NoError(t, toml.Unmarshal([]byte(body), &doc))
+	assert.Equal(t, "reg/web@sha256:a", doc.Services["web"].Image)
+	assert.Equal(t, "reg/api@sha256:b", doc.Services["web.api"].Image)
+}
+
+// blockingReader never returns, standing in for a terminal nobody answers.
+type blockingReader struct{ release chan struct{} }
+
+func (r blockingReader) Read([]byte) (int, error) {
+	<-r.release
+	return 0, io.EOF
+}
+
+func TestPromptYesNo_ContextCancelled(t *testing.T) {
+	in := blockingReader{release: make(chan struct{})}
+	defer close(in.release)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	ok, err := promptYesNo(ctx, in, &bytes.Buffer{}, "Continue? [y/N] ")
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, ok)
 }
 
 func TestNewAppsCmds_RevertFlags(t *testing.T) {

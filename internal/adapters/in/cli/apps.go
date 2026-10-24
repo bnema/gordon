@@ -214,7 +214,7 @@ func runAppsApply(ctx context.Context, plane ControlPlane, in io.Reader, out, er
 	req := dto.AppApplyRequest{ManifestTOML: string(data), DryRun: opts.DryRun, AllowSetImageRevert: opts.Yes}
 	resp, err := plane.ApplyApp(ctx, req)
 	if err != nil {
-		resp, err = resolveSetImageRevert(ctx, plane, req, err, in, out, opts)
+		resp, err = resolveSetImageRevert(ctx, plane, req, err, in, out, errOut, opts)
 		if err != nil {
 			return err
 		}

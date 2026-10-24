@@ -92,12 +92,13 @@ Warning: the manifest would revert 1 set-image change(s):
   service: web
     server: registry.example.com/web@sha256:3f1c…  (set-image, rev-2 by oidc:https://ci.example.com#repo at 2026-10-20T09:30:00Z)
     file: registry.example.com/web@sha256:9ab2…
-  Applying restores the file value and replaces the running image.
+  Applying restores the file value in desired state; the next deploy runs it.
 Continue? [y/N]
 ```
 
 - On a terminal, `y` retries the apply once against the same desired
-  revision; anything else keeps the server image.
+  revision; anything else, including end of input, keeps the server image.
+  The warning and the prompt go to stderr.
 - Without a terminal, or after `n`, the command exits nonzero and prints the
   lines to paste into the manifest to keep the server image:
 

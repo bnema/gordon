@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,7 +35,9 @@ func readerIsTerminal(r io.Reader) bool {
 // set-image changes. Any other error is returned unchanged. With --json the
 // conflict is written as JSON and never prompted. On an interactive terminal
 // a confirmed revert is retried once against the checked desired revision.
-func resolveSetImageRevert(ctx context.Context, plane ControlPlane, req dto.AppApplyRequest, applyErr error, in io.Reader, out io.Writer, opts appsApplyOptions) (*dto.AppApplyResponse, error) {
+// Interactive diagnostics and the prompt go to errOut so a redirected stdout
+// never hides the question; non-interactive output stays on out.
+func resolveSetImageRevert(ctx context.Context, plane ControlPlane, req dto.AppApplyRequest, applyErr error, in io.Reader, out, errOut io.Writer, opts appsApplyOptions) (*dto.AppApplyResponse, error) {
 	var revert *remote.SetImageRevertError
 	if !errors.As(applyErr, &revert) {
 		return nil, applyErr
@@ -46,21 +49,24 @@ func resolveSetImageRevert(ctx context.Context, plane ControlPlane, req dto.AppA
 		}
 		return nil, setImageRevertRefusal(applyErr)
 	}
-	if err := renderSetImageRevertWarning(out, conflict.SetImageReverts); err != nil {
-		return nil, err
-	}
 	if !opts.Interactive {
+		if err := renderSetImageRevertWarning(out, conflict.SetImageReverts); err != nil {
+			return nil, err
+		}
 		if err := renderSetImageKeepLines(out, opts.File, conflict.SetImageReverts); err != nil {
 			return nil, err
 		}
 		return nil, setImageRevertRefusal(applyErr)
 	}
-	confirmed, err := promptYesNo(in, out, "Continue? [y/N] ")
+	if err := renderSetImageRevertWarning(errOut, conflict.SetImageReverts); err != nil {
+		return nil, err
+	}
+	confirmed, err := promptYesNo(ctx, in, errOut, "Continue? [y/N] ")
 	if err != nil {
 		return nil, err
 	}
 	if !confirmed {
-		if err := renderSetImageKeepLines(out, opts.File, conflict.SetImageReverts); err != nil {
+		if err := renderSetImageKeepLines(errOut, opts.File, conflict.SetImageReverts); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("apply cancelled: the set-image changes were kept; update the manifest with the lines above")
@@ -76,18 +82,37 @@ func setImageRevertRefusal(cause error) error {
 	return fmt.Errorf("apply refused: it would revert set-image changes; update the manifest or rerun with --yes to restore the file images: %w", cause)
 }
 
-// promptYesNo asks one question and reads one answer line. Only y/yes
-// confirms; an empty answer or end of input means no.
-func promptYesNo(in io.Reader, out io.Writer, question string) (bool, error) {
+// promptYesNo asks one question and reads one answer line. Only a complete
+// y/yes line confirms; an empty answer or end of input means no. Context
+// cancellation stops the wait. The reader goroutine ends when the line or
+// EOF arrives; the process exits right after a cancelled apply, so a read
+// still pending on the terminal is not leaked into further work.
+func promptYesNo(ctx context.Context, in io.Reader, out io.Writer, question string) (bool, error) {
 	if err := cliWritef(out, "%s", question); err != nil {
 		return false, err
 	}
-	line, err := bufio.NewReader(in).ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return false, fmt.Errorf("failed to read confirmation: %w", err)
+	type answer struct {
+		line string
+		err  error
 	}
-	answer := strings.ToLower(strings.TrimSpace(line))
-	return answer == "y" || answer == "yes", nil
+	done := make(chan answer, 1)
+	go func() {
+		line, err := bufio.NewReader(in).ReadString('\n')
+		done <- answer{line: line, err: err}
+	}()
+	select {
+	case <-ctx.Done():
+		return false, fmt.Errorf("confirmation cancelled: %w", ctx.Err())
+	case a := <-done:
+		if errors.Is(a.err, io.EOF) {
+			return false, nil
+		}
+		if a.err != nil {
+			return false, fmt.Errorf("failed to read confirmation: %w", a.err)
+		}
+		reply := strings.ToLower(strings.TrimSpace(a.line))
+		return reply == "y" || reply == "yes", nil
+	}
 }
 
 // renderSetImageRevertWarning explains each set-image change the manifest
@@ -104,7 +129,7 @@ func renderSetImageRevertWarning(out io.Writer, reverts []dto.AppSetImageRevertD
 			cliRenderMeta("    file:", r.FileImage),
 		)
 	}
-	lines = append(lines, cliRenderMuted("  Applying restores the file value and replaces the running image."))
+	lines = append(lines, cliRenderMuted("  Applying restores the file value in desired state; the next deploy runs it."))
 	for _, line := range lines {
 		if err := cliWriteLine(out, line); err != nil {
 			return err
@@ -139,11 +164,20 @@ func renderSetImageKeepLines(out io.Writer, file string, reverts []dto.AppSetIma
 		return err
 	}
 	for _, r := range reverts {
-		if err := cliWritef(out, "\n[services.%s]\nimage = %q\n", r.Service, r.ServerImage); err != nil {
+		if err := cliWritef(out, "\n[services.%s]\nimage = %q\n", tomlKey(r.Service), r.ServerImage); err != nil {
 			return err
 		}
 	}
 	return cliWriteLine(out, "")
+}
+
+// tomlKey renders a service name as a TOML table key. Service names allow
+// dots, which a bare key would split into nested tables, so those are quoted.
+func tomlKey(name string) string {
+	if strings.Contains(name, ".") {
+		return strconv.Quote(name)
+	}
+	return name
 }
 
 // renderAppApplyPreview renders a dry-run result: the diff with each path
