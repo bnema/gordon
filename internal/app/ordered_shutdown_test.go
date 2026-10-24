@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +15,11 @@ import (
 	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
+	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
+	"github.com/bnema/gordon/internal/domain"
+	"github.com/bnema/gordon/internal/usecase/proxy"
 )
 
 type blockingReloader struct {
@@ -324,4 +331,56 @@ func TestTrailingReloadWaitingBehindBlockedReloadExitsOnStop(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("reload did not unwind")
 	}
+}
+
+func TestSmartTCPOrderedDrainIdle(t *testing.T) {
+	for _, keepAlive := range []bool{false, true} {
+		t.Run(fmt.Sprint(keepAlive), func(t *testing.T) {
+			manager := trafficadapter.NewManager()
+			manager.SetSmartTCPHTTPServer("edge", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }), nil)
+			graph := domain.TrafficGraph{EntryPoints: []domain.EntryPoint{{Name: "edge", Address: "127.0.0.1:0", Protocol: domain.EntryPointProtocolSmartTCP}}}
+			// Use a concrete address to dial the manager's externally owned socket.
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			require.NoError(t, err)
+			graph.EntryPoints[0].Address = ln.Addr().String()
+			require.NoError(t, ln.Close())
+			require.NoError(t, manager.Apply(context.Background(), &graph))
+			if keepAlive {
+				conn, err := net.Dial("tcp", graph.EntryPoints[0].Address)
+				require.NoError(t, err)
+				defer conn.Close()
+				_, err = conn.Write([]byte("GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"))
+				require.NoError(t, err)
+				resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+				require.NoError(t, err)
+				_, err = io.ReadAll(resp.Body)
+				require.NoError(t, err)
+				require.NoError(t, resp.Body.Close())
+			}
+			started := time.Now()
+			manager.StopAccepting()
+			drainIngress(nil, nil, nil, proxy.NewService(nil, proxy.Config{}), manager, 5*time.Second, zerowrap.Default())
+			assert.Less(t, time.Since(started), 500*time.Millisecond)
+		})
+	}
+}
+
+func TestOrderedDrainUnreadHTTPConnection(t *testing.T) {
+	srv := httptest.NewUnstartedServer(http.NotFoundHandler())
+	accepted := make(chan struct{}, 1)
+	srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			accepted <- struct{}{}
+		}
+	}
+	httphelper.TrackHTTPDrain(srv.Config)
+	srv.Start()
+	defer srv.Close()
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	<-accepted
+	started := time.Now()
+	drainIngress([]*http.Server{srv.Config}, nil, nil, nil, nil, 5*time.Second, zerowrap.Default())
+	assert.Less(t, time.Since(started), 500*time.Millisecond)
 }

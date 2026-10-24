@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -170,6 +171,7 @@ func (r *entryPointRuntime) replaceTLSHTTPServer(entryPoint domain.EntryPoint, c
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
 	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	listener.drain = httphelper.TrackHTTPDrain(server)
 	server.TLSConfig = config.TLSConfig.Clone()
 	done := make(chan struct{})
 
@@ -730,6 +732,7 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 	select {
 	case <-r.acceptDone:
 	case <-ctx.Done():
+		trafficWarn(ctx).Str("component", "tcp accept loop").Int("connections", r.activeCount()).Str("entrypoint", r.entryPointSnapshot().Name).Msg("accept deadline reached; force-closing connections")
 		r.closeActiveConns()
 	}
 	r.stopTLSHTTPServer(ctx, drainTimeout)
@@ -739,7 +742,7 @@ func (r *entryPointRuntime) stop(ctx context.Context, drainTimeout time.Duration
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped tcp traffic entrypoint")
 		return
 	}
-	trafficWarn(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
+	trafficWarn(ctx).Str("component", "tcp relays").Int("connections", r.activeCount()).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing tcp traffic entrypoint drain")
 	r.closeActiveConns()
 	select {
 	case <-r.activeDone():
@@ -777,10 +780,7 @@ func stopTLSHTTPServer(ctx context.Context, entryPointName string, listener *tls
 	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		trafficWarn(ctx).Err(err).Str("entrypoint", entryPointName).Msg("forcing tls mux https server close")
-		_ = server.Close()
-	}
+	listener.drain.Shutdown(shutdownCtx, server, "tls_mux HTTPS: "+entryPointName)
 	select {
 	case <-done:
 	case <-ctx.Done():
@@ -921,4 +921,10 @@ func backendFromAddress(name string, address string) (domain.TrafficBackend, err
 
 func serviceRef(name string, portName string) string {
 	return fmt.Sprintf("network_service:%s:%s", name, portName)
+}
+
+func (r *entryPointRuntime) activeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.activeConns)
 }

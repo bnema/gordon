@@ -396,7 +396,10 @@ func (r *udpEntryPointRuntime) stop(ctx context.Context, drainTimeout time.Durat
 		trafficInfo(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Msg("stopped udp traffic entrypoint")
 		return
 	}
-	trafficWarn(ctx).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing udp traffic entrypoint drain")
+	r.mu.Lock()
+	count := len(r.sessions)
+	r.mu.Unlock()
+	trafficWarn(ctx).Str("component", "udp relays").Int("sessions", count).Str("entrypoint", r.entryPointSnapshot().Name).Dur("drain_timeout", drainTimeout).Msg("forcing udp traffic entrypoint drain")
 	r.closeSessions()
 	if !r.waitRuntime(ctx, drainTimeout) {
 		r.runWG.Wait()

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -152,6 +153,7 @@ func (r *entryPointRuntime) replaceSmartTCPHTTPServer(entryPoint domain.EntryPoi
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
 	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	listener.drain = httphelper.TrackHTTPDrain(server)
 	server.Protocols = config.Protocols
 	done := make(chan struct{})
 	r.mu.Lock()
@@ -184,6 +186,7 @@ func (r *entryPointRuntime) replaceSmartTCPTLSServer(entryPoint domain.EntryPoin
 	}
 	listener := newTLSHTTPListener(r.listener.Addr())
 	server := newEntryPointHTTPServer(config.Handler, r.manager.httpOptions())
+	listener.drain = httphelper.TrackHTTPDrain(server)
 	server.TLSConfig = config.TLSConfig.Clone()
 	done := make(chan struct{})
 	r.mu.Lock()
@@ -254,9 +257,7 @@ func stopInternalHTTPServer(ctx context.Context, listener *tlsHTTPListener, serv
 	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, drainTimeout)
 	defer cancel()
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		_ = server.Close()
-	}
+	listener.drain.Shutdown(shutdownCtx, server, "smart_tcp HTTP")
 	select {
 	case <-done:
 	case <-shutdownCtx.Done():

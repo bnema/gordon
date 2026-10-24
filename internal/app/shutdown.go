@@ -115,8 +115,9 @@ func gracefulShutdown(registrySrvs []*http.Server, proxySrv, tlsSrv *http.Server
 // drainIngress keeps registry backends available until frontends and tracked
 // proxy requests drain. Both phases share one absolute connection deadline.
 func drainIngress(registry []*http.Server, proxySrv, tlsSrv *http.Server, proxySvc *proxy.Service, manager *trafficadapter.Manager, timeout time.Duration, log zerowrap.Logger) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(zerowrap.WithCtx(context.Background(), log), timeout)
 	defer cancel()
+	started := time.Now()
 	var wg sync.WaitGroup
 	for _, srv := range []*http.Server{proxySrv, tlsSrv} {
 		if srv != nil {
@@ -139,6 +140,8 @@ func drainIngress(registry []*http.Server, proxySrv, tlsSrv *http.Server, proxyS
 		})
 	}
 	wg.Wait()
+	log.Info().Dur("duration_ms", time.Since(started)).Msg("drained http frontends and traffic relays")
+	started = time.Now()
 	// No frontend can initiate another registry request now.
 	for _, srv := range registry {
 		if srv != nil {
@@ -146,6 +149,7 @@ func drainIngress(registry []*http.Server, proxySrv, tlsSrv *http.Server, proxyS
 		}
 	}
 	wg.Wait()
+	log.Info().Dur("duration_ms", time.Since(started)).Msg("drained registry backends")
 }
 
 // shutdownHTTPServers gracefully stops each non-nil server on the shutdown
@@ -156,7 +160,7 @@ func shutdownHTTPServers(ctx context.Context, log zerowrap.Logger, servers ...*h
 			continue
 		}
 		if err := srv.Shutdown(ctx); err != nil {
-			log.Warn().Err(err).Str("addr", srv.Addr).Msg("server drain deadline reached; force-closing remaining connections")
+			log.Warn().Err(err).Str("component", "http server").Int("servers", 1).Str("addr", srv.Addr).Msg("server drain deadline reached; force-closing remaining connections")
 			_ = srv.Close()
 		}
 	}

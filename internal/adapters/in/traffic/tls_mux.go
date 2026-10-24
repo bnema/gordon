@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	"github.com/bnema/gordon/internal/domain"
 )
 
@@ -288,6 +289,7 @@ func (c replayConn) Read(p []byte) (int, error) {
 }
 
 type tlsHTTPListener struct {
+	drain  *httphelper.HTTPDrain
 	addr   net.Addr
 	conns  chan net.Conn
 	done   chan struct{}

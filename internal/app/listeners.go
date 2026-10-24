@@ -11,6 +11,7 @@ import (
 
 	"github.com/bnema/zerowrap"
 
+	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"
 	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
@@ -403,6 +404,7 @@ func startServer(addr string, handler http.Handler, name string, protocols *http
 		MaxHeaderBytes:    1 << 20,
 	}
 
+	httphelper.TrackHTTPDrain(server)
 	go func() {
 		log.Info().Str("address", addr).Msgf("%s server starting", name)
 
