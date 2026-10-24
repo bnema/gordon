@@ -140,7 +140,9 @@ func (c *reloadCoordinator) scheduleTrailingReloadLocked(ctx context.Context, lo
 }
 
 func (c *reloadCoordinator) runTrailingReload(ctx context.Context, generation uint64, loadConfig bool) {
-	c.mu.Lock()
+	if err := c.mu.lockContext(ctx); err != nil {
+		return
+	}
 	defer c.mu.Unlock()
 
 	if c.stopped.Load() || generation != c.trailingGeneration {

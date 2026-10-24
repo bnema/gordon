@@ -215,6 +215,12 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 		tcpDrainTimeout = effectiveTCPOptions(graph.Options.TCP).DrainTimeout
 		udpDrainTimeout = effectiveUDPOptions(graph.Options.UDP).DrainTimeout
 	}
+	// Terminal shutdown uses the caller's whole remaining budget, rather than
+	// the retirement timeout used when replacing listeners during reload.
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := max(time.Until(deadline), time.Nanosecond)
+		tcpDrainTimeout, udpDrainTimeout = remaining, remaining
+	}
 	var wg sync.WaitGroup
 	for _, runtime := range listeners {
 		_ = runtime.listener.Close()

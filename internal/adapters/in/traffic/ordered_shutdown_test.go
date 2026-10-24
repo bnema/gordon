@@ -124,3 +124,50 @@ func TestApplyRejectsRetainedUpdateDuringPreparation(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalShutdownUsesCallerDeadlineInsteadOfGraphDrain(t *testing.T) {
+	backend := startTCPEchoServer(t, 0)
+	graph := tcpGraph(t, freeTCPAddress(t), backend.address)
+	graph.Options.TCP.DrainTimeout = 10 * time.Millisecond
+	m := NewManager()
+	require.NoError(t, m.Apply(context.Background(), &graph))
+	defer shutdownManager(t, m)
+	conn := dialTCP(t, graph.EntryPoints[0].Address)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(time.Second)))
+	reader := bufio.NewReader(conn)
+	echo := func() {
+		_, err := conn.Write([]byte("alive\n"))
+		require.NoError(t, err)
+		line, err := reader.ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, "alive\n", line)
+	}
+	echo() // Ensure the relay is active before shutdown.
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- m.Shutdown(ctx) }()
+	require.Eventually(t, m.stopped.Load, time.Second, time.Millisecond)
+	// Wait beyond the graph retirement budget, while retaining plenty of the
+	// terminal budget. An echo proves the connection was not retired early.
+	timer := time.NewTimer(3 * graph.Options.TCP.DrainTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		t.Fatalf("shutdown ended before caller deadline: %v", err)
+	case <-timer.C:
+	}
+	echo()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not finish")
+	}
+	require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+	_, err := reader.ReadByte()
+	require.Error(t, err)
+	var netErr net.Error
+	assert.False(t, errors.As(err, &netErr) && netErr.Timeout(), "relay must be closed at the shutdown deadline")
+}

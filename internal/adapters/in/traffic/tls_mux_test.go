@@ -179,7 +179,9 @@ func TestTLSMuxIncompleteClientHelloDoesNotHangShutdown(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	require.NoError(t, manager.Shutdown(ctx))
-	assert.Less(t, time.Since(started), 250*time.Millisecond)
+	// Terminal shutdown may use the whole caller deadline rather than the
+	// graph's shorter reload-retirement timeout; allow scheduling overhead.
+	assert.Less(t, time.Since(started), time.Second)
 	_ = conn.Close()
 }
 

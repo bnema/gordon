@@ -290,3 +290,38 @@ func TestSignalReloadWorkerStopsWhileCoordinatorBusy(t *testing.T) {
 		t.Fatal("reload did not unwind")
 	}
 }
+
+func TestTrailingReloadWaitingBehindBlockedReloadExitsOnStop(t *testing.T) {
+	r := &blockingReloader{make(chan context.Context, 1), make(chan struct{})}
+	c := newReloadCoordinator(nil, r, nil, nil, nil, nil, nil, zerowrap.Default())
+	running := make(chan error, 1)
+	go func() { running <- c.Trigger(context.Background()) }()
+	select {
+	case <-r.entered:
+	case <-time.After(time.Second):
+		t.Fatal("reload did not start")
+	}
+	trailingCtx := c.reloadContext(context.Background())
+	entered, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		close(entered)
+		c.runTrailingReload(trailingCtx, 0, true)
+		close(done)
+	}()
+	<-entered
+	c.Stop()
+	// The dependency is still blocked: the trailing callback must not need its
+	// serialization lock to observe lifecycle cancellation and exit.
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("trailing callback stuck behind reload after Stop")
+	}
+	close(r.release)
+	select {
+	case err := <-running:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("reload did not unwind")
+	}
+}
