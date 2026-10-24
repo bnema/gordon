@@ -443,7 +443,7 @@ func (s *Service) pullImage(ctx context.Context, policy domain.ImageSourcePolicy
 // localhost:15500/e2e/web).
 func stripImageTag(ref string) string {
 	if base, _, ok := strings.Cut(ref, "@"); ok {
-		return base
+		ref = base
 	}
 	lastSlash := strings.LastIndex(ref, "/")
 	if idx := strings.LastIndex(ref, ":"); idx > lastSlash {

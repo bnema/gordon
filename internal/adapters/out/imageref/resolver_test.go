@@ -36,6 +36,11 @@ func TestResolver_PinnedPassesThrough(t *testing.T) {
 
 	_, err = r.ResolveDigest(context.Background(), "img@sha256:short")
 	require.ErrorIs(t, err, domain.ErrAppImageUnresolvable)
+
+	// A tag next to the digest is informational: the digest pins the image.
+	got, err = r.ResolveDigest(context.Background(), "reg.example.com/team/img:v1@"+valid)
+	require.NoError(t, err)
+	assert.Equal(t, valid, got)
 }
 
 func TestResolver_LocalManifestHashes(t *testing.T) {

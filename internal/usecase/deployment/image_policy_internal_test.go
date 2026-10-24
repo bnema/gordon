@@ -66,6 +66,32 @@ func TestValidateImageSource_RequireDigestAppliesToAllRegistries(t *testing.T) {
 	require.NoError(t, svc.validateImageSource("gordon.example.com/team/app", digest))
 }
 
+// TestPreflightImage_TagAndDigestPullsByDigest proves a reference that
+// carries both a tag and a digest passes the policy and is pulled by
+// repository@digest only, without the tag.
+func TestPreflightImage_TagAndDigestPullsByDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	svc := NewService(Deps{
+		Runtime:     runtime,
+		Registry:    RegistryConfig{Domain: "gordon.example.com", PullAddress: "127.0.0.1:5000"},
+		ImagePolicy: FixedImagePolicy(domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", AllowedRegistries: []string{"registry.example.com"}}),
+	}, zerowrap.Default())
+
+	internal := "127.0.0.1:5000/blog/web@" + digest
+	request := domain.ImagePullRequest{Reference: internal, Transport: domain.ImagePullTransportHTTP}
+	runtime.EXPECT().PullImageWithOptions(mock.Anything, request).Return(nil).Once()
+	runtime.EXPECT().VerifyImageDigest(mock.Anything, internal, digest).Return(nil).Once()
+	got, err := svc.preflightImage(context.Background(), "gordon.example.com/blog/web:1.4.2@"+digest, digest)
+	require.NoError(t, err)
+	assert.Equal(t, internal, got)
+
+	runtime.EXPECT().PullImage(mock.Anything, "registry.example.com/team/app@"+digest).Return(nil).Once()
+	got, err = svc.preflightImage(context.Background(), "registry.example.com/team/app:1@"+digest, digest)
+	require.NoError(t, err)
+	assert.Equal(t, "registry.example.com/team/app@"+digest, got)
+}
+
 func TestPreflightImage_RejectsMalformedResolvedDigestBeforePull(t *testing.T) {
 	runtime := outmocks.NewMockContainerRuntime(t)
 	svc := NewService(Deps{

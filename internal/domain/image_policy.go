@@ -116,6 +116,12 @@ func ParseImageReference(ref string) (ImageReference, error) {
 	if err := validation.ValidateRepositoryName(parsed.Repository); err != nil {
 		return ImageReference{}, err
 	}
+	// A tag separator must be followed by a valid tag ("app:" is malformed).
+	if strings.Contains(rest, ":") {
+		if err := validation.ValidateReference(parsed.Tag); err != nil {
+			return ImageReference{}, err
+		}
+	}
 	return parsed, nil
 }
 
@@ -134,25 +140,17 @@ func (p ImageSourcePolicy) Validate() error {
 // allowlist. The allowlist controls names the runtime may contact; it does not
 // constrain where DNS resolves or provide runtime network egress enforcement.
 func (p ImageSourcePolicy) ValidateImageSource(ref string) error {
-	host, rest, err := parseImageRegistry(strings.TrimSpace(ref))
+	parsed, err := ParseImageReference(ref)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
 	}
-	repository, reference := splitRepositoryReference(rest)
-	if err := validation.ValidateRepositoryName(repository); err != nil {
-		return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
-	}
-	if strings.Contains(rest, "@") {
-		if err := validation.ValidateImageDigest(reference); err != nil {
-			return fmt.Errorf("%w: %s", ErrAppImageNotAllowed, err)
-		}
-	} else if p.RequireDigest {
+	if parsed.Digest == "" && p.RequireDigest {
 		return fmt.Errorf("%w: registry policy requires an immutable digest", ErrAppImageNotAllowed)
 	}
-	if p.registryAllowed(host) {
+	if p.registryAllowed(parsed.Host) {
 		return nil
 	}
-	return fmt.Errorf("%w: registry %q is not allowlisted", ErrAppImageNotAllowed, host)
+	return fmt.Errorf("%w: registry %q is not allowlisted", ErrAppImageNotAllowed, parsed.Host)
 }
 
 func (p ImageSourcePolicy) registryAllowed(host string) bool {

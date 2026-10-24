@@ -73,6 +73,33 @@ func TestImageSourcePolicy_RejectsMalformedDigests(t *testing.T) {
 	}
 }
 
+// A reference may carry a tag and a digest; the digest pins it, so it is
+// valid, satisfies require_digest, and the tag is not part of the
+// repository name.
+func TestImageSourcePolicy_AcceptsTagAndDigest(t *testing.T) {
+	policy := domain.ImageSourcePolicy{
+		AllowedRegistries:    []string{"registry.example.com:5000"},
+		RequireDigest:        true,
+		InstallationRegistry: "gordon.example.com",
+		InstallationAliases:  []string{"ci.example.com"},
+	}
+	for _, ref := range []string{
+		"gordon.example.com/team/app:1.0@" + testDigest202,
+		"ci.example.com/web:v1@" + testDigest202,
+		"registry.example.com:5000/team/app:1.0@" + testDigest202,
+		"nginx:1.25@" + testDigest202,
+	} {
+		require.NoError(t, policy.ValidateImageSource(ref), ref)
+	}
+	for _, ref := range []string{
+		"gordon.example.com/team/app:1.0@sha256:short",
+		"gordon.example.com/team/app:@" + testDigest202,
+		"other.example.com/team/app:1.0@" + testDigest202,
+	} {
+		assert.ErrorIs(t, policy.ValidateImageSource(ref), domain.ErrAppImageNotAllowed, ref)
+	}
+}
+
 func TestImageSourcePolicy_CanonicalizesHostAndDefaultPort(t *testing.T) {
 	policy := domain.ImageSourcePolicy{AllowedRegistries: []string{"registry.example.com"}}
 	require.NoError(t, policy.ValidateImageSource("REGISTRY.EXAMPLE.COM./team/app:1"))
