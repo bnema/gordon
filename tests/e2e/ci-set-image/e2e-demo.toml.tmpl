@@ -1,5 +1,5 @@
 # Two-service demo app. setup.sh replaces @IMAGE@ with the digest-pinned v1
-# image; CI then promotes only "web", "api" must keep v1.
+# image; CI then sets only the "web" image, "api" must keep v1.
 name = "e2e-demo"
 
 [services.web]

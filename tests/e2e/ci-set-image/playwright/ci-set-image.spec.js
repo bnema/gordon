@@ -3,7 +3,7 @@
 // E2E_RUN_ID     run id to inspect on ermite (required)
 // E2E_LOGIN_URL  one-time ermite login link (ermite web login), required
 // E2E_EXPECT     "release" (default) or "probe": what the run must show
-// E2E_VERSION    version promoted to web by the release run (required for
+// E2E_VERSION    version changed to web by the release run (required for
 //                release; playwright.sh reads it from run.sh release)
 // E2E_BASE       version the api service must keep (default v1)
 const { test, expect } = require('playwright/test');
@@ -60,7 +60,7 @@ test('ermite run page shows success and the job log has no JWT', async ({ page }
   }
 });
 
-test('app shows the promoted version, the other service is unchanged', async ({ page }) => {
+test('app shows the changed version, the other service is unchanged', async ({ page }) => {
   test.skip(expectKind !== 'release', 'only after a release run');
   expect(version, 'E2E_VERSION is required').toBeTruthy();
   await page.goto('https://app.localtest.me/');

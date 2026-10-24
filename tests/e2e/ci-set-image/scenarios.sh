@@ -42,7 +42,7 @@ check plain-http-other-peer 403 "${plain:-none}"
 # (covered by Go tests; the job-side check exchanges only on the CI host)
 
 # --- job side ---------------------------------------------------------------
-# The replay check promotes the digest web runs now (v1 after setup, the
+# The replay check sets the digest web runs now (v1 after setup, the
 # released version after run.sh release), so it never changes web.
 digest="$(gordon_admin apps show e2e-demo --json | jq -r '.active.services.web.digest // empty')" ||
 	die "cannot read the digest service web runs"

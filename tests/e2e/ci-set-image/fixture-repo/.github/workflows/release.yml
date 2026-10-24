@@ -1,5 +1,5 @@
 # Builds the demo image, pushes it to Gordon's CI host with the job's OIDC
-# identity and promotes exactly that digest to service "web" of e2e-demo.
+# identity and sets exactly that digest on service "web" of e2e-demo.
 # Needs Gordon's CI host. No Gordon secret is stored in the repository.
 name: release
 on:
@@ -51,17 +51,17 @@ jobs:
           echo "digest=$(jq -r .digest push.json)" >>"$GITHUB_OUTPUT"
           jq '{repository, tag, digest}' push.json
 
-      - name: Promote
+      - name: Set image
         env:
           REPOSITORY: ${{ steps.push.outputs.repository }}
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
-          gordon apps promote e2e-demo --service web \
+          gordon apps set-image e2e-demo --service web \
             --image "$REPOSITORY@$DIGEST" \
-            --remote "$GORDON_REMOTE" --json >promote.json
-          jq '{op, app, status, outcome}' promote.json
-          jq -e '.outcome == "success"' promote.json >/dev/null
+            --remote "$GORDON_REMOTE" --json >set-image.json
+          jq '{op, app, status, outcome}' set-image.json
+          jq -e '.outcome == "success"' set-image.json >/dev/null
 
       - name: Verify
         env:

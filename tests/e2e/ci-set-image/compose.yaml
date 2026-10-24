@@ -1,4 +1,4 @@
-# Local end-to-end harness for OIDC CI image promotion. Drive it with the
+# Local end-to-end harness for OIDC CI set-image. Drive it with the
 # scripts in this directory (setup.sh, run.sh, scenarios.sh, teardown.sh):
 # they pass --env-file "$E2E_STATE/.env", which holds the generated secrets.
 name: gordon-e2e-ci

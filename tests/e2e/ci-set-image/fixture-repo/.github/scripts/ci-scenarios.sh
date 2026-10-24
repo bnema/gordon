@@ -60,27 +60,27 @@ check blob-pull 404 "$(code "${auth[@]}" "$CI/v2/e2e-demo/blobs/sha256:$(printf 
 check admin 404 "$(code "${auth[@]}" "$CI/admin/apps")"
 check mount 404 "$(code "${auth[@]}" -X POST "$CI/v2/e2e-demo/blobs/uploads/?mount=sha256:$(printf '0%.0s' $(seq 64))&from=other")"
 
-# 4. promote with a tag image -> 400
-promote() { # key image -> code, body in /tmp/promote.json
-	curl -s -o /tmp/promote.json -w '%{http_code}' "${auth[@]}" \
+# 4. set-image with a tag image -> 400
+set_image() { # key image -> code, body in /tmp/set-image.json
+	curl -s -o /tmp/set-image.json -w '%{http_code}' "${auth[@]}" \
 		-H "Idempotency-Key: $1" -H 'Content-Type: application/json' \
-		-d "{\"service\":\"web\",\"image\":\"$2\"}" "$CI/-/ci/apps/e2e-demo/promote"
+		-d "{\"service\":\"web\",\"image\":\"$2\"}" "$CI/-/ci/apps/e2e-demo/set-image"
 }
-check tag-image 400 "$(promote "e2e-tag-$GITHUB_RUN_ID" "e2e-demo:v1")"
+check tag-image 400 "$(set_image "e2e-tag-$GITHUB_RUN_ID" "e2e-demo:v1")"
 
 # 5. other service of the same app -> 403
 other="$(curl -s -o /dev/null -w '%{http_code}' "${auth[@]}" -H "Idempotency-Key: e2e-api-$GITHUB_RUN_ID" \
 	-H 'Content-Type: application/json' -d '{"service":"api","image":"e2e-demo@sha256:'"$(printf 'a%.0s' $(seq 64))"'"}' \
-	"$CI/-/ci/apps/e2e-demo/promote")"
+	"$CI/-/ci/apps/e2e-demo/set-image")"
 check other-service 403 "$other"
 
 # 6. replay the same key -> same operation
 if [ -n "${DIGEST:-}" ]; then
 	key="e2e-replay-$GITHUB_RUN_ID"
-	c1="$(promote "$key" "e2e-demo@$DIGEST")"
-	op1="$(jq -r .op /tmp/promote.json)"
-	c2="$(promote "$key" "e2e-demo@$DIGEST")"
-	op2="$(jq -r .op /tmp/promote.json)"
+	c1="$(set_image "$key" "e2e-demo@$DIGEST")"
+	op1="$(jq -r .op /tmp/set-image.json)"
+	c2="$(set_image "$key" "e2e-demo@$DIGEST")"
+	op2="$(jq -r .op /tmp/set-image.json)"
 	echo "replay: first $c1 op=$op1, second $c2 op=$op2"
 	if [ -n "$op1" ] && [ "$op1" != null ]; then check replay-same-op "$op1" "$op2"; else check replay-same-op '<op id>' "${op1:-empty}"; fi
 	case "$c1" in 200 | 202) check replay-first-accepted ok ok ;; *) check replay-first-accepted 200/202 "$c1" ;; esac

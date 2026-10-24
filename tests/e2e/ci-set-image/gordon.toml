@@ -50,8 +50,8 @@ issuer = "https://ermite.localtest.me/-/oidc"
 audience = "https://ci.localtest.me"
 allow_private_network = true
 
-# Only the main branch of e2e/e2e-demo may promote, and only service "web".
-[[promotion_policies]]
+# Only the main branch of e2e/e2e-demo may set images, and only service "web".
+[[set_image_policies]]
 issuer = "https://ermite.localtest.me/-/oidc"
 subjects = ["repo:e2e/e2e-demo:ref:refs/heads/main"]
 app = "e2e-demo"

@@ -2,7 +2,7 @@
 # Triggers a workflow of the fixture repo and waits for it.
 #
 #   bash run.sh probe              OIDC claims + relay checks (no Gordon CI host)
-#   bash run.sh release [VERSION]  push + promote to service web
+#   bash run.sh release [VERSION]  push + set the image of service web
 #
 # Exit 0 only when the run concluded "success". The run JSON is written to
 # $E2E_STATE/runs/ and its log is checked for leaked tokens. A release also
