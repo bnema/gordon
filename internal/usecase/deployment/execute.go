@@ -817,7 +817,8 @@ func (s *Service) startPreparedCandidate(ctx context.Context, app, revision stri
 			RestartUnsafe:     singleWriterRequired(p.spec),
 			Error:             err.Error(),
 			Diagnostics:       tail,
-			CleanupWarnings:   append(candidate.CleanupWarnings, cleanup...),
+			// The removed candidate's restart-policy warning is moot.
+			CleanupWarnings: cleanup,
 		}
 	}
 	return ServiceResult{

@@ -140,7 +140,10 @@ func (s *Service) startPrepared(ctx context.Context, app string, p pinnedService
 	if err := s.deps.Runtime.UpdateRestartPolicy(ctx, created.ID, domain.RestartPolicyAlways); err != nil {
 		log := zerowrap.FromCtx(ctx)
 		log.Warn().Err(err).Str("container", created.ID).Msg("native restart policy not applied")
-		warnings = append(warnings, CleanupWarning{Service: p.name, Leftover: created.ID, Detail: "native restart policy not applied: " + err.Error()})
+		// Only a deployed candidate reports this warning. Leftover names the
+		// container so the CLI can render it; the Detail states it is the
+		// healthy serving generation, not garbage.
+		warnings = append(warnings, CleanupWarning{Service: p.name, Leftover: created.ID, Detail: "container is healthy, running without native restart policy: " + err.Error()})
 	}
 	// The execution is observed before readiness runs: a native restart
 	// between readiness and the verified-execution record then shows up as a

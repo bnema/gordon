@@ -107,7 +107,7 @@ func TestDeployHandover(t *testing.T) {
 				assert.Equal(t, []string{"create", "hold", "inhibit", "stop-old", "remove-old", "start", "policy"}, events)
 				if failure == "policy" {
 					require.Len(t, result.CleanupWarnings, 1)
-					assert.Contains(t, result.CleanupWarnings[0].Detail, "native restart policy not applied")
+					assert.Contains(t, result.CleanupWarnings[0].Detail, "container is healthy, running without native restart policy")
 				}
 			} else {
 				require.Equal(t, "failed", result.Result)
