@@ -860,7 +860,7 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		}
 		// Bind resolution stays a preflight gate: an unresolvable bind
 		// must fail before any workload mutation. The successful values
-		// are discarded because createAndStart re-resolves against the
+		// are discarded because prepareCandidate re-resolves against the
 		// current policy immediately before the runtime mutation.
 		if _, err := s.resolveServiceBinds(app, svc); err != nil {
 			return nil, err

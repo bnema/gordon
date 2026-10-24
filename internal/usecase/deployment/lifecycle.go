@@ -340,9 +340,9 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 		_ = s.withdrawForRecovery(ctx, app, name)
 		return fail(err.Error())
 	}
-	// Hold (or withdraw when disabled) before restarting an unverified execution.
+	// Hold (or withdraw when disabled) before restarting an unverified
+	// execution. A failed hold is already released.
 	if err := s.beginHandover(ctx, app, name, time.Now().Add(s.handoverBudget(eff.Spec, serviceStopGrace(eff)))); err != nil {
-		s.endFailedHold(ctx, app, name)
 		return fail(err.Error())
 	}
 	if err := s.deps.Runtime.RestartContainer(ctx, eff.Container, serviceStopGrace(eff)); err != nil {
@@ -352,8 +352,8 @@ func (s *Service) restartOneService(ctx context.Context, app, opID, name string,
 			// until a deploy.
 			svcResult, rebuildErr := s.redeployPinned(ctx, app, opID, name, eff, s.journalCandidate(op, index))
 			if rebuildErr != nil {
-				// Disabled holding keeps the legacy path: the rebuild owns
-				// its own withdrawal and no binds are cleared here.
+				// Disabled holding keeps the withdrawal ordering: the rebuild
+				// owns its own withdrawal and no binds are cleared here.
 				s.endFailedHold(ctx, app, name)
 				svcResult.Error = rebuildErr.Error()
 				step.State = domain.AppStepFailed

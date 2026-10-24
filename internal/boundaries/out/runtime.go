@@ -17,7 +17,8 @@ type ContainerRuntime interface {
 	// Container lifecycle
 	CreateContainer(ctx context.Context, config *domain.ContainerConfig) (*domain.Container, error)
 	StartContainer(ctx context.Context, containerID string) error
-	// UpdateRestartPolicy applies native self-healing only after the first start.
+	// UpdateRestartPolicy sets the native restart policy of an existing
+	// container.
 	UpdateRestartPolicy(ctx context.Context, containerID string, policy domain.RestartPolicy) error
 	// StopContainer stops one exact container, giving it grace to exit
 	// before the runtime kills it. A non-positive grace keeps the

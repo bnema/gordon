@@ -116,8 +116,8 @@ func TestDeployHandover(t *testing.T) {
 				}
 				if failure == "hold" {
 					// The hold survives a failed graph apply, so it is released
-					// after the candidate is retired.
-					assert.Equal(t, []string{"create", "hold", "remove-new", "release"}, events)
+					// before the candidate is retired.
+					assert.Equal(t, []string{"create", "hold", "release", "remove-new"}, events)
 					assert.Equal(t, "new", result.After)
 				}
 				if failure == "ready" {
@@ -193,6 +193,25 @@ func TestDeployHandoverPrepareFailureKeepsCandidateID(t *testing.T) {
 	result := svc.deployService(context.Background(), "blog", "rev-1", p, "op-1", "old", 10*time.Second, nil)
 	require.Equal(t, "failed", result.Result)
 	assert.Equal(t, "new", result.After, "the created candidate stays traceable in the result")
+}
+
+func TestRestartRebuildFailureWithHoldingReleasesHold(t *testing.T) {
+	state := outmocks.NewMockAppState(t)
+	runtime := outmocks.NewMockContainerRuntime(t)
+	traffic := outmocks.NewMockAppTrafficRefresher(t)
+	var events []string
+	state.EXPECT().LoadRecoveryInhibitions(mock.Anything, "blog").Return(nil, nil)
+	traffic.EXPECT().HoldService(mock.Anything, "blog", "web", mock.Anything).RunAndReturn(func(context.Context, string, string, time.Time) error { events = append(events, "hold"); return nil }).Once()
+	runtime.EXPECT().RestartContainer(mock.Anything, "old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
+	state.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{}, assert.AnError).Once()
+	traffic.EXPECT().WithdrawService(mock.Anything, "blog", "web").RunAndReturn(func(context.Context, string, string) error { events = append(events, "release"); return nil }).Once()
+	state.EXPECT().ClearRecoveryInhibition(mock.Anything, "blog", "web", "old").Return(nil).Once()
+	svc := NewService(Deps{State: state, Runtime: runtime, Traffic: traffic, Handover: HandoverConfig{MaxHold: time.Minute}}, zerowrap.Default())
+	op := domain.AppOperation{Steps: []domain.AppOperationStep{{}}}
+	eff := domain.AppEffectiveService{Container: "old", EffectiveRevision: "rev-1", Spec: domain.AppService{Name: "web"}}
+	result := svc.restartOneService(context.Background(), "blog", "op-1", "web", eff, &op, 0)
+	assert.Equal(t, "failed", result.Result)
+	assert.Equal(t, []string{"hold", "release"}, events)
 }
 
 func TestRestartRebuildFailureWithoutHoldingKeepsBinds(t *testing.T) {

@@ -665,7 +665,7 @@ func (s *Service) journalCandidate(op *domain.AppOperation, index int) candidate
 // With holding enabled, prepare without native restart, hold traffic, inhibit
 // recovery, retire the old generation, then start and verify the candidate.
 // A candidate never starts before the previous generation is confirmed gone.
-// Disabled holding retains the legacy withdraw/retire/create ordering.
+// Disabled holding keeps the withdrawal ordering: withdraw, retire, create.
 func (s *Service) deployService(ctx context.Context, app, revision string, p pinnedService, opID, before string, beforeGrace time.Duration, journal candidateJournal) ServiceResult {
 	// Revalidate the current authorization and source before withdrawing or
 	// retiring the serving generation. A reload between preflight and this
@@ -674,8 +674,8 @@ func (s *Service) deployService(ctx context.Context, app, revision string, p pin
 		return failed
 	}
 	// Holding prepares before disturbing the old generation. With holding
-	// disabled the legacy withdraw/retire/create ordering below is unchanged.
-	if before != "" && s.deps.Handover.MaxHold > 0 {
+	// disabled the withdrawal ordering below applies.
+	if before != "" && s.holdingEnabled() {
 		return s.deployHandover(ctx, app, revision, p, opID, before, beforeGrace, journal)
 	}
 	// Withdraw the service from traffic first and confirm it: a withdrawal
@@ -779,25 +779,26 @@ func (s *Service) revalidateService(app, revision string, p pinnedService, befor
 func (s *Service) startCandidate(ctx context.Context, app, revision string, p pinnedService, opID, before string, journal candidateJournal) ServiceResult {
 	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
 	if err != nil {
-		result := s.failResult(revision, before, "", err)
-		if prepared.Container != nil {
-			result.After = prepared.Container.ID
-		}
-		return result
+		return s.candidateFailResult(revision, before, prepared.Container, err)
 	}
 	return s.startPreparedCandidate(ctx, app, revision, p, before, prepared)
+}
+
+// candidateFailResult is the failed result of a candidate that could not be
+// prepared or started. A candidate that exists keeps its ID in the result so
+// the journal and the operator can still trace it.
+func (s *Service) candidateFailResult(revision, before string, candidate *domain.Container, err error) ServiceResult {
+	result := s.failResult(revision, before, "", err)
+	if candidate != nil {
+		result.After = candidate.ID
+	}
+	return result
 }
 
 func (s *Service) startPreparedCandidate(ctx context.Context, app, revision string, p pinnedService, before string, prepared preparedCandidate) ServiceResult {
 	candidate, err := s.startPrepared(ctx, app, p, prepared)
 	if err != nil {
-		result := s.failResult(revision, before, "", err)
-		if candidate.Container != nil {
-			// The candidate exists: keep its ID in the terminal result so the
-			// journal and the operator can still trace it.
-			result.After = candidate.Container.ID
-		}
-		return result
+		return s.candidateFailResult(revision, before, candidate.Container, err)
 	}
 	created := candidate.Container
 	if err := s.waitServiceReady(ctx, app, created.ID, deploymentReadiness(p.spec), candidate.TCPBinds); err != nil {

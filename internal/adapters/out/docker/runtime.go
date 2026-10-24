@@ -555,7 +555,7 @@ func (r *Runtime) StartContainer(ctx context.Context, containerID string) error 
 	return nil
 }
 
-// UpdateRestartPolicy enables native recovery after a container's first start.
+// UpdateRestartPolicy sets the native restart policy of an existing container.
 func (r *Runtime) UpdateRestartPolicy(ctx context.Context, containerID string, policy domain.RestartPolicy) error {
 	_, err := r.client.ContainerUpdate(ctx, containerID, client.ContainerUpdateOptions{
 		RestartPolicy: &container.RestartPolicy{Name: container.RestartPolicyMode(policy)},

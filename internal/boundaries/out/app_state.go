@@ -163,16 +163,18 @@ type AppApplyStore interface {
 }
 
 // AppTrafficRefresher is the app-facing traffic contract: one serialized
-// HTTP/L4 publish boundary that supports both fail-closed withdrawal of
-// one service and full publication of current verified state. Both
-// operations read the latest validated config at call time and are
-// serialized against reload and other rebuilds so a stale config can
-// never win. WithdrawService must leave no forwarding for the named
-// service once it returns nil; failing loudly is preferred to leaving
-// stale L4 forwarding behind.
+// HTTP/L4 publish boundary with three operations: holding one service
+// during a handover, fail-closed withdrawal of one service, and full
+// publication of current verified state. Every operation reads the latest
+// validated config at call time and is serialized against reload and other
+// rebuilds so a stale config can never win. WithdrawService must leave no
+// forwarding for the named service once it returns nil; failing loudly is
+// preferred to leaving stale L4 forwarding behind.
 type AppTrafficRefresher interface {
 	// HoldService clears recorded binds and holds HTTP/TCP traffic until
-	// publication of a ready backend or the process-local deadline.
+	// publication of a ready backend or the process-local deadline. A
+	// failed HoldService may leave the hold registered: the caller then
+	// releases it with WithdrawService.
 	HoldService(ctx context.Context, app, service string, until time.Time) error
 	// RebuildTraffic re-projects verified ACTIVE state and applies the
 	// full HTTP/L4 graph.
@@ -180,9 +182,10 @@ type AppTrafficRefresher interface {
 	// WithdrawService publishes the current graph without the named
 	// app service, so a dead or unverified backend stops receiving
 	// traffic. A nil return means stale forwarding is proven disabled.
+	// It drops any hold of the service.
 	WithdrawService(ctx context.Context, app, service string) error
-	// WithdrawServiceState drops the named service's recorded backend
-	// binds in ACTIVE without applying the graph. It is the canonical
+	// WithdrawServiceState drops the named service's hold and recorded
+	// backend binds in ACTIVE without applying the graph. It is the canonical
 	// state-only withdrawal: ready-path failures use it when the
 	// caller already owns publication (or none is due), so no second
 	// routing-state write races the serialized WithdrawService path.

@@ -32,14 +32,6 @@ type startedCandidate struct {
 // the unpublished journaled candidate.
 type preparedCandidate struct{ Container *domain.Container }
 
-func (s *Service) createAndStart(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (startedCandidate, error) {
-	prepared, err := s.prepareCandidate(ctx, app, revision, p, opID, journal)
-	if err != nil {
-		return startedCandidate{Container: prepared.Container}, err
-	}
-	return s.startPrepared(ctx, app, p, prepared)
-}
-
 // prepareCandidate creates, journals and connects a candidate without starting
 // it. No restart policy may be applied until its first explicit start.
 func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p pinnedService, opID string, journal candidateJournal) (preparedCandidate, error) {
