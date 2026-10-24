@@ -124,6 +124,10 @@ var (
 	// ErrAppServiceScope marks an app-wide mutation of a multi-service app
 	// that named neither one service nor all of them.
 	ErrAppServiceScope = errors.New("app service scope required")
+	// ErrAppSetImageRevert marks an apply refused because it would replace a
+	// service image that a set-image change introduced, without the caller
+	// allowing it.
+	ErrAppSetImageRevert = errors.New("apply would revert a set-image change")
 	// ErrAppServiceNotFound marks a mutation naming a service the app's
 	// desired state does not declare.
 	ErrAppServiceNotFound = errors.New("app service not found")

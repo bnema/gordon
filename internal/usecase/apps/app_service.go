@@ -229,20 +229,25 @@ func (s *AppServiceImpl) SetCapabilityPolicies(policies map[string]domain.AppCap
 var _ in.AppService = (*AppServiceImpl)(nil)
 
 // Apply implements in.AppService.
-func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error) {
-	applyResult, dryResult, err := s.core.Apply(ctx, spec, source, dryRun)
+func (s *AppServiceImpl) Apply(ctx context.Context, input in.AppApplyInput) (*in.AppApplyResult, *in.AppDryRunResult, error) {
+	applyResult, dryResult, err := s.core.Apply(ctx, input.Spec, input.Source, ApplyOptions{
+		DryRun:              input.DryRun,
+		AllowSetImageRevert: input.AllowSetImageRevert,
+		ExpectedRevision:    input.ExpectedRevision,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
 	if dryResult != nil {
 		return nil, &in.AppDryRunResult{
-			App:   spec.Name,
-			Valid: true,
-			Diff:  dryResult.Diff,
+			App:             input.Spec.Name,
+			Valid:           true,
+			Diff:            dryResult.Diff,
+			SetImageReverts: dryResult.SetImageReverts,
 		}, nil
 	}
 	if applyResult == nil {
-		return nil, &in.AppDryRunResult{App: spec.Name, Valid: true}, nil
+		return nil, &in.AppDryRunResult{App: input.Spec.Name, Valid: true}, nil
 	}
 	return &in.AppApplyResult{
 		App:               applyResult.App,
@@ -252,6 +257,7 @@ func (s *AppServiceImpl) Apply(ctx context.Context, spec domain.AppSpec, source 
 		Pending:           applyResult.Pending,
 		Diff:              applyResult.Diff,
 		IntentID:          applyResult.IntentID,
+		SetImageReverts:   applyResult.SetImageReverts,
 	}, nil, nil
 }
 

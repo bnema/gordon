@@ -187,6 +187,35 @@ func (s SetImagePolicySet) HasAppPolicy(principal WorkloadPrincipal, app string)
 	return false
 }
 
+// AppSetImageRevert is one service whose desired image was introduced by a
+// set-image change and that an apply would replace with the manifest image.
+type AppSetImageRevert struct {
+	Service     string
+	ServerImage string
+	FileImage   string
+	Revision    string
+	Principal   string
+	ChangedAt   time.Time
+}
+
+// SetImageRevertError is ErrAppSetImageRevert carrying the desired revision
+// the apply was checked against and the set-image changes it would revert.
+type SetImageRevertError struct {
+	DesiredRevision string
+	Reverts         []AppSetImageRevert
+}
+
+func (e *SetImageRevertError) Error() string {
+	services := make([]string, 0, len(e.Reverts))
+	for _, revert := range e.Reverts {
+		services = append(services, revert.Service)
+	}
+	return fmt.Sprintf("%s: desired revision %s, services %s", ErrAppSetImageRevert, e.DesiredRevision, strings.Join(services, ", "))
+}
+
+// Is matches ErrAppSetImageRevert.
+func (e *SetImageRevertError) Is(target error) bool { return target == ErrAppSetImageRevert }
+
 // AppSetImageProvenance records the accepted image change's immutable origin.
 type AppSetImageProvenance struct {
 	Service   string `json:"service,omitempty"`

@@ -91,7 +91,7 @@ func TestHandler_AppApply_Persists(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return !input.DryRun })).Return(
 		&in.AppApplyResult{App: "blog", ResultingRevision: "rev-1", Pending: true, IntentID: "apply-1"},
 		nil, nil,
 	).Once()
@@ -635,7 +635,7 @@ func TestHandler_AppApply_DryRunOmitsRevision(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, true).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return input.DryRun })).Return(
 		nil,
 		&in.AppDryRunResult{App: "blog", Valid: true},
 		nil,
@@ -669,7 +669,7 @@ func TestHandler_AppApply_MapsDevicePolicyViolation(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return !input.DryRun })).Return(
 		nil, nil,
 		fmt.Errorf("%w: app %q service %q device %q: refused by administrative device policy", domain.ErrDevicePolicy, "blog", "web", "test_gpu"),
 	).Once()
@@ -701,7 +701,7 @@ func TestHandler_AppApply_MapsRuntimeUnsupported(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return !input.DryRun })).Return(
 		nil, nil,
 		fmt.Errorf("%w: podman 4.9.5 below minimum 5.4", domain.ErrRuntimeUnsupported),
 	).Once()
@@ -718,7 +718,7 @@ func TestApplyApp_MapsCapabilityPolicyViolation(t *testing.T) {
 	appSvc := inmocks.NewMockAppService(t)
 	handler := appsTestHandler(t, appSvc)
 
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return !input.DryRun })).Return(
 		nil, nil,
 		fmt.Errorf("%w: app %q service %q capability %q: refused by administrative capability policy", domain.ErrCapabilityPolicy, "blog", "web", "net-admin"),
 	).Once()

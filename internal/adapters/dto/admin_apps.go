@@ -27,20 +27,51 @@ type AppDiffSection struct {
 }
 
 // AppApplyRequest asks the daemon to validate and persist desired state.
+// AllowSetImageRevert accepts a manifest that replaces images introduced by
+// set-image; ExpectedRevision, when set, must equal the current desired
+// revision.
 type AppApplyRequest struct {
-	ManifestTOML string `json:"manifest_toml"`
-	DryRun       bool   `json:"dry_run,omitempty"`
+	ManifestTOML        string `json:"manifest_toml"`
+	DryRun              bool   `json:"dry_run,omitempty"`
+	AllowSetImageRevert bool   `json:"allow_set_image_revert,omitempty"`
+	ExpectedRevision    string `json:"expected_revision,omitempty"`
 }
+
+// AppSetImageRevertDTO is one service whose set-image image the manifest
+// replaces: the server value, the file value, and the set-image origin.
+type AppSetImageRevertDTO struct {
+	Service     string    `json:"service"`
+	ServerImage string    `json:"server_image"`
+	FileImage   string    `json:"file_image"`
+	Revision    string    `json:"revision"`
+	Principal   string    `json:"principal,omitempty"`
+	ChangedAt   time.Time `json:"changed_at,omitzero"`
+}
+
+// AppSetImageRevertConflict is the 409 body of an apply refused because it
+// would revert set-image changes. DesiredRevision is the revision checked;
+// a retry sends it as expected_revision with allow_set_image_revert.
+type AppSetImageRevertConflict struct {
+	Error           string                 `json:"error"`
+	Message         string                 `json:"message,omitempty"`
+	Hint            string                 `json:"hint,omitempty"`
+	DesiredRevision string                 `json:"desired_revision"`
+	SetImageReverts []AppSetImageRevertDTO `json:"set_image_reverts"`
+}
+
+// AppSetImageRevertCode is the stable error code of AppSetImageRevertConflict.
+const AppSetImageRevertCode = "set-image-revert"
 
 // AppApplyResponse reports persistence success separately from deploy.
 type AppApplyResponse struct {
-	App               string         `json:"app"`
-	FormerRevision    string         `json:"former_revision,omitempty"`
-	ResultingRevision string         `json:"resulting_revision,omitempty"`
-	Pending           bool           `json:"pending"`
-	Noop              bool           `json:"noop,omitempty"`
-	Diff              AppDiffSection `json:"diff"`
-	Intent            string         `json:"intent,omitempty"`
+	App               string                 `json:"app"`
+	FormerRevision    string                 `json:"former_revision,omitempty"`
+	ResultingRevision string                 `json:"resulting_revision,omitempty"`
+	Pending           bool                   `json:"pending"`
+	Noop              bool                   `json:"noop,omitempty"`
+	Diff              AppDiffSection         `json:"diff"`
+	Intent            string                 `json:"intent,omitempty"`
+	SetImageReverts   []AppSetImageRevertDTO `json:"set_image_reverts,omitempty"`
 }
 
 // AppDeployRequest activates a captured revision.

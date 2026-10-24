@@ -16,6 +16,7 @@ import (
 
 	"github.com/bnema/gordon/internal/adapters/out/appstate"
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
+	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	cfgusecase "github.com/bnema/gordon/internal/usecase/config"
 )
@@ -62,7 +63,7 @@ func dryRunImage(t *testing.T, si *serviceInit, image string) error {
 		Name: "web", Image: image, StopGrace: 10 * time.Second,
 		Readiness: domain.AppReadiness{Type: "none", Timeout: 30 * time.Second},
 	}}}
-	_, dry, err := si.svc.appSvcImpl.Apply(t.Context(), spec, []byte("manifest"), true)
+	_, dry, err := si.svc.appSvcImpl.Apply(t.Context(), in.AppApplyInput{Spec: spec, Source: []byte("manifest"), DryRun: true})
 	if err == nil {
 		require.NotNil(t, dry)
 		assert.True(t, dry.Valid)

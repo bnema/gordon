@@ -69,7 +69,7 @@ func TestAppLocalAdminComposition_EndToEnd(t *testing.T) {
 	withRemoteTarget(t, "")
 
 	appSvc := inmocks.NewMockAppService(t)
-	appSvc.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, false).Return(
+	appSvc.EXPECT().Apply(mock.Anything, mock.MatchedBy(func(input in.AppApplyInput) bool { return !input.DryRun })).Return(
 		&in.AppApplyResult{App: "blog", ResultingRevision: "rev-2", Pending: true, IntentID: "apply-1"},
 		nil, nil,
 	).Once()

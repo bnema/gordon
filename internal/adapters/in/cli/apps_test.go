@@ -42,7 +42,7 @@ func writeManifest(t *testing.T, content string) string {
 
 func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
 	plane := appPlane(t)
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "x.toml", true, true, false)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, appsApplyOptions{File: "x.toml", DryRun: true, Deploy: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--dry-run")
 	assert.Contains(t, err.Error(), "--deploy")
@@ -50,7 +50,7 @@ func TestRunAppsApply_RejectsDryRunWithDeploy(t *testing.T) {
 
 func TestRunAppsApply_RequiresFile(t *testing.T) {
 	plane := appPlane(t)
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, "", false, false, false)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &bytes.Buffer{}, &bytes.Buffer{}, appsApplyOptions{File: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--file")
 }
@@ -64,8 +64,7 @@ func TestRunAppsApply_JSONParity(t *testing.T) {
 	plane := appPlane(t)
 	plane.EXPECT().ApplyApp(mock.Anything, mock.Anything).Return(want, nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
-		writeManifest(t, "[app]\nname = \"blog\"\n"), false, false, true))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{}, appsApplyOptions{File: writeManifest(t, "[app]\nname = \"blog\"\n"), JSON: true}))
 	var got dto.AppApplyResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
 	assert.Equal(t, *want, got)
@@ -78,8 +77,7 @@ func TestRunAppsApply_ChainsAcceptedRevision(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
-		writeManifest(t, "x"), false, true, false))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{}, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true}))
 	assert.Contains(t, out.String(), "rev-b")
 }
 
@@ -90,8 +88,7 @@ func TestRunAppsApply_ChainedJSONIsOneDocument(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Revision: "rev-b", Outcome: "success"}, "key-1", nil).Once()
 	var out bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{},
-		writeManifest(t, "x"), false, true, true))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &bytes.Buffer{}, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true, JSON: true}))
 	var got struct {
 		Apply  dto.AppApplyResponse  `json:"apply"`
 		Deploy dto.AppDeployResponse `json:"deploy"`

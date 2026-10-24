@@ -142,12 +142,21 @@ Examples:
 	return cmd
 }
 
+// appsApplyOptions carries the `apps apply` flags. Interactive reports
+// whether stdin is a terminal that may answer the set-image revert prompt;
+// it is resolved by the command and injected by tests.
+type appsApplyOptions struct {
+	File        string
+	DryRun      bool
+	Deploy      bool
+	JSON        bool
+	Yes         bool
+	Interactive bool
+}
+
 // newAppsApplyCmd creates `apps apply`.
 func newAppsApplyCmd() *cobra.Command {
-	var file string
-	var dryRun bool
-	var chainDeploy bool
-	var jsonOut bool
+	var opts appsApplyOptions
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Validate and persist an app manifest",
@@ -155,7 +164,11 @@ func newAppsApplyCmd() *cobra.Command {
 
 With --deploy, chains exactly the accepted revision into a deploy after
 persistence succeeds; the two outcomes are reported separately because a
-deploy may fail after the apply succeeded.`,
+deploy may fail after the apply succeeded.
+
+When the manifest would replace an image set by ` + "`apps set-image`" + `, the
+command shows the server and file values and asks before restoring the file
+value. Without a terminal it refuses unless --yes is given.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := resolveAppPlane()
 			if err != nil {
@@ -163,47 +176,70 @@ deploy may fail after the apply succeeded.`,
 			}
 			defer handle.close()
 			plane := handle.plane
-			return runAppsApply(cmd.Context(), plane, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), file, dryRun, chainDeploy, jsonOut)
+			opts.Interactive = readerIsTerminal(cmd.InOrStdin())
+			return runAppsApply(cmd.Context(), plane, cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&file, "file", "", "Path to the app manifest file (required)")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Validate without persisting")
-	cmd.Flags().BoolVar(&chainDeploy, "deploy", false, "Deploy the accepted revision after applying")
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
+	cmd.Flags().StringVar(&opts.File, "file", "", "Path to the app manifest file (required)")
+	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Validate without persisting")
+	cmd.Flags().BoolVar(&opts.Deploy, "deploy", false, "Deploy the accepted revision after applying")
+	cmd.Flags().BoolVar(&opts.Yes, "yes", false, "Restore file images over set-image changes without asking")
+	cmd.Flags().BoolVar(&opts.JSON, "json", false, "Output as JSON")
 	return cmd
 }
 
-func runAppsApply(ctx context.Context, plane ControlPlane, _ io.Reader, out, errOut io.Writer, file string, dryRun, chainDeploy, jsonOut bool) error {
-	if dryRun && chainDeploy {
-		return fmt.Errorf("cannot combine --dry-run with --deploy: dry-run persists nothing to deploy")
-	}
+// readAppManifest reads one manifest file within the apply bound.
+func readAppManifest(file string) ([]byte, error) {
 	if file == "" {
-		return fmt.Errorf("missing required flag --file")
+		return nil, fmt.Errorf("missing required flag --file")
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return fmt.Errorf("failed to read manifest file: %w", err)
+		return nil, fmt.Errorf("failed to read manifest file: %w", err)
 	}
 	if len(data) > appApplyMaxBytes {
-		return fmt.Errorf("manifest exceeds the 1 MiB apply bound (%d bytes)", len(data))
+		return nil, fmt.Errorf("manifest exceeds the 1 MiB apply bound (%d bytes)", len(data))
 	}
-	resp, err := plane.ApplyApp(ctx, dto.AppApplyRequest{ManifestTOML: string(data), DryRun: dryRun})
+	return data, nil
+}
+
+func runAppsApply(ctx context.Context, plane ControlPlane, in io.Reader, out, errOut io.Writer, opts appsApplyOptions) error {
+	if opts.DryRun && opts.Deploy {
+		return fmt.Errorf("cannot combine --dry-run with --deploy: dry-run persists nothing to deploy")
+	}
+	data, err := readAppManifest(opts.File)
 	if err != nil {
 		return err
 	}
-	if !chainDeploy {
-		if jsonOut {
+	req := dto.AppApplyRequest{ManifestTOML: string(data), DryRun: opts.DryRun, AllowSetImageRevert: opts.Yes}
+	resp, err := plane.ApplyApp(ctx, req)
+	if err != nil {
+		resp, err = resolveSetImageRevert(ctx, plane, req, err, in, out, opts)
+		if err != nil {
+			return err
+		}
+	}
+	if !opts.Deploy {
+		if opts.JSON {
 			return writeJSON(out, resp)
 		}
-		return renderAppApply(out, resp, dryRun)
+		return renderAppApplyResult(out, resp, opts)
 	}
-	if jsonOut {
+	if opts.JSON {
 		return runAppsApplyDeployJSON(ctx, plane, resp, out, errOut)
 	}
-	if err := renderAppApply(out, resp, dryRun); err != nil {
+	if err := renderAppApply(out, resp, false); err != nil {
 		return err
 	}
 	return runAppsApplyDeploy(ctx, plane, resp, out, errOut)
+}
+
+// renderAppApplyResult renders a dry-run preview or an accepted apply.
+func renderAppApplyResult(out io.Writer, resp *dto.AppApplyResponse, opts appsApplyOptions) error {
+	if opts.DryRun {
+		return renderAppApplyPreview(out, resp, opts.File)
+	}
+	return renderAppApply(out, resp, false)
 }
 
 // appApplyDeployDocument is the single machine-readable apply+deploy result.
@@ -291,6 +327,9 @@ func renderAppApply(out io.Writer, resp *dto.AppApplyResponse, dryRun bool) erro
 	if err := renderAppDiffSection(out, resp.Diff); err != nil {
 		return err
 	}
+	if err := renderAppliedReverts(out, resp.SetImageReverts); err != nil {
+		return err
+	}
 	if resp.Pending {
 		return cliWriteLine(out, cliRenderMeta("intent:", resp.Intent))
 	}
@@ -309,9 +348,14 @@ func appRevisionSuffix(revision string) string {
 // renderAppDiffSection renders normalized diff paths using the same
 // added/removed/changed sections as `apps diff`; empty diffs render nothing.
 func renderAppDiffSection(out io.Writer, diff dto.AppDiffSection) error {
-	if len(diff.Added) == 0 && len(diff.Removed) == 0 && len(diff.Changed) == 0 {
-		return nil
-	}
+	return walkDiffSection(diff, func(title, path string) error {
+		return cliWriteLine(out, cliRenderMeta(title, path))
+	})
+}
+
+// walkDiffSection visits the added, removed, then changed paths, each
+// section sorted.
+func walkDiffSection(diff dto.AppDiffSection, visit func(title, path string) error) error {
 	for _, section := range []struct {
 		title string
 		paths []string
@@ -323,7 +367,7 @@ func renderAppDiffSection(out io.Writer, diff dto.AppDiffSection) error {
 		paths := append([]string(nil), section.paths...)
 		sort.Strings(paths)
 		for _, p := range paths {
-			if err := cliWriteLine(out, cliRenderMeta(section.title, p)); err != nil {
+			if err := visit(section.title, p); err != nil {
 				return err
 			}
 		}
@@ -492,10 +536,16 @@ func renderActiveServices(active dto.AppActiveDTO) []string {
 // newAppsDiffCmd creates `apps diff`.
 func newAppsDiffCmd() *cobra.Command {
 	var jsonOut bool
+	var file string
 	cmd := &cobra.Command{
 		Use:   "diff APP",
 		Short: "Show the normalized desired-vs-active diff",
-		Args:  cobra.ExactArgs(1),
+		Long: `Shows the normalized desired-vs-active diff.
+
+With --file, previews what applying that manifest would change instead (a
+dry-run apply), marking paths changed on the server by set-image apart from
+paths changed in the file.`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			handle, err := resolveAppPlane()
 			if err != nil {
@@ -503,9 +553,13 @@ func newAppsDiffCmd() *cobra.Command {
 			}
 			defer handle.close()
 			plane := handle.plane
+			if file != "" {
+				return runAppsDiffFile(cmd.Context(), plane, args[0], file, cmd.OutOrStdout(), jsonOut)
+			}
 			return runAppsDiff(cmd.Context(), plane, args[0], cmd.OutOrStdout(), jsonOut)
 		},
 	}
+	cmd.Flags().StringVar(&file, "file", "", "Preview applying this manifest file")
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "Output as JSON")
 	return cmd
 }
@@ -521,23 +575,27 @@ func runAppsDiff(ctx context.Context, plane ControlPlane, app string, out io.Wri
 	if len(resp.Diff.Added) == 0 && len(resp.Diff.Removed) == 0 && len(resp.Diff.Changed) == 0 {
 		return cliWriteLine(out, cliRenderMuted(fmt.Sprintf("No differences for %s.", app)))
 	}
-	for _, section := range []struct {
-		title string
-		paths []string
-	}{
-		{"added:", resp.Diff.Added},
-		{"removed:", resp.Diff.Removed},
-		{"changed:", resp.Diff.Changed},
-	} {
-		paths := append([]string(nil), section.paths...)
-		sort.Strings(paths)
-		for _, p := range paths {
-			if err := cliWriteLine(out, cliRenderMeta(section.title, p)); err != nil {
-				return err
-			}
-		}
+	return renderAppDiffSection(out, resp.Diff)
+}
+
+// runAppsDiffFile previews applying file to app through a dry-run apply and
+// renders it like `apps apply --dry-run`. The manifest must name app.
+func runAppsDiffFile(ctx context.Context, plane ControlPlane, app, file string, out io.Writer, jsonOut bool) error {
+	data, err := readAppManifest(file)
+	if err != nil {
+		return err
 	}
-	return nil
+	resp, err := plane.ApplyApp(ctx, dto.AppApplyRequest{ManifestTOML: string(data), DryRun: true})
+	if err != nil {
+		return err
+	}
+	if resp.App != app {
+		return fmt.Errorf("manifest %s declares app %q, not %q", file, resp.App, app)
+	}
+	if jsonOut {
+		return writeJSON(out, resp)
+	}
+	return renderAppApplyPreview(out, resp, file)
 }
 
 // newAppsSecretsCmd creates the `apps secrets` parent command.

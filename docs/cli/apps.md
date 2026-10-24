@@ -49,7 +49,7 @@ See [Local-only Mode](../config/auth.md#local-only-mode).
 ## gordon apps apply
 
 ```bash
-gordon apps apply --file blog.toml [--dry-run] [--deploy] [--json]
+gordon apps apply --file blog.toml [--dry-run] [--deploy] [--yes] [--json]
 ```
 
 Validates a manifest file and persists it as desired state (or dry-runs).
@@ -79,6 +79,66 @@ No initial running document is emitted, and progress, transient warnings,
 and Ctrl-C resume guidance go to stderr.
 
 `--dry-run` and `--deploy` cannot be combined.
+
+### Images set by set-image
+
+`gordon apps set-image` changes a service image on the server only. When the
+manifest still names another image for that service, applying it would
+restore the file value. The daemon refuses that apply (HTTP 409,
+`set-image-revert`) unless the caller confirms it:
+
+```text
+Warning: the manifest would revert 1 set-image change(s):
+  service: web
+    server: registry.example.com/web@sha256:3f1c…  (set-image, rev-2 by oidc:https://ci.example.com#repo at 2026-10-20T09:30:00Z)
+    file: registry.example.com/web@sha256:9ab2…
+  Applying restores the file value and replaces the running image.
+Continue? [y/N]
+```
+
+- On a terminal, `y` retries the apply once against the same desired
+  revision; anything else keeps the server image.
+- Without a terminal, or after `n`, the command exits nonzero and prints the
+  lines to paste into the manifest to keep the server image:
+
+  ```toml
+  [services.web]
+  image = "registry.example.com/web@sha256:3f1c…"
+  ```
+
+- `--yes` restores the file images without asking (for scripts).
+- `--dry-run` shows the same warning and paste lines, without a prompt.
+- `--json` never prompts. On a refusal stdout carries the 409 body:
+
+```json
+{
+  "error": "set-image-revert",
+  "desired_revision": "rev-2",
+  "set_image_reverts": [
+    {
+      "service": "web",
+      "server_image": "registry.example.com/web@sha256:3f1c…",
+      "file_image": "registry.example.com/web@sha256:9ab2…",
+      "revision": "rev-2",
+      "principal": "oidc:https://ci.example.com#repo",
+      "changed_at": "2026-10-20T09:30:00Z"
+    }
+  ]
+}
+```
+
+Apply and dry-run responses list the same entries in `set_image_reverts`
+when the apply replaces (or would replace) set-image images.
+
+### Flags
+
+| Flag | Description |
+|------|-------------|
+| `--file` | Path to the app manifest file (required) |
+| `--dry-run` | Validate without persisting |
+| `--deploy` | Deploy the accepted revision after applying |
+| `--yes` | Restore file images over set-image changes without asking |
+| `--json` | Output as JSON |
 
 ---
 
@@ -156,10 +216,28 @@ and progress goes to stderr.
 ## gordon apps diff
 
 ```bash
-gordon apps diff APP [--json]
+gordon apps diff APP [--file blog.toml] [--json]
 ```
 
 Shows the normalized desired-vs-active diff (`added`, `removed`, `changed`).
+
+With `--file`, previews what applying that manifest would change (a dry-run
+apply, nothing is persisted). The manifest must declare `APP`. Output matches
+`apps apply --dry-run`: each path is marked `changed in your file` or
+`changed on the server (set-image, REV)`, followed by the
+[set-image warning](#images-set-by-set-image) and paste lines. `--json`
+prints the dry-run apply response, including `set_image_reverts`.
+
+```text
+Validated (dry-run) blog
+changed: service/web/image  (changed on the server (set-image, rev-2))
+changed: env/MODE  (changed in your file)
+```
+
+| Flag | Description |
+|------|-------------|
+| `--file` | Preview applying this manifest file |
+| `--json` | Output as JSON |
 
 ---
 
@@ -315,6 +393,8 @@ their provenance.
   caller needs a `[[set_image_policies]]` entry with issuer `gordon` and its
   token subject.
 - Setting a digest the service already runs succeeds without a change.
+- A later `apps apply` of a manifest that names another image for the service
+  asks before restoring it (see [Images set by set-image](#images-set-by-set-image)).
 - `apps set-image` is unrelated to the `gordon images` command group.
 
 | Flag | Description |

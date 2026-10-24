@@ -145,6 +145,7 @@ var errorMappings = []errorMapping{
 	{domain.ErrAppRevisionNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppIntentNotFound, http.StatusNotFound, "not-found", ""},
 	{domain.ErrAppOperationNotFound, http.StatusNotFound, "not-found", ""},
+	{domain.ErrAppSetImageRevert, http.StatusConflict, "set-image-revert", "confirm the revert or update the manifest to the server image"},
 	{domain.ErrAppBusy, http.StatusConflict, "app-busy", "another operation of this app is running; retry later with a new key"},
 	{domain.ErrAppStateConflict, http.StatusConflict, "state-conflict", ""},
 }

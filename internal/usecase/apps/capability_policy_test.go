@@ -32,7 +32,7 @@ func TestApply_AcceptsCapabilitiesUnderAdministrativePolicy(t *testing.T) {
 		WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{
 			"net-admin": capabilityPolicy([]string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 }
 
@@ -42,7 +42,7 @@ func TestApply_RejectsCapabilityWithoutPolicyBeforeStoreAccess(t *testing.T) {
 	spec.Services[0].Capabilities = []string{"net-admin"}
 	svc := apps.NewService(store, zerowrap.Default())
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
 	assert.Contains(t, err.Error(), "blog")
@@ -61,7 +61,7 @@ func TestApply_RejectsCapabilityOutsideAllowlists(t *testing.T) {
 			store := outmocks.NewMockAppState(t)
 			svc := apps.NewService(store, zerowrap.Default()).
 				WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{"net-admin": policy})
-			_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+			_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 			require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
 			assert.NotContains(t, err.Error(), "NET_ADMIN")
 		})
@@ -78,11 +78,11 @@ func TestApply_CapabilityPoliciesReplaceOnReload(t *testing.T) {
 		WithCapabilityPolicies(map[string]domain.AppCapabilityPolicy{
 			"net-admin": capabilityPolicy([]string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	svc.SetCapabilityPolicies(nil)
-	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
 }
 
@@ -92,6 +92,6 @@ func TestApply_CapabilityDryRunRefusedWithoutMutation(t *testing.T) {
 	spec.Services[0].Capabilities = []string{"net-admin"}
 	svc := apps.NewService(store, zerowrap.Default())
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), true)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.ErrorIs(t, err, domain.ErrCapabilityPolicy)
 }

@@ -197,13 +197,24 @@ type ApplyResult struct {
 	Pending           bool
 	Diff              domain.AppDiff
 	IntentID          string
+	SetImageReverts   []domain.AppSetImageRevert
 }
 
 // DryRunResult describes validation without persistence.
 type DryRunResult struct {
-	App   string
-	Valid bool
-	Diff  domain.AppDiff
+	App             string
+	Valid           bool
+	Diff            domain.AppDiff
+	SetImageReverts []domain.AppSetImageRevert
+}
+
+// ApplyOptions tunes one apply. AllowSetImageRevert accepts a manifest that
+// replaces images introduced by set-image; ExpectedRevision, when set, must
+// equal the current desired revision.
+type ApplyOptions struct {
+	DryRun              bool
+	AllowSetImageRevert bool
+	ExpectedRevision    string
 }
 
 // newRevisionID allocates a time-ordered rev- identifier (uuid v7).
@@ -233,13 +244,15 @@ func hexNoDashes(id uuid.UUID) string {
 
 // Apply validates a normalized spec and persists it as desired state.
 // source is the raw manifest bytes (hashed for audit, never re-read).
-// dryRun validates and previews without persistence or effects.
-func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*ApplyResult, *DryRunResult, error) {
+// opts.DryRun validates and previews without persistence or effects. A
+// non-dry-run apply that would replace set-image images is refused with a
+// *domain.SetImageRevertError unless opts.AllowSetImageRevert is set.
+func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte, opts ApplyOptions) (*ApplyResult, *DryRunResult, error) {
 	ctx = zerowrap.CtxWithFields(ctx, map[string]any{
 		zerowrap.FieldLayer:   "usecase",
 		zerowrap.FieldUseCase: "Apply",
 		"app":                 spec.Name,
-		"dry_run":             dryRun,
+		"dry_run":             opts.DryRun,
 	})
 	log := zerowrap.FromCtx(ctx)
 
@@ -257,6 +270,9 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := checkApplyGuards(prepared, opts); err != nil {
+		return nil, nil, err
+	}
 	if prepared.noop {
 		log.Info().Str("revision", prepared.desired.Revision).Msg("apps: no-change apply, idempotent")
 		return &ApplyResult{
@@ -267,14 +283,33 @@ func (s *Service) Apply(ctx context.Context, spec domain.AppSpec, source []byte,
 			Diff:              prepared.diff,
 		}, nil, nil
 	}
-	if dryRun {
+	if opts.DryRun {
 		return nil, &DryRunResult{
-			App:   spec.Name,
-			Valid: true,
-			Diff:  prepared.diff,
+			App:             spec.Name,
+			Valid:           true,
+			Diff:            prepared.diff,
+			SetImageReverts: prepared.reverts,
 		}, nil
 	}
+	if len(prepared.reverts) > 0 {
+		log.Warn().Int("services", len(prepared.reverts)).Str("revision", prepared.desired.Revision).
+			Msg("apps: apply reverts set-image changes, allowed by the caller")
+	}
 	return s.persistApply(ctx, spec, source, prepared)
+}
+
+// checkApplyGuards refuses an apply against another desired revision than
+// the caller expected, and a non-dry-run apply that would silently revert
+// set-image changes.
+func checkApplyGuards(prepared *applyPrepared, opts ApplyOptions) error {
+	current := prepared.desired.Revision
+	if opts.ExpectedRevision != "" && opts.ExpectedRevision != current {
+		return fmt.Errorf("apps: desired revision is %s, not %s: %w", current, opts.ExpectedRevision, domain.ErrAppStateConflict)
+	}
+	if opts.DryRun || opts.AllowSetImageRevert || len(prepared.reverts) == 0 {
+		return nil
+	}
+	return &domain.SetImageRevertError{DesiredRevision: current, Reverts: prepared.reverts}
 }
 
 // ValidateSpec applies the same structural and installation policy checks to
@@ -412,6 +447,7 @@ type applyPrepared struct {
 	desired      domain.AppDesiredRevision
 	diff         domain.AppDiff
 	reservations []domain.AppListenerReservation
+	reverts      []domain.AppSetImageRevert
 	noop         bool
 }
 
@@ -445,7 +481,14 @@ func (s *Service) prepareApply(ctx context.Context, spec domain.AppSpec) (*apply
 	if hasDesired && specsEqual(desired.Spec, spec) {
 		return &applyPrepared{desired: desired, diff: diff, reservations: reservations, noop: true}, nil
 	}
-	return &applyPrepared{desired: desired, diff: diff, reservations: reservations}, nil
+	var reverts []domain.AppSetImageRevert
+	if hasDesired {
+		reverts, err = detectSetImageReverts(ctx, s.store, desired, spec)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &applyPrepared{desired: desired, diff: diff, reservations: reservations, reverts: reverts}, nil
 }
 
 // persistApply durably accepts one apply.
@@ -474,6 +517,7 @@ func (s *Service) persistApply(ctx context.Context, spec domain.AppSpec, source 
 		Pending:           true,
 		Diff:              prepared.diff,
 		IntentID:          intent.Intent,
+		SetImageReverts:   prepared.reverts,
 	}, nil, nil
 }
 

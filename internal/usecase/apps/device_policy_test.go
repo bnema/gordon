@@ -33,7 +33,7 @@ func TestApply_AcceptsDevicesUnderAdministrativePolicy(t *testing.T) {
 		WithDevicePolicies(map[string]domain.AppDevicePolicy{
 			"test_gpu": devicePolicy([]string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 }
 
@@ -43,7 +43,7 @@ func TestApply_RejectsDeviceWithoutPolicyBeforeStoreAccess(t *testing.T) {
 	spec.Services[0].Devices = []string{"test_gpu"}
 	svc := apps.NewService(store, zerowrap.Default())
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 	assert.Contains(t, err.Error(), "blog")
@@ -61,7 +61,7 @@ func TestApply_RejectsDeviceOutsideAllowlists(t *testing.T) {
 			WithDevicePolicies(map[string]domain.AppDevicePolicy{
 				"test_gpu": devicePolicy([]string{"other"}, []string{"web"}),
 			})
-		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 		require.ErrorIs(t, err, domain.ErrDevicePolicy)
 		assert.NotContains(t, err.Error(), "GPU-test-uuid")
 	})
@@ -72,7 +72,7 @@ func TestApply_RejectsDeviceOutsideAllowlists(t *testing.T) {
 			WithDevicePolicies(map[string]domain.AppDevicePolicy{
 				"test_gpu": devicePolicy([]string{"blog"}, []string{"other"}),
 			})
-		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 		require.ErrorIs(t, err, domain.ErrDevicePolicy)
 		assert.NotContains(t, err.Error(), "GPU-test-uuid")
 	})
@@ -91,13 +91,13 @@ func TestApply_DevicePoliciesReplaceOnReload(t *testing.T) {
 		WithDevicePolicies(map[string]domain.AppDevicePolicy{
 			"test_gpu": devicePolicy([]string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	svc.SetDevicePolicies(map[string]domain.AppDevicePolicy{
 		"test_gpu": devicePolicy([]string{"other"}, []string{"web"}),
 	})
-	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 }
 
@@ -107,7 +107,7 @@ func TestApply_DeviceDryRunRefusedWithoutMutation(t *testing.T) {
 	spec.Services[0].Devices = []string{"test_gpu"}
 	svc := apps.NewService(store, zerowrap.Default())
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), true)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.Anything)
 }
@@ -123,7 +123,7 @@ func TestApply_RejectsDuplicateCDIIDsAcrossDevices(t *testing.T) {
 			"gpu-b": {Name: "gpu-b", CDI: []string{shared}, AllowedApps: []string{"blog"}, AllowedServices: []string{"web"}},
 		})
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.ErrorIs(t, err, domain.ErrDevicePolicy)
 	assert.NotContains(t, err.Error(), shared, "apply errors must never leak CDI IDs")

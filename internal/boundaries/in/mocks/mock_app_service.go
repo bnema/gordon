@@ -49,8 +49,8 @@ func (_m *MockAppService) EXPECT() *MockAppService_Expecter {
 }
 
 // Apply provides a mock function for the type MockAppService
-func (_mock *MockAppService) Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error) {
-	ret := _mock.Called(ctx, spec, source, dryRun)
+func (_mock *MockAppService) Apply(ctx context.Context, input in.AppApplyInput) (*in.AppApplyResult, *in.AppDryRunResult, error) {
+	ret := _mock.Called(ctx, input)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Apply")
@@ -59,25 +59,25 @@ func (_mock *MockAppService) Apply(ctx context.Context, spec domain.AppSpec, sou
 	var r0 *in.AppApplyResult
 	var r1 *in.AppDryRunResult
 	var r2 error
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppSpec, []byte, bool) (*in.AppApplyResult, *in.AppDryRunResult, error)); ok {
-		return returnFunc(ctx, spec, source, dryRun)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.AppApplyInput) (*in.AppApplyResult, *in.AppDryRunResult, error)); ok {
+		return returnFunc(ctx, input)
 	}
-	if returnFunc, ok := ret.Get(0).(func(context.Context, domain.AppSpec, []byte, bool) *in.AppApplyResult); ok {
-		r0 = returnFunc(ctx, spec, source, dryRun)
+	if returnFunc, ok := ret.Get(0).(func(context.Context, in.AppApplyInput) *in.AppApplyResult); ok {
+		r0 = returnFunc(ctx, input)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*in.AppApplyResult)
 		}
 	}
-	if returnFunc, ok := ret.Get(1).(func(context.Context, domain.AppSpec, []byte, bool) *in.AppDryRunResult); ok {
-		r1 = returnFunc(ctx, spec, source, dryRun)
+	if returnFunc, ok := ret.Get(1).(func(context.Context, in.AppApplyInput) *in.AppDryRunResult); ok {
+		r1 = returnFunc(ctx, input)
 	} else {
 		if ret.Get(1) != nil {
 			r1 = ret.Get(1).(*in.AppDryRunResult)
 		}
 	}
-	if returnFunc, ok := ret.Get(2).(func(context.Context, domain.AppSpec, []byte, bool) error); ok {
-		r2 = returnFunc(ctx, spec, source, dryRun)
+	if returnFunc, ok := ret.Get(2).(func(context.Context, in.AppApplyInput) error); ok {
+		r2 = returnFunc(ctx, input)
 	} else {
 		r2 = ret.Error(2)
 	}
@@ -91,36 +91,24 @@ type MockAppService_Apply_Call struct {
 
 // Apply is a helper method to define mock.On call
 //   - ctx context.Context
-//   - spec domain.AppSpec
-//   - source []byte
-//   - dryRun bool
-func (_e *MockAppService_Expecter) Apply(ctx any, spec any, source any, dryRun any) *MockAppService_Apply_Call {
-	return &MockAppService_Apply_Call{Call: _e.mock.On("Apply", ctx, spec, source, dryRun)}
+//   - input in.AppApplyInput
+func (_e *MockAppService_Expecter) Apply(ctx any, input any) *MockAppService_Apply_Call {
+	return &MockAppService_Apply_Call{Call: _e.mock.On("Apply", ctx, input)}
 }
 
-func (_c *MockAppService_Apply_Call) Run(run func(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool)) *MockAppService_Apply_Call {
+func (_c *MockAppService_Apply_Call) Run(run func(ctx context.Context, input in.AppApplyInput)) *MockAppService_Apply_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		var arg0 context.Context
 		if args[0] != nil {
 			arg0 = args[0].(context.Context)
 		}
-		var arg1 domain.AppSpec
+		var arg1 in.AppApplyInput
 		if args[1] != nil {
-			arg1 = args[1].(domain.AppSpec)
-		}
-		var arg2 []byte
-		if args[2] != nil {
-			arg2 = args[2].([]byte)
-		}
-		var arg3 bool
-		if args[3] != nil {
-			arg3 = args[3].(bool)
+			arg1 = args[1].(in.AppApplyInput)
 		}
 		run(
 			arg0,
 			arg1,
-			arg2,
-			arg3,
 		)
 	})
 	return _c
@@ -131,7 +119,7 @@ func (_c *MockAppService_Apply_Call) Return(appApplyResult *in.AppApplyResult, a
 	return _c
 }
 
-func (_c *MockAppService_Apply_Call) RunAndReturn(run func(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*in.AppApplyResult, *in.AppDryRunResult, error)) *MockAppService_Apply_Call {
+func (_c *MockAppService_Apply_Call) RunAndReturn(run func(ctx context.Context, input in.AppApplyInput) (*in.AppApplyResult, *in.AppDryRunResult, error)) *MockAppService_Apply_Call {
 	_c.Call.Return(run)
 	return _c
 }

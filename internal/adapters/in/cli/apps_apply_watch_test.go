@@ -35,8 +35,7 @@ func TestRunAppsApply_DeployAcceptedPollsToSuccess(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "[app]\nname = \"blog\"\n"), false, true, false))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "[app]\nname = \"blog\"\n"), Deploy: true}))
 	text := out.String()
 	assert.Contains(t, text, "Applied blog (rev-b)", "the apply outcome stays visible")
 	assert.Contains(t, text, "op op-1:", "the accepted deploy reports progress through the watch path")
@@ -53,8 +52,7 @@ func TestRunAppsApply_DeployAcceptedNoSecondMutation(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, false))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true}))
 }
 
 func TestRunAppsApply_DeployAcceptedUnchangedStateNotReprinted(t *testing.T) {
@@ -73,8 +71,7 @@ func TestRunAppsApply_DeployAcceptedUnchangedStateNotReprinted(t *testing.T) {
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, false))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true}))
 	assert.Equal(t, 2, strings.Count(out.String(), "op op-1:"),
 		"initial and one advanced poll render progress; the unchanged poll is not reprinted")
 }
@@ -92,8 +89,7 @@ func TestRunAppsApply_DeployAcceptedPartialFailsButKeepsApply(t *testing.T) {
 	}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, false)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true})
 	require.Error(t, err, "a terminal partial deploy must exit nonzero")
 	assert.Contains(t, err.Error(), "apply of blog succeeded (rev-b)")
 	assert.Contains(t, err.Error(), "partial")
@@ -113,8 +109,7 @@ func TestRunAppsApply_DeployAcceptedJSONKeepsStdoutSingleCombinedDocument(t *tes
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "success", Outcome: "success"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, true))
+	require.NoError(t, runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true, JSON: true}))
 
 	dec := json.NewDecoder(bytes.NewReader(out.Bytes()))
 	var got appApplyDeployDocument
@@ -138,8 +133,7 @@ func TestRunAppsApply_DeployAcceptedJSONFailureKeepsApplyDocument(t *testing.T) 
 		&dto.AppDeployResponse{Op: "op-1", App: "blog", Status: "failed", Outcome: "failed"}, nil).Once()
 
 	var out, errOut bytes.Buffer
-	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, true)
+	err := runAppsApply(context.Background(), plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true, JSON: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apply of blog succeeded (rev-b)")
 
@@ -160,8 +154,7 @@ func TestRunAppsApply_DeployAcceptedCancelPrintsResume(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(runningOp("op-1"), "key-1", nil).Once()
 
 	var out, errOut bytes.Buffer
-	err := runAppsApply(ctx, plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, false)
+	err := runAppsApply(ctx, plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apply of blog succeeded (rev-b)")
 	text := out.String()
@@ -177,8 +170,7 @@ func TestRunAppsApply_DeployAcceptedCancelKeepsJSONStdoutClean(t *testing.T) {
 	plane.EXPECT().DeployApp(mock.Anything, "blog", mock.Anything).Return(runningOp("op-1"), "key-1", nil).Once()
 
 	var out, errOut bytes.Buffer
-	err := runAppsApply(ctx, plane, strings.NewReader(""), &out, &errOut,
-		writeManifest(t, "x"), false, true, true)
+	err := runAppsApply(ctx, plane, strings.NewReader(""), &out, &errOut, appsApplyOptions{File: writeManifest(t, "x"), Deploy: true, JSON: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "apply of blog succeeded (rev-b)")
 	assert.Empty(t, out.String(), "JSON stdout stays empty when interrupted before terminal")

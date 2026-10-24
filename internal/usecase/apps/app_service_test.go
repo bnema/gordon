@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/bnema/gordon/internal/boundaries/in"
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/internal/usecase/apps"
 )
@@ -45,7 +46,7 @@ func TestAppServiceImpl_SecretsRoundTrip(t *testing.T) {
 	store.EXPECT().AcceptApply(mock.Anything, mock.Anything).Return(nil).Once()
 
 	svc := apps.NewAppServiceImpl(store, deploy, secrets, zerowrap.Default())
-	_, _, err := svc.Apply(ctx, secretSpec(), []byte("m"), false)
+	_, _, err := svc.Apply(ctx, in.AppApplyInput{Spec: secretSpec(), Source: []byte("m")})
 	require.NoError(t, err)
 
 	// SetSecrets resolves registered names from desired state.

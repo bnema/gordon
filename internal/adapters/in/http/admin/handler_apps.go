@@ -155,15 +155,22 @@ func (h *Handler) handleAppApply(w http.ResponseWriter, r *http.Request) {
 		h.sendAppError(w, http.StatusBadRequest, "invalid-manifest", err.Error(), "", "")
 		return
 	}
-	applyResult, dryResult, err := svc.Apply(ctx, spec, []byte(req.ManifestTOML), req.DryRun)
+	applyResult, dryResult, err := svc.Apply(ctx, in.AppApplyInput{
+		Spec:                spec,
+		Source:              []byte(req.ManifestTOML),
+		DryRun:              req.DryRun,
+		AllowSetImageRevert: req.AllowSetImageRevert,
+		ExpectedRevision:    req.ExpectedRevision,
+	})
 	if err != nil {
-		h.sendAppOpError(w, err)
+		h.sendAppApplyError(w, err)
 		return
 	}
 	if dryResult != nil {
 		h.sendJSON(w, http.StatusOK, dto.AppApplyResponse{
-			App:  spec.Name,
-			Diff: toAppDiffSection(dryResult.Diff),
+			App:             spec.Name,
+			Diff:            toAppDiffSection(dryResult.Diff),
+			SetImageReverts: toSetImageRevertDTOs(dryResult.SetImageReverts),
 		})
 		return
 	}
@@ -175,7 +182,41 @@ func (h *Handler) handleAppApply(w http.ResponseWriter, r *http.Request) {
 		Noop:              applyResult.Noop,
 		Diff:              toAppDiffSection(applyResult.Diff),
 		Intent:            applyResult.IntentID,
+		SetImageReverts:   toSetImageRevertDTOs(applyResult.SetImageReverts),
 	})
+}
+
+// sendAppApplyError answers a set-image revert refusal with 409 and the
+// reverts plus the checked desired revision, so the client can confirm and
+// retry against exactly that revision. Other errors map as usual.
+func (h *Handler) sendAppApplyError(w http.ResponseWriter, err error) {
+	var revert *domain.SetImageRevertError
+	if !errors.As(err, &revert) {
+		h.sendAppOpError(w, err)
+		return
+	}
+	h.sendJSON(w, http.StatusConflict, dto.AppSetImageRevertConflict{
+		Error:           dto.AppSetImageRevertCode,
+		Message:         err.Error(),
+		Hint:            "confirm with allow_set_image_revert, or update the manifest to the server image",
+		DesiredRevision: revert.DesiredRevision,
+		SetImageReverts: toSetImageRevertDTOs(revert.Reverts),
+	})
+}
+
+// toSetImageRevertDTOs maps set-image reverts to their wire shape.
+func toSetImageRevertDTOs(reverts []domain.AppSetImageRevert) []dto.AppSetImageRevertDTO {
+	if len(reverts) == 0 {
+		return nil
+	}
+	out := make([]dto.AppSetImageRevertDTO, 0, len(reverts))
+	for _, r := range reverts {
+		out = append(out, dto.AppSetImageRevertDTO{
+			Service: r.Service, ServerImage: r.ServerImage, FileImage: r.FileImage,
+			Revision: r.Revision, Principal: r.Principal, ChangedAt: r.ChangedAt,
+		})
+	}
+	return out
 }
 
 // handleAppList returns one summary per known app.

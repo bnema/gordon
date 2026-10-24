@@ -68,7 +68,7 @@ func TestApply_RejectsImageOutsideRegistryAllowlistBeforeStoreAccess(t *testing.
 	spec.Services[0].Image = "registry.example.com/team/app:1"
 	svc := apps.NewService(store, zerowrap.Default()).WithImagePolicy(fixedImagePolicy(domain.ImageSourcePolicy{}))
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
 }
@@ -82,7 +82,7 @@ func TestApply_RequireDigestIncludesInstallationRegistry(t *testing.T) {
 		RequireDigest:        true,
 	}))
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	assert.ErrorIs(t, err, domain.ErrAppImageNotAllowed)
 }
 
@@ -106,20 +106,20 @@ func TestApply_DryRunFollowsPublishedImagePolicy(t *testing.T) {
 	spec := testSpec("blog")
 	spec.Services[0].Image = "ci.example.com/web" + digest
 
-	_, _, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, _, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.ErrorIs(t, err, domain.ErrAppImageNotAllowed, "no CI domain yet")
 
 	policy = domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", InstallationAliases: []string{"ci.example.com"}}
-	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.NoError(t, err)
 	require.NotNil(t, dry)
 	assert.True(t, dry.Valid)
 
 	policy = domain.ImageSourcePolicy{InstallationRegistry: "gordon.example.com", InstallationAliases: []string{"ci2.example.com"}}
-	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.ErrorIs(t, err, domain.ErrAppImageNotAllowed, "the former CI domain is refused")
 	spec.Services[0].Image = "ci2.example.com/web" + digest
-	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, _, err = svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.NoError(t, err)
 }
 
@@ -133,7 +133,7 @@ func TestApply_HoldsSharedGCLease(t *testing.T) {
 	barrier := &recordingBarrier{}
 	svc := apps.NewService(store, zerowrap.Default()).WithGCBarrier(barrier)
 
-	_, _, err := svc.Apply(ctx, spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, barrier.shared, "apply must take the shared GC lease")
@@ -148,7 +148,7 @@ func TestApply_FailsClosedWhenGCBarrierRefuses(t *testing.T) {
 	barrier := &recordingBarrier{err: assert.AnError}
 	svc := apps.NewService(outmocks.NewMockAppState(t), zerowrap.Default()).WithGCBarrier(barrier)
 
-	_, _, err := svc.Apply(ctx, testSpec("blog"), []byte("manifest"), false)
+	_, _, err := svc.Apply(ctx, testSpec("blog"), []byte("manifest"), apps.ApplyOptions{})
 
 	require.Error(t, err)
 	assert.Equal(t, 0, barrier.shared)
@@ -161,7 +161,7 @@ func TestApply_AcceptsAndPersists(t *testing.T) {
 	spec := testSpec("blog")
 
 	applySuccess(store, spec)
-	result, dry, err := svc.Apply(ctx, spec, []byte("manifest"), false)
+	result, dry, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 	assert.Nil(t, dry)
 	require.NotNil(t, result)
@@ -179,7 +179,7 @@ func TestApply_NoopIsIdempotent(t *testing.T) {
 
 	// First apply persists.
 	applySuccess(store, spec)
-	first, _, err := svc.Apply(ctx, spec, []byte("manifest"), false)
+	first, _, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	// Second apply with identical content is a no-op: no writes.
@@ -188,7 +188,7 @@ func TestApply_NoopIsIdempotent(t *testing.T) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(desired, true, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
-	second, _, err := svc.Apply(ctx, spec, []byte("manifest"), false)
+	second, _, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 	assert.True(t, second.Noop)
 	assert.Equal(t, first.ResultingRevision, second.ResultingRevision)
@@ -204,7 +204,7 @@ func TestApply_DryRunWritesNothing(t *testing.T) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
-	result, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	result, dry, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.NoError(t, err)
 	assert.Nil(t, result)
 	require.NotNil(t, dry)
@@ -233,7 +233,7 @@ func TestApply_ImageOnlyDiffPreservesActiveNetworks(t *testing.T) {
 		Services: map[string]domain.AppEffectiveService{"web": {Spec: activeService}},
 	}, true, nil).Once()
 
-	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.NoError(t, err)
 	require.NotNil(t, dry)
 	assert.Equal(t, []string{"service/web/image"}, dry.Diff.Changed)
@@ -245,7 +245,7 @@ func TestApply_RejectsCrossAppConflict(t *testing.T) {
 	svc := apps.NewService(store, zerowrap.Default())
 
 	applySuccess(store, testSpec("blog"))
-	_, _, err := svc.Apply(ctx, testSpec("blog"), []byte("m"), false)
+	_, _, err := svc.Apply(ctx, testSpec("blog"), []byte("m"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	// Same host, different app → conflict before any write.
@@ -257,7 +257,7 @@ func TestApply_RejectsCrossAppConflict(t *testing.T) {
 	}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "shop").Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "shop").Return(domain.AppActive{}, false, nil).Once()
-	_, _, err = svc.Apply(ctx, other, []byte("m"), false)
+	_, _, err = svc.Apply(ctx, other, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrAppReservationConflict)
 	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.MatchedBy(func(intent domain.AppApplyIntent) bool {
 		return intent.App == "shop"
@@ -278,7 +278,7 @@ func TestApply_RejectsDuplicateClaimInCandidate(t *testing.T) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, "blog").Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{}, false, nil).Once()
-	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrAppReservationConflict)
 }
 
@@ -307,7 +307,7 @@ func TestApply_RejectsOverlappingWildcardClaimInCandidate(t *testing.T) {
 	store.EXPECT().LoadCheckpoint(mock.Anything).Return(domain.AppStoreCheckpoint{}, nil).Once()
 	store.EXPECT().LoadDesired(mock.Anything, spec.Name).Return(domain.AppDesiredRevision{}, false, nil).Once()
 	store.EXPECT().LoadActive(mock.Anything, spec.Name).Return(domain.AppActive{}, false, nil).Once()
-	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrAppReservationConflict)
 	store.AssertNotCalled(t, "AcceptApply", mock.Anything, mock.Anything)
 }
@@ -318,7 +318,7 @@ func TestApply_InvalidSpecFailsBeforeStore(t *testing.T) {
 	svc := apps.NewService(store, zerowrap.Default())
 
 	spec := testSpec("Bad!")
-	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
 	store.AssertNotCalled(t, "Recover", mock.Anything)
 }
@@ -337,7 +337,7 @@ func TestApply_RejectsPublishMismatchBeforeStore(t *testing.T) {
 	spec.Services[0].HTTP = nil
 	spec.Services[0].TCP = []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 25432, Publish: "127.0.0.1:25432"}}
 
-	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
 	store.AssertNotCalled(t, "Recover", mock.Anything)
 }
@@ -353,7 +353,7 @@ func TestApply_RejectsUnknownEntrypointBeforeStore(t *testing.T) {
 	spec.Services[0].HTTP = nil
 	spec.Services[0].TCP = []domain.AppTCPInterface{{Entrypoint: "tcp", Port: 25432, Publish: "0.0.0.0:25432"}}
 
-	_, _, err := svc.Apply(ctx, spec, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, spec, []byte("m"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
 	store.AssertNotCalled(t, "Recover", mock.Anything)
 }
@@ -374,7 +374,7 @@ func TestApply_SamePortDifferentProtoCoexists(t *testing.T) {
 		},
 	}
 	applySuccess(store, tcpApp)
-	_, _, err := svc.Apply(ctx, tcpApp, []byte("m"), false)
+	_, _, err := svc.Apply(ctx, tcpApp, []byte("m"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	udpApp := domain.AppSpec{
@@ -388,7 +388,7 @@ func TestApply_SamePortDifferentProtoCoexists(t *testing.T) {
 		},
 	}
 	applySuccess(store, udpApp)
-	_, _, err = svc.Apply(ctx, udpApp, []byte("m"), false)
+	_, _, err = svc.Apply(ctx, udpApp, []byte("m"), apps.ApplyOptions{})
 	require.NoError(t, err)
 }
 
@@ -433,7 +433,7 @@ func TestApply_ImageOnlyDiffWithAppEnv(t *testing.T) {
 	}, true, nil).Once()
 	store.EXPECT().LoadRevision(mock.Anything, "blog", "rev-1").Return(domain.AppDesiredRevision{Revision: "rev-1", App: "blog", Spec: previous}, nil).Once()
 
-	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), true)
+	_, dry, err := svc.Apply(ctx, spec, []byte("manifest"), apps.ApplyOptions{DryRun: true})
 	require.NoError(t, err)
 	require.NotNil(t, dry)
 	assert.Equal(t, []string{"service/web/image"}, dry.Diff.Changed)

@@ -39,7 +39,7 @@ func TestApply_AcceptsBindsUnderAdministrativePolicy(t *testing.T) {
 		WithBindPolicies(map[string]domain.AppBindPolicy{
 			"config": bindPolicy(root, source, []string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 }
 
@@ -49,7 +49,7 @@ func TestApply_RejectsBindWithoutPolicyBeforeStoreAccess(t *testing.T) {
 	spec.Services[0].Binds = []domain.AppBind{{Name: "config", Path: "/etc/app.conf"}}
 	svc := apps.NewService(store, zerowrap.Default())
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
 	assert.Contains(t, err.Error(), "blog")
@@ -70,7 +70,7 @@ func TestApply_RejectsBindOutsideAllowlists(t *testing.T) {
 			WithBindPolicies(map[string]domain.AppBindPolicy{
 				"config": bindPolicy(root, source, []string{"other"}, []string{"web"}),
 			})
-		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 		require.ErrorIs(t, err, domain.ErrBindPolicy)
 		assert.NotContains(t, err.Error(), source)
 	})
@@ -81,7 +81,7 @@ func TestApply_RejectsBindOutsideAllowlists(t *testing.T) {
 			WithBindPolicies(map[string]domain.AppBindPolicy{
 				"config": bindPolicy(root, source, []string{"blog"}, []string{"other"}),
 			})
-		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+		_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 		require.ErrorIs(t, err, domain.ErrBindPolicy)
 		assert.NotContains(t, err.Error(), source)
 	})
@@ -100,7 +100,7 @@ func TestApply_RejectsBindSourceOutsideRoot(t *testing.T) {
 			"config": bindPolicy(root, source, []string{"blog"}, []string{"web"}),
 		})
 
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
 	assert.NotContains(t, err.Error(), source, "apply errors must never leak the policy source path")
@@ -122,12 +122,12 @@ func TestApply_BindPoliciesReplaceOnReload(t *testing.T) {
 		WithBindPolicies(map[string]domain.AppBindPolicy{
 			"config": bindPolicy(root, source, []string{"blog"}, []string{"web"}),
 		})
-	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err := svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.NoError(t, err)
 
 	svc.SetBindPolicies(map[string]domain.AppBindPolicy{
 		"config": bindPolicy(root, source, []string{"other"}, []string{"web"}),
 	})
-	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), false)
+	_, _, err = svc.Apply(context.Background(), spec, []byte("manifest"), apps.ApplyOptions{})
 	require.ErrorIs(t, err, domain.ErrBindPolicy)
 }

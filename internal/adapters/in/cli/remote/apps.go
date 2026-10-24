@@ -97,17 +97,49 @@ func (c *Client) doMutation(ctx context.Context, method, path, key string, jsonB
 	return resp, nil
 }
 
-// ApplyApp validates and persists desired state (or dry-runs).
+// SetImageRevertError reports an apply refused with 409 because it would
+// revert set-image changes. Conflict carries the reverts and the checked
+// desired revision; a confirmed retry sends that revision as
+// expected_revision with allow_set_image_revert.
+type SetImageRevertError struct {
+	Status   string
+	Conflict dto.AppSetImageRevertConflict
+}
+
+func (e *SetImageRevertError) Error() string {
+	if e.Conflict.Message != "" {
+		return e.Status + ": " + e.Conflict.Message
+	}
+	return e.Status + ": " + e.Conflict.Error
+}
+
+// ApplyApp validates and persists desired state (or dry-runs). A 409
+// set-image revert refusal returns *SetImageRevertError.
 func (c *Client) ApplyApp(ctx context.Context, req dto.AppApplyRequest) (*dto.AppApplyResponse, error) {
 	resp, err := c.mutationPost(ctx, "/apps/apply", newIdempotencyKey(), req)
 	if err != nil {
 		return nil, err
+	}
+	if resp.StatusCode == http.StatusConflict {
+		return nil, decodeApplyConflict(resp)
 	}
 	var result dto.AppApplyResponse
 	if err := parseResponse(resp, &result); err != nil {
 		return nil, fmt.Errorf("apply app: %w", err)
 	}
 	return &result, nil
+}
+
+// decodeApplyConflict decodes a 409 apply answer: a set-image revert body
+// becomes *SetImageRevertError, any other conflict keeps the HTTPError shape.
+func decodeApplyConflict(resp *http.Response) error {
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxDeployConflictBodySize))
+	var conflict dto.AppSetImageRevertConflict
+	if err := json.Unmarshal(body, &conflict); err == nil && conflict.Error == dto.AppSetImageRevertCode {
+		return fmt.Errorf("apply app: %w", &SetImageRevertError{Status: resp.Status, Conflict: conflict})
+	}
+	return fmt.Errorf("apply app: %w", parseErrorResponse(resp, body))
 }
 
 // ListApps returns desired+active summaries.

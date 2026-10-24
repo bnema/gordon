@@ -21,9 +21,11 @@ import (
 // until then no caller exists.
 type AppService interface {
 	// Apply validates a manifest spec and persists it as desired state,
-	// or validates without persistence when dryRun is set. source is the
-	// raw manifest bytes (hashed for audit, never re-read).
-	Apply(ctx context.Context, spec domain.AppSpec, source []byte, dryRun bool) (*AppApplyResult, *AppDryRunResult, error)
+	// or validates without persistence when DryRun is set. A non-dry-run
+	// apply that would replace images introduced by set-image is refused
+	// with a *domain.SetImageRevertError (domain.ErrAppSetImageRevert)
+	// unless AllowSetImageRevert is set.
+	Apply(ctx context.Context, input AppApplyInput) (*AppApplyResult, *AppDryRunResult, error)
 
 	// List returns one summary per known app.
 	List(ctx context.Context) ([]AppSummary, error)
@@ -95,7 +97,17 @@ type SetImageInput struct {
 	LocalOwner       bool
 }
 
-// AppApplyResult describes one accepted (or no-op) apply.
+// AppApplyInput is one apply request. Source is the raw manifest bytes
+// (hashed for audit, never re-read). ExpectedRevision, when set, must equal
+// the current desired revision (domain.ErrAppStateConflict otherwise).
+type AppApplyInput struct {
+	Spec                domain.AppSpec
+	Source              []byte
+	DryRun              bool
+	AllowSetImageRevert bool
+	ExpectedRevision    string
+}
+
 // AppSecretMetadata is a secret registration without its value.
 type AppSecretMetadata struct {
 	Service  string
@@ -105,6 +117,8 @@ type AppSecretMetadata struct {
 	Presence string
 }
 
+// AppApplyResult describes one accepted (or no-op) apply.
+// SetImageReverts lists the set-image changes the apply replaced.
 type AppApplyResult struct {
 	App               string
 	FormerRevision    string
@@ -113,14 +127,17 @@ type AppApplyResult struct {
 	Pending           bool
 	Diff              domain.AppDiff
 	IntentID          string
+	SetImageReverts   []domain.AppSetImageRevert
 }
 
 // AppDryRunResult describes validation without persistence.
 // The resulting revision is a preview only and is never stored.
+// SetImageReverts lists the set-image changes a real apply would replace.
 type AppDryRunResult struct {
-	App   string
-	Valid bool
-	Diff  domain.AppDiff
+	App             string
+	Valid           bool
+	Diff            domain.AppDiff
+	SetImageReverts []domain.AppSetImageRevert
 }
 
 // AppSummary is one row of the app list: revisions, acceptance status,
