@@ -672,6 +672,8 @@ func buildProxyConfig(cfg Config, log zerowrap.Logger) (*proxyConfigResult, erro
 			MaxBodySize:        maxProxyBodySize,
 			MaxResponseSize:    maxProxyResponseSize,
 			MaxConcurrentConns: maxConcurrentConns,
+			MaxHold:            cfg.Handover.MaxHold,
+			MaxHeldRequests:    cfg.Handover.MaxHeldRequests,
 		},
 		maxBlobChunkSize: maxBlobChunkSize,
 		maxBlobSize:      maxBlobSize,

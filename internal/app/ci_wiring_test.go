@@ -36,6 +36,16 @@ func TestBuildProxyConfig_CarriesCIDomain(t *testing.T) {
 	assert.Equal(t, "gordon.example.com", result.proxyConfig.RegistryDomain)
 }
 
+func TestBuildProxyConfig_CarriesHandoverLimits(t *testing.T) {
+	cfg := Config{}
+	cfg.Server.GordonDomain = "gordon.example.com"
+	cfg.Handover = HandoverConfig{MaxHold: 45 * time.Second, MaxHeldRequests: 64}
+	result, err := buildProxyConfig(cfg, zerowrap.Default())
+	require.NoError(t, err)
+	assert.Equal(t, 45*time.Second, result.proxyConfig.MaxHold)
+	assert.Equal(t, 64, result.proxyConfig.MaxHeldRequests)
+}
+
 func TestManagementHosts_IncludeCIDomain(t *testing.T) {
 	cfg := Config{}
 	cfg.Server.GordonDomain = "gordon.example.com"
