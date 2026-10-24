@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// Default traffic handover limits (config section traffic.handover).
+const (
+	// DefaultHandoverMaxHold bounds how long one replacement or restart may
+	// hold traffic.
+	DefaultHandoverMaxHold = 90 * time.Second
+	// DefaultHandoverMaxHeldRequests bounds held HTTP requests per host.
+	DefaultHandoverMaxHeldRequests = 1024
+)
+
 type EntryPointProtocol string
 
 const (

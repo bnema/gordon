@@ -486,8 +486,8 @@ func loadConfig(v *viper.Viper, configPath string) error {
 	v.SetDefault("server.http.read_timeout", domain.DefaultRegistryReadTimeout.String())
 	v.SetDefault("server.http.write_timeout", domain.DefaultRegistryWriteTimeout.String())
 	v.SetDefault("server.http.idle_timeout", domain.DefaultRegistryIdleTimeout.String())
-	v.SetDefault("traffic.handover.max_hold", "90s")
-	v.SetDefault("traffic.handover.max_held_requests", 1024)
+	v.SetDefault("traffic.handover.max_hold", domain.DefaultHandoverMaxHold.String())
+	v.SetDefault("traffic.handover.max_held_requests", domain.DefaultHandoverMaxHeldRequests)
 	v.SetDefault("traffic.http.read_header_timeout", domain.DefaultEntryPointReadHeaderTimeout.String())
 	v.SetDefault("traffic.http.idle_timeout", domain.DefaultEntryPointIdleTimeout.String())
 	v.SetDefault("traffic.http.transfer_idle_timeout", domain.DefaultEntryPointTransferIdleTimeout.String())
@@ -593,32 +593,51 @@ type HandoverConfig struct {
 }
 
 func parseHandoverConfig(cfg Config) (HandoverConfig, error) {
-	value := strings.TrimSpace(cfg.Traffic.Handover.MaxHold)
-	if value == "" {
-		value = "90s"
-	}
-	maxHold, err := time.ParseDuration(value)
+	handover, err := parseHandoverLimits(cfg)
 	if err != nil {
-		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: %w", err)
+		return HandoverConfig{}, err
 	}
-	if maxHold < 0 {
-		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: must not be negative")
+	if err := checkHandoverIdleTimeout(zerowrap.Default(), cfg, handover.MaxHold); err != nil {
+		return HandoverConfig{}, err
+	}
+	return handover, nil
+}
+
+// parseHandoverLimits parses traffic.handover. Empty and zero values select
+// the defaults, except max_hold = "0s", which disables holding.
+func parseHandoverLimits(cfg Config) (HandoverConfig, error) {
+	maxHold := domain.DefaultHandoverMaxHold
+	if value := strings.TrimSpace(cfg.Traffic.Handover.MaxHold); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil {
+			return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: %w", err)
+		}
+		if parsed < 0 {
+			return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_hold: must not be negative")
+		}
+		maxHold = parsed
 	}
 	maxRequests := cfg.Traffic.Handover.MaxHeldRequests
 	if maxRequests < 0 {
 		return HandoverConfig{}, fmt.Errorf("invalid traffic.handover.max_held_requests: must not be negative")
 	}
 	if maxRequests == 0 {
-		maxRequests = 1024
-	}
-	httpOptions, err := traffic.ParseHTTPOptions(cfg.Traffic.HTTP)
-	if err != nil {
-		return HandoverConfig{}, err
-	}
-	if maxHold >= httpOptions.TransferIdleTimeout {
-		warnHandoverIdleTimeout(zerowrap.Default(), maxHold, httpOptions.TransferIdleTimeout)
+		maxRequests = domain.DefaultHandoverMaxHeldRequests
 	}
 	return HandoverConfig{MaxHold: maxHold, MaxHeldRequests: maxRequests}, nil
+}
+
+// checkHandoverIdleTimeout warns when a hold can outlast the HTTP transfer
+// idle timeout of cfg.
+func checkHandoverIdleTimeout(log zerowrap.Logger, cfg Config, maxHold time.Duration) error {
+	httpOptions, err := traffic.ParseHTTPOptions(cfg.Traffic.HTTP)
+	if err != nil {
+		return err
+	}
+	if maxHold > 0 && maxHold >= httpOptions.TransferIdleTimeout {
+		warnHandoverIdleTimeout(log, maxHold, httpOptions.TransferIdleTimeout)
+	}
+	return nil
 }
 
 func warnHandoverIdleTimeout(log zerowrap.Logger, maxHold, idle time.Duration) {

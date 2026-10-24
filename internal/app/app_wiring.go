@@ -144,7 +144,6 @@ func (si *serviceInit) initApps() error {
 	// activation and at boot. Wired here (store is open); the proxy
 	// itself was built earlier in initRuntimeAndProxy.
 	si.svc.appHostIndex = apptraffic.NewHostIndex()
-	si.svc.appHolds = apptraffic.NewHolds()
 	if si.svc.proxySvc != nil {
 		si.svc.proxySvc.WithAppTargets(si.svc.appHostIndex)
 	}

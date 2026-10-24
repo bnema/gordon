@@ -42,7 +42,7 @@ func TestAppTrafficPublisher_PublishesIndexOnlyAfterGraphApply(t *testing.T) {
 
 	publisher := newAppTrafficPublisher(svc, Config{})
 	require.NoError(t, publisher.RebuildTraffic(ctx))
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	assert.Equal(t, 32770, backend.Port)
 
@@ -59,11 +59,11 @@ func TestAppTrafficPublisher_PublishesIndexOnlyAfterGraphApply(t *testing.T) {
 		require.Len(t, hosts.AppHosts(), 1)
 		// The candidate carries the new backend while the live index
 		// still carries the old one: nothing is published yet.
-		live, ok := index.LookupHost("blog.example.com")
+		live, _, ok := index.LookupRoute("blog.example.com")
 		require.True(t, ok)
 		assert.Equal(t, 32770, live.Port, "the live index must not change before the graph apply succeeds")
 		candidateHosts := hosts.(*apptraffic.HostIndex)
-		candidateBackend, ok := candidateHosts.LookupHost("blog.example.com")
+		candidateBackend, _, ok := candidateHosts.LookupRoute("blog.example.com")
 		require.True(t, ok)
 		assert.Equal(t, 32771, candidateBackend.Port)
 		return nil
@@ -71,7 +71,7 @@ func TestAppTrafficPublisher_PublishesIndexOnlyAfterGraphApply(t *testing.T) {
 
 	require.NoError(t, publisher.RebuildTraffic(ctx))
 	assert.Equal(t, 1, applies)
-	backend, ok = index.LookupHost("blog.example.com")
+	backend, _, ok = index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	assert.Equal(t, 32771, backend.Port, "the accepted candidate is published exactly once")
 }
@@ -102,7 +102,7 @@ func TestAppTrafficPublisher_GraphFailureKeepsPreviousGeneration(t *testing.T) {
 	}
 
 	require.ErrorIs(t, publisher.RebuildTraffic(ctx), assert.AnError)
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	assert.Equal(t, 32770, backend.Port, "a rejected graph leaves the previous generation published")
 }
@@ -127,7 +127,7 @@ func TestAppTrafficPublisher_WithdrawalStaysFailClosedWhenGraphApplyFails(t *tes
 
 	publisher := newAppTrafficPublisher(svc, Config{})
 	require.NoError(t, publisher.RebuildTraffic(ctx))
-	_, ok := index.LookupHost("blog.example.com")
+	_, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 
 	// The withdrawal clears the binds, then the graph apply is rejected.
@@ -145,7 +145,7 @@ func TestAppTrafficPublisher_WithdrawalStaysFailClosedWhenGraphApplyFails(t *tes
 	}
 
 	require.Error(t, publisher.WithdrawService(ctx, "blog", "web"))
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	if ok {
 		assert.False(t, backend.Resolved(), "a withdrawn service must not keep a resolved backend")
 	}
@@ -176,7 +176,7 @@ func TestAppTrafficPublisher_ProjectionFailureAppliesNoGraph(t *testing.T) {
 
 	require.Error(t, publisher.RebuildTraffic(ctx))
 	assert.False(t, applied, "a failed projection must not reach the dataplane")
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	assert.Equal(t, 32770, backend.Port)
 }
@@ -204,7 +204,7 @@ func TestSetImageCIDomainCollisionKeepsPublishedState(t *testing.T) {
 	require.NoError(t, err)
 	require.ErrorContains(t, (&reloadRuntime{svc: svc}).applyServing(ctx, cfg, plan), "collides with an app host")
 	require.Same(t, before, svc.setImageSnapshot.Load())
-	_, ok := index.LookupHost("blog.example.com")
+	_, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	require.Empty(t, publisher.cfg.Server.CIDomain)
 	require.NoError(t, publisher.RebuildTraffic(ctx))

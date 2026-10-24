@@ -48,14 +48,21 @@ func (h *HostIndex) Replace(entries []RouteEntry) {
 	h.entries = append([]RouteEntry(nil), entries...)
 }
 
-// Changed returns the notification channel for the current snapshot.
+// Changed returns the notification channel for the current snapshot. A nil
+// index never changes, so it returns a nil channel.
 func (h *HostIndex) Changed() <-chan struct{} {
+	if h == nil {
+		return nil
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.changed
 }
 
-// LookupRoute returns a known host's backend and hold deadline.
+// LookupRoute returns a known host's backend and hold deadline. It
+// implements proxy.TargetProvider: the proxy package owns the interface;
+// apptraffic implements it to keep app-state interpretation out of the
+// proxy.
 func (h *HostIndex) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
 	entry, ok := h.Lookup(host)
 	return entry.Backend, entry.HoldUntil, ok
@@ -90,20 +97,6 @@ func (h *HostIndex) HostOwner(host string) (app, service string, ok bool) {
 		return "", "", false
 	}
 	return entry.App, entry.Service, true
-}
-
-// LookupHost implements proxy.TargetProvider over the host index.
-// The proxy package owns the interface; apptraffic implements it to
-// keep app-state interpretation out of the proxy.
-func (h *HostIndex) LookupHost(host string) (domain.AppBackend, bool) {
-	if h == nil {
-		return domain.AppBackend{}, false
-	}
-	entry, ok := h.Lookup(host)
-	if !ok {
-		return domain.AppBackend{}, false
-	}
-	return entry.Backend, true
 }
 
 // AppHosts returns the sorted served hosts with resolved backends or holds.
@@ -194,11 +187,10 @@ func (a *Activator) RebuildHostIndex(
 		}
 		actives[app] = active
 	}
-	if holds != nil {
-		holds.Prune(actives)
-	}
+	// A nil *Holds must stay a nil HoldSource, not a typed-nil interface.
 	var source HoldSource
 	if holds != nil {
+		holds.Prune(actives)
 		source = holds
 	}
 	projections, err := ProjectAll(actives, entrypoints, source)

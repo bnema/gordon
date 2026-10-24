@@ -160,14 +160,17 @@ func projectService(app, name string, eff domain.AppEffectiveService, entrypoint
 }
 
 func applyHolds(entries []RouteEntry, app, name string, holds HoldSource) {
-	if holds != nil {
-		for i := range entries {
-			e := &entries[i]
-			if e.Kind != "udp" && !e.Backend.Resolved() {
-				if until, ok := holds.Until(app, name); ok {
-					e.HoldUntil = until
-				}
-			}
+	if holds == nil {
+		return
+	}
+	until, ok := holds.Until(app, name)
+	if !ok {
+		return
+	}
+	for i := range entries {
+		e := &entries[i]
+		if e.Kind != "udp" && !e.Backend.Resolved() {
+			e.HoldUntil = until
 		}
 	}
 }

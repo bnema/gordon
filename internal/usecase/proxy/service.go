@@ -26,7 +26,7 @@ var proxyTracer = otel.Tracer("gordon.proxy")
 // Config holds configuration needed by the proxy service.
 type Config struct {
 	MaxHold         time.Duration // Zero disables handover holding.
-	MaxHeldRequests int           // Per host; non-positive uses 1024.
+	MaxHeldRequests int           // Per host; non-positive uses domain.DefaultHandoverMaxHeldRequests.
 	RegistryDomain  string
 	// CIDomain is the optional CI host (server.ci_domain), served by the
 	// in-process CI router. Empty disables it.
@@ -41,9 +41,8 @@ type Config struct {
 // Implemented by the apptraffic host index (derived from ACTIVE state);
 // the proxy never interprets app state itself.
 type TargetProvider interface {
-	// LookupHost returns the projected backend for a canonical host.
-	LookupHost(host string) (domain.AppBackend, bool)
-	// LookupRoute also returns the unresolved backend's hold deadline.
+	// LookupRoute returns the projected backend for a known canonical host
+	// and the unresolved backend's hold deadline.
 	LookupRoute(host string) (domain.AppBackend, time.Time, bool)
 	// Changed broadcasts index replacement; obtain it before looking up a route.
 	Changed() <-chan struct{}
@@ -202,7 +201,11 @@ func (s *Service) resolveAppTarget(ctx context.Context, domainName string, log z
 	if maxHold <= 0 || !until.After(time.Now()) || s.holdingStopped() {
 		return nil, domain.ErrTargetUnavailable
 	}
-	return s.waitHeldTarget(ctx, provider, domainName, ch, until, maxHold, maxHeld)
+	if !s.takeHeldSlot(domainName, maxHeld) {
+		return nil, domain.ErrTargetUnavailable
+	}
+	defer s.releaseHeldSlot(domainName)
+	return s.waitHeldTarget(ctx, provider, domainName, ch, until, time.Now().Add(maxHold))
 }
 
 func appTarget(host string, backend domain.AppBackend) *domain.ProxyTarget {
@@ -211,7 +214,7 @@ func appTarget(host string, backend domain.AppBackend) *domain.ProxyTarget {
 
 func (s *Service) takeHeldSlot(host string, maxHeld int) bool {
 	if maxHeld <= 0 {
-		maxHeld = 1024
+		maxHeld = domain.DefaultHandoverMaxHeldRequests
 	}
 	s.heldMu.Lock()
 	defer s.heldMu.Unlock()
@@ -222,23 +225,31 @@ func (s *Service) takeHeldSlot(host string, maxHeld int) bool {
 	return true
 }
 
-func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, host string, ch <-chan struct{}, until time.Time, maxHold time.Duration, maxHeld int) (target *domain.ProxyTarget, err error) {
-	if !s.takeHeldSlot(host, maxHeld) {
-		return nil, domain.ErrTargetUnavailable
+func (s *Service) releaseHeldSlot(host string) {
+	s.heldMu.Lock()
+	defer s.heldMu.Unlock()
+	s.held[host]--
+	if s.held[host] == 0 {
+		delete(s.held, host)
 	}
+}
+
+// errHoldingStopped labels a hold released by StopHolding; callers see
+// domain.ErrTargetUnavailable.
+var errHoldingStopped = fmt.Errorf("holding stopped: %w", domain.ErrTargetUnavailable)
+
+// waitHeldTarget waits for the held host to resolve until its hold deadline.
+// limit caps the hold deadline and every extension of it.
+func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, host string, ch <-chan struct{}, until, limit time.Time) (target *domain.ProxyTarget, err error) {
 	start := time.Now()
 	trace.SpanFromContext(ctx).SetAttributes(attribute.Bool("proxy.held", true))
 	defer func() {
-		s.heldMu.Lock()
-		s.held[host]--
-		if s.held[host] == 0 {
-			delete(s.held, host)
-		}
-		s.heldMu.Unlock()
 		log := zerowrap.FromCtx(ctx)
 		log.Debug().Int64("held_ms", time.Since(start).Milliseconds()).Str("outcome", holdOutcome(err)).Err(err).Msg("app target hold released")
+		if errors.Is(err, errHoldingStopped) {
+			err = domain.ErrTargetUnavailable
+		}
 	}()
-	limit := start.Add(maxHold)
 	timer := time.NewTimer(time.Until(holdDeadline(until, limit)))
 	defer timer.Stop()
 	for {
@@ -248,7 +259,7 @@ func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, h
 		case <-timer.C:
 			return nil, domain.ErrTargetUnavailable
 		case <-s.stopHolding:
-			return nil, domain.ErrTargetUnavailable
+			return nil, errHoldingStopped
 		case <-ch:
 			ch = provider.Changed()
 			backend, nextUntil, ok := provider.LookupRoute(host)
@@ -282,6 +293,8 @@ func holdOutcome(err error) string {
 		return "canceled"
 	case errors.Is(err, domain.ErrNoTargetAvailable):
 		return "unrouted"
+	case errors.Is(err, errHoldingStopped):
+		return "stopped"
 	default:
 		return "timeout"
 	}
@@ -492,7 +505,7 @@ func (s *Service) IsKnownHost(_ context.Context, host string) bool {
 	if provider == nil {
 		return false
 	}
-	_, ok = provider.LookupHost(canonicalHost)
+	_, _, ok = provider.LookupRoute(canonicalHost)
 	return ok
 }
 

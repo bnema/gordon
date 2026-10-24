@@ -244,13 +244,8 @@ func TestCreateHTTPHandlers_ForceHTTPSRedirect_DoesNotBypassDirectOnboarding(t *
 // stubAppTargets is a fixed proxy.TargetProvider for handler tests.
 type stubAppTargets map[string]domain.AppBackend
 
-func (s stubAppTargets) LookupHost(host string) (domain.AppBackend, bool) {
-	backend, ok := s[host]
-	return backend, ok
-}
-
 func (s stubAppTargets) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
-	backend, ok := s.LookupHost(host)
+	backend, ok := s[host]
 	return backend, time.Time{}, ok
 }
 

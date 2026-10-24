@@ -56,7 +56,7 @@ func TestAppTrafficPublisher_WithdrawServiceIsFailClosedInStateAndIndex(t *testi
 
 	// Serve the host first so the withdrawal has something to remove.
 	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil, nil))
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	require.True(t, backend.Resolved(), "precondition: the host resolves to a loopback backend")
 
@@ -65,7 +65,7 @@ func TestAppTrafficPublisher_WithdrawServiceIsFailClosedInStateAndIndex(t *testi
 
 	// The proxy fails closed on an unresolved backend (proxy/service.go
 	// resolveAppTarget), so an unresolved projection is a withdrawn one.
-	backend, ok = index.LookupHost("blog.example.com")
+	backend, _, ok = index.LookupRoute("blog.example.com")
 	if ok {
 		assert.False(t, backend.Resolved(), "a withdrawn service must not resolve to a backend")
 	}
@@ -90,7 +90,7 @@ func TestAppTrafficPublisher_WithdrawServiceSurfacesStateFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "persist fail-closed state")
 	// The projection could not be rebuilt, so stale forwarding may remain:
 	// the caller keeps its publication inhibition and retries.
-	_, ok := index.LookupHost("blog.example.com")
+	_, _, ok := index.LookupRoute("blog.example.com")
 	assert.True(t, ok)
 }
 
@@ -123,7 +123,7 @@ func TestAppTrafficPublisher_RebuildTrafficReprojectsVerifiedState(t *testing.T)
 	publisher := newAppTrafficPublisher(svc, Config{})
 	require.NoError(t, publisher.RebuildTraffic(ctx))
 
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	assert.Equal(t, 32770, backend.Port)
 }
@@ -352,7 +352,7 @@ func TestAppTrafficPublisher_RebuildSkipsStoppedApps(t *testing.T) {
 	}}
 	// Precondition: the host is routable while the app runs.
 	require.NoError(t, svc.appActivator.RebuildHostIndex(ctx, index, stubAppState{active: served}, nil, nil))
-	backend, ok := index.LookupHost("blog.example.com")
+	backend, _, ok := index.LookupRoute("blog.example.com")
 	require.True(t, ok)
 	require.True(t, backend.Resolved())
 
@@ -363,7 +363,7 @@ func TestAppTrafficPublisher_RebuildSkipsStoppedApps(t *testing.T) {
 	publisher := newAppTrafficPublisher(svc, Config{})
 	require.NoError(t, publisher.RebuildTraffic(ctx))
 
-	backend, ok = index.LookupHost("blog.example.com")
+	backend, _, ok = index.LookupRoute("blog.example.com")
 	if ok {
 		assert.False(t, backend.Resolved(), "a stopped app must not stay routable")
 	}

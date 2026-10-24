@@ -135,7 +135,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Debug().Str("resolving_target_for", host).Msg("looking up proxy target")
 	target, err := h.proxySvc.GetTarget(ctx, host)
 	if err != nil {
-		log.Warn().Err(err).Msg("no route found for domain")
+		logTargetError(log, err)
 		targetError(w, err)
 		return
 	}
@@ -169,6 +169,19 @@ func normalizeRequestHost(host string) string {
 	host = strings.ToLower(host)
 	host = strings.TrimSuffix(host, ".")
 	return host
+}
+
+// logTargetError logs a failed target resolution by kind: a client that
+// gave up is routine, an unavailable app target is not a missing route.
+func logTargetError(log zerowrap.Logger, err error) {
+	switch {
+	case errors.Is(err, domain.ErrTargetUnavailable):
+		log.Warn().Err(err).Msg("app target unavailable")
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		log.Debug().Err(err).Msg("client canceled while resolving target")
+	default:
+		log.Warn().Err(err).Msg("no route found for domain")
+	}
 }
 
 func targetError(w http.ResponseWriter, err error) {

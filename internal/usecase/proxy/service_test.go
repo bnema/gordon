@@ -24,13 +24,8 @@ type stubProvider struct {
 	backends map[string]domain.AppBackend
 }
 
-func (s *stubProvider) LookupHost(host string) (domain.AppBackend, bool) {
-	backend, ok := s.backends[host]
-	return backend, ok
-}
-
 func (s *stubProvider) LookupRoute(host string) (domain.AppBackend, time.Time, bool) {
-	b, ok := s.LookupHost(host)
+	b, ok := s.backends[host]
 	return b, time.Time{}, ok
 }
 func (s *stubProvider) Changed() <-chan struct{} { return nil }
