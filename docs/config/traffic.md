@@ -158,6 +158,29 @@ Each request has an inactivity timer, armed when the request starts. Progress re
 
 `transfer_idle_timeout` does not apply to `[traffic.tcp]` or `[traffic.udp]` routers; those use their own `idle_timeout` (see below).
 
+## Handover
+
+A service that owns a volume, bind, or device, a UDP service, and `gordon apps restart` are replaced sequentially: the old container stops before the new one starts. Gordon holds traffic for the service during that window so clients wait instead of failing. See [Deployment updates](../deployment/index.md#updates) for the sequence.
+
+```toml
+[traffic.handover]
+max_hold = "90s"
+max_held_requests = 1024
+```
+
+| Option | Env | Default | Description |
+|--------|-----|---------|-------------|
+| `traffic.handover.max_hold` | `GORDON_TRAFFIC_HANDOVER_MAX_HOLD` | `"90s"` | Upper bound on how long traffic is held. `"0s"` disables holding: the service's routes are withdrawn during the handover |
+| `traffic.handover.max_held_requests` | `GORDON_TRAFFIC_HANDOVER_MAX_HELD_REQUESTS` | `1024` | Maximum HTTP requests held at once, per host. Requests beyond the limit are answered with `503` |
+
+The effective hold deadline is the old container's `stop_grace` plus the readiness timeout plus 15 seconds, capped at `max_hold`. When the deadline passes or the handover fails, held HTTP requests receive `503` with `Retry-After: 5` and held TCP connections are closed.
+
+- Held HTTP requests wait with their body unread. A held request is still subject to `traffic.http.transfer_idle_timeout`, so keep `max_hold` below it; Gordon logs a warning at startup when `max_hold` is greater than or equal to `transfer_idle_timeout`, because the idle timeout would cut held requests first.
+- TCP connections on the service's entrypoint are accepted and wait. Held connections count against `traffic.tcp.max_connections`.
+- UDP routes are withdrawn during the handover.
+- A known app host with no available backend answers `503` with `Retry-After`; unknown hosts answer `404`.
+- Both keys are read at startup only; changing them requires a restart. Invalid or negative values are rejected when the configuration loads.
+
 ## TCP Routers
 
 Plain TCP entrypoints support one TCP router per entrypoint. TCP routers on a `smart_tcp` entrypoint are valid only when referenced by that entrypoint's `raw_fallback`.

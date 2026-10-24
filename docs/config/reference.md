@@ -44,6 +44,10 @@ read_header_timeout = "5s"                   # Max time to read request headers
 idle_timeout = "30s"                         # Keep-alive idle timeout
 transfer_idle_timeout = "2m"                 # Cut a transfer only after this long without data (no fixed read/write timeout)
 
+[traffic.handover]                           # Traffic holding during single-writer handovers (read at startup)
+max_hold = "90s"                             # Upper bound on holding traffic; "0s" withdraws instead
+max_held_requests = 1024                     # Max HTTP requests held per host
+
 # =============================================================================
 # DNS
 # =============================================================================
@@ -284,6 +288,8 @@ keep_last = 3                                # Keep N newest tags per repository
 | `traffic.http.read_header_timeout` | `"5s"` | Entrypoint HTTP servers: max time to read request headers (env `GORDON_TRAFFIC_HTTP_READ_HEADER_TIMEOUT`) |
 | `traffic.http.idle_timeout` | `"30s"` | Entrypoint HTTP servers: keep-alive idle timeout (env `GORDON_TRAFFIC_HTTP_IDLE_TIMEOUT`) |
 | `traffic.http.transfer_idle_timeout` | `"2m"` | Entrypoint HTTP servers: inactivity timeout for request bodies and responses (env `GORDON_TRAFFIC_HTTP_TRANSFER_IDLE_TIMEOUT`) |
+| `traffic.handover.max_hold` | `"90s"` | Upper bound on how long traffic is held while a stateful service is replaced; `"0s"` disables holding (env `GORDON_TRAFFIC_HANDOVER_MAX_HOLD`, read at startup) |
+| `traffic.handover.max_held_requests` | `1024` | Maximum HTTP requests held per host during a handover (env `GORDON_TRAFFIC_HANDOVER_MAX_HELD_REQUESTS`, read at startup) |
 | `entrypoints.<name>.address` | none | Deployment-selected listen address; `edge` is conventional for route-capable entrypoints but is not required when exactly one `smart_tcp` or `tls_mux` entrypoint exists |
 | `entrypoints.<name>.protocol` | none | Entrypoint protocol: `smart_tcp`, `tls_mux`, `tcp`, or `udp` |
 | `entrypoints.<name>.trusted_cidrs` | `[]` | Peer socket IP allowlist for all traffic on the entrypoint |
