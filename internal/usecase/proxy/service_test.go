@@ -708,3 +708,11 @@ func TestHeldTargets(t *testing.T) {
 		})
 	}
 }
+
+func TestHoldOutcome(t *testing.T) {
+	assert.Equal(t, "resolved", holdOutcome(nil))
+	assert.Equal(t, "canceled", holdOutcome(context.Canceled))
+	assert.Equal(t, "canceled", holdOutcome(context.DeadlineExceeded))
+	assert.Equal(t, "unrouted", holdOutcome(domain.ErrNoTargetAvailable))
+	assert.Equal(t, "timeout", holdOutcome(domain.ErrTargetUnavailable))
+}

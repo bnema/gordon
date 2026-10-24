@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -165,7 +166,7 @@ func (s *Service) GetTarget(ctx context.Context, domainName string) (target *dom
 func (s *Service) resolveAppTarget(ctx context.Context, domainName string, log zerowrap.Logger) (*domain.ProxyTarget, error) {
 	s.mu.RLock()
 	provider := s.appTargets
-	maxHold, cap := s.config.MaxHold, s.config.MaxHeldRequests
+	maxHold, maxHeld := s.config.MaxHold, s.config.MaxHeldRequests
 	s.mu.RUnlock()
 	if provider == nil {
 		log.Debug().Msg("no app target provider wired")
@@ -182,28 +183,28 @@ func (s *Service) resolveAppTarget(ctx context.Context, domainName string, log z
 	if maxHold <= 0 || !until.After(time.Now()) {
 		return nil, domain.ErrTargetUnavailable
 	}
-	return s.waitHeldTarget(ctx, provider, domainName, ch, until, maxHold, cap)
+	return s.waitHeldTarget(ctx, provider, domainName, ch, until, maxHold, maxHeld)
 }
 
 func appTarget(host string, backend domain.AppBackend) *domain.ProxyTarget {
 	return &domain.ProxyTarget{Host: backend.Host, Port: backend.Port, ContainerID: backend.ContainerID, Scheme: "http", RouteHost: host}
 }
 
-func (s *Service) takeHeldSlot(host string, cap int) bool {
-	if cap <= 0 {
-		cap = 1024
+func (s *Service) takeHeldSlot(host string, maxHeld int) bool {
+	if maxHeld <= 0 {
+		maxHeld = 1024
 	}
 	s.heldMu.Lock()
 	defer s.heldMu.Unlock()
-	if s.held[host] >= cap {
+	if s.held[host] >= maxHeld {
 		return false
 	}
 	s.held[host]++
 	return true
 }
 
-func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, host string, ch <-chan struct{}, until time.Time, maxHold time.Duration, cap int) (target *domain.ProxyTarget, err error) {
-	if !s.takeHeldSlot(host, cap) {
+func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, host string, ch <-chan struct{}, until time.Time, maxHold time.Duration, maxHeld int) (target *domain.ProxyTarget, err error) {
+	if !s.takeHeldSlot(host, maxHeld) {
 		return nil, domain.ErrTargetUnavailable
 	}
 	start := time.Now()
@@ -215,12 +216,8 @@ func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, h
 			delete(s.held, host)
 		}
 		s.heldMu.Unlock()
-		outcome := "resolved"
-		if err != nil {
-			outcome = err.Error()
-		}
 		log := zerowrap.FromCtx(ctx)
-		log.Debug().Int64("held_ms", time.Since(start).Milliseconds()).Str("outcome", outcome).Err(err).Msg("app target hold released")
+		log.Debug().Int64("held_ms", time.Since(start).Milliseconds()).Str("outcome", holdOutcome(err)).Err(err).Msg("app target hold released")
 	}()
 	limit := start.Add(maxHold)
 	timer := time.NewTimer(time.Until(holdDeadline(until, limit)))
@@ -252,6 +249,20 @@ func (s *Service) waitHeldTarget(ctx context.Context, provider TargetProvider, h
 			}
 			timer.Reset(time.Until(deadline))
 		}
+	}
+}
+
+// holdOutcome labels how a held request ended, for logs.
+func holdOutcome(err error) string {
+	switch {
+	case err == nil:
+		return "resolved"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "canceled"
+	case errors.Is(err, domain.ErrNoTargetAvailable):
+		return "unrouted"
+	default:
+		return "timeout"
 	}
 }
 
