@@ -598,6 +598,8 @@ type changingProvider struct {
 	known   bool
 	changed chan struct{}
 	looked  chan struct{}
+	// lookups receives one value per lookup when non-nil.
+	lookups chan struct{}
 	once    sync.Once
 	hook    func()
 }
@@ -607,14 +609,16 @@ func (p *changingProvider) Changed() <-chan struct{} {
 	defer p.mu.Unlock()
 	return p.changed
 }
-func (p *changingProvider) LookupHost(host string) (domain.AppBackend, bool) {
-	b, _, ok := p.LookupRoute(host)
-	return b, ok
-}
 func (p *changingProvider) LookupRoute(_ string) (domain.AppBackend, time.Time, bool) {
 	p.mu.Lock()
 	b, u, ok := p.backend, p.until, p.known
 	p.mu.Unlock()
+	if p.lookups != nil {
+		select {
+		case p.lookups <- struct{}{}:
+		default:
+		}
+	}
 	p.once.Do(func() {
 		if p.hook != nil {
 			p.hook()
@@ -643,6 +647,14 @@ func TestHeldTargets(t *testing.T) {
 			switch mode {
 			case "deadline":
 				p.until = time.Now().Add(20 * time.Millisecond)
+			case "stopped":
+				// Neither the hold deadline nor MaxHold may end the hold first.
+				p.until = time.Now().Add(time.Minute)
+				svc.config.MaxHold = time.Minute
+			case "extended":
+				expected = nil
+				p.until = time.Now().Add(50 * time.Millisecond)
+				p.lookups = make(chan struct{}, 4)
 			case "max-hold":
 				svc.config.MaxHold = 20 * time.Millisecond
 			case "disabled":
@@ -656,7 +668,7 @@ func TestHeldTargets(t *testing.T) {
 				expected = context.Canceled
 			case "cap":
 				svc.held["app.example.com"] = 1
-			case "resolved", "extended":
+			case "resolved":
 				expected = nil
 			case "missed-wakeup":
 				expected = nil
@@ -672,11 +684,17 @@ func TestHeldTargets(t *testing.T) {
 				done <- err
 			}()
 			<-p.looked
+			releasedAt := time.Now()
 			switch mode {
 			case "resolved":
 				p.replace(appBackend("", 18080), time.Time{}, true)
 			case "extended":
+				<-p.lookups // the first lookup
 				p.replace(domain.AppBackend{}, time.Now().Add(2*time.Second), true)
+				<-p.lookups // the held request observed the extension
+				// Outlive the original deadline: only the extension keeps the
+				// request held.
+				time.Sleep(100 * time.Millisecond)
 				p.replace(appBackend("", 18080), time.Time{}, true)
 			case "dropped":
 				p.replace(domain.AppBackend{}, time.Time{}, true)
@@ -691,6 +709,9 @@ func TestHeldTargets(t *testing.T) {
 			}
 			select {
 			case err := <-done:
+				if mode == "stopped" {
+					require.Less(t, time.Since(releasedAt), 500*time.Millisecond, "StopHolding releases the hold immediately")
+				}
 				if expected == nil {
 					require.NoError(t, err)
 				} else {
@@ -714,6 +735,7 @@ func TestHoldOutcome(t *testing.T) {
 	assert.Equal(t, "canceled", holdOutcome(context.DeadlineExceeded))
 	assert.Equal(t, "unrouted", holdOutcome(domain.ErrNoTargetAvailable))
 	assert.Equal(t, "timeout", holdOutcome(domain.ErrTargetUnavailable))
+	assert.Equal(t, "stopped", holdOutcome(errHoldingStopped))
 }
 
 func TestStopHoldingRefusesNewHolds(t *testing.T) {
@@ -723,7 +745,10 @@ func TestStopHoldingRefusesNewHolds(t *testing.T) {
 	svc := NewService(cfg, Config{MaxHold: time.Minute}).WithAppTargets(p)
 	svc.StopHolding()
 	svc.StopHolding()
-	_, err := svc.GetTarget(testContext(), "app.example.com")
-	require.ErrorIs(t, err, domain.ErrTargetUnavailable)
+	ctx, cancel := context.WithTimeout(testContext(), 200*time.Millisecond)
+	defer cancel()
+	_, err := svc.GetTarget(ctx, "app.example.com")
+	require.ErrorIs(t, err, domain.ErrTargetUnavailable, "a stopped proxy refuses the hold instead of waiting for the request deadline")
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
 	assert.Empty(t, svc.held)
 }

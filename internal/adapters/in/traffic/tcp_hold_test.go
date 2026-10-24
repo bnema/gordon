@@ -60,12 +60,15 @@ func TestTCPHoldRelease(t *testing.T) {
 }
 
 func TestTCPHoldEnds(t *testing.T) {
-	for _, outcome := range []string{"deadline", "stop", "withdraw"} {
+	// Shutdown release is covered by TestTCPHoldReleasedByStopAcceptingAndShutdown.
+	for _, outcome := range []string{"deadline", "withdraw"} {
 		t.Run(outcome, func(t *testing.T) {
 			backend := startTCPEchoServer(t, 0)
 			graph := tcpGraph(t, freeTCPAddress(t), backend.address)
 			graph.Services[0].Backends = nil
-			graph.Services[0].HoldUntil = time.Now().Add(250 * time.Millisecond)
+			// Long enough that the hold is observed before the deadline
+			// even on a loaded runner.
+			graph.Services[0].HoldUntil = time.Now().Add(time.Second)
 			if outcome != "deadline" {
 				graph.Services[0].HoldUntil = time.Now().Add(time.Minute)
 			}
@@ -75,20 +78,15 @@ func TestTCPHoldEnds(t *testing.T) {
 			conn := dialTCP(t, graph.EntryPoints[0].Address)
 			defer conn.Close()
 			require.Eventually(t, func() bool { return manager.Status().Counters.TotalHeld == 1 }, time.Second, time.Millisecond)
-			if outcome == "stop" {
-				require.NoError(t, manager.Shutdown(context.Background()))
-			}
 			if outcome == "withdraw" {
 				graph.Routers = nil
 				graph.Services = nil
 				require.NoError(t, manager.Apply(context.Background(), &graph))
 			}
-			require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(3*time.Second)))
 			_, err := conn.Read(make([]byte, 1))
 			require.Error(t, err)
-			if outcome != "stop" {
-				require.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, time.Millisecond)
-			}
+			require.Eventually(t, func() bool { return manager.Status().Counters.TotalRefused == 1 }, time.Second, time.Millisecond)
 		})
 	}
 }
