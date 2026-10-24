@@ -55,6 +55,8 @@ type Deps struct {
 	// TrustedNets are the reverse proxies whose X-Forwarded-* headers are
 	// trusted (client IP and X-Forwarded-Proto).
 	TrustedNets []*net.IPNet
+	// RateLimit wraps every admitted CI request before authentication. Nil disables it.
+	RateLimit func(http.Handler) http.Handler
 	// TokenRateLimit wraps the token endpoint. Nil disables it.
 	TokenRateLimit func(http.Handler) http.Handler
 	// MaxTokenWaiters caps concurrent token requests waiting on the
@@ -82,13 +84,17 @@ func NewHandler(deps Deps) *Handler {
 	if deps.TokenRateLimit != nil {
 		h.token = deps.TokenRateLimit(h.token)
 	}
+	route := http.Handler(http.HandlerFunc(h.route))
+	if deps.RateLimit != nil {
+		route = deps.RateLimit(route)
+	}
 	h.chain = middleware.Chain(
 		middleware.PanicRecovery(deps.Log),
 		middleware.RequestLogger(deps.Log, deps.TrustedNets),
 		middleware.SecurityHeaders,
 		h.httpsOnly,
 		h.currentHostOnly,
-	)(http.HandlerFunc(h.route))
+	)(route)
 	return h
 }
 

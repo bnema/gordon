@@ -471,6 +471,10 @@ sudo firewall-cmd --reload
 dot, distinct from the main host, legacy registry hosts, and app hosts.
 `auth.enabled` must be true. Removing `ci_domain` disables the CI router.
 The main registry and admin host can remain private.
+All admitted CI requests, including allowlist misses, use the configured API
+rate limits when enabled; otherwise limits are 500 requests/s globally (burst
+1000) and 50 requests/s per client IP (burst 100), allowing multi-request pushes.
+The token endpoint also retains its separate, stricter exchange limiter.
 
 For TLS termination upstream, route public DNS → reverse proxy → Gordon's
 edge entrypoint, not `server.registry_port`. Preserve `Host` and overwrite

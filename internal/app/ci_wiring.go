@@ -41,9 +41,27 @@ func buildCIHandler(svc *services, cfg Config, trustedNets []*net.IPNet, rawRegi
 		Domain:         func() string { return svc.proxySvc.ProxyConfig().CIDomain },
 		Registry:       rawRegistry,
 		TrustedNets:    trustedNets,
+		RateLimit:      ciRateLimit(cfg, log),
 		TokenRateLimit: ciTokenRateLimit(cfg, log),
 		Log:            log,
 	})
+}
+
+// ciRateLimit uses the main registry's configured limits when enabled.
+// Otherwise the public CI host still has a global 500 rps / 1000 burst and
+// per-IP 50 rps / 100 burst: enough for many blob/manifest requests per push,
+// unlike the deliberately stricter identity-provider token exchange limit.
+func ciRateLimit(cfg Config, log zerowrap.Logger) func(http.Handler) http.Handler {
+	globalRPS, perIPRPS, burst := 500.0, 50.0, 1000
+	ipBurst := 100
+	if cfg.API.RateLimit.Enabled {
+		globalRPS, perIPRPS = cfg.API.RateLimit.GlobalRPS, cfg.API.RateLimit.PerIPRPS
+		burst, ipBurst = cfg.API.RateLimit.Burst, cfg.API.RateLimit.Burst
+	}
+	return registry.RateLimitMiddleware(
+		ratelimit.NewMemoryStore(globalRPS, burst, log),
+		ratelimit.NewMemoryStore(perIPRPS, ipBurst, log),
+		cfg.API.RateLimit.TrustedProxies, log)
 }
 
 // ciTokenRateLimit limits the CI token endpoint like the main one: the

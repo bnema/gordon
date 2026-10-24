@@ -272,7 +272,7 @@ func TestCIEdge_LiveReloadOfCIDomain(t *testing.T) {
 	svc.proxySvc.UpdateConfig(withCI)
 	expectCI("after re-adding")
 
-	// Concurrent: readers see only the two coherent outcomes while a
+	// Concurrent: readers see coherent routing outcomes (including throttling) while a
 	// writer flips the config.
 	var wg sync.WaitGroup
 	var bad atomic.Int32
@@ -280,7 +280,9 @@ func TestCIEdge_LiveReloadOfCIDomain(t *testing.T) {
 		wg.Go(func() {
 			for range 200 {
 				code, auth := probe()
-				ok := (code == http.StatusUnauthorized && auth == ciRealm) || (code == http.StatusNotFound && auth == "")
+				ok := (code == http.StatusUnauthorized && auth == ciRealm) ||
+					(code == http.StatusNotFound && auth == "") ||
+					(code == http.StatusTooManyRequests && auth == "")
 				if !ok {
 					bad.Add(1)
 				}
@@ -297,9 +299,106 @@ func TestCIEdge_LiveReloadOfCIDomain(t *testing.T) {
 		}
 	})
 	wg.Wait()
-	assert.Zero(t, bad.Load(), "every response was either the CI router or a plain 404")
+	assert.Zero(t, bad.Load(), "every response was from CI authentication, its limiter, or a plain 404")
 
 	svc.proxySvc.UpdateConfig(withoutCI)
 	expectGone("final removal")
 	assert.Zero(t, hits.Load(), "CI host traffic never reached the registry/admin listener")
+}
+
+func TestCIEdge_GeneralRateLimit(t *testing.T) {
+	for _, path := range []string{"/v2/", "/-/ci/operations/missing", "/not-allowed"} {
+		t.Run(path, func(t *testing.T) {
+			_, cfg := readSetImageConfig(t, setImageTOML)
+			cfg.API.RateLimit.Enabled = false
+			cfg.API.RateLimit.TrustedProxies = []string{"10.0.0.5"}
+			synctest.Test(t, func(t *testing.T) {
+				svc := ciEdgeServices(t, cfg)
+				_, _, handler := createHTTPHandlers(svc, cfg, zerowrap.Default(), nil)
+				send := func(peer, xff string) *httptest.ResponseRecorder {
+					req := httptest.NewRequest(http.MethodGet, "https://ci.example"+path, nil)
+					req.TLS = tlsState()
+					req.RemoteAddr = net.JoinHostPort(peer, "5000")
+					req.Header.Set("X-Forwarded-For", xff)
+					req.Header.Set("Authorization", "Bearer invalid")
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					return rec
+				}
+				for i := range 100 {
+					require.NotEqual(t, http.StatusTooManyRequests, send("198.51.100.9", "192.0.2."+strconv.Itoa(i+1)).Code)
+				}
+				rec := send("198.51.100.9", "203.0.113.9")
+				require.Equal(t, http.StatusTooManyRequests, rec.Code, "untrusted XFF cannot evade the shared bucket")
+				require.Contains(t, rec.Body.String(), "TOOMANYREQUESTS")
+				for i := range 120 {
+					require.NotEqual(t, http.StatusTooManyRequests, send("10.0.0.5", "192.0.2."+strconv.Itoa(i+1)).Code, "trusted clients get separate buckets")
+				}
+			})
+		})
+	}
+}
+
+func TestCIEdge_DefaultLimitAllowsPushSequence(t *testing.T) {
+	_, cfg := readSetImageConfig(t, setImageTOML)
+	cfg.API.RateLimit.Enabled = false
+	synctest.Test(t, func(t *testing.T) {
+		svc := ciEdgeServices(t, cfg)
+		handler := buildCIHandler(svc, cfg, nil, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}), zerowrap.Default())
+		token := ciTokenFor(t, svc)
+		// A push checks blobs, uploads missing layers in chunks, then writes a manifest.
+		// A raw-registry stub avoids a container runtime while exercising authorization.
+		for i := range 60 {
+			method, path := http.MethodHead, "/v2/web/blobs/"+ciTestDigest
+			switch i % 5 {
+			case 1:
+				method, path = http.MethodPost, "/v2/web/blobs/uploads/"
+			case 2:
+				method, path = http.MethodPatch, "/v2/web/blobs/uploads/12345678-1234-4234-8234-123456789abc"
+			case 3:
+				method, path = http.MethodPut, "/v2/web/blobs/uploads/12345678-1234-4234-8234-123456789abc?digest="+ciTestDigest
+			case 4:
+				method, path = http.MethodPut, "/v2/web/manifests/latest"
+			}
+			req := httptest.NewRequest(method, "https://ci.example"+path, nil)
+			req.TLS = tlsState()
+			req.RemoteAddr = "198.51.100.9:5000"
+			req.Header.Set("Authorization", "Bearer "+token)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusNoContent, rec.Code)
+		}
+	})
+}
+
+func TestCIRateLimitGlobalAndConfiguredLimits(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			_, cfg := readSetImageConfig(t, setImageTOML)
+			cfg.API.RateLimit.Enabled = enabled
+			cfg.API.RateLimit.GlobalRPS = 20
+			cfg.API.RateLimit.PerIPRPS = 10
+			cfg.API.RateLimit.Burst = 3
+			synctest.Test(t, func(t *testing.T) {
+				handler := ciRateLimit(cfg, zerowrap.Default())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+				burst := 1000
+				if enabled {
+					burst = 3
+				}
+				for i := range burst + 1 {
+					req := httptest.NewRequest(http.MethodGet, "https://ci.example/v2/", nil)
+					req.RemoteAddr = net.JoinHostPort("192.0."+strconv.Itoa(i/250)+"."+strconv.Itoa(i%250+1), "5000")
+					rec := httptest.NewRecorder()
+					handler.ServeHTTP(rec, req)
+					if i == burst {
+						require.Equal(t, http.StatusTooManyRequests, rec.Code)
+					} else {
+						require.Equal(t, http.StatusNoContent, rec.Code)
+					}
+				}
+			})
+		})
+	}
 }
