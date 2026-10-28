@@ -130,6 +130,7 @@ func (si *serviceInit) initApps() error {
 	si.svc.appDeploySvc.SetDevicePolicies(devicePolicies)
 	si.svc.appDeploySvc.SetCapabilityPolicies(capabilityPolicies)
 	appSvcImpl := newAppDaemonService(si.ctx, store, si.svc.appDeploySvc, appsecrets.NewStore(si.log), si.log).
+		WithResourceLimits(limits).
 		WithEntrypoints(appEntrypointListeners(si.cfg)).
 		WithGCBarrier(si.svc.gcBarrier).
 		WithImagePolicy(si.svc.ImagePolicy).

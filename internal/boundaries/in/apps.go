@@ -159,6 +159,7 @@ type AppSummary struct {
 // AppServiceView is one service's effective state for inspection.
 // Digest and container are ids, never secret values.
 type AppServiceView struct {
+	Resources         *domain.AppResources
 	EffectiveRevision string
 	Digest            string
 	Container         string

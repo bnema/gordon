@@ -638,13 +638,24 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 	images := outmocks.NewMockImageResolver(t)
 	secrets := outmocks.NewMockSecretProvider(t)
 	seedReplaceableApp(t, ctx, store)
+	limits := domain.AppResources{CPUs: .5, Memory: 512 << 20, MemorySwap: 512 << 20}
+	before, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	effective := before.Services["web"]
+	effective.Spec.Resources = limits
+	effective.Resources = limits.ResourceView()
+	before.Services["web"] = effective
+	require.NoError(t, store.SaveActive(ctx, before))
 
 	runtime.EXPECT().RestartContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
 	runtime.EXPECT().StopContainer(mock.Anything, "c-old", mock.Anything).Return(domain.ErrContainerNotFound).Once()
 	runtime.EXPECT().RemoveContainer(mock.Anything, "c-old", false).Return(domain.ErrContainerNotFound).Once()
 	expectNetworkProvision(runtime, "app-blog", 1)
-	runtime.EXPECT().CreateContainer(mock.Anything, mock.Anything).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
+	runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
+		return assert.Equal(t, int64(500000000), cfg.NanoCPUs) && assert.Equal(t, limits.Memory, cfg.MemoryLimit) && assert.Equal(t, limits.MemorySwap, cfg.MemorySwap)
+	})).Return(&domain.Container{ID: "c-rebuilt", Name: "web"}, nil).Once()
 	runtime.EXPECT().UpdateRestartPolicy(mock.Anything, mock.Anything, domain.RestartPolicyAlways).Return(nil).Maybe()
 	runtime.EXPECT().StartContainer(mock.Anything, "c-rebuilt").Return(nil).Once()
 	runtime.EXPECT().InspectContainer(mock.Anything, "c-rebuilt").Return(&domain.Container{ID: "c-rebuilt", Status: "running", StartedAt: executionStartedAt}, nil).Maybe()
@@ -653,6 +664,7 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+		Limits: deployment.ResourceLimits{MemoryBytes: 8 << 30, NanoCPUs: 4e9},
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
@@ -669,6 +681,7 @@ func TestRestart_RebuildsMissingActiveContainer(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "c-rebuilt", active.Services["web"].Container)
+	assert.Equal(t, limits.ResourceView(), active.Services["web"].Resources)
 	assert.Equal(t, "rev-0", active.Services["web"].EffectiveRevision,
 		"the rebuild reuses the pinned revision")
 

@@ -479,6 +479,9 @@ func (s *Service) unchangedService(ctx context.Context, app string, p pinnedServ
 	if !ok || eff.Container == "" || eff.Digest == "" || eff.Digest != p.digest {
 		return eff, false
 	}
+	if s.effectiveResourcesChanged(p.spec, eff.Resources) {
+		return eff, false
+	}
 	reason := s.unchangedRefusal(ctx, app, p, eff)
 	if reason != "" {
 		log := zerowrap.FromCtx(ctx)
@@ -914,7 +917,12 @@ func (s *Service) publishService(ctx context.Context, app, revision string, p pi
 			effectiveRevision = previous.EffectiveRevision
 		}
 	}
+	resources, err := s.deps.Limits.ResolveServiceResources(p.spec)
+	if err != nil {
+		return err
+	}
 	active.Services[p.name] = domain.AppEffectiveService{
+		Resources:         resources.ResourceView(),
 		EffectiveRevision: effectiveRevision,
 		ActivatedBy:       activatedBy,
 		ActivatedAt:       activatedAt,

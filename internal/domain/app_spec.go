@@ -95,6 +95,7 @@ type AppSpec struct {
 // v3 runs exactly one container per service: no replicas field.
 // RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
 type AppService struct {
+	Resources AppResources
 	Name      string
 	Image     string
 	Command   []string
@@ -548,6 +549,9 @@ func checkVolumeOwnership(s AppSpec) error {
 
 // validate checks one service.
 func (s *AppService) validate() error {
+	if err := s.Resources.Validate(s.Name); err != nil {
+		return err
+	}
 	if strings.TrimSpace(s.Image) == "" {
 		return fmt.Errorf("%w: service %q requires an image", ErrInvalidAppSpec, s.Name)
 	}
@@ -1117,6 +1121,9 @@ func diffService(name string, desired, effective AppService) []string {
 	}
 	if strings.Join(desired.Command, "\x00") != strings.Join(effective.Command, "\x00") {
 		changed = append(changed, "service/"+name+"/command")
+	}
+	if desired.Resources != effective.Resources {
+		changed = append(changed, "service/"+name+"/resources")
 	}
 	if desired.StopGrace != effective.StopGrace {
 		changed = append(changed, "service/"+name+"/stop_grace")

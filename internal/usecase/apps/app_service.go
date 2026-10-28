@@ -361,6 +361,7 @@ func (s *AppServiceImpl) Show(ctx context.Context, app string) (*in.AppDetail, e
 	detail.Retained = retainedView(ownership)
 	for name, svc := range active.Services {
 		detail.Services[name] = in.AppServiceView{
+			Resources:         svc.Resources,
 			EffectiveRevision: svc.EffectiveRevision,
 			Digest:            svc.Digest,
 			Container:         svc.Container,
@@ -874,4 +875,10 @@ func (s *AppServiceImpl) secretReferenced(ctx context.Context, app, service, nam
 		}
 	}
 	return false, nil
+}
+
+// WithResourceLimits supplies installation ceilings to apply validation.
+func (s *AppServiceImpl) WithResourceLimits(limits deployment.ResourceLimits) *AppServiceImpl {
+	s.core.resourceLimits = limits
+	return s
 }

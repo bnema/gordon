@@ -139,13 +139,14 @@ func (s AppEffectiveService) BackendForProtocol(containerPort int, protocol Netw
 }
 
 type AppEffectiveService struct {
-	EffectiveRevision string     `json:"effective_revision"`
-	ActivatedBy       string     `json:"activated_by"`
-	ActivatedAt       time.Time  `json:"activated_at"`
-	Image             string     `json:"image"`
-	Digest            string     `json:"digest,omitempty"`
-	Container         string     `json:"container,omitempty"`
-	Spec              AppService `json:"spec"`
+	Resources         *AppResources `json:"resources,omitempty"`
+	EffectiveRevision string        `json:"effective_revision"`
+	ActivatedBy       string        `json:"activated_by"`
+	ActivatedAt       time.Time     `json:"activated_at"`
+	Image             string        `json:"image"`
+	Digest            string        `json:"digest,omitempty"`
+	Container         string        `json:"container,omitempty"`
+	Spec              AppService    `json:"spec"`
 	// BackendBinds maps container port -> 127.0.0.1 host port for the
 	// Gordon-published loopback backends. Readiness and the proxy dial
 	// these binds: they work rootless-first (no container-IP route

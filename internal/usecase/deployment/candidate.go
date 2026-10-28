@@ -38,6 +38,10 @@ func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p 
 	// Re-resolve binds from the current policy immediately before any
 	// runtime mutation: a bind revoked since preflight must fail here,
 	// before volume ownership or container creation.
+	resources, err := s.deps.Limits.ResolveServiceResources(p.spec)
+	if err != nil {
+		return preparedCandidate{}, err
+	}
 	resolvedBinds, err := s.resolveServiceBinds(app, p.spec)
 	if err != nil {
 		return preparedCandidate{}, err
@@ -106,8 +110,9 @@ func (s *Service) prepareCandidate(ctx context.Context, app, revision string, p 
 		NetworkMode:       nets.private,
 		Hostname:          p.spec.Name,
 		Aliases:           []string{p.spec.Name},
-		MemoryLimit:       s.deps.Limits.MemoryBytes,
-		NanoCPUs:          s.deps.Limits.NanoCPUs,
+		MemoryLimit:       resources.Memory,
+		MemorySwap:        resources.MemorySwap,
+		NanoCPUs:          int64(resources.CPUs * 1e9),
 		PidsLimit:         s.deps.Limits.PidsLimit,
 	}
 	created, err := s.createWithSecretFiles(ctx, app, p.name, config, files)

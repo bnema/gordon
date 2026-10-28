@@ -512,7 +512,7 @@ func TestHandler_AppShow_MapsReadModel(t *testing.T) {
 		ConvergedRevision: "rev-1",
 		Stopped:           true,
 		Services: map[string]in.AppServiceView{
-			"web": {EffectiveRevision: "rev-1", Digest: "sha256:x", Container: "ctr-1", RestartUnsafe: true},
+			"web": {EffectiveRevision: "rev-1", Digest: "sha256:x", Container: "ctr-1", RestartUnsafe: true, Resources: &domain.AppResources{CPUs: .5, Memory: 512 << 20}},
 		},
 		Retained: in.AppRetainedView{
 			Volumes: []string{"gordon-blog--web--vol--data"},
@@ -536,6 +536,7 @@ func TestHandler_AppShow_MapsReadModel(t *testing.T) {
 	assert.Equal(t, "rev-1", resp.Active.ConvergedRevision)
 	assert.True(t, resp.Intent.Stopped)
 	assert.True(t, resp.Active.Services["web"].RestartUnsafe, "restart safety must reach the wire")
+	assert.Equal(t, &domain.AppResources{CPUs: .5, Memory: 512 << 20}, resp.Active.Services["web"].Resources)
 	assert.Equal(t, "ctr-1", resp.Active.Services["web"].Container)
 	assert.Equal(t, []string{"gordon-blog--web--vol--data"}, resp.Retained.Volumes)
 	assert.Equal(t, []string{"registry.example.com/blog/web:1.4.2"}, resp.Retained.Images)

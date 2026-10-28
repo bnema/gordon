@@ -205,6 +205,8 @@ internal = true
 
 Every app container joins an incarnation-owned private network derived from the app's internal UUID; shared memberships come only from explicit `[[network.shared]]` declarations, and memory/CPU/PID limits apply on every create and recovery path.
 
+Installation `[containers]` memory and CPU limits are ceilings for per-service `[services.<name>.resources]` requests. Gordon rejects requests above a configured ceiling at apply and deployment preflight, and rechecks before create, including recovery replacements. Explicit `memory_swap` (total memory plus swap) is bounded by the installation memory ceiling too. Zero installation limits mean no ceiling. Unset CPU/memory values inherit installation limits; PID limits remain installation-wide. Omitted `memory_swap` retains the Docker/Podman default; set it equal to `memory` to disable swap. Effective activation-time limits are available in `apps status --json`.
+
 ## Readiness helper containers
 
 Probing an internal HTTP port uses one bounded helper container per readiness attempt, removed immediately after. Gordon force-removes the helper under an independent cleanup context, including on failure and timeout. There is no operator configuration for the helper; its image and limits are fixed.

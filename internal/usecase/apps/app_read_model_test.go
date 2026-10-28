@@ -55,7 +55,7 @@ func TestAppService_Show_ConvergedAppWithRetainedResources(t *testing.T) {
 	store.EXPECT().LoadActive(mock.Anything, "blog").Return(domain.AppActive{
 		App: "blog", Converged: true, ConvergedRevision: "rev-1",
 		Services: map[string]domain.AppEffectiveService{
-			"web": {EffectiveRevision: "rev-1", Digest: "sha256:abc", Container: "ctr-1"},
+			"web": {EffectiveRevision: "rev-1", Digest: "sha256:abc", Container: "ctr-1", Resources: &domain.AppResources{CPUs: .5, Memory: 512 << 20}},
 		},
 	}, true, nil).Once()
 	store.EXPECT().LoadIntent(mock.Anything, "blog").Return(domain.AppStopIntent{App: "blog"}, nil).Once()
@@ -84,6 +84,7 @@ func TestAppService_Show_ConvergedAppWithRetainedResources(t *testing.T) {
 	require.Contains(t, detail.Services, "web")
 	assert.Equal(t, "ctr-1", detail.Services["web"].Container)
 	assert.Equal(t, "sha256:abc", detail.Services["web"].Digest)
+	assert.Equal(t, &domain.AppResources{CPUs: .5, Memory: 512 << 20}, detail.Services["web"].Resources)
 	assert.True(t, detail.Services["web"].RestartUnsafe)
 	assert.Equal(t, []string{"gordon-blog--web--vol--data"}, detail.Retained.Volumes)
 	assert.Equal(t, []string{"gordon/apps/app-1/blog/web/database-url"}, detail.Retained.Secrets)

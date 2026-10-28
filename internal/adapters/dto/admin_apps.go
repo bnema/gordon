@@ -1,6 +1,10 @@
 package dto
 
-import "time"
+import (
+	"time"
+
+	"github.com/bnema/gordon/internal/domain"
+)
 
 // App admin DTOs use stable wire-facing field names.
 // No secret values exist in any shape here: secret references carry
@@ -177,10 +181,11 @@ type AppDesiredDTO struct {
 
 // AppActiveServiceDTO is one effective service for inspection.
 type AppActiveServiceDTO struct {
-	EffectiveRevision string `json:"effective_revision"`
-	Digest            string `json:"digest,omitempty"`
-	Container         string `json:"container,omitempty"`
-	RestartUnsafe     bool   `json:"restart_unsafe"`
+	Resources         *domain.AppResources `json:"resources,omitempty"`
+	EffectiveRevision string               `json:"effective_revision"`
+	Digest            string               `json:"digest,omitempty"`
+	Container         string               `json:"container,omitempty"`
+	RestartUnsafe     bool                 `json:"restart_unsafe"`
 }
 
 // AppActiveDTO carries per-service effective state.

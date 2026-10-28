@@ -858,17 +858,8 @@ func (s *Service) preflightServices(ctx context.Context, app string, rev domain.
 		if err := s.checkImageVolumes(ctx, svc, runtimeImage); err != nil {
 			return nil, err
 		}
-		// Bind resolution stays a preflight gate: an unresolvable bind
-		// must fail before any workload mutation. The successful values
-		// are discarded because prepareCandidate re-resolves against the
-		// current policy immediately before the runtime mutation.
-		if _, err := s.resolveServiceBinds(app, svc); err != nil {
-			return nil, err
-		}
-		if err := s.preflightServiceDevices(ctx, app, svc, pinned); err != nil {
-			return nil, err
-		}
-		if _, err := s.resolveServiceCapabilities(app, svc); err != nil {
+		// Policies are rechecked by prepareCandidate immediately before mutation.
+		if err := s.preflightServicePolicies(ctx, app, svc, pinned); err != nil {
 			return nil, err
 		}
 		pinned = append(pinned, pinnedService{

@@ -287,3 +287,23 @@ func TestRuntime_CreateContainerWithoutGrantsKeepsDefaultCapabilities(t *testing
 	require.True(t, ok)
 	assert.Equal(t, []any{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_NET_BIND_SERVICE", "CAP_SETGID", "CAP_SETUID"}, hostConfig["CapAdd"])
 }
+
+func TestRuntime_CreateContainerResources(t *testing.T) {
+	for _, cfg := range []*domain.ContainerConfig{
+		{Image: "nginx:latest", Name: "unlimited"},
+		{Image: "nginx:latest", Name: "limited", NanoCPUs: 500000000, MemoryLimit: 512 << 20, MemorySwap: 512 << 20},
+	} {
+		t.Run(cfg.Name, func(t *testing.T) {
+			body := createTestContainer(t, cfg)
+			host, ok := body["HostConfig"].(map[string]any)
+			require.True(t, ok)
+			for key, want := range map[string]int64{"NanoCpus": cfg.NanoCPUs, "Memory": cfg.MemoryLimit, "MemorySwap": cfg.MemorySwap} {
+				if want == 0 {
+					assert.Empty(t, host[key])
+				} else {
+					assert.Equal(t, float64(want), host[key], key)
+				}
+			}
+		})
+	}
+}

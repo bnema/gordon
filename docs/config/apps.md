@@ -112,6 +112,27 @@ RCON is ordinary TCP: use TCP interfaces, no special RCON kind.
 
 Image registry names and digest syntax are validated during manifest apply, resolution, deployment preflight, and immediately before every pull, including boot, restart, and recovery. Docker Hub (`docker.io` and canonical pull host `registry-1.docker.io`), `ghcr.io`, `quay.io`, and Gordon's configured registry are allowed by default. Add other exact registry hostname+port entries with `images.allowed_registries`; this does not configure credentials, and external resolution and pulls use anonymous access. When `images.require_digest` is enabled, every image reference, including Gordon registry images, must use `@sha256:<64 hex chars>`. See [Images](./images.md). This is a hostname allowlist, not DNS/IP validation or runtime egress enforcement.
 
+## Resource Limits
+
+Optional limits apply per service on Docker and Podman (Docker-compatible API):
+
+```toml
+[services.web.resources]
+cpus = 0.5
+memory = "512m"
+memory_swap = "512m"
+```
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `cpus` | number | Positive CPU quota in cores; fractional values are allowed. |
+| `memory` | string | Positive hard memory limit with `b`, `k`, `m`, or `g` units (case-insensitive, powers of 1024). |
+| `memory_swap` | string | Optional total memory plus swap allowance; requires explicit `memory` and must be at least that limit. Equal values disable swap. |
+
+Installation `[containers]` CPU and memory limits are ceilings: requests above a configured ceiling are rejected at apply and before container creation. The installation memory ceiling also bounds explicit `memory_swap`. A zero installation limit means no ceiling. Unset CPU/memory values inherit installation limits; omitted `memory_swap` preserves the runtime default. Services without resources retain existing behavior.
+
+Resource changes require container replacement. Recovery creates use the same resolution and ceiling checks. `gordon apps status APP --json` exposes activation-time effective limits under `active.services.<name>.resources` (`cpus` in cores, memory fields in bytes); unset fields and an entirely unlimited resource set are omitted.
+
 ## Replacement on Deploy
 
 A deploy recreates a service whose image digest, spec, environment, or secret values changed and keeps an unchanged one.

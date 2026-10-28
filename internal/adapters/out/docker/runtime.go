@@ -187,8 +187,9 @@ func (r *Runtime) CreateContainer(ctx context.Context, config *domain.ContainerC
 	}
 
 	resources := container.Resources{
-		Memory:   config.MemoryLimit,
-		NanoCPUs: config.NanoCPUs,
+		Memory:     config.MemoryLimit,
+		MemorySwap: config.MemorySwap,
+		NanoCPUs:   config.NanoCPUs,
 		Ulimits: []*units.Ulimit{
 			{Name: "nofile", Soft: 65536, Hard: 65536},
 		},

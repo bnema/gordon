@@ -268,6 +268,7 @@ func (h *Handler) handleAppShow(w http.ResponseWriter, r *http.Request, app stri
 	services := map[string]dto.AppActiveServiceDTO{}
 	for name, view := range detail.Services {
 		services[name] = dto.AppActiveServiceDTO{
+			Resources:         view.Resources,
 			EffectiveRevision: view.EffectiveRevision,
 			Digest:            view.Digest,
 			Container:         view.Container,

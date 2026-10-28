@@ -501,7 +501,8 @@ func TestRunAppStatus_Observed(t *testing.T) {
 	show := &dto.AppShowResponse{
 		App: "blog",
 		Active: dto.AppActiveDTO{Converged: true, Services: map[string]dto.AppActiveServiceDTO{
-			"web": {EffectiveRevision: "rev-b", Container: "ctr-b"},
+			"web":    {EffectiveRevision: "rev-b", Container: "ctr-b", Resources: &domain.AppResources{CPUs: .5, Memory: 512 << 20, MemorySwap: 512 << 20}},
+			"worker": {EffectiveRevision: "rev-b"},
 		}},
 	}
 	plane := appPlane(t)
@@ -515,6 +516,11 @@ func TestRunAppStatus_Observed(t *testing.T) {
 	var got dto.AppShowResponse
 	require.NoError(t, json.Unmarshal(out.Bytes(), &got))
 	assert.Equal(t, *show, got)
+	assert.Contains(t, out.String(), `"cpus": 0.5`)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &raw))
+	services := raw["active"].(map[string]any)["services"].(map[string]any)
+	assert.NotContains(t, services["worker"], "resources")
 }
 
 // fakeAppLogReader scripts container log reads for app log tests.

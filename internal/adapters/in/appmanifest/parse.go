@@ -44,6 +44,7 @@ type rawNetwork struct {
 // rawService mirrors one [services.<name>] table. The service name is
 // the table key, so there is no name field inside the table.
 type rawService struct {
+	Resources rawResources      `toml:"resources"`
 	Image     string            `toml:"image"`
 	Command   []string          `toml:"command"`
 	StopGrace string            `toml:"stop_grace"`
@@ -65,6 +66,39 @@ type rawService struct {
 	Databases    []rawDatabase `toml:"database"`
 	Backup       rawBackup     `toml:"backup"`
 	Telemetry    rawTelemetry  `toml:"telemetry"`
+}
+
+type rawResources struct {
+	CPUs       *float64 `toml:"cpus"`
+	Memory     *string  `toml:"memory"`
+	MemorySwap *string  `toml:"memory_swap"`
+}
+
+func (r rawResources) toDomain(service string) (domain.AppResources, error) {
+	var limits domain.AppResources
+	if r.CPUs != nil {
+		limits.CPUs = *r.CPUs
+		if limits.CPUs <= 0 {
+			return limits, fmt.Errorf("%w: service %q resources.cpus must be > 0", domain.ErrInvalidAppSpec, service)
+		}
+	}
+	for _, size := range []struct {
+		key  string
+		raw  *string
+		dest *int64
+	}{
+		{"memory", r.Memory, &limits.Memory}, {"memory_swap", r.MemorySwap, &limits.MemorySwap},
+	} {
+		if size.raw == nil {
+			continue
+		}
+		parsed, err := domain.ParseResourceSize(*size.raw)
+		if err != nil {
+			return limits, fmt.Errorf("%w: service %q resources.%s: %v", domain.ErrInvalidAppSpec, service, size.key, err)
+		}
+		*size.dest = parsed
+	}
+	return limits, limits.Validate(service)
 }
 
 // rawReadiness mirrors [services.<name>.readiness].
@@ -290,6 +324,11 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 			Volume:   append([]string(nil), raw.Backup.Volume...),
 		},
 	}
+	resources, err := raw.Resources.toDomain(serviceName)
+	if err != nil {
+		return domain.AppService{}, err
+	}
+	svc.Resources = resources
 	stopGrace := domain.AppDefaultStopGrace
 	if raw.StopGrace != "" {
 		parsed, err := time.ParseDuration(raw.StopGrace)
