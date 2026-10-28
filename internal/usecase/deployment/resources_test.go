@@ -46,19 +46,19 @@ func TestResolveServiceResources(t *testing.T) {
 }
 
 func TestCreateAndStartResources(t *testing.T) {
-	for _, requested := range []domain.AppResources{{}, {CPUs: .5, Memory: 512 << 20, MemorySwap: 512 << 20}} {
+	for _, requested := range []domain.AppResources{{}, {CPUs: .5, Memory: 512 << 20, MemorySwap: 512 << 20}, {CPUs: 1.001}, {CPUs: 1.0000000006}} {
 		t.Run("resources", func(t *testing.T) {
 			state := outmocks.NewMockAppState(t)
 			runtime := outmocks.NewMockContainerRuntime(t)
 			limits := ResourceLimits{MemoryBytes: 8 << 30, NanoCPUs: 4e9, PidsLimit: 100}
 			spec := domain.AppService{Name: "web", Resources: requested}
-			want, err := limits.ResolveServiceResources(spec)
+			want, err := limits.resolveServiceResources(spec)
 			require.NoError(t, err)
 			state.EXPECT().LoadOwnership(mock.Anything, "blog").Return(domain.AppOwnership{App: "blog", ID: "app-1"}, nil).Once()
 			runtime.EXPECT().ListNetworks(mock.Anything).Return([]*domain.NetworkInfo{}, nil).Once()
 			runtime.EXPECT().CreateNetwork(mock.Anything, domain.AppPrivateNetworkName("gordon", "app-1"), mock.Anything).Return(nil).Once()
 			runtime.EXPECT().CreateContainer(mock.Anything, mock.MatchedBy(func(cfg *domain.ContainerConfig) bool {
-				return assert.Equal(t, want.Memory, cfg.MemoryLimit) && assert.Equal(t, want.MemorySwap, cfg.MemorySwap) && assert.Equal(t, int64(want.CPUs*1e9), cfg.NanoCPUs) && assert.Equal(t, int64(100), cfg.PidsLimit)
+				return assert.Equal(t, want.Memory, cfg.MemoryLimit) && assert.Equal(t, want.MemorySwap, cfg.MemorySwap) && assert.Equal(t, want.NanoCPUs, cfg.NanoCPUs) && assert.Equal(t, int64(100), cfg.PidsLimit)
 			})).Return(&domain.Container{ID: "c-1", Name: "web"}, nil).Once()
 			runtime.EXPECT().UpdateRestartPolicy(mock.Anything, "c-1", domain.RestartPolicyAlways).Return(nil).Once()
 			runtime.EXPECT().StartContainer(mock.Anything, "c-1").Return(nil).Once()
@@ -81,4 +81,23 @@ func TestResourceChangeForcesReplacement(t *testing.T) {
 	p := pinnedService{name: "web", spec: domain.AppService{Name: "web", Resources: domain.AppResources{CPUs: .5}}}
 	assert.True(t, svc.effectiveResourcesChanged(p.spec, nil))
 	assert.False(t, svc.effectiveResourcesChanged(p.spec, p.spec.Resources.ResourceView()))
+}
+
+func TestResourceCPUIntegerCeilingAndInheritance(t *testing.T) {
+	ceiling, err := domain.CPUsToNanoCPUs(1.001)
+	require.NoError(t, err)
+	limits := ResourceLimits{NanoCPUs: ceiling}
+	for _, cpus := range []float64{0, 1.001, 1.0010000004} {
+		got, err := limits.resolveServiceResources(domain.AppService{Name: "web", Resources: domain.AppResources{CPUs: cpus}})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1001000000), got.NanoCPUs)
+		assert.Equal(t, 1.001, got.CPUs)
+	}
+	_, err = limits.resolveServiceResources(domain.AppService{Name: "web", Resources: domain.AppResources{CPUs: 1.0010000006}})
+	require.ErrorContains(t, err, "resources.cpus requested")
+	// Inheritance must never round-trip an installation integer through float64.
+	exact := int64(9223372036854775807)
+	got, err := (ResourceLimits{NanoCPUs: exact}).resolveServiceResources(domain.AppService{Name: "web"})
+	require.NoError(t, err)
+	assert.Equal(t, exact, got.NanoCPUs)
 }

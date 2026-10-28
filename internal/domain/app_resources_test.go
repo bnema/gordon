@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -27,5 +28,37 @@ func TestResourcesAreRuntimeSpecChanges(t *testing.T) {
 		assert.False(t, SameAppService(original, changed))
 		assert.False(t, SameAppServiceRuntime(original, changed))
 		assert.Contains(t, diffService("web", changed, original), "service/web/resources")
+	}
+}
+
+func TestCPUsToNanoCPUs(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cpus    float64
+		want    int64
+		invalid bool
+	}{
+		{name: "unlimited", cpus: 0, want: 0},
+		{name: "fractional", cpus: 1.001, want: 1001000000},
+		{name: "round down", cpus: 1.0000000004, want: 1000000000},
+		{name: "round up", cpus: 1.0000000006, want: 1000000001},
+		{name: "half", cpus: 0.5e-9, want: 1},
+		{name: "below half", cpus: math.Nextafter(0.5e-9, 0), invalid: true},
+		{name: "negative", cpus: -1, invalid: true},
+		{name: "nan", cpus: math.NaN(), invalid: true},
+		{name: "infinity", cpus: math.Inf(1), invalid: true},
+		{name: "multiply overflow", cpus: math.MaxFloat64, invalid: true},
+		{name: "int64 overflow", cpus: float64(math.MaxInt64) / 1e9, invalid: true},
+		{name: "below int64 overflow", cpus: math.Nextafter(float64(math.MaxInt64)/1e9, 0), want: 9223372036854774784},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := CPUsToNanoCPUs(tc.cpus)
+			if tc.invalid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
 	}
 }

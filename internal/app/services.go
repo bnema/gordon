@@ -382,9 +382,11 @@ func containerResourceLimits(cfg Config) (deployment.ResourceLimits, error) {
 		}
 		limits.MemoryBytes = parsed
 	}
-	if cfg.Containers.CPULimit > 0 {
-		limits.NanoCPUs = int64(cfg.Containers.CPULimit * float64(time.Second))
+	nanoCPUs, err := domain.CPUsToNanoCPUs(cfg.Containers.CPULimit)
+	if err != nil {
+		return limits, fmt.Errorf("invalid containers.cpu_limit %g: %w", cfg.Containers.CPULimit, err)
 	}
+	limits.NanoCPUs = nanoCPUs
 	return limits, nil
 }
 

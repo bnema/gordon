@@ -34,7 +34,7 @@ func ParseResourceSize(value string) (int64, error) {
 
 // Validate checks normalized resource limits; explicit zero is rejected during decoding.
 func (r AppResources) Validate(service string) error {
-	if math.IsNaN(r.CPUs) || math.IsInf(r.CPUs, 0) || r.CPUs < 0 || r.CPUs >= float64(math.MaxInt64)/1e9 || (r.CPUs > 0 && r.CPUs < 1e-9) {
+	if _, err := CPUsToNanoCPUs(r.CPUs); err != nil {
 		return fmt.Errorf("%w: service %q resources.cpus must be positive and representable as NanoCPUs", ErrInvalidAppSpec, service)
 	}
 	if r.Memory < 0 {
@@ -52,4 +52,19 @@ func (r AppResources) ResourceView() *AppResources {
 		return nil
 	}
 	return &r
+}
+
+// CPUsToNanoCPUs converts cores to the nearest NanoCPU, rounding halves up.
+// Zero means unset/unlimited. Positive quotas must round to at least one
+// NanoCPU; non-finite, negative, and overflowing values are rejected.
+func CPUsToNanoCPUs(cpus float64) (int64, error) {
+	if math.IsNaN(cpus) || math.IsInf(cpus, 0) || cpus < 0 {
+		return 0, fmt.Errorf("CPU quota must be finite and non-negative")
+	}
+	rounded := math.Round(cpus * 1e9)
+	// float64(MaxInt64) is 2^63, already outside the int64 range.
+	if rounded >= float64(math.MaxInt64) || (cpus > 0 && rounded < 1) {
+		return 0, fmt.Errorf("CPU quota must round to 1..MaxInt64 NanoCPUs")
+	}
+	return int64(rounded), nil
 }

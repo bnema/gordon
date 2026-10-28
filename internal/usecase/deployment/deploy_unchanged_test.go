@@ -22,6 +22,7 @@ type unchangedSeed struct {
 	binds       map[int]int
 	desiredEnv  map[string]string
 	inhibitedBy string
+	limits      deployment.ResourceLimits
 	// mutateDesired alters the desired service after the ACTIVE one is seeded.
 	mutateDesired func(*domain.AppService)
 }
@@ -90,6 +91,12 @@ func unchangedDeployService(t *testing.T, seeds ...unchangedSeed) (*deployment.S
 	runtime.EXPECT().InspectImageVolumes(mock.Anything, "docker.io/example/web:1.4.2").Return(nil, nil).Once()
 	svc := deployment.NewService(deployment.Deps{
 		State: store, Runtime: runtime, Images: images, Secrets: secrets,
+		Limits: func() deployment.ResourceLimits {
+			if len(seeds) > 0 {
+				return seeds[0].limits
+			}
+			return deployment.ResourceLimits{}
+		}(),
 	}, zerowrap.Default()).WithProbeDeps(deployment.NewTestProbeDeps(runtime,
 		func(context.Context, string, string) (int, error) { return 200, nil },
 		func(context.Context, string) error { return nil },
@@ -325,4 +332,25 @@ func secretDeployService(t *testing.T) (*deployment.Service, *outmocks.MockConta
 		func(context.Context, string) error { return nil },
 	))
 	return svc, runtime, secrets, ctx
+}
+
+// Old ACTIVE records lack resource metadata even though the runtime already
+// enforced installation limits. Upgrading must not replace that container.
+func TestDeploy_UpgradeKeepsUnknownInheritedResources(t *testing.T) {
+	svc, runtime, _, ctx, store := unchangedDeployService(t, unchangedSeed{
+		binds:  map[int]int{8080: 18080},
+		limits: deployment.ResourceLimits{NanoCPUs: 1001000000, MemoryBytes: 512 << 20},
+	})
+	active, ok, err := store.LoadActive(ctx, "blog")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Nil(t, active.Services["web"].Resources)
+	require.Zero(t, active.Services["web"].Spec.Resources)
+	runtime.EXPECT().InspectContainer(mock.Anything, "c-old").Return(&domain.Container{ID: "c-old", Status: "running"}, nil).Once()
+	result, err := svc.Deploy(ctx, deployment.DeployInput{App: "blog", Op: "op-upgrade"})
+	require.NoError(t, err)
+	assert.Equal(t, deployment.ServiceResultUnchanged, result.Services["web"].Result)
+	assert.Equal(t, "c-old", result.Services["web"].After)
+	runtime.AssertNotCalled(t, "CreateContainer", mock.Anything, mock.Anything)
+	runtime.AssertNotCalled(t, "StopContainer", mock.Anything, mock.Anything, mock.Anything)
 }
