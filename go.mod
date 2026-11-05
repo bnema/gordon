@@ -120,4 +120,5 @@ require (
 	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	howett.net/plist v1.0.1 // indirect
+	software.sslmate.com/src/go-pkcs12 v0.7.4 // indirect
 )

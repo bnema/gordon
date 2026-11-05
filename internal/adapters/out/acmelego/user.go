@@ -3,7 +3,7 @@ package acmelego
 import (
 	"crypto"
 
-	"github.com/go-acme/lego/v4/registration"
+	"github.com/go-acme/lego/v5/registration"
 )
 
 // AccountUser implements the lego registration.User interface for ACME
