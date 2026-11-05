@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/domain"
 	"github.com/bnema/gordon/pkg/childenv"

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/dto"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry/route"

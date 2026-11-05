@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/google/uuid"
 
 	"github.com/bnema/gordon/internal/domain"

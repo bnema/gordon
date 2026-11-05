@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
 	"github.com/bnema/gordon/internal/domain"

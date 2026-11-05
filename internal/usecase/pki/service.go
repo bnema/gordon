@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/bnema/gordon/internal/boundaries/out"

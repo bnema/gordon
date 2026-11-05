@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/stretchr/testify/assert"
 
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"

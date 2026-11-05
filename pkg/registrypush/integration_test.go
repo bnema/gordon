@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/stretchr/testify/assert"

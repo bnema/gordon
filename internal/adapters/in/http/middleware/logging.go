@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/bnema/gordon/internal/adapters/dto"

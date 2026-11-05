@@ -4,7 +4,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/ci"
 	"github.com/bnema/gordon/internal/adapters/in/http/registry"

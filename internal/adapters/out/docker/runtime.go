@@ -26,7 +26,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/go-units"
 	"github.com/moby/moby/api/pkg/stdcopy"

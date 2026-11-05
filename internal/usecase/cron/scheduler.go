@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"bnema.dev/zerowrap"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/zerowrap"
 )
 
 // Scheduler runs recurring jobs on preset schedules. Times are wall-clock

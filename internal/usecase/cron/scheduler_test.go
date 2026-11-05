@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"bnema.dev/zerowrap"
 	"github.com/bnema/gordon/internal/domain"
-	"github.com/bnema/zerowrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

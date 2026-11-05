@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/boundaries/in"
 	configusecase "github.com/bnema/gordon/internal/usecase/config"

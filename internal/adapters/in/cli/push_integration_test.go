@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"bnema.dev/zerowrap"
 	climocks "github.com/bnema/gordon/internal/adapters/in/cli/mocks"
-	"github.com/bnema/zerowrap"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 	"github.com/stretchr/testify/assert"

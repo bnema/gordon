@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/bnema/gordon/internal/adapters/dto"

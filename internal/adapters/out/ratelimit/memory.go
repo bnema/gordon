@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"golang.org/x/time/rate"
 
 	"github.com/bnema/gordon/internal/boundaries/out"

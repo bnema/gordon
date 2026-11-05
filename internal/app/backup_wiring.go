@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/out/filesystem"
 	s3storage "github.com/bnema/gordon/internal/adapters/out/s3"

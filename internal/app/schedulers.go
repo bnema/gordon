@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/spf13/viper"
 
 	"github.com/bnema/gordon/internal/domain"

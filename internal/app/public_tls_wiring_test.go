@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"bnema.dev/zerowrap"
 	pkiadapter "github.com/bnema/gordon/internal/adapters/out/pki"
 	inmocks "github.com/bnema/gordon/internal/boundaries/in/mocks"
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -24,7 +25,6 @@ import (
 	pkiusecase "github.com/bnema/gordon/internal/usecase/pki"
 	"github.com/bnema/gordon/internal/usecase/publictls"
 	traffic "github.com/bnema/gordon/internal/usecase/traffic"
-	"github.com/bnema/zerowrap"
 )
 
 func TestPublicTLSReadinessAllowsDNS01WithoutEdgePort(t *testing.T) {

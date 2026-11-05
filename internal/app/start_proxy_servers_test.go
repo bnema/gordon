@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/stretchr/testify/require"
 
 	trafficadapter "github.com/bnema/gordon/internal/adapters/in/traffic"

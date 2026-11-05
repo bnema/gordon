@@ -6,7 +6,7 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/out/appsecrets"
 	"github.com/bnema/gordon/internal/adapters/out/appstate"

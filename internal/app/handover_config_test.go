@@ -1,8 +1,8 @@
 package app
 
 import (
+	"bnema.dev/zerowrap"
 	"bytes"
-	"github.com/bnema/zerowrap"
 	"testing"
 	"time"
 

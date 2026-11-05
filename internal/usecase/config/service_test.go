@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"

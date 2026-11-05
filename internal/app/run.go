@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bnema/zerowrap"
-	zerowrapotel "github.com/bnema/zerowrap/otel"
+	"bnema.dev/zerowrap"
+	zerowrapotel "bnema.dev/zerowrap/otel"
 	"github.com/spf13/viper"
 
 	"github.com/bnema/gordon/internal/adapters/out/accesslog"

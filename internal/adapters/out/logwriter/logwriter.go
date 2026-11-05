@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"gopkg.in/natefinch/lumberjack.v2"
 )

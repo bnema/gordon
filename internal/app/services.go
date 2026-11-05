@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/spf13/viper"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/admin"

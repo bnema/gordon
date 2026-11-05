@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 	"github.com/rs/zerolog"
 
 	"github.com/bnema/gordon/internal/domain"

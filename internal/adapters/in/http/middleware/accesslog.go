@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bnema/zerowrap"
+	"bnema.dev/zerowrap"
 
 	"github.com/bnema/gordon/internal/adapters/in/http/httphelper"
 	out "github.com/bnema/gordon/internal/boundaries/out"
