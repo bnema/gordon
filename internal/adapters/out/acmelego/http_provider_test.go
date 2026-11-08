@@ -1,6 +1,7 @@
 package acmelego
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,21 +16,21 @@ func TestHTTPProviderStoresAndCleansChallenge(t *testing.T) {
 
 	provider := NewHTTPProvider(mockSink)
 
-	err := provider.Present("example.com", "token", "key-auth")
+	err := provider.Present(context.Background(), "example.com", "token", "key-auth")
 	assert.NoError(t, err)
 
-	err = provider.CleanUp("example.com", "token", "key-auth")
+	err = provider.CleanUp(context.Background(), "example.com", "token", "key-auth")
 	assert.NoError(t, err)
 }
 
 func TestHTTPProviderNilSink(t *testing.T) {
 	provider := NewHTTPProvider(nil)
 
-	err := provider.Present("example.com", "token", "key-auth")
+	err := provider.Present(context.Background(), "example.com", "token", "key-auth")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "sink is nil")
 
-	err = provider.CleanUp("example.com", "token", "key-auth")
+	err = provider.CleanUp(context.Background(), "example.com", "token", "key-auth")
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "sink is nil")
 }

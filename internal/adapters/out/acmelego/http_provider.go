@@ -2,6 +2,7 @@
 package acmelego
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/bnema/gordon/internal/boundaries/out"
@@ -19,7 +20,7 @@ func NewHTTPProvider(sink out.HTTPChallengeSink) *HTTPProvider {
 }
 
 // Present stores the key authorization for the given token via the sink.
-func (p *HTTPProvider) Present(_domain, token, keyAuth string) error {
+func (p *HTTPProvider) Present(_ context.Context, _domain, token, keyAuth string) error {
 	if p.sink == nil {
 		return fmt.Errorf("http-01 sink is nil: cannot Present")
 	}
@@ -30,7 +31,7 @@ func (p *HTTPProvider) Present(_domain, token, keyAuth string) error {
 }
 
 // CleanUp removes the key authorization for the given token via the sink.
-func (p *HTTPProvider) CleanUp(_domain, token, _keyAuth string) error {
+func (p *HTTPProvider) CleanUp(_ context.Context, _domain, token, _keyAuth string) error {
 	if p.sink == nil {
 		return fmt.Errorf("http-01 sink is nil: cannot CleanUp")
 	}

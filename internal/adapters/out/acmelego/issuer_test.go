@@ -248,7 +248,7 @@ func TestResourceConversionToStoredCertificate(t *testing.T) {
 	require.NoError(t, err)
 
 	resource := &certificate.Resource{
-		Domain:            "example.com",
+		Domains:           []string{"example.com"},
 		CertURL:           "https://acme-staging-v02.api.letsencrypt.org/acme/cert/123",
 		CertStableURL:     "https://acme-staging-v02.api.letsencrypt.org/acme/cert/123",
 		PrivateKey:        keyPEM,
@@ -289,7 +289,7 @@ func TestResourceConversionNoIssuer(t *testing.T) {
 	require.NoError(t, err)
 
 	resource := &certificate.Resource{
-		Domain:      "example.com",
+		Domains:     []string{"example.com"},
 		PrivateKey:  keyPEM,
 		Certificate: certPEM,
 	}
@@ -383,7 +383,7 @@ func TestParsedCertificateNotAfter(t *testing.T) {
 	require.NoError(t, err)
 
 	resource := &certificate.Resource{
-		Domain:      "test.example.com",
+		Domains:     []string{"test.example.com"},
 		PrivateKey:  keyPEM,
 		Certificate: certPEM,
 	}

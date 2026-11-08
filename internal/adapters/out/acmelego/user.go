@@ -3,6 +3,7 @@ package acmelego
 import (
 	"crypto"
 
+	"github.com/go-acme/lego/v5/acme"
 	"github.com/go-acme/lego/v5/registration"
 )
 
@@ -10,12 +11,12 @@ import (
 // account registration and certificate operations.
 type AccountUser struct {
 	email        string
-	privateKey   crypto.PrivateKey
-	registration *registration.Resource
+	privateKey   crypto.Signer
+	registration *acme.ExtendedAccount
 }
 
 // NewAccountUser creates a new AccountUser.
-func NewAccountUser(email string, key crypto.PrivateKey, reg *registration.Resource) *AccountUser {
+func NewAccountUser(email string, key crypto.Signer, reg *acme.ExtendedAccount) *AccountUser {
 	return &AccountUser{
 		email:        email,
 		privateKey:   key,
@@ -28,13 +29,13 @@ func (u *AccountUser) GetEmail() string {
 	return u.email
 }
 
-// GetRegistration returns the ACME registration resource.
-func (u *AccountUser) GetRegistration() *registration.Resource {
+// GetRegistration returns the ACME account resource.
+func (u *AccountUser) GetRegistration() *acme.ExtendedAccount {
 	return u.registration
 }
 
 // GetPrivateKey returns the account private key.
-func (u *AccountUser) GetPrivateKey() crypto.PrivateKey {
+func (u *AccountUser) GetPrivateKey() crypto.Signer {
 	return u.privateKey
 }
 

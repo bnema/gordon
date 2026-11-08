@@ -145,6 +145,9 @@ func normalizeDNSResolvers(resolvers []string) ([]string, error) {
 // compile-time interface check
 var _ out.PublicCertificateIssuer = (*Issuer)(nil)
 
+// certKeyType is the key type of issued certificates (ECDSA P-256).
+const certKeyType = certcrypto.EC256
+
 // Obtain obtains a new certificate for the given order. The ACME client is
 // initialized lazily on the first call.
 func (i *Issuer) Obtain(ctx context.Context, order out.CertificateOrder) (*out.StoredCertificate, error) {
@@ -152,8 +155,9 @@ func (i *Issuer) Obtain(ctx context.Context, order out.CertificateOrder) (*out.S
 		return nil, err
 	}
 
-	resource, err := i.client.Certificate.Obtain(certificate.ObtainRequest{
+	resource, err := i.client.Certificate.Obtain(ctx, certificate.ObtainRequest{
 		Domains: order.Names,
+		KeyType: certKeyType,
 		Bundle:  true,
 	})
 	if err != nil {
@@ -170,13 +174,8 @@ func (i *Issuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.St
 		return nil, err
 	}
 
-	domainName := ""
-	if len(cert.Names) > 0 {
-		domainName = cert.Names[0]
-	}
-
 	legoCert := certificate.Resource{
-		Domain:            domainName,
+		Domains:           cert.Names,
 		PrivateKey:        cert.PrivateKeyPEM,
 		Certificate:       cert.CertPEM,
 		IssuerCertificate: cert.ChainPEM,
@@ -187,8 +186,9 @@ func (i *Issuer) Renew(ctx context.Context, cert out.StoredCertificate) (*out.St
 		legoCert.Certificate = cert.FullchainPEM
 	}
 
-	renewed, err := i.client.Certificate.RenewWithOptions(legoCert, &certificate.RenewOptions{
-		Bundle: true,
+	renewed, err := i.client.Certificate.Renew(ctx, legoCert, &certificate.RenewOptions{
+		KeyType: certKeyType,
+		Bundle:  true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("renew certificate: %w", err)
@@ -266,7 +266,13 @@ func (i *Issuer) buildClient(ctx context.Context) (*AccountUser, *lego.Client, e
 		if err != nil {
 			return nil, nil, fmt.Errorf("create cloudflare dns provider: %w", err)
 		}
-		if err := client.Challenge.SetDNS01Provider(cfProvider, dns01.AddRecursiveNameservers(i.cfg.DNSResolvers)); err != nil {
+		// lego v5 reads recursive resolvers from the process-wide dns01 client.
+		if len(i.cfg.DNSResolvers) > 0 {
+			opts := dns01.NewOptions()
+			opts.RecursiveNameservers = i.cfg.DNSResolvers
+			dns01.SetDefaultClient(dns01.NewClient(opts))
+		}
+		if err := client.Challenge.SetDNS01Provider(cfProvider); err != nil {
 			return nil, nil, fmt.Errorf("set dns-01 provider: %w", err)
 		}
 	}
@@ -300,7 +306,7 @@ func (i *Issuer) loadOrCreateAccount(ctx context.Context) (*AccountUser, error) 
 		return nil, fmt.Errorf("create temporary lego client: %w", err)
 	}
 
-	reg, err := tmpClient.Registration.Register(registration.RegisterOptions{
+	reg, err := tmpClient.Registration.Register(ctx, registration.RegisterOptions{
 		TermsOfServiceAgreed: true,
 	})
 	if err != nil {
@@ -310,7 +316,7 @@ func (i *Issuer) loadOrCreateAccount(ctx context.Context) (*AccountUser, error) 
 	user = NewAccountUser(i.cfg.Email, privateKey, reg)
 
 	// Persist the account
-	bodyJSON, err := json.Marshal(reg.Body)
+	bodyJSON, err := json.Marshal(reg.Account)
 	if err != nil {
 		return nil, fmt.Errorf("marshal account body: %w", err)
 	}
@@ -320,7 +326,7 @@ func (i *Issuer) loadOrCreateAccount(ctx context.Context) (*AccountUser, error) 
 	if err := i.cfg.Store.SaveAccount(ctx, out.ACMEAccount{
 		Email:           i.cfg.Email,
 		PrivateKeyPEM:   privateKeyPEM,
-		RegistrationURI: reg.URI,
+		RegistrationURI: reg.Location,
 		BodyJSON:        bodyJSON,
 	}); err != nil {
 		return nil, fmt.Errorf("save account: %w", err)
@@ -336,8 +342,8 @@ func restoreAccount(stored *out.ACMEAccount) (*AccountUser, error) {
 		return nil, fmt.Errorf("parse account private key: %w", err)
 	}
 
-	reg := &registration.Resource{
-		URI: stored.RegistrationURI,
+	reg := &acme.ExtendedAccount{
+		Location: stored.RegistrationURI,
 	}
 
 	if len(stored.BodyJSON) > 0 {
@@ -345,7 +351,7 @@ func restoreAccount(stored *out.ACMEAccount) (*AccountUser, error) {
 		if err := json.Unmarshal(stored.BodyJSON, &body); err != nil {
 			return nil, fmt.Errorf("unmarshal account body: %w", err)
 		}
-		reg.Body = body
+		reg.Account = body
 	}
 
 	return NewAccountUser(stored.Email, privateKey, reg), nil
@@ -354,7 +360,6 @@ func restoreAccount(stored *out.ACMEAccount) (*AccountUser, error) {
 // newLegoConfig creates a lego.Config with common settings from the Issuer config.
 func (i *Issuer) newLegoConfig(user *AccountUser) *lego.Config {
 	legoCfg := lego.NewConfig(user)
-	legoCfg.Certificate.KeyType = certcrypto.EC256 // ECDSA P-256
 	if i.cfg.CADirectoryURL != "" {
 		legoCfg.CADirURL = i.cfg.CADirectoryURL
 	}
