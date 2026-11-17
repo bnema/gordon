@@ -48,7 +48,7 @@ type rawService struct {
 	Image     string       `toml:"image"`
 	Command   []string     `toml:"command"`
 	StopGrace string       `toml:"stop_grace"`
-	// DNS and DNSOptions override the container resolver configuration.
+	// DNS lists upstream resolver IPs; DNSOptions lists resolv.conf options.
 	DNS        []string          `toml:"dns"`
 	DNSOptions []string          `toml:"dns_options"`
 	Env        map[string]string `toml:"env"`
@@ -321,7 +321,7 @@ func toDomainService(serviceName string, raw rawService) (domain.AppService, err
 		Name:       serviceName,
 		Image:      normalizeImage(raw.Image),
 		Command:    append([]string(nil), raw.Command...),
-		DNS:        append([]string(nil), raw.DNS...),
+		DNS:        domain.CanonicalDNS(raw.DNS),
 		DNSOptions: append([]string(nil), raw.DNSOptions...),
 		Secrets:    map[string]string{},
 		Backup: domain.AppBackup{

@@ -678,6 +678,9 @@ func TestParse_ServiceDNSInvalid(t *testing.T) {
 		"zone":         "dns = [\"fe80::1%eth0\"]\n",
 		"empty option": "dns_options = [\"\"]\n",
 		"space option": "dns_options = [\"ndots: 1\"]\n",
+		"control char": "dns_options = [\"ndots:1\\u0000\"]\n",
+		"hash option":  "dns_options = [\"ndots#1\"]\n",
+		"four servers": "dns = [\"1.1.1.1\", \"8.8.8.8\", \"9.9.9.9\", \"8.8.4.4\"]\n",
 	}
 	for name, line := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -686,4 +689,11 @@ func TestParse_ServiceDNSInvalid(t *testing.T) {
 			require.ErrorIs(t, err, domain.ErrInvalidAppSpec)
 		})
 	}
+}
+
+func TestParse_ServiceDNSCanonicalized(t *testing.T) {
+	doc := "name = \"blog\"\n[services.web]\nimage = \"img:1\"\ndns = [\"2620:FE::FE\"]\n"
+	spec, _, err := appmanifest.Parse([]byte(doc), "blog.toml")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"2620:fe::fe"}, spec.Services[0].DNS)
 }

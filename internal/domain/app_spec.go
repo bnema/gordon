@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 )
 
 // App manifest validation is owned by the domain.
@@ -24,6 +23,7 @@ var (
 	appNamePattern     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	serviceNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9_.\-]{0,61}[a-z0-9])?$`)
 	dnsLabelPattern    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+	dnsOptionPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]+(:[0-9]{1,3})?$`)
 )
 
 // Reserved app names that collide with installation identity.
@@ -600,41 +600,59 @@ func (s *AppService) validate() error {
 	return nil
 }
 
+// AppMaxDNSServers caps dns entries: Docker's embedded resolver and glibc
+// use at most three servers.
+const AppMaxDNSServers = 3
+
 // validateDNS checks resolver addresses and options.
 func (s *AppService) validateDNS() error {
-	seen := make(map[netip.Addr]struct{}, len(s.DNS))
-	for _, raw := range s.DNS {
-		addr, err := netip.ParseAddr(raw)
-		if err != nil || addr.Zone() != "" {
-			return fmt.Errorf("%w: service %q dns %q is not an IP address", ErrInvalidAppSpec, s.Name, raw)
-		}
-		if _, dup := seen[addr]; dup {
-			return fmt.Errorf("%w: service %q dns %q is duplicated", ErrInvalidAppSpec, s.Name, raw)
-		}
-		seen[addr] = struct{}{}
+	if _, err := s.DNSAddrs(); err != nil {
+		return err
 	}
 	for _, opt := range s.DNSOptions {
-		if opt == "" || strings.ContainsFunc(opt, unicode.IsSpace) {
+		if !dnsOptionPattern.MatchString(opt) {
 			return fmt.Errorf("%w: service %q dns_options entry %q is invalid", ErrInvalidAppSpec, s.Name, opt)
 		}
 	}
 	return nil
 }
 
-// DNSAddrs returns the parsed resolver addresses, nil when DNS is unset.
+// DNSAddrs parses and checks the resolver addresses, nil when DNS is unset.
 func (s AppService) DNSAddrs() ([]netip.Addr, error) {
 	if len(s.DNS) == 0 {
 		return nil, nil
 	}
+	if len(s.DNS) > AppMaxDNSServers {
+		return nil, fmt.Errorf("%w: service %q dns allows at most %d servers", ErrInvalidAppSpec, s.Name, AppMaxDNSServers)
+	}
 	addrs := make([]netip.Addr, 0, len(s.DNS))
 	for _, raw := range s.DNS {
 		addr, err := netip.ParseAddr(raw)
-		if err != nil {
+		if err != nil || addr.Zone() != "" {
 			return nil, fmt.Errorf("%w: service %q dns %q is not an IP address", ErrInvalidAppSpec, s.Name, raw)
+		}
+		if slices.Contains(addrs, addr) {
+			return nil, fmt.Errorf("%w: service %q dns %q is duplicated", ErrInvalidAppSpec, s.Name, raw)
 		}
 		addrs = append(addrs, addr)
 	}
 	return addrs, nil
+}
+
+// CanonicalDNS returns dns entries in canonical IP form so spelling-only
+// edits compare equal. Unparsable entries are kept for validation to reject.
+func CanonicalDNS(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]string, len(raw))
+	for i, entry := range raw {
+		out[i] = entry
+		if addr, err := netip.ParseAddr(entry); err == nil {
+			out[i] = addr.String()
+		}
+	}
+	return out
 }
 
 // validateInterfaces checks HTTP/TCP/UDP entries and their port ownership.

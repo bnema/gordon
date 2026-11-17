@@ -324,4 +324,5 @@ func TestDiffAppSpec_DNSForcesReplacement(t *testing.T) {
 	opts := validSpec()
 	opts.Services[0].DNSOptions = []string{"ndots:1"}
 	assert.Contains(t, domain.DiffAppSpec(opts, before).Changed, "service/web/dns")
+	assert.False(t, domain.SameAppServiceRuntime(opts.Services[0], before.Services[0]))
 }

@@ -116,7 +116,7 @@ Image registry names and digest syntax are validated during manifest apply, reso
 
 ## DNS
 
-`dns` lists upstream resolver IP addresses (IPv4 or IPv6) and `dns_options` lists `resolv.conf` options for one service. Both are optional; without them the runtime default applies. Changing either replaces the container.
+`dns` lists upstream resolver IP addresses (IPv4 or IPv6) and `dns_options` lists `resolv.conf` options for one service. `dns` accepts at most 3 servers, the limit of Docker's embedded resolver and glibc. Both are optional; without them the runtime default applies. Changing either replaces the container.
 
 On an app network, Docker and Podman keep their network resolver in `/etc/resolv.conf` (Docker's embedded DNS, Podman's aardvark-dns). `dns` sets the upstream servers that resolver forwards to; it does not replace it, so service names keep resolving. It does not bypass aardvark-dns, so it does not work around aardvark-dns issues such as failures on large upstream answers. `dns_options` lands in `/etc/resolv.conf`.
 
