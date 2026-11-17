@@ -97,3 +97,55 @@ func TestPlanRuntimeImagesSupersededPodmanImage(t *testing.T) {
 		})
 	}
 }
+
+// TestPlanRuntimeImagesIncludeUnmanagedDangling proves the opt-in only
+// releases unused, untagged images with no Gordon provenance, and that
+// every other gate still holds.
+func TestPlanRuntimeImagesIncludeUnmanagedDangling(t *testing.T) {
+	id := digest("d")
+	untagged := domain.RuntimeImage{ID: id, RepoTags: []string{"docker.io/library/foo:<none>"}}
+
+	tests := []struct {
+		name       string
+		image      domain.RuntimeImage
+		containers []domain.RuntimeContainerUse
+		optIn      bool
+		complete   bool
+		want       domain.PruneVerdict
+		wantReason domain.PruneReason
+	}{
+		{"off keeps unmanaged protected", untagged, nil, false, true, domain.PruneVerdictProtected, domain.PruneReasonProtectedUnmanaged},
+		{"opt-in makes unmanaged eligible", untagged, nil, true, true, domain.PruneVerdictEligible, domain.PruneReasonEligibleUnmanagedDanglingImage},
+		{
+			"stopped container use still protects", untagged,
+			[]domain.RuntimeContainerUse{{ContainerID: "stopped", ImageID: id}}, true, true,
+			domain.PruneVerdictProtected, domain.PruneReasonProtectedContainerUse,
+		},
+		{
+			"tagged image still protected",
+			domain.RuntimeImage{ID: id, RepoTags: []string{"docker.io/library/foo:1"}}, nil, true, true,
+			domain.PruneVerdictProtected, domain.PruneReasonProtectedTagged,
+		},
+		{
+			"managed labels still protected",
+			domain.RuntimeImage{ID: id, Labels: map[string]string{domain.LabelManaged: "true"}}, nil, true, true,
+			domain.PruneVerdictProtected, domain.PruneReasonProtectedManagedOnly,
+		},
+		{"incomplete inventory stays unknown", untagged, nil, true, false, domain.PruneVerdictUnknown, domain.PruneReasonUnknownInventory},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			verdicts := PlanRuntimeImages(RuntimePlanInput{
+				Images:                   []domain.RuntimeImage{tt.image},
+				Containers:               tt.containers,
+				Snapshot:                 &domain.PruneProtectionSnapshot{},
+				Complete:                 tt.complete,
+				IncludeUnmanagedDangling: tt.optIn,
+			})
+			got := verdicts[0]
+			if got.Verdict != tt.want || len(got.Reasons) == 0 || got.Reasons[0] != tt.wantReason {
+				t.Fatalf("verdict = %v %v, want %v %v", got.Verdict, got.Reasons, tt.want, tt.wantReason)
+			}
+		})
+	}
+}

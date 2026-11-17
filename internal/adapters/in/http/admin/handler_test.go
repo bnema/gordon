@@ -1031,6 +1031,7 @@ func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
 		expectedPruneDangling bool
 		expectedPruneRegistry bool
 		expectedKeepLast      int
+		expectedUnmanaged     bool
 		wantStatus            int
 	}{
 		{
@@ -1058,6 +1059,14 @@ func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
 			wantStatus:            http.StatusOK,
 		},
 		{
+			name:                  "include unmanaged dangling opt-in",
+			body:                  `{"prune_dangling": true, "prune_registry": false, "include_unmanaged_dangling": true}`,
+			expectedPruneDangling: true,
+			expectedKeepLast:      domain.DefaultImagePruneKeepLast,
+			expectedUnmanaged:     true,
+			wantStatus:            http.StatusOK,
+		},
+		{
 			name:       "both scopes false returns 400",
 			body:       `{"prune_dangling": false, "prune_registry": false}`,
 			wantStatus: http.StatusBadRequest,
@@ -1073,6 +1082,7 @@ func TestHandler_ImagesPrune_ScopeDefaults(t *testing.T) {
 					assert.Equal(t, tt.expectedPruneDangling, opts.PruneDangling)
 					assert.Equal(t, tt.expectedPruneRegistry, opts.PruneRegistry)
 					assert.Equal(t, tt.expectedKeepLast, opts.KeepLast)
+					assert.Equal(t, tt.expectedUnmanaged, opts.IncludeUnmanagedDangling)
 					return domain.ImagePruneReport{}, nil
 				},
 			}

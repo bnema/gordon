@@ -14,6 +14,9 @@ type ImagePruneOptions struct {
 	PruneRegistry bool
 	// DryRun plans everything and deletes nothing.
 	DryRun bool
+	// IncludeUnmanagedDangling makes untagged runtime images with no
+	// Gordon provenance and no container use eligible. Off by default.
+	IncludeUnmanagedDangling bool
 }
 
 // DefaultImagePruneOptions returns options that prune both scopes with the default retention.

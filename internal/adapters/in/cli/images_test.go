@@ -618,3 +618,15 @@ func splitTableColumns(line string) []string {
 
 	return regexp.MustCompile(`\s{2,}`).Split(strings.TrimSpace(line), -1)
 }
+
+func TestRunImagesPrune_IncludeUnmanagedDanglingIsSent(t *testing.T) {
+	for _, include := range []bool{false, true} {
+		client := &imagesClientMock{pruneResp: &dto.ImagePruneResponse{}}
+		opts := imagesPruneOptions{DryRun: true, KeepReleases: 3, IncludeUnmanagedDangling: include}
+
+		require.NoError(t, runImagesPrune(context.Background(), client, opts, &bytes.Buffer{}))
+
+		require.NotNil(t, client.lastPruneOpts.IncludeUnmanagedDangling)
+		assert.Equal(t, include, *client.lastPruneOpts.IncludeUnmanagedDangling)
+	}
+}

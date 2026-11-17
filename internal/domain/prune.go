@@ -59,6 +59,10 @@ const (
 	// PruneReasonEligibleDanglingRuntimeImage marks a runtime image with
 	// no tag, no container use, and no protection root.
 	PruneReasonEligibleDanglingRuntimeImage PruneReason = "eligible-dangling-runtime-image"
+	// PruneReasonEligibleUnmanagedDanglingImage marks an untagged runtime
+	// image with no Gordon provenance and no container use, made eligible
+	// only by the operator's explicit opt-in.
+	PruneReasonEligibleUnmanagedDanglingImage PruneReason = "eligible-unmanaged-dangling-image"
 	// PruneReasonEligibleReleasedVolume marks an app-owned volume whose
 	// durable lifecycle state explicitly records released/abandoned,
 	// which no container uses.
@@ -111,7 +115,9 @@ const (
 	// still point at: tag retention owns it, not runtime prune.
 	PruneReasonProtectedTagged PruneReason = "protected-tagged-runtime-image"
 	// PruneReasonProtectedUnmanaged marks a resource with no Gordon
-	// provenance at all. Gordon never adopts or deletes it.
+	// provenance at all. Gordon never adopts or deletes it, except an
+	// unused untagged runtime image when the operator opts in with
+	// --include-unmanaged-dangling.
 	PruneReasonProtectedUnmanaged PruneReason = "protected-unmanaged"
 )
 
@@ -143,6 +149,7 @@ var pruneReasons = []PruneReason{
 	PruneReasonEligibleRetention,
 	PruneReasonEligibleUnreferencedBlob,
 	PruneReasonEligibleDanglingRuntimeImage,
+	PruneReasonEligibleUnmanagedDanglingImage,
 	PruneReasonEligibleReleasedVolume,
 
 	PruneReasonProtectedLatest,
@@ -172,32 +179,33 @@ var pruneReasons = []PruneReason{
 
 // pruneReasonCategory maps every reason code to the verdict it justifies.
 var pruneReasonCategory = map[PruneReason]PruneVerdict{
-	PruneReasonEligibleRetention:            PruneVerdictEligible,
-	PruneReasonEligibleUnreferencedBlob:     PruneVerdictEligible,
-	PruneReasonEligibleDanglingRuntimeImage: PruneVerdictEligible,
-	PruneReasonEligibleReleasedVolume:       PruneVerdictEligible,
-	PruneReasonProtectedLatest:              PruneVerdictProtected,
-	PruneReasonProtectedRetentionWindow:     PruneVerdictProtected,
-	PruneReasonProtectedDesiredRevision:     PruneVerdictProtected,
-	PruneReasonProtectedActiveService:       PruneVerdictProtected,
-	PruneReasonProtectedRecoveryInhibition:  PruneVerdictProtected,
-	PruneReasonProtectedApplyIntent:         PruneVerdictProtected,
-	PruneReasonProtectedOperation:           PruneVerdictProtected,
-	PruneReasonProtectedOwnership:           PruneVerdictProtected,
-	PruneReasonProtectedContainerUse:        PruneVerdictProtected,
-	PruneReasonProtectedPendingUpload:       PruneVerdictProtected,
-	PruneReasonProtectedSharedContent:       PruneVerdictProtected,
-	PruneReasonProtectedPinned:              PruneVerdictProtected,
-	PruneReasonProtectedServiceManaged:      PruneVerdictProtected,
-	PruneReasonProtectedManagedOnly:         PruneVerdictProtected,
-	PruneReasonProtectedTagged:              PruneVerdictProtected,
-	PruneReasonProtectedUnmanaged:           PruneVerdictProtected,
-	PruneReasonUnknownIdentity:              PruneVerdictUnknown,
-	PruneReasonUnknownProvenance:            PruneVerdictUnknown,
-	PruneReasonUnknownInventory:             PruneVerdictUnknown,
-	PruneReasonUnknownManifest:              PruneVerdictUnknown,
-	PruneReasonUnknownMediaType:             PruneVerdictUnknown,
-	PruneReasonUnknownContainerUse:          PruneVerdictUnknown,
+	PruneReasonEligibleRetention:              PruneVerdictEligible,
+	PruneReasonEligibleUnreferencedBlob:       PruneVerdictEligible,
+	PruneReasonEligibleDanglingRuntimeImage:   PruneVerdictEligible,
+	PruneReasonEligibleUnmanagedDanglingImage: PruneVerdictEligible,
+	PruneReasonEligibleReleasedVolume:         PruneVerdictEligible,
+	PruneReasonProtectedLatest:                PruneVerdictProtected,
+	PruneReasonProtectedRetentionWindow:       PruneVerdictProtected,
+	PruneReasonProtectedDesiredRevision:       PruneVerdictProtected,
+	PruneReasonProtectedActiveService:         PruneVerdictProtected,
+	PruneReasonProtectedRecoveryInhibition:    PruneVerdictProtected,
+	PruneReasonProtectedApplyIntent:           PruneVerdictProtected,
+	PruneReasonProtectedOperation:             PruneVerdictProtected,
+	PruneReasonProtectedOwnership:             PruneVerdictProtected,
+	PruneReasonProtectedContainerUse:          PruneVerdictProtected,
+	PruneReasonProtectedPendingUpload:         PruneVerdictProtected,
+	PruneReasonProtectedSharedContent:         PruneVerdictProtected,
+	PruneReasonProtectedPinned:                PruneVerdictProtected,
+	PruneReasonProtectedServiceManaged:        PruneVerdictProtected,
+	PruneReasonProtectedManagedOnly:           PruneVerdictProtected,
+	PruneReasonProtectedTagged:                PruneVerdictProtected,
+	PruneReasonProtectedUnmanaged:             PruneVerdictProtected,
+	PruneReasonUnknownIdentity:                PruneVerdictUnknown,
+	PruneReasonUnknownProvenance:              PruneVerdictUnknown,
+	PruneReasonUnknownInventory:               PruneVerdictUnknown,
+	PruneReasonUnknownManifest:                PruneVerdictUnknown,
+	PruneReasonUnknownMediaType:               PruneVerdictUnknown,
+	PruneReasonUnknownContainerUse:            PruneVerdictUnknown,
 }
 
 // Valid reports whether r is a defined reason code.

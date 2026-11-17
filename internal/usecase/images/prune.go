@@ -86,7 +86,7 @@ func (s *Service) Prune(ctx context.Context, opts domain.ImagePruneOptions) (dom
 	plan := &domain.PrunePlan{Gaps: append([]domain.InventoryGap(nil), snapshot.Gaps...)}
 
 	if opts.PruneDangling {
-		verdicts, gaps, err := s.planRuntimeImages(ctx, snapshot)
+		verdicts, gaps, err := s.planRuntimeImages(ctx, snapshot, opts.IncludeUnmanagedDangling)
 		if err != nil {
 			return domain.ImagePruneReport{}, err
 		}
@@ -145,7 +145,7 @@ func (s *Service) finishPlan(ctx context.Context, plan *domain.PrunePlan, dryRun
 // planRuntimeImages plans runtime image deletion from one coherent
 // inventory. An unwired or unreadable runtime inventory yields gaps
 // instead of an empty (apparently safe) runtime.
-func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneProtectionSnapshot) ([]domain.RuntimeImageVerdict, []domain.InventoryGap, error) {
+func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneProtectionSnapshot, includeUnmanagedDangling bool) ([]domain.RuntimeImageVerdict, []domain.InventoryGap, error) {
 	if s.pruneRuntime == nil {
 		return nil, []domain.InventoryGap{{
 			Source: domain.InventorySourceRuntimeImages,
@@ -158,11 +158,12 @@ func (s *Service) planRuntimeImages(ctx context.Context, snapshot *domain.PruneP
 		return nil, nil, fmt.Errorf("images: read runtime inventory: %w", err)
 	}
 	verdicts := pruneguard.PlanRuntimeImages(pruneguard.RuntimePlanInput{
-		Images:                inventory.Images,
-		Containers:            inventory.Containers,
-		Snapshot:              snapshot,
-		ProtectedContainerIDs: snapshot.RefsOfKind(domain.ProtectionRecoveryInhibition),
-		Complete:              inventory.Complete(),
+		Images:                   inventory.Images,
+		Containers:               inventory.Containers,
+		Snapshot:                 snapshot,
+		ProtectedContainerIDs:    snapshot.RefsOfKind(domain.ProtectionRecoveryInhibition),
+		Complete:                 inventory.Complete(),
+		IncludeUnmanagedDangling: includeUnmanagedDangling,
 	})
 	return verdicts, inventory.Gaps, nil
 }

@@ -21,6 +21,9 @@ type RuntimePlanInput struct {
 	// Complete is false when the runtime inventory could not be read in
 	// full. Candidates that would otherwise be eligible become unknown.
 	Complete bool
+	// IncludeUnmanagedDangling makes an untagged image with no Gordon
+	// provenance and no container use eligible instead of protected.
+	IncludeUnmanagedDangling bool
 }
 
 // containerUseIndex indexes container image usage for one planning run.
@@ -135,12 +138,16 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 		return domain.RuntimeImageVerdict{Ref: domain.RuntimeImageRef{ID: image.ID}, Verdict: useVerdict, Reasons: reasons}
 	}
 
+	eligibleReason := domain.PruneReasonEligibleDanglingRuntimeImage
 	// Labels are hints only. Deletion requires positive durable ownership:
 	// a matching claim from an app's ownership record. Every matching
 	// claim is considered: an attached or retained record protects even
 	// when a newer released record for the same image also exists.
 	if claimVerdict, reasons, decided := imageClaimVerdict(image, input.Snapshot); decided {
-		return domain.RuntimeImageVerdict{Ref: domain.RuntimeImageRef{ID: image.ID}, Verdict: claimVerdict, Reasons: reasons}
+		if !optedInUnmanaged(reasons, input) {
+			return domain.RuntimeImageVerdict{Ref: domain.RuntimeImageRef{ID: image.ID}, Verdict: claimVerdict, Reasons: reasons}
+		}
+		eligibleReason = domain.PruneReasonEligibleUnmanagedDanglingImage
 	}
 
 	// Safety is only provable against a complete view of both the
@@ -150,8 +157,17 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 		return verdict
 	}
 
-	verdict.Verdict, verdict.Reasons = eligibleResult(domain.PruneReasonEligibleDanglingRuntimeImage)
+	verdict.Verdict, verdict.Reasons = eligibleResult(eligibleReason)
 	return verdict
+}
+
+// optedInUnmanaged reports whether an untagged, unused image protected
+// only for lacking Gordon provenance is released by the operator opt-in.
+// Callers reach it after the tag and container-use gates, so the image is
+// already proven untagged and unused; the completeness gate still applies.
+func optedInUnmanaged(reasons []domain.PruneReason, input RuntimePlanInput) bool {
+	return input.IncludeUnmanagedDangling &&
+		len(reasons) == 1 && reasons[0] == domain.PruneReasonProtectedUnmanaged
 }
 
 // containerUseVerdict decides a candidate from container/tag state alone.

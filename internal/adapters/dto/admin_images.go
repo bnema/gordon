@@ -24,6 +24,9 @@ type ImagePruneRequest struct {
 	PruneDangling *bool `json:"prune_dangling,omitempty"`
 	PruneRegistry *bool `json:"prune_registry,omitempty"`
 	DryRun        *bool `json:"dry_run,omitempty"`
+	// IncludeUnmanagedDangling opts unmanaged, unused, untagged runtime
+	// images into prune.
+	IncludeUnmanagedDangling *bool `json:"include_unmanaged_dangling,omitempty"`
 }
 
 // RuntimePruneResult represents runtime prune results.
