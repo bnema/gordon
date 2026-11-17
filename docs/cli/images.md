@@ -223,7 +223,7 @@ Flags:
 | `--keep-releases` | `3` | Number of previous non-`latest` tags to keep per repository (`latest` is always preserved) |
 | `--dangling` | `false` | Restrict scope to dangling runtime images only |
 | `--registry` | `false` | Restrict scope to registry tag retention only |
-| `--include-unmanaged-dangling` | `false` | Also prune untagged runtime images with no Gordon provenance that no container uses |
+| `--include-unmanaged-dangling` | `false` | Also prune unused untagged runtime images with no Gordon ownership record and no Gordon labels |
 | `--no-confirm` | `false` | Skip the confirmation prompt |
 
 ### Scope resolution
@@ -252,7 +252,7 @@ Gordon prunes by ownership, not by name or age. Each candidate gets one verdict:
 
 Runtime images used by any container, running or stopped, always survive. Registry blobs reachable from a retained or protected manifest survive, including blobs shared with another tag. When a retained manifest cannot be read, the blobs whose safety depended on it become `unknown` rather than eligible.
 
-A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>` (how Podman keeps superseded images). A deploy that replaces a service's image with a different digest releases the previous one; Gordon keeps the 20 most recent released images per service. Untagged images with no Gordon provenance are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them and the inventory is complete.
+A runtime image counts as untagged when its tags are placeholders such as `<none>:<none>` or `<repo>:<none>` (how Podman keeps superseded images). A deploy that replaces a service's image with a different digest releases the previous one; Gordon keeps the 20 most recent released images per service. Untagged images with no Gordon ownership record and no Gordon labels are `protected-unmanaged` by default. `--include-unmanaged-dangling` makes them `eligible` (`eligible-unmanaged-dangling-image`) when no container uses them, no other image is built on them, and the inventory is complete. This scope can include Gordon images deployed before ownership tracking and digest-pulled images of other tools: review the `--dry-run` list first.
 
 Each inventory gap names the resource and the underlying error. For registry manifests it tells a missing manifest (`not found`, for example a stale tag entry) from a read or parse failure.
 

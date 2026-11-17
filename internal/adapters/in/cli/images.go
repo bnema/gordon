@@ -29,8 +29,8 @@ type imagesPruneOptions struct {
 	Dangling     bool // scope flag: prune dangling runtime images
 	Registry     bool // scope flag: prune registry tags
 	NoConfirm    bool
-	// IncludeUnmanagedDangling opts unmanaged, unused, untagged runtime
-	// images into prune.
+	// IncludeUnmanagedDangling opts unused, untagged runtime images with no
+	// Gordon ownership record and no Gordon labels into prune.
 	IncludeUnmanagedDangling bool
 }
 
@@ -134,7 +134,8 @@ reported and left in place. A prune that deletes nothing succeeds.`,
 	cmd.Flags().BoolVar(&opts.Registry, "registry", false, "Include old registry tags (default: both scopes)")
 	cmd.Flags().BoolVar(&opts.NoConfirm, "no-confirm", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.IncludeUnmanagedDangling, "include-unmanaged-dangling", false,
-		"Also prune untagged runtime images with no Gordon provenance that no container uses")
+		"Also prune unused untagged runtime images with no Gordon ownership record and no Gordon labels\n"+
+			"(includes Gordon images deployed before ownership tracking and images pulled by other tools)")
 
 	return cmd
 }
@@ -348,7 +349,7 @@ func runImagesPrune(ctx context.Context, client imagesClient, opts imagesPruneOp
 			return fmt.Errorf("failed to load prune preview: %w", err)
 		}
 
-		confirmed, err := pruneConfirmFunc(renderPruneConfirmPrompt(preview, opts.KeepReleases, pruneDangling, pruneRegistry))
+		confirmed, err := pruneConfirmFunc(renderPruneConfirmPrompt(preview, opts.KeepReleases, pruneDangling, pruneRegistry, opts.IncludeUnmanagedDangling))
 		if err != nil {
 			return fmt.Errorf("confirmation failed: %w", err)
 		}
@@ -445,11 +446,14 @@ func loadPrunePreview(ctx context.Context, client imagesClient, keepReleases int
 	return preview, nil
 }
 
-func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangling, pruneRegistry bool) string {
+func renderPruneConfirmPrompt(preview prunePreview, keepReleases int, pruneDangling, pruneRegistry, includeUnmanaged bool) string {
 	lines := []string{"Prune images? This cannot be undone.", ""}
 
 	if pruneDangling {
 		lines = append(lines, fmt.Sprintf("Runtime: would prune %d dangling runtime images", preview.danglingRuntimeCount))
+		if includeUnmanaged {
+			lines = append(lines, "Runtime: including untagged images not created by Gordon")
+		}
 	} else {
 		lines = append(lines, "Runtime: cleanup skipped (--registry)")
 	}
@@ -491,7 +495,7 @@ func collectTagsByRepository(images []dto.Image) map[string]map[string]time.Time
 	for _, img := range images {
 		repo := strings.TrimSpace(img.Repository)
 		tag := strings.TrimSpace(img.Tag)
-		if repo == "" || tag == "" || repo == "<none>" || tag == "<none>" {
+		if repo == "" || tag == "" || repo == "<none>" || domain.IsPlaceholderRepoTag(repo+":"+tag) {
 			continue
 		}
 

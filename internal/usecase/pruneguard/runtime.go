@@ -32,6 +32,8 @@ type containerUseIndex struct {
 	refs     map[string]struct{}
 	// protectedImageIDs are the images held by protected containers.
 	protectedImageIDs map[string]struct{}
+	// parentIDs are the images another inventoried image was built from.
+	parentIDs map[string]struct{}
 	// unknown marks a container whose image identity could not be
 	// resolved. It makes every image candidate unknown: an image used
 	// by any container, including an unknown one, must survive.
@@ -94,6 +96,7 @@ func (i containerUseIndex) usesImage(image domain.RuntimeImage) bool {
 // ordered by image ID so callers and reports are deterministic.
 func PlanRuntimeImages(input RuntimePlanInput) []domain.RuntimeImageVerdict {
 	uses := buildContainerUseIndex(input.Containers, input.ProtectedContainerIDs)
+	uses.parentIDs = parentImageIDs(input.Images)
 
 	verdicts := make([]domain.RuntimeImageVerdict, 0, len(input.Images))
 	for _, image := range input.Images {
@@ -136,7 +139,10 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 	// claim is considered: an attached or retained record protects even
 	// when a newer released record for the same image also exists.
 	if claimVerdict, reasons, decided := imageClaimVerdict(image, input.Snapshot); decided {
-		if !optedInUnmanaged(reasons, input) {
+		// The opt-in must stay after containerUseVerdict (tags, container
+		// use, recovery inhibition) and before the completeness check, so
+		// it can only release an untagged, unused image from a complete view.
+		if !optedInUnmanaged(image, reasons, uses, input) {
 			return domain.RuntimeImageVerdict{Ref: domain.RuntimeImageRef{ID: image.ID}, Verdict: claimVerdict, Reasons: reasons}
 		}
 		eligibleReason = domain.PruneReasonEligibleUnmanagedDanglingImage
@@ -157,9 +163,26 @@ func planRuntimeImage(image domain.RuntimeImage, uses containerUseIndex, input R
 // only for lacking Gordon provenance is released by the operator opt-in.
 // Callers reach it after the tag and container-use gates, so the image is
 // already proven untagged and unused; the completeness gate still applies.
-func optedInUnmanaged(reasons []domain.PruneReason, input RuntimePlanInput) bool {
+// A parent of another inventoried image is never released: removing it
+// would only untag a layer chain still in use.
+func optedInUnmanaged(image domain.RuntimeImage, reasons []domain.PruneReason, uses containerUseIndex, input RuntimePlanInput) bool {
+	if _, parent := uses.parentIDs[image.ID]; parent {
+		return false
+	}
 	return input.IncludeUnmanagedDangling &&
 		len(reasons) == 1 && reasons[0] == domain.PruneReasonProtectedUnmanaged
+}
+
+// parentImageIDs indexes the images another inventoried image names as its
+// parent. An empty ParentID is unknown and names no parent.
+func parentImageIDs(images []domain.RuntimeImage) map[string]struct{} {
+	parents := make(map[string]struct{})
+	for _, image := range images {
+		if image.ParentID != "" {
+			parents[image.ParentID] = struct{}{}
+		}
+	}
+	return parents
 }
 
 // containerUseVerdict decides a candidate from container/tag state alone.
@@ -238,7 +261,7 @@ func imageIdentities(image domain.RuntimeImage) []string {
 	identities := make([]string, 0, 1+len(image.RepoTags)+2*len(image.RepoDigests))
 	identities = append(identities, image.ID)
 	for _, repoTag := range image.RepoTags {
-		if isPlaceholderRepoTag(repoTag) {
+		if domain.IsPlaceholderRepoTag(repoTag) {
 			continue
 		}
 		identities = append(identities, repoTag)
@@ -262,27 +285,10 @@ func imageIdentities(image domain.RuntimeImage) []string {
 // image. Placeholder tags never count.
 func hasRepoTags(repoTags []string) bool {
 	for _, tag := range repoTags {
-		if isPlaceholderRepoTag(tag) {
+		if domain.IsPlaceholderRepoTag(tag) {
 			continue
 		}
 		return true
 	}
 	return false
-}
-
-// isPlaceholderRepoTag reports whether a runtime repo tag is a placeholder
-// rather than a usable tag. Docker reports "<none>:<none>"; Podman keeps
-// the repository of a superseded image and reports "<repo>:<none>"; a
-// digest-only "<none>@sha256:..." entry names no tag either.
-func isPlaceholderRepoTag(tag string) bool {
-	switch {
-	case tag == "", tag == "<none>":
-		return true
-	case strings.HasSuffix(tag, ":<none>"):
-		return true
-	case strings.HasPrefix(tag, "<none>@"):
-		return true
-	default:
-		return false
-	}
 }

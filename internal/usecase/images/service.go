@@ -102,7 +102,7 @@ func buildRuntimeImageIndex(details []runtime.ImageDetail) ([]domain.ImageInfo, 
 		}
 
 		for _, repoTag := range detail.RepoTags {
-			if repoTag == "" || repoTag == "<none>:<none>" {
+			if domain.IsPlaceholderRepoTag(repoTag) {
 				continue
 			}
 			repository, tag := splitRepoTag(repoTag)
@@ -187,7 +187,7 @@ func isDanglingImage(repoTags []string) bool {
 	}
 
 	for _, tag := range repoTags {
-		if tag == "<none>:<none>" || tag == "" {
+		if domain.IsPlaceholderRepoTag(tag) {
 			continue
 		}
 		return false

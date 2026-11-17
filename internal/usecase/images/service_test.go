@@ -383,3 +383,22 @@ func TestSplitRepoTag(t *testing.T) {
 }
 
 var _ pkgruntime.Runtime = (*fakeRuntime)(nil)
+
+func TestIsDanglingImage(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []string
+		want bool
+	}{
+		{"no tags", nil, true},
+		{"docker placeholder", []string{"<none>:<none>"}, true},
+		{"podman superseded", []string{"localhost/shop:<none>"}, true},
+		{"real tag", []string{"reg/shop:v2"}, false},
+		{"mixed", []string{"reg/shop:v2", "reg/shop:<none>"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDanglingImage(tt.tags))
+		})
+	}
+}

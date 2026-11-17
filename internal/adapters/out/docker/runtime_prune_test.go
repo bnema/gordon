@@ -30,7 +30,7 @@ func TestRuntime_InventoryRuntime(t *testing.T) {
 			_, _ = w.Write([]byte(`[
 				{"Id":"sha256:aaa","RepoTags":["registry.example/shop:1","registry.example/shop:latest"],
 				 "RepoDigests":["registry.example/shop@sha256:1111"],"Labels":{"gordon.app":"shop"},"Size":10,"Created":1700000000},
-				{"Id":"sha256:bbb","RepoTags":["<none>:<none>"],"RepoDigests":[],"Labels":{},"Size":20,"Created":1700000000}
+				{"Id":"sha256:bbb","ParentId":"sha256:aaa","RepoTags":["<none>:<none>"],"RepoDigests":[],"Labels":{},"Size":20,"Created":1700000000}
 			]`))
 		case "/v1.41/volumes":
 			_, _ = w.Write([]byte(`{"Volumes":[
@@ -67,6 +67,8 @@ func TestRuntime_InventoryRuntime(t *testing.T) {
 	// One image ID may carry several repo tags and repo digests.
 	assert.Equal(t, []string{"registry.example/shop:1", "registry.example/shop:latest"}, byImage["sha256:aaa"].RepoTags)
 	assert.Equal(t, []string{"registry.example/shop@sha256:1111"}, byImage["sha256:aaa"].RepoDigests)
+	assert.Equal(t, "sha256:aaa", byImage["sha256:bbb"].ParentID)
+	assert.Empty(t, byImage["sha256:aaa"].ParentID)
 	assert.Equal(t, "<none>:<none>", byImage["sha256:bbb"].RepoTags[0])
 
 	require.Len(t, inventory.Volumes, 2)

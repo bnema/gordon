@@ -59,9 +59,9 @@ const (
 	// PruneReasonEligibleDanglingRuntimeImage marks a runtime image with
 	// no tag, no container use, and no protection root.
 	PruneReasonEligibleDanglingRuntimeImage PruneReason = "eligible-dangling-runtime-image"
-	// PruneReasonEligibleUnmanagedDanglingImage marks an untagged runtime
-	// image with no Gordon provenance and no container use, made eligible
-	// only by the operator's explicit opt-in.
+	// PruneReasonEligibleUnmanagedDanglingImage marks an unused, untagged
+	// runtime image with no Gordon ownership record and no Gordon labels,
+	// made eligible only by the operator's explicit opt-in.
 	PruneReasonEligibleUnmanagedDanglingImage PruneReason = "eligible-unmanaged-dangling-image"
 	// PruneReasonEligibleReleasedVolume marks an app-owned volume whose
 	// durable lifecycle state explicitly records released/abandoned,
@@ -1342,7 +1342,10 @@ type RuntimeImage struct {
 	RepoTags []string
 	// RepoDigests are the manifest digests the runtime knows for it.
 	RepoDigests []string
-	Labels      map[string]string
+	// ParentID is the image this one was built from, when the runtime
+	// reports it. Empty means unknown, never "no children".
+	ParentID string
+	Labels   map[string]string
 	// Size is reported in bytes.
 	Size    int64
 	Created time.Time
@@ -1383,4 +1386,21 @@ func (i *RuntimeInventory) Complete() bool {
 		}
 	}
 	return true
+}
+
+// IsPlaceholderRepoTag reports whether a runtime repo tag is a placeholder
+// rather than a usable tag. Docker reports "<none>:<none>"; Podman keeps
+// the repository of a superseded image and reports "<repo>:<none>"; a
+// digest-only "<none>@sha256:..." entry names no tag either.
+func IsPlaceholderRepoTag(tag string) bool {
+	switch {
+	case tag == "", tag == "<none>":
+		return true
+	case strings.HasSuffix(tag, ":<none>"):
+		return true
+	case strings.HasPrefix(tag, "<none>@"):
+		return true
+	default:
+		return false
+	}
 }

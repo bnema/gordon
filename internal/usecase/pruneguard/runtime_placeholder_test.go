@@ -1,12 +1,13 @@
 package pruneguard
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/bnema/gordon/internal/domain"
 )
 
-func TestIsPlaceholderRepoTag(t *testing.T) {
+func TestDomainIsPlaceholderRepoTag(t *testing.T) {
 	tests := []struct {
 		tag  string
 		want bool
@@ -16,6 +17,8 @@ func TestIsPlaceholderRepoTag(t *testing.T) {
 		{"<none>:<none>", true},
 		{"registry.example.com/shop:<none>", true},
 		{"localhost:5000/shop:<none>", true},
+		{"localhost/x:<none>", true},
+		{"reg.example.com/shop@" + digest("a"), false},
 		{"<none>@" + digest("a"), true},
 		{"registry.example.com/shop:v1", false},
 		{"localhost:5000/shop:latest", false},
@@ -23,8 +26,8 @@ func TestIsPlaceholderRepoTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.tag, func(t *testing.T) {
-			if got := isPlaceholderRepoTag(tt.tag); got != tt.want {
-				t.Fatalf("isPlaceholderRepoTag(%q) = %v, want %v", tt.tag, got, tt.want)
+			if got := domain.IsPlaceholderRepoTag(tt.tag); got != tt.want {
+				t.Fatalf("domain.IsPlaceholderRepoTag(%q) = %v, want %v", tt.tag, got, tt.want)
 			}
 		})
 	}
@@ -91,7 +94,7 @@ func TestPlanRuntimeImagesSupersededPodmanImage(t *testing.T) {
 				Complete:   true,
 			})
 			got := verdicts[0]
-			if got.Verdict != tt.want || len(got.Reasons) == 0 || got.Reasons[0] != tt.wantReason {
+			if got.Verdict != tt.want || !reflect.DeepEqual(got.Reasons, []domain.PruneReason{tt.wantReason}) {
 				t.Fatalf("verdict = %v %v, want %v %v", got.Verdict, got.Reasons, tt.want, tt.wantReason)
 			}
 		})
@@ -99,52 +102,97 @@ func TestPlanRuntimeImagesSupersededPodmanImage(t *testing.T) {
 }
 
 // TestPlanRuntimeImagesIncludeUnmanagedDangling proves the opt-in only
-// releases unused, untagged images with no Gordon provenance, and that
-// every other gate still holds.
+// releases unused, untagged images with no Gordon ownership record, no
+// Gordon labels, and no child image, and that every other gate still holds.
 func TestPlanRuntimeImagesIncludeUnmanagedDangling(t *testing.T) {
 	id := digest("d")
 	untagged := domain.RuntimeImage{ID: id, RepoTags: []string{"docker.io/library/foo:<none>"}}
+	reasons := func(r domain.PruneReason) []domain.PruneReason { return []domain.PruneReason{r} }
+	claim := func(state domain.VolumeClaimState, app string) *domain.PruneProtectionSnapshot {
+		return &domain.PruneProtectionSnapshot{ImageClaims: []domain.ImageClaim{{Reference: id, App: app, State: state}}}
+	}
 
 	tests := []struct {
-		name       string
-		image      domain.RuntimeImage
-		containers []domain.RuntimeContainerUse
-		optIn      bool
-		complete   bool
-		want       domain.PruneVerdict
-		wantReason domain.PruneReason
+		name        string
+		image       domain.RuntimeImage
+		others      []domain.RuntimeImage
+		containers  []domain.RuntimeContainerUse
+		protectedID []string
+		snapshot    *domain.PruneProtectionSnapshot
+		optIn       bool
+		incomplete  bool
+		want        domain.PruneVerdict
+		wantReasons []domain.PruneReason
 	}{
-		{"off keeps unmanaged protected", untagged, nil, false, true, domain.PruneVerdictProtected, domain.PruneReasonProtectedUnmanaged},
-		{"opt-in makes unmanaged eligible", untagged, nil, true, true, domain.PruneVerdictEligible, domain.PruneReasonEligibleUnmanagedDanglingImage},
-		{
-			"stopped container use still protects", untagged,
-			[]domain.RuntimeContainerUse{{ContainerID: "stopped", ImageID: id}}, true, true,
-			domain.PruneVerdictProtected, domain.PruneReasonProtectedContainerUse,
-		},
-		{
-			"tagged image still protected",
-			domain.RuntimeImage{ID: id, RepoTags: []string{"docker.io/library/foo:1"}}, nil, true, true,
-			domain.PruneVerdictProtected, domain.PruneReasonProtectedTagged,
-		},
-		{
-			"managed labels still protected",
-			domain.RuntimeImage{ID: id, Labels: map[string]string{domain.LabelManaged: "true"}}, nil, true, true,
-			domain.PruneVerdictProtected, domain.PruneReasonProtectedManagedOnly,
-		},
-		{"incomplete inventory stays unknown", untagged, nil, true, false, domain.PruneVerdictUnknown, domain.PruneReasonUnknownInventory},
+		{name: "off keeps unmanaged protected", image: untagged,
+			want: domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedUnmanaged)},
+		{name: "opt-in makes unmanaged eligible", image: untagged, optIn: true,
+			others: []domain.RuntimeImage{{ID: digest("9")}},
+			want:   domain.PruneVerdictEligible, wantReasons: reasons(domain.PruneReasonEligibleUnmanagedDanglingImage)},
+		{name: "parent of another image stays protected", image: untagged, optIn: true,
+			others: []domain.RuntimeImage{{ID: digest("9"), ParentID: id}},
+			want:   domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedUnmanaged)},
+		{name: "stopped container use still protects", image: untagged, optIn: true,
+			containers: []domain.RuntimeContainerUse{{ContainerID: "stopped", ImageID: id}},
+			want:       domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedContainerUse)},
+		{name: "recovery inhibited container still protects", image: untagged, optIn: true,
+			containers:  []domain.RuntimeContainerUse{{ContainerID: "held", ImageID: id}},
+			protectedID: []string{"held"},
+			want:        domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedContainerUse)},
+		{name: "unknown container use stays unknown", image: untagged, optIn: true,
+			containers: []domain.RuntimeContainerUse{{ContainerID: "c", ImageUnknown: true}},
+			want:       domain.PruneVerdictUnknown, wantReasons: reasons(domain.PruneReasonUnknownContainerUse)},
+		{name: "matching root still protects", image: untagged, optIn: true,
+			snapshot: &domain.PruneProtectionSnapshot{Roots: []domain.ProtectionRoot{{Kind: domain.ProtectionActiveService, Ref: id, Owner: "shop"}}},
+			want:     domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedActiveService)},
+		{name: "snapshot gap stays unknown", image: untagged, optIn: true,
+			snapshot: &domain.PruneProtectionSnapshot{Gaps: []domain.InventoryGap{{
+				Source: domain.InventorySourceAppState, Reason: domain.PruneReasonUnknownInventory, Detail: "app record unreadable",
+			}}},
+			want: domain.PruneVerdictUnknown, wantReasons: reasons(domain.PruneReasonUnknownInventory)},
+		{name: "incomplete inventory stays unknown", image: untagged, optIn: true, incomplete: true,
+			want: domain.PruneVerdictUnknown, wantReasons: reasons(domain.PruneReasonUnknownInventory)},
+		{name: "attached claim still protects", image: untagged, optIn: true, snapshot: claim(domain.VolumeClaimAttached, "shop"),
+			want: domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedOwnership)},
+		{name: "retained claim still protects", image: untagged, optIn: true, snapshot: claim(domain.VolumeClaimRetained, "shop"),
+			want: domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedOwnership)},
+		{name: "invalid claim stays unknown", image: untagged, optIn: true, snapshot: claim(domain.VolumeClaimReleased, ""),
+			want: domain.PruneVerdictUnknown, wantReasons: reasons(domain.PruneReasonUnknownProvenance)},
+		{name: "app labels without claim stay unknown", optIn: true,
+			image: domain.RuntimeImage{ID: id, Labels: map[string]string{domain.LabelApp: "shop"}},
+			want:  domain.PruneVerdictUnknown, wantReasons: reasons(domain.PruneReasonUnknownProvenance)},
+		{name: "managed labels still protected", optIn: true,
+			image: domain.RuntimeImage{ID: id, Labels: map[string]string{domain.LabelManaged: "true"}},
+			want:  domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedManagedOnly)},
+		{name: "tagged image still protected", optIn: true,
+			image: domain.RuntimeImage{ID: id, RepoTags: []string{"docker.io/library/foo:1"}},
+			want:  domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedTagged)},
+		{name: "mixed real and placeholder tags still protected", optIn: true,
+			image: domain.RuntimeImage{ID: id, RepoTags: []string{"reg/shop:v2", "reg/shop:<none>"}},
+			want:  domain.PruneVerdictProtected, wantReasons: reasons(domain.PruneReasonProtectedTagged)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			snapshot := tt.snapshot
+			if snapshot == nil {
+				snapshot = &domain.PruneProtectionSnapshot{}
+			}
 			verdicts := PlanRuntimeImages(RuntimePlanInput{
-				Images:                   []domain.RuntimeImage{tt.image},
+				Images:                   append([]domain.RuntimeImage{tt.image}, tt.others...),
 				Containers:               tt.containers,
-				Snapshot:                 &domain.PruneProtectionSnapshot{},
-				Complete:                 tt.complete,
+				ProtectedContainerIDs:    tt.protectedID,
+				Snapshot:                 snapshot,
+				Complete:                 !tt.incomplete,
 				IncludeUnmanagedDangling: tt.optIn,
 			})
-			got := verdicts[0]
-			if got.Verdict != tt.want || len(got.Reasons) == 0 || got.Reasons[0] != tt.wantReason {
-				t.Fatalf("verdict = %v %v, want %v %v", got.Verdict, got.Reasons, tt.want, tt.wantReason)
+			var got domain.RuntimeImageVerdict
+			for _, verdict := range verdicts {
+				if verdict.Ref.ID == id {
+					got = verdict
+				}
+			}
+			if got.Verdict != tt.want || !reflect.DeepEqual(got.Reasons, tt.wantReasons) {
+				t.Fatalf("verdict = %v %v, want %v %v", got.Verdict, got.Reasons, tt.want, tt.wantReasons)
 			}
 		})
 	}

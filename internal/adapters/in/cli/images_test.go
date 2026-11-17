@@ -620,13 +620,32 @@ func splitTableColumns(line string) []string {
 }
 
 func TestRunImagesPrune_IncludeUnmanagedDanglingIsSent(t *testing.T) {
-	for _, include := range []bool{false, true} {
-		client := &imagesClientMock{pruneResp: &dto.ImagePruneResponse{}}
-		opts := imagesPruneOptions{DryRun: true, KeepReleases: 3, IncludeUnmanagedDangling: include}
-
-		require.NoError(t, runImagesPrune(context.Background(), client, opts, &bytes.Buffer{}))
-
-		require.NotNil(t, client.lastPruneOpts.IncludeUnmanagedDangling)
-		assert.Equal(t, include, *client.lastPruneOpts.IncludeUnmanagedDangling)
+	tests := []struct {
+		name string
+		opts imagesPruneOptions
+	}{
+		{"dry run off", imagesPruneOptions{DryRun: true, KeepReleases: 3}},
+		{"dry run on", imagesPruneOptions{DryRun: true, KeepReleases: 3, IncludeUnmanagedDangling: true}},
+		{"no confirm off", imagesPruneOptions{NoConfirm: true, KeepReleases: 3}},
+		{"no confirm on", imagesPruneOptions{NoConfirm: true, KeepReleases: 3, IncludeUnmanagedDangling: true}},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &imagesClientMock{pruneResp: &dto.ImagePruneResponse{}}
+
+			require.NoError(t, runImagesPrune(context.Background(), client, tt.opts, &bytes.Buffer{}))
+
+			require.NotNil(t, client.lastPruneOpts.IncludeUnmanagedDangling)
+			assert.Equal(t, tt.opts.IncludeUnmanagedDangling, *client.lastPruneOpts.IncludeUnmanagedDangling)
+			require.NotNil(t, client.lastPruneOpts.DryRun)
+			assert.Equal(t, tt.opts.DryRun, *client.lastPruneOpts.DryRun)
+		})
+	}
+}
+
+func TestRenderPruneConfirmPrompt_IncludeUnmanagedDangling(t *testing.T) {
+	const line = "Runtime: including untagged images not created by Gordon"
+	assert.Contains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, true), line)
+	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, true, true, false), line)
+	assert.NotContains(t, renderPruneConfirmPrompt(prunePreview{}, 3, false, true, true), line)
 }
