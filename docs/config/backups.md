@@ -94,6 +94,11 @@ keep = 14
 | `backups.volumes.s3.storage_class` | `""` | Storage class sent with each upload, such as `STANDARD_IA` (AWS) or `ONEZONE_IA` (Scaleway One Zone); empty uses the bucket default |
 | `backups.volumes.retention.keep` | `14` | Completed archives to keep per app + volume |
 
+Archives are crash-consistent copies of a running volume. A file that is
+deleted while the archive is written (for example a SQLite `*.db-journal`) is
+left out and logged as a warning; the backup still succeeds. Any other archive
+error fails the backup.
+
 Volume backup objects are stored under the canonical app name:
 
 ```text

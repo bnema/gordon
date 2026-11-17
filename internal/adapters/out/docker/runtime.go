@@ -1806,7 +1806,7 @@ func streamVolumeArchiveLogs(logs io.ReadCloser, pw *io.PipeWriter, statusCh <-c
 	var stderr bytes.Buffer
 	_, copyErr := stdcopy.StdCopy(pw, &stderr, logs)
 	statusCode, waitErr := waitForVolumeArchiveContainer(statusCh, errCh)
-	closeVolumeArchivePipe(pw, copyErr, waitErr, statusCode, stderr.String())
+	closeVolumeArchivePipe(pw, copyErr, waitErr, statusCode, stderr.String(), log)
 }
 
 func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh <-chan error) (int64, error) {
@@ -1830,17 +1830,82 @@ func waitForVolumeArchiveContainer(statusCh <-chan container.WaitResponse, errCh
 	return 0, fmt.Errorf("volume archive helper container wait channels closed")
 }
 
-func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string) {
+func closeVolumeArchivePipe(pw *io.PipeWriter, copyErr, waitErr error, statusCode int64, stderr string, log zerowrap.Logger) {
 	switch {
 	case copyErr != nil:
 		_ = pw.CloseWithError(copyErr)
 	case waitErr != nil:
 		_ = pw.CloseWithError(waitErr)
 	case statusCode != 0:
+		if vanished, ok := classifyVanishedTarFailure(statusCode, stderr); ok {
+			log.Warn().
+				Int("vanished_count", len(vanished)).
+				Strs("tar_stderr", firstLines(vanished, maxVanishedLogLines)).
+				Msg("files vanished during volume archive; backup continues without them")
+			_ = pw.Close()
+			return
+		}
 		_ = pw.CloseWithError(fmt.Errorf("volume archive helper exited with code %d: %s", statusCode, strings.TrimSpace(stderr)))
 	default:
 		_ = pw.Close()
 	}
+}
+
+const maxVanishedLogLines = 5
+
+// vanishedTarLine matches a tar stderr line reporting an archive member that
+// disappeared while archiving. Paths are relative to /volume, so members
+// always start with "./"; other ENOENT forms (archive, fifo) are rejected.
+type vanishedTarLine struct{ prefix, suffix string }
+
+var vanishedTarLines = []vanishedTarLine{
+	{"tar: ./", ": No such file or directory"},              // busybox stat
+	{"tar: can't open './", "': No such file or directory"}, // busybox open
+	{"tar: ./", ": File removed before we read it"},         // GNU tar
+}
+
+var tarSummaryLines = map[string]bool{
+	"tar: error exit delayed from previous errors":            true, // busybox
+	"tar: Exiting with failure status due to previous errors": true, // GNU tar
+}
+
+// classifyVanishedTarFailure reports whether a helper exit is only caused by
+// archive members removed while archiving (e.g. SQLite journals) and returns
+// those lines. It fails closed: only exit code 1 where every stderr line is a
+// known vanished-member or summary message is tolerated.
+func classifyVanishedTarFailure(statusCode int64, stderr string) ([]string, bool) {
+	if statusCode != 1 {
+		return nil, false
+	}
+	var vanished []string
+	for _, line := range strings.Split(stderr, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "" || tarSummaryLines[line]:
+		case isVanishedTarLine(line):
+			vanished = append(vanished, line)
+		default:
+			return nil, false
+		}
+	}
+	return vanished, len(vanished) > 0
+}
+
+func isVanishedTarLine(line string) bool {
+	for _, form := range vanishedTarLines {
+		if len(line) > len(form.prefix)+len(form.suffix) &&
+			strings.HasPrefix(line, form.prefix) && strings.HasSuffix(line, form.suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func firstLines(lines []string, n int) []string {
+	if len(lines) > n {
+		return lines[:n]
+	}
+	return lines
 }
 
 func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, error) {
@@ -1848,7 +1913,9 @@ func volumeArchiveCommand(compression domain.VolumeBackupCompression) (string, e
 	case domain.VolumeBackupCompressionGzip:
 		return "cd /volume && tar -czf - .", nil
 	case domain.VolumeBackupCompressionZstd:
-		return "cd /volume && fifo=/tmp/gordon-volume-backup.tar && mkfifo $fifo && zstd -T0 -c $fifo & zstd_pid=$! && tar -cf $fifo .; tar_status=$?; wait $zstd_pid; zstd_status=$?; if [ $tar_status -ne 0 ]; then exit $tar_status; fi; exit $zstd_status", nil
+		// Separate statements so only zstd is backgrounded; a zstd failure
+		// exits 3 so it is never mistaken for a tolerated tar exit 1.
+		return `cd /volume || exit 1; fifo=/tmp/gordon-volume-backup.tar; mkfifo "$fifo" || exit 1; zstd -T0 -c "$fifo" & zstd_pid=$!; tar -cf "$fifo" .; tar_status=$?; wait $zstd_pid; zstd_status=$?; if [ $zstd_status -ne 0 ]; then echo "gordon: zstd compression failed with status $zstd_status" >&2; exit 3; fi; exit $tar_status`, nil
 	default:
 		return "", fmt.Errorf("unsupported volume backup compression: %s", compression)
 	}
